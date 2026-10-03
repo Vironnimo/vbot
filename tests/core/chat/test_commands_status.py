@@ -254,6 +254,7 @@ def _wire_profile_fails(_agent: Any) -> StatusWireProfile | None:
                 ObservedFacts(
                     reasoning_field="reasoning_content",
                     rejected_parameters=("temperature", "top_p"),
+                    exclusive_parameters=("temperature+top_k",),
                     rejected_efforts=("xhigh",),
                     reasoning_returned=True,
                 ),
@@ -261,7 +262,8 @@ def _wire_profile_fails(_agent: Any) -> StatusWireProfile | None:
             [
                 "Wire profile: configured, unverified (Connection openai:api-key:work)",
                 "Learned wire facts: reasoning arrives in reasoning_content; "
-                "rejected parameters: temperature, top_p; rejected reasoning efforts: xhigh",
+                "rejected parameters: temperature, top_p; only one of: temperature or top_k; "
+                "rejected reasoning efforts: xhigh",
             ],
             id="configured-with-learned-facts",
         ),

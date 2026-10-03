@@ -289,12 +289,15 @@ class RequestRules:
     ``allowed_parameters`` is an allowlist of optional caller parameters (for
     example the Responses wires that accept only some sampling fields); ``None``
     allows every parameter the codec knows. ``parameters`` refines individual
-    parameters. ``body_defaults`` are set when the request body has no value for
-    the key; ``extra_body`` is always added and replaces any value the body
-    holds (both through :meth:`apply_body`, at the top level of the request body
-    on every protocol); ``extra_headers`` are always added to the request's
-    headers and replace any header of the same name the Adapter sets, auth
-    included. Every chat request path of every Adapter applies all three.
+    parameters. ``exclusive_parameters`` groups optional parameters the Provider
+    accepts only one at a time: when a request carries several of one group, only
+    the first the group lists is sent. ``body_defaults`` are set when the
+    request body has no value for the key; ``extra_body`` is always added and
+    replaces any value the body holds (both through :meth:`apply_body`, at the
+    top level of the request body on every protocol); ``extra_headers`` are
+    always added to the request's headers and replace any header of the same
+    name the Adapter sets, auth included. Every chat request path of every
+    Adapter applies all three.
     ``output_limit_collapse`` sends exactly one output-limit field: every
     output-limit alias a caller supplies collapses into ``output_limit_field``
     and the smallest positive value wins.
@@ -306,6 +309,7 @@ class RequestRules:
     output_limit_collapse: bool = False
     allowed_parameters: tuple[str, ...] | None = None
     parameters: Mapping[str, ParameterRule] = field(default_factory=lambda: _EMPTY)
+    exclusive_parameters: tuple[tuple[str, ...], ...] = ()
     body_defaults: Mapping[str, JsonValue] = field(default_factory=lambda: _EMPTY)
     extra_body: Mapping[str, JsonValue] = field(default_factory=lambda: _EMPTY)
     extra_headers: Mapping[str, str] = field(default_factory=lambda: _EMPTY)
@@ -345,7 +349,9 @@ class RequestRules:
         request asks for reasoning, and a value outside the bounds or allowed
         values is clamped into range, dropped or rejected (an exclusive lower
         bound or an allowed-value list cannot be clamped onto, so such a value
-        is dropped unless the rule rejects it). ``protected`` fields (the
+        is dropped unless the rule rejects it). Of each ``exclusive_parameters``
+        group the payload still carries several of, all but the first the group
+        lists are then removed. ``protected`` fields (the
         reasoning dialect's own output) are never shaped, unless ``extra_body``
         replaced them: an ``extra_body`` value is shaped like a caller's.
 
@@ -372,6 +378,10 @@ class RequestRules:
                 del payload[name]
                 continue
             self._shape_value(payload, name, rule, provider_label)
+        for group in self.exclusive_parameters:
+            present = [name for name in group if name in payload and name not in protected]
+            for name in present[1:]:
+                del payload[name]
 
     @staticmethod
     def _shape_value(

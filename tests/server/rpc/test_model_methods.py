@@ -318,6 +318,9 @@ async def test_model_catalog_reports_wire_profiles_per_usable_connection(
     assert wire_file is not None
     runtime.wire_profiles.replace_files({"openai": wire_file})
     runtime.wire_observations.record_rejected_parameter("openai", "oauth", "gpt-5.2", "top_p")
+    runtime.wire_observations.record_exclusive_parameters(
+        "openai", "oauth", "gpt-5.2", ("temperature", "top_k")
+    )
     runtime.wire_observations.record_reasoning_field(
         "openai", "oauth", "gpt-5.2", "reasoning_content"
     )
@@ -344,6 +347,7 @@ async def test_model_catalog_reports_wire_profiles_per_usable_connection(
             "learned": {
                 "reasoning_field": "reasoning_content",
                 "rejected_parameters": ["top_p"],
+                "exclusive_parameters": [["temperature", "top_k"]],
                 "rejected_efforts": [],
                 "reasoning_returned": True,
             },
@@ -358,6 +362,7 @@ async def test_model_catalog_reports_wire_profiles_per_usable_connection(
             "learned": {
                 "reasoning_field": None,
                 "rejected_parameters": [],
+                "exclusive_parameters": [],
                 "rejected_efforts": [],
                 "reasoning_returned": False,
             },

@@ -79,6 +79,15 @@ _THINKING_OFF = {"type": "disabled"}
             id="chat-stream-parameter",
         ),
         pytest.param(
+            # Of a combination the wire refuses, temperature stays and top_p goes.
+            paths.CHAT,
+            {"top_p": 0.9},
+            "`temperature` and `top_p` cannot both be specified for this model.",
+            ("top_p",),
+            [0.9, ABSENT, ABSENT],
+            id="chat-send-combination",
+        ),
+        pytest.param(
             paths.MESSAGES,
             {"temperature": 0.5, "thinking_effort": "none"},
             _error("temperature is not supported for this model"),

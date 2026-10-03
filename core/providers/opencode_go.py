@@ -445,15 +445,14 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         payload["store"] = False
         rules = profile.request
         rules.apply_body(payload)
-        if rules.parameters:
-            # Configured or learned parameter rules; the reasoning fields are
-            # the dialect's own output.
-            rules.shape_parameters(
-                payload,
-                reasoning_active="reasoning" in payload,
-                protected=RESPONSES_REASONING_FIELDS,
-                provider_label=self._config.name,
-            )
+        # Configured or learned parameter rules; the reasoning fields are
+        # the dialect's own output.
+        rules.shape_parameters(
+            payload,
+            reasoning_active="reasoning" in payload,
+            protected=RESPONSES_REASONING_FIELDS,
+            provider_label=self._config.name,
+        )
         return payload
 
     def _catalog_model(self, model_id: str) -> Model | None:

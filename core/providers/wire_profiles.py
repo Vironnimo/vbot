@@ -31,7 +31,11 @@ from core.providers._wire_profile_files import (
 from core.providers._wire_protocol_defaults import PROTOCOL_DEFAULTS
 from core.providers.reasoning import normalize_thinking_effort
 from core.providers.reasoning_dialects import dialect_carriers
-from core.providers.wire_observations import ObservedFacts, WireObservations
+from core.providers.wire_observations import (
+    EXCLUSIVE_GROUP_SEPARATOR,
+    ObservedFacts,
+    WireObservations,
+)
 from core.providers.wire_profile import (
     PROTOCOLS,
     Admission,
@@ -116,6 +120,12 @@ class WireBinding:
         if self.observations is not None:
             self.observations.record_rejected_parameter(
                 self.provider_id, self.connection_id, model_id, parameter
+            )
+
+    def observe_exclusive_parameters(self, model_id: str, group: Sequence[str]) -> None:
+        if self.observations is not None:
+            self.observations.record_exclusive_parameters(
+                self.provider_id, self.connection_id, model_id, group
             )
 
     def observe_rejected_effort(self, model_id: str, effort: str) -> None:
@@ -597,6 +607,15 @@ class _Resolution:
             partial["request"] = {
                 "parameters": {name: {"mode": "drop"} for name in facts.rejected_parameters}
             }
+        if facts.exclusive_parameters:
+            # Learned groups join the configured ones instead of replacing them.
+            configured = tuple(self.values.get("request", {}).get("exclusive_parameters", ()))
+            learned = tuple(
+                tuple(name.split(EXCLUSIVE_GROUP_SEPARATOR)) for name in facts.exclusive_parameters
+            )
+            partial.setdefault("request", {})["exclusive_parameters"] = tuple(
+                dict.fromkeys((*(tuple(group) for group in configured), *learned))
+            )
         rejected = facts.rejected_efforts
         narrowed_map: dict[str, str] | None = None
         if rejected:
@@ -727,6 +746,9 @@ def _build_request(values: Mapping[str, Any]) -> RequestRules:
     }
     kwargs["parameters"] = MappingProxyType(
         {name: ParameterRule(**rule) for name, rule in (values.get("parameters") or {}).items()}
+    )
+    kwargs["exclusive_parameters"] = tuple(
+        tuple(group) for group in values.get("exclusive_parameters") or ()
     )
     for key in ("body_defaults", "extra_body", "extra_headers", "options"):
         kwargs[key] = _frozen(values.get(key))

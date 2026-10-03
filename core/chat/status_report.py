@@ -29,7 +29,7 @@ from core.providers.reasoning import (
     ReasoningIntent,
     resolve_reasoning_intent,
 )
-from core.providers.wire_observations import ObservedFacts
+from core.providers.wire_observations import EXCLUSIVE_GROUP_SEPARATOR, ObservedFacts
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -558,6 +558,12 @@ def _learned_wire_facts_text(facts: ObservedFacts) -> str:
         parts.append("reasoning is returned")
     if facts.rejected_parameters:
         parts.append(f"rejected parameters: {', '.join(facts.rejected_parameters)}")
+    if facts.exclusive_parameters:
+        groups = ", ".join(
+            " or ".join(group.split(EXCLUSIVE_GROUP_SEPARATOR))
+            for group in facts.exclusive_parameters
+        )
+        parts.append(f"only one of: {groups}")
     if facts.rejected_efforts:
         parts.append(f"rejected reasoning efforts: {', '.join(facts.rejected_efforts)}")
     return "; ".join(parts)

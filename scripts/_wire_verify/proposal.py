@@ -50,6 +50,10 @@ def propose_entry(
         values.setdefault("request", {})["parameters"] = {
             name: {"mode": "drop"} for name in facts.rejected_parameters
         }
+    if facts.exclusive_parameters:
+        values.setdefault("request", {})["exclusive_parameters"] = [
+            list(group) for group in profile.request.exclusive_parameters
+        ]
     if facts.reasoning_returned and profile.source_of("reasoning.supported") == "observed":
         values.setdefault("reasoning", {})["supported"] = True
 

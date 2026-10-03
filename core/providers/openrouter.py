@@ -349,15 +349,14 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             payload["session_id"] = session_id
         rules = profile.request
         rules.apply_body(payload)
-        if rules.parameters:
-            # Configured or learned parameter rules; the reasoning fields are
-            # the dialect's own output.
-            rules.shape_parameters(
-                payload,
-                reasoning_active="reasoning" in payload,
-                protected=RESPONSES_REASONING_FIELDS,
-                provider_label=self._config.name,
-            )
+        # Configured or learned parameter rules; the reasoning fields are
+        # the dialect's own output.
+        rules.shape_parameters(
+            payload,
+            reasoning_active="reasoning" in payload,
+            protected=RESPONSES_REASONING_FIELDS,
+            provider_label=self._config.name,
+        )
         provider_preferences = _openrouter_provider_preferences(self._routing, model_id)
         if provider_preferences:
             payload["provider"] = provider_preferences

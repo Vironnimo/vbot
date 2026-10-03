@@ -155,6 +155,19 @@ def _scalar_list() -> _Leaf:
     return _Leaf(check, "a non-empty list of JSON scalars")
 
 
+def _parameter_groups() -> _Leaf:
+    def check(value: Any) -> bool:
+        return isinstance(value, list) and all(
+            isinstance(group, list)
+            and len(group) >= 2
+            and len(set(group)) == len(group)
+            and all(isinstance(name, str) and bool(name) for name in group)
+            for group in value
+        )
+
+    return _Leaf(check, "a list of groups of two or more distinct parameter names")
+
+
 _EFFORT_LEVELS = tuple(THINKING_EFFORT_ORDER)
 
 
@@ -194,6 +207,7 @@ PROFILE_SCHEMA: dict[str, Any] = {
         "output_limit_collapse": _bool(),
         "allowed_parameters": _string_list(nullable=True),
         "parameters": _MapOf(_PARAMETER_RULE),
+        "exclusive_parameters": _parameter_groups(),
         "body_defaults": _MapOf(_Json(), _TRANSPORT_OWNED_BODY_KEYS),
         "extra_body": _MapOf(_Json(), _TRANSPORT_OWNED_BODY_KEYS),
         "extra_headers": _MapOf(_string()),

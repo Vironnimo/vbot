@@ -335,12 +335,11 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         )
         rendered = set(payload) - unrendered
         provider_label = self._config.name
-        if rules.parameters:
-            # Shape caller values first so a dropped caller value never
-            # displaces a field the reasoning dialect rendered.
-            rules.shape_parameters(
-                request_kwargs, reasoning_active=False, provider_label=provider_label
-            )
+        # Shape caller values first so a dropped caller value never
+        # displaces a field the reasoning dialect rendered.
+        rules.shape_parameters(
+            request_kwargs, reasoning_active=False, provider_label=provider_label
+        )
 
         # Replayed thinking blocks must not be sent when the outgoing request
         # explicitly disables thinking or the model cannot reason; with the
@@ -367,14 +366,13 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         if resolved_max_tokens is not None:
             payload["max_tokens"] = resolved_max_tokens
         rules.apply_body(payload)
-        if rules.parameters:
-            # Sampling parameters are typically not sent while thinking is active.
-            rules.shape_parameters(
-                payload,
-                reasoning_active=_thinking_type(payload.get("thinking")) in _ACTIVE_THINKING,
-                protected=rendered - set(request_kwargs),
-                provider_label=provider_label,
-            )
+        # Sampling parameters are typically not sent while thinking is active.
+        rules.shape_parameters(
+            payload,
+            reasoning_active=_thinking_type(payload.get("thinking")) in _ACTIVE_THINKING,
+            protected=rendered - set(request_kwargs),
+            provider_label=provider_label,
+        )
         # Cache stable prefixes last, after every other payload mutation, so the
         # markers land on the final system/messages that go on the wire.
         if rules.prompt_cache == "anthropic_breakpoints":

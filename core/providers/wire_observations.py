@@ -2,13 +2,14 @@
 
 Codecs report what a Provider actually did for one (Provider, Connection,
 Model): which readable field carried reasoning, whether reasoning came back at
-all, which optional parameter the wire rejected, which effort value it refused
-(``none`` also for a refused explicit off). The resolver turns these facts
+all, which optional parameter the wire rejected, which parameters it accepts
+only one of at a time, which effort value it refused (``none`` also for a
+refused explicit off). The resolver turns these facts
 into profile values below every explicit Model entry, so a configured or
 verified profile always wins and an unconfigured Model improves after its first
 responses instead of failing the same way on every request.
 
-A rejection is not forever: each rejected parameter or effort expires
+A rejection is not forever: each rejected parameter, parameter group or effort expires
 ``REJECTION_TTL`` after it was learned, so a one-off or misattributed rejection
 heals by itself (the learner retries a rejected request at once, so re-learning
 a rejection that still holds costs one extra request). ``forget`` drops facts
@@ -23,7 +24,7 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -37,11 +38,13 @@ _LOGGER = get_logger("providers.wire_observations")
 OBSERVATIONS_FORMAT_VERSION = 2
 OBSERVATIONS_FILE_NAME = "wire-observations.json"
 REJECTION_TTL = timedelta(days=30)
+EXCLUSIVE_GROUP_SEPARATOR = "+"
 _DEFAULT_SAVE_DELAY_SECONDS = 2.0
 _MAX_LIST_ENTRIES = 16
 
 Clock = Callable[[], datetime]
-# A rejection's identity within one target: ("parameter" | "effort", name).
+# A rejection's identity within one target: ("parameter" | "exclusive" | "effort", name);
+# an exclusive group's name joins its parameters with ``+`` in the order kept first.
 _Rejection = tuple[str, str]
 _RejectionTimes = dict[str, dict[_Rejection, datetime]]
 
@@ -52,6 +55,8 @@ class ObservedFacts:
 
     reasoning_field: str | None = None
     rejected_parameters: tuple[str, ...] = ()
+    exclusive_parameters: tuple[str, ...] = ()
+    """Groups the wire accepts only one parameter of, each ``+``-joined, the kept one first."""
     rejected_efforts: tuple[str, ...] = ()
     reasoning_returned: bool = False
 
@@ -65,6 +70,13 @@ class ObservedFacts:
                 self,
                 rejected_parameters=tuple(
                     item for item in self.rejected_parameters if item != name
+                ),
+            )
+        if kind == "exclusive":
+            return replace(
+                self,
+                exclusive_parameters=tuple(
+                    item for item in self.exclusive_parameters if item != name
                 ),
             )
         return replace(
@@ -178,6 +190,23 @@ class WireObservations:
             ),
             f"the wire rejects parameter {parameter!r}",
             rejection=("parameter", parameter),
+        )
+
+    def record_exclusive_parameters(
+        self, provider_id: str, connection_id: str, model_id: str, group: Sequence[str]
+    ) -> None:
+        """The wire accepts only one of ``group`` per request; the first is the one kept."""
+
+        name = EXCLUSIVE_GROUP_SEPARATOR.join(group)
+        self._update(
+            provider_id,
+            connection_id,
+            model_id,
+            lambda facts: replace(
+                facts, exclusive_parameters=_with(facts.exclusive_parameters, name)
+            ),
+            f"the wire accepts only one of {', '.join(repr(item) for item in group)}",
+            rejection=("exclusive", name),
         )
 
     def record_rejected_effort(
@@ -299,9 +328,11 @@ class WireObservations:
                 times = self._learned_at.setdefault(key, {})
                 times[rejection] = self._clock()
                 # ``_with`` keeps the newest entries only; forget the evicted ones' times.
-                kept = {("parameter", name) for name in updated.rejected_parameters} | {
-                    ("effort", name) for name in updated.rejected_efforts
-                }
+                kept = (
+                    {("parameter", name) for name in updated.rejected_parameters}
+                    | {("exclusive", name) for name in updated.exclusive_parameters}
+                    | {("effort", name) for name in updated.rejected_efforts}
+                )
                 for evicted in [item for item in times if item not in kept]:
                     del times[evicted]
                 self._next_expiry = _next_expiry(self._learned_at)
@@ -380,6 +411,10 @@ def _document(facts: Mapping[str, ObservedFacts], learned_at: _RejectionTimes) -
             entry["rejected_parameters"] = {
                 name: _stamp(times.get(("parameter", name))) for name in item.rejected_parameters
             }
+        if item.exclusive_parameters:
+            entry["exclusive_parameters"] = {
+                name: _stamp(times.get(("exclusive", name))) for name in item.exclusive_parameters
+            }
         if item.rejected_efforts:
             entry["rejected_efforts"] = {
                 name: _stamp(times.get(("effort", name))) for name in item.rejected_efforts
@@ -418,16 +453,23 @@ def _read(
             continue
         field = entry.get("reasoning_field")
         parameters = _rejections(entry.get("rejected_parameters"), now)
+        groups = {
+            name: at
+            for name, at in _rejections(entry.get("exclusive_parameters"), now).items()
+            if len(name.split(EXCLUSIVE_GROUP_SEPARATOR)) >= 2
+        }
         efforts = _rejections(entry.get("rejected_efforts"), now)
         times: dict[_Rejection, datetime] = {
             ("parameter", name): at for name, at in parameters.items()
         }
+        times.update({("exclusive", name): at for name, at in groups.items()})
         times.update({("effort", name): at for name, at in efforts.items()})
         if times:
             learned_at[key] = times
         facts[key] = ObservedFacts(
             reasoning_field=field if isinstance(field, str) and field else None,
             rejected_parameters=tuple(parameters),
+            exclusive_parameters=tuple(groups),
             rejected_efforts=tuple(efforts),
             reasoning_returned=entry.get("reasoning_returned") is True,
         )

@@ -631,6 +631,7 @@ def test_learned_facts_shape_unconfigured_profiles_and_survive_a_restart(tmp_pat
     store.record_rejected_effort("acme", "api-key", "m::pinned", "xhigh")
     store.record_rejected_parameter("acme", "api-key", "m", "temperature")
     store.record_rejected_parameter("acme", "other", "m", "top_p")
+    store.record_exclusive_parameters("acme", "api-key", "m", ("temperature", "top_p"))
     store.flush()
     after = _resolve(profiles, "m")
 
@@ -645,6 +646,7 @@ def test_learned_facts_shape_unconfigured_profiles_and_survive_a_restart(tmp_pat
     assert after.reasoning.ladder == ("none", "low", "high")
     assert after.reasoning.plan("max").effort_level == "high"
     assert set(after.request.parameters) == {"temperature"}
+    assert after.request.exclusive_parameters == (("temperature", "top_p"),)
     assert _resolve(profiles, "unknown").reasoning.supported is True
 
     reloaded = WireObservations.load(path, save_delay=None)
@@ -664,10 +666,12 @@ def test_learned_rejections_expire_and_the_profile_follows(tmp_path: Path) -> No
     profiles.set_observations(store)
     store.record_reasoning_field("acme", "api-key", "m", "reasoning_content")
     store.record_rejected_parameter("acme", "api-key", "m", "temperature")
+    store.record_exclusive_parameters("acme", "api-key", "m", ("temperature", "top_k"))
     now[0] += timedelta(days=10)
     store.record_rejected_parameter("acme", "api-key", "m", "top_p")
     store.flush()
     assert set(_resolve(profiles, "m").request.parameters) == {"temperature", "top_p"}
+    assert _resolve(profiles, "m").request.exclusive_parameters == (("temperature", "top_k"),)
 
     now[0] += REJECTION_TTL - timedelta(days=10)
     remaining = ObservedFacts(
@@ -676,6 +680,7 @@ def test_learned_rejections_expire_and_the_profile_follows(tmp_path: Path) -> No
         reasoning_returned=True,
     )
     assert set(_resolve(profiles, "m").request.parameters) == {"top_p"}
+    assert _resolve(profiles, "m").request.exclusive_parameters == ()
     assert store.facts_for("acme", "api-key", "m") == remaining
     store.flush()
     assert (
@@ -823,3 +828,26 @@ def test_parameter_rules_shape_the_request_fields(
 
     assert payload.get("temperature") == expected
     assert payload["model"] == "m"
+
+
+@pytest.mark.parametrize(
+    ("payload", "parameters", "sent"),
+    [
+        ({"temperature": 0.3, "top_p": 0.9}, {}, {"temperature": 0.3}),
+        ({"top_p": 0.9}, {}, {"top_p": 0.9}),
+        (
+            {"temperature": 0.3, "top_p": 0.9},
+            {"temperature": ParameterRule(mode="drop")},
+            {"top_p": 0.9},
+        ),
+    ],
+    ids=["first-listed-kept", "alone-kept", "after-drops"],
+)
+def test_exclusive_parameter_groups_send_one_parameter_of_each_group(
+    payload: dict[str, Any], parameters: dict[str, ParameterRule], sent: dict[str, Any]
+) -> None:
+    rules = RequestRules(parameters=parameters, exclusive_parameters=(("temperature", "top_p"),))
+
+    rules.shape_parameters(payload, reasoning_active=False)
+
+    assert payload == sent

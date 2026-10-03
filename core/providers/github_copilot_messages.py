@@ -111,15 +111,14 @@ def build_copilot_messages_payload(
             payload[parameter_name] = request_kwargs[parameter_name]
     rules = profile.request
     rules.apply_body(payload)
-    if rules.parameters:
-        thinking = payload.get("thinking")
-        rules.shape_parameters(
-            payload,
-            reasoning_active=isinstance(thinking, Mapping)
-            and thinking.get("type") in ACTIVE_THINKING_TYPES,
-            protected=dialect_request_fields(wire.dialect),
-            provider_label=provider_label,
-        )
+    thinking = payload.get("thinking")
+    rules.shape_parameters(
+        payload,
+        reasoning_active=isinstance(thinking, Mapping)
+        and thinking.get("type") in ACTIVE_THINKING_TYPES,
+        protected=dialect_request_fields(wire.dialect),
+        provider_label=provider_label,
+    )
     return payload
 
 

@@ -12,6 +12,7 @@ from core.providers.providers import (
     model_is_local,
     resolve_effective_context_window,
 )
+from core.providers.wire_observations import EXCLUSIVE_GROUP_SEPARATOR
 from core.runs import QueuedRunItem, Run
 from core.tools import tool_is_ready
 
@@ -339,6 +340,9 @@ def _wire_profile_detail_response(profile: Any, learned: Any) -> JsonObject:
         "learned": {
             "reasoning_field": learned.reasoning_field,
             "rejected_parameters": list(learned.rejected_parameters),
+            "exclusive_parameters": [
+                group.split(EXCLUSIVE_GROUP_SEPARATOR) for group in learned.exclusive_parameters
+            ],
             "rejected_efforts": list(learned.rejected_efforts),
             "reasoning_returned": learned.reasoning_returned,
         },

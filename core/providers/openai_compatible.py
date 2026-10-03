@@ -428,12 +428,11 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         unrendered = set(payload)
         self._apply_reasoning(payload, request_kwargs, model_id)
         rendered = set(payload) - unrendered
-        if rules.parameters:
-            # Shape caller values first so a dropped caller value never
-            # displaces a field the reasoning dialect rendered.
-            rules.shape_parameters(
-                request_kwargs, reasoning_active=False, provider_label=self._config.name
-            )
+        # Shape caller values first so a dropped caller value never
+        # displaces a field the reasoning dialect rendered.
+        rules.shape_parameters(
+            request_kwargs, reasoning_active=False, provider_label=self._config.name
+        )
         # Apply provider defaults (lower priority — caller kwargs win)
         if self._config.defaults:
             for key, value in self._config.defaults.items():
@@ -449,13 +448,12 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         if rules.output_limit_collapse and rules.output_limit_field is not None:
             _collapse_output_limit(payload, rules.output_limit_field)
         described = self.describe_reasoning_render(model_id, selected_effort or None)
-        if rules.parameters:
-            rules.shape_parameters(
-                payload,
-                reasoning_active=described.requests_reasoning,
-                protected=rendered - set(request_kwargs),
-                provider_label=self._config.name,
-            )
+        rules.shape_parameters(
+            payload,
+            reasoning_active=described.requests_reasoning,
+            protected=rendered - set(request_kwargs),
+            provider_label=self._config.name,
+        )
         replay = profile.replay
         if (
             replay.strip_when_off

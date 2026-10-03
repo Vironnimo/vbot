@@ -1,7 +1,8 @@
 """Learn wire facts from a Provider's request rejections and streamed replies.
 
 A Model that vBot has not verified can reject an optional request parameter
-(``temperature`` on a reasoning Model), a reasoning effort value (``minimal``
+(``temperature`` on a reasoning Model), a combination of them (``temperature``
+together with ``top_p``), a reasoning effort value (``minimal``
 where only ``low`` exists) or the explicit off switch of its reasoning dialect
 (``thinking: {type: disabled}`` on an always-thinking Model). Instead of failing
 every later request the same way, the codec records the rejection as a learned
@@ -24,7 +25,7 @@ import re
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import aclosing
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from core.providers.errors import ProviderAuthError, ProviderError
 from core.providers.reasoning import detail_names_rejected_effort
@@ -38,7 +39,8 @@ __all__ = ["execute_learning_from_rejections", "stream_learning_from_rejections"
 _LOGGER = get_logger("providers.wire_learning")
 
 _MAX_LESSONS = 2
-"""At most two lessons (rejected parameter, effort or off switch) per request."""
+"""At most two lessons (rejected parameter, parameter combination, effort or off
+switch) per request."""
 
 _SAMPLING_PARAMETERS: tuple[str, ...] = ("temperature", "top_p", "top_k")
 """Sampling parameters a backend may reject for one Model and accept for another."""
@@ -65,6 +67,16 @@ _PARAMETER_REJECTION_MARKERS: tuple[str, ...] = (
 )
 """A parameter rejection names one of these markers and the parameter."""
 
+_EXCLUSIVE_REJECTION_MARKERS: tuple[str, ...] = (
+    "cannot both be specified",
+    "cannot both be set",
+    "cannot be specified together",
+    "cannot be used together",
+    "mutually exclusive",
+    "only one of",
+)
+"""A combination rejection names one of these markers and the parameters combined."""
+
 _OFF_REJECTION_MARKERS: tuple[str, ...] = (
     *_PARAMETER_REJECTION_MARKERS,
     "unsupported value",
@@ -90,9 +102,10 @@ parts are returned with or without reasoning."""
 class _Lesson:
     """One rejection attributed to what the request carried."""
 
-    rejected: str
-    """The sampling parameter, or the effort value (``none`` for the off switch)."""
-    parameter: bool
+    kind: Literal["parameter", "exclusive", "effort"]
+    rejected: tuple[str, ...]
+    """The sampling parameter, the combined parameters (the one to keep first),
+    or the effort value (``none`` for the off switch)."""
     description: str
 
 
@@ -115,19 +128,23 @@ async def execute_learning_from_rejections[T](
 
     - a sampling parameter the payload carries, named next to a rejection
       marker, is dropped;
+    - two or more sampling parameters the payload carries, named next to a
+      marker that they cannot be combined, become a group of which only the
+      first (``temperature``, ``top_p``, ``top_k`` order) is sent;
     - the effort value the payload carries, named next to its field, leaves the
       ladder (an explicit ``none`` outside the ladder becomes an omitted off);
     - the dialect's explicit off switch (``thinking: {type: disabled}``), named
       with its value next to a rejection marker, is recorded as a rejected
       ``none`` effort, which turns the off render into omission.
 
-    Parameters rejected during this request stay removed even when an explicit
-    Model entry keeps sending them. Every other error (auth, retryable, a
+    Parameters rejected or combined during this request stay removed even when
+    an explicit Model entry keeps sending them. Every other error (auth, retryable, a
     rejection of something the payload does not carry, a detail without a
     rejection marker), and a rebuild that changes nothing, propagates unchanged.
     """
 
     rejected_parameters: set[str] = set()
+    exclusive_groups: list[tuple[str, ...]] = []
     for _ in range(_MAX_LESSONS):
         try:
             return await execute_attempt()
@@ -138,14 +155,25 @@ async def execute_learning_from_rejections[T](
             lesson = _learn(str(error), payload, profile)
             if lesson is None:
                 raise
-            if lesson.parameter:
-                wire.observe_rejected_parameter(model_id, lesson.rejected)
-                rejected_parameters.add(lesson.rejected)
+            if lesson.kind == "parameter":
+                wire.observe_rejected_parameter(model_id, lesson.rejected[0])
+                rejected_parameters.add(lesson.rejected[0])
+            elif lesson.kind == "exclusive":
+                wire.observe_exclusive_parameters(model_id, lesson.rejected)
+                exclusive_groups.append(lesson.rejected)
             else:
-                wire.observe_rejected_effort(model_id, lesson.rejected)
+                wire.observe_rejected_effort(model_id, lesson.rejected[0])
             rebuilt = rebuild()
             for parameter in rejected_parameters:
                 _remove_sampling_parameter(rebuilt, profile.protocol, parameter)
+            for group in exclusive_groups:
+                carried = [
+                    parameter
+                    for parameter in group
+                    if _carries_sampling_parameter(rebuilt, profile.protocol, parameter)
+                ]
+                for parameter in carried[1:]:
+                    _remove_sampling_parameter(rebuilt, profile.protocol, parameter)
             if rebuilt == payload:
                 raise
             _LOGGER.warning(
@@ -214,12 +242,17 @@ async def stream_learning_from_rejections(
 
 def _learn(detail: str, payload: Mapping[str, Any], profile: WireProfile) -> _Lesson | None:
     lowered = detail.lower()
-    if any(marker in lowered for marker in _PARAMETER_REJECTION_MARKERS):
-        for parameter in _SAMPLING_PARAMETERS:
-            if _names_field(lowered, parameter) and _carries_sampling_parameter(
-                payload, profile.protocol, parameter
-            ):
-                return _Lesson(parameter, True, f"parameter {parameter!r}")
+    named = tuple(
+        parameter
+        for parameter in _SAMPLING_PARAMETERS
+        if _names_field(lowered, parameter)
+        and _carries_sampling_parameter(payload, profile.protocol, parameter)
+    )
+    if len(named) >= 2 and any(marker in lowered for marker in _EXCLUSIVE_REJECTION_MARKERS):
+        listed = " with ".join(repr(parameter) for parameter in named)
+        return _Lesson("exclusive", named, f"parameters {listed} combined")
+    if named and any(marker in lowered for marker in _PARAMETER_REJECTION_MARKERS):
+        return _Lesson("parameter", named[:1], f"parameter {named[0]!r}")
     carriers = dialect_carriers(profile.reasoning.dialect)
     # Only a rejection that names the value this request sent is attributable;
     # anything vaguer must not teach every later request a narrower wire.
@@ -229,10 +262,10 @@ def _learn(detail: str, payload: Mapping[str, Any], profile: WireProfile) -> _Le
         and _names_effort_field(lowered, carriers.effort)
         and _names_value(lowered, effort)
     ):
-        return _Lesson(effort, False, f"reasoning effort {effort!r}")
+        return _Lesson("effort", (effort,), f"reasoning effort {effort!r}")
     if _rejects_off_switch(lowered, payload, carriers):
         switch = ".".join(carriers.off_switch)
-        return _Lesson("none", False, f"reasoning off switch {switch}={carriers.off_value!r}")
+        return _Lesson("effort", ("none",), f"reasoning off switch {switch}={carriers.off_value!r}")
     return None
 
 
