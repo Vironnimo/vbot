@@ -28,7 +28,7 @@ async def test_batch_runs_in_order_and_returns_images_in_order(computer: Harness
     actions = [
         CLICK,
         {"action": "type", "text": "invoice"},
-        {"action": "screenshot", "scale": 0.5},
+        {"action": "screenshot"},
         {"action": "key", "text": "enter"},
         {"action": "zoom", "region": [100, 100, 300, 200]},
     ]
@@ -39,7 +39,7 @@ async def test_batch_runs_in_order_and_returns_images_in_order(computer: Harness
         ("keys", ["enter"], 1),
     ]
     # Screenshot, zoom, then the final screenshot because input was sent after the last one.
-    assert [image.size for image in images(context)] == [(640, 360), (200, 100), (1280, 720)]
+    assert [image.size for image in images(context)] == [(1280, 720), (200, 100), (1280, 720)]
     step, settle = computer_use.STEP_SETTLE_SECONDS, computer_use.SETTLE_SECONDS
     assert computer.sleeps == [step, step, settle]
     text = model_text(result)
@@ -69,7 +69,6 @@ async def test_batch_coordinates_keep_the_frame_from_before_the_call(computer: H
     context = computer.context_for("computer")
     await computer.call("computer", {"action": "screenshot", "view": "display"}, context)
     full_id = context.result_media[-1]["filename"].removesuffix(".png")
-    await computer.computer(action="screenshot", scale=0.5)
     computer.target.inputs.clear()
 
     def paint_to_front(record: tuple) -> None:
@@ -84,10 +83,9 @@ async def test_batch_coordinates_keep_the_frame_from_before_the_call(computer: H
     ]
     result = await computer.call("computer_batch", {"actions": actions})
     assert result["ok"], result
-    # The inner screenshot followed Paint to the wide display; the click still used the
-    # half-size image of Main, where pixel [150, 100] covers physical [300-301, 200-201].
+    # The inner screenshot followed Paint to the wide display; the click still used Main.
     assert '2. Screenshot of display 2 of 2 "Wide"' in model_text(result)
-    assert computer.target.inputs[-1] == ("click", 301, 201, "left", 1, [])
+    assert computer.target.inputs[-1] == ("click", 150, 100, "left", 1, [])
 
 
 async def test_batch_stops_at_the_first_failure_and_names_what_ran(computer: Harness) -> None:

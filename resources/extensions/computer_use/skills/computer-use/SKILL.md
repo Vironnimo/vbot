@@ -21,19 +21,18 @@ computer moves the user's real mouse and keyboard on the desktop of the computer
 
 ## Screenshots and coordinates
 
-- A coordinate is the pixel where you see the target in a returned image, counted from that image's top-left corner. Never convert it to screen pixels, add a crop origin or undo a scale: the Tool does that.
-- Without screenshot_id, coordinates refer to the latest image. Every image result gives a screenshot_id; pass it to click in an earlier screenshot or zoom, as long as its window has not moved since.
+- A coordinate is the pixel where you see the target in the latest screenshot, counted from its top-left corner. Never convert it to screen pixels, add a crop origin or calculate with image sizes: the Tool does that.
+- Pass screenshot_id to click in an earlier screenshot or in a zoom image, as long as its window has not moved since.
 - A screenshot shows the foreground window. Use `{"action":"screenshot","view":"display"}` to see the whole monitor, including the taskbar; add display to choose a monitor. `{"action":"screenshot","view":"window"}` returns to the window. Later screenshots keep the choice.
-- Each result says whether the image is 1:1 with the screen or how many screen pixels one image pixel covers. In a scaled-down image a click can land a pixel off. Where an exact pixel matters, such as a canvas edge, a thin line or a small handle, zoom first and use coordinates in the zoom image.
-- zoom takes `region: [x0, y0, x1, y1]` in the selected image; x1 and y1 are excluded. The zoom image is a fresh capture, usually 1:1 with the screen, with its own screenshot_id.
+- zoom is a magnifier: `region: [x0, y0, x1, y1]` in the selected image, with x1 and y1 excluded, returns a fresh, enlarged image with its own screenshot_id. Use it to read small text, and to click exactly on a small target such as a canvas edge, a thin line or a handle: pass the zoom's screenshot_id with the position where you see the target in the zoom image.
 - For an exact drag whose ends do not fit into one zoom, zoom around each end, then send left_mouse_down with the first zoom's screenshot_id and left_mouse_up with the second's, in one computer_batch if you have it.
-- Read positions and colors from zoom images. Do not analyse screenshot files with scripts.
+- Read positions and colors from the images. Do not analyse screenshot files with scripts.
 - Gray boxes are apps the user has not approved, when the user requires approval per app. Request the app if you need it; input into a gray area is refused.
 - Set action_summary on input actions; the user sees it.
 
 ## Keys and text
 
-- type and key go to the foreground window, wherever the pointer is. Click the field first. If another app came to the front since your latest image, they are refused; click into the window you want, then type.
+- type and key go to the foreground window, wherever the pointer is. Click the field first. If another app came to the front since your latest screenshot, they are refused; click into the window you want, then type.
 - key presses keys or chords: `enter`, `escape`, `tab`, `ctrl+s`, `ctrl+shift+t`, `alt+f4`. Separate several chords with spaces to press them in order.
 - On clicks, scrolls and drags, text names modifier keys to hold, such as `shift` or `ctrl`.
 

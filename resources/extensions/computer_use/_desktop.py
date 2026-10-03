@@ -27,7 +27,6 @@ from ._screens import (
     mask,
     publish_image,
     resized,
-    scaled,
 )
 from .target import DesktopTarget, Display, WindowInfo
 
@@ -159,9 +158,7 @@ class Desktop:
 
     # Images
 
-    def screenshot(
-        self, scale: float = 1.0, display: str | None = None, view: str | None = None
-    ) -> str:
+    def screenshot(self, display: str | None = None, view: str | None = None) -> str:
         """Publish the foreground window by default, or an explicitly selected display."""
         displays = self.target.displays()
         if display is not None:
@@ -215,7 +212,7 @@ class Desktop:
             if window is not None
             else f'Screenshot of display{which} "{chosen.name}"'
         )
-        text = self._publish(area, displays, chosen, scale, label, window)
+        text = self._publish(area, displays, chosen, label, window)
         if self.state.display != "auto" and foreground is not None and visible(foreground):
             holding = display_of_window(displays, foreground)
             if holding is not None and holding.id != chosen.id:
@@ -230,9 +227,9 @@ class Desktop:
         area: Area,
         displays: Sequence[Display],
         display: Display,
-        scale: float,
         label: str,
         window: WindowInfo | None = None,
+        zoom: bool = False,
     ) -> str:
         capture = Image.new("RGB", (area[2] - area[0], area[3] - area[1]))
         for item in displays:
@@ -246,26 +243,31 @@ class Desktop:
                 capture.paste(image, (left - area[0], top - area[1]))
         visible = self.access.window_visible
         covered, hidden = mask(capture, area, self.target.windows(), visible)
-        size = scaled(fit(*covered.size), scale)
+        size = fit(*covered.size)
         path = publish_image(self.context, resized(covered, size))
         foreground = self.target.foreground()
         front = foreground.app if foreground is not None and visible(foreground) else None
         frame = Frame(display, *size, area, path.stem, tuple(displays), window, front)
         self.state.images[frame.screenshot_id] = frame
-        self.state.latest_image = frame.screenshot_id
+        if not zoom:
+            # A zoom is a magnifier: coordinates without screenshot_id stay on the screenshot.
+            self.state.latest_image = frame.screenshot_id
         self.state.shown = display
         # Keep references bounded without retaining image bytes in Session state.
         while len(self.state.images) > 64:
             del self.state.images[next(iter(self.state.images))]
-        ratio = frame.screen_pixels
-        detail = (
-            "Coordinates are this image's pixels, 1:1 with the screen."
-            if ratio < 1.05
-            else f"Coordinates are this image's pixels; one covers {ratio:.1f} screen pixels, "
-            "so zoom in where an exact pixel matters."
-        )
-        text = f'{label}: {size[0]}x{size[1]} pixels, screenshot_id="{frame.screenshot_id}". '
-        text += detail
+        shot = frame.screenshot_id
+        text = f'{label}: {size[0]}x{size[1]} pixels, screenshot_id="{shot}". '
+        if zoom:
+            text += (
+                f'To click something you see here, pass screenshot_id="{shot}" with its '
+                "position in this image."
+            )
+        else:
+            text += "Use positions in this image as coordinates."
+        # Name no ratio: Agents used it to convert coordinates instead of clicking what they saw.
+        if frame.screen_pixels >= 1.05:
+            text += " It is reduced: for a small target, zoom in and click in the zoom image."
         if hidden:
             text += f" Hidden apps (gray, not approved): {', '.join(hidden)}."
         return text
@@ -278,9 +280,9 @@ class Desktop:
             frame.region(*action.region),
             frame.displays,
             frame.display,
-            action.scale,
             f"Zoom of {list(action.region)} in image {frame.screenshot_id}",
             frame.window,
+            zoom=True,
         )
 
     def cursor(self, frame: Frame) -> str:

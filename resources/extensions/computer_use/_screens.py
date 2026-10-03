@@ -1,7 +1,7 @@
 """Platform-neutral imaging: coordinate frames, display choice, masking and images.
 
 Each published image carries its own pixel space and physical rectangle.
-Coordinates measured in screenshots, scaled images and zooms are mapped here,
+Coordinates measured in screenshots and zooms are mapped here,
 without making the Agent reconstruct the scaling or the rectangle's origin.
 Masking hides every window whose application the Agent may not see.
 """
@@ -38,11 +38,6 @@ def fit(width: int, height: int) -> tuple[int, int]:
     if factor >= 1.0:
         return width, height
     return max(1, math.floor(width * factor)), max(1, math.floor(height * factor))
-
-
-def scaled(size: tuple[int, int], scale: float) -> tuple[int, int]:
-    """Return *size* multiplied by *scale* (0.1-1), at least one pixel per side."""
-    return max(1, round(size[0] * scale)), max(1, round(size[1] * scale))
 
 
 @dataclass(frozen=True)
@@ -267,5 +262,4 @@ __all__ = [
     "mask",
     "publish_image",
     "resized",
-    "scaled",
 ]
