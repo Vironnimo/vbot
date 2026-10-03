@@ -41,6 +41,9 @@ export function runEventFromServerEvent(serverEvent) {
   if (payload.timing) {
     runPayload.timing = payload.timing;
   }
+  if (payload.change_stats) {
+    runPayload.change_stats = payload.change_stats;
+  }
   if (typeof payload.error === 'string') {
     runPayload.error = payload.error;
   }

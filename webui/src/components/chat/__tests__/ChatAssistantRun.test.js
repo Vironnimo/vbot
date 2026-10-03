@@ -38,33 +38,6 @@ function stubClipboard() {
   return writeText;
 }
 
-function editChild(path) {
-  return toolChild(
-    'edit',
-    { path },
-    {
-      id: `edit-${path}`,
-      status: 'success',
-      resultEvent: {
-        type: 'tool_call_result',
-        payload: {
-          tool_call: { id: `call-edit-${path}`, name: 'edit' },
-          display: {
-            version: 1,
-            summary: path,
-            hidden_argument_keys: [],
-            primary: [],
-            facts: [
-              { kind: 'line_change', change: 'added', value: 3 },
-              { kind: 'line_change', change: 'removed', value: 2 },
-            ],
-          },
-        },
-      },
-    },
-  );
-}
-
 describe('ChatAssistantRun', () => {
   const run = setupChatAssistantRunSuite();
 
@@ -507,7 +480,13 @@ describe('ChatAssistantRun', () => {
         item: assistantRun({
           status: 'completed',
           durationMs: 8000,
-          items: [editChild('a.txt')],
+          changeStats: {
+            files: 1,
+            added: 3,
+            removed: 2,
+            paths: ['a.txt'],
+            file_stats: [{ path: 'a.txt', added: 3, removed: 2 }],
+          },
         }),
       });
 

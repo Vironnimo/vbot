@@ -103,6 +103,11 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
       call('session.activity_list', { agent_ids: agentIds }),
     getSession: (agentId, sessionId) =>
       call('session.get', { agent_id: agentId, session_id: sessionId }),
+    getSessionChangeStats: (agentId, sessionId) =>
+      call('session.change_stats', {
+        agent_id: agentId,
+        session_id: sessionId,
+      }),
     getCalendarWindow: (params) => call('calendar.window', params),
     createCalendarEvent: (params) => call('calendar.create', params),
     updateCalendarEvent: (params) => call('calendar.update', params),

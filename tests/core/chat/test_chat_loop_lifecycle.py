@@ -519,15 +519,15 @@ async def test_final_change_stats_allow_loop_progress_and_survive_cancel(
     event_loop = asyncio.get_running_loop()
     event_loop_thread = threading.get_ident()
     diff_threads: list[int] = []
-    original_diff = change_tracker_module._line_diff_counts
+    original_diff = change_tracker_module._counts
 
-    def slow_diff(before: str, after: str) -> tuple[int, int]:
+    def slow_diff(before: str | None, after: str | None) -> tuple[int, int]:
         diff_threads.append(threading.get_ident())
         event_loop.call_soon_threadsafe(entered.set)
         assert release.wait(5), "Event Loop did not progress while final statistics were computed"
         return original_diff(before, after)
 
-    monkeypatch.setattr(change_tracker_module, "_line_diff_counts", slow_diff)
+    monkeypatch.setattr(change_tracker_module, "_counts", slow_diff)
     run = await build_chat_loop(runtime).start_run("coder", "Work", session_id=session.id)
     key = (session.address, run.id)
     tracker.record_write(key, tmp_path / "file.txt", "before\n", "after\n")

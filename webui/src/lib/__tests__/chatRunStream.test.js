@@ -74,17 +74,24 @@ describe('live Run events of the displayed Session', () => {
         status: 'running',
       });
 
+      const changeStats = { files: 1, added: 2, removed: 0, paths: ['a.txt'] };
       harness.stream.handleServerEvents(
         serverRunEvent(type, 1, {
           ...displayed,
           run_id: 'run',
           status: type.slice(4),
+          change_stats: changeStats,
           ...(error ? { error } : {}),
         }),
       );
 
       expect(session.status).toBe(type.slice(4));
       expect(session.error).toBe(error);
+      // The final change statistics ride on the terminal event.
+      expect(
+        session.runEvents.find((event) => event.type === type)?.payload
+          .change_stats,
+      ).toEqual(changeStats);
       expect(harness.subscriptions[0].close).toHaveBeenCalledOnce();
       await vi.waitFor(() =>
         expect(harness.reconcileRunSession).toHaveBeenCalledWith(
