@@ -1,156 +1,207 @@
-"""Run-scoped file-content tracking for git-style change statistics.
+"""Run change statistics: the lines each Run changed through its file edits.
 
-Tracks, per Run, one real content delta per mutated file so the chat loop
-can compute git-style before/after line diffs — streamed live after each
-dispatched Tool round via ``peek_run_stats`` and consumed once at Run end via
-``take_run_stats``. Every mutation is recorded against the file's actual
-on-disk content immediately before the mutation, so external changes between
-tool calls (formatters, shell commands, other sessions) stay outside the run's
-delta instead of being attributed to it. Repeated mutations of one file within
-a Run count once against the first mutation's pre-state, matching how
-``git diff --stat`` reports a working-tree delta. No git repository or
-external process is involved.
+The chat loop reads a Run's statistics after every Tool round (``peek_run_stats``)
+to stream and persist them, and consumes them once at Run end
+(``take_run_stats``). ``apply_patch`` reports each committed text write with the
+file's actual content right before and after it (``record_write``).
 
-The tracker is a single runtime-owned instance injected into the apply_patch
-tools and the chat loop (constructor injection, like ``FileReadState``) — not a
-module singleton. It is deliberately best-effort: files that cannot be compared
-as UTF-8 text (too large, undecodable) simply fall back to the client-side
-per-tool-call counts.
+A Run's statistics cover only its own writes. Consecutive writes of one file
+form a segment that counts once, as the minimal line diff from the content
+before the first write to the content after the last (repeated edits of one
+line count once, a reverted edit counts zero). When the file changed between
+two of the Run's writes (another Session, a formatter, a shell command), the
+segment closes and the next write starts a new one from the changed content:
+the change in between is never attributed to the Run. A file's counts are the
+sum of its segments.
+
+Every write counts. Retaining contents is what lets a segment net repeated
+edits; a file too large to retain, or contents beyond the shared memory budget,
+are counted right away and their contents dropped, so their next write starts a
+new segment. No git repository or external process is involved.
 """
 
 from __future__ import annotations
 
-import difflib
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from core.tools._line_diff import line_change_counts
 from core.tools.arguments import split_text_lines
 
 if TYPE_CHECKING:
     from core.sessions import SessionAddress
+    from core.tools.contracts import JsonObject
 
-# Cap on tracked ``(Run, path)`` content entries so a long-lived server
-# process does not grow the map without bound; oldest insertions are evicted
-# first. A rarely evicted entry only costs a harmless fallback to the
-# per-tool-call counts.
-_MAX_TRACKED_FILES = 4096
+type RunKey = tuple[SessionAddress, str]
 
-# Cap on retained content per file so huge files do not bloat memory. Files
-# whose before- or after-content exceeds this are not tracked and fall back to
-# per-tool-call counts.
-MAX_TRACKED_BYTES = 512 * 1024
+# Contents a segment may retain per side (characters). A larger file is counted
+# at once and not retained.
+MAX_RETAINED_FILE_CHARS = 512 * 1024
 
-# Cap on the number of changed files reported per run so a pathological run
-# cannot produce an unbounded payload.
-_MAX_REPORTED_PATHS = 200
+# Contents all segments may retain together (characters). Beyond it the oldest
+# segments are counted and drop their contents.
+MAX_RETAINED_CHARS = 64 * 1024 * 1024
+
+# Changed files listed per Run payload; ``files``, ``added`` and ``removed``
+# still count every changed file.
+MAX_REPORTED_PATHS = 200
+
+
+@dataclass(eq=False, slots=True)
+class _Segment:
+    """Consecutive writes of one file by one Run: its counts, or the contents to count."""
+
+    base: str | None
+    current: str | None
+    counts: tuple[int, int] | None = None
+
+    @property
+    def retained(self) -> int:
+        return len(self.base or "") + len(self.current or "")
 
 
 class ChangeTracker:
-    """Process-wide registry of per-Run deltas."""
+    """Runtime-owned registry of the change statistics of running Runs."""
 
     def __init__(self) -> None:
-        # Insertion-ordered ``(Run, path)`` entries, so the oldest is evicted first.
-        self._run_changes: dict[tuple[tuple[SessionAddress, str], str], tuple[str, str]] = {}
-        # Runs that lost an entry report no statistics until their statistics are taken,
-        # so the accessor falls back to per-call counts instead of an undercount.
-        self._incomplete_runs: set[tuple[SessionAddress, str]] = set()
-        self._run_changes_lock = threading.Lock()
+        # Per running Run, each written file's segments in write order.
+        self._runs: dict[RunKey, dict[str, list[_Segment]]] = {}
+        self._retained = 0
+        self._lock = threading.Lock()
 
-    def record_write(
-        self, run_key: tuple[SessionAddress, str], resolved: Path, before: str, after: str
-    ) -> None:
-        """Record one file mutation for the current run's change statistics.
+    def record_write(self, run_key: RunKey, resolved: Path, before: str, after: str) -> None:
+        """Record one committed text write of ``resolved`` by the Run.
 
-        ``before`` is the file's actual on-disk content immediately before the
-        mutation; ``after`` is the new content. The delta is stored per
-        ``(Run, path)`` so repeated edits of the same file in one run diff
-        against the run's first pre-mutation state rather than summing
-        per-call counts.
+        ``before`` is the file's actual content immediately before the write
+        (empty for a new file), ``after`` the content it wrote (empty for a
+        deletion).
         """
-        if (
-            max(
-                len(before.encode("utf-8", errors="replace")),
-                len(after.encode("utf-8", errors="replace")),
-            )
-            > MAX_TRACKED_BYTES
-        ):
-            return
-        key = (run_key, str(resolved))
-        with self._run_changes_lock:
-            existing = self._run_changes.get(key)
-            if existing is not None:
-                self._run_changes[key] = (existing[0], after)
-                return
-            self._run_changes[key] = (before, after)
-            while len(self._run_changes) > _MAX_TRACKED_FILES:
-                evicted_run, _path = next(iter(self._run_changes))
-                del self._run_changes[evicted_run, _path]
-                self._incomplete_runs.add(evicted_run)
+        with self._lock:
+            files = self._runs.setdefault(run_key, {})
+            segments = files.setdefault(str(resolved), [])
+            last = segments[-1] if segments else None
+            if last is not None and last.current is not None and last.current == before:
+                self._retained -= last.retained
+                last.current = after
+                last.counts = None
+                segment = last
+            else:
+                segment = _Segment(base=before, current=after)
+                segments.append(segment)
+            self._retained += segment.retained
+            # A closed segment's contents are no longer needed once it is counted.
+            due = [item for item in segments[:-1] if item.counts is None]
+            if max(len(segment.base or ""), len(segment.current or "")) > MAX_RETAINED_FILE_CHARS:
+                due.append(segment)
+            due.extend(self._over_budget(exclude=due))
+            pending = [(item, item.base, item.current) for item in due]
+        # Count outside the lock; a segment written or taken meanwhile is left as it is.
+        counted = [(item, base, current, _counts(base, current)) for item, base, current in pending]
+        with self._lock:
+            for item, base, current, counts in counted:
+                if item.base is base and item.current is current:
+                    self._retained -= item.retained
+                    item.base = item.current = None
+                    item.counts = counts
 
-    def peek_run_stats(self, run_key: tuple[SessionAddress, str]) -> dict[str, object] | None:
-        """Return current git-style change statistics WITHOUT consuming them.
+    def peek_run_stats(self, run_key: RunKey) -> JsonObject | None:
+        """Return the Run's current statistics without consuming them.
 
-        Same computation as :meth:`take_run_stats`, but the per-run deltas stay
-        stored so the chat loop can stream live totals while the Run is still
-        executing and consume them once at Run end. An empty tracker returns
-        ``None``; recorded files whose diffs all net to zero return an explicit
-        all-zero object so a reverted change can retire an earlier nonzero
-        total instead of leaving it stale.
+        ``None`` means the Run recorded no write; a Run whose writes net to
+        nothing reports explicit zeros, so a reverted change retires an
+        earlier total.
         """
-        with self._run_changes_lock:
-            if run_key in self._incomplete_runs:
+        with self._lock:
+            run = self._runs.get(run_key)
+            if run is None:
                 return None
-            snapshot = self._changes_for_run(run_key)
-        if not snapshot:
-            return None
-        return _stats_from_changes(snapshot)
+            files = _snapshot(run)
+        counted = _count_files(files)
+        with self._lock:
+            for path, segments in files.items():
+                for (item, base, current, _known), counts in zip(
+                    segments, counted[path], strict=True
+                ):
+                    if item.base is base and item.current is current:
+                        item.counts = counts
+        return _stats(counted)
 
-    def take_run_stats(self, run_key: tuple[SessionAddress, str]) -> dict[str, object] | None:
-        """Return git-style change statistics for the Run.
-
-        Computes one real line diff per changed file against the run's first
-        pre-mutation state, sums the added/removed lines, and returns
-        ``{files, added, removed, paths, file_stats}`` — or ``None`` when the run changed
-        no tracked files. Reverted deltas return explicit zero totals. Entries
-        detach under the lock before the expensive diff, even if it fails.
-        """
-        with self._run_changes_lock:
-            run_changes = self._changes_for_run(run_key)
-            for path in run_changes:
-                del self._run_changes[run_key, path]
-            if run_key in self._incomplete_runs:
-                self._incomplete_runs.discard(run_key)
+    def take_run_stats(self, run_key: RunKey) -> JsonObject | None:
+        """Return the Run's final statistics and forget the Run, like ``peek_run_stats``."""
+        with self._lock:
+            run = self._runs.pop(run_key, None)
+            if run is None:
                 return None
-        if not run_changes:
-            return None
-        return _stats_from_changes(run_changes)
+            files = _snapshot(run)
+            for segments in run.values():
+                for item in segments:
+                    self._retained -= item.retained
+                    item.base = item.current = None
+        return _stats(_count_files(files))
 
-    def _changes_for_run(self, run_key: tuple[SessionAddress, str]) -> dict[str, tuple[str, str]]:
-        """Return one Run's deltas by path; the caller holds the lock."""
-        return {
-            path: change for (owner, path), change in self._run_changes.items() if owner == run_key
-        }
+    def _over_budget(self, exclude: list[_Segment]) -> list[_Segment]:
+        """Return the oldest retaining segments to count so the rest fit the budget."""
+        excess = self._retained - MAX_RETAINED_CHARS - sum(item.retained for item in exclude)
+        chosen: list[_Segment] = []
+        if excess <= 0:
+            return chosen
+        skipped = {id(item) for item in exclude}
+        for run in self._runs.values():
+            for segments in run.values():
+                for item in segments:
+                    if item.retained and id(item) not in skipped:
+                        chosen.append(item)
+                        excess -= item.retained
+                        if excess <= 0:
+                            return chosen
+        return chosen
 
 
-def _stats_from_changes(run_changes: dict[str, tuple[str, str]]) -> dict[str, object]:
-    """Aggregate one real line diff per changed file into run statistics.
+def _counts(before: str | None, after: str | None) -> tuple[int, int]:
+    return line_change_counts(
+        split_text_lines(before or "", keepends=True), split_text_lines(after or "", keepends=True)
+    )
 
-    ``paths`` lists the reported files in path order; ``file_stats`` carries
-    the same files in the same order with each file's own line counts.
+
+type _SegmentState = tuple[_Segment, str | None, str | None, tuple[int, int] | None]
+
+
+def _snapshot(run: dict[str, list[_Segment]]) -> dict[str, list[_SegmentState]]:
+    """Return each file's segments with their contents and counts as they are now."""
+    return {
+        path: [(item, item.base, item.current, item.counts) for item in segments]
+        for path, segments in run.items()
+    }
+
+
+def _count_files(files: dict[str, list[_SegmentState]]) -> dict[str, list[tuple[int, int]]]:
+    return {
+        path: [
+            known if known is not None else _counts(base, current)
+            for _item, base, current, known in segments
+        ]
+        for path, segments in files.items()
+    }
+
+
+def _stats(counted: dict[str, list[tuple[int, int]]]) -> JsonObject:
+    """Aggregate per-file segment counts into Run statistics.
+
+    ``paths`` lists the changed files in path order and ``file_stats`` the same
+    files with their own counts; a file whose counts are zero is in neither.
     """
-    file_stats: list[dict[str, object]] = []
-    added = 0
-    removed = 0
-    for path, (before, after) in sorted(run_changes.items()):
-        diff_added, diff_removed = _line_diff_counts(before, after)
-        if diff_added == 0 and diff_removed == 0:
-            continue
-        file_stats.append({"path": path, "added": diff_added, "removed": diff_removed})
-        added += diff_added
-        removed += diff_removed
-
-    reported = file_stats[:_MAX_REPORTED_PATHS]
+    file_stats: list[JsonObject] = []
+    added = removed = 0
+    for path in sorted(counted):
+        file_added = sum(counts[0] for counts in counted[path])
+        file_removed = sum(counts[1] for counts in counted[path])
+        if file_added or file_removed:
+            file_stats.append({"path": path, "added": file_added, "removed": file_removed})
+            added += file_added
+            removed += file_removed
+    reported = file_stats[:MAX_REPORTED_PATHS]
     return {
         "files": len(file_stats),
         "added": added,
@@ -158,33 +209,3 @@ def _stats_from_changes(run_changes: dict[str, tuple[str, str]]) -> dict[str, ob
         "paths": [entry["path"] for entry in reported],
         "file_stats": reported,
     }
-
-
-def _line_diff_counts(before: str, after: str) -> tuple[int, int]:
-    """Return ``(added, removed)`` line counts of a real before/after diff.
-
-    Auto-junking stays off: with the default heuristic, SequenceMatcher treats
-    frequently repeated lines in long files as junk and reports inflated
-    replace blocks where git reports a minimal diff.
-    """
-    before_lines = split_text_lines(before)
-    after_lines = split_text_lines(after)
-    matcher = difflib.SequenceMatcher(None, before_lines, after_lines, autojunk=False)
-    added = 0
-    removed = 0
-    for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
-        if tag == "insert":
-            added += j2 - j1
-        elif tag == "delete":
-            removed += _i2 - _i1
-        elif tag == "replace":
-            removed += _i2 - _i1
-            added += j2 - j1
-    return added, removed
-
-
-__all__ = [
-    "MAX_TRACKED_BYTES",
-    "_MAX_REPORTED_PATHS",
-    "_MAX_TRACKED_FILES",
-]
