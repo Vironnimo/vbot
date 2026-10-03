@@ -843,7 +843,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument(
-        "--policy", choices=("auto", "none", "current_run", "full_history"), default="auto"
+        "--policy",
+        choices=("auto", "none", "current_run", "tool_turns", "full_history"),
+        default="auto",
     )
     parser.add_argument(
         "--api-key-env",

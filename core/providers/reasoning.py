@@ -34,15 +34,25 @@ _BAD_EFFORT_STATUS_CODE = 400
 # The one effort value that means "do not reason"; never flagged as swallowed.
 _NONE_EFFORT = "none"
 
-ReasoningReplayPolicy = Literal["none", "current_run", "full_history"]
+ReasoningReplayPolicy = Literal["none", "current_run", "tool_turns", "full_history"]
 """How persisted assistant ``reasoning``/``reasoning_meta`` replays natively.
+
+Ordered from narrowest to broadest:
 
 - ``none`` — assistant request entries never carry reasoning fields, not even
   the live in-run continuation turn.
 - ``current_run`` — only the active run's assistant turns keep their reasoning
   fields; history from earlier runs is stripped.
+- ``tool_turns`` — like ``full_history``, but only assistant turns with Tool
+  Calls keep their reasoning fields; answer turns never carry them, neither
+  live nor in later Runs. For Providers that bill historical answer-turn
+  reasoning their Model does not need.
 - ``full_history`` — assistant entries whose persisted model passes the chat
   layer's same-model gate keep their reasoning fields across runs.
+
+Every policy except ``current_run`` decides per message alone, so what a request
+sends for a message never changes in a later request and the Provider prompt
+cache keeps its prefix.
 
 This policy does not govern Chat's bounded request-only projection of readable
 Reasoning across a mismatched route; that projection is provider-neutral context
@@ -51,10 +61,12 @@ and never carries native reasoning fields or opaque metadata.
 
 REASONING_REPLAY_NONE: ReasoningReplayPolicy = "none"
 REASONING_REPLAY_CURRENT_RUN: ReasoningReplayPolicy = "current_run"
+REASONING_REPLAY_TOOL_TURNS: ReasoningReplayPolicy = "tool_turns"
 REASONING_REPLAY_FULL_HISTORY: ReasoningReplayPolicy = "full_history"
 REASONING_REPLAY_POLICIES: tuple[ReasoningReplayPolicy, ...] = (
     REASONING_REPLAY_NONE,
     REASONING_REPLAY_CURRENT_RUN,
+    REASONING_REPLAY_TOOL_TURNS,
     REASONING_REPLAY_FULL_HISTORY,
 )
 DEFAULT_REASONING_REPLAY_POLICY: ReasoningReplayPolicy = REASONING_REPLAY_FULL_HISTORY

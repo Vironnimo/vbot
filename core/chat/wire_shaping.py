@@ -50,6 +50,7 @@ from core.providers.reasoning import (
     DEFAULT_REASONING_REPLAY_POLICY,
     REASONING_REPLAY_FULL_HISTORY,
     REASONING_REPLAY_NONE,
+    REASONING_REPLAY_TOOL_TURNS,
     ReasoningReplayPolicy,
 )
 from core.sessions import (
@@ -372,9 +373,10 @@ def _replays_assistant_reasoning(
 ) -> bool:
     """Return whether history shaping keeps this assistant turn's reasoning fields.
 
-    Only ``full_history`` replays persisted reasoning across runs, and only when
-    the entry's persisted Provider/Model/Connection identity exactly matches the
-    active resolved request scope. A Model, wire, Connection, or account mismatch
+    Only ``full_history`` and, for turns with Tool Calls, ``tool_turns`` replay
+    persisted reasoning across runs, and only when the entry's persisted
+    Provider/Model/Connection identity exactly matches the active resolved
+    request scope. A Model, wire, Connection, or account mismatch
     means the opaque reasoning belongs to a different context and is stripped
     exactly like under ``current_run``. An interrupted turn is never a complete
     Provider reasoning boundary: its readable work survives through the
@@ -383,7 +385,10 @@ def _replays_assistant_reasoning(
     """
     if message.interrupted:
         return False
-    if replay_policy != REASONING_REPLAY_FULL_HISTORY:
+    if replay_policy == REASONING_REPLAY_TOOL_TURNS:
+        if not message.tool_calls:
+            return False
+    elif replay_policy != REASONING_REPLAY_FULL_HISTORY:
         return False
     if agent_model is None or message.model is None:
         return False
@@ -472,9 +477,11 @@ def _assistant_continuation_dict(
     Keeps readable ``reasoning`` and opaque ``reasoning_meta`` so reasoning-aware
     adapters can round-trip the active tool-use turn, but drops ``usage`` because
     token accounting is never part of the provider request contract. Under the
-    ``none`` replay policy even the live turn loses its reasoning fields. An
-    interrupted turn is a hard native-reasoning boundary under every policy:
-    its readable work returns only through provider-neutral recovery text.
+    ``none`` replay policy even the live turn loses its reasoning fields, and
+    under ``tool_turns`` a live turn without Tool Calls loses them, as it will
+    in every later request. An interrupted turn is a hard native-reasoning
+    boundary under every policy: its readable work returns only through
+    provider-neutral recovery text.
     """
     data = message.to_dict()
     data.pop("run_id", None)
@@ -487,7 +494,11 @@ def _assistant_continuation_dict(
     data.pop("interruption_cause", None)
     data.pop("output_files", None)
     data.pop("reasoning_scope", None)
-    if replay_policy == REASONING_REPLAY_NONE or message.interrupted:
+    if (
+        replay_policy == REASONING_REPLAY_NONE
+        or (replay_policy == REASONING_REPLAY_TOOL_TURNS and not message.tool_calls)
+        or message.interrupted
+    ):
         data.pop("reasoning", None)
         data.pop("reasoning_meta", None)
     return data

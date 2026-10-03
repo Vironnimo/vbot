@@ -960,7 +960,7 @@ export default Object.freeze({
   'settings.providers.custom.wireFieldResponse':
     'response.reasoning_fields: the response fields that carry reasoning text, in the order vBot checks them, for example ["reasoning_content"].',
   'settings.providers.custom.wireFieldReplay':
-    'replay.history_field: the message field that sends earlier reasoning back with the conversation, for example "reasoning_content". replay.scope picks the turns (none, current_run or full_history), replay.fidelity the kind of reasoning state (meta_preferred, meta_only or readable_only).',
+    'replay.history_field: the message field that sends earlier reasoning back with the conversation, for example "reasoning_content". replay.scope picks the turns (none, current_run, tool_turns or full_history), replay.fidelity the kind of reasoning state (meta_preferred, meta_only or readable_only).',
   'settings.providers.custom.wireFieldRequest':
     'request.output_limit_field: the field that limits output (max_tokens or max_completion_tokens). request.parameters: rules per request parameter, for example "temperature": {"mode": "drop"}.',
   'settings.providers.custom.wireFieldSupported':

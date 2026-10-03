@@ -430,6 +430,10 @@ async def _check_replay(adapter: ProviderAdapter, model_id: str, vision: bool) -
     accounting control; readable reasoning only). B above A means the Provider
     consumes the carrier; B not above A while C is above A means the carrier is
     stripped or ignored. Anything else stays unresolved.
+
+    The in-Run and cross-Run scopes vary the Tool Call turn's reasoning; the
+    answer-turn scope varies only the reasoning of the earlier Run's final
+    answer, which tells ``tool_turns`` from ``full_history``.
     """
 
     del vision
@@ -460,13 +464,18 @@ async def _check_replay(adapter: ProviderAdapter, model_id: str, vision: bool) -
 
     in_run = [_QUESTION, first.normalized, _tool_result(first)]
     in_run_tokens, answer = await _measure(adapter, model_id, in_run, options)
-    final = {"role": "assistant", "content": answer or "It is 21 C and clear in Paris."}
+    final = {"role": "assistant", "content": answer.content or "It is 21 C and clear in Paris."}
     cross_run = [*in_run, final, _FOLLOW_UP]
     cross_run_tokens, _ = await _measure(adapter, model_id, cross_run, options)
+    answer_tokens: _Tokens = (None, None, None)
+    if answer.content and (answer.reasoning or answer.reasoning_meta):
+        answered = [*in_run, answer.normalized, _FOLLOW_UP]
+        answer_tokens, _ = await _measure(adapter, model_id, answered, options, varied=3)
 
     in_run_result = _classify(*in_run_tokens)
     cross_run_result = _classify(*cross_run_tokens)
-    measured = _measured_scope(in_run_result, cross_run_result)
+    answer_result = _classify(*answer_tokens)
+    measured = _measured_scope(in_run_result, cross_run_result, answer_result)
     scope = profile.replay.scope
     facts = {
         "effort": effort,
@@ -474,10 +483,14 @@ async def _check_replay(adapter: ProviderAdapter, model_id: str, vision: bool) -
         "profile_scope": scope,
         "in_run": _scope_facts(in_run_tokens, in_run_result),
         "cross_run": _scope_facts(cross_run_tokens, cross_run_result),
+        "answer_turn": _scope_facts(answer_tokens, answer_result),
         "measured_scope": measured,
     }
+    # A tool_turns profile drops answer-turn reasoning the Provider would bill
+    # on purpose, so only reasoning on Tool Call turns counts against it.
+    needed = "tool_turns" if measured == "full_history" and scope == "tool_turns" else measured
     detail = ""
-    if measured is not None and _scope_rank(measured) > _scope_rank(scope):
+    if needed is not None and _scope_rank(needed) > _scope_rank(scope):
         detail = f"the Model consumes replayed reasoning ({measured}); the profile replays {scope}"
     elif measured == "none" and scope != "none":
         detail = f"the Provider ignores replayed reasoning; the profile replays {scope}"
@@ -492,12 +505,18 @@ async def _measure(
     model_id: str,
     history: list[dict[str, Any]],
     options: Mapping[str, Any],
-) -> tuple[_Tokens, str]:
-    """Return input tokens for A (stripped), B (carried), C (control) and B's answer."""
+    *,
+    varied: int | None = None,
+) -> tuple[_Tokens, _Reply]:
+    """Return input tokens for A (stripped), B (carried), C (control) and B's reply.
+
+    ``varied`` limits A and C to the reasoning of that one history message;
+    every Assistant message by default.
+    """
 
     carried = await _send(adapter, model_id, history, **options)
-    stripped = await _send(adapter, model_id, _without_reasoning(history), **options)
-    control_history = _reasoning_as_content(history)
+    stripped = await _send(adapter, model_id, _without_reasoning(history, varied), **options)
+    control_history = _reasoning_as_content(history, varied)
     control = (
         await _send(adapter, model_id, control_history, **options)
         if control_history is not None
@@ -508,28 +527,36 @@ async def _measure(
         carried.input_tokens,
         control.input_tokens if control is not None else None,
     )
-    return tokens, carried.content
+    return tokens, carried
 
 
 _REASONING_KEYS = ("reasoning", "reasoning_meta", "reasoning_scope")
 
 
-def _without_reasoning(history: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def _varies(index: int, message: Mapping[str, Any], varied: int | None) -> bool:
+    return message.get("role") == "assistant" and varied in (None, index)
+
+
+def _without_reasoning(
+    history: Sequence[Mapping[str, Any]], varied: int | None = None
+) -> list[dict[str, Any]]:
     return [
         {key: value for key, value in message.items() if key not in _REASONING_KEYS}
-        if message.get("role") == "assistant"
+        if _varies(index, message, varied)
         else dict(message)
-        for message in history
+        for index, message in enumerate(history)
     ]
 
 
-def _reasoning_as_content(history: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]] | None:
+def _reasoning_as_content(
+    history: Sequence[Mapping[str, Any]], varied: int | None = None
+) -> list[dict[str, Any]] | None:
     """Move readable reasoning into visible Assistant content, or ``None`` if there is none."""
 
-    stripped = _without_reasoning(history)
+    stripped = _without_reasoning(history, varied)
     moved = False
-    for original, message in zip(history, stripped, strict=True):
-        reasoning = original.get("reasoning") if original.get("role") == "assistant" else None
+    for index, (original, message) in enumerate(zip(history, stripped, strict=True)):
+        reasoning = original.get("reasoning") if _varies(index, original, varied) else None
         if isinstance(reasoning, str) and reasoning:
             message["content"] = f"{reasoning}\n\n{message.get('content') or ''}".strip()
             moved = True
@@ -551,9 +578,10 @@ def _scope_facts(tokens: _Tokens, result: str) -> dict[str, Any]:
     return {"a": stripped, "b": carried, "c": control, "result": result}
 
 
-def _measured_scope(in_run: str, cross_run: str) -> ReasoningReplayPolicy | None:
+def _measured_scope(in_run: str, cross_run: str, answer_turn: str) -> ReasoningReplayPolicy | None:
     if cross_run == "consumed":
-        return "full_history"
+        # Only a demonstrably ignored answer turn narrows the scope.
+        return "tool_turns" if answer_turn == "ignored" else "full_history"
     if in_run == "consumed" and cross_run == "ignored":
         return "current_run"
     if in_run == "ignored" and cross_run == "ignored":

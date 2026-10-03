@@ -103,7 +103,12 @@ async def test_a_clean_run_proposes_a_verified_entry_that_parses_as_a_wire_file(
     ]
     # Input tokens follow the request size here, so the replayed carrier is measured as consumed.
     replay = results[-1].facts
-    assert replay["in_run"]["result"] == replay["cross_run"]["result"] == "consumed"
+    assert (
+        replay["in_run"]["result"]
+        == replay["cross_run"]["result"]
+        == replay["answer_turn"]["result"]
+        == "consumed"
+    )
     assert replay["measured_scope"] == replay["profile_scope"] == "full_history"
     assert replay["in_run"]["a"] < min(replay["in_run"]["b"], replay["in_run"]["c"])
     entry = propose_entry(
