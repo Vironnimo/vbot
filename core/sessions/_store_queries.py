@@ -318,10 +318,8 @@ def list_summaries_page(
             ).fetchone()
     if required_row is not None and not bool(required_row["list_visible"]):
         total += 1
-    changes = change_totals(
-        connection,
-        [int(row["session_key"]) for row in (*rows, *([required_row] if required_row else []))],
-    )
+    listed_rows = [*rows, *([] if required_row is None else [required_row])]
+    changes = change_totals(connection, [int(row["session_key"]) for row in listed_rows])
     return lambda: _summaries_page(rows, required_row, total, changes, has_more=has_more)
 
 
