@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Collection
 from pathlib import Path
 
 from .common import SCRIPT, CommandError, tool_command
@@ -211,7 +212,7 @@ class Browser:
         self.problem = problem
 
 
-def find_browser(explicit: str | None) -> Browser:
+def find_browser(explicit: str | None, *, excluded: Collection[str] = ()) -> Browser:
     if explicit:
         path = shutil.which(explicit) or explicit
         if not Path(path).is_file():
@@ -220,6 +221,8 @@ def find_browser(explicit: str | None) -> Browser:
         return Browser(None, problem) if problem else Browser(path)
     problems: list[str] = []
     for candidate in _browser_candidates():
+        if candidate in excluded:
+            continue
         problem = _missing_libraries(candidate)
         if problem:
             problems.append(problem)
@@ -235,6 +238,11 @@ def _browser_candidates() -> list[str]:
         if path and Path(path).is_file() and path not in found:
             found.append(path)
 
+    playwright = _playwright_browsers()
+    # The dedicated shell prints without the desktop browser's startup machinery.
+    for candidate in playwright:
+        if Path(candidate).stem in ("chrome-headless-shell", "headless_shell"):
+            add(candidate)
     if os.name == "nt":
         roots = [
             os.environ.get(name) for name in ("PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA")
@@ -262,7 +270,7 @@ def _browser_candidates() -> list[str]:
         for path in system:
             if path and not os.path.realpath(path).startswith("/snap/"):
                 add(path)
-    for path in _playwright_browsers():
+    for path in playwright:
         add(path)
     if os.name != "nt" and sys.platform != "darwin":
         for name in ("chromium", "chromium-browser"):
