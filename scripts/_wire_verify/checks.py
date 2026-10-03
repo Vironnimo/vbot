@@ -336,11 +336,16 @@ def _decision_label(decision: ReasoningIntent) -> str:
     return decision.kind
 
 
+_EMPTY_REASONING_TOKENS = 2
+"""Reasoning tokens an empty reasoning block may count (Kimi reports 1 with
+reasoning off); more, or any returned Reasoning, means the Model reasoned."""
+
+
 def _judge_effort(effort: str, decision: ReasoningIntent, reply: _Reply) -> tuple[str, str]:
     returned = bool(reply.reasoning) or reply.reasoning_meta
     tokens = reply.reasoning_tokens
     if normalize_thinking_effort(effort) == "none":
-        if decision.kind == "off" and (returned or (tokens or 0) > 0):
+        if decision.kind == "off" and (returned or (tokens or 0) > _EMPTY_REASONING_TOKENS):
             return "warn", "reasoning was disabled but the Model still reasoned"
         return "ok", ""
     if decision.requests_reasoning and not returned and tokens == 0:
@@ -350,10 +355,12 @@ def _judge_effort(effort: str, decision: ReasoningIntent, reply: _Reply) -> tupl
 
 async def _check_sampling(adapter: ProviderAdapter, model_id: str, vision: bool) -> CheckResult:
     del vision
-    reply = await _send(adapter, model_id, _PROMPT, temperature=0.3, top_p=0.9)
-    rejected = adapter.wire_profile(model_id).request.parameters
-    dropped = sorted(name for name, rule in rejected.items() if rule.mode == "drop")
-    facts = {"dropped": dropped, **_reply_facts(reply)}
+    sampling = {"temperature": 0.3, "top_p": 0.9}
+    reply = await _send(adapter, model_id, _PROMPT, **sampling)
+    # What the profile left out: dropped parameters and exclusive group members.
+    shaped = dict(sampling)
+    adapter.wire_profile(model_id).request.shape_parameters(shaped, reasoning_active=False)
+    facts = {"dropped": sorted(set(sampling) - set(shaped)), **_reply_facts(reply)}
     return CheckResult("sampling", "ok", "", facts)
 
 
