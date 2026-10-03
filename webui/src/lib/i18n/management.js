@@ -628,6 +628,7 @@ export default Object.freeze({
   'projects.team.address': 'Address',
   'projects.team.sourceFileLabel': 'Source file',
   'projects.team.valueWithSource': '{value} · from {source}',
+  'projects.team.samplingInherited': 'Without an override: {value}',
   'projects.team.agentTargetsUnavailable':
     'Sub-Agent tools are not available to this Agent.',
   'projects.team.agentTargetsSelf':

@@ -665,6 +665,7 @@ describe('Projects controller Team overrides', () => {
     ],
   };
 
+  // Sampling drafts hold only the override itself, never an inherited value.
   it('seeds override drafts from overrides, else from the effective values', async () => {
     const { controller } = await loadedController();
     controller.selectProject('demo', scan);
@@ -680,7 +681,7 @@ describe('Projects controller Team overrides', () => {
     expect(controller.overrideDraft('planner')).toEqual({
       model: 'openai/gpt-5.2',
       temperature: '',
-      top_p: '0.95',
+      top_p: '',
       thinking_effort: 'high',
       compaction_policy: null,
       tool_access: { mode: 'all' },
@@ -708,6 +709,25 @@ describe('Projects controller Team overrides', () => {
     } else {
       expect(setOverride).toHaveBeenCalledWith('demo', 'planner', field, sent);
     }
+  });
+
+  it('clears a sampling override whose box was emptied', async () => {
+    const setOverride = vi.fn().mockResolvedValue({ scan });
+    const clearOverride = vi.fn().mockResolvedValue({ scan });
+    const { controller } = await loadedController(
+      {},
+      { setOverride, clearOverride },
+    );
+    controller.selectProject('demo', scan);
+    controller.updateOverrideDraft('builder', 'temperature', '');
+
+    await expect(controller.savePendingOverrides()).resolves.toBe(true);
+    expect(clearOverride).toHaveBeenCalledWith(
+      'demo',
+      'builder',
+      'temperature',
+    );
+    expect(setOverride).not.toHaveBeenCalled();
   });
 
   it('owns overrides and re-pointing without leaking transport details', async () => {

@@ -702,10 +702,10 @@ export function memberFieldIsOverridden(member, field) {
 
 // Seed the per-field override draft (the values the override controls edit) for one
 // team member. The model draft is the member's overridden model (or the
-// effective/repo model as a starting suggestion), each sampling draft
-// (temperature, top_p) a text box seeded from the overridden/effective number,
-// the thinking-effort draft the overridden/effective level. A blank draft means
-// "nothing typed yet".
+// effective/repo model as a starting suggestion), the thinking-effort draft the
+// overridden/effective level. Each sampling draft (temperature, top_p) holds only
+// the override itself: an empty box means "no override", so the inherited value,
+// or the Provider default, stays in effect and is never copied into an override.
 export function seedTeamOverrideDraft(member) {
   const overrides = isPlainObject(member?.overrides) ? member.overrides : {};
   const effective = member?.effective ?? {};
@@ -714,9 +714,7 @@ export function seedTeamOverrideDraft(member) {
     ? String(overrides.model)
     : effectiveTextValue(effective.model);
   const samplingSeed = (field) =>
-    hasNumber(overrides[field])
-      ? String(overrides[field])
-      : effectiveTextValue(effective[field]);
+    hasNumber(overrides[field]) ? String(overrides[field]) : '';
   const thinkingSeed =
     typeof overrides.thinking_effort === 'string'
       ? overrides.thinking_effort
@@ -737,9 +735,8 @@ export function seedTeamOverrideDraft(member) {
 }
 
 // A sampling override value (temperature, top_p) for the payload: a
-// comma-tolerant number, or null when the box is empty/non-numeric (no override
-// is saved on null — an override must carry a value; clearing is a separate
-// action).
+// comma-tolerant number, or null when the box is empty/non-numeric. An emptied
+// box clears the override (see the controller's savePendingOverrides).
 export function normalizeOverrideNumber(value) {
   return normalizeProjectNumber(value);
 }

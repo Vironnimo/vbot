@@ -682,6 +682,11 @@ export function createProjectsController({
   async function savePendingOverrides() {
     clearToolAccessOverrideAutoSave({ flushPending: false });
     for (const change of pendingOverrideChanges()) {
+      if (isClearedSamplingDraft(change.agentId, change.field)) {
+        if (!(await clearMemberOverride(change.agentId, change.field)))
+          return false;
+        continue;
+      }
       if (!canSetOverride(change.agentId, change.field)) {
         state.editError = t('errors.validation');
         return false;
@@ -692,6 +697,14 @@ export function createProjectsController({
         return false;
     }
     return true;
+  }
+
+  // An emptied sampling box means "no override": saving it clears the override.
+  function isClearedSamplingDraft(agentId, field) {
+    return (
+      (field === 'temperature' || field === 'top_p') &&
+      String(overrideDraft(agentId)[field] ?? '').trim() === ''
+    );
   }
 
   async function setMemberOverride(agentId, field, explicitValue = undefined) {
@@ -756,7 +769,7 @@ export function createProjectsController({
   async function clearMemberOverride(agentId, field) {
     const project = selectedProject();
     if (!project || state.overrideBusyKey) {
-      return;
+      return false;
     }
     if (field === 'tool_access') {
       clearToolAccessOverrideAutoSave({ flushPending: false });
@@ -770,13 +783,14 @@ export function createProjectsController({
         field,
       );
       if (!active) {
-        return;
+        return false;
       }
       applyScan(result?.scan, { replaceDrafts: true });
       onToast({
         title: t('projects.team.overrideCleared'),
         variant: 'success',
       });
+      return true;
     } catch (error) {
       if (active) {
         onToast({
@@ -785,6 +799,7 @@ export function createProjectsController({
           sticky: true,
         });
       }
+      return false;
     } finally {
       if (active) {
         state.overrideBusyKey = '';

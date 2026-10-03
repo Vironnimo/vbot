@@ -192,11 +192,27 @@
     );
     const field = (fieldName) => ({
       value: draft[fieldName] ?? '',
+      hint: inheritedSamplingHint(member, fieldName),
       explicit: memberFieldIsOverridden(member, fieldName),
       recommended: recommendations[fieldName],
       clearLabel: t('projects.team.clearOverride'),
     });
     return { temperature: field('temperature'), top_p: field('top_p') };
+  }
+
+  // What applies while the box is empty: the repository, Project or global value
+  // with its source, or the Provider default. An overridden field has no
+  // inherited value to show, so it gets no hint.
+  function inheritedSamplingHint(member, field) {
+    if (memberFieldIsOverridden(member, field)) return '';
+    const display = effectiveDisplay(member, field);
+    const value = display.sourceLabel
+      ? t('projects.team.valueWithSource', {
+          value: display.value,
+          source: display.sourceLabel,
+        })
+      : display.value;
+    return t('projects.team.samplingInherited', { value });
   }
 
   function overrideModelOptions(member) {
