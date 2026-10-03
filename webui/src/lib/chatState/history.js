@@ -6,6 +6,7 @@ import {
   CHAT_STATUS_IDLE,
   isRecord,
   isRunActive,
+  nextContextUsage,
   TERMINAL_RUN_STATUSES,
 } from './sessionState.js';
 
@@ -107,7 +108,10 @@ export function loadHistory(sessionState, messages, options = {}) {
     sessionState.sessionUsage = options.sessionUsage;
   }
   if (Object.hasOwn(options, 'contextUsage')) {
-    sessionState.contextUsage = options.contextUsage ?? null;
+    sessionState.contextUsage = nextContextUsage(
+      sessionState.contextUsage,
+      options.contextUsage,
+    );
   }
   if (isRecord(options.compactionPolicy)) {
     sessionState.compactionPolicy = options.compactionPolicy;

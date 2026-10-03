@@ -42,6 +42,7 @@ class _HistoryAgents:
     def __init__(self) -> None:
         self.current_session_id = "session-one"
         self.compaction_policy: dict[str, Any] | None = None
+        self.model = ""
 
     def get(self, _agent_id: str) -> SimpleNamespace:
         return SimpleNamespace(current_session_id=self.current_session_id)
@@ -49,7 +50,7 @@ class _HistoryAgents:
     def resolve_agent(self, project_id: str | None, agent_id: str) -> SimpleNamespace:
         if project_id is not None:
             raise AgentResolutionError(f"agent '{agent_id}@{project_id}' not found")
-        return SimpleNamespace(compaction_policy=self.compaction_policy)
+        return SimpleNamespace(compaction_policy=self.compaction_policy, model=self.model)
 
 
 @dataclass
@@ -218,8 +219,13 @@ async def test_history_hides_notes_and_internal_continuation_records(history: _H
 
 @pytest.mark.asyncio
 async def test_history_reports_usage_per_message_and_for_the_whole_session(
-    history: _History,
+    history: _History, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    windows = {"openai/gpt-5.2": 400_000}
+    monkeypatch.setattr(
+        chat_methods, "_resolve_context_window", lambda _state, model: windows.get(model)
+    )
+    history.agents.model = "openai/gpt-5.2"
     session = history.session()
     session.append(ChatMessage.user(content="hello"))
     session.append(
@@ -281,12 +287,32 @@ async def test_history_reports_usage_per_message_and_for_the_whole_session(
             "reasoning_turns": 2,
             "reasoning_tokens": 60,
         }
+        # A Context that records no window fills the one of the Agent's Model.
         assert result["context_usage"] == {
             "tokens": 2100,
             "estimated": True,
             "provider_input_tokens": 2000,
             "provider_output_tokens": 100,
+            "context_window": 400_000,
         }
+
+    # The window recorded with the Context, of the Model that answered, wins.
+    session.append(
+        ChatMessage.assistant(
+            model="anthropic/claude",
+            content="Three",
+            usage={
+                "input_tokens": 2200,
+                "output_tokens": 10,
+                "context_usage": {"tokens": 2210, "estimated": False, "context_window": 128_000},
+            },
+        )
+    )
+    assert (await history.read())["context_usage"] == {
+        "tokens": 2210,
+        "estimated": False,
+        "context_window": 128_000,
+    }
 
 
 @pytest.mark.asyncio

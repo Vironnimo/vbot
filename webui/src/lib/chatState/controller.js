@@ -5,7 +5,6 @@ import {
   controlRun as requestControlRun,
   createSession as requestCreateSession,
   editChatMessage as requestEditChatMessage,
-  getAgent as requestGetAgent,
   getSession as requestGetSession,
   getSessionChangeStats as requestGetSessionChangeStats,
   inspectSubAgentWork as requestInspectSubAgentWork,
@@ -99,7 +98,6 @@ function defaultChatOperations() {
     createSession: (...args) => requestCreateSession(...args),
     editChatMessage: (...args) => requestEditChatMessage(...args),
     inspectSubAgentWork: (...args) => requestInspectSubAgentWork(...args),
-    getAgent: (...args) => requestGetAgent(...args),
     listAgents: (...args) => requestListAgents(...args),
     listChatCommands: (...args) => requestListChatCommands(...args),
     listFiles: (...args) => requestListFiles(...args),
@@ -242,32 +240,12 @@ export function createChatController({
         chatState.loadingAgents = false;
       }
     }
-    // A hidden Agent's Model, and with it its context window, can change too.
-    for (const agentId of Object.keys(chatState.hiddenAgents)) {
-      void loadHiddenAgent(agentId);
-    }
     const loadInitialHistory = initialHistoryPending;
     initialHistoryPending = false;
     if (selectedAgentId && loadInitialHistory && shouldLoadCurrentHistory()) {
       await loadCurrentHistory();
     }
     return true;
-  }
-
-  // An Identity Agent outside the roster, such as the hidden Librarian, gets
-  // the same payload as a roster Agent once one of its Sessions is shown. An
-  // Agent that cannot be read (deleted meanwhile) keeps no entry.
-  const hiddenAgentLoads = new Map();
-  async function loadHiddenAgent(agentId) {
-    const version = (hiddenAgentLoads.get(agentId) ?? 0) + 1;
-    hiddenAgentLoads.set(agentId, version);
-    const agent = await operations.getAgent(agentId).catch(() => null);
-    if (hiddenAgentLoads.get(agentId) !== version) return;
-    const others = Object.fromEntries(
-      Object.entries(chatState.hiddenAgents).filter(([id]) => id !== agentId),
-    );
-    chatState.hiddenAgents =
-      agent?.id === agentId ? { ...others, [agentId]: agent } : others;
   }
 
   async function loadCurrentHistory() {
@@ -954,7 +932,6 @@ export function createChatController({
     listSessions: (...args) => operations.listSessions(...args),
     loadAdoptedSelectionHistory,
     loadAgents,
-    loadHiddenAgent,
     loadCommands,
     loadCurrentHistory,
     loadHistoryForSession,

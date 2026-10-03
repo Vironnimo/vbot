@@ -13,7 +13,9 @@ from core.chat.usage import (
     RequestContextUsage,
     aggregate_session_usage,
     checkpoint_context_usage,
+    latest_context_window,
     latest_session_context_usage,
+    with_context_window,
 )
 from core.compaction.compaction import (
     COMPACTION_POLICY_META_KEY,
@@ -280,10 +282,10 @@ class CompactionRunCoordinator:
                     model_id=request.active_model_id,
                     tools=request.request_state.tools,
                 )
-                context_usage = {
-                    "tokens": wire_context_tokens_before,
-                    "estimated": True,
-                }
+                context_usage = with_context_window(
+                    {"tokens": wire_context_tokens_before, "estimated": True},
+                    latest_context_window(messages),
+                )
                 run.terminal_payload_extras["context_usage"] = context_usage
                 context_tokens_before = wire_context_tokens_before
                 checkpoint = await compaction_service.compact(
@@ -459,6 +461,7 @@ class CompactionRunCoordinator:
             model_id=target.model_id,
             tools=tools,
             scope=context.prompt_cache_affinity_id,
+            context_window=context_window,
         )
         input_tokens = int(effective_context_usage["tokens"])
         run.terminal_payload_extras["context_usage"] = effective_context_usage
@@ -755,7 +758,9 @@ class CompactionRunCoordinator:
     ) -> None:
         """Publish the one completed-checkpoint payload used by every trigger."""
         checkpoint_usage = checkpoint.usage or {}
-        context_usage = checkpoint_context_usage(checkpoint)
+        context_usage = checkpoint_context_usage(
+            checkpoint, latest_context_window(session_messages)
+        )
         if context_usage is not None:
             run.terminal_payload_extras["context_usage"] = context_usage
         payload: JsonObject = {

@@ -164,6 +164,7 @@ def test_latest_session_context_usage_restores_saved_snapshot_plus_new_messages(
                 "estimated": True,
                 "provider_input_tokens": 10_000,
                 "provider_output_tokens": 100,
+                "context_window": 400_000,
             },
         },
         tool_calls=[],
@@ -191,6 +192,7 @@ def test_latest_session_context_usage_restores_saved_snapshot_plus_new_messages(
         "estimated": True,
         "provider_input_tokens": 10_000,
         "provider_output_tokens": 100,
+        "context_window": 400_000,
         "estimated_delta_tokens": delta_tokens,
     }
 
@@ -204,7 +206,14 @@ def test_latest_session_context_usage_has_no_projection_without_a_snapshot() -> 
 
 
 def test_latest_session_context_usage_prefers_newer_compaction_checkpoint() -> None:
-    assistant = _assistant({"input_tokens": 20_000, "output_tokens": 500})
+    # The checkpoint fills the window of the Model that last answered.
+    assistant = _assistant(
+        {
+            "input_tokens": 20_000,
+            "output_tokens": 500,
+            "context_usage": {"tokens": 20_500, "estimated": False, "context_window": 128_000},
+        }
+    )
     checkpoint = ChatMessage.compaction_checkpoint(
         summary="summary",
         projection=[ChatMessage.user("tail")],
@@ -216,6 +225,7 @@ def test_latest_session_context_usage_prefers_newer_compaction_checkpoint() -> N
     assert latest_session_context_usage([assistant, checkpoint]) == {
         "tokens": 4_000,
         "estimated": True,
+        "context_window": 128_000,
     }
 
 
@@ -233,6 +243,8 @@ def test_request_measurement_cancels_existing_estimation_bias_and_counts_changes
     accounting.observe({"input_tokens": 150_000, "output_tokens": 20_000}, base, **args)
     assert accounting.project(base, **args)["tokens"] == 150_000
     assert accounting.project(base, **args)["estimated"] is False
+    # A projection names the window of the Model the request goes to.
+    assert accounting.project(base, **args, context_window=200_000)["context_window"] == 200_000
     assistant = {"role": "assistant", "content": "done"}
     after = [*base, assistant]
     delta = estimate_request_input_tokens([assistant])[0]

@@ -403,6 +403,7 @@ class AgenticProgression:
                     model_id=target.model_id,
                     tools=tools,
                     scope=context.prompt_cache_affinity_id,
+                    context_window=self._requests.resolve_context_window(agent, target),
                 )
                 self._requests._raise_if_measured_context_exhausted(
                     context.session_snapshot.active_messages,
@@ -557,6 +558,7 @@ class AgenticProgression:
                     model_id=target.model_id,
                     tools=request_tools,
                     scope=context.prompt_cache_affinity_id,
+                    context_window=self._requests.resolve_context_window(agent, target),
                 )
                 assistant_message = replace(
                     assistant_message,
@@ -992,6 +994,7 @@ class AgenticProgression:
                 model_id=target.model_id,
                 tools=tools,
                 scope=context.prompt_cache_affinity_id,
+                context_window=self._requests.resolve_context_window(context.agent, target),
             )
             run.terminal_payload_extras["context_usage"] = tool_context_usage
 

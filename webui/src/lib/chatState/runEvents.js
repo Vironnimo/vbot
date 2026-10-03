@@ -8,6 +8,7 @@ import {
   CHAT_STATUS_FAILED,
   CHAT_STATUS_CANCELLED,
   CHAT_STATUS_INTERRUPTED,
+  nextContextUsage,
 } from './sessionState.js';
 import { t } from '../i18n.js';
 import { qualifyAgentAddress } from '../agentAddress.js';
@@ -100,7 +101,10 @@ export function appendRunEvent(sessionState, event) {
     (!sessionState.currentRun ||
       sessionState.currentRun.runId === normalizedEvent.run_id)
   ) {
-    sessionState.contextUsage = normalizedEvent.payload.context_usage;
+    sessionState.contextUsage = nextContextUsage(
+      sessionState.contextUsage,
+      normalizedEvent.payload.context_usage,
+    );
   }
   if (normalizedEvent.type === RUN_EVENT_STREAM_ATTEMPT_RESTARTED) {
     discardStreamingAttempt(sessionState, normalizedEvent.run_id);

@@ -264,8 +264,8 @@ describe('ChatView', () => {
     );
 
     it('does not render the context ring without a context window', async () => {
-      // An unknown model window arrives as context_window: null; without a
-      // denominator there is no fill ratio, never a NaN arc.
+      // A Session whose Context names no window has no fill ratio, never a
+      // NaN arc, even though its Agent's Model has a window.
       rpcMock.mockImplementation(
         createChatRpcMock({
           usage: { input_tokens: 3886, output_tokens: 92 },

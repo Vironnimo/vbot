@@ -214,9 +214,8 @@ export function createChatRpcMock({
   commandItems,
   agents,
 } = {}) {
-  const resolvedAgents = agents ?? [
-    createAgent({ context_window: contextWindow }),
-  ];
+  // The Agent's own window never sizes the ring; the Session's Context names it.
+  const resolvedAgents = agents ?? [createAgent()];
   const resolvedSessionMessages = {
     'session-1': [
       {
@@ -265,7 +264,11 @@ export function createChatRpcMock({
               }
             : null);
         if (resolvedContextUsage) {
-          response.context_usage = resolvedContextUsage;
+          response.context_usage =
+            contextWindow === null ||
+            Object.hasOwn(resolvedContextUsage, 'context_window')
+              ? resolvedContextUsage
+              : { ...resolvedContextUsage, context_window: contextWindow };
         }
         if (activeRuns?.[params.session_id]) {
           response.active_run = activeRuns[params.session_id];

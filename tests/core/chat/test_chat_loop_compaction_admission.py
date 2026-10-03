@@ -208,7 +208,11 @@ async def test_checkpoint_records_both_context_sizes_with_the_selected_wire_esti
     )
     started = next(event for event in probe.run.events if event.type == COMPACTION_STARTED_EVENT)
     assert started.payload["context_tokens_before"] == 95
-    assert started.payload["context_usage"] == {"tokens": 95, "estimated": True}
+    assert started.payload["context_usage"] == {
+        "tokens": 95,
+        "estimated": True,
+        "context_window": 100,
+    }
 
 
 @pytest.mark.asyncio

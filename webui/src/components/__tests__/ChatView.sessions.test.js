@@ -975,28 +975,23 @@ describe('ChatView Sessions', () => {
   });
 
   describe('Librarian Session', () => {
-    it('opens a Session of the hidden Librarian like any Agent and continues it', async () => {
-      const baseRpc = createChatRpcMock({
-        contextUsage: { tokens: 32768, estimated: false },
-        sessionMessages: {
-          'lib-1': [message('lib-summary', 'Merged deploy notes')],
-        },
-        streamHandler: ({ agent_id: agentId, session_id: sessionId }) => {
-          if (agentId === 'librarian' && sessionId === 'lib-1') {
-            return runningRun('librarian-continue');
-          }
-          throw new Error(`Unexpected stream target: ${agentId}/${sessionId}`);
-        },
-      });
-      rpcMock.mockImplementation(async (method, params) =>
-        method === 'agent.get' && params.id === 'librarian'
-          ? createAgent({
-              id: 'librarian',
-              name: t('librarian.name'),
-              builtin: 'librarian',
-              context_window: 131072,
-            })
-          : baseRpc(method, params),
+    it('opens a Session of the hidden Librarian like any Session and continues it', async () => {
+      rpcMock.mockImplementation(
+        createChatRpcMock({
+          contextUsage: { tokens: 32768, estimated: false },
+          contextWindow: 131072,
+          sessionMessages: {
+            'lib-1': [message('lib-summary', 'Merged deploy notes')],
+          },
+          streamHandler: ({ agent_id: agentId, session_id: sessionId }) => {
+            if (agentId === 'librarian' && sessionId === 'lib-1') {
+              return runningRun('librarian-continue');
+            }
+            throw new Error(
+              `Unexpected stream target: ${agentId}/${sessionId}`,
+            );
+          },
+        }),
       );
       await chat.mountChat(
         {
@@ -1021,8 +1016,8 @@ describe('ChatView Sessions', () => {
         document.querySelector('.chat-header__agent-picker').textContent.trim(),
       ).toBe(t('librarian.name'));
       expect(composerInput().disabled).toBe(false);
-      // Its own Agent payload gives the context window, so the context ring
-      // shows the Session's fill like for a roster Agent.
+      // The Session's Context names its window, so the ring shows without the
+      // hidden Agent in the roster.
       await waitForCondition(() =>
         Boolean(document.querySelector('.context-ring')),
       );

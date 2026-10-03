@@ -638,6 +638,8 @@ def test_http_send_persists_the_run_and_serves_its_timeline_and_history(
     assert history_result["context_usage"] == messages[4].usage["context_usage"]
     assert history_result["context_usage"]["estimated"] is True
     assert history_result["context_usage"]["tokens"] > 0
+    # The Run records the window of the Model that answered with the Context.
+    assert history_result["context_usage"]["context_window"] > 0
     tool_message_content = messages[3].content
     assert isinstance(tool_message_content, str)
     assert json.loads(tool_message_content) == {
