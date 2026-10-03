@@ -318,21 +318,26 @@ def list_summaries_page(
             ).fetchone()
     if required_row is not None and not bool(required_row["list_visible"]):
         total += 1
-    return lambda: _summaries_page(rows, required_row, total, has_more=has_more)
+    changes = change_totals(
+        connection,
+        [int(row["session_key"]) for row in (*rows, *([required_row] if required_row else []))],
+    )
+    return lambda: _summaries_page(rows, required_row, total, changes, has_more=has_more)
 
 
 def _summaries_page(
     rows: Sequence[sqlite3.Row],
     required_row: sqlite3.Row | None,
     total_count: int,
+    changes: dict[int, JsonObject],
     *,
     has_more: bool,
 ) -> SessionListPage:
-    summaries = [_summary(row) for row in rows]
+    summaries = [_with_changes(_summary(row), row, changes) for row in rows]
     if required_row is not None and _store_values._address(required_row) not in {
         _store_values._address(row) for row in rows
     }:
-        summaries.append(_summary(required_row))
+        summaries.append(_with_changes(_summary(required_row), required_row, changes))
     last = rows[-1] if has_more and rows else None
     return SessionListPage(
         sessions=tuple(summaries),
@@ -357,7 +362,99 @@ def summary(
         "WHERE s.state = 'live' AND s.project_id = ? AND s.agent_id = ? AND s.session_id = ?",
         _store_values._scope(address),
     ).fetchone()
-    return lambda: None if row is None else _summary(row)
+    if row is None:
+        return lambda: None
+    changes = change_totals(connection, [int(row["session_key"])])
+    return lambda: _with_changes(_summary(row), row, changes)
+
+
+def _with_changes(
+    summary: JsonObject, row: sqlite3.Row, changes: dict[int, JsonObject]
+) -> JsonObject:
+    totals = changes.get(int(row["session_key"]))
+    if totals is not None:
+        summary["change_stats"] = totals
+    return summary
+
+
+# Session keys per change-totals statement, far below SQLite's variable limit.
+_CHANGE_TOTALS_BATCH_SIZE = 500
+
+# Changed files listed by one Session's change statistics, in path order.
+MAX_SESSION_CHANGE_PATHS = 500
+
+
+def change_totals(
+    connection: sqlite3.Connection, session_keys: Sequence[int]
+) -> dict[int, JsonObject]:
+    """Return ``{files, added, removed}`` per Session that changed files.
+
+    Totals sum the Session's own Runs (inherited fork history excluded),
+    running ones with the statistics recorded so far. ``files`` counts each
+    changed file once, and at least as many as any one Run reported.
+    """
+    totals: dict[int, JsonObject] = {}
+    for batch in batched(dict.fromkeys(session_keys), _CHANGE_TOTALS_BATCH_SIZE, strict=False):
+        placeholders = ", ".join("?" for _key in batch)
+        listed = {
+            int(row["session_key"]): int(row["listed"])
+            for row in connection.execute(
+                "SELECT r.session_key, COUNT(DISTINCT p.path) AS listed "
+                "FROM runs AS r JOIN run_change_paths AS p ON p.run_key = r.run_key "
+                f"WHERE r.session_key IN ({placeholders}) AND r.inherited = 0 "
+                "GROUP BY r.session_key",
+                batch,
+            )
+        }
+        for row in connection.execute(
+            "SELECT session_key, MAX(changed_files) AS most_files, "
+            "SUM(lines_added) AS added, SUM(lines_removed) AS removed FROM runs "
+            f"WHERE session_key IN ({placeholders}) AND inherited = 0 "
+            "AND changed_files IS NOT NULL GROUP BY session_key",
+            batch,
+        ):
+            session_key = int(row["session_key"])
+            files = max(int(row["most_files"]), listed.get(session_key, 0))
+            if files:
+                totals[session_key] = {
+                    "files": files,
+                    "added": int(row["added"] or 0),
+                    "removed": int(row["removed"] or 0),
+                }
+    return totals
+
+
+def session_change_stats(
+    connection: sqlite3.Connection, address: SessionAddress
+) -> JsonObject | None:
+    """Return one Session's change statistics with its changed files, or ``None``.
+
+    Adds to ``change_totals`` the ``file_stats`` of up to
+    ``MAX_SESSION_CHANGE_PATHS`` files in path order, each with its lines summed
+    over the Runs; a count is ``None`` when a Run recorded the file without one.
+    """
+    session_key = int(_store_values._require_live(connection, address)["session_key"])
+    totals = change_totals(connection, [session_key]).get(session_key)
+    if totals is None:
+        return None
+    rows = connection.execute(
+        "SELECT p.path, SUM(p.lines_added) AS added, SUM(p.lines_removed) AS removed, "
+        "COUNT(*) = COUNT(p.lines_added) AND COUNT(*) = COUNT(p.lines_removed) AS known "
+        "FROM runs AS r JOIN run_change_paths AS p ON p.run_key = r.run_key "
+        "WHERE r.session_key = ? AND r.inherited = 0 GROUP BY p.path ORDER BY p.path LIMIT ?",
+        (session_key, MAX_SESSION_CHANGE_PATHS),
+    ).fetchall()
+    return {
+        **totals,
+        "file_stats": [
+            {
+                "path": str(row["path"]),
+                "added": int(row["added"]) if row["known"] else None,
+                "removed": int(row["removed"]) if row["known"] else None,
+            }
+            for row in rows
+        ],
+    }
 
 
 # Two bound values per scope; the chunk stays far below SQLite's variable limit.

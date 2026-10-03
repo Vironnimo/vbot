@@ -459,6 +459,14 @@ class ChatSessionManager:
         """Read one live Session's list row by exact address; ``None`` if absent."""
         return self._store.summary(address)
 
+    def change_stats(self, address: SessionAddress) -> JsonObject | None:
+        """Return the lines the Session's own Runs changed, with its changed files.
+
+        ``{files, added, removed, file_stats}`` or ``None`` when the Session
+        changed no file; see ``sessions.md`` -> Interfaces.
+        """
+        return self._store.change_stats(address)
+
     def list_completion_activity(
         self, scopes: Sequence[tuple[str | None, str]]
     ) -> dict[tuple[str | None, str], builtins.list[JsonObject]]:
