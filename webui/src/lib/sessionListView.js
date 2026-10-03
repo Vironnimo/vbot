@@ -343,7 +343,6 @@ function normalizeSession(session) {
     fork_source: forkSource,
     is_fork: forkSource !== null,
     run_kinds: runKinds,
-    change_stats: normalizeChangeTotals(session?.change_stats),
     is_background_only: isBackgroundOnlySession({
       run_kinds: runKinds,
       platform,
@@ -364,20 +363,6 @@ function normalizeSession(session) {
   normalizedSession.display_name = sessionDisplayName(normalizedSession);
 
   return normalizedSession;
-}
-
-// The lines the Session's own Runs changed, `{ files, added, removed }`, or
-// null when it changed no files or the server sent no valid totals.
-function normalizeChangeTotals(changeStats) {
-  if (!isPlainObject(changeStats)) {
-    return null;
-  }
-  const { files, added, removed } = changeStats;
-  const counts = [files, added, removed];
-  if (!counts.every((value) => Number.isInteger(value) && value >= 0)) {
-    return null;
-  }
-  return files > 0 ? { files, added, removed } : null;
 }
 
 function isSubAgentSession(session) {
