@@ -91,14 +91,17 @@ class ChangeTracker:
                 segment = _Segment(base=before, current=after)
                 segments.append(segment)
             self._retained += segment.retained
-            # A closed segment's contents are no longer needed once it is counted.
-            due = [item for item in segments[:-1] if item.counts is None]
+            # A closed segment needs its contents only until it is counted.
+            due = [item for item in segments[:-1] if item.retained]
             if max(len(segment.base or ""), len(segment.current or "")) > MAX_RETAINED_FILE_CHARS:
                 due.append(segment)
             due.extend(self._over_budget(exclude=due))
-            pending = [(item, item.base, item.current) for item in due]
+            pending = [(item, item.base, item.current, item.counts) for item in due]
         # Count outside the lock; a segment written or taken meanwhile is left as it is.
-        counted = [(item, base, current, _counts(base, current)) for item, base, current in pending]
+        counted = [
+            (item, base, current, known if known is not None else _counts(base, current))
+            for item, base, current, known in pending
+        ]
         with self._lock:
             for item, base, current, counts in counted:
                 if item.base is base and item.current is current:
