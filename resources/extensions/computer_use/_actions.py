@@ -30,19 +30,21 @@ DEFAULT_SCROLL_AMOUNT = 3
 DEFAULT_WAIT_SECONDS = 1.0
 
 _FIELDS: dict[str, frozenset[str]] = {
-    "screenshot": frozenset({"scale", "display"}),
-    "zoom": frozenset({"region", "scale"}),
-    **dict.fromkeys(CLICKS, frozenset({"coordinate", "text"})),
-    "mouse_move": frozenset({"coordinate"}),
-    "left_click_drag": frozenset({"coordinate", "start_coordinate", "text"}),
-    "left_mouse_down": frozenset({"coordinate"}),
-    "left_mouse_up": frozenset({"coordinate"}),
-    "scroll": frozenset({"coordinate", "scroll_direction", "scroll_amount", "text"}),
+    "screenshot": frozenset({"scale", "display", "view"}),
+    "zoom": frozenset({"region", "scale", "screenshot_id"}),
+    **dict.fromkeys(CLICKS, frozenset({"coordinate", "text", "screenshot_id"})),
+    "mouse_move": frozenset({"coordinate", "screenshot_id"}),
+    "left_click_drag": frozenset({"coordinate", "start_coordinate", "text", "screenshot_id"}),
+    "left_mouse_down": frozenset({"coordinate", "screenshot_id"}),
+    "left_mouse_up": frozenset({"coordinate", "screenshot_id"}),
+    "scroll": frozenset(
+        {"coordinate", "scroll_direction", "scroll_amount", "text", "screenshot_id"}
+    ),
     "type": frozenset({"text"}),
     "key": frozenset({"text", "repeat"}),
     "hold_key": frozenset({"text", "duration"}),
     "wait": frozenset({"duration"}),
-    "cursor_position": frozenset(),
+    "cursor_position": frozenset({"screenshot_id"}),
 }
 
 
@@ -65,6 +67,8 @@ class Action:
     region: tuple[int, int, int, int] | None = None
     scale: float = 1.0
     display: str | None = None
+    view: str | None = None
+    screenshot_id: str | None = None
     notes: tuple[str, ...] = ()
 
     @property
@@ -173,11 +177,25 @@ def parse_action(arguments: Mapping[str, Any]) -> Action:
         values["scale"] = float(arguments["scale"])
     if name == "screenshot" and isinstance(arguments.get("display"), str):
         values["display"] = arguments["display"].strip() or None
+    if name == "screenshot":
+        values["view"] = arguments.get("view")
+        if values["view"] == "window" and values.get("display") is not None:
+            raise ActionError(
+                'view "window" follows the foreground window. Omit display, or use '
+                'view "display" to capture a selected monitor. Nothing was done.'
+            )
+    if "screenshot_id" in fields:
+        values["screenshot_id"] = arguments.get("screenshot_id")
     return Action(**values, notes=tuple(notes))
 
 
 def _refuse_misplaced(name: str, unused: list[str]) -> None:
     """Refuse fields whose presence means the Agent expects a different effect."""
+    if "screenshot_id" in unused:
+        raise ActionError(
+            f"{name} does not use screenshot_id. It selects the image for coordinates, "
+            "zoom or cursor_position; it does not change keyboard focus. Nothing was done."
+        )
     if "coordinate" in unused and name in {"type", "key", "hold_key"}:
         raise ActionError(
             f"{name} acts on the focused field and does not click first. Click the field "

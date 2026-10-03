@@ -18,6 +18,7 @@ from typing import Any
 
 from core.utils.ids import new_id
 
+from ._screens import Frame
 from .target import AppInfo, Display, WindowInfo
 
 # Approvals and the display choice end this long after the Session's last call.
@@ -32,11 +33,14 @@ type SessionKey = tuple[str | None, str, str]
 
 @dataclass
 class SessionState:
-    """A Session's approved apps, display choice and the display its last screenshot showed."""
+    """A Session's access, capture choice and bounded image-coordinate references."""
 
     grants: list[AppInfo] = field(default_factory=list)
     display: str = "auto"
     shown: Display | None = None
+    view: str = "window"
+    images: dict[str, Frame] = field(default_factory=dict)
+    latest_image: str | None = None
     last_used: float = 0.0
 
     def granted(self, app: AppInfo) -> bool:

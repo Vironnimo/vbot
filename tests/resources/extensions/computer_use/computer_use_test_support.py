@@ -352,6 +352,7 @@ async def computer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIter
             family=declaration.family,
             result_schema=declaration.result_schema,
             parallel_safe=declaration.parallel_safe,
+            open_input_schema=declaration.open_input_schema,
             argument_normalizer=declaration.argument_normalizer,
         )
     api.operations.bind(registry)

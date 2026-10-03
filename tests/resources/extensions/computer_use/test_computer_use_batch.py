@@ -22,6 +22,7 @@ CLICK = {"action": "left_click", "coordinate": [200, 150], "action_summary": "Fo
 
 
 async def test_batch_runs_in_order_and_returns_images_in_order(computer: Harness) -> None:
+    await computer.computer(action="screenshot", view="display")
     computer.target.inputs.clear()
     context = computer.context_for("computer_batch")
     actions = [
@@ -58,13 +59,17 @@ async def test_batch_runs_in_order_and_returns_images_in_order(computer: Harness
 async def test_batch_adds_no_final_screenshot_after_one_or_without_input(
     computer: Harness, actions: list, count: int
 ) -> None:
+    await computer.computer(action="screenshot", view="display")
     context = computer.context_for("computer_batch")
     result = await computer.call("computer_batch", {"actions": actions}, context)
     assert result["ok"] and len(images(context)) == count
 
 
 async def test_batch_coordinates_keep_the_frame_from_before_the_call(computer: Harness) -> None:
-    await computer.computer(action="screenshot")
+    context = computer.context_for("computer")
+    await computer.call("computer", {"action": "screenshot", "view": "display"}, context)
+    full_id = context.result_media[-1]["filename"].removesuffix(".png")
+    await computer.computer(action="screenshot", scale=0.5)
     computer.target.inputs.clear()
 
     def paint_to_front(record: tuple) -> None:
@@ -72,7 +77,11 @@ async def test_batch_coordinates_keep_the_frame_from_before_the_call(computer: H
             computer.target.front(PAINT)
 
     computer.target.on_input = paint_to_front
-    actions = [CLICK, {"action": "screenshot"}, {"action": "left_click", "coordinate": [300, 200]}]
+    actions = [
+        {**CLICK, "screenshot_id": full_id},
+        {"action": "screenshot"},
+        {"action": "left_click", "coordinate": [150, 100]},
+    ]
     result = await computer.call("computer_batch", {"actions": actions})
     assert result["ok"], result
     # The inner screenshot followed Paint to the wide display; the click still used Main.
@@ -81,6 +90,7 @@ async def test_batch_coordinates_keep_the_frame_from_before_the_call(computer: H
 
 
 async def test_batch_stops_at_the_first_failure_and_names_what_ran(computer: Harness) -> None:
+    await computer.computer(action="screenshot", view="display")
     slack = computer.target.windows_[3]
     computer.target.windows_[3] = replace(slack, elevated=True)
     computer.target.inputs.clear()
@@ -98,16 +108,36 @@ async def test_batch_stops_at_the_first_failure_and_names_what_ran(computer: Har
     assert computer.target.inputs == [("click", 200, 150, "left", 1, [])]
 
 
+async def test_batch_rechecks_image_geometry_after_earlier_input(computer: Harness) -> None:
+    await computer.computer(action="screenshot")
+
+    def move_window(record: tuple) -> None:
+        computer.target.windows_[0] = replace(computer.target.windows_[0], left=101)
+
+    computer.target.on_input = move_window
+    result = await computer.call("computer_batch", {"actions": [CLICK, CLICK]})
+    assert result["error"]["code"] == "invalid_arguments"
+    assert "Action 2 of 2" in result["error"]["message"]
+    assert "moved, resized or closed" in result["error"]["message"]
+    assert "Actions that ran" in result["error"]["message"]
+    assert computer.target.inputs == [("click", 300, 250, "left", 1, [])]
+
+
 @pytest.mark.parametrize(
     ("bad", "message"),
     [
         ({"action": "type", "text": "x", "coordinate": [1, 1]}, "Action 2: type acts on the"),
         ({"action": "left_click", "coordinate": [5000, 10]}, "Action 2: coordinate [5000, 10]"),
+        (
+            {"action": "left_click", "coordinate": [200, 150], "screenshot_id": "shot_unknown"},
+            "Action 2: Image",
+        ),
     ],
 )
 async def test_batch_with_an_invalid_action_runs_nothing(
     computer: Harness, bad: dict, message: str
 ) -> None:
+    await computer.computer(action="screenshot", view="display")
     computer.target.inputs.clear()
     result = await computer.call("computer_batch", {"actions": [CLICK, bad]})
     assert result["error"]["code"] == "invalid_arguments"
@@ -116,6 +146,7 @@ async def test_batch_with_an_invalid_action_runs_nothing(
 
 
 async def test_double_escape_interrupts_a_batch_between_input_events(computer: Harness) -> None:
+    await computer.computer(action="screenshot", view="display")
     computer.target.inputs.clear()
 
     def escape_on_typing(record: tuple) -> None:
