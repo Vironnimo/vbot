@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "_comment": "OpenCode Go gateway. One API key reaches three wires; the catalog protocol hint (the Model's AI SDK package on models.dev) routes the Messages and Responses Models (Grok 4.7 on Responses live low-effort smoke verified), a rule routes the Messages Models the catalog names no package for, and every other Model speaks Chat Completions. Every wire carries the x-opencode-session prompt-cache affinity header (Adapter code). Chat replays readable reasoning_content only (OpenCode's own client never replays reasoning_details) and gives every historical Tool Call a reasoning_content carrier, empty when the call had no readable Reasoning: DeepSeek's thinking mode rejects a Tool Call without it. Responses is stateless (store false), takes only max_output_tokens (max_tokens maps onto it) and top_p, and structured output on every Model; its default ladder has no none rung because the gateway rejected an explicit none (live 2026-08-25), so only a Model whose ladder lists none sends it. Models that cannot stop reasoning get their cheapest rung for none. Replay scope is full_history for every Model, also where an upstream preserved-thinking contract is stronger than a particular gateway measurement. GLM 5.3 Flash drops calls to Tools outside the request's Tool list, so Tools announced mid-Session are listed there.",
+  "_comment": "OpenCode Go gateway. One API key reaches three wires; the catalog protocol hint (the Model's AI SDK package on models.dev) routes the Messages and Responses Models (Grok 4.7 on Responses live low-effort smoke verified), a rule routes the Messages Models the catalog names no package for, and every other Model speaks Chat Completions. Every wire carries the x-opencode-session prompt-cache affinity header (Adapter code). Chat replays readable reasoning_content only (OpenCode's own client never replays reasoning_details) and gives every historical Tool Call a reasoning_content carrier, empty when the call had no readable Reasoning: DeepSeek's thinking mode rejects a Tool Call without it. Responses is stateless (store false), takes only max_output_tokens (max_tokens maps onto it) and top_p, and structured output on every Model; its default ladder has no none rung because the gateway rejected an explicit none (live 2026-08-25), so only a Model whose ladder lists none sends it. Models that cannot stop reasoning get their cheapest rung for none. Replay scope is full_history, also where an upstream preserved-thinking contract is stronger than a particular gateway measurement; only Qwen replays tool_turns. GLM 5.3 Flash drops calls to Tools outside the request's Tool list, so Tools announced mid-Session are listed there.",
   "defaults": {
     "replay": {"scope": "full_history"}
   },
@@ -90,6 +90,11 @@
       "when": {"ids": ["glm-5.3-flash"]},
       "set": {"request": {"list_announced_tools": true}},
       "note": "GLM 5.3 Flash drops calls to Tools that are not in the request's Tool list."
+    },
+    {
+      "when": {"prefix": ["qwen"]},
+      "set": {"replay": {"scope": "tool_turns"}},
+      "note": "The gateway bills historical answer-turn Reasoning of every Qwen Model (verify_wire_profile replay check, live 2026-10-03). Qwen's own chat template keeps earlier Reasoning only with preserve_thinking, so answer turns drop it and Tool Call turns keep it."
     }
   ],
   "models": {
