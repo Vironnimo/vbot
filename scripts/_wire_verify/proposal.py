@@ -65,17 +65,108 @@ def propose_entry(
 
 
 def write_entry(wire_dir: Path, provider_id: str, model_id: str, entry: Mapping[str, Any]) -> Path:
-    """Merge ``entry`` into ``models[model_id]`` of a bundled Provider's wire file."""
+    """Merge ``entry`` into ``models[model_id]`` of a bundled Provider's wire file.
+
+    Only that Model entry's text changes: the hand-formatted rest of the file
+    keeps its layout, so the diff shows the verified evidence alone.
+    """
 
     path = wire_dir / f"{provider_id}.json"
-    document: dict[str, Any] = (
-        json.loads(path.read_text(encoding="utf-8"))
-        if path.is_file()
-        else {"format_version": WIRE_PROFILE_FORMAT_VERSION}
-    )
+    if not path.is_file():
+        document: dict[str, Any] = {"format_version": WIRE_PROFILE_FORMAT_VERSION}
+        _merge_entry(document, model_id, entry)
+        path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8", newline="\n")
+        return path
+    text = path.read_text(encoding="utf-8")
+    document = json.loads(text)
     _merge_entry(document, model_id, entry)
-    path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8", newline="\n")
+    key = model_id.split("::", 1)[0]
+    updated = _splice_model_entry(text, key, document["models"][key])
+    if json.loads(updated) != document:
+        raise StorageError(f"could not place the entry for {key!r} in {path}")
+    path.write_text(updated, encoding="utf-8", newline="\n")
     return path
+
+
+def _splice_model_entry(text: str, key: str, value: Mapping[str, Any]) -> str:
+    """Return ``text`` with ``models[key]`` set to ``value``, every other byte kept."""
+
+    root_members, root_end = _object_members(text, text.index("{"))
+    models = next((member for member in root_members if member[0] == "models"), None)
+    if models is None:
+        return _insert_member(text, root_members, root_end, "models", {key: value})
+    model_members, models_end = _object_members(text, models[2])
+    current = next((member for member in model_members if member[0] == key), None)
+    if current is None:
+        return _insert_member(text, model_members, models_end, key, value)
+    _, key_start, value_start, value_end = current
+    indent = _line_indent(text, key_start)
+    return text[:value_start] + _render(value, indent) + text[value_end:]
+
+
+_Member = tuple[str, int, int, int]
+"""A JSON object member: key, key start, value start and value end offsets."""
+
+
+def _object_members(text: str, open_index: int) -> tuple[list[_Member], int]:
+    """Return the members of the object opening at ``open_index`` and its ``}`` offset."""
+
+    decoder = json.JSONDecoder()
+    members: list[_Member] = []
+    index = _skip_space(text, open_index + 1)
+    while text[index] != "}":
+        key, after_key = decoder.raw_decode(text, index)
+        value_start = _skip_space(text, _skip_space(text, after_key) + 1)
+        _, value_end = decoder.raw_decode(text, value_start)
+        members.append((key, index, value_start, value_end))
+        index = _skip_space(text, value_end)
+        if text[index] == ",":
+            index = _skip_space(text, index + 1)
+    return members, index
+
+
+def _insert_member(
+    text: str, members: list[_Member], close_index: int, key: str, value: Any
+) -> str:
+    if members:
+        last_end = members[-1][3]
+        indent = _line_indent(text, members[-1][1])
+        member = f"{json.dumps(key)}: {_render(value, indent)}"
+        return text[:last_end] + f",\n{indent}{member}" + text[last_end:]
+    outer = _line_indent(text, close_index)
+    indent = outer + "  "
+    member = f"{json.dumps(key)}: {_render(value, indent)}"
+    open_index = text.rindex("{", 0, close_index)
+    return text[: open_index + 1] + f"\n{indent}{member}\n{outer}" + text[close_index:]
+
+
+def _render(value: Any, indent: str) -> str:
+    """Render ``value`` in the wire files' style: one line while it fits, else expanded."""
+
+    flat = json.dumps(value)
+    if len(indent) + len(flat) <= _LINE_WIDTH or not isinstance(value, dict | list) or not value:
+        return flat
+    inner = indent + "  "
+    if isinstance(value, dict):
+        items = [f"{inner}{json.dumps(key)}: {_render(item, inner)}" for key, item in value.items()]
+        return "{\n" + ",\n".join(items) + f"\n{indent}}}"
+    items = [f"{inner}{_render(item, inner)}" for item in value]
+    return "[\n" + ",\n".join(items) + f"\n{indent}]"
+
+
+_LINE_WIDTH = 100
+
+
+def _line_indent(text: str, index: int) -> str:
+    line_start = text.rfind("\n", 0, index) + 1
+    line = text[line_start:index]
+    return line[: len(line) - len(line.lstrip())]
+
+
+def _skip_space(text: str, index: int) -> int:
+    while text[index] in " \t\r\n":
+        index += 1
+    return index
 
 
 def write_custom_provider_entry(

@@ -128,6 +128,21 @@ async def test_a_clean_run_proposes_a_verified_entry_that_parses_as_a_wire_file(
     assert issues == []
     assert parsed.models["m"].verification is not None
 
+    # An existing hand-formatted file changes only in the written Model entry.
+    hand = (
+        '{\n  "format_version": 1,\n'
+        '  "defaults": {"request": {"allowed_parameters": ["top_p"]}},\n'
+        '  "models": {\n    "other": {"set": {"reasoning": {"levels": []}}}\n  }\n}\n'
+    )
+    hand_path = tmp_path / "hand.json"
+    hand_path.write_text(hand, encoding="utf-8", newline="\n")
+    write_entry(tmp_path, "hand", "m", entry)
+    written = hand_path.read_text(encoding="utf-8")
+    assert written.startswith(hand[: hand.index("\n  }\n}")])
+    assert json.loads(written)["models"]["m"] == json.loads(path.read_text())["models"]["m"]
+    write_entry(tmp_path, "hand", "m", entry)
+    assert hand_path.read_text(encoding="utf-8") == written
+
     # A Custom Provider's entry goes into its Settings wire block, next to what is there.
     storage = StorageManager(tmp_path / "data")
     storage.save_custom_provider_settings(
