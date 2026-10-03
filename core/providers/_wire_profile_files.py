@@ -75,6 +75,14 @@ class _Leaf:
 @dataclass(frozen=True)
 class _MapOf:
     value: Any
+    reserved: Mapping[str, str] = field(default_factory=dict)
+    """Keys the map must not carry, each with the reason reported when it does."""
+
+
+_TRANSPORT_OWNED_BODY_KEYS: Mapping[str, str] = {
+    "stream": "the request path decides streaming",
+}
+"""Request body keys that ``body_defaults`` and ``extra_body`` cannot set."""
 
 
 @dataclass(frozen=True)
@@ -186,8 +194,8 @@ PROFILE_SCHEMA: dict[str, Any] = {
         "output_limit_collapse": _bool(),
         "allowed_parameters": _string_list(nullable=True),
         "parameters": _MapOf(_PARAMETER_RULE),
-        "body_defaults": _MapOf(_Json()),
-        "extra_body": _MapOf(_Json()),
+        "body_defaults": _MapOf(_Json(), _TRANSPORT_OWNED_BODY_KEYS),
+        "extra_body": _MapOf(_Json(), _TRANSPORT_OWNED_BODY_KEYS),
         "extra_headers": _MapOf(_string()),
         "tool_schema": _enum(TOOL_SCHEMA_PROFILES),
         "tool_call_ids": _enum(TOOL_CALL_ID_PROFILES),
@@ -352,6 +360,9 @@ def _validate_node(value: Any, node: Any, *, where: str, report: WireIssueReport
                 report(f"{where}: ignoring invalid key {key!r}")
                 continue
             if key.startswith("_"):
+                continue
+            if key in node.reserved:
+                report(f"{where}.{key}: {node.reserved[key]}, ignoring it")
                 continue
             if where.endswith(".effort_map") and key not in _EFFORT_MAP_KEYS:
                 report(f"{where}.{key}: not an effort level, ignoring it")

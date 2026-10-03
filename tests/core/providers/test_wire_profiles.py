@@ -114,7 +114,11 @@ def test_invalid_values_are_reported_and_omitted_individually() -> None:
         {
             "format_version": 1,
             "defaults": {
-                "request": {"output_limit_field": "max_completion_tokens", "tool_schema": "loose"},
+                "request": {
+                    "output_limit_field": "max_completion_tokens",
+                    "tool_schema": "loose",
+                    "extra_body": {"stream": False, "store": False},
+                },
                 "reasoning": {"levels": ["low", "ultra"], "dialect": "reasoning_effort"},
                 "bogus": True,
             },
@@ -129,13 +133,18 @@ def test_invalid_values_are_reported_and_omitted_individually() -> None:
     )
 
     assert parsed is not None
-    assert dict(parsed.defaults["request"]) == {"output_limit_field": "max_completion_tokens"}
+    request = parsed.defaults["request"]
+    assert request["output_limit_field"] == "max_completion_tokens"
+    # The request path decides streaming; a body rule cannot.
+    assert dict(request["extra_body"]) == {"store": False}
+    assert set(request) == {"output_limit_field", "extra_body"}
     assert dict(parsed.defaults["reasoning"]) == {"dialect": "reasoning_effort"}
     assert [rule.index for rule in parsed.rules] == [0]
     assert dict(parsed.models["m"].values) == {"replay": {}}
     assert parsed.models["m"].verification is None
-    assert len(issues) == 6
+    assert len(issues) == 7
     assert any("tool_schema" in issue for issue in issues)
+    assert any("extra_body.stream" in issue for issue in issues)
     assert any("colour" in issue for issue in issues)
 
 
