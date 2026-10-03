@@ -18,6 +18,8 @@ from ._tools import ACTIONS
 type Point = tuple[int, int]
 
 READ_ACTIONS = frozenset({"screenshot", "zoom", "cursor_position", "wait"})
+# Keyboard input goes to the foreground window, wherever the pointer is.
+KEYBOARD = frozenset({"type", "key", "hold_key"})
 CLICKS = {
     "left_click": ("left", 1),
     "right_click": ("right", 1),
@@ -30,19 +32,22 @@ DEFAULT_SCROLL_AMOUNT = 3
 DEFAULT_WAIT_SECONDS = 1.0
 
 _FIELDS: dict[str, frozenset[str]] = {
-    "screenshot": frozenset({"scale", "display"}),
-    "zoom": frozenset({"region", "scale"}),
-    **dict.fromkeys(CLICKS, frozenset({"coordinate", "text"})),
-    "mouse_move": frozenset({"coordinate"}),
-    "left_click_drag": frozenset({"coordinate", "start_coordinate", "text"}),
-    "left_mouse_down": frozenset({"coordinate"}),
-    "left_mouse_up": frozenset({"coordinate"}),
-    "scroll": frozenset({"coordinate", "scroll_direction", "scroll_amount", "text"}),
-    "type": frozenset({"text"}),
-    "key": frozenset({"text", "repeat"}),
-    "hold_key": frozenset({"text", "duration"}),
+    "screenshot": frozenset({"scale", "display", "view"}),
+    "zoom": frozenset({"region", "scale", "screenshot_id"}),
+    **dict.fromkeys(CLICKS, frozenset({"coordinate", "text", "screenshot_id"})),
+    "mouse_move": frozenset({"coordinate", "screenshot_id"}),
+    "left_click_drag": frozenset({"coordinate", "start_coordinate", "text", "screenshot_id"}),
+    "left_mouse_down": frozenset({"coordinate", "screenshot_id"}),
+    "left_mouse_up": frozenset({"coordinate", "screenshot_id"}),
+    "scroll": frozenset(
+        {"coordinate", "scroll_direction", "scroll_amount", "text", "screenshot_id"}
+    ),
+    # On keyboard actions screenshot_id names the image whose app must still be in front.
+    "type": frozenset({"text", "screenshot_id"}),
+    "key": frozenset({"text", "repeat", "screenshot_id"}),
+    "hold_key": frozenset({"text", "duration", "screenshot_id"}),
     "wait": frozenset({"duration"}),
-    "cursor_position": frozenset(),
+    "cursor_position": frozenset({"screenshot_id"}),
 }
 
 
@@ -65,6 +70,8 @@ class Action:
     region: tuple[int, int, int, int] | None = None
     scale: float = 1.0
     display: str | None = None
+    view: str | None = None
+    screenshot_id: str | None = None
     notes: tuple[str, ...] = ()
 
     @property
@@ -126,7 +133,7 @@ def parse_action(arguments: Mapping[str, Any]) -> Action:
         values["point"] = _point(arguments["coordinate"], "coordinate")
     elif name in {"mouse_move", "left_click_drag"}:
         raise ActionError(
-            f'{name} needs "coordinate": [x, y] from the latest screenshot, for example '
+            f'{name} needs "coordinate": [x, y] in a screenshot or zoom image, for example '
             f'{{"action":"{name}","coordinate":[640, 360]}}.'
         )
     if name == "left_click_drag" and arguments.get("start_coordinate") is not None:
@@ -173,6 +180,15 @@ def parse_action(arguments: Mapping[str, Any]) -> Action:
         values["scale"] = float(arguments["scale"])
     if name == "screenshot" and isinstance(arguments.get("display"), str):
         values["display"] = arguments["display"].strip() or None
+    if name == "screenshot":
+        values["view"] = arguments.get("view")
+        if values["view"] == "window" and values.get("display") is not None:
+            raise ActionError(
+                'view "window" follows the foreground window. Omit display, or use '
+                'view "display" to capture a selected monitor. Nothing was done.'
+            )
+    if "screenshot_id" in fields:
+        values["screenshot_id"] = arguments.get("screenshot_id")
     return Action(**values, notes=tuple(notes))
 
 
@@ -227,7 +243,7 @@ def _region(value: Any) -> tuple[int, int, int, int]:
             return x0, y0, x1, y1
     raise ActionError(
         'zoom needs "region": [x0, y0, x1, y1], the top-left and bottom-right corners of a '
-        'rectangle in the latest screenshot, for example {"action":"zoom","region":'
+        'rectangle in a screenshot, for example {"action":"zoom","region":'
         "[100, 200, 500, 400]}."
     )
 
@@ -257,6 +273,7 @@ def _seconds(value: Any, name: str, default: float | None) -> tuple[float, str |
 
 __all__ = [
     "CLICKS",
+    "KEYBOARD",
     "READ_ACTIONS",
     "Action",
     "ActionError",

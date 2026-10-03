@@ -212,6 +212,7 @@ class WindowsTarget(WindowsInput):
             right=right,
             bottom=bottom,
             elevated=resolver.elevated(facts),
+            owner=_win32.window_owner(handle),
         )
 
     @staticmethod

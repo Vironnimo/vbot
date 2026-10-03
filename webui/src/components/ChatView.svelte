@@ -38,6 +38,7 @@
   import { createChatViewNavigation } from './chat/view/navigation.svelte.js';
   import { createChatViewActions } from './chat/view/actions.svelte.js';
   import { createChatViewLayout } from './chat/view/layout.svelte.js';
+  import { createSessionChanges } from './chat/view/sessionChanges.svelte.js';
   import './chat/view/chatView.css';
 
   let {
@@ -267,6 +268,21 @@
     },
   });
 
+  const sessionChanges = createSessionChanges({
+    get target() {
+      return target;
+    },
+    get chatController() {
+      return chatController;
+    },
+    get sessionsRefreshToken() {
+      return sessionsRefreshToken;
+    },
+    get timelineItems() {
+      return activeTimelineItems;
+    },
+  });
+
   let showSessionDrawer = $state(false);
   const componentId = $props.id();
   const chatTitleId = `${componentId}-title`;
@@ -484,13 +500,6 @@
       : '';
     const refreshKey = `${sessionsRefreshToken}:${reconnectRevision}`;
     untrack(() => chatController.syncAgentActivity(addresses, refreshKey));
-  });
-
-  // A shown Session of an identity Agent outside the roster, such as the
-  // hidden Librarian, loads that Agent's payload like the roster has it.
-  $effect(() => {
-    const agentId = target.hiddenAgentToLoad;
-    if (agentId) untrack(() => void chatController.loadHiddenAgent(agentId));
   });
 
   $effect(() => {
@@ -995,7 +1004,8 @@
                   target.activeSessionState,
                 )}
                 onForceCompaction={actions.handleCompactContext}
-                contextWindow={target.activeAgent?.context_window}
+                contextWindow={target.activeSessionState?.contextUsage
+                  ?.context_window}
                 compactionPolicy={target.activeSessionState?.compactionPolicy}
                 usage={target.activeSessionState?.usage}
                 sessionUsage={target.activeSessionState?.sessionUsage}
@@ -1029,6 +1039,8 @@
           ?.backgroundBashStatuses}
         backgroundBashProcesses={chatState.backgroundBashProcesses}
         reflectionTasks={reflectionTaskRows(target.activeSessionState)}
+        sessionStats={sessionChanges.stats}
+        onSessionStatsWanted={sessionChanges.setWanted}
         parentSession={navigation.sessionParentLink}
         onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
         onNavigateToParentSession={navigation.navigateToParentSession}

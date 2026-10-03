@@ -71,6 +71,44 @@ async function openSessionInfoLink(selector, text) {
 describe('ChatView Sessions', () => {
   const chat = setupChatViewTestSuite();
 
+  describe('Session information', () => {
+    it('reads the Session change statistics from the server while it is open', async () => {
+      const answers = [
+        { files: 1, added: 3, removed: 1, file_stats: [] },
+        { files: 2, added: 5, removed: 1, file_stats: [] },
+      ];
+      const fallback = createChatRpcMock();
+      rpcMock.mockImplementation(async (method, params) =>
+        method === 'session.change_stats'
+          ? {
+              change_stats:
+                answers[rpcCalls('session.change_stats').length - 1] ?? null,
+            }
+          : fallback(method, params),
+      );
+      const props = reactiveProps({ sessionsRefreshToken: 0 });
+      await chat.mountChat(props);
+      const statsText = () =>
+        document.querySelector('.chat-activity__stats-value')?.textContent ??
+        '';
+
+      // Closed, the panel asks for nothing.
+      expect(rpcCalls('session.change_stats')).toEqual([]);
+      document.querySelector('.chat-activity__rail').click();
+      flushSync();
+      await waitForCondition(() => statsText().includes('+3'));
+      expect(rpcCalls('session.change_stats')).toEqual([
+        { agent_id: 'alpha', session_id: 'session-1' },
+      ]);
+
+      // A Sessions refresh (a Run ended somewhere) reads them again.
+      props.sessionsRefreshToken = 1;
+      flushSync();
+      await waitForCondition(() => statsText().includes('+5'));
+      expect(rpcCalls('session.change_stats')).toHaveLength(2);
+    });
+  });
+
   describe('New session', () => {
     it.each([
       ['reuses an already empty Session', { 'session-1': [] }, 0],
@@ -937,28 +975,23 @@ describe('ChatView Sessions', () => {
   });
 
   describe('Librarian Session', () => {
-    it('opens a Session of the hidden Librarian like any Agent and continues it', async () => {
-      const baseRpc = createChatRpcMock({
-        contextUsage: { tokens: 32768, estimated: false },
-        sessionMessages: {
-          'lib-1': [message('lib-summary', 'Merged deploy notes')],
-        },
-        streamHandler: ({ agent_id: agentId, session_id: sessionId }) => {
-          if (agentId === 'librarian' && sessionId === 'lib-1') {
-            return runningRun('librarian-continue');
-          }
-          throw new Error(`Unexpected stream target: ${agentId}/${sessionId}`);
-        },
-      });
-      rpcMock.mockImplementation(async (method, params) =>
-        method === 'agent.get' && params.id === 'librarian'
-          ? createAgent({
-              id: 'librarian',
-              name: t('librarian.name'),
-              builtin: 'librarian',
-              context_window: 131072,
-            })
-          : baseRpc(method, params),
+    it('opens a Session of the hidden Librarian like any Session and continues it', async () => {
+      rpcMock.mockImplementation(
+        createChatRpcMock({
+          contextUsage: { tokens: 32768, estimated: false },
+          contextWindow: 131072,
+          sessionMessages: {
+            'lib-1': [message('lib-summary', 'Merged deploy notes')],
+          },
+          streamHandler: ({ agent_id: agentId, session_id: sessionId }) => {
+            if (agentId === 'librarian' && sessionId === 'lib-1') {
+              return runningRun('librarian-continue');
+            }
+            throw new Error(
+              `Unexpected stream target: ${agentId}/${sessionId}`,
+            );
+          },
+        }),
       );
       await chat.mountChat(
         {
@@ -983,8 +1016,8 @@ describe('ChatView Sessions', () => {
         document.querySelector('.chat-header__agent-picker').textContent.trim(),
       ).toBe(t('librarian.name'));
       expect(composerInput().disabled).toBe(false);
-      // Its own Agent payload gives the context window, so the context ring
-      // shows the Session's fill like for a roster Agent.
+      // The Session's Context names its window, so the ring shows without the
+      // hidden Agent in the roster.
       await waitForCondition(() =>
         Boolean(document.querySelector('.context-ring')),
       );

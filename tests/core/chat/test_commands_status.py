@@ -416,6 +416,20 @@ def test_status_text_marks_an_estimated_context_and_omits_its_cache() -> None:
     assert "Turn count: 1" in text
     assert "App uptime:" in text
 
+    # The window of the Model that answered, recorded with the Context, wins over
+    # the Agent's current Model.
+    answered = _cached_turn(
+        {
+            "input_tokens": 987,
+            "input_tokens_estimated": True,
+            "context_usage": {"tokens": 987, "estimated": True, "context_window": 128_000},
+        }
+    )
+    text = build_status_text(
+        _make_agent(), [messages[0], answered], context_window=200_000, started_at=_APP_STARTED
+    )
+    assert "Context usage: ~987 / 128000" in text
+
 
 def _two_cached_turns() -> list[ChatMessage]:
     """One fully measured turn, then one whose Provider omitted only the output."""

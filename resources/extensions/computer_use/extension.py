@@ -582,14 +582,15 @@ class ComputerUseService:
         return await self._handle(context, "computer", work)
 
     async def _computer(self, context: ToolContext, desktop: Desktop, action: Action) -> str:
-        exact = bool(action.frame_points()) or action.region is not None
-        frame = await self._on_worker(desktop.frame, exact)
+        frame = await self._on_worker(desktop.frame, action)
         desktop.check_bounds(action, frame)
         lines: list[str] = []
         try:
             if action.name == "screenshot":
                 lines.append(
-                    await self._on_worker(desktop.screenshot, action.scale, action.display)
+                    await self._on_worker(
+                        desktop.screenshot, action.scale, action.display, action.view
+                    )
                 )
             elif action.name == "zoom":
                 lines.append(await self._on_worker(desktop.zoom, frame, action))
@@ -639,11 +640,12 @@ class ComputerUseService:
         return await self._handle(context, "computer_batch", work)
 
     async def _batch(self, context: ToolContext, desktop: Desktop, actions: list[Action]) -> str:
-        exact = any(action.frame_points() or action.region is not None for action in actions)
-        frame = await self._on_worker(desktop.frame, exact)
+        frames = []
         for number, action in enumerate(actions, start=1):
             try:
+                frame = await self._on_worker(desktop.frame, action)
                 desktop.check_bounds(action, frame)
+                frames.append(frame)
             except CallRefusedError as refusal:
                 raise CallRefusedError(
                     refusal.code, f"Action {number}: {refusal} Nothing was run."
@@ -652,7 +654,7 @@ class ComputerUseService:
         sent = False
         number = 0
         try:
-            for number, action in enumerate(actions, start=1):
+            for number, (action, frame) in enumerate(zip(actions, frames, strict=True), start=1):
                 if action.sends_input and sent:
                     await self._pause(STEP_SETTLE_SECONDS)
                 self._check_stop()
@@ -677,7 +679,7 @@ class ComputerUseService:
         self, context: ToolContext, desktop: Desktop, action: Action, frame: Any
     ) -> str:
         if action.name == "screenshot":
-            return await self._on_worker(desktop.screenshot, action.scale)
+            return await self._on_worker(desktop.screenshot, action.scale, None, action.view)
         if action.name == "zoom":
             return await self._on_worker(desktop.zoom, frame, action)
         if action.name == "cursor_position":
@@ -965,6 +967,7 @@ def register(api: ExtensionAPI) -> None:
     shared: dict[str, Any] = {
         "requires_opt_in": True,
         "parallel_safe": False,
+        "open_input_schema": True,
         "ready": service.ready,
         "readiness_hint": READINESS_HINT,
         "result_schema": RESULT_SCHEMA,

@@ -231,6 +231,15 @@ class ChatSession:
             )
         )
 
+    async def record_change_stats_async(self, change_stats: JsonObject) -> None:
+        """Store the bound running Run's change statistics so far."""
+        if self.run_id is None:
+            raise ChatSessionError("Change statistics need a Run-bound Session")
+        run_id = self.run_id
+        await self._store.run_async(
+            lambda: self._store.record_run_changes(self.address, run_id, change_stats)
+        )
+
     def append_continuation_record(self, record: JsonObject) -> None:
         self.append_continuation_records([record])
 

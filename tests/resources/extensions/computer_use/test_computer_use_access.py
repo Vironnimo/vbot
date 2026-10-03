@@ -30,6 +30,7 @@ async def test_by_default_every_app_takes_input_without_approval(computer: Harne
         (VBOT, {"action": "left_click", "coordinate": [1250, 50], "text": "shift"}),
     ):
         computer.target.front(app)
+        await computer.computer(action="screenshot", view="display")
         assert (await computer.computer(**arguments))["ok"]
     assert len(computer.target.inputs) == 3
 
@@ -217,6 +218,7 @@ async def test_asking_refuses_input_unless_the_foreground_app_and_each_point_are
     computer.ask_per_app()
     await computer.grant("Notepad")
     computer.target.front(front)
+    await computer.computer(action="screenshot", view="display")
     computer.target.inputs.clear()
     result = await computer.computer(**arguments)
     assert result["error"]["code"] == "access_required"
@@ -228,7 +230,7 @@ async def test_asking_hides_every_window_of_apps_not_approved(computer: Harness)
     computer.ask_per_app()
     await computer.grant("Notepad")
     context = computer.context_for("computer")
-    result = await computer.call("computer", {"action": "screenshot"}, context)
+    result = await computer.call("computer", {"action": "screenshot", "view": "display"}, context)
     assert model_text(result).endswith(
         "Hidden apps (gray, not approved): Google Chrome, Windows Terminal, Slack, vBot, "
         "File Explorer."

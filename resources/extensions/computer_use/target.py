@@ -73,6 +73,7 @@ class WindowInfo:
     right: int
     bottom: int
     elevated: bool
+    owner: int = 0
 
     def contains(self, x: int, y: int) -> bool:
         return self.left <= x < self.right and self.top <= y < self.bottom

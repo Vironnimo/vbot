@@ -1,0 +1,25 @@
+{
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "includeCoAuthoredBy": false,
+  "env": {
+    "GIT_AUTHOR_NAME": "Julian B.",
+    "GIT_AUTHOR_EMAIL": "virojb@web.de",
+    "GIT_COMMITTER_NAME": "Julian B.",
+    "GIT_COMMITTER_EMAIL": "virojb@web.de"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git config core.hooksPath .githooks"
+          }
+        ]
+      }
+    ]
+  }
+}

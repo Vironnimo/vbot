@@ -559,6 +559,11 @@ class ChatMessage:
             change_stats=dict(change_stats) if change_stats is not None else None,
         )
 
+    @staticmethod
+    def validate_change_stats(change_stats: JsonObject) -> None:
+        """Validate Run change statistics in the shape a ``run_summary`` carries them."""
+        _message_validation._validate_change_stats(change_stats)
+
     @classmethod
     def compaction_checkpoint(
         cls,

@@ -78,6 +78,25 @@ class RequestContextUsage:
         model_id: str,
         tools: Sequence[Mapping[str, Any]],
         scope: str,
+        context_window: int | None = None,
+    ) -> JsonObject:
+        """Project the request's Context in tokens.
+
+        ``context_window`` is the effective window of the Model the request goes
+        to; the projection carries it, so the Session's Context usage names the
+        window it fills.
+        """
+        return with_context_window(
+            self._project(messages, adapter, model_id, tools, scope), context_window
+        )
+
+    def _project(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        adapter: Any,
+        model_id: str,
+        tools: Sequence[Mapping[str, Any]],
+        scope: str,
     ) -> JsonObject:
         key = self._context_key(messages, adapter, model_id, tools, scope)
         request_hash = _context_digest(messages)
@@ -171,7 +190,10 @@ def latest_session_context_usage(messages: list[ChatMessage]) -> JsonObject | No
             return None
         delta_messages = _provider_visible_delta(messages[checkpoint_index + 1 :])
         delta_tokens, _ = estimate_request_input_tokens(delta_messages)
-        return {"tokens": context_after + delta_tokens, "estimated": True}
+        return with_context_window(
+            {"tokens": context_after + delta_tokens, "estimated": True},
+            latest_context_window(messages),
+        )
 
     assert assistant_index is not None
     saved_projection = (messages[assistant_index].usage or {}).get("context_usage")
@@ -190,14 +212,36 @@ def latest_session_context_usage(messages: list[ChatMessage]) -> JsonObject | No
     return saved
 
 
-def checkpoint_context_usage(checkpoint: ChatMessage) -> JsonObject | None:
+def checkpoint_context_usage(
+    checkpoint: ChatMessage, context_window: int | None = None
+) -> JsonObject | None:
     """Project the estimated post-Compaction Context from one checkpoint."""
 
     usage = checkpoint.usage or {}
     context_after = _optional_non_negative_int(usage.get("context_tokens_after"))
     if context_after is None:
         return None
-    return {"tokens": context_after, "estimated": True}
+    return with_context_window({"tokens": context_after, "estimated": True}, context_window)
+
+
+def with_context_window(usage: JsonObject, context_window: int | None) -> JsonObject:
+    """Return ``usage`` naming the Model window it fills, when that is known."""
+    if context_window is None or context_window <= 0:
+        return usage
+    return {**usage, "context_window": context_window}
+
+
+def latest_context_window(messages: Sequence[ChatMessage]) -> int | None:
+    """Return the window of the Model that last answered in the Session, if recorded."""
+    for message in reversed(messages):
+        if message.role != "assistant" or not isinstance(message.usage, dict):
+            continue
+        projection = message.usage.get("context_usage")
+        if isinstance(projection, dict):
+            window = _optional_non_negative_int(projection.get("context_window"))
+            if window:
+                return window
+    return None
 
 
 def aggregate_session_usage(messages: list[ChatMessage]) -> JsonObject:

@@ -623,11 +623,17 @@ def _strip_pinned_connection_suffix(model_string: str) -> str:
 
 
 def _context_usage_text_from_facts(facts: StatusSessionFacts, context_window: int | None) -> str:
-    if context_window is None or context_window <= 0:
-        return STATUS_PLACEHOLDER
-
     latest_usage = facts.latest_assistant_usage
     if latest_usage is None:
+        return STATUS_PLACEHOLDER
+    # Prefer the window of the Model that answered, recorded with its Context.
+    projection = latest_usage.get("context_usage")
+    recorded = (
+        _coerce_int(projection.get("context_window")) if isinstance(projection, dict) else None
+    )
+    if recorded is not None and recorded > 0:
+        context_window = recorded
+    if context_window is None or context_window <= 0:
         return STATUS_PLACEHOLDER
 
     input_tokens = _coerce_int(latest_usage.get("input_tokens"))

@@ -9,11 +9,14 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from PIL import Image
+
 from core.tools import ToolContext
 
 from ._access import Access
-from ._actions import CLICKS, Action, Point
+from ._actions import CLICKS, KEYBOARD, Action, Point
 from ._screens import (
+    Area,
     Frame,
     choose_display,
     describe_displays,
@@ -54,26 +57,68 @@ class Desktop:
 
     # Frames and displays
 
-    def frame(self, exact: bool) -> Frame:
-        """Return the frame coordinates refer to: the latest screenshot's display.
+    def frame(self, action: Action) -> Frame:
+        """Resolve an image reference before the call or batch sends any input."""
+        if action.name in KEYBOARD:
+            # Keys need no coordinates; the image only tells which app was in front.
+            images = self.state.images
+            found = images.get(action.screenshot_id or "") or images.get(
+                self.state.latest_image or ""
+            )
+            return found or Frame.of(self._chosen(self.target.displays()))
+        needs_image = (
+            bool(action.frame_points())
+            or action.region is not None
+            or action.name == "cursor_position"
+            or action.screenshot_id is not None
+        )
+        if not needs_image:
+            return Frame.of(self._chosen(self.target.displays()))
+        reference = action.screenshot_id or self.state.latest_image
+        frame = self.state.images.get(reference or "")
+        if frame is None:
+            which = (
+                f'Image "{reference}" is not available in this Session'
+                if reference
+                else ("There is no screenshot in this Session yet")
+            )
+            raise CallRefusedError(
+                "invalid_arguments",
+                f'{which}. Take a new screenshot with {{"action":"screenshot"}} and use '
+                "its screenshot_id and pixel coordinates. Nothing was done.",
+            )
+        self.validate_frame(frame)
+        return frame
 
-        With *exact*, coordinates are about to be used, so a display that changed
-        size or disappeared since that screenshot refuses the call.
-        """
-        displays = self.target.displays()
-        shown = self.state.shown
-        if shown is not None:
-            current = next((display for display in displays if display.id == shown.id), None)
-            if current is not None and display_area(current) == display_area(shown):
-                return Frame.of(current)
-            if exact:
+    def validate_frame(self, frame: Frame) -> None:
+        """Do not apply an observed mapping after its display/window geometry changes."""
+        if not frame.screenshot_id:
+            return
+        current = {item.id: item for item in self.target.displays()}
+        if current != {item.id: item for item in frame.displays}:
+            raise CallRefusedError(
+                "invalid_arguments",
+                f'Image "{frame.screenshot_id}" no longer fits because the display layout '
+                'changed. Take a new screenshot with {"action":"screenshot"} and use its '
+                "screenshot_id and coordinates. Nothing was sent for this action.",
+            )
+        if frame.window is not None:
+            observed = frame.window
+            window = next(
+                (item for item in self.target.windows() if item.handle == observed.handle), None
+            )
+            if (
+                window is None
+                or not window.app.matches(observed.app)
+                or (window.left, window.top, window.right, window.bottom)
+                != (observed.left, observed.top, observed.right, observed.bottom)
+            ):
                 raise CallRefusedError(
                     "invalid_arguments",
-                    "The display of the latest screenshot changed size or was disconnected, so "
-                    'its coordinates no longer fit. Take a new screenshot with {"action":'
-                    '"screenshot"} and use its coordinates.',
+                    f'The window in image "{frame.screenshot_id}" moved, resized or closed. '
+                    'Take a new screenshot with {"action":"screenshot"} and use its '
+                    "screenshot_id and coordinates. Nothing was sent for this action.",
                 )
-        return Frame.of(self._chosen(displays))
 
     def _chosen(self, displays: Sequence[Display]) -> Display:
         foreground = self.target.foreground()
@@ -96,9 +141,7 @@ class Desktop:
     @staticmethod
     def check_bounds(action: Action, frame: Frame) -> None:
         """Refuse coordinates outside *frame* before anything runs."""
-        size = (
-            f'the latest screenshot of display "{frame.display.name}", which is {frame.size_text}'
-        )
+        size = f'image "{frame.screenshot_id}", which is {frame.size_text} pixels'
         for name, point in (("start_coordinate", action.start), ("coordinate", action.point)):
             if point is not None and not frame.contains(*point):
                 raise CallRefusedError(
@@ -116,35 +159,63 @@ class Desktop:
 
     # Images
 
-    def screenshot(self, scale: float = 1.0, display: str | None = None) -> str:
-        """Capture, mask and publish the current display; return its description."""
+    def screenshot(
+        self, scale: float = 1.0, display: str | None = None, view: str | None = None
+    ) -> str:
+        """Publish the foreground window by default, or an explicitly selected display."""
         displays = self.target.displays()
         if display is not None:
             self._select(displays, display)
+            self.state.view = "display"
+        if view is not None:
+            self.state.view = view
+            if view == "window":
+                self.state.display = "auto"
         chosen = self._chosen(displays)
         windows = self.target.windows()
         visible = self.access.window_visible
-        covered, hidden = mask(self.target.capture(chosen), display_area(chosen), windows, visible)
-        frame = Frame.of(chosen)
-        size = (frame.width, frame.height)
-        image = resized(covered, size)
-        if scale < 1:
-            size = scaled(size, scale)
-            image = resized(image, size)
-        publish_image(self.context, image)
-        self.state.shown = chosen
+        foreground = self.target.foreground()
+        area = display_area(chosen)
+        window = None
+        if self.state.view == "window" and foreground is not None and visible(foreground):
+            # Include visible owned menus/dialogs even when they extend past the window.
+            related = [foreground]
+            handles = {foreground.handle}
+            while True:
+                children = [
+                    item
+                    for item in windows
+                    if item.owner in handles
+                    and item.handle not in handles
+                    and item.app.matches(foreground.app)
+                    and visible(item)
+                ]
+                if not children:
+                    break
+                related.extend(children)
+                handles.update(item.handle for item in children)
+            candidate = (
+                max(min(item.left for item in related), min(item.left for item in displays)),
+                max(min(item.top for item in related), min(item.top for item in displays)),
+                min(
+                    max(item.right for item in related),
+                    max(item.left + item.width for item in displays),
+                ),
+                min(
+                    max(item.bottom for item in related),
+                    max(item.top + item.height for item in displays),
+                ),
+            )
+            if candidate[0] < candidate[2] and candidate[1] < candidate[3]:
+                area, window = candidate, foreground
         number = next(index for index, item in enumerate(displays, 1) if item.id == chosen.id)
         which = f" {number} of {len(displays)}" if len(displays) > 1 else ""
-        text = f'Screenshot of display{which} "{chosen.name}": {frame.size_text} frame'
-        if size != (frame.width, frame.height):
-            text += (
-                f", image scaled to {size[0]}x{size[1]}; coordinates use the "
-                f"{frame.size_text} frame"
-            )
-        text += "."
-        if hidden:
-            text += f" Hidden apps (gray, not approved): {', '.join(hidden)}."
-        foreground = self.target.foreground()
+        label = (
+            f'Screenshot of foreground window "{window.app.name}"'
+            if window is not None
+            else f'Screenshot of display{which} "{chosen.name}"'
+        )
+        text = self._publish(area, displays, chosen, scale, label, window)
         if self.state.display != "auto" and foreground is not None and visible(foreground):
             holding = display_of_window(displays, foreground)
             if holding is not None and holding.id != chosen.id:
@@ -154,56 +225,91 @@ class Desktop:
                 )
         return text
 
-    def zoom(self, frame: Frame, action: Action) -> str:
-        """Publish a fresh, masked capture of a frame region at physical resolution."""
-        assert action.region is not None
-        area = frame.region(*action.region)
-        display = frame.display
-        capture = self.target.capture(display)
-        crop = capture.crop(
-            (
-                area[0] - display.left,
-                area[1] - display.top,
-                area[2] - display.left,
-                area[3] - display.top,
-            )
+    def _publish(
+        self,
+        area: Area,
+        displays: Sequence[Display],
+        display: Display,
+        scale: float,
+        label: str,
+        window: WindowInfo | None = None,
+    ) -> str:
+        capture = Image.new("RGB", (area[2] - area[0], area[3] - area[1]))
+        for item in displays:
+            left, top = max(area[0], item.left), max(area[1], item.top)
+            right = min(area[2], item.left + item.width)
+            bottom = min(area[3], item.top + item.height)
+            if left < right and top < bottom:
+                image = self.target.capture(item).crop(
+                    (left - item.left, top - item.top, right - item.left, bottom - item.top)
+                )
+                capture.paste(image, (left - area[0], top - area[1]))
+        visible = self.access.window_visible
+        covered, hidden = mask(capture, area, self.target.windows(), visible)
+        size = scaled(fit(*covered.size), scale)
+        path = publish_image(self.context, resized(covered, size))
+        foreground = self.target.foreground()
+        front = foreground.app if foreground is not None and visible(foreground) else None
+        frame = Frame(display, *size, area, path.stem, tuple(displays), window, front)
+        self.state.images[frame.screenshot_id] = frame
+        self.state.latest_image = frame.screenshot_id
+        self.state.shown = display
+        # Keep references bounded without retaining image bytes in Session state.
+        while len(self.state.images) > 64:
+            del self.state.images[next(iter(self.state.images))]
+        ratio = frame.screen_pixels
+        detail = (
+            "Coordinates are this image's pixels, 1:1 with the screen."
+            if ratio < 1.05
+            else f"Coordinates are this image's pixels; one covers {ratio:.1f} screen pixels, "
+            "so zoom in where an exact pixel matters."
         )
-        covered, hidden = mask(crop, area, self.target.windows(), self.access.window_visible)
-        size = fit(covered.width, covered.height)
-        if action.scale < 1:
-            size = scaled(size, action.scale)
-        publish_image(self.context, resized(covered, size))
-        factor = size[0] / (action.region[2] - action.region[0])
-        text = (
-            f"Zoom of {list(action.region)}: image {size[0]}x{size[1]}, {factor:.1f}x the "
-            f"screenshot. Coordinates still use the {frame.size_text} frame of display "
-            f'"{display.name}".'
-        )
+        text = f'{label}: {size[0]}x{size[1]} pixels, screenshot_id="{frame.screenshot_id}". '
+        text += detail
         if hidden:
             text += f" Hidden apps (gray, not approved): {', '.join(hidden)}."
         return text
 
+    def zoom(self, frame: Frame, action: Action) -> str:
+        """Publish a directly clickable fresh capture of a selected image's region."""
+        assert action.region is not None
+        self.validate_frame(frame)
+        return self._publish(
+            frame.region(*action.region),
+            frame.displays,
+            frame.display,
+            action.scale,
+            f"Zoom of {list(action.region)} in image {frame.screenshot_id}",
+            frame.window,
+        )
+
     def cursor(self, frame: Frame) -> str:
+        self.validate_frame(frame)
         x, y = self.target.cursor()
-        if frame.display.contains(x, y):
+        left, top, right, bottom = frame.area
+        if left <= x < right and top <= y < bottom:
             fx, fy = frame.to_frame(x, y)
             return (
-                f"The pointer is at [{fx}, {fy}] in the {frame.size_text} frame of display "
-                f'"{frame.display.name}".'
+                f'The pointer is at [{fx}, {fy}] in image "{frame.screenshot_id}" '
+                f"({frame.size_text} pixels)."
             )
         other = next((item for item in self.target.displays() if item.contains(x, y)), None)
         where = f' on display "{other.name}"' if other is not None else ""
         return (
-            f"The pointer is outside the current display{where}. Move it with mouse_move to a "
-            "coordinate in the latest screenshot."
+            f'The pointer is outside image "{frame.screenshot_id}"{where}. Move it with '
+            "mouse_move to a coordinate in this image, or take a new screenshot."
         )
 
     # Input
 
     def act(self, action: Action, frame: Frame) -> str:
         """Check access for *action*, send its input and describe what was done."""
+        if action.uses_pointer:
+            self.validate_frame(frame)
         points = self._points(action, frame)
         self._check_access(action, frame, points)
+        if action.name in KEYBOARD and not self.input_started:
+            self._check_front(action, frame)
         self.input_started = True
         target = self.target
         modifiers = list(action.modifiers)
@@ -273,9 +379,33 @@ class Desktop:
                 raise CallRefusedError(
                     "access_required",
                     f"No app window is at {shown}, so {action.name} was not sent. Use "
-                    "coordinates on an app window in the latest screenshot.",
+                    "coordinates on an app window in that image.",
                 )
             self._allow(action, window, f"The window at {shown}")
+            if frame.window is not None and not window.app.matches(frame.window.app):
+                raise CallRefusedError(
+                    "invalid_arguments",
+                    f'The window in image "{frame.screenshot_id}" is covered at {shown}, so '
+                    f"{action.name} was not sent. Bring {frame.window.app.name} to the front "
+                    "and take a new screenshot before retrying.",
+                )
+
+    def _check_front(self, action: Action, frame: Frame) -> None:
+        """Refuse keys when another app came to the front since the Agent's image.
+
+        Only the call's first input is checked: later keys may follow a window
+        the call itself brought up, such as a dialog or the Start menu.
+        """
+        expected, current = frame.front, self.target.foreground()
+        if expected is None or current is None or current.app.matches(expected):
+            return
+        raise CallRefusedError(
+            "focus_changed",
+            f'{expected.name} was in front in image "{frame.screenshot_id}", but the foreground '
+            f"window now belongs to {current.app.name}, so {action.name} was not sent. Click "
+            "into the window you want to type into, or take a screenshot to see what is in "
+            "front.",
+        )
 
     def _allow(self, action: Action, window: WindowInfo, where: str) -> None:
         app = window.app.name

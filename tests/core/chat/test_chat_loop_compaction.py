@@ -127,7 +127,12 @@ async def test_automatic_compaction_commits_a_checkpoint_and_rebuilds_the_reques
     ]
     assert lifecycle[0].payload == {
         "context_tokens_before": 90,
-        "context_usage": {"tokens": 90, "estimated": False, "provider_input_tokens": 90},
+        "context_usage": {
+            "tokens": 90,
+            "estimated": False,
+            "provider_input_tokens": 90,
+            "context_window": 100,
+        },
     }
     assert lifecycle[1].payload["checkpoint"] == 1
     assert lifecycle[1].payload["checkpoint_id"] == checkpoint.id

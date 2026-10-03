@@ -8,6 +8,9 @@ from typing import Any, override
 
 import pytest
 
+from core.chat._queued_input import STEERING_SYSTEM_REMINDER
+from core.chat.messages import ChatMessage, InputOrigin
+from core.chat.wire_shaping import system_reminder_request_message
 from core.providers.errors import NetworkError
 from core.runs import PROVIDER_REQUEST_STATUS_EVENT, RunKind, RunStatus
 from core.tools import ToolRegistry, tool_success
@@ -17,8 +20,17 @@ from tests.core.chat.chat_loop_support import (
     StubAgent,
     StubRuntime,
     build_chat_loop,
+    build_request_messages,
     session_address,
 )
+
+
+def _steering_notes(messages: list[ChatMessage]) -> list[ChatMessage]:
+    return [
+        message
+        for message in messages
+        if message.role == "note" and message.content == STEERING_SYSTEM_REMINDER
+    ]
 
 
 class SteeringAdapter(StubAdapter):
@@ -63,8 +75,9 @@ class PausedAdapter(PolicyStubAdapter):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool_step", [False, True])
+@pytest.mark.parametrize("origin", [None, "speech_transcription", "live_voice"])
 async def test_steer_keeps_same_run_and_follows_complete_tool_batch(
-    tmp_path: Path, tool_step: bool
+    tmp_path: Path, tool_step: bool, origin: InputOrigin | None
 ) -> None:
     first = {
         "content": "Before",
@@ -88,7 +101,7 @@ async def test_steer_keeps_same_run_and_follows_complete_tool_batch(
     await asyncio.wait_for(adapter.entered.wait(), 5)
     ordinary = await loop.queue_run("coder", "Later", session_id="one")
     items = [
-        await loop.queue_run("coder", content, session_id="one")
+        await loop.queue_run("coder", content, session_id="one", input_origin=origin)
         for content in ["Steer one", "Steer two"]
     ]
     for item in reversed(items):
@@ -101,7 +114,8 @@ async def test_steer_keeps_same_run_and_follows_complete_tool_batch(
     assert run.iteration_count == 2
     assert all(item.future.result() is run for item in items)
     assert runtime.chat_run_manager.list_queued("coder", "one", project_id=None) == []
-    history = runtime.chat_sessions.get(session_address("coder", "one")).load()
+    session = runtime.chat_sessions.get(session_address("coder", "one"))
+    history = session.load()
     visible = [m for m in history if m.role in {"user", "assistant", "tool"}]
     assert [m.role for m in visible] == (
         ["user", "assistant", "tool", "tool", "user", "user", "assistant"]
@@ -113,8 +127,26 @@ async def test_steer_keeps_same_run_and_follows_complete_tool_batch(
         "Steer one",
         "Steer two",
     ]
+    steering_notes = _steering_notes(history)
+    assert len(steering_notes) == 2
+    for note in steering_notes:
+        user = history[history.index(note) + 1]
+        assert user.role == "user"
+        assert user.input_origin == origin
+        assert note.run_id == user.run_id == run.id
     sent = adapter.requests[1]["messages"]
-    assert [m["content"] for m in sent if m["role"] == "user"][-2:] == ["Steer one", "Steer two"]
+    reminder = system_reminder_request_message(STEERING_SYSTEM_REMINDER)["content"]
+    for content in ["Steer one", "Steer two"]:
+        index = next(i for i, message in enumerate(sent) if message["content"] == content)
+        assert sent[index]["role"] == "user"
+        assert sent[index - 1]["role"] == "user"
+        assert sent[index - 1]["content"].endswith(reminder)
+        assert sent[index - 1]["content"].count("<system-reminder>") == 1 + bool(origin)
+    assert not any(
+        reminder in str(message.get("content")) for message in adapter.requests[0]["messages"]
+    )
+    replayed = await build_request_messages(loop, agent, session)
+    assert replayed[-5:-1] == sent[-4:]
     assert len([m for m in history if m.role == "run_summary"]) == 1
     assert [
         e.payload.get("queue_item_id")
@@ -151,6 +183,7 @@ async def test_steering_reaches_an_internal_system_run(tmp_path: Path) -> None:
     assert item.future.result() is run
     history = runtime.chat_sessions.get(session_address("coder", "one")).load()
     assert [m.content for m in history if m.role == "user"] == ["Also check the tests"]
+    assert len(_steering_notes(history)) == 1
     sent = adapter.requests[1]["messages"]
     assert [m["content"] for m in sent if m["role"] == "user"][-1] == "Also check the tests"
 
@@ -175,6 +208,7 @@ async def test_input_selected_for_a_cancelled_run_starts_next(tmp_path: Path) ->
     await asyncio.wait_for(successor.wait(), 10)
     history = runtime.chat_sessions.get(session_address("coder", "one")).load()
     assert [m.content for m in history if m.role == "user"] == ["Original", "Retained"]
+    assert not _steering_notes(history)
 
 
 @pytest.mark.asyncio
@@ -250,6 +284,7 @@ async def test_withdrawn_steering_input_keeps_the_final_answer(tmp_path: Path) -
     assert len(adapter.requests) == 1
     history = runtime.chat_sessions.get(address).load()
     assert [m.content for m in history if m.role == "user"] == ["Original"]
+    assert not _steering_notes(history)
 
 
 @pytest.mark.asyncio

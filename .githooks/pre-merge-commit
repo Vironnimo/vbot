@@ -1,7 +1,8 @@
 #!/bin/sh
-# Check a merge commit like any other commit; see scripts/commit_check.py.
+# Check a merge commit like any other commit: refuse an AI tool identity
+# (scripts/commit_authorship.py), then run scripts/commit_check.py.
 # Enable once per clone: git config core.hooksPath .githooks
-if command -v python >/dev/null 2>&1; then
-    exec python scripts/commit_check.py
-fi
-exec python3 scripts/commit_check.py
+PYTHON=python
+command -v python >/dev/null 2>&1 || PYTHON=python3
+"$PYTHON" scripts/commit_authorship.py identity || exit 1
+exec "$PYTHON" scripts/commit_check.py

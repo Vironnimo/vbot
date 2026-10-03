@@ -17,6 +17,7 @@ from core.chat import (
 )
 from core.chat.content_blocks import ContentBlock
 from core.chat.file_mentions import expand_file_mentions, resolve_mention_root
+from core.chat.usage import with_context_window
 from core.compaction import COMPACTION_POLICY_META_KEY, effective_compaction_policy
 from core.projects import AgentResolutionError, format_agent_address
 from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem, Run, RunCancelledError
@@ -49,6 +50,7 @@ from server.rpc.event_bridge import (
 )
 from server.rpc.payloads import (
     _queued_response,
+    _resolve_context_window,
     _run_response,
     history_message,
 )
@@ -91,11 +93,15 @@ class _ChatHistoryRead:
     """One `chat.history` read: the snapshot and the Session facts the response adds.
 
     An ``unchanged`` snapshot carries no policy or reflection Runs.
+    ``context_window`` is the window of the Agent's current Model, for a
+    Context usage that records none (the Session has not answered since vBot
+    started recording the window of the Model that answered).
     """
 
     history: SessionChatHistorySnapshot
     compaction_policy: JsonObject | None
     reflection_runs: list[JsonObject] | None
+    context_window: int | None = None
 
 
 def _publish_queue_changed(state: Any, agent_id: str, session_id: str) -> None:
@@ -252,9 +258,11 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
         )
         # Present (possibly null) whenever it was read; an absent field keeps
         # the caller's value.
-        response["context_usage"] = (
-            context_usage if isinstance(context_usage, dict) else projection.context_usage
-        )
+        if not isinstance(context_usage, dict):
+            context_usage = projection.context_usage
+        if context_usage is not None and "context_window" not in context_usage:
+            context_usage = with_context_window(context_usage, read.context_window)
+        response["context_usage"] = context_usage
         if before is None:
             response["background_bash_statuses"] = projection.background_bash_statuses
     if reflection_runs is not None:
@@ -289,32 +297,42 @@ def _read_chat_history(
     )
     if history.unchanged:
         return _ChatHistoryRead(history, None, None)
+    agent = _session_agent(state, address) if before is None else None
     return _ChatHistoryRead(
         history,
-        _session_compaction_policy(state, address) if before is None else None,
+        _session_compaction_policy(state, address, agent) if agent is not None else None,
         None if active_reviews is None else _read_reflection_runs(session, active_reviews),
+        _resolve_context_window(state, str(getattr(agent, "model", "") or ""))
+        if agent is not None
+        else None,
     )
 
 
-def _session_compaction_policy(state: Any, address: SessionAddress) -> JsonObject | None:
-    """Return the Session's effective Compaction Policy (Session -> Agent -> global).
+def _session_agent(state: Any, address: SessionAddress) -> Any | None:
+    """Return the Session's Agent, ``None`` when it no longer resolves.
 
-    Accessors use it to relate Current Context Usage to automatic Compaction.
     A Session whose Agent no longer resolves through the ordinary addressing
-    (a removed Team member, a temporary Session) stays readable; its Policy is
-    reported as unknown by omitting the field.
+    (a removed Team member, a temporary Session) stays readable; the facts
+    that depend on its Agent are reported as unknown by omitting them.
     """
-    session_policy = state.runtime.chat_sessions.metadata_value(address, COMPACTION_POLICY_META_KEY)
     try:
-        agent = state.runtime.agent_resolver.resolve_agent(address.project_id, address.agent_id)
+        return state.runtime.agent_resolver.resolve_agent(address.project_id, address.agent_id)
     except AgentResolutionError as exc:
         _LOGGER.debug(
-            "Compaction Policy unavailable for history (agent=%s session=%s): %s",
+            "Agent unavailable for history (agent=%s session=%s): %s",
             format_agent_address(address.agent_id, address.project_id),
             address.session_id,
             exc,
         )
         return None
+
+
+def _session_compaction_policy(state: Any, address: SessionAddress, agent: Any) -> JsonObject:
+    """Return the Session's effective Compaction Policy (Session -> Agent -> global).
+
+    Accessors use it to relate Current Context Usage to automatic Compaction.
+    """
+    session_policy = state.runtime.chat_sessions.metadata_value(address, COMPACTION_POLICY_META_KEY)
     return effective_compaction_policy(
         session_policy,
         getattr(agent, "compaction_policy", None),

@@ -47,12 +47,24 @@ export const TERMINAL_VISIBLE_DRAFT_EVENT_TYPES = new Set([
 export const isRecord = (value) =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
+// A Session's Context usage names the window of the Model that answered
+// (`context_window`). An update that names none, such as a Compaction before
+// any answer recorded one, keeps the window already known for the Session.
+export function nextContextUsage(previous, next) {
+  if (
+    !isRecord(next) ||
+    Object.hasOwn(next, 'context_window') ||
+    !isRecord(previous) ||
+    !Object.hasOwn(previous, 'context_window')
+  ) {
+    return next ?? null;
+  }
+  return { ...next, context_window: previous.context_window };
+}
+
 export function createChatState() {
   return {
     agents: [],
-    // Identity Agents outside the roster whose Session is shown, such as the
-    // hidden Librarian: id -> the same Agent payload the roster holds.
-    hiddenAgents: {},
     selectedAgentId: '',
     sessions: {},
     loadingAgents: false,

@@ -216,7 +216,6 @@ export function createChatViewTarget(context) {
       }
       return (
         agentById(context.navigation.viewingSessionAgentId) ??
-        hiddenAgent(context.navigation.viewingSessionAgentId) ??
         overrideAgentDisplayStandIn(context.navigation.viewingSessionAgentId)
       );
     }
@@ -226,29 +225,10 @@ export function createChatViewTarget(context) {
     return selectedAgent(context.chatState);
   }
 
-  // The identity Agent outside the roster whose Session is shown, such as the
-  // hidden Librarian, once its payload has loaded: the chat surface shows it
-  // like a roster Agent (context window included) and names it in the header.
-  function hiddenAgent(agentAddress) {
-    const { agentId, projectId } = parseAgentAddress(agentAddress);
-    const agent = projectId ? null : context.chatState.hiddenAgents?.[agentId];
-    return agent ? { ...agent, __overrideAddress: agentAddress } : null;
-  }
-
-  // The identity Agent outside the roster whose Session is shown and whose
-  // payload the chat controller still has to load, '' when there is none.
-  let hiddenAgentToLoad = $derived.by(() => {
-    const address = context.navigation.viewingSessionAgentId;
-    if (!context.navigation.viewingSessionId || !address) return '';
-    const { agentId, projectId } = parseAgentAddress(address);
-    if (projectId || !agentId || agentById(agentId)) return '';
-    return context.chatState.hiddenAgents?.[agentId] ? '' : agentId;
-  });
-
   // Minimal agent-like object for an overridden session whose owner is not an
   // identity-roster agent — a project team agent's session (or a project
-  // child), a hidden Agent's session until its payload loads, or an identity
-  // agent deleted while its session is still viewed. Keeps the chat surface (header,
+  // child), the hidden Librarian's session, or an identity agent deleted
+  // while its session is still viewed. Keeps the chat surface (header,
   // banner, return button) alive instead of dead-ending on "choose an
   // agent". The bare id stays in `id` so queue and cancel-tool payloads keep
   // the bare spelling (trap 2).
@@ -261,13 +241,12 @@ export function createChatViewTarget(context) {
           ? librarianName()
           : agentId || agentAddress,
       current_session_id: '',
-      context_window: null,
       __overrideAddress: agentAddress,
     };
   }
 
   // Shape a projected team member into the minimal agent-like object the chat
-  // surface renders (header name, token badge context window). The local
+  // surface renders (header name). The local
   // session id stands in for `current_session_id` so the existing session
   // machinery reads it without a special case.
   function projectAgentAsAgent(member) {
@@ -283,7 +262,6 @@ export function createChatViewTarget(context) {
       id: member.agent_id,
       name: member.display_name || member.agent_id,
       current_session_id: projectAgentSessions[addressing.agentAddress] ?? '',
-      context_window: null,
       __projectAddress: addressing.agentAddress,
     };
   }
@@ -697,9 +675,6 @@ export function createChatViewTarget(context) {
     },
     get projectAgentStatuses() {
       return projectAgentStatuses;
-    },
-    get hiddenAgentToLoad() {
-      return hiddenAgentToLoad;
     },
     get activeAgentAddress() {
       return activeAgentAddress;

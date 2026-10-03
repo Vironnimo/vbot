@@ -1,0 +1,6 @@
+#!/bin/sh
+# Refuse to push commits that carry AI tool attribution; see scripts/commit_authorship.py.
+# Enable once per clone: git config core.hooksPath .githooks
+PYTHON=python
+command -v python >/dev/null 2>&1 || PYTHON=python3
+exec "$PYTHON" scripts/commit_authorship.py push "$1"

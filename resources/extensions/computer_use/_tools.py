@@ -45,26 +45,28 @@ MAX_BATCH_ACTIONS = 30
 
 COMPUTER_DESCRIPTION = (
     "Operate the desktop of the computer the vBot server runs on (Windows) with "
-    "screenshots, mouse and keyboard. Coordinates are pixels [x, y] in the latest "
-    "screenshot of the current display; every result states that frame's size. Input "
-    "actions return a new screenshot about half a second later. Use zoom to read small "
-    "text, computer_batch for several predictable steps, and computer_apps to bring an "
-    "app to the front. If the user requires approval per app, apps not approved yet "
-    "appear as gray boxes and input into them is refused. This is the user's real mouse "
-    "and keyboard. From your first call until you hand the computer back with "
-    'computer_apps {"action":"release"}, a frame around the screens shows the user that '
-    "you control it, and the user can stop you at any time with the Stop button or by "
-    "pressing Esc twice. Control also ends with your reply or after 2 minutes without a "
-    "call."
+    "screenshots, mouse and keyboard. Start with a screenshot; it shows the foreground "
+    "window unless you choose a whole display with view. Coordinates are [x, y] pixels of "
+    "a returned image, a screenshot or a zoom, counted from its top-left corner: use the "
+    "position where you see the target in that image, and the Tool maps it to the screen. "
+    "Input actions return a new screenshot about half a second later. Results say when an "
+    "image is scaled down; zoom into a region to read small text or to hit exact screen "
+    "pixels. If you have computer_batch, use it for predictable steps. If you have "
+    "computer_apps, use it to bring apps to the front and to release the computer when you "
+    "are done. If the user requires approval per app, apps not approved yet appear as gray "
+    "boxes and input into them is refused. This is the user's real mouse and keyboard: a "
+    "frame around the screens shows that you control it until you release it, your reply "
+    "ends or 2 minutes pass without a call, and the user can stop you at any time with the "
+    "Stop button or by pressing Esc twice."
 )
 
 COMPUTER_BATCH_DESCRIPTION = (
     "Run several computer actions in one call when you can predict the steps, such as "
     "clicking a field, typing and pressing enter. Actions run in order; the batch stops "
     "at the first one that fails, and the result says which steps ran. Each action takes "
-    "the same fields as computer, except display. All coordinates refer to the "
-    "screenshot taken before this call, even after a screenshot inside the batch. "
-    "Screenshot and zoom actions return their images in order, and a batch that sent "
+    "the same fields as computer, except display. Coordinates refer to images you received "
+    "before this call: the latest one, or the one named by screenshot_id. Screenshot and "
+    "zoom actions return their images after the batch, in order, and a batch that sent "
     "input ends with a fresh screenshot."
 )
 
@@ -93,12 +95,29 @@ def _point_schema(description: str) -> dict[str, Any]:
 _ACTION_PROPERTIES: dict[str, Any] = {
     "action": {"type": "string", "enum": list(ACTIONS), "description": "The action to perform."},
     "coordinate": _point_schema(
-        "[x, y] in the latest screenshot: where to click, move, scroll or end a drag. "
+        "[x, y] in the selected image: where to click, move, scroll or end a drag. "
         "Omit on a click or scroll to use the pointer's position."
     ),
     "start_coordinate": _point_schema(
-        "[x, y] where left_click_drag starts. Omit to start at the pointer's position."
+        "[x, y] in the selected image where left_click_drag starts. "
+        "Omit to start at the pointer's position."
     ),
+    "screenshot_id": {
+        "type": "string",
+        "description": (
+            "The screenshot_id of the image that coordinate, start_coordinate or region "
+            "refer to, as a result gave it. Omit to use the latest image."
+        ),
+    },
+    "view": {
+        "type": "string",
+        "enum": ["window", "display"],
+        "description": (
+            "screenshot: window captures the foreground window, display a whole monitor. "
+            "Later screenshots keep the choice. Omit to keep the current choice, initially "
+            "window."
+        ),
+    },
     "text": {
         "type": "string",
         "description": (
@@ -137,8 +156,9 @@ _ACTION_PROPERTIES: dict[str, Any] = {
         "minItems": 4,
         "maxItems": 4,
         "description": (
-            "zoom: [x0, y0, x1, y1], the rectangle of the latest screenshot to show at "
-            "full resolution."
+            "zoom: [x0, y0, x1, y1] in the selected image; x1 and y1 are excluded. The "
+            "zoom image shows the area fresh at up to full screen resolution, with its own "
+            "screenshot_id; use its pixels directly as coordinates."
         ),
     },
     "scale": {
@@ -146,8 +166,8 @@ _ACTION_PROPERTIES: dict[str, Any] = {
         "minimum": 0.1,
         "maximum": 1,
         "description": (
-            "screenshot and zoom: return a smaller image, 0.1-1 of the full size, to save "
-            "context. Coordinates stay in the full frame."
+            "screenshot and zoom: shrink the returned image to this fraction to save "
+            "context; coordinates then refer to the smaller image. Omit for full detail."
         ),
     },
     "action_summary": {
@@ -162,8 +182,9 @@ _ACTION_PROPERTIES: dict[str, Any] = {
 _DISPLAY_PROPERTY = {
     "type": "string",
     "description": (
-        "screenshot: the display to show from now on, by name or number (1, 2, ...), or "
-        "auto for the display of the foreground app. Omit to keep the current display."
+        "screenshot: the monitor to capture, by name or number (1, 2, ...), or auto for "
+        "the foreground window's monitor. Setting display switches to display view. Omit to "
+        "keep the current monitor."
     ),
 }
 
@@ -171,14 +192,12 @@ COMPUTER_PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {**_ACTION_PROPERTIES, "display": _DISPLAY_PROPERTY},
     "required": ["action"],
-    "additionalProperties": False,
 }
 
 _BATCH_ITEM: dict[str, Any] = {
     "type": "object",
     "properties": _ACTION_PROPERTIES,
     "required": ["action"],
-    "additionalProperties": False,
 }
 
 COMPUTER_BATCH_PARAMETERS: dict[str, Any] = {
@@ -198,7 +217,6 @@ COMPUTER_BATCH_PARAMETERS: dict[str, Any] = {
         },
     },
     "required": ["actions"],
-    "additionalProperties": False,
 }
 
 COMPUTER_APPS_PARAMETERS: dict[str, Any] = {
@@ -225,7 +243,6 @@ COMPUTER_APPS_PARAMETERS: dict[str, Any] = {
         },
     },
     "required": ["action"],
-    "additionalProperties": False,
 }
 
 RESULT_SCHEMA: dict[str, Any] = {
@@ -279,6 +296,7 @@ _FIELD_ALIASES = SpellingAliases(
         "repeat": ("times", "presses", "repeat_count", "repetitions"),
         "action_summary": ("summary", "action_description"),
         "display": ("monitor", "screen", "display_name", "display_id", "display_number"),
+        "screenshot_id": ("image_id", "screenshotId"),
     }
 )
 _KEY_FIELDS = frozenset({"key", "keys", "combo", "shortcut", "chord", "hotkey"})
@@ -339,6 +357,8 @@ _OPTIONAL = (
     "region",
     "scale",
     "display",
+    "view",
+    "screenshot_id",
     "action_summary",
 )
 
