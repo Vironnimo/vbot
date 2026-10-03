@@ -486,6 +486,13 @@
     untrack(() => chatController.syncAgentActivity(addresses, refreshKey));
   });
 
+  // A shown Session of an identity Agent outside the roster, such as the
+  // hidden Librarian, loads that Agent's payload like the roster has it.
+  $effect(() => {
+    const agentId = target.hiddenAgentToLoad;
+    if (agentId) untrack(() => void chatController.loadHiddenAgent(agentId));
+  });
+
   $effect(() => {
     const entries = sessionInvalidations;
     untrack(() =>

@@ -937,21 +937,28 @@ describe('ChatView Sessions', () => {
   });
 
   describe('Librarian Session', () => {
-    it('opens a Session of the hidden Librarian under its name and continues it', async () => {
-      rpcMock.mockImplementation(
-        createChatRpcMock({
-          sessionMessages: {
-            'lib-1': [message('lib-summary', 'Merged deploy notes')],
-          },
-          streamHandler: ({ agent_id: agentId, session_id: sessionId }) => {
-            if (agentId === 'librarian' && sessionId === 'lib-1') {
-              return runningRun('librarian-continue');
-            }
-            throw new Error(
-              `Unexpected stream target: ${agentId}/${sessionId}`,
-            );
-          },
-        }),
+    it('opens a Session of the hidden Librarian like any Agent and continues it', async () => {
+      const baseRpc = createChatRpcMock({
+        contextUsage: { tokens: 32768, estimated: false },
+        sessionMessages: {
+          'lib-1': [message('lib-summary', 'Merged deploy notes')],
+        },
+        streamHandler: ({ agent_id: agentId, session_id: sessionId }) => {
+          if (agentId === 'librarian' && sessionId === 'lib-1') {
+            return runningRun('librarian-continue');
+          }
+          throw new Error(`Unexpected stream target: ${agentId}/${sessionId}`);
+        },
+      });
+      rpcMock.mockImplementation(async (method, params) =>
+        method === 'agent.get' && params.id === 'librarian'
+          ? createAgent({
+              id: 'librarian',
+              name: t('librarian.name'),
+              builtin: 'librarian',
+              context_window: 131072,
+            })
+          : baseRpc(method, params),
       );
       await chat.mountChat(
         {
@@ -976,6 +983,16 @@ describe('ChatView Sessions', () => {
         document.querySelector('.chat-header__agent-picker').textContent.trim(),
       ).toBe(t('librarian.name'));
       expect(composerInput().disabled).toBe(false);
+      // Its own Agent payload gives the context window, so the context ring
+      // shows the Session's fill like for a roster Agent.
+      await waitForCondition(() =>
+        Boolean(document.querySelector('.context-ring')),
+      );
+      const fill = document.querySelector('.context-ring__fill');
+      expect(Number(fill.getAttribute('stroke-dashoffset'))).toBeCloseTo(
+        2 * Math.PI * 6 * (1 - 32768 / 131072),
+        1,
+      );
 
       sendComposerMessage('Why did you merge deploy?');
       await waitForCondition(() => rpcCalls('chat.stream').length === 1);
