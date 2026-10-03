@@ -206,6 +206,9 @@ def dispatch_provider_command(
 ) -> CommandResult:
     """Dispatch one parsed provider command against the server RPC client."""
 
+    target_error = _accept_connection_target(args, instance)
+    if target_error is not None:
+        return target_error
     if args.command == "list":
         if args.details:
             return list_providers(instance, details=True)
@@ -280,6 +283,29 @@ def dispatch_provider_command(
     if args.command == "connect-status":
         return connect_status_fn(instance, args.provider, args.connection, args.account)
     raise ValueError(f"Unsupported provider command: {args.command}")
+
+
+def _accept_connection_target(
+    args: argparse.Namespace, instance: ServerInstance
+) -> CommandResult | None:
+    """Let a Connection id such as ``ollama:local`` stand where a provider id goes.
+
+    ``provider list`` names Connections ``<provider>:<connection>``; every
+    command that also takes ``--connection`` accepts that id as its target.
+    """
+
+    target = getattr(args, "provider", None)
+    if not isinstance(target, str) or ":" not in target or not hasattr(args, "connection"):
+        return None
+    if args.connection is not None and args.connection != target:
+        return CommandResult(
+            ok=False,
+            message=f"conflicting targets: {target} and --connection {args.connection}",
+            instance=instance,
+        )
+    args.provider = target.split(":", 1)[0]
+    args.connection = target
+    return None
 
 
 def dispatch_model_command(

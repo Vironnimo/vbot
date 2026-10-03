@@ -311,7 +311,11 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
     status_parser = _add_command_parser(
         provider_subparsers, "status", PROVIDER_HELP["status"], example="provider status openai"
     )
-    status_parser.add_argument("provider", metavar="<provider-id>", help="Provider id to inspect")
+    status_parser.add_argument(
+        "provider",
+        metavar="<provider-id>",
+        help="Provider id to inspect, or one Connection id such as openai:api-key",
+    )
     status_parser.add_argument(
         "--connection",
         metavar="<provider:connection-id>",
@@ -359,7 +363,9 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         "Example: vbot provider key set openai --stdin --refresh-models"
     )
     set_key_parser.add_argument(
-        "provider", metavar="<provider-id>", help="Provider id to configure"
+        "provider",
+        metavar="<provider-id>",
+        help="Provider id to configure, or one Connection id such as openai:api-key",
     )
     key_source = set_key_parser.add_mutually_exclusive_group(required=True)
     key_source.add_argument(
@@ -397,7 +403,11 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         "Remove an API key from the target data-dir .env through the server RPC contract. "
         "Process-environment credentials are not touched. Example: vbot provider key unset openai"
     )
-    unset_key_parser.add_argument("provider", metavar="<provider-id>", help="Provider id to clear")
+    unset_key_parser.add_argument(
+        "provider",
+        metavar="<provider-id>",
+        help="Provider id to clear, or one Connection id such as openai:api-key",
+    )
     unset_key_parser.add_argument(
         "--connection",
         metavar="<provider:connection-id>",
@@ -423,7 +433,9 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
             f"Example: vbot provider {command} ollama"
         )
         toggle_parser.add_argument(
-            "provider", metavar="<provider-id>", help="Provider id to toggle"
+            "provider",
+            metavar="<provider-id>",
+            help="Provider id to toggle, or one Connection id as provider list shows it",
         )
         toggle_parser.add_argument(
             "--connection",
@@ -439,7 +451,9 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
             example=f"provider {command} openai",
         )
         command_parser.add_argument(
-            "provider", metavar="<provider-id>", help="Provider id of the OAuth connection"
+            "provider",
+            metavar="<provider-id>",
+            help="Provider id of the OAuth connection, or that Connection's id",
         )
         command_parser.add_argument(
             "--connection",

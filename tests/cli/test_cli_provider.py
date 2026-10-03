@@ -235,6 +235,14 @@ def test_provider_usage_prints_the_live_usage_snapshot(
 
 
 @pytest.mark.parametrize(
+    "target",
+    [
+        pytest.param(("ollama", "--connection"), id="provider-and-connection"),
+        # The Connection id as provider list shows it stands for both.
+        pytest.param((), id="connection-id"),
+    ],
+)
+@pytest.mark.parametrize(
     ("connection_id", "saved", "shown"),
     [
         pytest.param(
@@ -260,10 +268,11 @@ def test_provider_enable_with_an_explicit_connection_reports_its_readiness(
     connection_id: str,
     saved: dict[str, Any],
     shown: tuple[str, ...],
+    target: tuple[str, ...],
 ) -> None:
     rpc.reply("connection.set_enabled", _set_enabled_result(connection_id, True) | saved)
 
-    code, out, _err = run_cli("provider", "enable", "ollama", "--connection", connection_id)
+    code, out, _err = run_cli("provider", "enable", *target, connection_id)
 
     assert code == 0
     assert rpc.calls == [
