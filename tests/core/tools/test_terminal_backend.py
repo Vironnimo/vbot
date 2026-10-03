@@ -203,8 +203,8 @@ def test_posix_terminal_program_without_job_control_receives_ctrl_c(tmp_path: Pa
         pytest.skip("Linux PTY contract")
     program = (
         "import sys, time\n"
-        "print('<ready>', flush=True)\n"
-        "try:\n    time.sleep(10)\n"
+        # Ctrl+C can arrive while print is still returning under parallel load.
+        "try:\n    print('<ready>', flush=True)\n    time.sleep(10)\n"
         "except KeyboardInterrupt:\n    print('interrupted')\n    sys.exit(7)\n"
     )
     adapter = spawn_posix_terminal([sys.executable, "-c", program], tmp_path)
