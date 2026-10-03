@@ -78,7 +78,7 @@ class _Harness:
         # merge: owner, Skill, absorbing Skill and whether the delete succeeded.
         self.references: tuple[SkillReference, ...] = ()
         self.unmovable: set[SkillReference] = set()
-        self.merges: list[tuple[str, str, str, bool]] = []
+        self.merges: list[tuple[str, str, str | None, bool]] = []
         self.tools = ToolRegistry()
         self.authoring = SkillAuthoringService(protected_roots=[tmp_path / "resources" / "skills"])
         register_skill_manage_tool(
@@ -99,7 +99,7 @@ class _Harness:
         self,
         owner_id: str,
         name: str,
-        target: str,
+        target: str | None,
         delete: Callable[[tuple[SkillReference, ...]], Awaitable[bool]],
     ) -> tuple[SkillReference, ...]:
         deleted = await delete(self.references)
@@ -371,16 +371,6 @@ def test_missing_description_is_refused_with_the_header(tmp_path: Path, content:
             "unknown and you cannot change it; nothing changed. Leave it as it is and name "
             "the needed change in your reply.",
             id="unreadable-history",
-        ),
-        pytest.param(
-            "agent",
-            {"action": "delete", "name": "demo"},
-            "invalid_arguments",
-            "delete needs absorbed_into: the name of another of your own Skills that now "
-            "holds the instructions of 'demo'; nothing changed. Merge the instructions into "
-            "that Skill with patch or edit first, then call delete with absorbed_into. If no "
-            "other Skill holds them, leave 'demo' as it is.",
-            id="delete-without-absorbed-into",
         ),
     ],
 )

@@ -68,8 +68,8 @@ class _Harness:
         self.usage_error: Exception | None = None
         self.usage_reads = 0
         self.scheduled: dict[str, frozenset[str]] = {}
-        # The Skills each Agent shares with other Agents.
-        self.shared: dict[str, frozenset[str]] = {}
+        # The Skills each Agent shares, mapped to the Agents it shares them with.
+        self.shared: dict[str, dict[str, frozenset[str]]] = {}
         self.changed: list[str] = []
         self.announced = 0
         self.started: list[dict[str, Any]] = []
@@ -122,7 +122,7 @@ class _Harness:
             skills_dir=self.home,
             skill_usage=skill_usage,
             triggered_skill_names=lambda agent_id: self.scheduled.get(agent_id, frozenset()),
-            shared_skill_names=lambda agent_id: self.shared.get(agent_id, frozenset()),
+            shared_skill_receivers=lambda agent_id: self.shared.get(agent_id, {}),
             skills_changed=self.changed.append,
             status_changed=self.announce,
             reviewing=self.reviewing.__contains__,
@@ -192,7 +192,7 @@ def harness(tmp_path: Path) -> _Harness:
 
 
 @pytest.mark.asyncio
-async def test_a_pass_archives_inactive_background_skills_and_reports_them(
+async def test_a_pass_archives_inactive_skills_and_reports_them(
     harness: _Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = harness.home("main")
@@ -204,7 +204,8 @@ async def test_a_pass_archives_inactive_background_skills_and_reports_them(
         ("old-human", _HUMAN),
         ("used-recently", _REFLECTION),
         ("scheduled", _REFLECTION),
-        ("shared", _REFLECTION),
+        ("shared-idle", _HUMAN),
+        ("shared-used", _AGENT),
         ("reviewed-recently", _REFLECTION),
         ("edited-recently", _REFLECTION),
     ):
@@ -219,32 +220,41 @@ async def test_a_pass_archives_inactive_background_skills_and_reports_them(
             harness.authoring.edit(root, name, changed, writer=writer)
     harness.usage = {
         ("main", "used-recently"): SkillUse(last_activated=recent, count=3),
-        # Another Agent's use of the same name does not keep this Agent's Skill.
+        # Another Agent's use of the same name does not keep this Agent's Skill...
         ("other", "old-review"): SkillUse(last_activated=recent, count=1),
+        # ...unless this Agent shares the Skill with it.
+        ("two", "shared-used"): SkillUse(last_activated=recent, count=1),
     }
     harness.scheduled = {"main": frozenset({"scheduled"})}
-    # Sharing is the user's choice; the receivers' use is not counted here.
-    harness.shared = {"main": frozenset({"shared"})}
+    harness.shared = {
+        "main": {"shared-idle": frozenset({"two"}), "shared-used": frozenset({"two"})}
+    }
     harness.settings["consolidate"] = False
 
     status = await harness.run_pass()
 
+    # Who created a Skill does not matter; a pin, recent use (also by the Agents
+    # it is shared with), an attended change or an automation keeps it.
     assert sorted(harness.authoring.records(root)) == [
         "edited-recently",
-        "old-agent",
-        "old-human",
         "old-pinned",
         "scheduled",
-        "shared",
+        "shared-used",
         "used-recently",
     ]
     assert [
         (change["skill"], change["actor"], change["reason"], change["run_kind"])
         for change in status["changes"]
     ] == [
-        ("reviewed-recently", "librarian", "inactive", "librarian"),
-        ("old-review", "librarian", "inactive", "librarian"),
-        ("old-pass", "librarian", "inactive", "librarian"),
+        (name, "librarian", "inactive", "librarian")
+        for name in (
+            "shared-idle",
+            "reviewed-recently",
+            "old-review",
+            "old-pass",
+            "old-human",
+            "old-agent",
+        )
     ]
     assert harness.changed == ["main"]
     # Observers learn that the pass started and that it ended.
@@ -252,7 +262,7 @@ async def test_a_pass_archives_inactive_background_skills_and_reports_them(
     last_pass = status["last_pass"]
     assert (last_pass["trigger"], last_pass["archived"], last_pass["consolidation"]) == (
         "manual",
-        3,
+        6,
         "disabled",
     )
     finished = datetime.fromisoformat(last_pass["finished_at"])
@@ -279,7 +289,7 @@ async def test_consolidation_runs_the_brief_only_over_changed_candidates(
     harness.authoring.create(root, "deploy-db", _document("deploy-db"), writer=_AGENT)
     harness.authoring.set_pinned(root, "deploy-db", True, writer=_HUMAN)
     harness.authoring.create(root, "deploy-team", _document("deploy-team"), writer=_AGENT)
-    harness.shared = {"main": frozenset({"deploy-team"})}
+    harness.shared = {"main": {"deploy-team": frozenset({"two"})}}
     # Nothing is old enough to age.
     harness.now = datetime.now(UTC)
 

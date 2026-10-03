@@ -277,7 +277,7 @@ export default Object.freeze({
   'settings.librarian.enabledDescription':
     'The Librarian tidies up each Agent’s own Skills.',
   'settings.librarian.enabledHelp':
-    'From time to time, the Librarian goes through one Agent’s own Skills. It retires Skills that Reflection or an earlier pass made and that went unused for a long time, and it merges overlapping Skills. Pinned Skills are never changed.\n\nPasses run one at a time. A pass starts only while neither the Agent nor the Librarian has an active or queued Run, and only for Agents that have Skills of their own and whose Librarian switch is on (Agents → Context & Memory). Sub-Agents are skipped.\n\nEvery change is recorded in the Skill history and can be reverted. An Agent’s page in the Skills manager shows the last pass and starts a pass on request, also while scheduled maintenance is off.',
+    'From time to time, the Librarian goes through one Agent’s own Skills. It retires Skills that went unused for a long time, and it merges overlapping Skills. Pinned Skills are never changed.\n\nPasses run one at a time. A pass starts only while neither the Agent nor the Librarian has an active or queued Run, and only for Agents that have Skills of their own and whose Librarian switch is on (Agents → Context & Memory). Sub-Agents are skipped.\n\nEvery change is recorded in the Skill history and can be reverted. An Agent’s page in the Skills manager shows the last pass and starts a pass on request, also while scheduled maintenance is off.',
   'settings.librarian.interval': 'Maintenance interval',
   'settings.librarian.intervalDescription':
     'Days between scheduled passes of one Agent.',
@@ -285,14 +285,14 @@ export default Object.freeze({
     'A pass becomes due this many days after the Agent’s last pass and starts once the Agent is idle. An Agent’s first pass becomes due this many days after the Librarian first saw it. From 1 to 3650 days. Default: 7.',
   'settings.librarian.archiveAfter': 'Retire unused Skills after',
   'settings.librarian.archiveAfterDescription':
-    'Days without use or change before a Skill made in the background is retired.',
+    'Days without use or change before an unpinned Skill is retired.',
   'settings.librarian.archiveAfterHelp':
-    'A pass retires an unpinned Skill that Reflection or an earlier pass created once it was neither used nor changed in a conversation or by you for this many days. Changes by Reflection and earlier passes do not count. Retired Skills move to the archive, where you can restore them. A Skill named in one of the Agent’s Schedules or Calendar actions stays, and so does a Skill the Agent shares with other Agents. From 1 to 3650 days. Default: 90.',
+    'A pass retires an unpinned Skill, whoever created it, once it was neither used nor changed in a conversation or by you for this many days. Use by the Agents a Skill is shared with counts too; changes by Reflection and earlier passes do not. Retired Skills move to the archive, where you can restore them. A Skill named in one of the Agent’s Schedules or Calendar actions stays, because those use it only when they run. From 1 to 3650 days. Default: 90.',
   'settings.librarian.consolidate': 'Merge overlapping Skills',
   'settings.librarian.consolidateDescription':
     'Each pass lets the Librarian merge and correct the Agent’s Skills.',
   'settings.librarian.consolidateHelp':
-    'After retiring unused Skills, the Librarian reads the Agent’s unpinned Skills, merges overlapping ones into one Skill and corrects outdated or hard-to-use instructions. Merged Skills move to the archive; the Agents they were shared with and the Schedules and Calendar actions that named them move to the Skill that absorbed them.\n\nThis step runs only when there are at least two such Skills and one of them changed since the last merge. It is a Run of the Librarian in a new Session of its own, with the Librarian’s Model, so it uses tokens. Default: on.',
+    'After retiring unused Skills, the Librarian reads the Agent’s unpinned Skills, merges overlapping ones into one Skill, corrects hard-to-use instructions and deletes wrong or obsolete ones. Merged Skills move to the archive; the Agents they were shared with and the Schedules and Calendar actions that named them move to the Skill that absorbed them.\n\nThis step runs only when there are at least two such Skills and one of them changed since the last merge. It is a Run of the Librarian in a new Session of its own, with the Librarian’s Model, so it uses tokens. Default: on.',
   'settings.librarian.agent': 'The Librarian',
   'settings.librarian.agentDescription':
     'The Librarian is an Agent of its own that works only on Skills. Its Model decides how well it merges; the settings and conversations of the curated Agents are not affected.',

@@ -165,8 +165,8 @@ def _format_status(agent_id: str, data: Mapping[str, Any]) -> list[str]:
 def _schedule_line(settings: Mapping[str, Any]) -> str:
     merging = "on" if settings.get("consolidate") else "off"
     return (
-        f"scheduled passes: every {settings.get('interval_days')} days; skills made in the "
-        f"background are archived after {settings.get('archive_after_days')} days unused; "
+        f"scheduled passes: every {settings.get('interval_days')} days; unpinned skills are "
+        f"archived after {settings.get('archive_after_days')} days unused; "
         f"merging overlapping skills: {merging}"
     )
 

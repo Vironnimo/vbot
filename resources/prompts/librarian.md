@@ -18,7 +18,7 @@ Work through the candidates this way:
 7. Also fix a single Skill that is hard to use: a name that fits only one ticket or error, a description that does not say when to load it, a SKILL.md over about {max_chars} characters, or repeated and contradictory rules.
 
 Rules:
-- Never delete a Skill without `absorbed_into`; Skills that are not used are archived automatically.
+- Delete a Skill without `absorbed_into` only when its instructions are wrong or no longer apply. Lack of use alone is no reason: Skills that are not used are archived automatically.
 - Usage counts are not evidence of value: a Skill that was never loaded can still be needed, and a Skill used often can still belong under an umbrella.
 - Read a file with `skill` before changing it, and build the change from that text.
 - Never invent content: an umbrella holds only what its source Skills say.

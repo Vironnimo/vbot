@@ -614,21 +614,21 @@ class Runtime:
     def background_skill_protection(self, agent_id: str, names: Iterable[str]) -> dict[str, str]:
         return self._skill_operations().background_protection(agent_id, names)
 
-    def shared_skill_names(self, owner_id: str) -> frozenset[str]:
-        """Name the Skills the Identity Agent ``owner_id`` shares with other Agents."""
-        return self._skill_operations().shared_skill_names(owner_id)
+    def shared_skill_receivers(self, owner_id: str) -> dict[str, frozenset[str]]:
+        """Map each Skill the Identity Agent ``owner_id`` shares to its receiver Agents."""
+        return self._skill_operations().shared_skill_receivers(owner_id)
 
     async def follow_skill_merge(
         self,
         owner_id: str,
         name: str,
-        target: str,
+        target: str | None,
         delete: Callable[[tuple[SkillReference, ...]], Awaitable[bool]],
     ) -> tuple[SkillReference, ...]:
-        """Delete an Identity Agent's Skill into another one and move what named it there.
+        """Delete an Identity Agent's Skill and move what named it to ``target``, if any.
 
         ``delete(followed)`` deletes the Skill and records ``followed``; returns
-        what could not move (``core/runtime/_skill_merge.py``).
+        what did not move (``core/runtime/_skill_merge.py``).
         """
         if self._skill_policy is None:
             raise RuntimeError("Skill policy service not available")

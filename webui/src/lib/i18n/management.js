@@ -342,7 +342,7 @@ export default Object.freeze({
   'skills.revert.error': 'The change could not be reverted.',
   'skills.librarian.title': 'Skill maintenance',
   'skills.librarian.help':
-    'The Librarian keeps this Agent’s own Skills small and current. A pass retires unpinned Skills that Reflection or an earlier pass created and that went unused for a long time. The Librarian then merges overlapping Skills and corrects outdated instructions in a Session of its own, which Open session shows. Pinned Skills are never changed.\n\nEvery change is recorded in the Skill history, and Revert together takes back all changes of the last pass. Settings → Memory → Skill maintenance sets the schedule and the Librarian’s Model; the Librarian switch under Agents → Context & Memory turns it off for one Agent.',
+    'The Librarian keeps this Agent’s own Skills small and current. A pass retires unpinned Skills that went unused for a long time. The Librarian then merges overlapping Skills, corrects hard-to-use instructions and deletes wrong or obsolete ones in a Session of its own, which Open session shows. Pinned Skills are never changed.\n\nEvery change is recorded in the Skill history, and Revert together takes back all changes of the last pass. Settings → Memory → Skill maintenance sets the schedule and the Librarian’s Model; the Librarian switch under Agents → Context & Memory turns it off for one Agent.',
   'skills.librarian.run': 'Run now',
   'skills.librarian.schedule': 'Schedule',
   'skills.librarian.daily': 'Every day while the Agent is idle',
@@ -438,7 +438,7 @@ export default Object.freeze({
   'agents.form.librarianDescription':
     'Lets the Librarian tidy up this Agent’s own Skills.',
   'agents.form.librarianHelp':
-    'While this is on, Librarian passes retire this Agent’s unused Skills that Reflection or an earlier pass made, and the Librarian merges this Agent’s overlapping Skills. Pinned Skills are never changed.\n\nTurning it off stops both scheduled passes and Run now for this Agent; Settings → Memory → Skill maintenance switches scheduled passes off for all Agents. This Agent’s conversations are not affected either way.',
+    'While this is on, Librarian passes retire this Agent’s unused Skills, and the Librarian merges this Agent’s overlapping Skills. Pinned Skills are never changed.\n\nTurning it off stops both scheduled passes and Run now for this Agent; Settings → Memory → Skill maintenance switches scheduled passes off for all Agents. This Agent’s conversations are not affected either way.',
   'agents.form.memoryPromptMode': 'Memory',
   'agents.form.memoryModeHelp':
     'Which memory files are pinned into the System Prompt. Off also removes the memory Tool; while Memory is on, turning the memory Tool off in Tool access keeps these notes visible but makes Memory read-only.',

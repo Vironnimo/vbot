@@ -1,4 +1,4 @@
-"""A Skill merged into another one: what named it moves to that Skill.
+"""A deleted Skill: what named it moves to the Skill that absorbed it, if any.
 
 A ``skill_manage`` delete with ``absorbed_into`` says the deleted Skill's
 instructions now live in another Skill of the same Identity Agent. Its shares
@@ -8,6 +8,9 @@ work keep getting those instructions. Runtime owns both, so it orders the
 follow: under the automation reference lock it lists what names the Skill, lets
 the delete record that list in the Skill history, and moves each reference once
 the delete succeeded. Restoring the archived Skill moves nothing back.
+
+A delete without ``absorbed_into`` moves nothing: it returns what still names
+the deleted Skill, so the caller can say so.
 """
 
 from __future__ import annotations
@@ -37,14 +40,14 @@ async def follow_skill_merge(
     services: SkillMergeServices,
     owner_id: str,
     name: str,
-    target: str,
+    target: str | None,
     delete: Callable[[tuple[SkillReference, ...]], Awaitable[bool]],
 ) -> tuple[SkillReference, ...]:
     """Delete the Skill ``name`` of ``owner_id`` into ``target`` and move what named it there.
 
     ``delete(followed)`` deletes the Skill, recording ``followed``, and says
-    whether it did. Returns the references that could not move; they still name
-    ``name``.
+    whether it did. Returns the references that did not move; they still name
+    ``name``. Without ``target`` nothing moves: every reference is returned.
     """
     automation = services.automation
     async with automation.lock:
@@ -58,6 +61,8 @@ async def follow_skill_merge(
             SkillReference(reference.kind, reference.id, reference.name)
             for reference in automations
         )
+        if target is None:
+            return (*shares, *triggers) if await delete(()) else ()
         if not await delete((*shares, *triggers)):
             return ()
         failed: list[SkillReference] = []

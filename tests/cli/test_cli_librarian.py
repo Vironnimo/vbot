@@ -90,7 +90,7 @@ def test_librarian_status_reports_the_passes_and_how_to_undo_the_last_one(
     assert rpc.calls == [("librarian.status", {"agent_id": "assistant"})]
     assert out.splitlines() == [
         "Librarian of assistant",
-        "scheduled passes: every 7 days; skills made in the background are archived after "
+        "scheduled passes: every 7 days; unpinned skills are archived after "
         "90 days unused; merging overlapping skills: on",
         "next scheduled pass: 2026-10-07T10:02:00Z (when the agent is idle)",
         "last pass: 2026-09-30T10:02:00Z (scheduled)",
@@ -176,8 +176,8 @@ def test_librarian_status_names_why_an_agent_is_not_scheduled(
         line,
         *(
             [
-                "scheduled passes: every 7 days; skills made in the background are archived "
-                "after 90 days unused; merging overlapping skills: off"
+                "scheduled passes: every 7 days; unpinned skills are archived after 90 days "
+                "unused; merging overlapping skills: off"
             ]
             if enabled
             else ["last pass: 2026-09-30T10:02:00Z (scheduled)"]
@@ -222,7 +222,7 @@ def test_librarian_status_without_an_agent_lists_the_recent_passes_of_all_agents
     )
     assert out.splitlines() == [
         "Librarian (agent librarian)",
-        "scheduled passes: every 7 days; skills made in the background are archived after "
+        "scheduled passes: every 7 days; unpinned skills are archived after "
         "90 days unused; merging overlapping skills: on",
         "a pass of coder is running",
         "recent passes, newest first:",

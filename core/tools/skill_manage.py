@@ -89,6 +89,12 @@ SKILL_MANAGE_NOT_FOLLOWED_WARNING = (
     "These could not be changed and still name '{name}', which no longer exists: {items}. "
     "Name them in your reply so the user can change them to '{target}'."
 )
+# After a delete without absorbed_into: nothing holds the instructions, so what
+# named the Skill now finds nothing, and the Agent passes it on to the user.
+SKILL_MANAGE_ORPHANED_WARNING = (
+    "These still name '{name}', which no longer exists: {items}. Name them in your reply so "
+    "the user can change or remove them."
+)
 _REFERENCE_LABELS = {
     "shared": "the share with Agent '{name}'",
     "bootstrap": "Bootstrap job '{name}'",
@@ -97,8 +103,8 @@ _REFERENCE_LABELS = {
 }
 # Refusals of a background writer: a Reflection, or the Librarian, also while
 # the user talks with it in a Librarian Session. It never changes a Skill the
-# user pinned, and deletes a Skill only into another one (``absorbed_into``). The
-# reply is where it reports what it could not change; the briefs ask for the same.
+# user pinned. The reply is where it reports what it could not change; the
+# briefs ask for the same.
 _LEAVE_IT = "Leave it as it is and name the needed change in your reply."
 SKILL_MANAGE_PINNED_REFUSAL = (
     f"Skill '{{name}}' is pinned by the user, so you cannot change it; nothing changed. {_LEAVE_IT}"
@@ -113,12 +119,6 @@ SKILL_MANAGE_CHANGED_DURING_PASS_REFUSAL = (
     "Skill '{name}' was changed outside this pass after the pass started; nothing changed. "
     "Load '{name}' again with skill and build your change from that text, or leave it as "
     "it is."
-)
-SKILL_MANAGE_ABSORBED_INTO_REQUIRED = (
-    "delete needs absorbed_into: the name of another of your own Skills that now holds the "
-    "instructions of '{name}'; nothing changed. Merge the instructions into that Skill with "
-    "patch or edit first, then call delete with absorbed_into. If no other Skill holds "
-    "them, leave '{name}' as it is."
 )
 # ``absorbed_into`` names the Skill that now holds a deleted Skill's instructions.
 SKILL_MANAGE_ABSORBED_INTO_ACTION = (
@@ -136,7 +136,7 @@ SKILL_MANAGE_ABSORBED_INTO_UNKNOWN = (
 _ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "delete")
 # follow_merge(owner_id, name, target, delete) -> the references that could not move.
 SkillMergeFollower = Callable[
-    [str, str, str, Callable[[tuple[SkillReference, ...]], Awaitable[bool]]],
+    [str, str, str | None, Callable[[tuple[SkillReference, ...]], Awaitable[bool]]],
     Awaitable[tuple[SkillReference, ...]],
 ]
 # Actions that may operate on a Skill shared into the caller (maintained in the
@@ -209,7 +209,7 @@ _UNADVERTISED_PARAMETERS: JsonObject = {
     "description": {"type": "string"},
     "scope": {"type": "string"},
     "category": {"type": "string"},
-    # Named in the background delete refusal; attended deletes accept it too.
+    # Named in the Librarian brief: the Skill that absorbed a deleted one.
     "absorbed_into": {"type": "string"},
 }
 _FIELD_ALIASES = {
@@ -301,7 +301,7 @@ def make_skill_manage_handler(
     """Return the direct Skill-management handler.
 
     A background writer (a Reflection or the Librarian) never changes a Skill
-    the user pinned, and deletes a Skill only with ``absorbed_into``.
+    the user pinned.
 
     The handler's third argument is when the calling Run started, given for a
     Librarian Run. Such a Run builds its changes from Skills it read during the Run, so a
@@ -407,7 +407,7 @@ def make_skill_manage_handler(
             ):
                 check_unchanged_since(target_root, call.name, writer, run_started_at)
             if call.action == "delete":
-                _check_absorbed_into(call, own_root, writer)
+                _check_absorbed_into(call, own_root)
             result, summary = _apply(authoring, target_root, call, writer, followed)
         except _RefusalError as refusal:
             return tool_failure(refusal.code, refusal.message, retryable=False)
@@ -458,14 +458,10 @@ def _after(timestamp: str, moment: datetime) -> bool:
         return False
 
 
-def _check_absorbed_into(call: _Call, own_root: Path, writer: SkillWriter) -> None:
-    """A background delete names the own Skill that absorbed this one."""
+def _check_absorbed_into(call: _Call, own_root: Path) -> None:
+    """A delete's ``absorbed_into``, when given, names another own Skill."""
     target = call.absorbed_into
     if target is None:
-        if writer.background:
-            raise _RefusalError(
-                "invalid_arguments", SKILL_MANAGE_ABSORBED_INTO_REQUIRED.format(name=call.name)
-            )
         return
     if target == call.name:
         raise _RefusalError(
@@ -1103,11 +1099,12 @@ def register_skill_manage_tool(
     unknown). It reads Event Loop state, so it runs on the Loop, before the
     write moves to a worker.
 
-    ``follow_merge(owner_id, name, target, delete)`` runs a delete with
-    ``absorbed_into``: it calls ``delete(followed)`` with what names the Skill
-    (its shares, the automations that trigger it), and once that delete
-    succeeded moves each of them to ``target``, returning those it could not
-    move. The result then notes both.
+    ``follow_merge(owner_id, name, target, delete)`` runs every delete. With
+    ``absorbed_into`` as ``target`` it calls ``delete(followed)`` with what
+    names the Skill (its shares, the automations that trigger it), and once that
+    delete succeeded moves each of them to ``target``, returning those it could
+    not move. Without, ``target`` is ``None``: nothing moves and it returns what
+    still names the Skill. The result then notes them.
     """
     handler = make_skill_manage_handler(
         authoring,
@@ -1146,8 +1143,10 @@ def register_skill_manage_tool(
 
         failed = await follow_merge(context.skill_subject_id, name, target, delete)
         result = results[0]
-        if result.get("ok") is True and planned:
-            _note_followed(result, name, target, planned, failed)
+        if result.get("ok") is True and target is None and failed:
+            _note_orphaned(result, name, failed)
+        elif result.get("ok") is True and planned:
+            _note_followed(result, name, target or name, planned, failed)
         return result
 
     registry.register(
@@ -1169,14 +1168,27 @@ def register_skill_manage_tool(
     )
 
 
-def _merge(arguments: JsonObject) -> tuple[str, str] | None:
-    """The Skill name and the absorbing Skill of a delete with ``absorbed_into``."""
+def _merge(arguments: JsonObject) -> tuple[str, str | None] | None:
+    """The Skill name and the absorbing Skill (``None`` without one) of a delete.
+
+    ``None`` for another action, and for a delete the handler refuses anyway
+    because ``absorbed_into`` names the Skill itself.
+    """
     name, target = arguments.get("name"), arguments.get("absorbed_into")
     if arguments.get("action") != "delete" or not isinstance(name, str):
         return None
-    if not isinstance(target, str) or not target or target == name:
+    if not isinstance(target, str) or not target:
+        return name, None
+    if target == name:
         return None
     return name, target
+
+
+def _note_orphaned(result: JsonObject, name: str, references: tuple[SkillReference, ...]) -> None:
+    """Add what still names the deleted Skill ``name`` (a warning)."""
+    items = "; ".join(_reference_label(reference) for reference in references)
+    warning = SKILL_MANAGE_ORPHANED_WARNING.format(name=name, items=items)
+    result["data"]["content"] = "\n".join((result["data"]["content"], f"Warning: {warning}"))
 
 
 def _note_followed(

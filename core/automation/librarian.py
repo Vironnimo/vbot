@@ -8,15 +8,15 @@ and revert.
 
 A pass has two parts:
 
-1. **Aging** (no Model): every unpinned Skill that a background Run created
-   (origin ``reflection`` or ``librarian``) and whose last activity (created,
-   last changed by the user, an attended Agent or an outside edit, last used in
-   a conversation) is older than ``librarian.archive_after_days`` is archived
-   with the reason ``inactive``. Changes by background Runs do not keep a Skill.
-   A Skill that a live Bootstrap job, Cron job or Calendar action of the Agent
-   triggers by name is kept, and so is one the Agent shares with other Agents
-   (the user shared it; its receivers' use is not counted here). Skills that
-   the Agent or the user created are never aged.
+1. **Aging** (no Model): every unpinned Skill of the Agent, whoever created
+   it, whose last activity (created, last changed by the user, an attended
+   Agent or an outside edit, last used in a conversation) is older than
+   ``librarian.archive_after_days`` is archived with the reason ``inactive``.
+   Changes by background Runs do not keep a Skill. Use of a shared Skill by
+   the Agents it is shared with counts as use. A Skill that a live Bootstrap
+   job, Cron job or Calendar action of the Agent triggers by name is kept: its
+   use is recorded only when the automation runs, which can be rarer than the
+   aging period.
 2. **Consolidation** (``librarian.consolidate``): when at least two Skills are
    candidates and the candidates changed since the last consolidation (their
    fingerprint: names and latest revision ids), the built-in Librarian Agent
@@ -109,6 +109,7 @@ from core.skills import (
 )
 from core.skills._history import EXTERNAL_ACTOR
 from core.skills.skills import scan_skill_resources
+from core.statistics.skills import SkillUse
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 from core.utils.timestamps import format_canonical_timestamp, parse_timestamp
@@ -117,7 +118,6 @@ from core.utils.workers import BoundedWorkerPool
 if TYPE_CHECKING:
     from core.runtime.interfaces import RuntimeServices
     from core.skills import SkillRevision
-    from core.statistics.skills import SkillUse
 
 _LOGGER = get_logger("automation.librarian")
 
@@ -128,8 +128,6 @@ _LIBRARIAN_WORKERS = BoundedWorkerPool(name="librarian", max_workers=2)
 FIRST_CHECK_DELAY_SECONDS = 300.0
 CHECK_INTERVAL_SECONDS = 3600.0
 
-# Aging archives only Skills that a background Run created.
-AGED_ORIGINS = frozenset({"reflection", "librarian"})
 # Writers whose changes count as activity for aging: background Runs' do not.
 _ATTENDED_ACTORS = frozenset({"human", "agent", EXTERNAL_ACTOR})
 _LIBRARIAN_WRITER = SkillWriter(actor="librarian", run_kind=RunKind.LIBRARIAN.value)
@@ -408,14 +406,6 @@ class _Library:
     fingerprint: str
 
 
-@dataclass(frozen=True)
-class _KeptSkills:
-    """Skills of the Agent that aging keeps: live automations trigger them, or it shares them."""
-
-    scheduled: frozenset[str]
-    shared: frozenset[str]
-
-
 @dataclass
 class _ActivePass:
     """A running pass and how far it got.
@@ -521,7 +511,7 @@ class LibrarianService:
         skills_dir: Callable[[str], Path],
         skill_usage: Callable[[], Awaitable[Mapping[tuple[str, str], SkillUse]]],
         triggered_skill_names: Callable[[str], frozenset[str]],
-        shared_skill_names: Callable[[str], frozenset[str]],
+        shared_skill_receivers: Callable[[str], Mapping[str, frozenset[str]]],
         skills_changed: Callable[[str], None],
         status_changed: Callable[[], None] = lambda: None,
         reviewing: Callable[[str], bool] = lambda _agent_id: False,
@@ -531,9 +521,10 @@ class LibrarianService:
 
         ``skill_usage`` reads every Agent's Skill use by ``(agent id, name)``;
         ``triggered_skill_names`` names the Skills an Agent's live automations
-        trigger, and ``shared_skill_names`` (blocking) the Skills it shares with
-        other Agents. ``skills_changed`` runs after aging archived Skills of an Agent
-        (consolidation writes report themselves through ``skill_manage``), and
+        trigger, and ``shared_skill_receivers`` (blocking) maps each Skill it
+        shares to the Agents it shares it with. ``skills_changed`` runs after
+        aging archived Skills of an Agent (consolidation writes report themselves
+        through ``skill_manage``), and
         ``status_changed`` whenever a pass starts or ends. ``reviewing(agent_id)``
         says whether a Reflection of the Agent is starting or running; a pass
         waits for it like for any other Run of the Agent.
@@ -543,7 +534,7 @@ class LibrarianService:
         self._skills_dir = skills_dir
         self._skill_usage = skill_usage
         self._triggered_skill_names = triggered_skill_names
-        self._shared_skill_names = shared_skill_names
+        self._shared_skill_receivers = shared_skill_receivers
         self._skills_changed = skills_changed
         self._status_changed = status_changed
         self._reviewing = reviewing
@@ -897,16 +888,16 @@ class LibrarianService:
         active.base = (await _LIBRARIAN_WORKERS.run(self._read_state, agent_id)).settled()
         await self._write_progress(agent_id, active)
         settings = await _LIBRARIAN_WORKERS.run(self._runtime.storage.load_librarian_settings)
-        # Sharing is a user act, and live automations load Skills by name: both are kept.
-        kept = _KeptSkills(
-            scheduled=self._triggered_skill_names(agent_id),
-            shared=await _LIBRARIAN_WORKERS.run(self._shared_skill_names, agent_id),
-        )
+        # Live automations load Skills by name and record use only when they run.
+        scheduled = self._triggered_skill_names(agent_id)
+        receivers = await _LIBRARIAN_WORKERS.run(self._shared_skill_receivers, agent_id)
         if active.usage is None:
             active.usage = await self._skill_usage()
-        usage = {name: use for (owner, name), use in active.usage.items() if owner == agent_id}
+        usage = _library_usage(active.usage, agent_id, receivers)
         cutoff = self._clock() - timedelta(days=settings["archive_after_days"])
-        library = await _LIBRARIAN_WORKERS.run(self._age_library, agent_id, usage, kept, cutoff)
+        library = await _LIBRARIAN_WORKERS.run(
+            self._age_library, agent_id, usage, scheduled, cutoff
+        )
         active.archived = len(library.archived_names)
         active.archived_revisions = library.archived_revisions
         active.candidates = len(library.candidates)
@@ -991,7 +982,7 @@ class LibrarianService:
         self,
         agent_id: str,
         usage: Mapping[str, SkillUse],
-        kept: _KeptSkills,
+        scheduled: frozenset[str],
         cutoff: datetime,
     ) -> _Library:
         """Archive the inactive Skills, then describe what consolidation may change."""
@@ -1004,7 +995,7 @@ class LibrarianService:
             archived: list[str] = []
             revisions: list[int] = []
             for name, record in sorted(records.items()):
-                if name in kept.scheduled or name in kept.shared:
+                if name in scheduled:
                     continue
                 if not _inactive(record, usage.get(name), changed.get(name), cutoff):
                     continue
@@ -1196,11 +1187,11 @@ def _attended_changes(history: Sequence[SkillRevision]) -> dict[str, str]:
 def _inactive(
     record: SkillRecord, use: SkillUse | None, changed_at: str | None, cutoff: datetime
 ) -> bool:
-    """Whether aging archives ``record``: background-made, unpinned and idle since ``cutoff``.
+    """Whether aging archives ``record``: unpinned and idle since ``cutoff``.
 
     ``changed_at`` is the Skill's newest change by an attended writer.
     """
-    if record.pinned or record.origin not in AGED_ORIGINS:
+    if record.pinned:
         return False
     moments = [record.created_at, changed_at, None if use is None else use.last_activated]
     try:
@@ -1209,6 +1200,30 @@ def _inactive(
         # A time that cannot be read never ages a Skill.
         return False
     return last_activity < cutoff
+
+
+def _library_usage(
+    usage: Mapping[tuple[str, str], SkillUse],
+    agent_id: str,
+    receivers: Mapping[str, frozenset[str]],
+) -> dict[str, SkillUse]:
+    """The use of ``agent_id``'s Skills by name, its shared Skills' receivers included.
+
+    A receiver's use of a shared Skill's name counts toward the owner's Skill:
+    the Sessions add up and the latest activation wins.
+    """
+    library = {name: use for (owner, name), use in usage.items() if owner == agent_id}
+    for name, agents in receivers.items():
+        uses = [use for agent in agents if (use := usage.get((agent, name))) is not None]
+        own = library.get(name)
+        if own is not None:
+            uses.append(own)
+        if uses:
+            library[name] = SkillUse(
+                last_activated=max((use.last_activated for use in uses), key=parse_timestamp),
+                count=sum(use.count for use in uses),
+            )
+    return library
 
 
 def _by_run(revision: SkillRevision, run_id: str | None) -> bool:

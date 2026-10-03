@@ -292,14 +292,18 @@ class SkillRuntime:
                 return archived
         return None
 
-    def shared_skill_names(self, owner_id: str) -> frozenset[str]:
-        """Name the Skills of ``owner_id``'s private home that it shares with other Agents.
+    def shared_skill_receivers(self, owner_id: str) -> dict[str, frozenset[str]]:
+        """Map each Skill of ``owner_id``'s private home that it shares to its receiver Agents.
 
-        Sharing is the user's choice, so Librarian aging never retires one of
-        these Skills: the receivers' shares would then name no Skill.
+        Skills shared with nobody but the owner are absent. Librarian aging counts
+        the receivers' use of a shared Skill as use of the owner's Skill.
         """
         shared = self._policy.load().shared.get(owner_id, {})
-        return frozenset(name for name, receivers in shared.items() if receivers - {owner_id})
+        return {
+            name: frozenset(receivers - {owner_id})
+            for name, receivers in shared.items()
+            if receivers - {owner_id}
+        }
 
     def background_protection(self, agent_id: str, names: Iterable[str]) -> dict[str, str]:
         """Return why a background Run of *agent_id* cannot change each named Skill.
