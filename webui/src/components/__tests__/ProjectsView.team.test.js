@@ -26,10 +26,11 @@ import {
   setupProjectsViewSuite,
 } from './ProjectsView.support.js';
 
-function effective(model, temperature, thinkingEffort) {
+function effective(model, temperature, thinkingEffort, topP) {
   return {
     model: model ?? { value: null, source: null },
     temperature: temperature ?? { value: null, source: null },
+    top_p: topP ?? { value: null, source: null },
     thinking_effort: thinkingEffort ?? { value: null, source: null },
   };
 }
@@ -58,8 +59,9 @@ describe('ProjectsView Team', () => {
               { value: 'openai/gpt-mini', source: 'override' },
               { value: 0.2, source: 'agent' },
               { value: 'high', source: 'project_default' },
+              { value: 0.9, source: 'override' },
             ),
-            overrides: { model: 'openai/gpt-mini' },
+            overrides: { model: 'openai/gpt-mini', top_p: 0.9 },
           }),
           member({
             agent_id: 'planner',
@@ -127,10 +129,18 @@ describe('ProjectsView Team', () => {
     const builderDetail = memberDetail('builder');
     expect(
       builderDetail.querySelectorAll('.projects-effective-row'),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
     expect(
       builderDetail.querySelectorAll('.projects-effective-source'),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
+    // The collapsed sampling block names the member's own override only.
+    expect(
+      builderDetail
+        .querySelector('#project-override-builder-sampling-toggle')
+        .textContent.trim(),
+    ).toBe(
+      `${t('sampling.title')} ${t('sampling.summaryTopP', { value: '0.9' })}`,
+    );
     expect(builderDetail.textContent).toContain('openai/gpt-mini');
     expect(builderDetail.textContent).toContain('.opencode/agents/builder.md');
     expect(builderDetail.textContent).toContain('opencode');
@@ -140,10 +150,10 @@ describe('ProjectsView Team', () => {
     const plannerDetail = memberDetail('planner');
     expect(
       plannerDetail.querySelectorAll('.projects-effective-row'),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
     expect(
       plannerDetail.querySelectorAll('.projects-effective-value--muted'),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     const sources = plannerDetail.querySelectorAll(
       '.projects-effective-source',
     );
@@ -268,7 +278,7 @@ describe('ProjectsView Team', () => {
     );
   });
 
-  it('sets a temperature override with the comma-tolerant value', async () => {
+  it('sets a sampling override with the comma-tolerant value', async () => {
     serveProject(
       {},
       { team: [member({ agent_id: 'builder', display_name: 'Builder' })] },
@@ -277,14 +287,14 @@ describe('ProjectsView Team', () => {
     await selectDemo();
     await expandMember('builder');
 
-    setInputValue('project-override-temperature-builder', '0,3');
+    setInputValue('project-override-builder-top-p', '0,9');
     await wait(AUTO_SAVE_WAIT_MS);
     await waitForCondition(() => setOverrideMock.mock.calls.length === 1);
     expect(setOverrideMock).toHaveBeenCalledWith(
       'demo',
       'builder',
-      'temperature',
-      0.3,
+      'top_p',
+      0.9,
     );
   });
 
@@ -307,7 +317,7 @@ describe('ProjectsView Team', () => {
     await selectDemo();
     await expandMember('builder');
 
-    setInputValue('project-override-temperature-builder', '0.3');
+    setInputValue('project-override-builder-temperature', '0.3');
     await wait(AUTO_SAVE_WAIT_MS);
     await waitForCondition(() =>
       onToast.mock.calls.some((call) => call[0]?.variant === 'error'),

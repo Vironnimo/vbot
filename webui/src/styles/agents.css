@@ -175,10 +175,6 @@
   font-size: var(--fs-label-sm);
 }
 
-.agents-view .agents-view__inherit-hint {
-  color: var(--text-med);
-}
-
 .agents-view .agents-view__dropdown {
   width: 100%;
 }
@@ -188,24 +184,13 @@
   overflow-y: auto;
 }
 
-/* Temperature keeps the shared number width; the reset action sits in front
-   of the input instead of widening the column. */
-.agents-view .s-group__rows > .s-row > .agents-view__temperature-control {
-  width: auto;
-  justify-self: end;
-  gap: 6px;
-}
-
-.agents-view .agents-view__temperature-control > .s-input {
-  width: var(--s-number-width);
-}
-
 .agents-view .agents-view__reset-inherit {
   flex-shrink: 0;
   padding: 4px 10px;
 }
 
-.agents-view .s-group__rows > .agents-view__fallback-models {
+/* The fallback chain grows downward; its label stays at the top. */
+.agents-view .s-group > .agents-view__fallback-models {
   align-items: start;
 }
 
@@ -557,10 +542,6 @@
 
   .agents-view .agent-list-pane {
     max-height: min(220px, 32vh);
-  }
-
-  .agents-view .s-group__rows > .s-row > .agents-view__temperature-control {
-    justify-self: start;
   }
 
   .agents-view .agents-view__fallback-add,

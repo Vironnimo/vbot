@@ -11,12 +11,16 @@ import { asText, isPlainObject } from './values.js';
 export const AGENT_FORM_MODE_CREATE = 'create';
 export const AGENT_FORM_MODE_EDIT = 'edit';
 
-const DEFAULT_AGENT_TEMPERATURE = '';
 const DEFAULT_AGENT_ALLOWED_LIST = '*';
 const DEFAULT_AGENT_ALLOWED_SKILLS = Object.freeze([
   DEFAULT_AGENT_ALLOWED_LIST,
 ]);
 const DEFAULT_AGENT_MEMORY_PROMPT_MODE = 'agent_user';
+// The sampling fields and their accepted ranges, matching the server's rules.
+const SAMPLING_RANGES = Object.freeze({
+  temperature: Object.freeze([0, 2]),
+  top_p: Object.freeze([0, 1]),
+});
 export const AGENT_MEMORY_PROMPT_MODES = Object.freeze([
   'off',
   'agent',
@@ -42,6 +46,7 @@ const EDITABLE_AGENT_FIELDS = Object.freeze([
   'model',
   'fallback_models',
   'temperature',
+  'top_p',
   'thinking_effort',
   'memory_prompt_mode',
   'workspace',
@@ -57,7 +62,7 @@ const EDITABLE_AGENT_FIELDS = Object.freeze([
 const AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
 export function createAgentFormValues(agent = {}) {
-  // The four inheritable run fields (model/fallback_models/temperature/
+  // The inheritable run fields (model/fallback_models/temperature/top_p/
   // thinking_effort) bind to the agent's RAW own values (`agent.config`), so an
   // empty/null raw value reads as the inherit state instead of the baked
   // top-level value. When no `config` block is present (create form, or an older
@@ -72,9 +77,8 @@ export function createAgentFormValues(agent = {}) {
     root_project_id: hasValue(agent.root_project_id)
       ? String(agent.root_project_id)
       : null,
-    temperature: hasValue(raw.temperature)
-      ? String(raw.temperature)
-      : DEFAULT_AGENT_TEMPERATURE,
+    temperature: hasValue(raw.temperature) ? String(raw.temperature) : '',
+    top_p: hasValue(raw.top_p) ? String(raw.top_p) : '',
     thinking_effort: asText(raw.thinking_effort),
     memory_prompt_mode: normalizeMemoryPromptMode(agent.memory_prompt_mode),
     tool_access: normalizeToolAccess(agent.tool_access),
@@ -106,17 +110,22 @@ export function normalizeAgentForm(values, options = {}) {
     validateAgentId(normalized.id, errors);
   }
 
-  const temperature = normalizeTemperature(normalized.temperature);
-  if (normalized.temperature && temperature === null) {
-    errors.temperature = 'invalid_number';
+  const sampling = {};
+  for (const field of Object.keys(SAMPLING_RANGES)) {
+    const { value, error } = parseSamplingValue(field, normalized[field]);
+    sampling[field] = value;
+    if (error) errors[field] = error;
   }
 
   const payloadOptions = {
     includeEmptyName: mode === AGENT_FORM_MODE_EDIT,
     includeWorkspace: mode === AGENT_FORM_MODE_EDIT,
     includeTools: mode === AGENT_FORM_MODE_EDIT,
+    // A new Agent sends only the sampling values the user set, so an unset
+    // field stays with the inherited value or the Provider default.
+    includeEmptySampling: mode === AGENT_FORM_MODE_EDIT,
   };
-  let payload = buildAgentPayload(normalized, temperature, payloadOptions);
+  let payload = buildAgentPayload(normalized, sampling, payloadOptions);
 
   if (
     mode === AGENT_FORM_MODE_EDIT &&
@@ -124,9 +133,15 @@ export function normalizeAgentForm(values, options = {}) {
     typeof options.initialValues === 'object'
   ) {
     const initialNormalized = normalizeValues(options.initialValues);
+    const initialSampling = Object.fromEntries(
+      Object.keys(SAMPLING_RANGES).map((field) => [
+        field,
+        parseSamplingValue(field, initialNormalized[field]).value,
+      ]),
+    );
     const initialPayload = buildAgentPayload(
       initialNormalized,
-      normalizeTemperature(initialNormalized.temperature),
+      initialSampling,
       payloadOptions,
     );
     payload = filterChangedFields(payload, initialPayload);
@@ -158,6 +173,19 @@ export function reasoningForModelValue(modelValue, models) {
   const list = Array.isArray(models) ? models : [];
   const match = list.find((candidate) => candidate.id === model);
   return match?.capabilities?.reasoning ?? null;
+}
+
+// The selected Model's sampling recommendations from its `model.list` entry,
+// each a number or null. They are only offered in the editor, never applied
+// on their own.
+export function samplingRecommendationsForModelValue(modelValue, models) {
+  const { model } = parseModelSelectionValue(modelValue);
+  const list = Array.isArray(models) ? models : [];
+  const match = model ? list.find((candidate) => candidate.id === model) : null;
+  return {
+    temperature: finiteOrNull(match?.recommended_temperature),
+    top_p: finiteOrNull(match?.recommended_top_p),
+  };
 }
 
 // The thinking-effort options a model may show, gated by its reasoning ladder.
@@ -192,6 +220,7 @@ function normalizeValues(values = {}) {
       ? String(values.root_project_id).trim() || null
       : null,
     temperature: asText(values.temperature).trim(),
+    top_p: asText(values.top_p).trim(),
     thinking_effort: asText(values.thinking_effort).trim(),
     memory_prompt_mode: normalizeMemoryPromptMode(values.memory_prompt_mode),
     tool_access: normalizeToolAccess(values.tool_access),
@@ -215,14 +244,27 @@ function normalizeArrayList(items, fallback = DEFAULT_AGENT_ALLOWED_SKILLS) {
     .filter((item) => item.length > 0);
 }
 
-function normalizeTemperature(value) {
-  if (!value) {
-    return null;
+// One sampling field's text as a number: empty is null (not set); text that is
+// not a number or lies outside the field's range is an error.
+function parseSamplingValue(field, text) {
+  if (!text) {
+    return { value: null, error: '' };
   }
 
   // Tolerate a comma decimal separator typed in comma-decimal locales.
-  const numberValue = Number(asText(value).trim().replace(',', '.'));
-  return Number.isFinite(numberValue) ? numberValue : null;
+  const numberValue = Number(asText(text).trim().replace(',', '.'));
+  if (!Number.isFinite(numberValue)) {
+    return { value: null, error: 'invalid_number' };
+  }
+  const [minimum, maximum] = SAMPLING_RANGES[field];
+  if (numberValue < minimum || numberValue > maximum) {
+    return { value: null, error: 'out_of_range' };
+  }
+  return { value: numberValue, error: '' };
+}
+
+function finiteOrNull(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 function normalizeMemoryPromptMode(value) {
@@ -232,11 +274,10 @@ function normalizeMemoryPromptMode(value) {
     : DEFAULT_AGENT_MEMORY_PROMPT_MODE;
 }
 
-function buildAgentPayload(normalized, temperature, options = {}) {
+function buildAgentPayload(normalized, sampling, options = {}) {
   const payload = {
     model: normalized.model,
     fallback_models: normalized.fallback_models,
-    temperature,
     thinking_effort: normalized.thinking_effort || null,
     memory_prompt_mode: normalized.memory_prompt_mode,
     tool_access: normalized.tool_access,
@@ -245,6 +286,12 @@ function buildAgentPayload(normalized, temperature, options = {}) {
     custom_system_prompt_enabled: normalized.custom_system_prompt_enabled,
     compaction_policy: normalized.compaction_policy,
   };
+
+  for (const [field, value] of Object.entries(sampling)) {
+    if (value !== null || options.includeEmptySampling) {
+      payload[field] = value;
+    }
+  }
 
   if (normalized.name || options.includeEmptyName) {
     payload.name = normalized.name;

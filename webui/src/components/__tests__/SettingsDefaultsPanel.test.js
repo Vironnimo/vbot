@@ -49,7 +49,7 @@ describe('SettingsDefaultsPanel', () => {
     mountedComponent = await cleanupSettingsViewHarness(mountedComponent);
   });
 
-  it('saves model, fallback chain, temperature and thinking effort, and clears them to no default', async () => {
+  it('saves model, fallback chain, sampling and thinking effort, and clears them to no default', async () => {
     rpcMock.mockImplementation(createSettingsRpcMock());
     // The host (AgentsView) passes each committed response back as settings.
     const props = reactiveProps({ settings: settingsPayload() });
@@ -83,6 +83,7 @@ describe('SettingsDefaultsPanel', () => {
     );
 
     setInputValue('#settings-defaults-temperature', '0.7');
+    setInputValue('#settings-defaults-top-p', '0.9');
     openSimpleDropdown('settings-defaults-thinking-effort');
     selectSimpleOption('settings-defaults-thinking-effort', 'high');
 
@@ -94,6 +95,7 @@ describe('SettingsDefaultsPanel', () => {
           model: 'openai/gpt-5.2::api-key',
           fallback_models: ['openai/gpt-5.2-mini::api-key'],
           temperature: 0.7,
+          top_p: 0.9,
           thinking_effort: 'high',
         },
       },
@@ -104,6 +106,7 @@ describe('SettingsDefaultsPanel', () => {
           model: null,
           fallback_models: null,
           temperature: null,
+          top_p: null,
           thinking_effort: null,
         },
       },
@@ -122,6 +125,12 @@ describe('SettingsDefaultsPanel', () => {
       .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     flushSync();
     setInputValue('#settings-defaults-temperature', '');
+    // The clear action in front of a set value empties it as well.
+    document
+      .querySelector('#settings-defaults-top-p')
+      .parentElement.querySelector('button')
+      .click();
+    flushSync();
     openSimpleDropdown('settings-defaults-thinking-effort');
     selectSimpleOption('settings-defaults-thinking-effort', '— (no default)');
 
@@ -146,6 +155,7 @@ describe('SettingsDefaultsPanel', () => {
           model: null,
           fallback_models: null,
           temperature: null,
+          top_p: null,
           thinking_effort: '',
         },
       },

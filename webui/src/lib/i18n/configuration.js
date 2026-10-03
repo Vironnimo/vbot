@@ -164,16 +164,11 @@ export default Object.freeze({
   'settings.defaults.fallbackModels': 'Fallback models',
   'settings.defaults.fallbackModelDescription':
     'Used when an agent fallback chain is empty.',
-  'settings.defaults.temperature': 'Temperature',
-  'settings.defaults.temperatureDescription':
-    'Used when an agent temperature is unset.',
   'settings.defaults.thinkingEffort': 'Thinking effort',
   'settings.defaults.thinkingEffortDescription':
     'Used when an agent thinking effort is unset.',
   'settings.defaults.thinkingEffortHelp':
     'How much internal reasoning the Model may spend before answering. Every Agent and Project without its own Thinking effort uses this value. With either — option, vBot sends no effort and the Provider decides.',
-  'settings.defaults.temperatureHelp':
-    'Sampling randomness, typically 0–2. Every Agent and Project without its own temperature uses this value. When empty, a Model’s recommended temperature applies if its catalog entry has one, otherwise the Provider default.',
   'settings.defaults.noThinkingEffort': '— (no default)',
   'settings.defaults.providerThinkingEffortDefault': '— (provider default)',
   'settings.defaults.noModelDefault': '— (no default)',

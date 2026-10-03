@@ -4,11 +4,13 @@
     AGENT_FORM_MODE_EDIT,
     reasoningForModelValue,
     effortOptionsForReasoning,
+    samplingRecommendationsForModelValue,
   } from '$lib/agentForm.js';
   import Button from '../ui/Button.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Dropdown from '../Dropdown.svelte';
   import TextField from '../ui/TextField.svelte';
+  import SamplingSettings from '../sampling/SamplingSettings.svelte';
   import {
     selectModelValue,
     filterModelSelectOptions,
@@ -32,8 +34,6 @@
     inheritSource,
     inheritDisplayValue,
   } = $props();
-
-  const EMPTY_VALUE = '—';
 
   let showAllModels = $state(false);
 
@@ -64,11 +64,41 @@
   // Model comes from.
   let modelTriggerTooltip = $derived(modelTriggerDetails(formValues.model));
 
+  // The Model a Run would use: the Agent's own, else the inherited global
+  // default. Its catalog recommendations are offered beside the sampling
+  // fields.
+  let samplingRecommendations = $derived(
+    samplingRecommendationsForModelValue(
+      formValues.model || inheritedModelValue(),
+      availableModels,
+    ),
+  );
+
+  let samplingFields = $derived({
+    temperature: samplingField('temperature'),
+    top_p: samplingField('top_p'),
+  });
+
+  function inheritedModelValue() {
+    return inheritSource('model') === 'global_default'
+      ? inheritDisplayValue('model')
+      : '';
+  }
+
+  function samplingField(fieldName) {
+    return {
+      value: formValues[fieldName],
+      hint:
+        inheritSource(fieldName) === 'global_default'
+          ? t('inherit.hint', { value: inheritDisplayValue(fieldName) })
+          : t('inherit.hintProviderDefault'),
+      error: formErrors[fieldName] ? fieldError(fieldName) : '',
+      recommended: samplingRecommendations[fieldName],
+    };
+  }
+
   function modelTriggerDetails(value) {
-    const inherited =
-      !value && inheritSource('model') === 'global_default'
-        ? inheritDisplayValue('model')
-        : '';
+    const inherited = value ? '' : inheritedModelValue();
     if (!value && !inherited) {
       return { text: t('agents.details.modelNotConfigured'), placement: 'top' };
     }
@@ -124,18 +154,6 @@
       value: option,
       label: thinkingEffortLabel(option),
     })),
-  );
-
-  let temperatureIsInherit = $derived(formValues.temperature === '');
-
-  let temperatureDescribedBy = $derived(
-    [
-      'agent-temperature-desc',
-      temperatureIsInherit ? 'agent-temperature-help' : '',
-      formErrors.temperature ? 'agent-temperature-error' : '',
-    ]
-      .filter(Boolean)
-      .join(' '),
   );
 
   let projectDropdownOptions = $derived(buildProjectDropdownOptions());
@@ -223,15 +241,6 @@
       });
     }
     return t('inherit.optionNotConfigured');
-  }
-
-  let modelOptionsOpen = $state(false);
-  $effect(() => {
-    if (formErrors.temperature) modelOptionsOpen = true;
-  });
-
-  function clearTemperature() {
-    formValues.temperature = '';
   }
 </script>
 
@@ -374,129 +383,60 @@
           </div>
         </div>
 
-        <button
-          type="button"
-          class="s-row s-row--compact s-disclosure-row"
-          id="agent-model-options-toggle"
-          aria-expanded={modelOptionsOpen}
-          aria-controls="agent-model-options"
-          onclick={() => (modelOptionsOpen = !modelOptionsOpen)}
-        >
-          <span class="s-row-label">
-            <span
-              class="disclosure-chevron"
-              class:disclosure-chevron--open={modelOptionsOpen}
-              aria-hidden="true"
-            ></span>
-            {t('agents.modelOptions')}
-          </span>
-        </button>
-        <div
-          class="s-group__rows"
-          id="agent-model-options"
-          hidden={!modelOptionsOpen}
-        >
-          <div class="s-row">
-            <div class="s-row-info">
-              <label class="s-row-label" for="agent-temperature">
-                {t('agents.form.temperature')}
-              </label>
-              <div class="s-row-desc" id="agent-temperature-desc">
-                {t('agents.form.temperatureDescription')}
-              </div>
-              {#if temperatureIsInherit}
-                <div
-                  class="s-row-desc agents-view__inherit-hint"
-                  id="agent-temperature-help"
-                >
-                  {inheritSource('temperature') === 'global_default'
-                    ? t('inherit.hint', {
-                        value: inheritDisplayValue('temperature'),
-                      })
-                    : t('inherit.hintProviderDefault')}
-                </div>
-              {/if}
-              {#if formErrors.temperature}
-                <p
-                  class="agents-view__row-error"
-                  id="agent-temperature-error"
-                  role="alert"
-                >
-                  {fieldError('temperature')}
-                </p>
-              {/if}
+        <div class="s-row agents-view__fallback-models">
+          <div class="s-row-info">
+            <div class="s-row-label" id="agent-fallback-models-label">
+              {t('agents.form.fallbackModels')}
             </div>
-            <div class="s-row-control agents-view__temperature-control">
-              <TextField
-                id="agent-temperature"
-                inputmode="decimal"
-                invalid={Boolean(formErrors.temperature)}
-                aria-describedby={temperatureDescribedBy}
-                value={formValues.temperature}
-                onInput={(next) => (formValues.temperature = next)}
-              />
-              {#if !temperatureIsInherit}
-                <Button
-                  variant="tertiary"
-                  class="agents-view__reset-inherit"
-                  tooltip={t('inherit.resetToInherit')}
-                  ariaLabel={t('inherit.resetToInherit')}
-                  onClick={clearTemperature}
-                >
-                  {EMPTY_VALUE}
-                </Button>
-              {/if}
+            <div class="s-row-desc">
+              {t('agents.form.fallbackModelsHelp')}
             </div>
           </div>
-
-          <div class="s-row agents-view__fallback-models">
-            <div class="s-row-info">
-              <div class="s-row-label" id="agent-fallback-models-label">
-                {t('agents.form.fallbackModels')}
-              </div>
-              <div class="s-row-desc">
-                {t('agents.form.fallbackModelsHelp')}
-              </div>
-            </div>
-            <div class="s-row-control agents-view__fallback-list">
-              {#each fallbackModelRows as row, index (index)}
-                <div class="agents-view__fallback-row">
-                  <SearchableDropdown
-                    id={`agent-fallback-model-${index}`}
-                    value={row.selectValue}
-                    options={allFallbackModelOptions}
-                    placeholder={t('agents.form.fallbackModelPlaceholder')}
-                    searchPlaceholder={t('agents.form.modelSearchPlaceholder')}
-                    emptyLabel={t('agents.form.modelSearchEmpty')}
-                    ariaLabel={`${t('agents.form.fallbackModels')} ${index + 1}`}
-                    triggerClass="agents-view__dropdown"
-                    panelClass="agents-view__search-panel"
-                    onOpenChange={onModelDropdownOpenChange}
-                    onValueChange={(selectedValue) =>
-                      updateFallbackModelEntry(index, selectedValue)}
-                  />
-                  <button
-                    type="button"
-                    class="agents-view__fallback-remove"
-                    aria-label={t('agents.form.removeFallbackModel')}
-                    onclick={() => removeFallbackModelEntry(index)}
-                  >
-                    ×
-                  </button>
-                </div>
-              {/each}
-              {#if canAddFallbackModelRow}
+          <div class="s-row-control agents-view__fallback-list">
+            {#each fallbackModelRows as row, index (index)}
+              <div class="agents-view__fallback-row">
+                <SearchableDropdown
+                  id={`agent-fallback-model-${index}`}
+                  value={row.selectValue}
+                  options={allFallbackModelOptions}
+                  placeholder={t('agents.form.fallbackModelPlaceholder')}
+                  searchPlaceholder={t('agents.form.modelSearchPlaceholder')}
+                  emptyLabel={t('agents.form.modelSearchEmpty')}
+                  ariaLabel={`${t('agents.form.fallbackModels')} ${index + 1}`}
+                  triggerClass="agents-view__dropdown"
+                  panelClass="agents-view__search-panel"
+                  onOpenChange={onModelDropdownOpenChange}
+                  onValueChange={(selectedValue) =>
+                    updateFallbackModelEntry(index, selectedValue)}
+                />
                 <button
                   type="button"
-                  class="agents-view__fallback-add"
-                  onclick={addFallbackModelEntry}
+                  class="agents-view__fallback-remove"
+                  aria-label={t('agents.form.removeFallbackModel')}
+                  onclick={() => removeFallbackModelEntry(index)}
                 >
-                  {t('agents.form.addFallbackModel')}
+                  ×
                 </button>
-              {/if}
-            </div>
+              </div>
+            {/each}
+            {#if canAddFallbackModelRow}
+              <button
+                type="button"
+                class="agents-view__fallback-add"
+                onclick={addFallbackModelEntry}
+              >
+                {t('agents.form.addFallbackModel')}
+              </button>
+            {/if}
           </div>
         </div>
+
+        <SamplingSettings
+          idPrefix="agent"
+          fields={samplingFields}
+          onChange={(fieldName, value) => (formValues[fieldName] = value)}
+          onClear={(fieldName) => (formValues[fieldName] = '')}
+        />
       </div>
     </div>
   </section>

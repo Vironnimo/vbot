@@ -463,6 +463,7 @@ describe('agent defaults, sub-agents and session titles', () => {
       model: '',
       fallback_models: [],
       temperature: null,
+      top_p: null,
       thinking_effort: null,
     });
     expect(
@@ -472,6 +473,7 @@ describe('agent defaults, sub-agents and session titles', () => {
             model: ' openai/gpt-5.2 ',
             fallback_models: [' openai/gpt-5.1 ', ''],
             temperature: '0.6',
+            top_p: 0.9,
             thinking_effort: ' high ',
           },
         },
@@ -480,6 +482,7 @@ describe('agent defaults, sub-agents and session titles', () => {
       model: 'openai/gpt-5.2',
       fallback_models: ['openai/gpt-5.1'],
       temperature: 0.6,
+      top_p: 0.9,
       thinking_effort: 'high',
     });
     // An empty thinking effort is a stored choice, distinct from no default.
@@ -497,6 +500,7 @@ describe('agent defaults, sub-agents and session titles', () => {
         fallback_models: ['openai/gpt-5.1'],
         // Comma decimal separator typed in comma-decimal locales.
         temperature: '0,7',
+        top_p: '0.95',
         thinking_effort: '',
       }),
     ).toEqual({
@@ -505,6 +509,7 @@ describe('agent defaults, sub-agents and session titles', () => {
           model: 'openai/gpt-5.2',
           fallback_models: ['openai/gpt-5.1'],
           temperature: 0.7,
+          top_p: 0.95,
           thinking_effort: '',
         },
       },
@@ -514,6 +519,7 @@ describe('agent defaults, sub-agents and session titles', () => {
         model: '',
         fallback_models: [],
         temperature: '',
+        top_p: '',
         thinking_effort: AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
       }),
     ).toEqual({
@@ -522,6 +528,7 @@ describe('agent defaults, sub-agents and session titles', () => {
           model: null,
           fallback_models: null,
           temperature: null,
+          top_p: null,
           thinking_effort: null,
         },
       },

@@ -15,7 +15,6 @@ export default Object.freeze({
   'toolAccess.source.extension': 'Extension',
   'toolAccess.access.explicit': 'Explicit permission; selecting grants it',
   'toolAccess.access.selected': 'Allowed while selected',
-  'agents.modelOptions': 'Temperature & fallback models',
   'agents.storageDetails': 'Workspace & advanced',
   'projects.repositorySection': 'Repository',
   'projects.defaultsSection': 'Agent defaults',
@@ -269,6 +268,19 @@ export default Object.freeze({
     'Reset to the inherited value: {value} (global default)',
   'inherit.resetToProviderDefault': 'Reset to the provider default',
   'inherit.editGlobalDefaults': 'Edit global defaults',
+  'sampling.title': 'Advanced sampling',
+  'sampling.note':
+    'We recommend the Provider defaults. Change these only to fix a problem or when you know what the Model needs.',
+  'sampling.temperature': 'Temperature',
+  'sampling.temperatureDescription':
+    'Sampling randomness, 0–2. Empty uses the inherited value or the Provider default.',
+  'sampling.topP': 'Top P',
+  'sampling.topPDescription':
+    'Nucleus sampling, 0–1. Empty uses the inherited value or the Provider default.',
+  'sampling.summaryTemperature': 'Temperature {value}',
+  'sampling.summaryTopP': 'Top P {value}',
+  'sampling.modelRecommends': 'Model recommends {value}',
+  'sampling.useRecommendation': 'Use {value}',
   'agents.title': 'Agents',
   'agents.loading': 'Loading agents…',
   'agents.empty': 'No agents found.',
@@ -287,7 +299,6 @@ export default Object.freeze({
   'agents.form.model': 'Model',
   'agents.form.fallbackModels': 'Fallback models',
   'agents.form.workspace': 'Workspace',
-  'agents.form.temperature': 'Temperature',
   'agents.form.thinkingEffort': 'Thinking effort',
   'agents.form.toolAccess': 'Tool access',
   'agents.form.toolAccessHelp':
@@ -301,13 +312,10 @@ export default Object.freeze({
   'agents.form.fallbackModelInherit': 'Inherit global default',
   'agents.form.addFallbackModel': '+ Add fallback model',
   'agents.form.removeFallbackModel': 'Remove fallback model',
-  'agents.form.temperatureHelp':
-    'Sampling randomness, typically 0–2. Leave empty to use the default.',
   'agents.form.thinkingEffortHelp':
     'How much internal reasoning the model may spend before answering. Leave at — for the default.',
   'agents.form.thinkingEffortDescription':
     'How much internal reasoning the Model may spend before answering.',
-  'agents.form.temperatureDescription': 'Sampling randomness, typically 0–2.',
   'agents.form.customPromptDescription':
     'Gives this Agent its own editable copy of the System Prompt. Turning it off keeps the customized blocks but stops using them.',
   'agents.form.skills': 'Skills',
@@ -523,14 +531,11 @@ export default Object.freeze({
     'The team agent preselected when you open this project in Chat.',
   'projects.manage.defaultModelHelp':
     'Used by team agents that do not declare their own model. Resolution order: per-agent override → the agent’s own value → this project default → the global default.',
-  'projects.manage.defaultTemperatureHelp':
-    'Used by team agents that do not set their own temperature. Same resolution order as the default model.',
   'projects.manage.defaultThinkingEffortHelp':
     'Used by team agents that do not set their own thinking effort. Same resolution order as the default model.',
   'projects.manage.defaultAgentEmpty': 'No project default',
   'projects.manage.defaultAgentUnavailable': '{agentId} (not in team)',
   'projects.manage.defaultModel': 'Default model',
-  'projects.manage.defaultTemperature': 'Default temperature',
   'projects.manage.defaultThinkingEffort': 'Default thinking effort',
   'projects.manage.noThinkingEffort': 'No project default',
   'projects.manage.providerThinkingEffortDefault': '— (provider default)',
@@ -594,6 +599,7 @@ export default Object.freeze({
     'No agents discovered in this repository yet. An empty project is valid — add agent files to the repo to build a team.',
   'projects.team.effectiveModel': 'Model',
   'projects.team.effectiveTemperature': 'Temperature',
+  'projects.team.effectiveTopP': 'Top P',
   'projects.team.effectiveThinkingEffort': 'Thinking effort',
   'projects.team.valueNotConfigured': 'not configured',
   'projects.team.valueProviderDefault': 'provider default',
@@ -618,7 +624,6 @@ export default Object.freeze({
   'projects.team.deniedToolsBaselineHelp':
     'These blocks apply only while the repository policy is active. A vBot Tool override replaces them.',
   'projects.team.overrideModelPlaceholder': 'No override',
-  'projects.team.overrideTemperaturePlaceholder': 'e.g. 0.7',
   'projects.team.sourceFile': 'Source: {path} ({format})',
   'projects.team.address': 'Address',
   'projects.team.sourceFileLabel': 'Source file',

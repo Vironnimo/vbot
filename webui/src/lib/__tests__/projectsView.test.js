@@ -77,6 +77,7 @@ describe('Projects controller loading', () => {
               {
                 project_id: 'demo',
                 default_temperature: 0,
+                default_top_p: 1,
                 default_thinking_effort: '',
                 source_format: 'claude',
                 auto_load: ['AGENTS.md', '  '],
@@ -92,6 +93,7 @@ describe('Projects controller loading', () => {
     expect(state.projects[0]).toMatchObject({
       project_id: 'demo',
       default_temperature: 0,
+      default_top_p: 1,
       default_thinking_effort: '',
       source_format: 'claude',
       auto_load: ['AGENTS.md'],
@@ -102,6 +104,7 @@ describe('Projects controller loading', () => {
       display_name: '',
       cwd_exists: false,
       default_temperature: null,
+      default_top_p: null,
       default_thinking_effort: null,
       source_format: 'opencode',
       auto_load: [],
@@ -214,6 +217,7 @@ describe('Projects controller editing', () => {
     default_agent: 'builder',
     default_model: 'openai/gpt-5.2',
     default_temperature: 0.5,
+    default_top_p: 0.9,
     default_thinking_effort: 'high',
     source_format: 'opencode',
     auto_load: ['AGENTS.md'],
@@ -283,6 +287,18 @@ describe('Projects controller editing', () => {
       { default_temperature: null },
       { default_temperature: '0' },
       { default_temperature: 0 },
+    ],
+    [
+      'a changed top_p as a number',
+      {},
+      { default_top_p: '0,95' },
+      { default_top_p: 0.95 },
+    ],
+    [
+      'null for an emptied top_p',
+      {},
+      { default_top_p: '' },
+      { default_top_p: null },
     ],
     [
       'null for the no-default thinking effort',
@@ -626,11 +642,13 @@ describe('Projects controller Team overrides', () => {
         overrides: {
           model: 'openai/gpt-mini',
           temperature: 0.3,
+          top_p: 0.8,
           thinking_effort: 'low',
         },
         effective: {
           model: { value: 'openai/gpt-mini', source: 'override' },
           temperature: { value: 0.3, source: 'override' },
+          top_p: { value: 0.8, source: 'override' },
           thinking_effort: { value: 'low', source: 'override' },
         },
       },
@@ -640,6 +658,7 @@ describe('Projects controller Team overrides', () => {
         effective: {
           model: { value: 'openai/gpt-5.2', source: 'agent' },
           temperature: { value: null, source: null },
+          top_p: { value: 0.95, source: 'project_default' },
           thinking_effort: { value: 'high', source: 'project_default' },
         },
       },
@@ -653,6 +672,7 @@ describe('Projects controller Team overrides', () => {
     expect(controller.overrideDraft('builder')).toEqual({
       model: 'openai/gpt-mini',
       temperature: '0.3',
+      top_p: '0.8',
       thinking_effort: 'low',
       compaction_policy: null,
       tool_access: { mode: 'all' },
@@ -660,6 +680,7 @@ describe('Projects controller Team overrides', () => {
     expect(controller.overrideDraft('planner')).toEqual({
       model: 'openai/gpt-5.2',
       temperature: '',
+      top_p: '0.95',
       thinking_effort: 'high',
       compaction_policy: null,
       tool_access: { mode: 'all' },
@@ -668,28 +689,24 @@ describe('Projects controller Team overrides', () => {
 
   // null: the draft holds no number, so the override is refused unsent.
   it.each([
-    ['0,7', 0.7],
-    ['0', 0],
-    ['', null],
-    ['abc', null],
-  ])('sets the override temperature typed as %j to %j', async (draft, sent) => {
+    ['temperature', '0,7', 0.7],
+    ['temperature', '0', 0],
+    ['top_p', '0,9', 0.9],
+    ['temperature', '', null],
+    ['top_p', 'abc', null],
+  ])('sets the %s override typed as %j to %j', async (field, draft, sent) => {
     const setOverride = vi.fn().mockResolvedValue({ scan });
     const { controller } = await loadedController({}, { setOverride });
     controller.selectProject('demo', scan);
-    controller.updateOverrideDraft('planner', 'temperature', draft);
+    controller.updateOverrideDraft('planner', field, draft);
 
-    await expect(
-      controller.setMemberOverride('planner', 'temperature'),
-    ).resolves.toBe(sent !== null);
+    await expect(controller.setMemberOverride('planner', field)).resolves.toBe(
+      sent !== null,
+    );
     if (sent === null) {
       expect(setOverride).not.toHaveBeenCalled();
     } else {
-      expect(setOverride).toHaveBeenCalledWith(
-        'demo',
-        'planner',
-        'temperature',
-        sent,
-      );
+      expect(setOverride).toHaveBeenCalledWith('demo', 'planner', field, sent);
     }
   });
 
@@ -758,15 +775,17 @@ describe('Project scan projections', () => {
             description: 'Builds things',
             model: 'openai/gpt-5.2',
             temperature: 0.2,
+            top_p: 0.9,
             thinking_effort: 'high',
             source_format: 'opencode',
             source_path: '.opencode/agents/builder.md',
             denied_tools: ['bash'],
             tools: { subagent: { allowed_agents: ['builder'] } },
-            overrides: { model: 'openai/gpt-mini', unknown: 'x' },
+            overrides: { model: 'openai/gpt-mini', top_p: 0.8, unknown: 'x' },
             effective: {
               model: { value: 'openai/gpt-mini', source: 'override' },
               temperature: { value: 0.2, source: 'agent' },
+              top_p: { value: 0.8, source: 'override' },
               thinking_effort: { value: 'high', source: 'agent' },
             },
           },
@@ -780,16 +799,18 @@ describe('Project scan projections', () => {
         description: 'Builds things',
         model: 'openai/gpt-5.2',
         temperature: 0.2,
+        top_p: 0.9,
         thinking_effort: 'high',
         source_format: 'opencode',
         source_path: '.opencode/agents/builder.md',
         denied_tools: ['bash'],
         tools: { subagent: { allowed_agents: ['builder'] } },
         // Only the known override fields survive.
-        overrides: { model: 'openai/gpt-mini' },
+        overrides: { model: 'openai/gpt-mini', top_p: 0.8 },
         effective: {
           model: { value: 'openai/gpt-mini', source: 'override' },
           temperature: { value: 0.2, source: 'agent' },
+          top_p: { value: 0.8, source: 'override' },
           thinking_effort: { value: 'high', source: 'agent' },
           tool_access: { value: { mode: 'all' }, source: null },
         },
@@ -800,6 +821,7 @@ describe('Project scan projections', () => {
         description: '',
         model: '',
         temperature: null,
+        top_p: null,
         thinking_effort: null,
         source_format: '',
         source_path: '',
@@ -810,6 +832,7 @@ describe('Project scan projections', () => {
         effective: {
           model: { value: null, source: null },
           temperature: { value: null, source: null },
+          top_p: { value: null, source: null },
           thinking_effort: { value: null, source: null },
           tool_access: { value: { mode: 'all' }, source: null },
         },

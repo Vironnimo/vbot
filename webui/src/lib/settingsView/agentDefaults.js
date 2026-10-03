@@ -10,6 +10,7 @@ const AGENT_DEFAULTS_FIELDS = Object.freeze([
   'model',
   'fallback_models',
   'temperature',
+  'top_p',
   'thinking_effort',
 ]);
 
@@ -34,7 +35,8 @@ export function normalizeAgentDefaultsSettings(rawSettings) {
     fallback_models: normalizeAgentDefaultsStringList(
       agentDefaults.fallback_models,
     ),
-    temperature: normalizeAgentDefaultsTemperature(agentDefaults.temperature),
+    temperature: normalizeAgentDefaultsNumber(agentDefaults.temperature),
+    top_p: normalizeAgentDefaultsNumber(agentDefaults.top_p),
     thinking_effort: normalizeAgentDefaultsThinkingEffort(
       agentDefaults.thinking_effort,
     ),
@@ -51,7 +53,8 @@ export function buildAgentDefaultsPayload(formValues) {
         fallback_models: normalizeAgentDefaultsStringListForPayload(
           values.fallback_models,
         ),
-        temperature: normalizeAgentDefaultsTemperature(values.temperature),
+        temperature: normalizeAgentDefaultsNumber(values.temperature),
+        top_p: normalizeAgentDefaultsNumber(values.top_p),
         thinking_effort: normalizeAgentDefaultsThinkingEffortForPayload(
           values.thinking_effort,
         ),
@@ -143,7 +146,9 @@ function resolveAgentDefaultsSource(rawSettings) {
   return {};
 }
 
-function normalizeAgentDefaultsTemperature(value) {
+// A sampling default (temperature, top_p): a number, or null when unset or
+// not a number.
+function normalizeAgentDefaultsNumber(value) {
   if (value === null || value === undefined) {
     return null;
   }

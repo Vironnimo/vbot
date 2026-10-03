@@ -548,18 +548,19 @@ describe('ProjectsView Project settings', () => {
       inputById('project-edit-model')?.textContent.includes('openai/gpt-5.2'),
     );
     expect(
-      document.querySelector('.projects-inherit-hint').textContent,
+      document.querySelector('#project-edit-temperature-help').textContent,
     ).toContain('0.7');
 
     // An own value's reset control names the value it returns to.
     setInputValue('project-edit-temperature', '0.3');
+    const resetLabel = t('inherit.resetToValue', { value: '0.7' });
     await waitForCondition(() =>
-      document.querySelector('[aria-label="Reset to inherited value"]'),
+      document.querySelector(`[aria-label="${resetLabel}"]`),
     );
-    document.querySelector('[aria-label="Reset to inherited value"]').focus();
+    document.querySelector(`[aria-label="${resetLabel}"]`).focus();
     await vi.waitFor(() =>
       expect(document.getElementById('app-tooltip')?.textContent).toBe(
-        t('inherit.resetToValue', { value: '0.7' }),
+        resetLabel,
       ),
     );
   });

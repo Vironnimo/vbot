@@ -340,10 +340,11 @@ export function setOverride(projectId, agentId, field, value, options = {}) {
     'project.set_override',
   );
 
-  // A per-agent override (model / temperature / thinking_effort) becomes the top
-  // tier of that field's resolution chain for this agent in this project. The value
-  // shape is field-specific (a model address string, a number, an effort string);
-  // the server validates it against the canonical agent rules.
+  // A per-agent override (model / temperature / top_p / thinking_effort /
+  // compaction_policy / tool_access) becomes the top tier of that field's
+  // resolution chain for this agent in this project. The value shape is
+  // field-specific (a model address string, a number, an effort string, an
+  // object); the server validates it against the canonical agent rules.
   return rpc(
     'project.set_override',
     { project_id: projectId, agent_id: agentId, field, value },
