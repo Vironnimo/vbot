@@ -22,6 +22,15 @@ if TYPE_CHECKING:
     from core.chat.chat import ChatLoop
 
 
+STEERING_SYSTEM_REMINDER = (
+    "The following user message was added to your current task. "
+    "Apply its corrections and additional instructions to that task. "
+    "If the message asks a question or requests a status update, answer briefly and then resume "
+    "any unfinished work on the task. "
+    "If the user clearly cancels or replaces the task, follow that change."
+)
+
+
 @dataclass(frozen=True)
 class QueuedChatInput:
     """Editable queued executor retaining every immutable admission input."""
@@ -59,6 +68,7 @@ async def persist_steering_input(context: _RunExecutionContext, item: QueuedRunI
     await context.session_snapshot.refresh(session)
     session.begin_defer_notes()
     _append_input_origin_note(session, request.input_origin)
+    session.add_note(STEERING_SYSTEM_REMINDER)
     message = ChatMessage.user(
         _assign_session_image_references(request.content, context.session_snapshot.active_messages),
         input_origin=request.input_origin,
