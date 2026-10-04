@@ -1,4 +1,4 @@
-"""Chat history primitives: checkpoint ordinals, history guidance, compaction overlays,
+"""Chat history primitives: checkpoint ordinals, checkpoint guidance, compaction overlays,
 reply-surface state and Session image references."""
 
 from __future__ import annotations
@@ -9,14 +9,13 @@ from core.chat import ChatMessage, ReplySurface, ToolCall
 from core.chat._message_history import (
     checkpoint_ordinal,
     effective_compaction_messages,
-    finalize_checkpoint_history_guidance,
-    history_available,
+    finalize_checkpoint_guidance,
     reply_surface_from_note,
     should_append_reply_surface_note,
 )
 from core.chat._request_history import _assign_session_image_references
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
-from core.chat.messages import COMPACTION_SUMMARY_END_MARKER, HISTORY_COMPACTION_GUIDANCE
+from core.chat.messages import COMPACTION_CHECKPOINT_GUIDANCE, COMPACTION_SUMMARY_END_MARKER
 
 
 def _checkpoint(
@@ -37,15 +36,13 @@ def _tool_batch(content: str | None = None) -> tuple[ChatMessage, ChatMessage]:
     return carrier, result
 
 
-def test_availability_and_ordinals_derive_from_append_order() -> None:
+def test_ordinals_derive_from_append_order() -> None:
     first = _checkpoint("First")
     second = _checkpoint("Second")
     without_checkpoint = [ChatMessage.user("before")]
     messages = [*without_checkpoint, first, ChatMessage.user("between"), second]
 
-    assert history_available(without_checkpoint) is False
     assert effective_compaction_messages(without_checkpoint) == without_checkpoint
-    assert history_available(messages) is True
     assert checkpoint_ordinal(messages, first.id) == 1
     assert checkpoint_ordinal(messages, second.id) == 2
     assert checkpoint_ordinal(messages, "missing") is None
@@ -59,13 +56,13 @@ def test_availability_and_ordinals_derive_from_append_order() -> None:
 def test_checkpoint_guidance_is_added_once_before_the_summary_end(summary: str) -> None:
     checkpoint = _checkpoint(summary)
 
-    finalized = finalize_checkpoint_history_guidance(checkpoint, ordinal=3)
-    finalized_again = finalize_checkpoint_history_guidance(finalized, ordinal=3)
+    finalized = finalize_checkpoint_guidance(checkpoint, ordinal=3)
+    finalized_again = finalize_checkpoint_guidance(finalized, ordinal=3)
 
     assert finalized.projection is not None
     leading = ChatMessage.from_dict(finalized.projection[0]).content
     assert isinstance(leading, str)
-    guidance = HISTORY_COMPACTION_GUIDANCE.format(ordinal=3)
+    guidance = COMPACTION_CHECKPOINT_GUIDANCE.format(ordinal=3)
     assert leading.startswith("[compaction-summary] Earlier decisions.")
     assert leading.count(guidance) == 1
     if COMPACTION_SUMMARY_END_MARKER in summary:

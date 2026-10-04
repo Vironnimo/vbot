@@ -20,11 +20,9 @@ from core.runs import (
 from core.sessions import ChatSession
 from core.sessions.store import SessionStore
 from core.tools import (
-    HISTORY_TOOL_NAME,
     ToolContext,
     ToolDisplay,
     ToolRegistry,
-    register_history_tool,
     tool_failure,
     tool_success,
 )
@@ -326,7 +324,6 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
         ),
         models=StubModels({("openai", "gpt-5.2"): 100}),
     )
-    register_history_tool(runtime.tools, runtime.chat_sessions)
     compaction_service = SingleCheckpointCompactionService()
 
     assistant = await build_chat_loop(
@@ -346,8 +343,8 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
     ]
     assert compaction_service.request_messages[2]["reasoning"] == "Need weather."
     assert compaction_service.request_messages[3]["tool_call_id"] == "call_abc"
-    assert HISTORY_TOOL_NAME not in [tool["name"] for tool in requests[0]["kwargs"]["tools"]]
-    assert HISTORY_TOOL_NAME in [tool["name"] for tool in requests[1]["kwargs"]["tools"]]
+    # Compaction between two requests of one Run leaves the offered Tool list unchanged.
+    assert requests[1]["kwargs"]["tools"] == requests[0]["kwargs"]["tools"]
     assert [message["role"] for message in continued_messages] == [
         "system",
         "user",

@@ -274,8 +274,8 @@ def test_session_scoped_tool_is_offered_only_with_its_grant() -> None:
     registry = ToolRegistry()
     register_read_file(registry)
     registry.register(
-        name="history",
-        description="Read this Session's earlier original records.",
+        name="inbox",
+        description="Read this Session's inbox.",
         parameters={"type": "object"},
         handler=read_file_handler,
         session_scoped=True,
@@ -287,13 +287,13 @@ def test_session_scoped_tool_is_offered_only_with_its_grant() -> None:
     assert registry.prompt_definitions([]) == []
     assert [
         definition["name"]
-        for definition in registry.provider_definitions([], session_grants=["history"])
-    ] == ["history"]
+        for definition in registry.provider_definitions([], session_grants=["inbox"])
+    ] == ["inbox"]
     assert [
         definition["name"]
-        for definition in registry.prompt_definitions([], session_grants=["history"])
-    ] == ["history"]
-    assert [tool.name for tool in registry.list_tools()] == ["history", "read_file"]
+        for definition in registry.prompt_definitions([], session_grants=["inbox"])
+    ] == ["inbox"]
+    assert [tool.name for tool in registry.list_tools()] == ["inbox", "read_file"]
     assert [tool.name for tool in registry.list_tools(include_session_scoped=False)] == [
         "read_file"
     ]

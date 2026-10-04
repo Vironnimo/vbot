@@ -14,7 +14,6 @@ from core.providers.github_copilot_responses import (
     build_responses_payload,
     estimate_responses_input_tokens,
 )
-from core.tools import HISTORY_TOOL_DESCRIPTION, HISTORY_TOOL_NAME, HISTORY_TOOL_PARAMETERS
 from core.utils.tokens import NATIVE_MEDIA_TOKEN_RESERVE
 from tests.core.providers.responses_test_support import responses_policy, responses_reasoning
 
@@ -59,12 +58,6 @@ def test_payload_maps_effort_and_tool_definitions_and_gates_structured_output() 
                     "parameters": _SEARCH_PARAMETERS,
                 },
             },
-            # The history Tool maps like any other Tool, without a special case.
-            {
-                "name": HISTORY_TOOL_NAME,
-                "description": HISTORY_TOOL_DESCRIPTION,
-                "parameters": HISTORY_TOOL_PARAMETERS,
-            },
         ],
         tool_choice="auto",
         response_format={"type": "json_object"},
@@ -88,13 +81,6 @@ def test_payload_maps_effort_and_tool_definitions_and_gates_structured_output() 
                 "name": "lookup",
                 "description": "Look up docs",
                 "parameters": _SEARCH_PARAMETERS,
-                "strict": False,
-            },
-            {
-                "type": "function",
-                "name": HISTORY_TOOL_NAME,
-                "description": HISTORY_TOOL_DESCRIPTION,
-                "parameters": HISTORY_TOOL_PARAMETERS,
                 "strict": False,
             },
         ],

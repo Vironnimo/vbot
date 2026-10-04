@@ -13,12 +13,7 @@ import respx
 from core.chat.streaming import StreamingAccumulator
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.errors import NetworkError, ProviderError
-from core.tools import (
-    HISTORY_TOOL_DESCRIPTION,
-    HISTORY_TOOL_NAME,
-    HISTORY_TOOL_PARAMETERS,
-    tool_success,
-)
+from core.tools import tool_success
 from core.utils.retry import caller_owns_retries
 from tests.core.providers.ollama_test_support import (
     CLOUD_CHAT_URL,
@@ -41,12 +36,6 @@ WEATHER_TOOL = {
         "properties": {"city": {"type": "string"}},
         "required": ["city"],
     },
-}
-
-HISTORY_TOOL = {
-    "name": HISTORY_TOOL_NAME,
-    "description": HISTORY_TOOL_DESCRIPTION,
-    "parameters": HISTORY_TOOL_PARAMETERS,
 }
 
 
@@ -81,7 +70,7 @@ async def test_native_request_uses_ollama_message_tool_and_option_shapes() -> No
     await local_adapter().send(
         messages,
         model_id="ministral-3:8b",
-        tools=[WEATHER_TOOL, HISTORY_TOOL],
+        tools=[WEATHER_TOOL],
         temperature=0.2,
         top_p=0.95,
     )
@@ -90,10 +79,7 @@ async def test_native_request_uses_ollama_message_tool_and_option_shapes() -> No
     # The keyless local Connection sends no auth header.
     assert "Authorization" not in route.calls.last.request.headers
     assert payload["stream"] is False
-    assert payload["tools"] == [
-        {"type": "function", "function": WEATHER_TOOL},
-        {"type": "function", "function": HISTORY_TOOL},
-    ]
+    assert payload["tools"] == [{"type": "function", "function": WEATHER_TOOL}]
     assert payload["options"] == {"temperature": 0.2, "top_p": 0.95}
     user, tool_call_turn, tool, answer = payload["messages"]
     # Canonical media blocks become the per-message bare-base64 images array.

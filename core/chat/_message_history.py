@@ -230,11 +230,6 @@ def latest_compaction_checkpoint(
     return None
 
 
-def history_available(messages: Sequence[_records.ChatMessage]) -> bool:
-    """Return whether the current view grants the History tool."""
-    return any(message.role == "compaction_checkpoint" for message in messages)
-
-
 def checkpoint_ordinal(messages: Sequence[_records.ChatMessage], checkpoint_id: str) -> int | None:
     """Return a checkpoint's one-based chronological ordinal."""
     ordinal = 0
@@ -247,15 +242,15 @@ def checkpoint_ordinal(messages: Sequence[_records.ChatMessage], checkpoint_id: 
     return None
 
 
-def finalize_checkpoint_history_guidance(
+def finalize_checkpoint_guidance(
     checkpoint: _records.ChatMessage,
     *,
     ordinal: int,
 ) -> _records.ChatMessage:
-    """Add the ordinal-specific History guidance to a new checkpoint once."""
+    """Add the ordinal-specific checkpoint guidance to a new checkpoint once."""
     if checkpoint.role != "compaction_checkpoint" or checkpoint.projection is None:
-        raise ChatMessageValidationError("History guidance requires a projected checkpoint")
-    guidance = _records.HISTORY_COMPACTION_GUIDANCE.format(ordinal=ordinal)
+        raise ChatMessageValidationError("checkpoint guidance requires a projected checkpoint")
+    guidance = _records.COMPACTION_CHECKPOINT_GUIDANCE.format(ordinal=ordinal)
     projection = [dict(entry) for entry in checkpoint.projection]
     leading = _records.ChatMessage.from_dict(projection[0])
     if leading.role != "note" or not isinstance(leading.content, str):

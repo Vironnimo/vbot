@@ -102,7 +102,6 @@ from core.tools import (
     register_bash_tool,
     register_generate_music_tool,
     register_generate_video_tool,
-    register_history_tool,
     register_image_generation_tool,
     register_memory_tool,
     register_process_tool,
@@ -440,7 +439,6 @@ def bootstrap(runtime: Runtime) -> None:
             run_started_at=runtime.run_started_at,
             follow_merge=runtime.follow_skill_merge,
         )
-        register_history_tool(runtime._tools, runtime._chat_sessions)
         runtime._projects = ProjectStore(
             runtime._storage.data_dir,
             sessions=runtime._chat_sessions,

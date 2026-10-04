@@ -118,7 +118,7 @@ async def test_owner_catalog_projects_registry_metadata_until_the_registration_r
     tools = {tool["name"]: tool for tool in catalog["tools"]}
     read = runtime.tools.get("read")
     assert (tools["read"]["family"], tools["read"]["activation"]) == (read.family, read.activation)
-    assert not {"history", *SWARM_PRIVATE_TOOLS} & tools.keys()
+    assert not set(SWARM_PRIVATE_TOOLS) & tools.keys()
     assert catalog["tool_settings"] == {
         "bash": {
             "type": "object",

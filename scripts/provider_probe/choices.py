@@ -95,7 +95,6 @@ PROBE_SCENARIOS = (
     "ha_get_state",
     "ha_list_entities",
     "ha_list_services",
-    "history",
     "image_generation",
     "memory",
     "process",
@@ -250,42 +249,6 @@ HA_LIST_SERVICES_CASES = ("default", "domain")
 
 
 HA_CALL_SERVICE_CASES = ("base", "entity", "empty_data", "data", "all")
-
-
-HISTORY_CASES = (
-    "overview_default",
-    "overview_limit_min",
-    "overview_limit_max",
-    "overview_cursor",
-    "search_default",
-    "search_checkpoint",
-    "search_roles_one",
-    "search_roles_all",
-    "search_match_all_terms",
-    "search_match_phrase",
-    "search_match_any_term",
-    "search_limit",
-    "search_all",
-    "search_cursor",
-    "read_default",
-    "read_checkpoint",
-    "read_roles_empty",
-    "read_roles",
-    "read_direction_start",
-    "read_direction_end",
-    "read_limit",
-    "read_all",
-    "read_cursor",
-    "around_default",
-    "around_checkpoint",
-    "around_roles",
-    "around_before_zero",
-    "around_before_max",
-    "around_after_zero",
-    "around_after_max",
-    "around_all",
-    "around_cursor",
-)
 
 
 PROCESS_CASES = (

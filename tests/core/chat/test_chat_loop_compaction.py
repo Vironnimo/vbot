@@ -11,11 +11,11 @@ from typing import Any, cast, override
 import pytest
 
 from core.chat import ChatMessage
-from core.chat.messages import HISTORY_COMPACTION_GUIDANCE
+from core.chat.messages import COMPACTION_CHECKPOINT_GUIDANCE
 from core.compaction import MIN_AUTO_COMPACTION_RECLAIM_TOKENS, CompactionService
 from core.compaction.compaction import COMPACTION_SUMMARY_END_MARKER
 from core.runs import COMPACTION_ABORTED_EVENT, COMPACTION_COMPLETED_EVENT, COMPACTION_STARTED_EVENT
-from core.tools import HISTORY_TOOL_NAME, ToolRegistry, register_history_tool, tool_success
+from core.tools import ToolRegistry, tool_success
 from core.utils.tokens import estimate_request_input_tokens
 from tests.core.chat.chat_loop_compaction_test_support import (
     WAIT_SECONDS,
@@ -107,12 +107,9 @@ async def test_automatic_compaction_commits_a_checkpoint_and_rebuilds_the_reques
     assert "Compacted tail context." in reminder
     assert [message["content"] for message in probe.rebuilt[2:]] == ["Tail user", "Tail assistant"]
 
-    # The after-count estimates the rebuilt request with the now granted history Tool.
+    # The after-count estimates the rebuilt request with the Agent's Tool definitions.
     tokens_after, _ = estimate_request_input_tokens(
-        probe.rebuilt,
-        runtime.system_prompts.provider_tool_definitions(
-            agent, session_tool_grants=(HISTORY_TOOL_NAME,)
-        ),
+        probe.rebuilt, runtime.system_prompts.provider_tool_definitions(agent)
     )
     lifecycle = [
         event
@@ -134,7 +131,6 @@ async def test_automatic_compaction_commits_a_checkpoint_and_rebuilds_the_reques
     }
     assert lifecycle[1].payload["checkpoint"] == 1
     assert lifecycle[1].payload["checkpoint_id"] == checkpoint.id
-    assert lifecycle[1].payload["history_available"] is True
     assert lifecycle[1].payload["context_tokens_before"] == 90
     assert lifecycle[1].payload["context_tokens_after"] == tokens_after
     assert lifecycle[1].payload["context_usage"] == {"tokens": tokens_after, "estimated": True}
@@ -265,7 +261,6 @@ async def test_real_compaction_repeats_between_complete_tool_iterations(tmp_path
         agent=StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["word_count"]),
         tools=word_count_tools(),
     )
-    register_history_tool(runtime.tools, runtime.chat_sessions)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("OLD_CONTEXT_MARKER " + ("old context " * 5_000)))
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="old answer " * 5_000))
@@ -293,9 +288,9 @@ async def test_real_compaction_repeats_between_complete_tool_iterations(tmp_path
             if COMPACTION_SUMMARY_END_MARKER in str(message.get("content") or "")
         ]
         assert summary.endswith(COMPACTION_SUMMARY_END_MARKER)
-        assert summary.index(HISTORY_COMPACTION_GUIDANCE.format(ordinal=ordinal)) < summary.index(
-            COMPACTION_SUMMARY_END_MARKER
-        )
+        assert summary.index(
+            COMPACTION_CHECKPOINT_GUIDANCE.format(ordinal=ordinal)
+        ) < summary.index(COMPACTION_SUMMARY_END_MARKER)
         # Tool Results always stay directly behind the Assistant step that called them.
         for index, message in enumerate(projection):
             if message["role"] == "tool":

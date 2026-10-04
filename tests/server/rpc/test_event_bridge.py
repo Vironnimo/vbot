@@ -256,7 +256,6 @@ def test_terminal_events_project_only_their_completion_facts(
                 "message": {"id": "message-one", "role": "compaction_checkpoint"},
                 "checkpoint": {"id": "checkpoint-one", "summary": "Earlier work"},
                 "checkpoint_id": "checkpoint-one",
-                "history_available": True,
             },
             id="compaction-completed",
         ),

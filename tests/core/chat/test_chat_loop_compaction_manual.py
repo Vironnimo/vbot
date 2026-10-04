@@ -11,12 +11,10 @@ from typing import Any, cast
 import pytest
 
 from core.chat import ChatMessage
-from core.chat._run_state import RequestBuildInputs
 from core.compaction import CompactionService
 from core.compaction.compaction import COMPACTION_REFERENCE_PREFIX, CompactionError
 from core.prompts.pinned_context import PINNED_SKILL_CATALOG_SLOT, pinned_skill_catalog
 from core.runs import COMPACTION_ABORTED_EVENT, Run
-from core.tools import HISTORY_TOOL_NAME, register_history_tool
 from tests.core.chat.chat_loop_compaction_test_support import (
     CompactOnceService,
     RecordingCompactionAdapter,
@@ -84,7 +82,6 @@ async def test_compact_session_commits_the_checkpoint_and_closes_the_adapter(
 ) -> None:
     adapter = ClosingStubAdapter([])
     runtime = compaction_runtime(tmp_path, adapter=adapter)
-    register_history_tool(runtime.tools, runtime.chat_sessions)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
     caplog.set_level(logging.INFO, logger="vbot.compaction.coordination")
@@ -138,7 +135,6 @@ async def test_real_manual_compaction_after_completed_run_does_not_continue_agen
         },
         agent=StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[]),
     )
-    register_history_tool(runtime.tools, runtime.chat_sessions)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("OLD_MANUAL_CONTEXT " + ("older " * 8_000)))
     session.append(
@@ -233,7 +229,6 @@ async def test_compact_session_scopes_to_project_session_and_agent(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_compact_session_converts_compaction_failure_into_reply(tmp_path: Path) -> None:
     runtime = compaction_runtime(tmp_path)
-    register_history_tool(runtime.tools, runtime.chat_sessions)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Hi"))
     service = StubCompactionService(
@@ -246,10 +241,6 @@ async def test_compact_session_converts_compaction_failure_into_reply(tmp_path: 
     assert reply == "Compaction failed: compaction broke"
     assert persisted_roles(session.load()) == ["user"]
     assert runtime.refresh_skills_for_calls == []
-    request_state = await loop._requests.build_request_state(
-        runtime.agents.get("coder"), session, inputs=RequestBuildInputs()
-    )
-    assert HISTORY_TOOL_NAME not in [tool["name"] for tool in request_state.tools]
 
 
 @pytest.mark.asyncio

@@ -376,8 +376,8 @@ def test_tool_list_includes_session_scoped_tools_with_activation_metadata() -> N
         handler=lambda _context, _arguments: tool_success({}),
     )
     registry.register(
-        name="history",
-        description="Read compacted Session history",
+        name="inbox",
+        description="Read this Session's inbox",
         parameters={"type": "object"},
         handler=lambda _context, _arguments: tool_success({}),
         session_scoped=True,
@@ -387,11 +387,11 @@ def test_tool_list_includes_session_scoped_tools_with_activation_metadata() -> N
 
     result = _list_tools(state, {})
 
-    assert [tool["name"] for tool in result["tools"]] == ["history", "read"]
-    history = result["tools"][0]
-    assert history["session_scoped"] is True
-    assert history["activation"] == "session_grant"
-    assert history["project_configurable"] is False
+    assert [tool["name"] for tool in result["tools"]] == ["inbox", "read"]
+    inbox = result["tools"][0]
+    assert inbox["session_scoped"] is True
+    assert inbox["activation"] == "session_grant"
+    assert inbox["project_configurable"] is False
     assert result["default_project_tools"] == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
 
 

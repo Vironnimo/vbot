@@ -25,7 +25,13 @@ Finds conversation content in past Sessions and returns bounded excerpts with ca
 
 ## Extended inspection
 
-The bundled `vbot-cli` Skill advertises extended Session search and transcript retrieval and routes to `references/session-search.md`. It teaches when existing excerpts suffice, Session listing through the CLI, read-only SQLite scope selection (Tool `project_id: null` means SQL empty string, not SQL NULL), complete active User/Assistant transcripts, match-centered substring previews including Tool Results, and generation-bound exact Result reads. Search previews return the generation needed for the exact read. It adds no Bash availability prerequisite, Tool grant, or new runtime API.
+The bundled `vbot-cli` Skill advertises extended Session search and transcript retrieval and routes to `references/session-search.md`. It teaches when existing excerpts suffice, Session listing through the CLI, read-only SQLite scope selection (Tool `project_id: null` means SQL empty string, not SQL NULL), complete active User/Assistant transcripts, match-centered substring previews including Tool Results, and generation-bound exact Result reads. Search previews return the generation needed for the exact read. It names the shell Tool's `VBOT_RUN_AGENT_ID`, `VBOT_RUN_SESSION_ID` and `VBOT_RUN_PROJECT_ID` variables for the current Session, which `session_search` excludes; this path replaces the archived `history` Tool (`tools/history.md`). It adds no Bash availability prerequisite, Tool grant, or new runtime API.
+
+## Agent-facing text
+
+| Text | Reason |
+|---|---|
+| `For the current Session, read its scope inside the shell Tool command from the environment variables VBOT_RUN_AGENT_ID, VBOT_RUN_SESSION_ID and VBOT_RUN_PROJECT_ID. ...` (`references/session-search.md`, Locate and select) | The reference is the only way to read the current Session's pre-Compaction Messages since the `history` Tool was retired, and an Agent does not otherwise know its own Session id or scope. |
 
 ## Constraints & Gotchas
 

@@ -753,7 +753,6 @@ class CompactionRunCoordinator:
             "message": checkpoint.to_dict(),
             "checkpoint": checkpoint_ordinal(session_messages, checkpoint.id),
             "checkpoint_id": checkpoint.id,
-            "history_available": True,
             "context_tokens_before": checkpoint_usage.get("context_tokens_before"),
             "context_tokens_after": checkpoint_usage.get("context_tokens_after"),
         }

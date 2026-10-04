@@ -61,7 +61,6 @@ from scripts.provider_probe.choices import (  # noqa: E402
     HA_GET_STATE_CASES,
     HA_LIST_ENTITIES_CASES,
     HA_LIST_SERVICES_CASES,
-    HISTORY_CASES,
     IMAGE_GENERATION_CASES,
     MCP_CASE_ARGUMENTS,
     MEMORY_CASES,
@@ -233,12 +232,6 @@ def _parser() -> argparse.ArgumentParser:
         choices=MEMORY_CASES,
         default="list_user",
         help="Exact memory action and argument shape requested by the scenario.",
-    )
-    parser.add_argument(
-        "--history-case",
-        choices=HISTORY_CASES,
-        default="overview_default",
-        help="Exact history action and argument shape requested by the scenario.",
     )
     parser.add_argument(
         "--ha-list-entities-case",

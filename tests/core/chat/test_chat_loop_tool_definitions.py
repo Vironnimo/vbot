@@ -8,7 +8,6 @@ from typing import Any
 
 import pytest
 
-from core.chat import ChatMessage
 from core.chat._tool_epoch import tool_change_from_note
 from core.extensions.operations import ExtensionOperations
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
@@ -24,7 +23,6 @@ from core.tools import (
     ToolRegistry,
     model_names,
     model_tool_name,
-    register_history_tool,
     tool_success,
 )
 from tests.core.chat.chat_loop_support import (
@@ -634,31 +632,3 @@ async def test_tool_restriction_denies_dispatch_without_changing_offered_definit
     assert restricted["messages"][0]["content"] == unrestricted["messages"][0]["content"]
     assert prompt_tool_names["restricted"] == prompt_tool_names["unrestricted"]
     assert [set(names) for names in prompt_tool_names["restricted"]] == [_offered(unrestricted)]
-
-
-@pytest.mark.asyncio
-async def test_checkpoint_granted_history_stays_offered_when_the_run_restricts_dispatch(
-    tmp_path: Path,
-) -> None:
-    runtime = tool_runtime(
-        tmp_path,
-        None,
-        [tool_turn(("history-call", "history", {"action": "overview"})), final("done")],
-        allowed_tools=[],
-    )
-    register_history_tool(runtime.tools, runtime.chat_sessions)
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
-    session.append(ChatMessage.user("Earlier request"))
-    session.append(
-        ChatMessage.compaction_checkpoint(
-            summary="Earlier context", projection=[], compacted_token_count=10
-        )
-    )
-
-    run = await build_chat_loop(runtime).start_run(
-        "coder", "Continue", session_id="session-one", tool_restriction=("memory",)
-    )
-    await run.wait()
-
-    assert [_offered(request) for request in runtime.adapter.requests] == [{"history"}] * 2
-    assert tool_results(history(runtime))[0]["error"]["code"] == "tool_not_allowed"

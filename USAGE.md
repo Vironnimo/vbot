@@ -719,11 +719,11 @@ The result contains only Models with at least one usable Connection (including e
 
 Recall searches canonical persisted Session history; it does not replace curated `MEMORY.md`. Available first-party backends are `canonical_scan` for direct chronological scanning, `sqlite_fts` for indexed substring and relevance search, `vector` for semantic Passage search through the configured `text_embedding` Model, and `hybrid` for fused lexical and semantic results. SQLite indexes under `<data-dir>/recall/` are derived and disposable; incompatible schemas or embedding spaces rebuild rather than migrate.
 
-The `session_search` Tool exposes Recall to Agents. The `history` Tool is Session-scoped and becomes available when Compaction has moved earlier detail behind a checkpoint.
+The `session_search` Tool exposes Recall to Agents. For complete transcripts, including the current Session's Messages before a Compaction checkpoint, the bundled `vbot-cli` Skill teaches read-only queries through the shell Tool.
 
 ### Compaction and Continuation
 
-Compaction appends a checkpoint Projection and never rewrites or deletes older Session records. Automatic Compaction runs only at safe completed Model boundaries according to the effective Policy; `/compact` invokes the selected strategy manually when no Run is active. Older detail remains discoverable through `history` and Recall.
+Compaction appends a checkpoint Projection and never rewrites or deletes older Session records. Automatic Compaction runs only at safe completed Model boundaries according to the effective Policy; `/compact` invokes the selected strategy manually when no Run is active. Older detail remains discoverable through Recall and the `vbot-cli` Skill's Session search.
 
 When a visible Run is interrupted, Continuation retains a private checkpoint regardless of whether the cause was user Cancel, a Provider or network failure, a timeout, a process restart, or an internal failure. The WebUI exposes no checkpoint banner or recovery controls. The next normal user message receives the checkpoint automatically alongside the new instruction, and a complete response resolves it.
 

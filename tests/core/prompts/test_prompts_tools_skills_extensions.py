@@ -11,7 +11,7 @@ from core.memory import MEMORY_PROMPT_MODE_AGENT_USER, MEMORY_PROMPT_MODE_OFF, M
 from core.projects import ProjectStore
 from core.prompts.blocks import BlockDefinition, LayoutEntry
 from core.subagents import SubAgentPromptTarget
-from core.tools import HISTORY_TOOL_NAME, ToolRegistry, model_names, tool_success
+from core.tools import ToolRegistry, model_names, tool_success
 from core.tools.bash import register_bash_tool
 from core.tools.file_state import FileReadState
 from core.tools.process_manager import ProcessManager
@@ -402,8 +402,8 @@ def test_session_grant_drives_provider_and_enabled_live_tool_list(
 ) -> None:
     registry = ToolRegistry()
     registry.register(
-        name=HISTORY_TOOL_NAME,
-        description="Verify original Session records.",
+        name="session_board",
+        description="Post to the Session board.",
         parameters={"type": "object", "additionalProperties": False},
         handler=lambda _context, _arguments: tool_success({}),
         session_scoped=True,
@@ -416,15 +416,15 @@ def test_session_grant_drives_provider_and_enabled_live_tool_list(
     preview_prompt = manager.build_system_prompt(agent)
     live_definitions = manager.provider_tool_definitions(
         agent,
-        session_tool_grants=(HISTORY_TOOL_NAME,),
+        session_tool_grants=("session_board",),
     )
     live_prompt = manager.build_system_prompt(
         agent,
         effective_tool_definitions=live_definitions,
-        session_tool_grants=(HISTORY_TOOL_NAME,),
+        session_tool_grants=("session_board",),
     )
 
     assert preview_definitions == []
-    assert HISTORY_TOOL_NAME not in preview_prompt
-    assert [definition["name"] for definition in live_definitions] == [HISTORY_TOOL_NAME]
-    assert "- history: Verify original Session records." in live_prompt
+    assert "session_board" not in preview_prompt
+    assert [definition["name"] for definition in live_definitions] == ["session_board"]
+    assert "- session_board: Post to the Session board." in live_prompt
