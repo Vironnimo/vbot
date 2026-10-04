@@ -44,13 +44,14 @@ def commit_compaction(
     since: SessionReadCursor,
     epoch: PromptEpoch,
     run_id: str | None,
-) -> tuple[_store_history.HistoryDelta, str] | None:
+) -> _store_history.HistoryDelta | None:
     """Append a Compaction *checkpoint* only while *since* still names the newest entry.
 
     The checkpoint starts a new prompt epoch: its pins and seen Skills replace
-    the Session's, and a new prompt-cache affinity id starts a new cache
-    lineage. Returns the entries after *since* with that id, or ``None``
-    (nothing written) when another writer advanced the Session first.
+    the Session's. The prompt-cache affinity id stays, so the Provider keeps
+    routing to the cache that still holds the unchanged System Prompt and Tool
+    prefix. Returns the entries after *since*, or ``None`` (nothing written)
+    when another writer advanced the Session first.
     """
     if checkpoint.role != "compaction_checkpoint":
         raise ChatSessionError("a Compaction commit appends one Compaction checkpoint")
@@ -61,10 +62,9 @@ def commit_compaction(
     _store_prompts.replace_pins(connection, session_key, epoch.pins)
     if epoch.seen_skills is not None:
         _store_prompts.replace_seen_skills(connection, session_key, epoch.seen_skills)
-    affinity_id = _store_prompts.rotate_affinity(connection, session_key)
     delta = _store_history.message_rows_since(connection, address, since)
     assert delta is not None
-    return delta, affinity_id
+    return delta
 
 
 def _edit_target(
@@ -99,16 +99,17 @@ def apply_edit(
     run_id: str | None,
     seen_skills: SeenSkillsUpdate | None = None,
     continuation_records: Sequence[JsonObject] = (),
-) -> tuple[_store_history.HistoryDelta, str]:
+) -> _store_history.HistoryDelta:
     """Replace history from one User message on, in one transaction.
 
     Everything from the target on leaves the current view: the Session's own
     entries are superseded and inherited history is cut at the target. A
     ``history_edit`` marker (kept only in the own audit) and *messages* follow
-    at the end. The Continuation starts over from *continuation_records*, a
-    new prompt-cache lineage starts, and a generated title is cleared when the
-    edit replaces the first User message. Returns the complete history after
-    the edit with the new prompt-cache affinity id.
+    at the end. The Continuation starts over from *continuation_records*, and
+    a generated title is cleared when the edit replaces the first User
+    message. The prompt-cache affinity id stays, so the Provider keeps routing
+    to the cache that holds the unchanged history before the edit. Returns
+    the complete history after the edit.
     """
     from core.chat.messages import ChatMessage
 
@@ -168,7 +169,6 @@ def apply_edit(
     _store_continuation.append_continuation(connection, address, continuation_records)
     if seen_skills is not None:
         _store_prompts.record_seen_skills(connection, session_key, seen_skills)
-    affinity_id = _store_prompts.rotate_affinity(connection, session_key)
     if reset_title:
         connection.execute(
             "UPDATE sessions SET auto_title = NULL, auto_title_initialized = 0, "
@@ -178,4 +178,4 @@ def apply_edit(
         )
     delta = _store_history.message_rows_since(connection, address, None)
     assert delta is not None
-    return delta, affinity_id
+    return delta

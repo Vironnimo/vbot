@@ -80,7 +80,6 @@ async def test_automatic_compaction_commits_a_checkpoint_and_rebuilds_the_reques
     checkpoint = seed_tail(session)
     service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
     loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
-    affinity_before = runtime.chat_sessions.prompt_cache_affinity_id(session.address)
 
     caplog.set_level(logging.INFO, logger="vbot.compaction.coordination")
     probe = await auto_compact(loop, agent, session, usage={"input_tokens": 90})
@@ -95,7 +94,6 @@ async def test_automatic_compaction_commits_a_checkpoint_and_rebuilds_the_reques
     assert all(field in completed for field in fields)
     assert all(key in completed for key in ("tokens_after=", "carried_notes=0", "duration_ms="))
     assert persisted_roles(session.load()) == ["user", "assistant", "compaction_checkpoint"]
-    assert runtime.chat_sessions.prompt_cache_affinity_id(session.address) != affinity_before
     [call] = service.compact_calls
     assert call["summary_model_id"] == "gpt-5.2"
     assert call["summary_adapter"] is runtime.adapter
@@ -188,7 +186,7 @@ async def test_automatic_compaction_boundaries_never_reload_complete_history(
     assert len(service.compacted_contents) == 3
     assert complete_reads == [None]
     assert persisted_roles(session.load_active()).count("compaction_checkpoint") == 3
-    # Every checkpoint rotated the prompt-cache affinity the next request carries.
+    # Every request carries the Session's one prompt-cache affinity across checkpoints.
     affinities = [
         affinity_before,
         *(
@@ -197,7 +195,7 @@ async def test_automatic_compaction_boundaries_never_reload_complete_history(
         ),
         runtime.chat_sessions.prompt_cache_affinity_id(session.address),
     ]
-    assert len(set(affinities)) == 4
+    assert len(set(affinities)) == 1
 
 
 @pytest.mark.asyncio

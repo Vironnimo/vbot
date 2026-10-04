@@ -72,14 +72,13 @@ def _grow_skills_after_pinning(runtime: Any, loop: Any, session: Any) -> None:
 @pytest.mark.parametrize("manual", [False, True], ids=["automatic", "manual"])
 async def test_compaction_rescans_skills_into_the_new_epoch(tmp_path: Path, manual: bool) -> None:
     # A registry that grew since the Session was pinned is rescanned; the checkpoint,
-    # the new catalog and seen-Skill set, and a new prompt-cache affinity commit together.
+    # the new catalog and seen-Skill set commit together.
     runtime = compaction_runtime(tmp_path, adapter=ClosingStubAdapter([]))
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
     loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
     _grow_skills_after_pinning(runtime, loop, session)
     renders_before = runtime.system_prompts.render_skill_catalog_calls
-    affinity_before = runtime.chat_sessions.prompt_cache_affinity_id(session.address)
 
     if manual:
         assert await loop.compact_session("coder", session.id) == "Context compacted."
@@ -92,7 +91,6 @@ async def test_compaction_rescans_skills_into_the_new_epoch(tmp_path: Path, manu
     assert runtime.refresh_skills_for_calls == [(None, "coder")]
     assert catalog_pin is not None and catalog_pin["catalog_text"] == "catalog:2"
     assert runtime.chat_sessions.seen_skills(session.address) == frozenset({"one", "two"})
-    assert runtime.chat_sessions.prompt_cache_affinity_id(session.address) != affinity_before
 
 
 @pytest.mark.asyncio

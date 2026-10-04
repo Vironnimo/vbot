@@ -130,15 +130,15 @@ def test_prompt_cache_affinity_id_is_prompt_state_not_metadata(manager, monkeypa
     assert manager.prompt_cache_affinity_id(address) == default
     user = ChatMessage.user("first")
     session.append(user)
-    edited = session.apply_edit(user.id, [ChatMessage.user("second")])
+    session.apply_edit(user.id, [ChatMessage.user("second")])
 
     def no_metadata_decode(_address):
         raise AssertionError("the affinity id must not decode the complete metadata")
 
     with monkeypatch.context() as patch:
         patch.setattr(manager._store, "metadata", no_metadata_decode)
-        assert manager.prompt_cache_affinity_id(address) == edited.prompt_cache_affinity_id
-    assert edited.prompt_cache_affinity_id != default
+        # An edit keeps the affinity: the history before the edit stays cached.
+        assert manager.prompt_cache_affinity_id(address) == default
     assert "prompt_cache_affinity_id" not in manager.get_metadata(address)
     with pytest.raises(ChatSessionError, match="dedicated APIs"):
         manager.set_metadata(address, {"prompt_cache_affinity_id": "chosen"})

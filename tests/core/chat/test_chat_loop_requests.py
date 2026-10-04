@@ -685,7 +685,7 @@ async def test_background_completion_joins_next_request_in_same_run(tmp_path: Pa
 
 
 @pytest.mark.asyncio
-async def test_edit_run_sends_the_edited_lineage_under_a_new_cache_affinity(
+async def test_edit_run_sends_the_edited_lineage_under_the_sessions_cache_affinity(
     tmp_path: Path,
 ) -> None:
     adapter = _ContextAdapter([{"content": "new answer"}])
@@ -723,10 +723,10 @@ async def test_edit_run_sends_the_edited_lineage_under_a_new_cache_affinity(
     ]
     # The superseded answer's usage still counts toward the Session.
     assert run.terminal_payload_extras["session_usage"]["input_tokens"] >= 100
-    # The edit starts a new prompt-cache lineage, and the edited Run already uses it.
-    affinity_after_edit = runtime.chat_sessions.prompt_cache_affinity_id(SESSION)
-    assert affinity_after_edit != affinity_before_edit
-    assert request["kwargs"]["_test_context"]["prompt_cache_affinity_id"] == affinity_after_edit
+    # The edit keeps the prompt-cache affinity, so the Provider still routes to the
+    # cache that holds the unchanged history before the edited message.
+    assert runtime.chat_sessions.prompt_cache_affinity_id(SESSION) == affinity_before_edit
+    assert request["kwargs"]["_test_context"]["prompt_cache_affinity_id"] == affinity_before_edit
 
 
 @pytest.mark.asyncio

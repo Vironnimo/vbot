@@ -30,9 +30,9 @@ Task-gated detail for `sessions.md`: how forks share history, how a history edit
 3. Supersede own non-superseded entries at or after the target at `marker_seq` (the current `next_seq`), then `truncate` the lineage at the target (segments starting at or after it are deleted, longer ones shortened). `fork_point_seq` does not change.
 4. Insert the `history_edit` marker at `marker_seq`, superseded at its own seq; set `next_seq` and `cursor_floor_seq` to `marker_seq + 1`, so every earlier cursor stops continuing.
 5. Append the replacement Messages, then re-index the candidates; only entries some view still holds return.
-6. Delete the Continuation and fold `continuation_records`; record `seen_skills` if given; rotate the prompt-cache affinity id.
+6. Delete the Continuation and fold `continuation_records`; record `seen_skills` if given; the prompt-cache affinity id stays.
 7. If no current User entry precedes the target, clear `auto_title` and `auto_title_initialized` (no title callback).
-8. Return the complete own audit and current view with the new affinity id; `ChatSession.apply_edit` then drops its Skill activation cache.
+8. Return the complete own audit and current view; `ChatSession.apply_edit` then drops its Skill activation cache.
 
 ## Delete
 

@@ -48,36 +48,39 @@ class _ContextAdapter(RecordingCompactionAdapter):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("strategy", "manual", "separate_summary"),
+    ("strategy", "manual", "summary_model"),
     [
-        ("summary_tail", False, False),
-        ("summary_tail", False, True),
-        ("summary_tail", True, False),
-        ("summary_tail", True, True),
-        ("continuation", False, False),
-        ("continuation", True, False),
+        ("summary_tail", False, None),
+        ("summary_tail", False, "other/summary"),
+        ("summary_tail", False, "openai/gpt-5.2"),
+        ("summary_tail", True, None),
+        ("summary_tail", True, "other/summary"),
+        ("summary_tail", True, "openai/gpt-5.2"),
+        ("continuation", False, None),
+        ("continuation", True, None),
     ],
     ids=[
         "automatic-summary-tail-active-target",
         "automatic-summary-tail-summary-target",
+        "automatic-summary-tail-summary-model-names-active-target",
         "manual-summary-tail-active-target",
         "manual-summary-tail-summary-target",
+        "manual-summary-tail-summary-model-names-active-target",
         "automatic-continuation",
         "manual-continuation",
     ],
 )
 async def test_compaction_routes_session_context_through_selected_adapter(
-    tmp_path: Path, strategy: str, manual: bool, separate_summary: bool
+    tmp_path: Path, strategy: str, manual: bool, summary_model: str | None
 ) -> None:
+    separate_summary = summary_model == "other/summary"
     active = _ContextAdapter(
         [{"content": "finished", "tool_calls": None}], summaries=["ACTIVE SUMMARY"]
     )
     summary = _ContextAdapter([], summaries=["SEPARATE SUMMARY"])
     strategy_settings: JsonObject = {"type": strategy}
     if strategy == "summary_tail":
-        strategy_settings.update(
-            tail_tokens=100, summary_model="other/summary" if separate_summary else None
-        )
+        strategy_settings.update(tail_tokens=100, summary_model=summary_model)
     runtime = real_compaction_runtime(
         tmp_path,
         active,
@@ -111,8 +114,10 @@ async def test_compaction_routes_session_context_through_selected_adapter(
     else:
         await loop.send("coder", "Continue", session_id=session.id)
 
-    # The Engine asks the selected target's own Adapter for request context, with
-    # the pre-checkpoint affinity; only the committed checkpoint rotates it.
+    # The Engine asks the selected target's own Adapter for request context. A
+    # summary Model naming the active Model is the active target. On the active
+    # target the summary call keeps the Agent's reasoning setting, which shapes
+    # the rendered prompt; another target gets the Provider default.
     selected, other = (summary, active) if separate_summary else (active, summary)
     [compaction_request] = selected.stream_requests
     assert compaction_request["kwargs"]["_test_context"] == {
@@ -122,12 +127,14 @@ async def test_compaction_routes_session_context_through_selected_adapter(
         "prompt_cache_affinity_id": affinity,
         "adapter": id(selected),
     }
+    assert compaction_request["kwargs"]["thinking_effort"] == ("" if separate_summary else "high")
     assert other.stream_requests == []
     assert sum(message.role == "compaction_checkpoint" for message in session.load()) == 1
-    rotated = runtime.chat_sessions.prompt_cache_affinity_id(session.address)
-    assert rotated != affinity
+    # The checkpoint keeps the affinity, so the Provider routes the next request
+    # to the cache holding the unchanged System Prompt and Tool prefix.
+    assert runtime.chat_sessions.prompt_cache_affinity_id(session.address) == affinity
     if not manual:
-        assert active.requests[0]["kwargs"]["_test_context"]["prompt_cache_affinity_id"] == rotated
+        assert active.requests[0]["kwargs"]["_test_context"]["prompt_cache_affinity_id"] == affinity
 
 
 @pytest.mark.asyncio

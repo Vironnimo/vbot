@@ -206,6 +206,7 @@ class CompactionRunHost(Protocol):
         settings: Any,
         *,
         active_provider_id: str,
+        active_connection_id: str,
     ) -> tuple[Any, str, str]: ...
 
     def resolve_context_window(self, agent: Any, target: Any) -> int | None: ...
@@ -304,6 +305,7 @@ class CompactionRunCoordinator:
                     active_adapter=request.active_adapter,
                     active_model_id=request.active_model_id,
                     active_tools=request.request_state.tools,
+                    active_thinking_effort=agent.thinking_effort,
                     summary_model_reference=f"{request.summary_provider_id}/{request.summary_model_id}",
                     active_model_reference=f"{request.active_provider_id}/{request.active_model_id}",
                 )
@@ -516,6 +518,7 @@ class CompactionRunCoordinator:
             target.model_id,
             settings,
             active_provider_id=target.provider_id,
+            active_connection_id=target.connection_id,
         )
         close_summary_adapter = summary_adapter is not target.adapter
         compaction_started_perf = time.perf_counter()
@@ -550,6 +553,7 @@ class CompactionRunCoordinator:
                     active_adapter=target.adapter,
                     active_model_id=target.model_id,
                     active_tools=tools,
+                    active_thinking_effort=agent.thinking_effort,
                     minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
                 )
             except CompactionInsufficientReclaimError as exc:

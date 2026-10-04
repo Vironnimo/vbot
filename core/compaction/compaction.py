@@ -445,6 +445,7 @@ class CompactionService:
         active_adapter: Any | None = None,
         active_model_id: str | None = None,
         active_tools: list[JsonObject] | None = None,
+        active_thinking_effort: str | None = None,
         minimum_reclaim_tokens: int = 0,
         summary_model_reference: str | None = None,
         active_model_reference: str | None = None,
@@ -479,11 +480,14 @@ class CompactionService:
                     active_adapter=active_adapter,
                     active_model_id=active_model_id,
                 )
+                same_target = adapter is active_adapter and model_id == active_model_id
                 # Internal task, not the agent's voice: no sampling parameters,
-                # so the Provider's own defaults apply.
+                # so the Provider's own defaults apply. On the active target the
+                # Run's reasoning setting stays, because a changed setting renders
+                # a different prompt and loses the Run's Provider prompt cache.
                 request_options: dict[str, Any] = {
                     "model_id": model_id,
-                    "thinking_effort": "",
+                    "thinking_effort": active_thinking_effort if same_target else "",
                 }
                 request_options.update(
                     adapter.request_context_kwargs(
@@ -497,7 +501,7 @@ class CompactionService:
                     _prepare_compaction_model_request,
                     plan,
                     active_tools,
-                    strip_reasoning=(adapter is not active_adapter or model_id != active_model_id),
+                    strip_reasoning=not same_target,
                 )
                 if active_tools is not None:
                     request_options["tools"] = model_tools

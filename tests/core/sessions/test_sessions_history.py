@@ -133,13 +133,12 @@ def test_compaction_checkpoint_commits_only_while_its_cursor_is_current(manager)
     committed = session.commit_compaction(checkpoint, since=current.cursor, epoch=epoch)
 
     assert committed is not None
-    delta, rotated = committed
-    assert [message.id for message in delta.messages] == [checkpoint.id]
+    assert [message.id for message in committed.messages] == [checkpoint.id]
     latest = session.load_since()
-    assert latest is not None and delta.cursor == latest.cursor
+    assert latest is not None and committed.cursor == latest.cursor
     assert manager.prompt_pin(session.address, PINNED_SKILL_CATALOG_SLOT) == {"catalog": "new"}
     assert manager.seen_skills(session.address) == frozenset({"alpha"})
-    assert manager.prompt_cache_affinity_id(session.address) == rotated != affinity
+    assert manager.prompt_cache_affinity_id(session.address) == affinity
 
 
 def test_continuation_events_update_one_normalized_current_state(manager) -> None:

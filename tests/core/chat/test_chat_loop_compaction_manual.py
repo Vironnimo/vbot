@@ -87,7 +87,6 @@ async def test_compact_session_commits_the_checkpoint_and_closes_the_adapter(
     register_history_tool(runtime.tools, runtime.chat_sessions)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
-    affinity_before = runtime.chat_sessions.prompt_cache_affinity_id(session.address)
     caplog.set_level(logging.INFO, logger="vbot.compaction.coordination")
 
     reply = await build_chat_loop(runtime, compaction_service=cast(Any, service)).compact_session(
@@ -102,7 +101,6 @@ async def test_compact_session_commits_the_checkpoint_and_closes_the_adapter(
     ]
     assert all(field in completed for field in ("trigger=manual", "tokens_after=", "duration_ms="))
     assert persisted_roles(session.load()) == ["user", "assistant", "compaction_checkpoint"]
-    assert runtime.chat_sessions.prompt_cache_affinity_id(session.address) != affinity_before
     [call] = service.compact_calls
     assert call["summary_model_id"] == "gpt-5.2"
     assert call["summary_adapter"] is adapter
