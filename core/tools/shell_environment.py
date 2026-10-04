@@ -45,15 +45,33 @@ _INSTANCE_VARIABLES = ("VBOT_DATA_DIR", "VBOT_SERVER_PORT", "VBOT_INSTALL_ROOT")
 # Variables vBot's own Python process carries and a user's shell must not.
 _PROCESS_VARIABLES = frozenset({"PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV", "__PYVENV_LAUNCHER__"})
 
-# Git runs its editor through ``sh -c '<editor> "$@"'``: the message goes to
-# stderr and ``false`` takes the file name and fails.
-_NO_EDITOR = (
-    "echo 'No editor is available in this terminal: pass the text as an argument, "
-    "for example git commit -m.' >&2; false"
+# Git runs its editor through ``sh -c '<editor> "$@"'`` with the file to edit, so
+# each value ends in a function call that takes the file name; only sh builtins.
+#
+# The message editor accepts a message git prepared, as closing an editor without
+# changes would: git rebase/merge/cherry-pick/revert --continue, git revert and
+# git commit --amend then work as typed. A message of comments only (git commit or
+# git tag -a without -m) fails with the fix; lines below the scissors line of
+# ``commit -v`` are no message.
+_MESSAGE_EDITOR = (
+    '_vbot_editor() { while IFS= read -r line || [ -n "$line" ]; do case $line in '
+    "'# '*'>8'*) break ;; '#'*) ;; *[![:space:]]*) return 0 ;; esac; done < \"$1\"; "
+    "echo 'No editor is available in this terminal: pass the message as an argument, "
+    'for example git commit -m "Fix the parser".\' >&2; return 1; }; _vbot_editor'
+)
+# The todo list of git rebase -i is never accepted unchanged: the Agent asked to
+# edit it, and running it as prepared would report a rebase that changed nothing.
+_SEQUENCE_ASSIGNMENT = (
+    '$env:GIT_SEQUENCE_EDITOR = ":"' if sys.platform == "win32" else "GIT_SEQUENCE_EDITOR=:"
+)
+_SEQUENCE_EDITOR = (
+    "echo 'No editor is available in this terminal for the git rebase -i todo list. To run "
+    f"the list as git prepared it, for example with --autosquash, set {_SEQUENCE_ASSIGNMENT} "
+    "for the git command.' >&2; false"
 )
 _UNATTENDED_DEFAULTS: dict[str, str] = {
-    "GIT_EDITOR": _NO_EDITOR,
-    "GIT_SEQUENCE_EDITOR": _NO_EDITOR,
+    "GIT_EDITOR": _MESSAGE_EDITOR,
+    "GIT_SEQUENCE_EDITOR": _SEQUENCE_EDITOR,
     "GIT_MERGE_AUTOEDIT": "no",
     "GIT_TERMINAL_PROMPT": "0",
     "GCM_INTERACTIVE": "never",
