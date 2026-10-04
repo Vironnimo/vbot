@@ -37,12 +37,13 @@ Tool shares only its name.
 
 ## Agent-facing text
 
-Minimal by user decision (2026-10-04); about 66 tokens (`scripts.tool_lab
+Minimal by user decision (2026-10-04); about 76 tokens (`scripts.tool_lab
 definitions` estimate).
 
 | Text | Reason |
 |---|---|
 | `Create a file or replace all of its content.` | Names both effects; replacing part of a file belongs to `edit`, whose name says so. |
+| `To replace an existing file, read it first.` | Without it, deepseek-v4.1-flash and mimo-v2.6-flash sent `write` over an unread file in 5 of 6 live replace-file trials (2026-10-04); each `file_not_read` refusal cost a round trip. User decision 2026-10-04. |
 | `path`: `File to write, relative to the working directory or absolute.` | States both accepted path forms. |
 | `content`: `Complete file content.` | Says the value is the whole file, so an Agent does not send a fragment or a diff. |
 | `write replaces the whole file and has no old_string. To replace text inside a file, call edit with path and edits.` | Edit-shaped calls sent to `write` name the Tool that takes them instead of failing on unknown parameters. |

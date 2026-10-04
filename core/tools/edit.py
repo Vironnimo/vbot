@@ -90,7 +90,9 @@ EDIT_TOOL_PARAMETERS: JsonObject = {
     "required": ["path", "edits"],
 }
 
-WRITE_TOOL_DESCRIPTION = "Create a file or replace all of its content."
+WRITE_TOOL_DESCRIPTION = (
+    "Create a file or replace all of its content. To replace an existing file, read it first."
+)
 WRITE_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {

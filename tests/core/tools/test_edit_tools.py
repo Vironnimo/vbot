@@ -72,7 +72,9 @@ def test_edit_and_write_have_minimal_definitions() -> None:
         },
         "required": ["path", "edits"],
     }
-    assert WRITE_TOOL_DESCRIPTION == "Create a file or replace all of its content."
+    assert WRITE_TOOL_DESCRIPTION == (
+        "Create a file or replace all of its content. To replace an existing file, read it first."
+    )
     assert WRITE_TOOL_PARAMETERS == {
         "type": "object",
         "properties": {
