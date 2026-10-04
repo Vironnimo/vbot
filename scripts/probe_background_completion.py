@@ -156,6 +156,9 @@ class _ProbePromptManager:
     def render_skill_catalog(self, _agent: Agent, _skills: Any) -> PinnedSkillCatalog:
         return PinnedSkillCatalog(catalog_text="")
 
+    def render_dynamic_blocks(self, _agent: Agent, **_kwargs: Any) -> dict[str, Any]:
+        return {}
+
     def render_working_project_context(self, _agent: Any, _context: Any, **_kwargs: Any) -> str:
         return ""
 

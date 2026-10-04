@@ -11,6 +11,12 @@ from typing import TYPE_CHECKING, Any
 from core.agents import skill_subject_id
 from core.attachments.images import ImageConverter
 from core.chat._message_history import finalize_checkpoint_guidance
+from core.chat._prompt_block_epoch import (
+    PromptBlockPin,
+    ensure_prompt_block_pin,
+    plan_prompt_block_change,
+    without_other_epoch_prompt_block_changes,
+)
 from core.chat._request_history import (
     _prepare_request_messages,
     _request_content_resolution_inputs,
@@ -51,8 +57,12 @@ from core.chat.wire_shaping import (
 )
 from core.extensions import invoke_extension_handler
 from core.projects import ProjectError
-from core.prompts import BLOCK_KIND_DATA, BlockDefinition
-from core.prompts.pinned_context import PINNED_TOOL_DEFINITIONS_SLOT, stamp_prompt_files_read
+from core.prompts import BLOCK_KIND_DATA, BlockDefinition, RenderedBlock
+from core.prompts.pinned_context import (
+    PINNED_DYNAMIC_BLOCKS_SLOT,
+    PINNED_TOOL_DEFINITIONS_SLOT,
+    stamp_prompt_files_read,
+)
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, ConnectionRef, split_connection_id
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.providers import resolve_effective_context_window
@@ -128,16 +138,18 @@ def _live_session_tool_grants(session_capability: Any | None) -> tuple[str, ...]
     return tuple(session_capability.tool_names) if session_capability is not None else ()
 
 
-def _fold_tool_epoch(
-    pin: ToolEpochPin, session_messages: list[ChatMessage]
+def _fold_prompt_epoch(
+    pin: ToolEpochPin, prompt_blocks: PromptBlockPin, session_messages: list[ChatMessage]
 ) -> tuple[ToolEpochView, list[ChatMessage]]:
-    """Return what the Model knows in *pin*'s epoch and the history without other epochs' notes.
+    """Return what the Model knows of its Tools and the history without other epochs' notes.
 
     Both walk the whole Session, so they run on a Chat worker.
     """
     return (
         ToolEpochView.fold(pin, session_messages),
-        without_other_epoch_tool_changes(session_messages, pin.epoch),
+        without_other_epoch_prompt_block_changes(
+            without_other_epoch_tool_changes(session_messages, pin.epoch), prompt_blocks.epoch
+        ),
     )
 
 
@@ -300,6 +312,81 @@ class RequestBuilder:
             record_seen=SeenSkillsUpdate(baseline, tuple(new_names)),
         )
 
+    async def plan_prompt_block_change(self, context: _RunExecutionContext) -> str | None:
+        """Return the note telling the Model which pinned prompt blocks changed, if any.
+
+        The System Prompt keeps showing the prompt epoch's pinned Tool and Extension
+        block texts. This compares a live render of those blocks with what the
+        Model knows of them (the pin plus the epoch's earlier notes in the Run's
+        snapshot) and returns one note for every change, which the Run persists
+        with its input. ``None`` when the Session has no pins yet or nothing changed.
+        """
+        return await _CHAT_TRANSFORM_WORKERS.run(
+            self._plan_prompt_block_change,
+            context.agent,
+            context.session.address,
+            RequestBuildInputs.from_context(context, context.primary_target),
+            context.session_snapshot.active_messages,
+        )
+
+    def _plan_prompt_block_change(
+        self,
+        agent: Any,
+        address: SessionAddress,
+        inputs: RequestBuildInputs,
+        messages: list[ChatMessage],
+    ) -> str | None:
+        sessions = self._dependencies.sessions
+        pin = PromptBlockPin.from_payload(sessions.prompt_pin(address, PINNED_DYNAMIC_BLOCKS_SLOT))
+        tool_pin = self._stored_tool_epoch_pin(address)
+        if pin is None or tool_pin is None or not pin.blocks:
+            return None
+        live = self._dependencies.get_system_prompts().render_dynamic_blocks(
+            agent,
+            block_ids=pin.blocks.keys(),
+            **self._block_render_inputs(inputs, tool_pin.definitions),
+        )
+        change = plan_prompt_block_change(pin, messages, live)
+        return None if change is None else change.note_content()
+
+    def _block_render_inputs(
+        self, inputs: RequestBuildInputs, tool_definitions: Sequence[JsonObject]
+    ) -> dict[str, Any]:
+        """The System Prompt inputs dynamic blocks render from, for builds and pins alike."""
+        return {
+            "project_context": inputs.project_context,
+            "working_project_context": inputs.working_project_context,
+            "soul_context": inputs.soul_context,
+            "memory_files_context": inputs.memory_files_context,
+            "agent_project_id": inputs.agent_project_id,
+            "nesting_depth": self.nesting_depth,
+            "effective_tool_definitions": tool_definitions,
+        }
+
+    async def _prompt_block_pin(
+        self,
+        agent: Any,
+        session: ChatSession,
+        render_inputs: Mapping[str, Any],
+        *,
+        fresh: bool,
+    ) -> PromptBlockPin:
+        """Return the prompt epoch's dynamic block pin, pinning blocks shown for the first time.
+
+        A *fresh* pin starts a new epoch from the blocks as they render now; the
+        caller persists it (Compaction commit).
+        """
+        system_prompts = self._dependencies.get_system_prompts()
+
+        def render(pinned: Collection[str]) -> Mapping[str, RenderedBlock]:
+            return system_prompts.render_dynamic_blocks(agent, skip=pinned, **render_inputs)
+
+        if fresh:
+            return PromptBlockPin.start(await _CHAT_TRANSFORM_WORKERS.run(render, ()))
+        return await _CHAT_TRANSFORM_WORKERS.run(
+            ensure_prompt_block_pin, self._dependencies.sessions, session.address, render
+        )
+
     async def build_request_state(
         self,
         agent: Any,
@@ -321,7 +408,9 @@ class RequestBuilder:
         # definitions (plus announced additions on routes that must list them).
         # Tool changes since the pin reach the Model as ``[tool-change]`` notes,
         # which the Run announces at its request boundaries; dispatch follows
-        # what they told the Model.
+        # what they told the Model. Tool and Extension dynamic blocks show the
+        # epoch's pinned texts the same way; their changes reach the Model as
+        # ``[prompt-block-change]`` notes at Run start.
         session_messages = (
             await session.load_active_async()
             if inputs.session_messages_override is None
@@ -340,7 +429,7 @@ class RequestBuilder:
             if inputs.input_modalities is not None
             else _model_input_modalities(self._dependencies, agent)
         )
-        pin = None if inputs.fresh_tool_epoch else await self._read_tool_epoch_pin(session)
+        pin = None if inputs.fresh_prompt_epoch else await self._read_tool_epoch_pin(session)
         catalog: LiveToolCatalog | None = None
         if pin is None or inputs.temporary_binding is not None:
             # Measured on the Run's primary route, like every Tool announcement,
@@ -362,10 +451,14 @@ class RequestBuilder:
         if pin is None:
             assert catalog is not None
             pin = await _CHAT_TRANSFORM_WORKERS.run(ToolEpochPin.start, catalog)
-            if not inputs.fresh_tool_epoch:
+            if not inputs.fresh_prompt_epoch:
                 pin = await self._ensure_tool_epoch_pin(session, pin)
+        render_inputs = self._block_render_inputs(inputs, pin.definitions)
+        prompt_blocks = await self._prompt_block_pin(
+            agent, session, render_inputs, fresh=inputs.fresh_prompt_epoch
+        )
         tool_epoch, session_messages = await _CHAT_TRANSFORM_WORKERS.run(
-            _fold_tool_epoch, pin, session_messages
+            _fold_prompt_epoch, pin, prompt_blocks, session_messages
         )
         # A temporary Session's capability Tools must be offered now; the first
         # request boundary announces any the Model does not know yet.
@@ -426,22 +519,18 @@ class RequestBuilder:
                 )
             request_block_definitions = tuple(rendered_blocks)
         prompt_read_paths: list[Path] = []
+        # The System Prompt describes the pinned Tool list (``render_inputs``)
+        # and shows the pinned dynamic block texts, so it stays unchanged for
+        # the whole prompt epoch too.
         system_prompt = await system_prompts.build_system_prompt_async(
             agent,
             agent_body=inputs.agent_body,
-            project_context=inputs.project_context,
-            working_project_context=inputs.working_project_context,
-            soul_context=inputs.soul_context,
-            memory_files_context=inputs.memory_files_context,
-            agent_project_id=inputs.agent_project_id,
-            nesting_depth=self.nesting_depth,
             skill_registry=inputs.skill_registry,
             skill_catalog=inputs.skill_catalog,
             read_paths=prompt_read_paths,
-            # The System Prompt describes the pinned Tool list, so it stays
-            # unchanged for the whole prompt epoch too.
-            effective_tool_definitions=pin.definitions,
+            pinned_blocks=prompt_blocks.texts(),
             request_block_definitions=request_block_definitions,
+            **render_inputs,
         )
         # Auto-injected prompt files (SOUL, pinned memory, project auto-load files,
         # workspace includes) count as read for this session, so the agent can edit
@@ -475,6 +564,7 @@ class RequestBuilder:
                 session_tool_grants,
                 tool_contracts,
                 tool_epoch,
+                prompt_blocks,
             )
 
         current_user_message, read_media_outputs = await _CHAT_TRANSFORM_WORKERS.run(
@@ -528,6 +618,7 @@ class RequestBuilder:
             session_tool_grants,
             tool_contracts,
             tool_epoch,
+            prompt_blocks,
         )
 
     async def rebuild_live_request_state(

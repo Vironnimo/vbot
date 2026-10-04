@@ -56,13 +56,15 @@ PROJECT_TOOL_PARAMETERS: JsonObject = {
 
 PROJECT_PROMPT_BLOCK_HEADER = (
     "## Projects\n\n"
-    "Before working on a registered Project other than your current working Project (marked "
-    '`active="true"`), call `project` with its exact id. Call it alone and wait for its '
-    "result before any dependent Tool call, because sibling calls run concurrently. Loading "
-    "does not change your working directory: use absolute paths for file Tools, and set "
-    f"`workdir` to the returned `project_path` on every `{SHELL_MODEL_NAME}` call.\n\n"
+    "Before working on a registered Project, call `project` with its exact id, unless it is "
+    "the Project in the Working Project section of this System Prompt. Call it alone and wait "
+    "for its result before any dependent Tool call, because sibling calls run concurrently. "
+    "Loading does not change your working directory: use absolute paths for file Tools, and "
+    f"set `workdir` to the returned `project_path` on every `{SHELL_MODEL_NAME}` call.\n\n"
     "Registered Projects:"
 )
+# Names the Project list when vBot tells the Model that it changed mid-Session.
+PROJECT_CATALOG_TITLE = "Registered Projects"
 # ``choices`` lists registered ids with their display names.
 _PROJECT_NOT_FOUND_MESSAGE_TEMPLATE = (
     "Project not found: {project_id}. Use one of these registered Project ids exactly: {choices}."
@@ -255,26 +257,34 @@ def register_project_tool(
         )
 
 
-def _render_project_prompt_block(context: Any, projects: ProjectStore) -> str:
-    active_project_id = getattr(context.agent, "root_project_id", None)
-    project_lines = [
-        _project_prompt_line(project, active_project_id=active_project_id)
-        for project in projects.list()
-    ]
-    if not project_lines:
-        project_lines.append("**No Projects are currently registered.**")
-    return f"{PROJECT_PROMPT_BLOCK_HEADER}\n\n" + "\n".join(project_lines)
+def _render_project_prompt_block(context: Any, projects: ProjectStore) -> Any:
+    """Render the registered Projects as a catalog, one entry per Project id.
+
+    Nothing here depends on the Agent or on the disk state of a Project path: the
+    block stays the same for every Agent until a Project is registered, changed
+    or removed. A path that is unreachable fails the ``project`` call instead.
+    """
+    from core.prompts import BlockCatalog, RenderedBlock
+
+    del context
+    entries = tuple(
+        (project.project_id, _project_prompt_line(project)) for project in projects.list()
+    )
+    lines = [line for _key, line in entries] or ["**No Projects are currently registered.**"]
+    return RenderedBlock(
+        text=f"{PROJECT_PROMPT_BLOCK_HEADER}\n\n" + "\n".join(lines),
+        catalog=BlockCatalog(
+            title=PROJECT_CATALOG_TITLE, entries=entries, frame=PROJECT_PROMPT_BLOCK_HEADER
+        ),
+    )
 
 
-def _project_prompt_line(project: Any, *, active_project_id: str | None) -> str:
+def _project_prompt_line(project: Any) -> str:
     attributes = [
         f'id="{escape(project.project_id, quote=True)}"',
         f'name="{escape(_single_line(project.display_name), quote=True)}"',
         f'project_path="{escape(model_path(project.cwd), quote=True)}"',
-        f'available="{str(cwd_exists(project.cwd)).lower()}"',
     ]
-    if project.project_id == active_project_id:
-        attributes.append('active="true"')
     return f"<project {' '.join(attributes)} />"
 
 

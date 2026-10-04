@@ -8,6 +8,7 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
+from core.chat._prompt_block_epoch import PromptBlockPin
 from core.chat._step_outcomes import _ToolProgress
 from core.chat._tool_epoch import ToolEpochView
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
@@ -41,6 +42,7 @@ from core.projects import (
 )
 from core.prompts import PinnedSkillCatalog, ProjectPromptContext
 from core.prompts.pinned_context import (
+    pinned_agent_body,
     pinned_memory_files,
     pinned_skill_catalog,
     pinned_soul_context,
@@ -94,7 +96,8 @@ class RequestState:
     ``tools`` is the request's Tool list; ``allowed_tool_names`` and
     ``tool_contracts`` follow ``tool_epoch``, the pinned Tools plus the Tool
     changes announced to the Model (``None`` only for a state assembled without
-    a Session request build).
+    a Session request build). ``prompt_blocks`` holds the dynamic block texts
+    the System Prompt shows.
     """
 
     messages: list[JsonObject]
@@ -103,6 +106,7 @@ class RequestState:
     session_tool_grants: tuple[str, ...]
     tool_contracts: Mapping[str, ToolContract] = field(default_factory=dict)
     tool_epoch: ToolEpochView | None = None
+    prompt_blocks: PromptBlockPin | None = None
 
 
 _RequestState = RequestState
@@ -432,6 +436,8 @@ class _CompactionPromptRefresh:
     prompt_read_paths: tuple[Path, ...]
     available_skill_names: tuple[str, ...]
     memory_prompt_mode: str | None = None
+    # Whether ``agent_body`` is a prompt-epoch pin (a Workspace-less Agent's body).
+    pins_agent_body: bool = False
 
 
 @dataclass(frozen=True)
@@ -469,9 +475,10 @@ class RequestBuildInputs:
     session_messages_override: list[ChatMessage] | None = None
     image_budget: RequestImageBudget | None = None
     temporary_binding: TemporarySessionBinding | None = None
-    # Start a new prompt epoch's Tool pin from the current Tools instead of
-    # reading the Session's pin; the caller persists it (Compaction commit).
-    fresh_tool_epoch: bool = False
+    # Start a new prompt epoch's Tool pin and dynamic block pin from the current
+    # Tools and blocks instead of reading the Session's pins; the caller persists
+    # them (Compaction commit).
+    fresh_prompt_epoch: bool = False
     # List announced Tool additions in the request's Tool list: for a route
     # that drops calls to unlisted Tools, and for every fallback route.
     list_announced_tools: bool = False
@@ -693,6 +700,15 @@ async def create_run_execution_context(
             project_prompt_context,
             project_id,
         )
+        agent_body = await _CHAT_TRANSFORM_WORKERS.run(
+            pinned_agent_body,
+            dependencies,
+            run.agent_id,
+            run.session_id,
+            agent,
+            project_id,
+            runtime_agent_body(agent),
+        )
         if temporary_source is None:
             soul_context = await _CHAT_TRANSFORM_WORKERS.run(
                 pinned_soul_context,
@@ -744,7 +760,7 @@ async def create_run_execution_context(
             request=request,
             session=session,
             agent=agent,
-            agent_body=runtime_agent_body(agent),
+            agent_body=agent_body,
             primary_target=target,
             project_id=project_id,
             project_cwd=project_cwd,

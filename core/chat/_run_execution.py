@@ -298,6 +298,10 @@ class RunExecution:
                 if skill_announcement.note is not None:
                     session.add_note(skill_announcement.note)
                 record_seen_skills = skill_announcement.record_seen
+                # Persists with the input, so the first request already tells it.
+                prompt_block_change = await self._requests.plan_prompt_block_change(context)
+                if prompt_block_change is not None:
+                    session.add_note(prompt_block_change)
                 async with self._dependencies.sessions.write_lock(session_address):
                     # Another admitted Run may have appended while this Run was
                     # queued for the Session lock. Refresh before assigning image

@@ -11,13 +11,17 @@ import pytest
 
 from core.agents.temporary import TemporaryAgentConfig, TemporaryAgentRegistry
 from core.chat import ChatMessage
+from core.chat._prompt_block_epoch import PromptBlockPin
 from core.chat._run_state import RequestBuildInputs, _RunRequest
 from core.chat._tool_epoch import ToolEpochPin
 from core.chat.wire_shaping import PINNED_IMAGE_RETIREMENT_SLOT
 from core.extensions import ExtensionAPI, ExtensionRecord, ExtensionRegistry
 from core.extensions.extensions import ExtensionDeclarations
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
+from core.prompts import BlockCatalog, RenderedBlock
 from core.prompts.pinned_context import (
+    PINNED_AGENT_BODY_SLOT,
+    PINNED_DYNAMIC_BLOCKS_SLOT,
     PINNED_MEMORY_FILES_SLOT,
     PINNED_SKILL_CATALOG_SLOT,
     PINNED_SOUL_CONTEXT_SLOT,
@@ -200,6 +204,58 @@ async def test_compaction_pins_the_current_tools_for_the_new_epoch(
     sent = json.dumps(rebuilt.tools)
     assert sent == json.dumps(list(pin.definitions)) == json.dumps(next_run.request_state.tools)
     assert json.dumps(rebuilt.tools[1]["parameters"]) == json.dumps(ordered)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("refresh_fails", [False, True], ids=["refreshed", "refresh-failed"])
+async def test_compaction_pins_the_current_dynamic_blocks_and_retires_their_notes(
+    tmp_path: Path, refresh_fails: bool
+) -> None:
+    # A dynamic block change announced in the ending epoch is part of the new epoch's
+    # pin, even when the rest of the refresh failed, so no later Run repeats it.
+    entries = [("a", "- a")]
+
+    def render(_agent: Any, *, block_ids: Any = None, skip: Any = (), **_inputs: Any) -> Any:
+        block = RenderedBlock(
+            " ".join(line for _key, line in entries),
+            BlockCatalog(title="Probe entries", entries=tuple(entries)),
+        )
+        return {} if "tool:probe" in skip else {"tool:probe": block}
+
+    runtime = compaction_runtime(tmp_path)
+    runtime.system_prompts.render_dynamic_blocks = render
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+    context = await run_context(
+        loop, Run(run_id="run-1", agent_id="coder", session_id=session.id), session
+    )
+    old_epoch = context.request_state.prompt_blocks.epoch
+    entries.append(("b", "- b"))
+    note = await loop._requests.plan_prompt_block_change(context)
+    assert note is not None and "Probe entries changed" in note
+    session.append(ChatMessage.note(note))
+    if refresh_fails:
+
+        def fail_refresh(_project_id: str | None, _agent_id: str | None) -> Any:
+            raise RuntimeError("scan failed")
+
+        runtime.refresh_skills_for = fail_refresh
+
+    rebuilt = await compact_context(loop, context)
+
+    pin = PromptBlockPin.from_payload(
+        runtime.chat_sessions.prompt_pin(session.address, PINNED_DYNAMIC_BLOCKS_SLOT)
+    )
+    assert persisted_roles(session.load())[-1] == "compaction_checkpoint"
+    assert pin is not None and pin.epoch != old_epoch
+    assert pin.texts() == {"tool:probe": "- a - b"}
+    assert rebuilt.prompt_blocks == pin
+    next_run = await run_context(
+        loop, Run(run_id="run-2", agent_id="coder", session_id=session.id), session
+    )
+    assert next_run.request_state.prompt_blocks == pin
+    assert await loop._requests.plan_prompt_block_change(next_run) is None
 
 
 @pytest.mark.asyncio
@@ -397,6 +453,7 @@ async def test_temporary_compaction_refreshes_epoch_without_identity_lookup(
     assert runtime.refresh_skills_for_calls == [(project_id, None)]
     assert runtime.agent_resolver.calls == []
     assert context.agent_body == "TEMP_BODY_SENTINEL"
+    assert prompt_pin(address, PINNED_AGENT_BODY_SLOT) == {"text": "TEMP_BODY_SENTINEL"}
     assert context.soul_context is None and context.memory_files_context is None
     assert prompt_pin(address, PINNED_SOUL_CONTEXT_SLOT) is None
     assert prompt_pin(address, PINNED_MEMORY_FILES_SLOT) is None

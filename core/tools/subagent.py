@@ -55,6 +55,8 @@ TOP_LEVEL_EXECUTION_GUIDANCE = (
     "still working, otherwise in a new turn right after yours ends. Continue other work, or "
     "end your turn to wait; do not poll `status` for completion."
 )
+# Names the target list when vBot tells the Model that it changed mid-Session.
+SUBAGENT_CATALOG_TITLE = "The Agent ids under Sub-Agents"
 NESTED_EXECUTION_GUIDANCE_TEMPLATE = (
     "You are a Sub-Agent, so each `run` waits and returns the Sub-Agent's final answer. vBot "
     "cancels work that takes longer than {timeout}, including time spent waiting for a busy "
@@ -253,34 +255,44 @@ def _subagent_display_parts(raw_arguments: JsonObject) -> tuple[ToolDisplayPart,
     return tuple(parts)
 
 
-def _render_subagent_prompt_block(context: Any, coordinator: SubAgentCoordinator) -> str:
+def _render_subagent_prompt_block(context: Any, coordinator: SubAgentCoordinator) -> Any:
+    """Render the Sub-Agent guidance with its targets as a catalog, one entry per id.
+
+    The execution guidance is the catalog's frame: a nested Agent's timeout
+    setting is part of it, so a changed timeout replaces the whole block.
+    """
+    from core.prompts import BlockCatalog, RenderedBlock
+
     targets = coordinator.prompt_targets(context.agent, context.agent_project_id)
-    rendered_targets = _format_subagent_targets(targets)
+    entries = tuple((target.agent_id, _subagent_target_line(target)) for target in targets)
     if getattr(context, "nesting_depth", 0) > 0:
-        # Read per prompt build like the target catalog, so a changed setting
-        # reaches the next request of every nested Agent.
         minutes = coordinator.foreground_timeout_minutes()
         timeout = f"{minutes} minute" if minutes == 1 else f"{minutes} minutes"
         execution_guidance = NESTED_EXECUTION_GUIDANCE_TEMPLATE.replace("{timeout}", timeout)
     else:
         execution_guidance = TOP_LEVEL_EXECUTION_GUIDANCE
-    return SUBAGENT_PROMPT_BLOCK_TEMPLATE.replace("{target_choices}", rendered_targets).replace(
-        "{execution_guidance}", execution_guidance
+    target_choices = (
+        TARGET_CHOICES_TEMPLATE.replace("{subagent_list}", "\n".join(line for _, line in entries))
+        if entries
+        else NO_ADDITIONAL_SUBAGENTS_TEXT
+    )
+    return RenderedBlock(
+        text=SUBAGENT_PROMPT_BLOCK_TEMPLATE.replace("{target_choices}", target_choices).replace(
+            "{execution_guidance}", execution_guidance
+        ),
+        catalog=BlockCatalog(
+            title=SUBAGENT_CATALOG_TITLE, entries=entries, frame=execution_guidance
+        ),
     )
 
 
-def _format_subagent_targets(targets: list[SubAgentPromptTarget]) -> str:
-    if not targets:
-        return NO_ADDITIONAL_SUBAGENTS_TEXT
-    lines: list[str] = []
-    for target in targets:
-        name = _single_line(target.name) or target.agent_id
-        description = _single_line(target.description)
-        suffix = f" — {name}"
-        if description:
-            suffix = f"{suffix} — {description}"
-        lines.append(f"- `{target.agent_id}`{suffix}")
-    return TARGET_CHOICES_TEMPLATE.replace("{subagent_list}", "\n".join(lines))
+def _subagent_target_line(target: SubAgentPromptTarget) -> str:
+    name = _single_line(target.name) or target.agent_id
+    description = _single_line(target.description)
+    suffix = f" — {name}"
+    if description:
+        suffix = f"{suffix} — {description}"
+    return f"- `{target.agent_id}`{suffix}"
 
 
 def _single_line(value: str) -> str:

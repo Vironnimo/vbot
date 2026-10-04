@@ -28,7 +28,11 @@ from core.compaction.compaction import (
     CompactionPlan,
     carry_notes_into_checkpoint,
 )
-from core.sessions import is_tool_change_note
+from core.sessions import (
+    PROMPT_BLOCK_CHANGE_NOTE_PREFIX,
+    is_prompt_block_change_note,
+    is_tool_change_note,
+)
 from core.sessions.history import _skill_context_note_content
 from core.tools import tool_success
 from tests.core.compaction.compaction_test_support import (
@@ -308,10 +312,11 @@ async def test_compaction_reports_only_the_immediately_completed_skill_epoch() -
 
 
 @pytest.mark.asyncio
-async def test_compaction_drops_the_tool_change_notes_of_the_ending_epoch() -> None:
-    # The next prompt epoch pins every Tool these notes announced.
+async def test_compaction_drops_the_change_notes_of_the_ending_epoch() -> None:
+    # The next prompt epoch pins every Tool and prompt block these notes announced.
     note = ChatMessage.note(ToolChange("removed", "probe", "epoch-1").note_content())
-    history = [user("u1", "First task"), note, assistant("a1", "Done")]
+    block_note = ChatMessage.note(PROMPT_BLOCK_CHANGE_NOTE_PREFIX + "{}")
+    history = [user("u1", "First task"), note, block_note, assistant("a1", "Done")]
 
     history.append(
         await compact(
@@ -323,7 +328,9 @@ async def test_compaction_drops_the_tool_change_notes_of_the_ending_epoch() -> N
 
     effective = effective_compaction_messages(history)
     assert [item.id for item in effective if item.role != "note"] == ["u1", "a1"]
-    assert not any(is_tool_change_note(item) for item in effective)
+    assert not any(
+        is_tool_change_note(item) or is_prompt_block_change_note(item) for item in effective
+    )
 
 
 def _plain_note(note_id: str) -> ChatMessage:
@@ -346,6 +353,11 @@ def _plain_note(note_id: str) -> ChatMessage:
             [ChatMessage.note(ToolChange("removed", "probe", "epoch-1").note_content())],
             None,
             id="tool-change-note",
+        ),
+        pytest.param(
+            [ChatMessage.note(PROMPT_BLOCK_CHANGE_NOTE_PREFIX + "{}")],
+            None,
+            id="prompt-block-change-note",
         ),
         pytest.param(
             [message("n3", "note", f"{COMPACTION_SKILL_NOTE_PREFIX}[]")],

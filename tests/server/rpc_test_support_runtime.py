@@ -95,9 +95,10 @@ class StubPrompts:
         read_paths: list[Path] | None = None,
         effective_tool_definitions: object = None,
         session_tool_grants: object = (),
+        pinned_blocks: object = None,
         request_block_definitions: object = (),
     ) -> str:
-        del agent_project_id, request_block_definitions
+        del agent_project_id, pinned_blocks, request_block_definitions
         if getattr(scope, "type", None) == "agent":
             scope_agent_id = getattr(scope, "agent_id", None)
             return f"Custom system for {scope_agent_id}"
@@ -126,6 +127,9 @@ class StubPrompts:
     ) -> str:
         del on_read
         return str(getattr(project_context, "project_id", ""))
+
+    def render_dynamic_blocks(self, _agent: StubAgent, **_options: object) -> dict[str, Any]:
+        return {}
 
     def render_soul(self, _agent: StubAgent, *, on_read: object = None) -> str:
         return ""
