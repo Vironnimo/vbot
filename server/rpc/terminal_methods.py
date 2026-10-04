@@ -46,11 +46,13 @@ async def _terminal_programs(state: Any, params: JsonObject) -> JsonObject:
     return {"running": await _terminal_manager(state).running_programs_for_operator()}
 
 
-def _terminal_read(state: Any, params: JsonObject) -> JsonObject:
+async def _terminal_read(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"terminal_id"}, "terminal.read")
     try:
         return dict(
-            _terminal_manager(state).read_for_operator(_required_string(params, "terminal_id"))
+            await _terminal_manager(state).read_for_operator(
+                _required_string(params, "terminal_id")
+            )
         )
     except TerminalManagerError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
@@ -204,32 +206,6 @@ async def _terminal_input(state: Any, params: JsonObject) -> JsonObject:
     return {"terminal": terminal}
 
 
-async def _terminal_resize(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"terminal_id", "columns", "rows"}, "terminal.resize")
-    terminal_id = _required_string(params, "terminal_id")
-    columns = _required_integer(params, "columns")
-    rows = _required_integer(params, "rows")
-    if not TERMINAL_MIN_COLUMNS <= columns <= TERMINAL_MAX_COLUMNS:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"params.columns must be between {TERMINAL_MIN_COLUMNS} and {TERMINAL_MAX_COLUMNS}",
-        )
-    if not TERMINAL_MIN_ROWS <= rows <= TERMINAL_MAX_ROWS:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"params.rows must be between {TERMINAL_MIN_ROWS} and {TERMINAL_MAX_ROWS}",
-        )
-    try:
-        terminal = await _terminal_manager(state).resize_for_operator(
-            terminal_id, columns=columns, rows=rows
-        )
-    except ValueError as exc:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
-    except Exception as exc:
-        raise _map_expected_error(exc) from exc
-    return {"terminal": terminal}
-
-
 async def _terminal_kill(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"terminal_id"}, "terminal.kill")
     terminal_id = _required_string(params, "terminal_id")
@@ -297,7 +273,6 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "terminal.programs": _terminal_programs,
         "terminal.start": _terminal_start,
         "terminal.input": _terminal_input,
-        "terminal.resize": _terminal_resize,
         "terminal.kill": _terminal_kill,
         "terminal.forget": _terminal_forget,
         "terminal.group.create": _terminal_group_create,

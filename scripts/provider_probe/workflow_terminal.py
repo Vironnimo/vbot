@@ -136,10 +136,9 @@ async def _probe_terminal_case(
 ) -> dict[str, Any]:
     # Reuse the existing disposable PTY fixture; Model output never launches a host program.
     from core.projects import ProjectStore
-    from core.tools._terminal_events import _attention_body
-    from core.tools._terminal_input import _input_chunks
+    from core.tools._terminal_input import input_chunks
     from core.tools.terminal import register_terminal_tool
-    from core.tools.terminal_manager import TerminalManager
+    from core.tools.terminal_manager import TerminalManager, TerminalRenderHost
     from core.tools.tools import ToolRegistry
     from core.utils.tokens import estimate_json_tokens
     from tests.core.tools.terminal_helpers import make_context
@@ -148,13 +147,19 @@ async def _probe_terminal_case(
         PendingTriggerService,
         eventually,
         owner,
+        terminal_info,
     )
 
     with TemporaryDirectory(prefix="vbot-terminal-probe-") as directory:
         root = Path(directory).resolve()
         factory = AdapterFactory()
         trigger = PendingTriggerService()
-        manager = TerminalManager(trigger, adapter_factory=factory, activity_quiet_seconds=0.03)
+        manager = TerminalManager(
+            trigger,
+            adapter_factory=factory,
+            render_host=TerminalRenderHost.in_process(),
+            activity_quiet_seconds=0.03,
+        )
         manager.start()
         projects = ProjectStore(root / "data")
         projects.create("probe", "Probe", root)
@@ -169,16 +174,16 @@ async def _probe_terminal_case(
                 ["terminal"],
             )
             terminal_id = seed["data"]["terminal_id"]
-            session = manager.get_session(terminal_id, owner())
             await manager.send_operator_input(terminal_id, "open")
             factory.adapters[0].emit(
                 "Ready for next instruction> "
                 if case["id"] == "natural_continue"
                 else "fixture history\r\nProceed with fixture check? [y/n]"
             )
-            await eventually(lambda: session.attention is not None)
-            assert session.attention is not None
-            revision = session.renderer.revision
+            # The settled screen is delivered to the attached Session as its notification.
+            await eventually(lambda: bool(trigger.submissions))
+            notification = str(trigger.submissions[-1][1]["body"])
+            revision = terminal_info(manager, terminal_id).screen_revision
             expected = dict(case.get("arguments", case.get("expected", {})))
             for key, value in expected.items():
                 if value == "{terminal_id}":
@@ -199,10 +204,15 @@ async def _probe_terminal_case(
                         / "resources/skills/coding-agents/references"
                         / case["reference"]
                     ).read_text(encoding="utf-8")
+                # What the Agent last saw: the notification, or a status result.
                 observation = (
-                    _attention_body(session, session.attention)
+                    notification
                     if case["id"] == "natural_notice"
-                    else json.dumps(await manager.snapshot(terminal_id, owner()))
+                    else json.dumps(
+                        await registry.dispatch(
+                            context, {"action": "status", "terminal_id": terminal_id}, ["terminal"]
+                        )
+                    )
                 )
                 messages = [
                     {"role": "system", "content": skill},
@@ -306,22 +316,24 @@ async def _probe_terminal_case(
                         and len(factory.calls) == launches_before
                     )
                 elif actual["action"] == "input":
-                    chunks = _input_chunks(
+                    chunks = input_chunks(
                         data=actual.get("data"), text=actual.get("text"), key=actual.get("key")
                     )
                     effect_ok = factory.adapters[0].writes == writes_before + list(
                         chunks
                     ) and data.get("characters_sent") == sum(map(len, chunks))
                 elif actual["action"] == "start":
-                    child = manager.get_session(data["terminal_id"], owner())
                     if actual.get("text"):
-                        child.renderer.feed("ready> ")
+                        # The start input waits for a quiet, non-empty start screen.
+                        factory.adapters[-1].emit("ready> ")
                         await eventually(
                             lambda: (
                                 bool(factory.adapters[-1].writes)
                                 and factory.adapters[-1].writes[-1] == "\r"
-                            )
+                            ),
+                            attempts=600,
                         )
+                    child = manager.terminal(data["terminal_id"], owner())
                     effect_ok = (
                         len(factory.calls) == launches_before + 1
                         and child.attachment == owner()
@@ -343,13 +355,14 @@ async def _probe_terminal_case(
                 elif actual["action"] == "status":
                     effect_ok = ("screen" in data) == ("start_line" not in actual)
                     if "start_line" in actual:
-                        effect_ok = effect_ok and data["scrollback"]["line_count"] <= actual.get(
-                            "lines", 30
-                        )
+                        page = data["scrollback"]
+                        effect_ok = effect_ok and page["end_line"] - page[
+                            "start_line"
+                        ] <= actual.get("lines", 30)
                 elif actual["action"] == "wait":
                     effect_ok = (
                         data["timed_out"] == (case["id"] == "wait_timeout")
-                        and session.adapter.is_alive()
+                        and factory.adapters[0].alive
                     )
                 elif actual["action"] == "resize":
                     effect_ok = factory.adapters[0].resizes[-1] == (
@@ -357,11 +370,14 @@ async def _probe_terminal_case(
                         actual["columns"],
                     )
                 elif actual["action"] == "attach":
-                    effect_ok = session.attachment == owner()
+                    effect_ok = terminal_info(manager, terminal_id).attachment == owner()
                 elif actual["action"] == "detach":
-                    effect_ok = session.attachment is None and session.adapter.is_alive()
+                    effect_ok = (
+                        terminal_info(manager, terminal_id).attachment is None
+                        and factory.adapters[0].alive
+                    )
                 elif actual["action"] == "kill":
-                    effect_ok = not session.adapter.is_alive() and data["state"] == "exited"
+                    effect_ok = not factory.adapters[0].alive and data["state"] == "exited"
                 else:
                     effect_ok = data["terminals"][0]["terminal_id"] == terminal_id
             code = ((result or {}).get("error") or {}).get("code")

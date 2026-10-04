@@ -2,30 +2,39 @@
 
 from __future__ import annotations
 
-import ast
 import os
-import shlex
-import shutil
-import subprocess
-import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import core.tools._bash_environment as bash_environment
-import core.tools._terminal_input as terminal_input
+import core.tools._terminal_launch as terminal_launch
 import core.tools.terminal_manager as terminal_module
-from core.tools.terminal_manager import TerminalManager, TerminalStaleScreenError
+from core.tools._terminal_launch import shell_launch
+from core.tools.terminal_manager import (
+    TerminalLaunchError,
+    TerminalManager,
+    TerminalRenderHost,
+    TerminalStaleScreenError,
+)
 from tests.core.tools.terminal_manager_helpers import (
     AdapterFactory,
+    FakeClock,
+    FakeTerminalAdapter,
+    PendingTriggerService,
     eventually,
     owner,
-    session_of,
     spawn,
+    terminal_info,
 )
+from tests.core.tools.terminal_manager_helpers import clocked_manager as clocked_manager
 from tests.core.tools.terminal_manager_helpers import quick_readiness as quick_readiness
 from tests.core.tools.terminal_manager_helpers import shell_environment as shell_environment
 from tests.core.tools.terminal_manager_helpers import terminal_manager as terminal_manager
+
+Clocked = tuple[TerminalManager, AdapterFactory, PendingTriggerService, FakeClock]
 
 
 @pytest.mark.asyncio
@@ -74,14 +83,22 @@ async def test_terminal_reprobes_missing_program_and_keeps_explicit_env(
 
     factory = AdapterFactory()
 
-    def launch(argv, cwd, env, rows, columns):  # type: ignore[no-untyped-def]
+    def launch(
+        argv: Sequence[str],
+        cwd: Path,
+        env: Mapping[str, str],
+        rows: int,
+        columns: int,
+        *,
+        command_line: str | None = None,
+    ) -> FakeTerminalAdapter:
         calls.append(dict(env))
         if len(calls) == 1:
             raise FileNotFoundError("test-owned absent executable")
-        return factory(argv, cwd, env, rows, columns)
+        return factory(argv, cwd, env, rows, columns, command_line=command_line)
 
     monkeypatch.setattr(bash_environment, "_probe_shell_env", probe)
-    manager = TerminalManager(adapter_factory=launch)
+    manager = TerminalManager(adapter_factory=launch, render_host=TerminalRenderHost.in_process())
     try:
         await manager.spawn(
             owner(), ["new-program"], cwd=tmp_path, env={"EXPLICIT": "kept"}, origin_run_id="run"
@@ -96,19 +113,18 @@ async def test_terminal_reprobes_missing_program_and_keeps_explicit_env(
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("quick_readiness")
 async def test_start_input_waits_for_a_settled_screen_and_answers_terminal_queries_meanwhile(
-    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+    clocked_manager: Clocked, tmp_path: Path
 ) -> None:
-    manager, factory = terminal_manager
-    session = await spawn(manager, tmp_path, initial_text="agent task")
-    assert session.state == "starting"
+    manager, factory, _trigger, _clock = clocked_manager
+    started = await spawn(manager, tmp_path, initial_text="agent task")
+    assert started.state == "starting"
 
+    # A cursor query draws nothing: the blank screen is no start screen yet.
     factory.adapters[0].emit("\x1b[6n")
     await eventually(lambda: factory.adapters[0].writes == ["\x1b[1;1R"])
-    assert session.initial_input_task is not None
-    assert not session.initial_input_task.done()
     factory.adapters[0].emit("READY> ")
     await eventually(lambda: factory.adapters[0].writes == ["\x1b[1;1R", "agent task", "\r"])
-    assert session.state == "working"
+    assert terminal_info(manager, started.terminal_id).state == "working"
 
 
 @pytest.mark.asyncio
@@ -116,249 +132,110 @@ async def test_operator_input_supersedes_pending_agent_start_and_stale_observati
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
     manager, factory = terminal_manager
-    session = await spawn(manager, tmp_path, initial_text="agent task")
-    revision = session.renderer.revision
-    initial_task = session.initial_input_task
-    assert initial_task is not None
+    started = await spawn(manager, tmp_path, initial_text="agent task")
+    # Only the pending start task shows that the Agent's first input was dropped:
+    # it would otherwise be written once the start screen settles.
+    initial_input = manager._sessions[started.terminal_id]._initial_input_task
+    assert initial_input is not None
 
-    await manager.send_operator_input(session.terminal_id, "human input")
-    await eventually(initial_task.done)
+    await manager.send_operator_input(started.terminal_id, "human input")
+    await eventually(initial_input.done)
     assert factory.adapters[0].writes == ["human input"]
     with pytest.raises(TerminalStaleScreenError):
         await manager.send_input(
-            session.terminal_id,
+            started.terminal_id,
             owner(),
             text=None,
             key="enter",
-            expected_screen_revision=revision,
+            expected_screen_revision=started.screen_revision,
             origin_run_id="run-a",
         )
     assert factory.adapters[0].writes == ["human input"]
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("quick_readiness")
 async def test_empty_agent_input_preserves_startup_and_pending_input(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
     manager, factory = terminal_manager
-    session = await spawn(manager, tmp_path, initial_text="agent task")
-    session.suppress_until_activity = True
-    revision = session.renderer.revision
+    started = await spawn(manager, tmp_path, initial_text="agent task")
+
     result = await manager.send_input(
-        session.terminal_id,
+        started.terminal_id,
         owner(),
         data="",
         text=None,
         key=None,
-        expected_screen_revision=revision,
+        expected_screen_revision=started.screen_revision,
         origin_run_id="run-a",
     )
+
     assert result["characters_sent"] == 0
-    assert session.renderer.revision == revision
-    assert session.suppress_until_activity
-    assert session.initial_input_task is not None
-    assert session.initial_input_task.cancelling() == 0
+    after = terminal_info(manager, started.terminal_id)
+    assert (after.state, after.screen_revision) == ("starting", started.screen_revision)
     assert factory.adapters[0].writes == []
-
-
-@pytest.fixture
-def host_shell(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["host-shell"])
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("host_shell", "quick_readiness")
-async def test_manual_command_is_typed_into_the_default_shell_with_quoted_arguments(
-    tmp_path: Path,
-) -> None:
-    factory = AdapterFactory()
-    # The default quiet period keeps the shell busy with its prompt output while
-    # the command is typed.
-    manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
-    manager.start()
-    try:
-        result = await manager.spawn_for_operator(
-            command="codex", arguments=["--profile", "work space"], cwd=tmp_path
-        )
-        session = session_of(manager, result["terminal_id"])
-
-        assert session.owner is None
-        assert (session.command, session.arguments) == ("host-shell", ())
-        assert (session.launch_command, session.launch_arguments) == (
-            "codex",
-            ("--profile", "work space"),
-        )
-        assert (result["command"], result["launch_command"], result["launch_args"]) == (
-            "host-shell",
-            "codex",
-            ["--profile", "work space"],
-        )
-        factory.adapters[0].emit("PS C:\\work> ")
-        await eventually(
-            lambda: factory.adapters[0].writes == ["codex --profile 'work space'", "\r"]
-        )
-    finally:
-        await manager.aclose()
+    # The pending first input still goes out once the start screen settles.
+    factory.adapters[0].emit("READY> ")
+    await eventually(lambda: factory.adapters[0].writes == ["agent task", "\r"])
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("prompt", "ready_timeout", "shell_ends"),
-    [(None, 0.01, False), ("PS C:\\work> ", 0.25, False), (None, None, True)],
-    ids=["no-prompt", "prompt-not-quiet-long-enough", "shell-exits"],
-)
-@pytest.mark.usefixtures("host_shell")
-async def test_manual_command_is_not_written_without_a_ready_shell(
+@pytest.mark.parametrize("shell", ["pwsh.exe", "cmd.exe"])
+async def test_manual_command_starts_inside_the_default_shell_through_its_start_options(
     terminal_manager: tuple[TerminalManager, AdapterFactory],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    prompt: str | None,
-    ready_timeout: float | None,
-    shell_ends: bool,
+    shell: str,
 ) -> None:
-    # A prompt must stay unchanged for a whole minute before the command is typed.
-    monkeypatch.setattr(terminal_input, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 60)
-    if ready_timeout is not None:
-        monkeypatch.setattr(
-            terminal_input, "TERMINAL_OPERATOR_READY_TIMEOUT_SECONDS", ready_timeout
-        )
+    """The shell receives the program through its own start options: PowerShell
+    in its arguments, cmd in an exact command line. Nothing is typed."""
+    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda _env: [shell])
     manager, factory = terminal_manager
-    result = await manager.spawn_for_operator(command="codex", arguments=[], cwd=tmp_path)
-    session = session_of(manager, result["terminal_id"])
-    command_task = session.operator_command_task
-    assert command_task is not None
-    if prompt is not None:
-        factory.adapters[0].emit(prompt)
-    if shell_ends:
-        factory.adapters[0].finish(1)
-        await eventually(lambda: session.state == "exited")
+    arguments = ["--profile", "work space"]
 
-    await eventually(command_task.done)
-    assert factory.adapters[0].writes == []
+    result = await manager.spawn_for_operator(command="codex", arguments=arguments, cwd=tmp_path)
+
+    expected = shell_launch([shell], "codex", arguments, environment={})
+    assert factory.calls[0][0] == expected.argv
+    assert factory.command_lines == [expected.command_line]
+    info = terminal_info(manager, result["terminal_id"])
+    assert (info.owner, info.attachment) == (None, None)
+    assert (info.command, info.arguments) == (shell, ())
+    assert (info.launch_command, info.launch_arguments) == ("codex", tuple(arguments))
+    assert (result["command"], result["arguments"]) == (shell, [])
+    assert (result["launch_command"], result["launch_args"]) == ("codex", arguments)
+    history = manager.list_operator_launch_history()
+    assert [(entry["command"], entry["args"]) for entry in history] == [("codex", arguments)]
+    # Early operator input reaches the shell as typed, with nothing queued before it.
+    await manager.send_operator_input(result["terminal_id"], "x")
+    assert factory.adapters[0].writes == ["x"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("host_shell", "quick_readiness")
-async def test_manual_command_survives_early_operator_input(
-    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+async def test_manual_command_launch_files_are_removed_when_the_terminal_ends_or_fails_to_start(
+    terminal_manager: tuple[TerminalManager, AdapterFactory],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Operator input queues behind the launch command instead of cancelling it.
-
-    The WebUI takes control right after a manual start, so the first typed
-    characters can arrive while the shell is still booting.
-    """
+    """zsh reads the launch from private start files named by ``ZDOTDIR``."""
+    monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda _env: ["/bin/zsh"])
+    monkeypatch.setattr(terminal_launch, "os", SimpleNamespace(name="posix"))
     manager, factory = terminal_manager
-    result = await manager.spawn_for_operator(command="opencode2", arguments=[], cwd=tmp_path)
-    session = session_of(manager, result["terminal_id"])
-    assert session.operator_command_task is not None
-    assert not session.operator_command_task.done()
 
-    factory.adapters[0].emit("PS C:\\work> ")
-    await manager.send_operator_input(session.terminal_id, "x")
+    result = await manager.spawn_for_operator(command="codex", arguments=[], cwd=tmp_path)
 
-    await eventually(lambda: factory.adapters[0].writes == ["opencode2", "\r", "x"])
-    assert session.operator_command_task.done()
+    argv, _cwd, environment, _rows, _columns = factory.calls[0]
+    started_files = Path(environment["ZDOTDIR"])
+    assert argv == ["/bin/zsh"]
+    assert (started_files / ".zshrc").is_file()
+    factory.adapters[0].finish(0)
+    await eventually(lambda: not started_files.exists())
+    assert terminal_info(manager, result["terminal_id"]).state == "exited"
 
-
-def test_shell_command_renders_exact_typed_shell_input() -> None:
-    for command, arguments in [(None, []), ("", ["arg"]), ("codex", [""])]:
-        assert terminal_input._shell_command(command, arguments, shell="sh") is None
-    arguments = ["--profile", "work space", "$null", "$(echo BAD)", "a'b", 'a"b', "C:\\Tools\\"]
-    rendered = terminal_input._shell_command("/path with spaces/tool", arguments, shell="bash")
-    assert rendered is not None
-    assert shlex.split(rendered) == ["/path with spaces/tool", *arguments]
-
-
-# Real shell startup can exceed 10 seconds on shared Windows CI runners.
-@pytest.mark.timeout(120)
-@pytest.mark.parametrize("shell", ["powershell.exe", "pwsh.exe", "cmd.exe", "sh", "bash"])
-def test_manual_launch_preserves_arguments_through_real_shell(shell: str) -> None:
-    executable = shutil.which(shell)
-    if executable is None or (os.name == "nt" and shell in {"sh", "bash"}):
-        pytest.skip("Shell is not available for this platform")
-    arguments = [
-        "space value",
-        'a"b',
-        'a\\"b',
-        "trailing space\\",
-        "$null",
-        "$(echo SHOULD_NOT_RUN)",
-        "x`ny",
-        "%VBOT_TERMINAL_TEST_VALUE%",
-        "a,b",
-        "a'b",
-        "x&y",
-        "a|b",
-        "(arg)",
-        "bang!",
-    ]
-    line = terminal_input._shell_command(
-        sys.executable,
-        ["-c", "import sys; print(repr(sys.argv[1:]))", *arguments],
-        shell=executable,
-    )
-    assert line is not None
-    environment = dict(os.environ, VBOT_TERMINAL_TEST_VALUE="MUST_NOT_EXPAND")
-    if shell == "cmd.exe":
-        result = subprocess.run(
-            [executable, "/d", "/v:off"],
-            input=line + "\nexit\n",
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        output = next(row for row in result.stdout.splitlines() if row.startswith("["))
-    else:
-        flags = ["-NoProfile", "-NonInteractive", "-Command"] if shell.endswith(".exe") else ["-c"]
-        result = subprocess.run(
-            [executable, *flags, line], env=environment, capture_output=True, text=True, timeout=60
-        )
-        output = result.stdout.strip()
-    assert result.returncode == 0, result.stderr
-    assert ast.literal_eval(output) == arguments
-
-
-# Real shell startup can exceed 10 seconds on shared Windows CI runners.
-@pytest.mark.timeout(120)
-@pytest.mark.parametrize("shell", ["powershell.exe", "pwsh.exe", "cmd.exe"])
-def test_manual_launch_executes_program_path_with_spaces(shell: str) -> None:
-    shell_path = shutil.which(shell)
-    program = shutil.which("pwsh.exe")
-    if os.name != "nt" or shell_path is None or program is None or " " not in program:
-        pytest.skip("A Windows executable with a spaced path is required")
-    line = terminal_input._shell_command(program, ["-NoProfile", "-Version"], shell=shell_path)
-    assert line is not None
-    if shell == "cmd.exe":
-        result = subprocess.run(
-            [shell_path, "/d", "/v:off"],
-            input=line + "\nexit\n",
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    else:
-        result = subprocess.run(
-            [shell_path, "-NoProfile", "-NonInteractive", "-Command", line],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    assert result.returncode == 0, result.stderr
-    assert any(row.startswith("PowerShell ") for row in result.stdout.splitlines())
-
-
-def test_screen_prompt_markers_detect_common_shell_prompts() -> None:
-    assert terminal_input._screen_has_prompt_marker("PS C:\\work> ") is True
-    assert terminal_input._screen_has_prompt_marker("PS C:\\work>") is True
-    assert terminal_input._screen_has_prompt_marker("C:\\work>") is True
-    assert terminal_input._screen_has_prompt_marker("user@host:~/project$") is True
-    assert terminal_input._screen_has_prompt_marker("$ ") is True
-    assert terminal_input._screen_has_prompt_marker("> ") is True
-    assert terminal_input._screen_has_prompt_marker("❯ ") is True
-    assert terminal_input._screen_has_prompt_marker("viro@mac project % ") is True
-    assert terminal_input._screen_has_prompt_marker("% ") is True
-    assert terminal_input._screen_has_prompt_marker("Downloading 50 %") is False
-    assert terminal_input._screen_has_prompt_marker("") is False
-    assert terminal_input._screen_has_prompt_marker("hello world") is False
-    assert terminal_input._screen_has_prompt_marker("PS") is False
+    factory.error = OSError("no PTY")
+    with pytest.raises(TerminalLaunchError):
+        await manager.spawn_for_operator(command="codex", arguments=[], cwd=tmp_path)
+    failed_files = Path(factory.calls[1][2]["ZDOTDIR"])
+    assert failed_files != started_files
+    assert not failed_files.exists()

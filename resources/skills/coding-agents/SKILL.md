@@ -31,7 +31,7 @@ Use `input.text` with `key: "enter"` to submit instructions, named keys for menu
 
 ## Read longer output
 
-Default `status` returns the current screen and recent scrollback. For the complete retained buffer, start with `start_line: 0` and follow `scrollback.next_request` until null. Explicit pages run forward and contain the current screen only when they reach it. Append pages in order; indices shift if old output is evicted.
+Default `status` returns the current screen and the history right above it. Line numbers stay fixed as output arrives; `scrollback.first_line` is the oldest retained line. Follow `scrollback.older_request` to read further back. For the complete retained buffer, start at `start_line` = `scrollback.first_line` and follow `scrollback.newer_request` until it is absent; pages contain the current screen only when they reach it. A full-screen program (alternate screen) keeps no terminal history: use its own scrolling or paging instead.
 
 Rendered text represents terminal cells, not exact file contents. `log_file`, when present, contains raw terminal output with control sequences and redraws.
 

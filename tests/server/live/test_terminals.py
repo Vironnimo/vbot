@@ -4,6 +4,7 @@ keys, the Terminal layout, and the guards that keep text out of a shell or a men
 from __future__ import annotations
 
 import asyncio
+import base64
 import queue
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -15,10 +16,10 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-import core.tools._terminal_input as terminal_input
+import core.tools._terminal_session as terminal_session
 import core.tools.terminal_backend as terminal_backend
 import core.tools.terminal_manager as terminal_module
-from core.tools.terminal_manager import TerminalManager
+from core.tools.terminal_manager import TerminalManager, TerminalRenderHost
 from server.live._context import LiveUiError
 from server.live._terminals import TerminalTimings
 from server.live._tools import LiveToolExecutor
@@ -382,14 +383,15 @@ class Menu:
 class EmulatedTerminal:
     """A Terminal's shell and the coding program it started, drawn like the real ones.
 
-    The screen is the shell's history plus the program's current screen; when the
+    PowerShell runs the program its ``-EncodedCommand`` start option names. The
+    screen is the shell's history plus the program's current screen; when the
     program exits, its last screen stays above the next prompt, as in a real
     Terminal.
     """
 
     _last_pid = 990_000
 
-    def __init__(self) -> None:
+    def __init__(self, argv: Sequence[str] = ()) -> None:
         EmulatedTerminal._last_pid += 1
         self._pid = EmulatedTerminal._last_pid
         self._output: queue.Queue[str | None] = queue.Queue()
@@ -403,7 +405,14 @@ class EmulatedTerminal:
         self.menu: Menu | None = None
         self.menu_on_paste: Menu | None = None
         self.start_menu: Menu | None = None
+        self._launch = _encoded_program(argv)
         self._draw()
+
+    def launch(self) -> None:
+        """Run the program the shell was started with, if any."""
+        if self._launch in {"codex", "claude"}:
+            self.history = []
+            self._start_program(self._launch)
 
     # -- TerminalAdapter ----------------------------------------------------
 
@@ -466,11 +475,15 @@ class EmulatedTerminal:
             return
         command, self._line = self._line.strip(), ""
         if command in {"codex", "claude"}:
-            self.program = command
-            self.menu, self.start_menu = self.start_menu, None
-            self._output.put("\x1b[?2004h")
-        else:
-            self.history.append(START_PROMPT)
+            self._start_program(command)
+            return
+        self.history.append(START_PROMPT)
+        self._draw()
+
+    def _start_program(self, program: str) -> None:
+        self.program = program
+        self.menu, self.start_menu = self.start_menu, None
+        self._output.put("\x1b[?2004h")
         self._draw()
 
     def _program(self, text: str) -> None:
@@ -535,6 +548,14 @@ class EmulatedTerminal:
         self._output.put("\x1b[2J\x1b[H" + "\r\n".join(lines))
 
 
+def _encoded_program(argv: Sequence[str]) -> str | None:
+    """The program PowerShell's ``-EncodedCommand`` runs: the first word of its last line."""
+    if "-EncodedCommand" not in argv:
+        return None
+    script = base64.b64decode(argv[list(argv).index("-EncodedCommand") + 1]).decode("utf-16-le")
+    return script.splitlines()[-1].split()[0]
+
+
 class EmulatedTerminals:
     """The adapter factory and process probe of the Terminal manager."""
 
@@ -544,10 +565,18 @@ class EmulatedTerminals:
         self.start_menu: Menu | None = None
 
     def __call__(
-        self, argv: Sequence[str], cwd: Path, env: Mapping[str, str], rows: int, columns: int
+        self,
+        argv: Sequence[str],
+        cwd: Path,
+        env: Mapping[str, str],
+        rows: int,
+        columns: int,
+        *,
+        command_line: str | None = None,
     ) -> EmulatedTerminal:
-        terminal = EmulatedTerminal()
+        terminal = EmulatedTerminal(argv)
         terminal.start_menu, self.start_menu = self.start_menu, None
+        terminal.launch()
         self.all.append(terminal)
         return terminal
 
@@ -624,17 +653,18 @@ class Call:
         """Wait until the Terminal's rendered screen is what the emulator drew last."""
         manager = self.state.runtime.terminal_manager
         terminal_id = next(
-            key for key, session in manager._sessions.items() if session.adapter is terminal
+            item.terminal_id for item in manager.list_terminals() if item.pid == terminal.pid
         )
-
-        def rendered() -> bool:
-            screen = manager.read_for_operator(terminal_id)["screen"]
+        deadline = time.monotonic() + 5
+        while True:
+            screen = (await manager.read_for_operator(terminal_id))["screen"]
             lines = [line.rstrip() for line in screen.splitlines()]
             while lines and not lines[-1]:
                 lines.pop()
-            return lines == terminal.drawn
-
-        await _eventually(rendered)
+            if lines == terminal.drawn:
+                return
+            assert time.monotonic() < deadline, "timed out"
+            await asyncio.sleep(0.01)
 
 
 async def _eventually(predicate: Any) -> None:
@@ -647,7 +677,7 @@ async def _eventually(predicate: Any) -> None:
 @pytest_asyncio.fixture
 async def call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Call]:
     monkeypatch.setattr(terminal_module, "default_terminal_argv", lambda env: ["pwsh.exe"])
-    monkeypatch.setattr(terminal_input, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
+    monkeypatch.setattr(terminal_session, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
     # Emulated Terminals have no OS processes to stop.
     monkeypatch.setattr(
         terminal_backend, "terminate_process_tree", lambda adapter, targets=None: None
@@ -655,6 +685,7 @@ async def call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator
     terminals = EmulatedTerminals()
     manager = TerminalManager(
         adapter_factory=terminals,
+        render_host=TerminalRenderHost.in_process(),
         sweep_interval_seconds=3600,
         data_dir=tmp_path / "terminals",
         program_probe=terminals.runs,
@@ -671,8 +702,8 @@ async def call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator
 
 
 def _started(terminal: EmulatedTerminal) -> list[str]:
-    """What reached the Terminal after the shell started the program."""
-    return terminal.writes[terminal.writes.index("\r") + 1 :]
+    """What reached the Terminal; the shell started the program from its start options."""
+    return terminal.writes
 
 
 @pytest.mark.asyncio

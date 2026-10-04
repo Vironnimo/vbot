@@ -8,8 +8,9 @@ import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import override
+from typing import Any, override
 
+import psutil  # type: ignore[import-untyped]
 import pytest
 
 import core.tools.terminal_backend as terminal_backend
@@ -23,6 +24,7 @@ from core.tools.terminal_manager import (
     TerminalManagerError,
     TerminalNotOwnedError,
     TerminalOwner,
+    TerminalRenderHost,
 )
 from tests.core.tools.terminal_manager_helpers import (
     TEST_ACTIVITY_QUIET_SECONDS,
@@ -33,9 +35,10 @@ from tests.core.tools.terminal_manager_helpers import (
     establish_delivered_baseline,
     eventually,
     owner,
-    session_of,
+    screen_shows,
     settle_next_activity,
     spawn,
+    terminal_info,
 )
 from tests.core.tools.terminal_manager_helpers import clocked_manager as clocked_manager
 from tests.core.tools.terminal_manager_helpers import shell_environment as shell_environment
@@ -50,6 +53,14 @@ def terminate_directly(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def _manager(adapter_factory: Any) -> TerminalManager:
+    return TerminalManager(
+        adapter_factory=adapter_factory,
+        render_host=TerminalRenderHost.in_process(),
+        sweep_interval_seconds=3600,
+    )
+
+
 @pytest.mark.asyncio
 async def test_session_move_transfers_attachment_and_only_an_agent_terminals_lifecycle(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
@@ -57,23 +68,22 @@ async def test_session_move_transfers_attachment_and_only_an_agent_terminals_lif
     manager, factory = terminal_manager
     agent_started = await spawn(manager, tmp_path)
     manual = await manager.spawn_for_operator(command=None, arguments=[], cwd=tmp_path)
-    operator_started = session_of(manager, manual["terminal_id"])
-    manager.attach(operator_started.terminal_id, owner(), origin_run_id="run-a")
+    manual_id = manual["terminal_id"]
+    manager.attach(manual_id, owner(), origin_run_id="run-a")
     target = owner("session-b")
     with pytest.raises(TerminalNotOwnedError):
-        manager.get_session(agent_started.terminal_id, target)
+        manager.terminal(agent_started.terminal_id, target)
 
     assert manager.transfer_scope(owner(), target) == 2
 
-    for session in (agent_started, operator_started):
-        assert manager.get_session(session.terminal_id, target) is session
-        assert session.attachment == target
-    assert (agent_started.owner, agent_started.lifecycle_owner) == (owner(), target)
-    assert (operator_started.owner, operator_started.lifecycle_owner) == (None, None)
-    assert len(manager.list_sessions()) == 2
+    moved_agent = manager.terminal(agent_started.terminal_id, target)
+    moved_manual = manager.terminal(manual_id, target)
+    assert (moved_agent.owner, moved_agent.lifecycle_owner) == (owner(), target)
+    assert (moved_manual.owner, moved_manual.lifecycle_owner) == (None, None)
+    assert len(manager.list_terminals()) == 2
 
     await manager.close_scope(target)
-    assert operator_started.attachment is None
+    assert terminal_info(manager, manual_id).attachment is None
     assert factory.adapters[1].alive is True
     assert factory.adapters[0].alive is False
 
@@ -83,17 +93,16 @@ async def test_attach_rejects_another_session_and_detached_agent_origin_still_ow
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
     manager, factory = terminal_manager
-    session = await spawn(manager, tmp_path)
+    started = await spawn(manager, tmp_path)
     other = owner("session-b")
 
     with pytest.raises(TerminalAlreadyAttachedError):
-        manager.attach(session.terminal_id, other, origin_run_id="run-b")
+        manager.attach(started.terminal_id, other, origin_run_id="run-b")
 
-    manager.detach(session.terminal_id, owner())
-    attached, changed = manager.attach(session.terminal_id, other, origin_run_id="run-b")
-    assert attached is session
+    manager.detach(started.terminal_id, owner())
+    attached, changed = manager.attach(started.terminal_id, other, origin_run_id="run-b")
     assert changed is True
-    assert (session.owner, session.lifecycle_owner, session.attachment) == (
+    assert (attached.owner, attached.lifecycle_owner, attached.attachment) == (
         owner(),
         owner(),
         other,
@@ -101,7 +110,7 @@ async def test_attach_rejects_another_session_and_detached_agent_origin_still_ow
 
     await manager.close_scope(other)
     assert factory.adapters[0].alive is True
-    assert session.attachment is None
+    assert terminal_info(manager, started.terminal_id).attachment is None
 
     await manager.close_scope(owner())
     assert factory.adapters[0].alive is False
@@ -126,7 +135,7 @@ async def test_live_terminal_capacity_is_owner_scoped_and_globally_bounded(
     await manager.spawn(other_owner, ["owner-b-1"], cwd=tmp_path, env=None, origin_run_id="run-b")
 
     with pytest.raises(TerminalCapacityError, match="3"):
-        await manager.spawn_for_operator(command="manual-terminal", arguments=[], cwd=tmp_path)
+        await manager.spawn_for_operator(command=None, arguments=[], cwd=tmp_path)
 
 
 @pytest.mark.asyncio
@@ -137,7 +146,7 @@ async def test_pending_starts_reserve_owner_and_global_capacity(
     release = threading.Event()
     adapters: list[FakeTerminalAdapter] = []
 
-    def factory(*args):  # type: ignore[no-untyped-def]
+    def factory(*_args: Any, **_kwargs: Any) -> FakeTerminalAdapter:
         adapter = FakeTerminalAdapter()
         adapters.append(adapter)
         assert release.wait(5)
@@ -145,7 +154,7 @@ async def test_pending_starts_reserve_owner_and_global_capacity(
 
     monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_PER_SESSION", 2)
     monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_GLOBAL", 3)
-    manager = TerminalManager(adapter_factory=factory)
+    manager = _manager(factory)
     tasks = [asyncio.create_task(spawn(manager, tmp_path)) for _ in range(2)]
     try:
         await eventually(lambda: len(adapters) == 2)
@@ -165,8 +174,12 @@ async def test_pending_starts_reserve_owner_and_global_capacity(
             )
         release.set()
         await asyncio.gather(*tasks)
-        assert len(manager.list_sessions()) == 3
-        assert not manager._pending_spawns
+        assert len(manager.list_terminals()) == 3
+
+        # Completed starts hold no reservation: a stopped terminal frees its place.
+        stopped = next(info for info in manager.list_terminals() if info.owner == owner())
+        await manager.kill_for_operator(stopped.terminal_id)
+        await spawn(manager, tmp_path)
     finally:
         release.set()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -187,19 +200,19 @@ async def test_waiting_reader_does_not_block_input_resize_or_stop(
             return super().read(size)
 
     adapter = WaitingAdapter()
-    manager = TerminalManager(adapter_factory=lambda *args: adapter)
+    manager = _manager(lambda *_args, **_kwargs: adapter)
     loop = asyncio.get_running_loop()
     with ThreadPoolExecutor(max_workers=1) as executor:
         # A one-thread default executor: a blocked read there would stall every other call.
         monkeypatch.setattr(loop, "_default_executor", executor)
         try:
-            session = await spawn(manager, tmp_path)
+            started = await spawn(manager, tmp_path)
             await eventually(reading.is_set)
-            await asyncio.wait_for(manager.send_operator_input(session.terminal_id, "hello"), 1)
+            await asyncio.wait_for(manager.send_operator_input(started.terminal_id, "hello"), 1)
             await asyncio.wait_for(
-                manager.resize_for_operator(session.terminal_id, columns=90, rows=24), 1
+                manager.resize_for_operator(started.terminal_id, columns=90, rows=24), 1
             )
-            await asyncio.wait_for(manager.kill_for_operator(session.terminal_id), 1)
+            await asyncio.wait_for(manager.kill_for_operator(started.terminal_id), 1)
             assert adapter.writes == ["hello"]
             assert adapter.resizes == [(24, 90)]
             assert not adapter.alive
@@ -215,12 +228,12 @@ async def test_cancelled_start_waits_for_child_cleanup(tmp_path: Path) -> None:
     release = threading.Event()
     adapter = FakeTerminalAdapter()
 
-    def factory(*args):  # type: ignore[no-untyped-def]
+    def factory(*_args: Any, **_kwargs: Any) -> FakeTerminalAdapter:
         entered.set()
         assert release.wait(5)
         return adapter
 
-    manager = TerminalManager(adapter_factory=factory)
+    manager = _manager(factory)
     task = asyncio.create_task(spawn(manager, tmp_path))
     try:
         await eventually(entered.is_set)
@@ -233,8 +246,7 @@ async def test_cancelled_start_waits_for_child_cleanup(tmp_path: Path) -> None:
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, 1)
         assert not adapter.alive
-        assert not manager._pending_spawns
-        assert all(session.state == "exited" for session in manager.list_sessions())
+        assert all(info.state == "exited" for info in manager.list_terminals())
     finally:
         release.set()
         await asyncio.gather(task, return_exceptions=True)
@@ -248,12 +260,12 @@ async def test_shutdown_waits_for_pending_start_and_closes_its_child(tmp_path: P
     release = threading.Event()
     adapter = FakeTerminalAdapter()
 
-    def factory(*args):  # type: ignore[no-untyped-def]
+    def factory(*_args: Any, **_kwargs: Any) -> FakeTerminalAdapter:
         entered.set()
         assert release.wait(5)
         return adapter
 
-    manager = TerminalManager(adapter_factory=factory)
+    manager = _manager(factory)
     task = asyncio.create_task(spawn(manager, tmp_path))
     try:
         await eventually(entered.is_set)
@@ -262,9 +274,9 @@ async def test_shutdown_waits_for_pending_start_and_closes_its_child(tmp_path: P
         release.set()
         await asyncio.wait_for(closing, 1)
         result = await asyncio.gather(task, return_exceptions=True)
-        assert isinstance(result[0], terminal_module.TerminalLaunchError)
+        assert isinstance(result[0], TerminalClosedError)
         assert not adapter.alive
-        assert not manager.list_sessions()
+        assert not manager.list_terminals()
     finally:
         release.set()
         await asyncio.gather(task, return_exceptions=True)
@@ -284,8 +296,8 @@ async def test_parallel_terminal_ids_skip_collisions(
     monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
     first, second = await asyncio.gather(spawn(manager, tmp_path), spawn(manager, tmp_path))
     assert {first.terminal_id, second.terminal_id} == {"term_000000000001", "term_000000000002"}
-    assert manager.get_session(first.terminal_id, owner()) is first
-    assert manager.get_session(second.terminal_id, owner()) is second
+    assert manager.terminal(first.terminal_id, owner()).terminal_id == first.terminal_id
+    assert manager.terminal(second.terminal_id, owner()).terminal_id == second.terminal_id
 
 
 @pytest.mark.asyncio
@@ -294,25 +306,18 @@ async def test_kill_closes_reader_even_without_tree_eof(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager, factory = terminal_manager
+    manager, _factory = terminal_manager
     monkeypatch.setattr(terminal_backend, "terminate_process_tree", lambda adapter, **_kwargs: None)
-    # More kills than the reader pool has threads: a leaked blocked read would exhaust it.
-    for _ in range(35):
-        session = await manager.spawn(
+    # More kills than the reader pool has threads: a leaked blocked read would
+    # exhaust it, and the next kill would wait for its reader beyond the timeout.
+    for _ in range(terminal_module.TERMINAL_MAX_LIVE_GLOBAL + 3):
+        started = await manager.spawn(
             owner(), ["fake"], cwd=tmp_path, env=None, origin_run_id="run"
         )
-        adapter = factory.adapters[-1]
         # The fake's read is still blocked, as when an escaped child holds
         # the PTY slave. Closing the transport must release it independently.
-        await asyncio.wait_for(manager.kill_for_operator(session.terminal_id), 1)
-        assert session.reader_task is not None and session.reader_task.done()
-        adapter.alive = False
-    assert (
-        await asyncio.wait_for(
-            asyncio.get_running_loop().run_in_executor(manager._reader_executor, lambda: 42), 1
-        )
-        == 42
-    )
+        killed = await asyncio.wait_for(manager.kill_for_operator(started.terminal_id), 1)
+        assert killed["state"] == "exited"
 
 
 class IdleTimeoutAdapter(FakeTerminalAdapter):
@@ -339,28 +344,29 @@ async def test_reader_reads_on_after_idle_timeouts_and_stops_when_the_program_en
     tmp_path: Path,
 ) -> None:
     adapter = IdleTimeoutAdapter()
-    manager = TerminalManager(adapter_factory=lambda *args: adapter, sweep_interval_seconds=3600)
+    manager = _manager(lambda *_args, **_kwargs: adapter)
     try:
-        session = await spawn(manager, tmp_path)
+        started = await spawn(manager, tmp_path)
         await eventually(lambda: adapter.idle_reads > 0)
         adapter.emit("after idle")
-        await eventually(lambda: "after idle" in session.renderer.screen_text())
+        await eventually(lambda: screen_shows(manager, started.terminal_id, "after idle"))
 
         # The program ends while the reader is idle, without closing the PTY.
         adapter.code = 3
         adapter.alive = False
-        await eventually(lambda: session.state == "exited")
-        assert session.reader_task.done()
-        assert session.exit_code == 3
+        await eventually(lambda: terminal_info(manager, started.terminal_id).state == "exited")
+        assert terminal_info(manager, started.terminal_id).exit_code == 3
     finally:
         await manager.aclose()
 
 
 @pytest.mark.asyncio
 async def test_real_terminal_output_and_idle_reader_shutdown(tmp_path: Path) -> None:
-    manager = TerminalManager(activity_quiet_seconds=0.03)
+    manager = TerminalManager(
+        render_host=TerminalRenderHost.in_process(), activity_quiet_seconds=0.03
+    )
     try:
-        session = await manager.spawn(
+        started = await manager.spawn(
             owner(),
             [
                 sys.executable,
@@ -373,12 +379,12 @@ async def test_real_terminal_output_and_idle_reader_shutdown(tmp_path: Path) -> 
             origin_run_id="run",
         )
         await eventually(
-            lambda: "real-terminal-ready" in session.renderer.screen_text(), attempts=1000
+            lambda: screen_shows(manager, started.terminal_id, "real-terminal-ready"),
+            attempts=1000,
         )
-        await asyncio.wait_for(manager.kill_for_operator(session.terminal_id), 10)
-        assert session.state == "exited"
-        assert session.reader_task is not None and session.reader_task.done()
-        assert not session.adapter.is_alive()
+        killed = await asyncio.wait_for(manager.kill_for_operator(started.terminal_id), 10)
+        assert killed["state"] == "exited"
+        assert not psutil.pid_exists(started.pid)
     finally:
         await asyncio.wait_for(manager.aclose(), 10)
 
@@ -390,12 +396,12 @@ async def test_failed_tree_kill_retains_orphan_after_root_eof_for_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manager, factory = terminal_manager
-    session = await spawn(manager, tmp_path)
+    started = await spawn(manager, tmp_path)
     adapter = factory.adapters[0]
     orphan = object()
     attempts: list[list[object]] = []
 
-    def kill_tree(child, *, targets):  # type: ignore[no-untyped-def]
+    def kill_tree(child: FakeTerminalAdapter, *, targets: list[object]) -> None:
         assert child is adapter
         attempts.append(targets)
         if len(attempts) == 1:
@@ -407,16 +413,18 @@ async def test_failed_tree_kill_retains_orphan_after_root_eof_for_retry(
 
     monkeypatch.setattr(terminal_backend, "kill_process_tree", kill_tree)
     with pytest.raises(TerminalManagerError, match="Retry the kill operation"):
-        await manager.kill(session.terminal_id, owner())
-    await asyncio.wait_for(asyncio.shield(session.reader_task), 2)
-    assert session.termination_pending
-    assert session.state not in {"exited", "error"}
-    assert session.finished_at is None
+        await manager.kill(started.terminal_id, owner())
+    # The root's EOF reaches the reader; only its end shows it was handled.
+    reader = manager._sessions[started.terminal_id]._reader_task
+    assert reader is not None
+    await asyncio.wait_for(asyncio.shield(reader), 2)
+    retained = terminal_info(manager, started.terminal_id)
+    assert retained.state not in {"exited", "error"}
+    assert retained.finished_at is None
 
-    await manager.kill(session.terminal_id, owner())
+    await manager.kill(started.terminal_id, owner())
     assert attempts[0] is attempts[1]
-    assert session.state == "exited"
-    assert not session.termination_pending
+    assert terminal_info(manager, started.terminal_id).state == "exited"
 
 
 @pytest.mark.asyncio
@@ -430,26 +438,20 @@ async def test_shutdown_attempts_other_terminals_and_retains_failed_tree_for_ret
     second = await spawn(manager, tmp_path)
     denied = True
 
-    def kill_tree(child, *, targets):  # type: ignore[no-untyped-def]
+    def kill_tree(child: FakeTerminalAdapter, *, targets: list[object]) -> None:
         if child is factory.adapters[0] and denied:
             raise PermissionError("descendant still running")
         child.terminate()
 
     monkeypatch.setattr(terminal_backend, "kill_process_tree", kill_tree)
-    sweeper = manager._sweeper_task
-    assert sweeper is not None
     with pytest.raises(TerminalManagerError, match=first.terminal_id):
         await manager.aclose()
-    assert sweeper.done()
-    assert second.reader_task.done()
-    assert first.termination_pending
     assert factory.adapters[0].alive
     assert not factory.adapters[1].alive
-    assert not second.termination_pending
+    assert terminal_info(manager, second.terminal_id).state == "exited"
     denied = False
     manager.stop()
     assert not factory.adapters[0].alive
-    assert not first.termination_pending
 
 
 @pytest.mark.asyncio
@@ -457,20 +459,20 @@ async def test_shutdown_attempts_other_terminals_and_retains_failed_tree_for_ret
 async def test_execution_group_stop_keeps_unrelated_terminal_after_attachment_transfer(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
-    manager, _factory = terminal_manager
+    manager, factory = terminal_manager
     execution = RunExecutionOwner("fixture", "group", "peer", "generation", "epoch")
     owned = await manager.spawn(
         owner(), ["fake"], cwd=tmp_path, env=None, origin_run_id="run", execution_owner=execution
     )
-    unrelated = await manager.spawn(
-        owner(), ["fake"], cwd=tmp_path, env=None, origin_run_id="other"
-    )
+    await manager.spawn(owner(), ["fake"], cwd=tmp_path, env=None, origin_run_id="other")
     manager.detach(owned.terminal_id, owner())
     await manager.close_execution_group("fixture", "group", "epoch")
-    assert not owned.adapter.is_alive()
-    assert unrelated.adapter.is_alive()
+    assert not factory.adapters[0].alive
+    assert factory.adapters[1].alive
     # The settled group's admission marker does not outlive its drain.
-    assert manager._closed_execution_groups == set()
+    await manager.spawn(
+        owner(), ["fake"], cwd=tmp_path, env=None, origin_run_id="late", execution_owner=execution
+    )
 
 
 @pytest.mark.asyncio
@@ -480,12 +482,12 @@ async def test_execution_group_stop_drains_pending_terminal_launch(tmp_path: Pat
     release = threading.Event()
     factory = AdapterFactory()
 
-    def blocked_factory(*args):  # type: ignore[no-untyped-def]
+    def blocked_factory(*args: Any, **kwargs: Any) -> FakeTerminalAdapter:
         started.set()
         assert release.wait(5)
-        return factory(*args)
+        return factory(*args, **kwargs)
 
-    manager = TerminalManager(adapter_factory=blocked_factory)
+    manager = _manager(blocked_factory)
     execution = RunExecutionOwner("fixture", "group", "peer", "generation", "epoch")
     launch = asyncio.create_task(
         manager.spawn(
@@ -513,10 +515,9 @@ async def test_execution_group_stop_drains_pending_terminal_launch(tmp_path: Pat
                 execution_owner=execution,
             )
         release.set()
-        session = await launch
+        await launch
         await close
-        assert not session.adapter.is_alive()
-        assert manager._closed_execution_groups == set()
+        assert not factory.adapters[0].alive
     finally:
         release.set()
         await asyncio.gather(launch, return_exceptions=True)
@@ -530,14 +531,13 @@ async def test_terminal_completion_uses_activity_owner_without_transferring_proc
 ) -> None:
     manager, factory, trigger, clock = clocked_manager
     execution = RunExecutionOwner("swarm", "group", "peer", "generation", "epoch")
-    session = await establish_delivered_baseline(
+    delivered = await establish_delivered_baseline(
         manager, factory, trigger, clock, tmp_path, quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS
     )
-    manager.attach(
-        session.terminal_id, owner(), origin_run_id="owned-run", execution_owner=execution
-    )
-    await manager.send_input(
-        session.terminal_id,
+    terminal_id = delivered.terminal_id
+    manager.attach(terminal_id, owner(), origin_run_id="owned-run", execution_owner=execution)
+    sent = await manager.send_input(
+        terminal_id,
         owner(),
         data="next\r",
         text=None,
@@ -546,13 +546,17 @@ async def test_terminal_completion_uses_activity_owner_without_transferring_proc
         origin_run_id="owned-run",
         execution_owner=execution,
     )
-    generation = session.activity_generation
     factory.adapters[0].emit("new result")
     await settle_next_activity(
-        clock, session, after_generation=generation, quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS
+        clock,
+        manager,
+        terminal_id,
+        after_revision=sent["screen_revision"],
+        quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
     )
     await eventually(lambda: len(trigger.submissions) == 2)
     assert trigger.submissions[-1][1]["execution_owner"] == execution
-    assert session.execution_owner is None
+    # The activity owner never owns the process: its group neither waits for nor stops it.
+    assert not manager.has_execution_work(execution)
     await manager.close_execution_group("swarm", "group", "epoch")
-    assert session.adapter.is_alive()
+    assert factory.adapters[0].alive

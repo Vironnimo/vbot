@@ -41,13 +41,13 @@ from core.tools.terminal_manager import (
     TerminalAlreadyAttachedError,
     TerminalCapacityError,
     TerminalClosedError,
+    TerminalInfo,
     TerminalLaunchError,
     TerminalManager,
     TerminalNotAttachedError,
     TerminalNotFoundError,
     TerminalNotOwnedError,
     TerminalOwner,
-    TerminalSession,
     TerminalStaleScreenError,
 )
 from core.tools.tools import (
@@ -186,15 +186,16 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "default": TERMINAL_STATUS_DEFAULT_LINES,
             "description": (
                 "History page size for status. Omit for 30 lines. Without start_line, "
-                "the current screen is also returned."
+                "the page ends right above the current screen, which is also returned."
             ),
         },
         "start_line": {
             "type": "integer",
             "minimum": 0,
             "description": (
-                "Zero-based buffer line for status; 0 is oldest retained. Returns only "
-                "that page. Omit for newest scrollback plus screen."
+                "Line number for status; line numbers stay fixed as output arrives "
+                "(scrollback.first_line is the oldest retained). Returns only that page. "
+                "Omit for the history above the screen plus the screen."
             ),
         },
         "timeout_ms": {
@@ -329,7 +330,7 @@ async def _handle_start(
         # A live terminal may be what the Agent means to use; a finished one cannot be.
         if any(
             item.terminal_id == requested_id and item.state not in {"exited", "error"}
-            for item in terminal_manager.list_sessions()
+            for item in terminal_manager.list_terminals()
         ):
             typing = json.dumps(
                 {"action": "input", "terminal_id": requested_id, "text": "...", "key": "enter"}
@@ -401,7 +402,7 @@ async def _handle_start(
         if not isinstance(raw_group, str) or not raw_group.strip():
             raise ToolContractError("group must be a non-empty string")
         group_id = terminal_manager.resolve_or_create_agent_group(raw_group.strip()).group_id
-    session = await terminal_manager.spawn(
+    started = await terminal_manager.spawn(
         owner,
         argv,
         cwd=workdir,
@@ -414,29 +415,28 @@ async def _handle_start(
         initial_text=text if isinstance(text, str) else None,
         group_id=group_id,
     )
-    snapshot = await terminal_manager.snapshot(session.terminal_id, owner)
+    snapshot = await terminal_manager.snapshot(started.terminal_id, owner)
     _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
     data = _project_snapshot(snapshot, view="start")
     data["delivery"] = "automatic_terminal_activity"
     if requested_id is not None:
         notes.append(
-            f"start assigns the terminal_id: use {session.terminal_id}, not {requested_id}."
+            f"start assigns the terminal_id: use {started.terminal_id}, not {requested_id}."
         )
     return tool_success(_with_notes(data, notes))
 
 
 def _handle_list(terminal_manager: TerminalManager, context: ToolContext) -> JsonObject:
     owner = _owner(context)
-    sessions = terminal_manager.list_sessions()
     return tool_success(
         {
             "terminals": [
                 {
                     key: value
-                    for key, value in _terminal_summary(session, current_attachment=owner).items()
+                    for key, value in _terminal_summary(info, current_attachment=owner).items()
                     if value not in (None, "")
                 }
-                for session in sessions
+                for info in terminal_manager.list_terminals()
             ]
         }
     )
@@ -449,13 +449,13 @@ def _handle_attach(
 ) -> JsonObject:
     terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
     owner = _owner(context)
-    session, changed = terminal_manager.attach(
+    info, changed = terminal_manager.attach(
         terminal_id,
         owner,
         origin_run_id=context.run_id,
         execution_owner=context.execution_owner,
     )
-    data = _terminal_summary(session, current_attachment=owner)
+    data = _terminal_summary(info, current_attachment=owner)
     data.update({"attached": True, "changed": changed, "delivery": "automatic_terminal_activity"})
     return tool_success(data)
 
@@ -466,13 +466,13 @@ def _handle_detach(
     arguments: JsonObject,
 ) -> JsonObject:
     terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
-    session = terminal_manager.detach(terminal_id, _owner(context))
-    data = _terminal_summary(session, current_attachment=_owner(context))
+    info = terminal_manager.detach(terminal_id, _owner(context))
+    data = _terminal_summary(info, current_attachment=_owner(context))
     data.update(
         {
             "attached": False,
             "changed": True,
-            "process_continues": session.state not in {"exited", "error"},
+            "process_continues": not info.finished,
         }
     )
     return tool_success(data)
@@ -521,7 +521,7 @@ async def _handle_wait(
 ) -> JsonObject:
     terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
     owner = _owner(context)
-    session = terminal_manager.get_session(terminal_id, owner)
+    info = terminal_manager.terminal(terminal_id, owner)
     after_revision = optional_int(
         arguments.get("after_revision"),
         field_name="after_revision",
@@ -529,7 +529,7 @@ async def _handle_wait(
         minimum=0,
     )
     if after_revision is None:
-        after_revision = session.acknowledged_attention_revision
+        after_revision = info.acknowledged_attention_revision
     timeout_ms, notes = _wait_milliseconds(arguments)
     snapshot, timed_out = await terminal_manager.wait_for_attention(
         terminal_id,
@@ -581,9 +581,9 @@ async def _handle_input(
         minimum=0,
     )
     owner = _owner(context)
-    session = terminal_manager.get_session(terminal_id, owner)
-    prior_attention_revision = session.attention_revision if session.attention is not None else None
-    revision_before_input = session.attention_revision
+    info = terminal_manager.terminal(terminal_id, owner)
+    prior_attention_revision = info.attention_revision if info.attention is not None else None
+    revision_before_input = info.attention_revision
     data = await terminal_manager.send_input(
         terminal_id,
         owner,
@@ -659,9 +659,14 @@ async def _handle_kill(
 
 
 # Snapshot facts no Tool result shows: attention records repeat what state,
-# timed_out, and the screen already say, and timestamps change no next call.
+# timed_out, and the screen already say, timestamps change no next call, and
+# the observation is the manager's record of the shown screen.
 _HIDDEN_SNAPSHOT_FIELDS = frozenset(
-    {"attention", "attention_revision", "started_at", "finished_at", "pid"}
+    {"attention", "attention_revision", "started_at", "finished_at", "pid", "observation"}
+)
+_ALTERNATE_SCREEN_NOTE = (
+    "The program shows a full-screen view (alternate screen), which keeps no terminal "
+    "history; to see earlier content, use the program's own scrolling or paging."
 )
 # Launch facts: start and status show them; results that follow up on a
 # running terminal do not repeat them.
@@ -677,16 +682,16 @@ def _project_snapshot(
 ) -> JsonObject:
     """Shape a terminal snapshot for one action's result.
 
-    History text above the screen becomes its own multi-line ``history`` field;
-    ``scrollback`` keeps the paging facts and appears only when there is history
-    or an older page to read.
+    History text becomes its own multi-line ``history`` field; ``scrollback``
+    keeps the line numbers and the requests for the adjacent pages, and
+    appears only when there is history or another page to read.
     """
     projected = {
         key: value
         for key, value in snapshot.items()
         if key not in _HIDDEN_SNAPSHOT_FIELDS and value is not None
     }
-    for key in ("title", "arguments"):
+    for key in ("title", "arguments", "alternate_screen"):
         if not projected.get(key):
             projected.pop(key, None)
     if view == "start":
@@ -700,25 +705,31 @@ def _project_snapshot(
             projected.pop("columns", None)
             projected.pop("rows", None)
     screen = projected.pop("screen", None)
-    scrollback = dict(projected.pop("scrollback", None) or {})
-    history = scrollback.pop("text", "")
-    next_start = scrollback.get("next_start_line")
-    scrollback["next_request"] = (
-        {
-            "action": "status",
-            "terminal_id": str(snapshot["terminal_id"]),
-            "start_line": next_start,
-            "lines": page_lines,
-        }
-        if isinstance(next_start, int)
-        else None
-    )
+    page = dict(projected.pop("scrollback", None) or {})
+    history = page.pop("text", "")
+    scrollback: JsonObject = {
+        key: page[key]
+        for key in ("first_line", "start_line", "end_line", "total_lines", "screen_start_line")
+        if key in page
+    }
+    adjacent = (("older_request", "previous_start_line"), ("newer_request", "next_start_line"))
+    for name, key in adjacent:
+        start = page.get(key)
+        if isinstance(start, int):
+            scrollback[name] = {
+                "action": "status",
+                "terminal_id": str(snapshot["terminal_id"]),
+                "start_line": start,
+                "lines": page_lines,
+            }
     if history:
         projected["history"] = history
     if include_screen:
         projected["screen"] = screen if isinstance(screen, str) else ""
-    if not include_screen or history or scrollback["next_request"] is not None:
+    if not include_screen or history or "older_request" in scrollback:
         projected["scrollback"] = scrollback
+    if view == "status" and projected.get("alternate_screen"):
+        projected["note"] = _ALTERNATE_SCREEN_NOTE
     return projected
 
 
@@ -766,8 +777,8 @@ def _split_command_line(command: str, environment: Mapping[str, str]) -> list[st
     return words
 
 
-def _terminal_label(session: TerminalSession) -> str:
-    label = session.name or session.renderer.title or session.command
+def _terminal_label(info: TerminalInfo) -> str:
+    label = info.name or info.title or info.command
     if len(label) > _TERMINAL_LABEL_CHARS:
         return label[: _TERMINAL_LABEL_CHARS - 3] + "..."
     return label
@@ -775,21 +786,21 @@ def _terminal_label(session: TerminalSession) -> str:
 
 def _terminals_text(terminal_manager: TerminalManager, owner: TerminalOwner) -> str:
     """Name the terminals attached to this Session, live and newest first."""
-    sessions = terminal_manager.list_sessions()
+    terminals = terminal_manager.list_terminals()
     attached = sorted(
-        (session for session in reversed(sessions) if session.attachment == owner),
-        key=lambda session: session.state in {"exited", "error"},
+        (info for info in reversed(terminals) if info.attachment == owner),
+        key=lambda info: info.finished,
     )
     if not attached:
-        if sessions:
+        if terminals:
             return (
                 'No terminal is attached to this Session; {"action": "list"} shows every '
                 "terminal, and attach makes one usable here."
             )
         return "You have no terminals; start one."
     shown = "; ".join(
-        f"{session.terminal_id} ({session.state}: {_terminal_label(session)})"
-        for session in attached[:_LISTED_TERMINALS]
+        f"{info.terminal_id} ({info.state}: {_terminal_label(info)})"
+        for info in attached[:_LISTED_TERMINALS]
     )
     more = ' {"action": "list"} shows all of them.' if len(attached) > _LISTED_TERMINALS else ""
     return f"Terminals attached to this Session: {shown}.{more}"
@@ -807,11 +818,11 @@ def _not_found_message(
 
 
 def _not_owned_message(terminal_manager: TerminalManager, terminal_id: str) -> str:
-    session = next(
-        (item for item in terminal_manager.list_sessions() if item.terminal_id == terminal_id),
+    info = next(
+        (item for item in terminal_manager.list_terminals() if item.terminal_id == terminal_id),
         None,
     )
-    if session is not None and session.attachment is not None:
+    if info is not None and info.attachment is not None:
         return (
             f"{terminal_id} is attached to another Session, so this Session cannot use it "
             "until that Session detaches it."
@@ -820,26 +831,26 @@ def _not_owned_message(terminal_manager: TerminalManager, terminal_id: str) -> s
     return f"{terminal_id} is not attached to this Session. Attach it first with {attach}."
 
 
-def _terminal_summary(session: TerminalSession, *, current_attachment: TerminalOwner) -> JsonObject:
-    attention = session.attention
-    if session.attachment == current_attachment:
+def _terminal_summary(info: TerminalInfo, *, current_attachment: TerminalOwner) -> JsonObject:
+    attention = info.attention
+    if info.attachment == current_attachment:
         attachment = "current"
-    elif session.attachment is None:
+    elif info.attachment is None:
         attachment = "none"
     else:
         attachment = "other"
     return {
-        "terminal_id": session.terminal_id,
-        "state": session.state,
-        "command": session.command,
-        "name": session.name,
-        "title": session.renderer.title,
-        "workdir": model_path(session.cwd),
-        "exit_code": session.exit_code,
-        "started_at": session.started_at.isoformat(),
-        "finished_at": session.finished_at.isoformat() if session.finished_at else None,
-        "screen_revision": session.renderer.revision,
-        "attention_revision": session.attention_revision,
+        "terminal_id": info.terminal_id,
+        "state": info.state,
+        "command": info.command,
+        "name": info.name,
+        "title": info.title,
+        "workdir": model_path(info.cwd),
+        "exit_code": info.exit_code,
+        "started_at": info.started_at.isoformat(),
+        "finished_at": info.finished_at.isoformat() if info.finished_at else None,
+        "screen_revision": info.screen_revision,
+        "attention_revision": info.attention_revision,
         "attention_kind": attention.kind if attention is not None else None,
         "attachment": attachment,
     }
@@ -853,13 +864,10 @@ def _acknowledge_after_persistence(
 ) -> None:
     attention = snapshot.get("attention")
     terminal_id = str(snapshot["terminal_id"])
-    screen_revision = int(snapshot["screen_revision"])
-    columns, rows = int(snapshot["columns"]), int(snapshot["rows"])
+    observation = snapshot["observation"]
 
     def acknowledge() -> None:
-        if not terminal_manager.acknowledge_screen(
-            terminal_id, owner, screen_revision=screen_revision, columns=columns, rows=rows
-        ):
+        if not terminal_manager.acknowledge_screen(terminal_id, owner, observation):
             return
         if isinstance(attention, dict) and isinstance(attention.get("revision"), int):
             terminal_manager.acknowledge_attention(terminal_id, owner, attention["revision"])

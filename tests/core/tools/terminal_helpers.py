@@ -9,7 +9,7 @@ import pytest_asyncio
 
 from core.projects import ProjectStore
 from core.tools.terminal import TERMINAL_TOOL_NAME, register_terminal_tool
-from core.tools.terminal_manager import TerminalManager
+from core.tools.terminal_manager import TerminalManager, TerminalRenderHost
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry
 from tests.core.tools.terminal_manager_helpers import AdapterFactory
 from tests.core.tools.tools_test_support import dispatch_as_executor
@@ -20,6 +20,7 @@ async def manager() -> AsyncIterator[tuple[TerminalManager, AdapterFactory]]:
     factory = AdapterFactory()
     manager = TerminalManager(
         adapter_factory=factory,
+        render_host=TerminalRenderHost.in_process(),
         sweep_interval_seconds=3600,
         activity_quiet_seconds=0.03,
     )

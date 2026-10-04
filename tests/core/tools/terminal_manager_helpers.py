@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import queue
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -13,11 +14,13 @@ import pytest
 import pytest_asyncio
 
 import core.tools._bash_environment as bash_environment
-import core.tools._terminal_input as terminal_input
-import core.tools._terminal_io as terminal_io
+import core.tools._terminal_session as terminal_session
+import core.tools.terminal_manager as terminal_manager_module
 from core.tools.terminal_manager import (
+    TerminalInfo,
     TerminalManager,
     TerminalOwner,
+    TerminalRenderHost,
 )
 
 TEST_ACTIVITY_QUIET_SECONDS = 1.0
@@ -83,6 +86,10 @@ class AdapterFactory:
         self.initial_output = initial_output
         self.adapters: list[FakeTerminalAdapter] = []
         self.calls: list[tuple[list[str], Path, dict[str, str], int, int]] = []
+        # The exact Windows command line of each call, when one was given.
+        self.command_lines: list[str | None] = []
+        # Set to fail every later start with this error; the call is still recorded.
+        self.error: BaseException | None = None
 
     def __call__(
         self,
@@ -91,10 +98,15 @@ class AdapterFactory:
         env: Mapping[str, str],
         rows: int,
         columns: int,
+        *,
+        command_line: str | None = None,
     ) -> FakeTerminalAdapter:
+        self.calls.append((list(argv), cwd, dict(env), rows, columns))
+        self.command_lines.append(command_line)
+        if self.error is not None:
+            raise self.error
         adapter = FakeTerminalAdapter(self.initial_output)
         self.adapters.append(adapter)
-        self.calls.append((list(argv), cwd, dict(env), rows, columns))
         return adapter
 
 
@@ -177,8 +189,14 @@ def shell_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def quick_readiness(monkeypatch: pytest.MonkeyPatch) -> None:
     """Treat a start screen or shell prompt as settled after 10 ms instead of 0.5 s."""
-    monkeypatch.setattr(terminal_io, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
-    monkeypatch.setattr(terminal_input, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
+    monkeypatch.setattr(terminal_session, "TERMINAL_INITIAL_INPUT_QUIET_SECONDS", 0.01)
+
+
+@pytest.fixture
+def default_shell(monkeypatch: pytest.MonkeyPatch) -> str:
+    """Make PowerShell the host's default interactive shell on every platform."""
+    monkeypatch.setattr(terminal_manager_module, "default_terminal_argv", lambda _env: ["pwsh.exe"])
+    return "pwsh.exe"
 
 
 @pytest_asyncio.fixture
@@ -186,6 +204,7 @@ async def terminal_manager() -> AsyncIterator[tuple[TerminalManager, AdapterFact
     factory = AdapterFactory()
     manager = TerminalManager(
         adapter_factory=factory,
+        render_host=TerminalRenderHost.in_process(),
         sweep_interval_seconds=3600,
         activity_quiet_seconds=0.03,
     )
@@ -206,6 +225,7 @@ async def delivering_manager() -> AsyncIterator[
     manager = TerminalManager(
         trigger,
         adapter_factory=factory,
+        render_host=TerminalRenderHost.in_process(),
         sweep_interval_seconds=3600,
         activity_quiet_seconds=0.03,
     )
@@ -227,6 +247,7 @@ async def clocked_manager() -> AsyncIterator[
     manager = TerminalManager(
         trigger,
         adapter_factory=factory,
+        render_host=TerminalRenderHost.in_process(),
         sweep_interval_seconds=3600,
         activity_quiet_seconds=TEST_ACTIVITY_QUIET_SECONDS,
         monotonic=clock.monotonic,
@@ -243,9 +264,9 @@ def owner(session_id: str = "session-a") -> TerminalOwner:
     return TerminalOwner("project-a", "agent-a", session_id)
 
 
-def session_of(manager: TerminalManager, terminal_id: str) -> Any:
-    """Return the Session behind a terminal id, including one no Agent owns."""
-    return next(item for item in manager.list_sessions() if item.terminal_id == terminal_id)
+def terminal_info(manager: TerminalManager, terminal_id: str) -> TerminalInfo:
+    """Return the current facts of a terminal, including one no Agent owns."""
+    return next(item for item in manager.list_terminals() if item.terminal_id == terminal_id)
 
 
 async def spawn(
@@ -254,7 +275,7 @@ async def spawn(
     *,
     command: str = "fake-tui",
     initial_text: str | None = None,
-) -> Any:
+) -> TerminalInfo:
     return await manager.spawn(
         owner(),
         [command],
@@ -268,24 +289,36 @@ async def spawn(
 
 
 async def eventually(predicate: Any, *, attempts: int = 200) -> None:
+    """Poll *predicate* until it is true; an awaitable answer is awaited first."""
     for _ in range(attempts):
-        if predicate():
+        answer = predicate()
+        if inspect.isawaitable(answer):
+            answer = await answer
+        if answer:
             return
         await asyncio.sleep(0.005)
     raise AssertionError("condition was not reached")
 
 
+async def screen_shows(manager: TerminalManager, terminal_id: str, text: str) -> bool:
+    """Whether the rendered screen of a terminal contains *text*."""
+    screen: str = (await manager.read_for_operator(terminal_id))["screen"]
+    return text in screen
+
+
 async def settle_next_activity(
     clock: FakeClock,
-    session: Any,
+    manager: TerminalManager,
+    terminal_id: str,
     *,
-    after_generation: int,
+    after_revision: int,
     quiet_seconds: float,
 ) -> None:
-    await eventually(lambda: session.activity_generation > after_generation)
+    """Let output that advanced the screen past *after_revision* reach its quiet boundary."""
+    await eventually(lambda: terminal_info(manager, terminal_id).screen_revision > after_revision)
     await eventually(lambda: clock.sleeping)
     await clock.advance(quiet_seconds)
-    await eventually(lambda: session.state == "ready")
+    await eventually(lambda: terminal_info(manager, terminal_id).state == "ready")
 
 
 async def establish_delivered_baseline(
@@ -296,12 +329,13 @@ async def establish_delivered_baseline(
     tmp_path: Path,
     *,
     quiet_seconds: float,
-) -> Any:
-    session = await spawn(manager, tmp_path)
-    session.state = "working"
-    manager.attach(session.terminal_id, owner(), origin_run_id="attach-run")
-    await manager.send_input(
-        session.terminal_id,
+) -> TerminalInfo:
+    """Start an attached terminal whose first settled screen was delivered."""
+    started = await spawn(manager, tmp_path)
+    terminal_id = started.terminal_id
+    manager.attach(terminal_id, owner(), origin_run_id="attach-run")
+    sent = await manager.send_input(
+        terminal_id,
         owner(),
         data="go\r",
         text=None,
@@ -309,15 +343,20 @@ async def establish_delivered_baseline(
         expected_screen_revision=None,
         origin_run_id="run-0",
     )
-    generation = session.activity_generation
     factory.adapters[0].emit("MENU> ")
     await settle_next_activity(
         clock,
-        session,
-        after_generation=generation,
+        manager,
+        terminal_id,
+        after_revision=sent["screen_revision"],
         quiet_seconds=quiet_seconds,
     )
     await eventually(lambda: len(trigger.submissions) == 1)
     trigger.release.set()
-    await eventually(lambda: session.attention is not None and session.attention.delivered)
-    return session
+
+    def delivered() -> bool:
+        attention = terminal_info(manager, terminal_id).attention
+        return attention is not None and attention.delivered
+
+    await eventually(delivered)
+    return terminal_info(manager, terminal_id)

@@ -83,9 +83,8 @@ async def test_start_ignores_placeholders_that_request_nothing(
     assert "note" not in result["data"]
     assert manager[1].calls[0][0] == ["fake-tui"]
     assert manager[1].calls[0][3:] == (24, 80)
-    # No start input is queued, so nothing is typed later either.
-    session = terminal.manager.get_session(result["data"]["terminal_id"], OWNER)
-    assert session.initial_input_task is None
+    # No start input is queued (it would keep the terminal starting), so nothing is typed.
+    assert result["data"]["state"] == "ready"
     assert manager[1].adapters[0].writes == []
 
 
@@ -193,20 +192,26 @@ async def test_input_types_text_keys_and_exact_data_against_the_current_screen(
 ) -> None:
     terminal_id = await terminal.start()
     adapter = manager[1].adapters[0]
-    session = terminal.manager.get_session(terminal_id, OWNER)
-    adapter.emit("QUESTION> ")
-    await eventually(lambda: session.renderer.revision > 0)
+
+    def revision() -> int:
+        return terminal.manager.terminal(terminal_id, OWNER).screen_revision
+
+    async def render(output: str) -> None:
+        shown = revision()
+        adapter.emit(output)
+        await eventually(lambda: revision() > shown)
 
     async def send(**fields: Any) -> dict[str, Any]:
         return await terminal({"action": "input", "terminal_id": terminal_id, **fields})
 
+    await render("QUESTION> ")
     stale = await send(text="answer", expected_screen_revision=0)
     assert stale == tool_failure(
         "stale_screen",
         "Terminal screen changed; inspect status before sending this input",
         retryable=True,
     )
-    typed = await send(text="answer", expected_screen_revision=session.renderer.revision)
+    typed = await send(text="answer", expected_screen_revision=revision())
     assert (typed["data"]["key"], typed["data"]["delivery"]) == (
         None,
         "automatic_terminal_activity",
@@ -232,13 +237,11 @@ async def test_input_types_text_keys_and_exact_data_against_the_current_screen(
     assert adapter.writes == ["answer", "submit", "\r", "\x1b[24~", raw]
 
     multiline = "first\n  second"
-    adapter.emit("\x1b[?2004h")
-    await eventually(lambda: session.renderer.bracketed_paste_enabled)
+    await render("\x1b[?2004h")
     pasted = await send(text=multiline)
     assert adapter.writes[-1] == f"\x1b[200~{multiline}\x1b[201~"
     assert pasted["data"]["bracketed_paste"] is True
-    adapter.emit("\x1b[?2004l")
-    await eventually(lambda: not session.renderer.bracketed_paste_enabled)
+    await render("\x1b[?2004l")
     typed_lines = await send(text=multiline)
     assert adapter.writes[-1] == multiline
     assert typed_lines["data"]["bracketed_paste"] is False
@@ -655,9 +658,8 @@ async def test_follow_up_results_show_the_screen_without_repeating_launch_facts(
         "delivery",
     ]
     terminal_id = started["data"]["terminal_id"]
-    session = terminal.manager.get_session(terminal_id, OWNER)
     manager[1].adapters[0].emit("".join(f"line-{index}\r\n" for index in range(30)) + "ready> ")
-    await eventually(lambda: session.renderer.revision > 0)
+    await eventually(lambda: terminal.manager.terminal(terminal_id, OWNER).screen_revision > 0)
 
     wait: JsonObject = {"action": "wait", "terminal_id": terminal_id, "timeout_ms": 2000}
     waited = await terminal(wait)

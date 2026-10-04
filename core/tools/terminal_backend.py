@@ -1,12 +1,10 @@
-"""Private PTY/ConPTY transport, VT rendering, and process-tree control."""
+"""Private PTY/ConPTY transport, Windows command lines, and process-tree control."""
 
 from __future__ import annotations
 
 import codecs
 import contextlib
-import copy
 import errno
-import hashlib
 import os
 import re
 import select
@@ -17,74 +15,22 @@ import subprocess
 import sys
 import threading
 import weakref
-from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, override
-
-import pyte
+from typing import Any, Protocol
 
 from core.utils.processes import guarded_process_launch, kill_process_tree
 
-_ALTERNATE_SCREEN_MODES = frozenset({47, 1047, 1049})
-_BRACKETED_PASTE_MODE = 2004
 _WINDOWS_INTERACTIVE_SHELLS = ("pwsh.exe", "powershell.exe")
-TERMINAL_TITLE_MAX_CHARS = 160
 TERMINAL_READ_TIMEOUT_SECONDS = 0.2
 # A POSIX child's exit status follows the end of its output by moments; closing
 # the PTY gives its session this long to end on the hangup before it is killed.
 _EXIT_STATUS_GRACE_SECONDS = 0.5
 _CLOSE_GRACE_SECONDS = 0.1
-_APPLICATION_CURSOR_MODE = 1
-_PRIVATE_MODE_SEQUENCE_MIN = 1000
-# pyte ignores the ``<``/``>``/``=`` CSI prefixes and dispatches the payload
-# as a normal sequence. A TUI enabling xterm keyboard modes (for example
-# ``CSI > 4 ; 1 m`` for modifyOtherKeys) is then misread as SGR
-# "underscore + bold", and every blank cell written afterwards inherits
-# those attributes — the viewer draws white underlines under blank rows.
-# pyte cannot act on any of these keyboard/DA sequences, so they are
-# dropped before they reach it.
-_XT_KEYBOARD_MODE_COMPLETE = re.compile(r"\x1b\[[<>=][0-9;:]*[A-Za-z]")
-_XT_KEYBOARD_MODE_PARTIAL = re.compile(r"\x1b(?:\[[0-?]*[ -/]*)?$")
-_TERMINAL_QUERY = re.compile(r"\x1b\[([?>]?)([0-9;]*)(\$?)([cntp])")
-_SCREEN_STATE_FIELDS = (
-    "savepoints",
-    "columns",
-    "lines",
-    "buffer",
-    "dirty",
-    "margins",
-    "mode",
-    "title",
-    "icon_name",
-    "charset",
-    "g0_charset",
-    "g1_charset",
-    "tabstops",
-    "cursor",
-    "saved_columns",
-    "_private_modes",
-    "bracketed_paste_enabled",
-)
-_ANSI_COLOR_CODES = {
-    "black": 30,
-    "red": 31,
-    "green": 32,
-    "brown": 33,
-    "blue": 34,
-    "magenta": 35,
-    "cyan": 36,
-    "white": 37,
-    "brightblack": 90,
-    "brightred": 91,
-    "brightgreen": 92,
-    "brightbrown": 93,
-    "brightblue": 94,
-    "brightmagenta": 95,
-    "brightcyan": 96,
-    "brightwhite": 97,
-}
+# cmd.exe metacharacters, escaped with ^ in a typed command line.
+_CMD_META = re.compile(r'([()%!^"<>&|])')
+# Characters cmd acts on outside quotes when it parses a line again.
+_CMD_ACTIVE = re.compile(r"[()^<>&|]")
 
 
 class TerminalAdapter(Protocol):
@@ -108,9 +54,24 @@ class TerminalAdapter(Protocol):
     def close(self) -> None: ...
 
 
-TerminalAdapterFactory = Callable[
-    [Sequence[str], Path, Mapping[str, str], int, int], TerminalAdapter
-]
+class TerminalAdapterFactory(Protocol):
+    """Start a terminal process.
+
+    *command_line* is, on Windows, the exact command line after the
+    executable, for a program that does not parse its arguments with the C
+    runtime rules (cmd.exe); *argv* then names only the executable.
+    """
+
+    def __call__(
+        self,
+        argv: Sequence[str],
+        cwd: Path,
+        env: Mapping[str, str],
+        rows: int,
+        columns: int,
+        *,
+        command_line: str | None = None,
+    ) -> TerminalAdapter: ...
 
 
 def default_terminal_argv(env: Mapping[str, str] | None = None) -> list[str]:
@@ -155,348 +116,6 @@ def _posix_login_shell() -> str | None:
     except ImportError, KeyError, OSError:
         return None
     return str(shell) if shell else None
-
-
-class _TerminalScreen(pyte.Screen):
-    def __init__(self, columns: int, lines: int, on_scroll: Callable[[str], None]) -> None:
-        self._on_scroll = on_scroll
-        self._primary_state: dict[str, Any] | None = None
-        self._alternate_modes: set[int] = set()
-        self._private_modes: set[int] = set()
-        self.alternate_exit_revision = 0
-        self.bracketed_paste_enabled = False
-        super().__init__(columns, lines)
-
-    @property
-    def alternate_active(self) -> bool:
-        """Whether the rendered screen is the alternate screen buffer."""
-        return self._primary_state is not None
-
-    @property
-    def private_modes(self) -> frozenset[int]:
-        """Private modes currently enabled by the foreground program."""
-        return frozenset(self._private_modes)
-
-    @override
-    def index(self) -> None:
-        top, bottom = self.margins or (0, self.lines - 1)
-        if self.cursor.y == bottom and self._primary_state is None:
-            self._on_scroll(_render_buffer_line(self.buffer[top], self.columns))
-        super().index()
-
-    @override
-    def set_mode(self, *modes: int, **kwargs: Any) -> None:
-        private = kwargs.get("private")
-        alternate = _ALTERNATE_SCREEN_MODES.intersection(modes) if private else set()
-        if alternate and self._primary_state is None:
-            self._primary_state = self._capture_state()
-            super().reset()
-        if private:
-            self._private_modes.update(modes)
-            if _BRACKETED_PASTE_MODE in modes:
-                self.bracketed_paste_enabled = True
-        self._alternate_modes.update(alternate)
-        super().set_mode(*modes, **kwargs)
-
-    @override
-    def reset_mode(self, *modes: int, **kwargs: Any) -> None:
-        private = kwargs.get("private")
-        alternate = _ALTERNATE_SCREEN_MODES.intersection(modes) if private else set()
-        if private:
-            self._private_modes.difference_update(modes)
-            if _BRACKETED_PASTE_MODE in modes:
-                self.bracketed_paste_enabled = False
-        self._alternate_modes.difference_update(alternate)
-        if alternate and not self._alternate_modes and self._primary_state is not None:
-            primary_state = self._primary_state
-            self._primary_state = None
-            self._restore_state(primary_state)
-            self.alternate_exit_revision += 1
-            remaining = tuple(mode for mode in modes if mode not in alternate)
-            if remaining:
-                super().reset_mode(*remaining, **kwargs)
-            return
-        super().reset_mode(*modes, **kwargs)
-
-    @override
-    def resize(self, lines: int | None = None, columns: int | None = None) -> None:
-        if self._primary_state is None:
-            super().resize(lines=lines, columns=columns)
-            return
-        alternate_state = self._capture_state()
-        primary_state = self._primary_state
-        self._restore_state(primary_state)
-        super().resize(lines=lines, columns=columns)
-        self._primary_state = self._capture_state()
-        self._restore_state(alternate_state)
-        super().resize(lines=lines, columns=columns)
-
-    def _capture_state(self) -> dict[str, Any]:
-        return {
-            field_name: copy.deepcopy(getattr(self, field_name))
-            for field_name in _SCREEN_STATE_FIELDS
-        }
-
-    def _restore_state(self, state: Mapping[str, Any]) -> None:
-        for field_name in _SCREEN_STATE_FIELDS:
-            setattr(self, field_name, copy.deepcopy(state[field_name]))
-
-
-@dataclass(frozen=True, slots=True)
-class _ScrollbackLine:
-    sequence: int
-    text: str
-
-
-class TerminalRenderer:
-    """Bounded rendered screen and monotonically addressed scrollback."""
-
-    def __init__(self, columns: int, rows: int, *, scrollback_lines: int) -> None:
-        self.columns = columns
-        self.rows = rows
-        self.revision = 0
-        self._next_sequence = 1
-        self._scrollback: deque[_ScrollbackLine] = deque(maxlen=scrollback_lines)
-        self._screen = _TerminalScreen(columns, rows, self._capture_scrolled_line)
-        self._stream = pyte.Stream(self._screen)
-        self._held_sequence_prefix = ""
-        self._responses: list[str] = []
-
-    def feed(self, text: str) -> bool:
-        """Render output and report whether it exited an alternate screen."""
-        if not text:
-            return False
-        text = self._held_sequence_prefix + text
-        self._held_sequence_prefix = ""
-        # A keyboard-mode sequence can be split across PTY read chunks; its
-        # incomplete head is held back so the remainder in the next chunk
-        # completes it instead of leaking into the text stream.
-        partial = _XT_KEYBOARD_MODE_PARTIAL.search(text)
-        if partial:
-            self._held_sequence_prefix = partial.group(0)
-            text = text[: partial.start()]
-        if not text:
-            return False
-        alternate_exit_revision = self._screen.alternate_exit_revision
-        offset = 0
-        for match in _TERMINAL_QUERY.finditer(text):
-            self._stream.feed(_XT_KEYBOARD_MODE_COMPLETE.sub("", text[offset : match.start()]))
-            self._respond_to_query(*match.groups())
-            offset = match.end()
-        self._stream.feed(_XT_KEYBOARD_MODE_COMPLETE.sub("", text[offset:]))
-        self.revision += 1
-        return self._screen.alternate_exit_revision != alternate_exit_revision
-
-    def take_responses(self) -> str:
-        """Drain replies computed from the canonical grid, once per PTY read."""
-        responses = "".join(self._responses)
-        self._responses.clear()
-        return responses
-
-    def _respond_to_query(
-        self, prefix: str, parameters: str, intermediate: str, final: str
-    ) -> None:
-        values = parameters.split(";")
-        # Invalid or unsupported reports are silent, as on the underlying VT.
-        if len(values) != 1 or len(values[0]) > 6:
-            return
-        mode = int(values[0] or "0")
-        response = None
-        if final == "n" and not intermediate:
-            if mode == 5 and not prefix:
-                response = "\x1b[0n"
-            elif mode == 6 and prefix in {"", "?"}:
-                cursor = self._screen.cursor
-                row = cursor.y + 1
-                if pyte.modes.DECOM in self._screen.mode and self._screen.margins is not None:
-                    row -= self._screen.margins.top
-                column = min(cursor.x + 1, self.columns)
-                response = f"\x1b[{prefix}{row};{column}R"
-        elif final == "c" and not intermediate and mode == 0:
-            if not prefix:
-                response = "\x1b[?6c"
-            elif prefix == ">":
-                response = "\x1b[>0;0;0c"
-        elif final == "t" and not prefix and not intermediate and mode == 18:
-            response = f"\x1b[8;{self.rows};{self.columns}t"
-        elif final == "p" and intermediate == "$" and prefix in {"", "?"}:
-            tracked = mode << 5 if prefix else mode
-            known = (
-                mode in {1, 6, 7, 25, 47, 1000, 1002, 1003, 1006, 1047, 1049, 2004}
-                if prefix
-                else mode in {4, 20}
-            )
-            enabled = tracked in self._screen.mode
-            status = (1 if enabled else 2) if known else 0
-            response = f"\x1b[{prefix}{mode};{status}$y"
-        if response is not None:
-            self._responses.append(response)
-
-    def resize(self, columns: int, rows: int) -> None:
-        self._screen.resize(lines=rows, columns=columns)
-        self.columns = columns
-        self.rows = rows
-        self.revision += 1
-
-    def screen_text(self) -> str:
-        lines = [line.rstrip() for line in self._screen.display]
-        while lines and not lines[-1]:
-            lines.pop()
-        return "\n".join(lines)
-
-    def screen_tail(self, count: int) -> str:
-        """Return the newest ``count`` non-blank screen rows as plain text."""
-        if count <= 0:
-            return ""
-        lines = [line.rstrip() for line in self._screen.display]
-        while lines and not lines[-1]:
-            lines.pop()
-        return "\n".join(lines[-count:])
-
-    def screen_signature(self) -> str:
-        """Compare visible cells, including selection styles, without cursor blink."""
-        digest = hashlib.sha256()
-        for row in range(self.rows):
-            line = self._screen.buffer[row]
-            cells = [
-                (column, line[column])
-                for column in range(self.columns)
-                if line[column] != self._screen.default_char
-            ]
-            if cells:
-                digest.update(repr((row, cells)).encode("utf-8"))
-        return digest.hexdigest()
-
-    @property
-    def title(self) -> str:
-        """Return one bounded single-line title announced through the VT stream."""
-        return _normalize_terminal_title(self._screen.title or self._screen.icon_name)
-
-    @property
-    def bracketed_paste_enabled(self) -> bool:
-        """Report whether the foreground terminal application enabled bracketed paste."""
-        return self._screen.bracketed_paste_enabled
-
-    def ansi_snapshot(self) -> str:
-        """Serialize bounded scrollback plus the current screen for a late viewer.
-
-        The stream re-emits the tracked terminal modes before the screen text
-        so the receiving xterm lands in the same state as the live terminal:
-        alternate screen (TUI), application cursor keys, mouse reporting, and
-        bracketed paste. Without these a late viewer renders the alternate
-        screen as plain text on the primary screen, and interactive regions
-        (mouse-dependent TUI controls) are dead.
-        """
-        parts = ["\x1b[?25l", "\x1b[0m", "\x1b[2J", "\x1b[H"]
-        if self._screen.alternate_active:
-            parts.append("\x1b[?1049h")
-        for mode in sorted(self._screen.private_modes):
-            if mode in _ALTERNATE_SCREEN_MODES:
-                continue
-            parts.append(f"\x1b[?{mode}h")
-        if _APPLICATION_CURSOR_MODE in self._screen.mode:
-            parts.append("\x1b[?1h")
-        if (
-            self._screen.bracketed_paste_enabled
-            and _BRACKETED_PASTE_MODE not in self._screen.private_modes
-        ):
-            parts.append(f"\x1b[?{_BRACKETED_PASTE_MODE}h")
-        if self._scrollback:
-            parts.append("\r\n".join(line.text for line in self._scrollback))
-            parts.append("\r\n")
-        active_style: tuple[Any, ...] | None = None
-        for row_index in range(self.rows):
-            if row_index:
-                parts.append("\r\n")
-            line = self._screen.buffer[row_index]
-            for column_index in range(self.columns):
-                cell = line[column_index]
-                # pyte stores the second cell of a wide glyph as empty. The
-                # glyph already advances the viewer by two columns; emitting a
-                # space for its continuation would wrap and scroll the snapshot.
-                if not cell.data:
-                    continue
-                style = _cell_style(cell)
-                if style != active_style:
-                    parts.append(_style_sequence(cell))
-                    active_style = style
-                parts.append(cell.data)
-
-        cursor = self._screen.cursor
-        parts.extend(
-            (
-                "\x1b[0m",
-                f"\x1b[{cursor.y + 1};{cursor.x + 1}H",
-                "\x1b[?25l" if cursor.hidden else "\x1b[?25h",
-            )
-        )
-        return "".join(parts)
-
-    def page(self, *, limit: int) -> dict[str, Any]:
-        available = list(self._scrollback)
-        selected = available[-limit:]
-        has_more = bool(selected) and any(
-            line.sequence < selected[0].sequence for line in self._scrollback
-        )
-        oldest_displayed = len(available) - len(selected)
-        return {
-            "text": "\n".join(line.text for line in selected),
-            "line_count": len(selected),
-            "has_more": has_more,
-            "next_start_line": max(0, oldest_displayed - limit) if has_more else None,
-            **self._buffer_metrics(),
-        }
-
-    def page_from(self, start: int, limit: int) -> dict[str, Any]:
-        """Return a forward page of the whole buffer addressed by absolute line.
-
-        Line 0 is the oldest retained scrollback line; the current screen
-        follows it. This gives the Agent one-call paging over the complete
-        retained history (Hermes ``read_terminal`` contract) instead of a
-        signed-cursor chase, and is the cheaper model path for long logs.
-        """
-        all_lines, scrollback_len = self._all_lines()
-        total = len(all_lines)
-        start = max(0, min(start, total))
-        count = max(0, min(limit, total - start))
-        selected = all_lines[start : start + count]
-        end = start + count
-        return {
-            "text": "\n".join(selected),
-            "line_count": count,
-            "total_lines": total,
-            "start_line": start,
-            "end_line": end,
-            "next_start_line": end if end < total else None,
-            **self._buffer_metrics(scrollback_len=scrollback_len),
-        }
-
-    def _buffer_metrics(self, *, scrollback_len: int | None = None) -> dict[str, Any]:
-        """Share absolute line metrics between the two page addressing modes."""
-        if scrollback_len is None:
-            _lines, scrollback_len = self._all_lines()
-        return {
-            "total_lines": len(self._scrollback) + self._screen_rows_trimmed(),
-            "cursor_row": scrollback_len + self._screen.cursor.y,
-            "viewport_rows": self.rows,
-        }
-
-    def _screen_rows_trimmed(self) -> int:
-        return len(self._trimmed_screen_lines())
-
-    def _all_lines(self) -> tuple[list[str], int]:
-        scrollback = [line.text for line in self._scrollback]
-        return scrollback + self._trimmed_screen_lines(), len(scrollback)
-
-    def _trimmed_screen_lines(self) -> list[str]:
-        lines = [line.rstrip() for line in self._screen.display]
-        while lines and not lines[-1]:
-            lines.pop()
-        return lines
-
-    def _capture_scrolled_line(self, text: str) -> None:
-        self._scrollback.append(_ScrollbackLine(self._next_sequence, text))
-        self._next_sequence += 1
 
 
 class _WindowsTerminalAdapter:
@@ -702,18 +321,16 @@ def spawn_terminal_adapter(
     rows: int,
     columns: int,
     *,
+    command_line: str | None = None,
     platform_name: str = os.name,
 ) -> TerminalAdapter:
     if platform_name == "nt":
-        from winpty import PtyProcess
-
-        process = PtyProcess.spawn(
-            _windows_spawn_argv(argv, env),
-            cwd=str(cwd),
-            env=dict(env),
-            dimensions=(rows, columns),
+        executable, arguments = _windows_command(argv, env, command_line)
+        return _WindowsTerminalAdapter(
+            _spawn_windows_process(executable, arguments, cwd, env, rows, columns)
         )
-        return _WindowsTerminalAdapter(process)
+    if command_line is not None:
+        raise ValueError("An exact command line exists only on Windows")
     return _spawn_posix_terminal(argv, cwd, env, rows, columns)
 
 
@@ -727,83 +344,108 @@ def terminate_process_tree(adapter: TerminalAdapter, *, targets: list[Any] | Non
         return
 
 
-def _windows_spawn_argv(argv: Sequence[str], env: Mapping[str, str]) -> list[str]:
-    executable = shutil.which(argv[0], path=env.get("PATH"))
-    resolved = executable or argv[0]
-    prepared = [resolved, *argv[1:]]
-    if Path(resolved).suffix.lower() not in {".bat", ".cmd"}:
-        return prepared
+def windows_command_processor_line(command: str, arguments: Sequence[str]) -> str:
+    """Render a program and its arguments as a cmd.exe command line.
+
+    The executable keeps its quotes for cmd's command lookup; the argument
+    syntax is escaped so cmd hands the native C-runtime command line to the
+    program unchanged. Inside ``cmd /s /c "<line>"`` or ``/k`` the line works
+    as if it were typed at the prompt.
+    """
+    return " ".join(
+        [
+            subprocess.list2cmdline([command]),
+            *(_CMD_META.sub(r"^\1", _command_processor_word(value)) for value in arguments),
+        ]
+    )
+
+
+def _command_processor_word(value: str) -> str:
+    """Return the C runtime quoting of *value*, quoted if cmd could act on it.
+
+    A batch file such as an npm program shim hands ``%*`` to cmd once more,
+    which keeps metacharacters literal only inside quotes; ``list2cmdline``
+    quotes only around whitespace.
+    """
+    word = subprocess.list2cmdline([value])
+    if word.startswith('"') or not _CMD_ACTIVE.search(value):
+        return word
+    # Backslashes before the closing quote are doubled to stay literal.
+    trailing = len(word) - len(word.rstrip("\\"))
+    return f'"{word}{"\\" * trailing}"'
+
+
+def _windows_command(
+    argv: Sequence[str], env: Mapping[str, str], command_line: str | None
+) -> tuple[str, str]:
+    """Return the executable and the command line after it.
+
+    Batch launchers (``.cmd``/``.bat``, such as npm's program shims) run
+    through the command processor, whose own grammar the line follows; other
+    programs get the C runtime quoting of their arguments.
+    """
+    executable = shutil.which(argv[0], path=env.get("PATH")) or argv[0]
+    if command_line is not None:
+        return executable, command_line
+    if Path(executable).suffix.lower() not in {".bat", ".cmd"}:
+        return executable, subprocess.list2cmdline(argv[1:])
     command_processor = env.get("COMSPEC") or os.environ.get("COMSPEC") or "cmd.exe"
-    return [command_processor, "/d", "/s", "/c", subprocess.list2cmdline(prepared)]
-
-
-def _render_buffer_line(line: Any, columns: int) -> str:
-    return "".join(line[column].data for column in range(columns)).rstrip()
-
-
-def _normalize_terminal_title(value: object) -> str:
-    printable = "".join(
-        character if character.isprintable() else " " for character in str(value or "")
-    )
-    return " ".join(printable.split())[:TERMINAL_TITLE_MAX_CHARS]
-
-
-def _cell_style(cell: Any) -> tuple[Any, ...]:
+    line = windows_command_processor_line(executable, argv[1:])
     return (
-        cell.fg,
-        cell.bg,
-        cell.bold,
-        cell.italics,
-        cell.underscore,
-        cell.strikethrough,
-        cell.reverse,
-        cell.blink,
+        shutil.which(command_processor, path=env.get("PATH")) or command_processor,
+        f'/d /s /c "{line}"',
     )
 
 
-def _style_sequence(cell: Any) -> str:
-    codes = [0]
-    codes.extend(_ansi_color(cell.fg, background=False))
-    codes.extend(_ansi_color(cell.bg, background=True))
-    if cell.bold:
-        codes.append(1)
-    if cell.italics:
-        codes.append(3)
-    if cell.underscore:
-        codes.append(4)
-    if cell.blink:
-        codes.append(5)
-    if cell.reverse:
-        codes.append(7)
-    if cell.strikethrough:
-        codes.append(9)
-    return f"\x1b[{';'.join(str(code) for code in codes)}m"
+def _spawn_windows_process(
+    executable: str, arguments: str, cwd: Path, env: Mapping[str, str], rows: int, columns: int
+) -> Any:
+    """Start *executable* with an exact command line behind ConPTY.
+
+    ``PtyProcess.spawn`` would join an argument list with the C runtime rules,
+    which cmd.exe does not use; this is its body with the line kept as given.
+    """
+    from winpty import PTY, PtyProcess
+
+    if not os.path.isfile(executable):
+        raise FileNotFoundError(errno.ENOENT, "No executable program found", executable)
+    _accept_console_interrupts()
+    backend = os.environ.get("PYWINPTY_BACKEND")
+    pty = PTY(columns, rows, backend=int(backend) if backend is not None else None)
+    environment = "\0".join(f"{key}={value}" for key, value in env.items()) + "\0"
+    if arguments:
+        pty.spawn(executable, cwd=str(cwd), env=environment, cmdline=" " + arguments)
+    else:
+        pty.spawn(executable, cwd=str(cwd), env=environment)
+    process = PtyProcess(pty)
+    process._winsize = (rows, columns)
+    process.argv = [executable]
+    process.env = environment
+    process.launch_dir = str(cwd)
+    return process
 
 
-def _ansi_color(value: Any, *, background: bool) -> list[int]:
-    if not isinstance(value, str) or value == "default":
-        return [49 if background else 39]
-    named = _ANSI_COLOR_CODES.get(value)
-    if named is not None:
-        return [named + 10 if background else named]
-    if len(value) == 6:
-        try:
-            red = int(value[0:2], 16)
-            green = int(value[2:4], 16)
-            blue = int(value[4:6], 16)
-        except ValueError:
-            pass
-        else:
-            return [48 if background else 38, 2, red, green, blue]
-    return [49 if background else 39]
+def _accept_console_interrupts() -> None:
+    """Let Terminal programs receive Ctrl+C.
+
+    A process started in a new process group, as the managed Server is,
+    ignores Ctrl+C, and its children inherit that, ConPTY children included:
+    Ctrl+C typed into a Terminal would then not stop a console program. The
+    managed Server's own console is hidden, so it clears the inherited
+    setting for itself and its children; a Server run in the foreground
+    already processes Ctrl+C.
+    """
+    if sys.platform == "win32":
+        import ctypes
+
+        ctypes.WinDLL("kernel32").SetConsoleCtrlHandler(None, False)
 
 
 __all__ = [
     "TerminalAdapter",
     "TerminalAdapterFactory",
-    "TerminalRenderer",
-    "TERMINAL_TITLE_MAX_CHARS",
     "default_terminal_argv",
     "spawn_terminal_adapter",
     "terminate_process_tree",
+    "windows_command_processor_line",
 ]

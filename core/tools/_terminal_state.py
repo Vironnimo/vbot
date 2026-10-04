@@ -1,23 +1,15 @@
-"""Terminal Session values, limits, errors and owned-resource cleanup."""
+"""Terminal Session values, limits and errors."""
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, TextIO
+from typing import Any, Literal
 
 from core.event_stream import ReplayEventStream
-from core.runs import RunExecutionOwner
-from core.storage.temp_files import TemporaryFileLease
-from core.tools.terminal_backend import (
-    TerminalAdapter,
-    TerminalRenderer,
-)
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
@@ -42,7 +34,6 @@ TERMINAL_DELIVERY_TAIL_LINES = 20
 TERMINAL_TEMPORARY_CATEGORY = "terminals"
 TERMINAL_INITIAL_INPUT_QUIET_SECONDS = 0.5
 TERMINAL_INITIAL_INPUT_TIMEOUT_SECONDS = 15.0
-TERMINAL_OPERATOR_READY_TIMEOUT_SECONDS = 10.0
 TERMINAL_ACTIVITY_QUIET_SECONDS = 2.0
 # Output this soon after resizing a quiet terminal is the program redrawing
 # its screen for the new size. Claude Code, Codex and OpenCode finish that
@@ -178,7 +169,7 @@ class TerminalOwner:
     session_id: str
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class TerminalAttention:
     """One program-agnostic Agent-attention boundary for a Terminal Session."""
 
@@ -191,78 +182,40 @@ class TerminalAttention:
     delivered: bool = False
 
 
-@dataclass(slots=True)
-class TerminalSession:
-    """In-memory state for one interactive terminal process."""
+@dataclass(frozen=True, slots=True)
+class TerminalInfo:
+    """Immutable view of one Terminal Session at the moment it was taken."""
 
     terminal_id: str
-    # Immutable process provenance. None means the local operator started it.
+    # Process provenance. None means the local operator started it.
     owner: TerminalOwner | None
-    # Agent-started terminals retain their lifecycle scope independently of attachment.
     lifecycle_owner: TerminalOwner | None
-    # The one vBot Session currently authorized for Tool access and activity delivery.
     attachment: TerminalOwner | None
-    adapter: TerminalAdapter
-    renderer: TerminalRenderer
+    state: TerminalState
     command: str
     arguments: tuple[str, ...]
+    launch_command: str | None
+    launch_arguments: tuple[str, ...]
+    name: str | None
+    group_id: str | None
     cwd: Path
-    state: TerminalState
+    pid: int
     started_at: datetime
-    origin_run_id: str | None
-    activity_origin_run_id: str | None
+    finished_at: datetime | None
+    exit_code: int | None
+    title: str
+    columns: int
+    rows: int
+    alternate_screen: bool
+    screen_revision: int
+    attention: TerminalAttention | None
+    attention_revision: int
+    acknowledged_attention_revision: int
     log_path: Path | None
-    log_handle: TextIO | None
-    log_lease: TemporaryFileLease | None
-    execution_owner: RunExecutionOwner | None = None
-    activity_execution_owner: RunExecutionOwner | None = None
-    launch_command: str | None = None
-    launch_arguments: tuple[str, ...] = ()
-    name: str | None = None
-    # Explicit user/agent group chosen at spawn; None means the Terminal
-    # belongs to its automatic group (per-Agent or shared manual).
-    group_id: str | None = None
-    exit_code: int | None = None
-    finished_at: datetime | None = None
-    attention_revision: int = 0
-    acknowledged_attention_revision: int = 0
-    attention: TerminalAttention | None = None
-    activity_generation: int = 0
-    notify_on_settle: bool = False
-    settled_delivery_enabled: bool = False
-    # Agent-started sessions without initial text suppress settle deliveries
-    # until the first explicit input or attach: the startup screen (banner,
-    # prompt, TUI boot) is observed by the starting Agent and visible to the
-    # operator, so its settle waves must not wake the session. Real work
-    # after the suppression clears delivers normally.
-    suppress_until_activity: bool = False
-    # Set when a quiet terminal is resized: output before this monotonic time
-    # redraws known content for the new size and is not activity. Later
-    # output, or input, ends the repaint and makes the cycle activity again.
-    repaint_until: float = 0.0
-    # Visible-cell signature of the rendered screen at the moment the last
-    # output_settled delivery happened (None until the first delivery).
-    # A quiet boundary whose screen is unchanged (status refreshes, cursor
-    # frames, repaint echoes) must not wake the agent again.
-    settled_screen_signature: str | None = None
-    last_resize_screen_revision: int = 0
-    observed_screen: tuple[int, int, int] | None = None
-    snapshot_on_settle: bool = False
-    suppress_exit_attention: bool = False
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
-    output_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
-    attention_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
-    termination_pending: bool = False
-    termination_targets: list[Any] = field(default_factory=list, repr=False)
-    reader_task: asyncio.Task[None] | None = field(default=None, repr=False)
-    initial_input_task: asyncio.Task[None] | None = field(default=None, repr=False)
-    operator_command_task: asyncio.Task[None] | None = field(default=None, repr=False)
-    settle_task: asyncio.Task[None] | None = field(default=None, repr=False)
-    notification_task: asyncio.Task[None] | None = field(default=None, repr=False)
-    stream_sequence: int = 0
-    stream: ReplayEventStream[TerminalStreamEvent] = field(
-        default_factory=_new_terminal_stream, repr=False
-    )
+
+    @property
+    def finished(self) -> bool:
+        return self.state in {"exited", "error"}
 
 
 def _attention_data(attention: TerminalAttention | None) -> dict[str, Any] | None:
@@ -294,18 +247,3 @@ def _validate_dimensions(columns: int, rows: int) -> None:
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
-
-
-def _finish_files(session: TerminalSession) -> None:
-    if session.log_handle is not None:
-        with contextlib.suppress(OSError):
-            session.log_handle.close()
-        session.log_handle = None
-    if session.log_lease is not None:
-        session.log_lease.finish()
-        session.log_lease = None
-
-
-def _require_live(session: TerminalSession) -> None:
-    if session.finished_at is not None or session.state in {"exited", "error"}:
-        raise TerminalClosedError("Terminal Session is no longer running")
