@@ -755,6 +755,7 @@ class StubModelEntry:
     capabilities: Any = field(default_factory=lambda: SimpleNamespace(input_modalities=()))
     recommended_temperature: float | None = None
     recommended_top_p: float | None = None
+    family: str = ""
 
     def context_window_for(self, connection_id: str) -> int | None:
         return self.connection_context_windows.get(connection_id, self.context_window)
@@ -772,8 +773,10 @@ class StubModels:
         recommended_temperatures: dict[tuple[str, str], float] | None = None,
         recommended_top_ps: dict[tuple[str, str], float] | None = None,
         connection_context_windows: dict[tuple[str, str], dict[str, int]] | None = None,
+        families: dict[tuple[str, str], str] | None = None,
     ) -> None:
         modality_map = input_modalities or {}
+        family_map = families or {}
         temp_map = recommended_temperatures or {}
         top_p_map = recommended_top_ps or {}
         connection_window_map = connection_context_windows or {}
@@ -786,6 +789,7 @@ class StubModels:
                 ),
                 recommended_temperature=temp_map.get((provider_id, model_id)),
                 recommended_top_p=top_p_map.get((provider_id, model_id)),
+                family=family_map.get((provider_id, model_id), ""),
             )
             for (provider_id, model_id), context_window in entries.items()
         }

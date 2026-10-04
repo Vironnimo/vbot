@@ -12,7 +12,11 @@ from typing import Any
 from core.attachments import AttachmentError, sniff_media_type
 from core.model_tasks import SpeechError
 from core.tools._path_suggestions import missing_file_message
-from core.tools._read_arguments import READ_HIDDEN_PARAMETERS, normalize_read_arguments
+from core.tools._read_arguments import (
+    READ_HIDDEN_PARAMETERS,
+    change_command_refusal,
+    normalize_read_arguments,
+)
 from core.tools._read_text import (
     DEFAULT_LINE_LIMIT,
     MAX_FILE_BYTES,
@@ -26,6 +30,7 @@ from core.tools._read_text import (
 )
 from core.tools.arguments import optional_int, split_text_lines
 from core.tools.contracts import ToolContractError
+from core.tools.edit import offered_edit_tool
 from core.tools.file_state import FileReadState, os_error_reason
 from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.read_extract import (
@@ -297,6 +302,11 @@ def make_read_handler(
         return tool_success({"content": content})
 
     async def read_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        if "command" in arguments:
+            return tool_failure(
+                "invalid_arguments",
+                change_command_refusal(arguments["command"], offered_edit_tool(context)),
+            )
         prepared = await run_tool_worker(prepare_read, context, arguments)
         if isinstance(prepared, _PreparedAudio):
             result = await _read_audio(
@@ -537,7 +547,8 @@ def register_read_tool(
         display=ToolDisplay(parts_builder=_display_parts, fact_builder=_read_line_range_facts),
         parallel_safe=True,
         open_input_schema=True,
-        unadvertised_parameters=READ_HIDDEN_PARAMETERS,
+        # A command that changes a file reaches the handler, which refuses it.
+        unadvertised_parameters={**READ_HIDDEN_PARAMETERS, "command": {}},
         argument_normalizer=normalize_read_arguments,
     )
 

@@ -206,6 +206,11 @@ USUAL_POINTER = "For reading, searching and editing files use read, search_files
         ),
         (("search_files",), 0, "For searching files use search_files. "),
         (("read", "apply_patch"), 0, "For reading and editing files use read and apply_patch. "),
+        (
+            ("read", "search_files", "edit", "write"),
+            0,
+            "For reading, searching and editing files use read, search_files and edit. ",
+        ),
         (("web_fetch",), 0, "For web pages use web_fetch. "),
         ((), 0, ""),
         (("read", "web_fetch"), 1, "For reading files use read; for web pages use web_fetch. "),

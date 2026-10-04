@@ -189,8 +189,12 @@ def edit_tool_siblings(names: Collection[str]) -> tuple[str, ...]:
 
 
 def offered_edit_tool(context: ToolContext) -> str | None:
-    """Return the Tool the Agent sees for changing part of a file, if any."""
-    for name in (EDIT_TOOL_NAME, APPLY_PATCH_TOOL_NAME):
+    """Return the Tool the Agent sees for changing part of a file, if any.
+
+    Without a Model request (every callable Tool counts as shown) that is
+    ``apply_patch``, the one the user configures.
+    """
+    for name in (APPLY_PATCH_TOOL_NAME, EDIT_TOOL_NAME):
         if context.offers(name):
             return name
     return None

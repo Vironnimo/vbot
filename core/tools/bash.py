@@ -101,13 +101,19 @@ def _shell_syntax_notes() -> str:
     return " Commands run in bash on this host."
 
 
-# Dedicated Tools the description points to, by what they do better than a shell.
-# Registry names of the Files and Web families; literal to avoid importing them.
-_FILE_TOOL_USES = (("reading", "read"), ("searching", "search_files"), ("editing", "apply_patch"))
+# Dedicated Tools the description points to, by what they do better than a shell,
+# each use naming the first of its Tools that is offered. A route offers one file
+# edit dialect: apply_patch, or edit with write. Registry names of the Files and
+# Web families; literal to avoid importing them.
+_FILE_TOOL_USES = (
+    ("reading", ("read",)),
+    ("searching", ("search_files",)),
+    ("editing", ("apply_patch", "edit")),
+)
 _WEB_PAGE_TOOL = "web_fetch"
 # Offered with the shell in practice; the registered description names these,
 # and each request's projection names the ones that Agent is actually offered.
-_USUAL_DEDICATED_TOOLS = frozenset(name for _use, name in _FILE_TOOL_USES)
+_USUAL_DEDICATED_TOOLS = frozenset(names[0] for _use, names in _FILE_TOOL_USES)
 
 
 def _joined(words: Sequence[str]) -> str:
@@ -116,7 +122,11 @@ def _joined(words: Sequence[str]) -> str:
 
 def _dedicated_tools_sentence(offered: frozenset[str]) -> str:
     """One sentence naming the offered Tools for file and web work, or nothing."""
-    uses = [(use, name) for use, name in _FILE_TOOL_USES if name in offered]
+    uses = [
+        (use, name)
+        for use, names in _FILE_TOOL_USES
+        if (name := next((name for name in names if name in offered), None)) is not None
+    ]
     clauses = []
     if uses:
         clauses.append(

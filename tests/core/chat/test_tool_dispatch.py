@@ -13,10 +13,13 @@ from core.chat.messages import ChatMessage, JsonObject
 from core.runs import TOOL_CALL_RESULT_EVENT, TOOL_CALL_STARTED_EVENT, RunKind
 from core.skills import SkillRegistry
 from core.tools import (
+    FileReadState,
     ToolContext,
     ToolDisplay,
     ToolDisplayField,
     ToolRegistry,
+    register_apply_patch_tool,
+    register_edit_tools,
     tool_failure,
     tool_success,
 )
@@ -221,6 +224,51 @@ async def test_session_tool_grant_precedes_agent_and_run_dispatch_gates(tmp_path
     assert await dispatch(session_tool_grants=("inbox",)) == tool_success({"ran": True})
     restricted = await dispatch(session_tool_grants=("inbox",), tool_restriction=("read",))
     assert restricted["error"]["code"] == "tool_not_allowed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("allowed_tools", "offered", "restriction", "runs"),
+    [
+        pytest.param(None, ("edit", "write"), None, True, id="route-offered-edit"),
+        pytest.param(None, ("apply_patch",), None, True, id="route-offered-apply-patch"),
+        pytest.param(None, ("edit", "write"), ("apply_patch",), True, id="restriction-names-one"),
+        pytest.param(None, ("edit", "write"), ("read",), False, id="restriction-names-none"),
+        pytest.param(["read"], ("read",), None, False, id="apply-patch-off"),
+    ],
+)
+async def test_file_edit_tools_share_one_permission_whichever_the_route_offered(
+    tmp_path: Path,
+    allowed_tools: list[str] | None,
+    offered: tuple[str, ...],
+    restriction: tuple[str, ...] | None,
+    runs: bool,
+) -> None:
+    state = FileReadState()
+    tools = ToolRegistry()
+    register_apply_patch_tool(tools, file_state=state)
+    register_edit_tools(tools, file_state=state)
+    harness = ToolDispatchHarness(tmp_path, tools, allowed_tools=allowed_tools)
+
+    dispatched = await harness.dispatch(
+        [
+            call("apply_patch", patch="*** Begin Patch\n*** Add File: a.txt\n+a\n*** End Patch"),
+            call("write", path="b.txt", content="b\n"),
+            call("edit", path="c.txt", edits=[{"old_string": "", "new_string": "c\n"}]),
+        ],
+        base_allowed_tools=offered,
+        tool_restriction=restriction,
+    )
+
+    # Each call runs as the Tool it named, under the apply_patch permission.
+    results = dispatched.results
+    assert [result["ok"] for result in results] == [runs] * 3
+    if not runs:
+        assert {result["error"]["code"] for result in results} == {"tool_not_allowed"}
+    workspace = tmp_path / "workspace"
+    assert sorted(path.name for path in workspace.iterdir()) == (
+        ["a.txt", "b.txt", "c.txt"] if runs else []
+    )
 
 
 @pytest.mark.asyncio

@@ -109,6 +109,30 @@ def _model_input_modalities_for_target(
     return frozenset(str(modality) for modality in modalities)
 
 
+def _model_family(dependencies: ModelResolutionDependencies, agent: Any) -> str:
+    """Return the agent model's family, empty when the model is unknown."""
+    try:
+        provider_id, model_id = _split_agent_model(agent.model)
+    except ChatError:
+        return ""
+    return _model_family_for_target(dependencies, provider_id, model_id)
+
+
+def _model_family_for_target(
+    dependencies: ModelResolutionDependencies, provider_id: str, model_id: str
+) -> str:
+    """Return the family of one resolved Provider/Model target, empty when unknown.
+
+    An unknown Model is already logged by the input modality lookup of the same target.
+    """
+    try:
+        model = dependencies.models.get(provider_id, model_id)
+    except AttributeError, ChatError, KeyError:
+        return ""
+    family = getattr(model, "family", "")
+    return family if isinstance(family, str) else ""
+
+
 def _log_unresolved_modalities(model_ref: str, error: Exception) -> None:
     if _MODALITY_CONDITIONS.started(model_ref, type(error).__name__):
         _LOGGER.warning(

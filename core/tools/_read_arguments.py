@@ -144,8 +144,16 @@ def _repair_contract() -> ToolContract:
 
 
 def normalize_read_arguments(arguments: Any) -> Any:
-    """Return read arguments with other harnesses' spellings translated."""
+    """Return read arguments with other harnesses' spellings translated.
+
+    A call that asks read to change a file (``command`` other than ``view``) comes
+    back as its ``command`` and ``path`` alone; the handler refuses it naming the
+    Tool the Agent changes files with (``change_command_refusal``).
+    """
     if isinstance(arguments, dict):
+        command = _change_command(arguments)
+        if command is not None:
+            return command
         arguments = _one_file(_without_remarks(arguments))
     normalized = normalize_call_arguments(
         _repair_contract(),
@@ -163,17 +171,43 @@ def _without_remarks(arguments: dict[str, Any]) -> dict[str, Any]:
     result = {key: value for key, value in arguments.items() if spelling(key) not in _REMARKS}
     for key, value in arguments.items():
         name = spelling(key)
-        if name == "includesummaryofotherlines" and value is False:
-            del result[key]
-        elif name == "command":
-            if not isinstance(value, str) or spelling(value) != "view":
-                raise ValueError(
-                    f"read has no command {_literal(value)}: it shows the file or lists the "
-                    "directory given as path. To change a file, call "
-                    f"{model_tool_name('apply_patch')}."
-                )
+        if name == "includesummaryofotherlines" and value is False or name == "command":
             del result[key]
     return result
+
+
+def _change_command(arguments: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a call whose ``command`` asks to change a file as that command and its path."""
+    for key, value in arguments.items():
+        if spelling(key) == "command" and not (
+            isinstance(value, str) and spelling(value) == "view"
+        ):
+            call = {"command": value}
+            path = next(
+                (
+                    item
+                    for name, item in arguments.items()
+                    if isinstance(item, str)
+                    and item
+                    and _FIELD_ALIASES.get(name, spelling(name)) == "path"
+                ),
+                None,
+            )
+            if path is not None:
+                call["path"] = path
+            return call
+    return None
+
+
+def change_command_refusal(command: Any, edit_tool: str | None) -> str:
+    """Refuse a read ``command`` that changes a file, naming ``edit_tool`` when there is one."""
+    message = (
+        f"read has no command {_literal(command)}: it shows the file or lists the directory "
+        "given as path."
+    )
+    if edit_tool is not None:
+        message += f" To change a file, call {model_tool_name(edit_tool)}."
+    return message
 
 
 def _one_file(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -401,4 +435,4 @@ def _literal(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-__all__ = ["READ_HIDDEN_PARAMETERS", "normalize_read_arguments"]
+__all__ = ["READ_HIDDEN_PARAMETERS", "change_command_refusal", "normalize_read_arguments"]

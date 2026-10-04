@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -323,11 +324,6 @@ async def test_notes_and_one_file_lists_read_that_file(project: Path, arguments:
             {"path": "src/code.py", "paths": ["src/app.txt"]},
             "Conflicting values for path; provide one intended value.",
         ),
-        (
-            {"command": "str_replace", "path": "src/app.txt", "old_str": "a", "new_str": "b"},
-            'read has no command "str_replace": it shows the file or lists the directory '
-            "given as path. To change a file, call apply_patch.",
-        ),
         # Two different paths are a conflict, not a choice.
         (
             {"path": "src/app.txt", "file_path": "src/code.py"},
@@ -350,6 +346,31 @@ async def test_several_files_or_other_commands_fail_with_the_calls_to_send(
     project: Path, arguments: dict, message: str
 ) -> None:
     assert message in await rejected(project, arguments)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("offered", "advice"),
+    [
+        (None, " To change a file, call apply_patch."),
+        (("read", "apply_patch"), " To change a file, call apply_patch."),
+        (("read", "edit", "write"), " To change a file, call edit."),
+        (("read",), ""),
+    ],
+)
+async def test_a_command_that_changes_a_file_names_the_offered_edit_tool(
+    project: Path, offered: tuple[str, ...] | None, advice: str
+) -> None:
+    registry = read_registry()
+    context = replace(make_context(project), offered_tools=offered)
+    arguments = {"command": "str_replace", "path": "src/app.txt", "old_str": "a", "new_str": "b"}
+
+    result = await registry.dispatch(context, arguments)
+
+    assert error(result) == (
+        'read has no command "str_replace": it shows the file or lists the directory given as '
+        f"path.{advice}"
+    )
 
 
 @pytest.mark.asyncio

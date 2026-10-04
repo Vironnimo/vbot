@@ -18,11 +18,14 @@ from core.tools import (
     BASH_TOOL_DESCRIPTION,
     BASH_TOOL_NAME,
     BASH_TOOL_PARAMETERS,
+    FileReadState,
     ToolAccess,
     ToolContext,
     ToolRegistry,
     model_names,
     model_tool_name,
+    register_apply_patch_tool,
+    register_edit_tools,
     tool_success,
 )
 from tests.core.chat.chat_loop_support import (
@@ -632,3 +635,86 @@ async def test_tool_restriction_denies_dispatch_without_changing_offered_definit
     assert restricted["messages"][0]["content"] == unrestricted["messages"][0]["content"]
     assert prompt_tool_names["restricted"] == prompt_tool_names["unrestricted"]
     assert [set(names) for names in prompt_tool_names["restricted"]] == [_offered(unrestricted)]
+
+
+EDIT_TOOLS = {"apply_patch", "edit", "write"}
+
+
+def _file_edit_runtime(tmp_path: Path, family: str, responses: list[JsonObject]) -> Any:
+    state = FileReadState()
+    tools = ToolRegistry()
+    register_apply_patch_tool(tools, file_state=state)
+    register_edit_tools(tools, file_state=state)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(exist_ok=True)
+    return tool_runtime(
+        tmp_path,
+        tools,
+        responses,
+        model="provider/route-model",
+        workspace=workspace,
+        models=StubModels(
+            {("provider", "route-model"): 128_000}, families={("provider", "route-model"): family}
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("family", "offered"),
+    [
+        ("gpt", {"apply_patch"}),
+        ("o-mini", {"apply_patch"}),
+        ("claude-sonnet", {"edit", "write"}),
+        ("gpt-oss", {"edit", "write"}),
+        ("", {"edit", "write"}),
+    ],
+)
+async def test_the_model_family_decides_which_file_edit_tools_are_offered(
+    tmp_path: Path, family: str, offered: set[str]
+) -> None:
+    runtime = _file_edit_runtime(tmp_path, family, [final("done")])
+    loop = build_chat_loop(runtime)
+
+    preview = await loop.preview_tool_definitions(runtime.agents.get("coder"))
+    await loop.send("coder", "Change a file", session_id="s1")
+
+    assert {tool["name"] for tool in preview} & EDIT_TOOLS == offered
+    assert _offered(runtime.adapter.requests[0]) & EDIT_TOOLS == offered
+
+
+@pytest.mark.asyncio
+async def test_a_model_change_keeps_the_file_edit_tools_of_the_prompt_epoch(
+    tmp_path: Path,
+) -> None:
+    runtime = _file_edit_runtime(tmp_path, "claude-sonnet", [final("first")])
+    await build_chat_loop(runtime).send("coder", "First", session_id="s1")
+    pinned = runtime.adapter.requests[0]["kwargs"]["tools"]
+
+    # The Session moves to a GPT Model; the epoch keeps edit and write.
+    runtime.models = StubModels(
+        {("provider", "route-model"): 128_000}, families={("provider", "route-model"): "gpt"}
+    )
+    runtime.adapter = StubAdapter(
+        [
+            tool_turn(
+                (
+                    "call_patch",
+                    "apply_patch",
+                    {"patch": "*** Begin Patch\n*** Add File: a.txt\n+a\n*** End Patch"},
+                ),
+                ("call_write", "write", {"path": "b.txt", "content": "b\n"}),
+            ),
+            final("second"),
+        ]
+    )
+    await build_chat_loop(runtime).send("coder", "Second", session_id="s1")
+
+    assert {tool["name"] for tool in pinned} & EDIT_TOOLS == {"edit", "write"}
+    assert [request["kwargs"]["tools"] for request in runtime.adapter.requests] == [pinned] * 2
+    assert _announced(runtime, "s1") == []
+    # A call to apply_patch, which this epoch never offered, runs as apply_patch.
+    messages = history(runtime, "s1")
+    assert _call_names(messages) == ["apply_patch", "write"]
+    assert [result["ok"] for result in tool_results(messages)] == [True, True]
+    assert (tmp_path / "workspace" / "a.txt").read_bytes() == b"a\n"

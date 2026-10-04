@@ -217,7 +217,7 @@ class AgenticProgression:
                 if tool_key != evaluated_tool_key:
                     evaluated_tool_key = tool_key
                     tool_catalog = await self._requests.live_tool_catalog(
-                        context, known=tool_epoch.allowed_names
+                        context, known=tool_epoch.allowed_names, told=tool_epoch.known_names
                     )
             boundary_notes: list[ChatMessage] = []
             async with self._dependencies.sessions.write_lock(session_address):
