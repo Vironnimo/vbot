@@ -31,8 +31,15 @@ for Windows) still runs itself.
 
 Exit status. ``pwsh -Command`` exits with 1 whenever the last statement failed,
 so a native program's own exit code is lost. A closing statement at the end of
-the command's last block exits with that code instead, as ``bash -c`` does, and
-otherwise with 0 or 1 by the last statement's success.
+the command's last block records that code instead, as ``bash -c`` reports it,
+and otherwise 0 or 1 by the last statement's success.
+
+Formatted output. Objects without a fixed-width view, such as Select-Object
+results or Get-Location, are held by the table formatter until its pipeline
+ends, and an ``exit`` before that discards them: ``Get-ChildItem | Select-Object
+Name; exit 0`` prints nothing. The command's output is therefore piped through
+Out-Default, and the wrapper exits with the recorded code only after that
+pipeline has ended. Native programs keep the terminal as their output.
 
 Recorded errors. If the last statement succeeded after PowerShell recorded an
 error, the exit status stays 0 but a bounded note is printed to the error
@@ -67,14 +74,15 @@ POWERSHELL_ERROR_NOTE = (
     "command caught. Check the error output and verify any changed files before relying "
     "on this result."
 )
-# Enter the success branch before any bookkeeping changes $? or $LASTEXITCODE.
+# Read $? before any bookkeeping changes it or $LASTEXITCODE. The statement only
+# records the code; the wrapper exits after the command's output is formatted.
 # Explicit exit statements bypass this epilogue, preserving the caller's control
-# flow. Clearing $Error also suppresses it; no note is not proof of no errors.
+# flow. Clearing $Error suppresses the error note; no note is not proof of no errors.
 # Get-Variable reads LASTEXITCODE even when it was never set under Set-StrictMode.
 EXIT_STATUS_STATEMENT = (
-    "if ($?) { & $__vbotReportErrors; exit 0 }; "
-    "$__vbotExitCode = Get-Variable LASTEXITCODE -ValueOnly -ErrorAction Ignore; "
-    "if ($__vbotExitCode) { exit $__vbotExitCode }; exit 1"
+    "$global:__vbotExitCode = if ($?) { 0 } else { "
+    "$__vbotLastCode = Get-Variable LASTEXITCODE -ValueOnly -ErrorAction Ignore; "
+    "if ($__vbotLastCode) { $__vbotLastCode } else { 1 } }"
 )
 
 UNIX_LINE_FILTERS_STATEMENT = "".join(
@@ -199,7 +207,10 @@ $__vbotCommand = if ($__vbotEnd -and -not $__vbotEnd.Unnamed) {
 } else {
     "$__vbotCommand`n`n$__vbotExitStatus"
 }
-. __vbotInvoke
+$global:__vbotExitCode = 0
+. __vbotInvoke | Out-Default
+if ($global:__vbotExitCode -eq 0) { & $__vbotReportErrors }
+exit $global:__vbotExitCode
 """
 # The command runs from the first line. Write-Error names its caller's position,
 # which PowerShell shows only beyond the first line, so no wrapper line appears in

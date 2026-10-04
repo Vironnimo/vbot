@@ -241,6 +241,15 @@ _PRINTED_ERROR_TEXT = "; ".join(
             ("begin-sentinel\nend-sentinel",),
         ),
         ("begin { 'begin-sentinel' } process { cmd /c exit 3 }", 3, False, ("begin-sentinel",)),
+        # Objects the table formatter holds still print before the exit, and a native
+        # program keeps the terminal as its output.
+        (
+            "Get-Location\n[pscustomobject]@{ Name = 'table-sentinel' } | Select-Object Name\n"
+            f"& '{sys.executable}' -c \"import sys; print('tty', sys.stdout.isatty())\"",
+            0,
+            False,
+            ("table-sentinel", "tty True"),
+        ),
     ],
     ids=[
         "param-block-native-exit",
@@ -255,6 +264,7 @@ _PRINTED_ERROR_TEXT = "; ".join(
         "printed-text-and-quotes",
         "named-blocks",
         "named-blocks-exit",
+        "formatted-objects-and-native-terminal",
     ],
 )
 async def test_exit_status_and_error_records_follow_the_last_statement(
