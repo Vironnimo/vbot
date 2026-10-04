@@ -17,6 +17,7 @@ from core.tools import (
     ToolDisplay,
     ToolDisplayField,
     ToolRegistry,
+    tool_failure,
     tool_success,
 )
 from core.tools.model_names import SHELL_MODEL_NAME
@@ -314,7 +315,7 @@ async def test_dispatch_carries_final_ui_display_into_event_and_tool_message(
 
 
 @pytest.mark.asyncio
-async def test_only_read_media_artifacts_become_media_outputs(tmp_path: Path) -> None:
+async def test_media_outputs_are_read_media_artifacts_and_loaded_pixels(tmp_path: Path) -> None:
     media = {
         "kind": "read_media",
         "attachment_id": "att-1",
@@ -337,11 +338,19 @@ async def test_only_read_media_artifacts_become_media_outputs(tmp_path: Path) ->
             artifacts=[{"kind": "image", "url": "/api/x", "id": "img-1"}],
         ),
     )
+    loaded = {"filename": "shot.png", "media_type": "image/png", "base64": "iVBO"}
+
+    def failing_with_screenshot(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        context.result_media.append(dict(loaded))
+        return tool_failure("step_failed", "The second step failed; the screenshot shows why.")
+
+    tools.register("computer", "Operates the desktop.", {"type": "object"}, failing_with_screenshot)
     harness = ToolDispatchHarness(tmp_path, tools)
 
-    dispatched = await harness.dispatch([call("read"), call("image_generation")])
+    dispatched = await harness.dispatch([call("read"), call("image_generation"), call("computer")])
 
-    assert len(dispatched.messages) == 2
+    assert len(dispatched.messages) == 3
+    # Pixels a Tool loaded reach the Model with a failed Result too.
     assert dispatched.media_outputs == [
         {
             "tool_call_id": "call-read",
@@ -349,7 +358,12 @@ async def test_only_read_media_artifacts_become_media_outputs(tmp_path: Path) ->
             "attachment_id": "att-1",
             "filename": "diagram.png",
             "media_type": "image/png",
-        }
+        },
+        {
+            **loaded,
+            "tool_call_id": "call-computer",
+            "tool_message_id": dispatched.messages[2].id,
+        },
     ]
 
 
