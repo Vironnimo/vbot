@@ -26,7 +26,7 @@ from core.model_tasks.image_types import (
 from core.model_tasks.model_tasks import TaskModelTargetRef, model_supports_task
 from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage, TaskUsageContext
 from core.providers.accounts import ConnectionRef
-from core.providers.errors import ProviderOutcomeUnknownError
+from core.providers.errors import ProviderContentRefusedError, ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
 from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, TaskError, VBotError
@@ -113,6 +113,20 @@ class ImageOutcomeUnknownError(ImageExecutionError):
     def __init__(self, message: str, *, operation_key: str) -> None:
         self.operation_key = operation_key
         super().__init__(message)
+
+
+class ImageRefusedError(ImageExecutionError):
+    """Raised when the provider declined to create the requested image."""
+
+    code = ProviderContentRefusedError.code
+
+    def __init__(self, reason: str | None) -> None:
+        self.reason = reason
+        super().__init__(
+            f"Image generation was refused: {reason}"
+            if reason
+            else "Image generation was refused without a reason"
+        )
 
 
 class ImageInputError(ImageError):
@@ -281,6 +295,12 @@ class ImageService:
             return await provider_client.generate(request_prompt, options=merged_options)
         except ImageError:
             raise
+        except ProviderContentRefusedError as exc:
+            _LOGGER.warning(
+                "Image generation refused by the provider for target=%s",
+                _safe_target_label(target_ref),
+            )
+            raise ImageRefusedError(exc.reason) from exc
         except ProviderOutcomeUnknownError as exc:
             safe_error = _safe_error_text(exc, target_ref)
             _LOGGER.warning(
@@ -541,6 +561,7 @@ class ImageService:
                 extension=extension,
                 media_type=result.media_type,
                 index=idx,
+                revised_prompt=result.revised_prompt,
             )
             for idx, image_bytes in enumerate(result.images)
         )
@@ -802,6 +823,7 @@ def _write_image_artifact(
     extension: str,
     media_type: str,
     index: int,
+    revised_prompt: str | None = None,
 ) -> ImageArtifact:
     """Write one generated image without overwriting an existing workspace file."""
 
@@ -816,6 +838,7 @@ def _write_image_artifact(
             size_bytes=len(payload),
             file_path=output_dir / filename,
             index=index,
+            revised_prompt=revised_prompt,
         )
     except OSError as exc:
         raise ImageExecutionError(str(exc)) from exc

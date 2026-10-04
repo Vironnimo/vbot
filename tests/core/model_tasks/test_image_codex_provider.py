@@ -12,6 +12,7 @@ import respx
 
 from core.model_tasks.image_providers import (
     _OPENAI_CODEX_IMAGE_CARRIER_MODEL,
+    _OPENAI_CODEX_IMAGE_INSTRUCTIONS,
     ProviderImageClient,
 )
 from core.model_tasks.image_types import ImageInput
@@ -19,6 +20,7 @@ from core.model_tasks.model_tasks import parse_task_model_target_id
 from core.model_tasks.task_execution import TaskUsage
 from core.providers.errors import (
     ProviderAuthError,
+    ProviderContentRefusedError,
     ProviderError,
     ProviderOutcomeUnknownError,
 )
@@ -256,7 +258,7 @@ async def test_subscription_image_asks_a_codex_carrier_to_call_the_image_tool(
         "model": _OPENAI_CODEX_IMAGE_CARRIER_MODEL,
         "stream": True,
         "store": False,
-        "instructions": "You are an image generation assistant.",
+        "instructions": _OPENAI_CODEX_IMAGE_INSTRUCTIONS,
     }
     assert payload["tools"] == [{"type": "image_generation", **tool}]
     assert payload["input"][0]["content"] == [
@@ -278,8 +280,7 @@ async def test_subscription_image_asks_a_codex_carrier_to_call_the_image_tool(
         },
         "response": {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
     }
-    assert result.raw is not None
-    assert result.raw["image_generation_calls"][0]["revised_prompt"] == "a revised image prompt"
+    assert result.revised_prompt == "a revised image prompt"
 
 
 @pytest.mark.asyncio
@@ -290,20 +291,62 @@ async def test_openai_subscription_image_generate_requires_account_header() -> N
         await client.generate("a cat", options={})
 
 
+_FAILED_CALL = _sse_event(
+    {
+        "type": "response.output_item.done",
+        "item": {"type": "image_generation_call", "status": "failed"},
+    }
+)
+
+
+def _carrier_reply(text: str) -> str:
+    return _sse_event(
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": text}],
+            },
+        }
+    )
+
+
+_COMPLETED = _sse_event({"type": "response.completed", "response": {"status": "completed"}})
+_SAFETY = "The image_generation tool reported: Your request was rejected by the safety system."
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "refusal_reason"),
+    [
+        pytest.param(_FAILED_CALL + _carrier_reply(_SAFETY) + _COMPLETED, _SAFETY, id="failed"),
+        pytest.param(_FAILED_CALL + _COMPLETED, None, id="failed-silently"),
+        pytest.param(
+            _carrier_reply("I can't create that.") + _COMPLETED,
+            "I can't create that.",
+            id="carrier-declined",
+        ),
+        pytest.param(_COMPLETED, "unknown", id="nothing"),
+    ],
+)
 @respx.mock
-async def test_openai_subscription_image_does_not_retry_missing_final_image() -> None:
+async def test_subscription_image_without_image_is_never_retried(
+    body: str, refusal_reason: str | None
+) -> None:
+    """A refused render is a known outcome; an empty answer stays unknown."""
+
     route = respx.post(OPENAI_CODEX_RESPONSES_URL).mock(
-        return_value=httpx.Response(
-            200,
-            text=_sse_event({"type": "response.completed", "response": {"status": "completed"}}),
-            headers={"content-type": "text/event-stream"},
-        )
+        return_value=httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
     )
     client = _openai_subscription_image_client("gpt-image-2")
 
-    with pytest.raises(ProviderOutcomeUnknownError) as exc_info:
-        await client.generate("a cat", options={})
-
-    assert exc_info.value.retryable is False
+    if refusal_reason == "unknown":
+        with pytest.raises(ProviderOutcomeUnknownError) as unknown:
+            await client.generate("a cat", options={})
+        assert unknown.value.retryable is False
+    else:
+        with pytest.raises(ProviderContentRefusedError) as refused:
+            await client.generate("a cat", options={})
+        assert (refused.value.reason, refused.value.retryable) == (refusal_reason, False)
     assert route.call_count == 1

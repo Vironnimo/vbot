@@ -12,7 +12,7 @@ import httpx
 
 from core.model_tasks.image_types import ImageGenerationResult, ImageInput, JsonObject
 from core.providers._http_shared import parse_sse_json_data, split_stream_lines
-from core.providers.errors import ProviderAuthError, ProviderError
+from core.providers.errors import ProviderAuthError, ProviderContentRefusedError, ProviderError
 from core.providers.openai import (
     CODEX_EXTRA_HEADERS,
     CODEX_RESPONSES_ENDPOINT,
@@ -34,7 +34,16 @@ _OPENAI_IMAGES_EDITS_ENDPOINT = "/images/edits"
 _DEFAULT_IMAGE_TIMEOUT = 120.0
 _OPENAI_CODEX_IMAGE_TIMEOUT = 300.0
 _OPENAI_CODEX_IMAGE_CARRIER_MODEL = "gpt-5.5"
-_OPENAI_CODEX_IMAGE_INSTRUCTIONS = "You are an image generation assistant."
+# The carrier Model sits between vBot and the image tool. Left alone it retried
+# refused requests with its own rewritten prompt (a named film character became
+# an original look-alike) and the calling Agent never learned of it.
+_OPENAI_CODEX_IMAGE_INSTRUCTIONS = (
+    "Make exactly one image_generation tool call that renders the image request in the "
+    "user message. Keep its subject, named characters and content as requested; do not "
+    "rewrite them. If the tool call fails, do not call the tool again; reply with one "
+    "sentence that states the reason the tool reported, or that it reported none."
+)
+_MAX_CARRIER_REPLY_CHARS = 500
 _OPENROUTER_IMAGE_RETRY_POLICY = TaskRequestRetryPolicy(
     replay_safe=False,
     verified_safe_retry_status_codes=frozenset({503}),
@@ -559,6 +568,7 @@ def _parse_unified_image_response(
         model=model,
         usage=usage if isinstance(usage, dict) else None,
         raw=payload,
+        revised_prompt=_first_revised_prompt(data),
     )
 
 
@@ -569,6 +579,7 @@ def _parse_openai_codex_image_response(
     requested_output_format: Any = None,
 ) -> ImageGenerationResult:
     image_items: list[JsonObject] = []
+    carrier_texts: list[str] = []
     completed_response: Mapping[str, Any] | None = None
 
     for data in _iter_sse_data_from_text(sse_body):
@@ -580,20 +591,19 @@ def _parse_openai_codex_image_response(
         event_type = event.get("type")
         if event_type == "response.output_item.done":
             item = event.get("item")
-            if isinstance(item, Mapping) and item.get("type") == "image_generation_call":
+            if not isinstance(item, Mapping):
+                continue
+            if item.get("type") == "image_generation_call":
                 image_items.append(dict(item))
+            elif item.get("type") == "message":
+                carrier_texts.extend(_codex_message_texts(item))
         elif event_type == "response.completed":
             response = event.get("response")
             if isinstance(response, Mapping):
                 completed_response = response
 
-    if not image_items:
-        raise ProviderError(
-            "OpenAI Codex image response contains no final image",
-            retryable=True,
-        )
-
     image_bytes_list: list[bytes] = []
+    rendered_items: list[JsonObject] = []
     for item in image_items:
         result = item.get("result")
         if not isinstance(result, str) or not result:
@@ -602,8 +612,22 @@ def _parse_openai_codex_image_response(
             image_bytes_list.append(base64.b64decode(result, validate=True))
         except binascii.Error, ValueError:
             continue
+        rendered_items.append(item)
 
     if not image_bytes_list:
+        # The tool reports a refused render only as an item with status
+        # "failed" and no reason; the carrier's reply carries the reason. A
+        # reply without any image call is the carrier declining by itself.
+        refused = (image_items and all(item.get("status") == "failed" for item in image_items)) or (
+            not image_items and carrier_texts
+        )
+        if refused:
+            raise ProviderContentRefusedError(_carrier_reply(carrier_texts))
+        if not image_items:
+            raise ProviderError(
+                "OpenAI Codex image response contains no final image",
+                retryable=True,
+            )
         raise ProviderError(
             "OpenAI Codex image response images could not be decoded",
             retryable=True,
@@ -611,7 +635,10 @@ def _parse_openai_codex_image_response(
 
     actual_output_format = requested_output_format
     if is_omittable_option(actual_output_format):
-        actual_output_format = image_items[0].get("output_format")
+        actual_output_format = rendered_items[0].get("output_format")
+    revised_prompt = rendered_items[0].get("revised_prompt")
+    if not isinstance(revised_prompt, str) or not revised_prompt.strip():
+        revised_prompt = None
 
     raw: JsonObject = {"image_generation_calls": image_items}
     if completed_response is not None:
@@ -623,7 +650,34 @@ def _parse_openai_codex_image_response(
         model=model,
         usage=_openai_codex_usage(completed_response),
         raw=raw,
+        revised_prompt=revised_prompt
+        if isinstance(revised_prompt, str) and revised_prompt
+        else None,
     )
+
+
+def _codex_message_texts(item: Mapping[str, Any]) -> list[str]:
+    content = item.get("content")
+    if not isinstance(content, list):
+        return []
+    return [
+        part["text"]
+        for part in content
+        if isinstance(part, Mapping)
+        and part.get("type") == "output_text"
+        and isinstance(part.get("text"), str)
+    ]
+
+
+def _carrier_reply(texts: list[str]) -> str | None:
+    """Return the carrier's reply as one bounded line, or None when it said nothing."""
+
+    reply = " ".join(" ".join(texts).split())
+    if not reply:
+        return None
+    if len(reply) <= _MAX_CARRIER_REPLY_CHARS:
+        return reply
+    return reply[: _MAX_CARRIER_REPLY_CHARS - 3].rstrip() + "..."
 
 
 def _iter_sse_data_from_text(body: str):
@@ -729,4 +783,16 @@ def _parse_openai_image_response(
         media_type=_media_type_from_output_format(requested_output_format),
         model=model,
         raw=payload,
+        revised_prompt=_first_revised_prompt(data),
     )
+
+
+def _first_revised_prompt(entries: list[Any]) -> str | None:
+    """Return the rewritten prompt an images response reports, if any entry has one."""
+
+    for entry in entries:
+        if isinstance(entry, dict):
+            revised = entry.get("revised_prompt")
+            if isinstance(revised, str) and revised.strip():
+                return revised.strip()
+    return None

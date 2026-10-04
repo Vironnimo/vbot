@@ -26,6 +26,7 @@ from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.accounts import ConnectionRef
 from core.providers.adapter_types import openai_compatible_base_url
 from core.providers.errors import (
+    ProviderContentRefusedError,
     ProviderError,
     ProviderOutcomeUnknownError,
     ProviderRateLimitError,
@@ -310,7 +311,7 @@ class ProviderTaskClient:
                     try:
                         parsed = parse(response)
                         return parsed  # type: ignore[no-any-return]
-                    except ProviderOutcomeUnknownError:
+                    except ProviderOutcomeUnknownError, ProviderContentRefusedError:
                         raise
                     except (ProviderError, ValueError) as exc:
                         if retry_policy.can_replay_after_ambiguous_failure:
@@ -431,6 +432,9 @@ def _classify_task_response_for_retry_policy(
     operation_key: str,
     extra_retryable_status_codes: frozenset[int],
 ) -> None:
+    refusal = _content_refusal(response)
+    if refusal is not None:
+        raise refusal
     verified_status_codes = retry_policy.verified_safe_retry_status_codes
     try:
         classify_task_response(
@@ -451,6 +455,38 @@ def _classify_task_response_for_retry_policy(
                 f"the provider returned an ambiguous HTTP {response.status_code} response: {exc}",
             ) from exc
         raise
+
+
+# Error codes and message phrases with which providers report that they
+# declined the requested content. OpenAI sends ``moderation_blocked``;
+# OpenRouter forwards the upstream message under a numeric code ("Your request
+# was rejected by the safety system", 2026-10) or reports its own moderation as
+# "... was flagged ...".
+_REFUSAL_ERROR_CODES = frozenset({"moderation_blocked", "content_policy_violation"})
+_REFUSAL_PHRASES = ("rejected by the safety system", "content policy", "was flagged")
+
+
+def _content_refusal(response: httpx.Response) -> ProviderContentRefusedError | None:
+    """Return the refusal a client-error response reports, if it reports one."""
+
+    if not 400 <= response.status_code < 500:
+        return None
+    try:
+        payload = response.json()
+    except ValueError, UnicodeError:
+        return None
+    error = payload.get("error") if isinstance(payload, Mapping) else None
+    if not isinstance(error, Mapping):
+        return None
+    code = error.get("code")
+    raw_message = error.get("message")
+    message = " ".join(raw_message.split()) if isinstance(raw_message, str) else ""
+    refused = (isinstance(code, str) and code in _REFUSAL_ERROR_CODES) or any(
+        phrase in message.lower() for phrase in _REFUSAL_PHRASES
+    )
+    if not refused:
+        return None
+    return ProviderContentRefusedError(message or None)
 
 
 def _outcome_unknown(operation_key: str, message: str) -> ProviderOutcomeUnknownError:

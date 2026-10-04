@@ -11,6 +11,7 @@ from core.model_tasks import (
     ImageError,
     ImageExecutionError,
     ImageOutcomeUnknownError,
+    ImageRefusedError,
     ImageUnderstandingRunContext,
     ImageUnderstandingUnavailableError,
     ImageUnsupportedTargetError,
@@ -24,7 +25,12 @@ from core.tools._image_inputs import (
     resolve_analysis_images,
     resolve_local_images,
 )
-from core.tools._media_failures import provider_failure_message, unavailable_message
+from core.tools._media_failures import (
+    outcome_unknown_message,
+    provider_failure_message,
+    refusal_message,
+    unavailable_message,
+)
 from core.tools.arguments import optional_string
 from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
@@ -190,8 +196,10 @@ def _image_failure(error: ImageError, labels: tuple[str, str]) -> JsonObject:
     """Project an expected Image-domain failure with wording the Agent can act on."""
     task, setting = labels
     message = str(error)
-    if isinstance(error, ImageOutcomeUnknownError):
-        pass
+    if isinstance(error, ImageRefusedError):
+        message = refusal_message(error.reason, task=task)
+    elif isinstance(error, ImageOutcomeUnknownError):
+        message = outcome_unknown_message(task=task, product="image")
     elif isinstance(error, ImageExecutionError):
         message = provider_failure_message(error, task=task, setting=setting)
     elif isinstance(error, ImageUnderstandingUnavailableError) or (
@@ -384,13 +392,16 @@ def make_image_generation_handler(image_service: Any):
         image_payloads: list[JsonObject] = []
         for artifact in artifacts:
             context.add_display_media(artifact.file_path, artifact.media_type)
-            image_payloads.append(
-                {
-                    "path": model_path(artifact.file_path),
-                    "media_type": artifact.media_type,
-                    "size_bytes": artifact.size_bytes,
-                }
-            )
+            payload: JsonObject = {
+                "path": model_path(artifact.file_path),
+                "media_type": artifact.media_type,
+                "size_bytes": artifact.size_bytes,
+            }
+            if artifact.revised_prompt:
+                # The provider rendered its own rewrite of the prompt, which can
+                # change the subject; the Agent needs it to describe the image.
+                payload["revised_prompt"] = artifact.revised_prompt
+            image_payloads.append(payload)
         return tool_success({"images": image_payloads})
 
     return handler

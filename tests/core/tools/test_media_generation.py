@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.model_tasks import MusicExecutionError, VideoConfigurationError, VideoExecutionError
-from core.providers.errors import ProviderRateLimitError
+from core.providers.errors import ProviderContentRefusedError, ProviderRateLimitError
 from core.tools.media_generation import (
     GENERATE_MUSIC_TOOL_NAME,
     GENERATE_VIDEO_TOOL_NAME,
@@ -225,6 +225,17 @@ async def test_video_failures_keep_request_fixes_and_reword_provider_refusals(
         "safety filter). If the reason concerns the request, change it; otherwise "
         "tell the user, who may need to choose another Video generation model in Settings "
         "→ Tools → Images, video & music."
+    )
+
+    refusal = ProviderContentRefusedError("Your request was rejected by the safety system.")
+    service.error = VideoExecutionError(str(refusal))
+    service.error.__cause__ = refusal
+    result = await registry.dispatch(context, {"prompt": "A river"})
+    assert result["error"]["message"] == (
+        "The video-generation provider refused the request and created nothing. Its reason: "
+        "Your request was rejected by the safety system. Repeating the unchanged request gets "
+        "the same refusal. Change what the prompt asks for, for example an original design "
+        "instead of a named character, brand or real person, or tell the user."
     )
 
 
