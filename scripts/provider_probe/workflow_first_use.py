@@ -78,7 +78,7 @@ async def first_use_trial(
             messages.append(
                 {"role": "user", "content": case["task"].replace("{repo}", fixture.repo.as_posix())}
             )
-            definitions = fixture.registry.provider_definitions()
+            definitions = fixture.offered_definitions(args.edit_dialect)
             record["definitions"] = definitions
             _, record["model_definitions"] = model_facing_request([], definitions)
             record["definition_sha256"] = hashlib.sha256(
@@ -206,6 +206,7 @@ async def _probe_first_use(adapter: Any, args: argparse.Namespace) -> dict:
             "model": args.model,
             "thinking_effort": args.thinking_effort,
             "max_tokens": args.max_tokens or 6000,
+            "edit_dialect": args.edit_dialect,
             "trials": len(results),
             "planned_trials": len(cases) * args.repetitions,
             "first_attempt_successes": sum(r["first_attempt_success"] for r in results),
