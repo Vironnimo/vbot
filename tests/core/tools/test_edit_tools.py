@@ -37,28 +37,33 @@ def test_edit_and_write_are_available_exactly_when_apply_patch_is() -> None:
 
 
 def test_edit_and_write_have_minimal_definitions() -> None:
-    path = {"type": "string", "description": "Relative to the working directory or absolute."}
-    assert (
-        EDIT_TOOL_DESCRIPTION == "Replace text in a file. Put all changes to one file in one call."
-    )
-    assert {
+    assert EDIT_TOOL_DESCRIPTION == "Replace text in a file. The result shows the changed lines."
+    assert EDIT_TOOL_PARAMETERS == {
         "type": "object",
         "properties": {
-            "path": path,
+            "path": {
+                "type": "string",
+                "description": "File to change, relative to the working directory or absolute.",
+            },
             "edits": {
                 "type": "array",
+                "description": "All changes to this file, applied in order.",
                 "items": {
                     "type": "object",
                     "properties": {
                         "old_string": {
                             "type": "string",
-                            "description": "Exact text from the file. Without replace_all it "
-                            "must occur once.",
+                            "description": "Text to replace, copied exactly from the file. "
+                            "Without replace_all, it must occur exactly once.",
                         },
-                        "new_string": {"type": "string"},
+                        "new_string": {
+                            "type": "string",
+                            "description": 'Replacement for old_string; "" deletes it.',
+                        },
                         "replace_all": {
                             "type": "boolean",
-                            "description": "Replace every occurrence.",
+                            "description": "Replace every occurrence of old_string. Omit to "
+                            "replace exactly one.",
                         },
                     },
                     "required": ["old_string", "new_string"],
@@ -66,16 +71,19 @@ def test_edit_and_write_have_minimal_definitions() -> None:
             },
         },
         "required": ["path", "edits"],
-    } == EDIT_TOOL_PARAMETERS
+    }
     assert WRITE_TOOL_DESCRIPTION == "Create a file or replace all of its content."
-    assert {
+    assert WRITE_TOOL_PARAMETERS == {
         "type": "object",
         "properties": {
-            "path": path,
+            "path": {
+                "type": "string",
+                "description": "File to write, relative to the working directory or absolute.",
+            },
             "content": {"type": "string", "description": "Complete file content."},
         },
         "required": ["path", "content"],
-    } == WRITE_TOOL_PARAMETERS
+    }
 
 
 @pytest.mark.parametrize(
