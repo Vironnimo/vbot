@@ -113,7 +113,7 @@ async def test_connection_auth_config_selects_the_auth_header(
 def test_wire_declares_images_and_openai_audio_and_full_history_replay() -> None:
     """The generic wire carries images plus WAV/MP3 but no PDF; subclasses inherit this."""
 
-    adapter = make_adapter()
+    adapter = make_adapter(NO_DEFAULTS_CONFIG)  # no wire file refines the protocol default
 
     assert adapter.wire_media_support(MODEL_ID) == IMAGE_WIRE_MEDIA_TYPES | {
         "audio/wav",

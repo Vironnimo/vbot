@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from core.models import Capabilities, Model, ReasoningCapabilities
+from core.providers._wire_profile_files import parse_wire_profile_file
 from server.rpc import model_methods
 from server.rpc.model_methods import shutdown_background_refresh_tasks
 from tests.server.rpc_test_support import (
@@ -53,6 +54,7 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
     monkeypatch.setenv("OLLAMA_API_KEY", "ollama-key")
+    monkeypatch.delenv("OPENAI_OAUTH_TOKEN", raising=False)
     state = make_state(tmp_path, StubAdapter())
     monkeypatch.setattr(
         state.runtime.providers,
@@ -77,7 +79,12 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                     "vision": True,
                     "tools": True,
                     "json_mode": False,
-                    "reasoning": {"supported": True, "control": None, "levels": []},
+                    "reasoning": {
+                        "supported": True,
+                        "control": None,
+                        "levels": [],
+                        "mandatory": False,
+                    },
                     "input_modalities": ["text", "image"],
                     "output_modalities": ["text"],
                     "supported_parameters": [],
@@ -93,6 +100,9 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                 "local": False,
                 "max_output_tokens": 64000,
                 "connections": [],
+                "recommended_temperature": None,
+                "recommended_top_p": None,
+                "wire_profiles": {"api-key": {"wire_status": "inferred", "verified_at": None}},
             },
             {
                 "id": "ollama/llama3.2",
@@ -103,7 +113,12 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                     "vision": False,
                     "tools": True,
                     "json_mode": False,
-                    "reasoning": {"supported": False, "control": None, "levels": []},
+                    "reasoning": {
+                        "supported": False,
+                        "control": None,
+                        "levels": [],
+                        "mandatory": False,
+                    },
                     "input_modalities": ["text"],
                     "output_modalities": ["text"],
                     "supported_parameters": [],
@@ -114,6 +129,9 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                 "local": False,
                 "max_output_tokens": 8192,
                 "connections": [],
+                "recommended_temperature": None,
+                "recommended_top_p": None,
+                "wire_profiles": {"api-key": {"wire_status": "inferred", "verified_at": None}},
             },
             {
                 "id": "openai/gpt-4.1-mini",
@@ -124,7 +142,12 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                     "vision": False,
                     "tools": True,
                     "json_mode": True,
-                    "reasoning": {"supported": False, "control": None, "levels": []},
+                    "reasoning": {
+                        "supported": False,
+                        "control": None,
+                        "levels": [],
+                        "mandatory": False,
+                    },
                     "input_modalities": ["text"],
                     "output_modalities": ["text"],
                     "supported_parameters": [],
@@ -135,6 +158,9 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                 "local": False,
                 "max_output_tokens": 16000,
                 "connections": [],
+                "recommended_temperature": None,
+                "recommended_top_p": None,
+                "wire_profiles": {"api-key": {"wire_status": "inferred", "verified_at": None}},
             },
             {
                 "id": "openai/gpt-5.2",
@@ -145,7 +171,12 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                     "vision": True,
                     "tools": True,
                     "json_mode": True,
-                    "reasoning": {"supported": True, "control": None, "levels": []},
+                    "reasoning": {
+                        "supported": True,
+                        "control": None,
+                        "levels": [],
+                        "mandatory": False,
+                    },
                     "input_modalities": ["text", "image"],
                     "output_modalities": ["text"],
                     "supported_parameters": [],
@@ -161,6 +192,9 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                 "local": False,
                 "max_output_tokens": 32000,
                 "connections": [],
+                "recommended_temperature": None,
+                "recommended_top_p": None,
+                "wire_profiles": {"api-key": {"wire_status": "inferred", "verified_at": None}},
             },
         ]
     }
@@ -257,6 +291,111 @@ async def test_model_list_outputs_per_model_connections_allowlist(
 
 
 @pytest.mark.asyncio
+async def test_model_catalog_reports_wire_profiles_per_usable_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``model.list`` reports each usable Connection's wire status; ``model.get``
+    adds the profile summary and the facts live traffic taught, as requests use them,
+    until ``model.forget_wire_facts`` drops them."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("OPENAI_OAUTH_TOKEN", "oauth-token")
+    state = make_state(tmp_path, StubAdapter())
+    runtime = state.runtime
+    wire_file = parse_wire_profile_file(
+        "openai",
+        {
+            "format_version": 1,
+            "models": {
+                "gpt-5.2": {
+                    "verified": {"date": "2026-09-30", "connections": ["api-key"]},
+                    "set": {
+                        "reasoning": {
+                            "dialect": "reasoning_effort",
+                            "levels": ["low", "high"],
+                        },
+                        "replay": {"fidelity": "readable_only"},
+                    },
+                }
+            },
+        },
+        source="openai.json",
+        report=lambda issue: pytest.fail(issue),
+    )
+    assert wire_file is not None
+    runtime.wire_profiles.replace_files({"openai": wire_file})
+    runtime.wire_observations.record_rejected_parameter("openai", "oauth", "gpt-5.2", "top_p")
+    runtime.wire_observations.record_exclusive_parameters(
+        "openai", "oauth", "gpt-5.2", ("temperature", "top_k")
+    )
+    runtime.wire_observations.record_reasoning_field(
+        "openai", "oauth", "gpt-5.2", "reasoning_content"
+    )
+
+    listed = {model["id"]: model for model in (await rpc_result(state, "model.list"))["models"]}
+    model = (await rpc_result(state, "model.get", model="openai/gpt-5.2"))["model"]
+
+    assert listed["openai/gpt-5.2"]["wire_profiles"] == {
+        "oauth": {"wire_status": "configured", "verified_at": None},
+        "api-key": {"wire_status": "verified", "verified_at": "2026-09-30"},
+    }
+    assert listed["openai/gpt-4.1-mini"]["wire_profiles"] == {
+        "oauth": {"wire_status": "inferred", "verified_at": None},
+        "api-key": {"wire_status": "inferred", "verified_at": None},
+    }
+    assert model["wire_profiles"] == {
+        "oauth": {
+            "wire_status": "configured",
+            "verified_at": None,
+            "protocol": "chat_completions",
+            "reasoning_dialect": "reasoning_effort",
+            "reasoning_ladder": ["low", "high"],
+            "replay_fidelity": "readable_only",
+            "learned": {
+                "reasoning_field": "reasoning_content",
+                "rejected_parameters": ["top_p"],
+                "exclusive_parameters": [["temperature", "top_k"]],
+                "rejected_efforts": [],
+                "reasoning_returned": True,
+            },
+        },
+        "api-key": {
+            "wire_status": "verified",
+            "verified_at": "2026-09-30",
+            "protocol": "chat_completions",
+            "reasoning_dialect": "reasoning_effort",
+            "reasoning_ladder": ["low", "high"],
+            "replay_fidelity": "readable_only",
+            "learned": {
+                "reasoning_field": None,
+                "rejected_parameters": [],
+                "exclusive_parameters": [],
+                "rejected_efforts": [],
+                "reasoning_returned": False,
+            },
+        },
+    }
+
+    refused = await rpc_error(
+        state, "model.forget_wire_facts", model="openai/gpt-5.2", connection="nowhere"
+    )
+    forgotten = await rpc_result(
+        state, "model.forget_wire_facts", model="openai/gpt-5.2", connection="openai:oauth"
+    )
+    model = (await rpc_result(state, "model.get", model="openai/gpt-5.2"))["model"]
+
+    assert refused["code"] == "invalid_request"
+    assert forgotten == {
+        "provider_id": "openai",
+        "model_id": "gpt-5.2",
+        "connection_id": "oauth",
+        "forgotten": 1,
+    }
+    assert model["wire_profiles"]["oauth"]["learned"]["rejected_parameters"] == []
+
+
+@pytest.mark.asyncio
 async def test_model_get_returns_complete_model_data(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -295,6 +434,13 @@ async def test_model_get_returns_complete_model_data(
         "en-us-harper:mai-voice-2",
     ]
     assert model["capabilities"]["task_options"] == {"text_to_speech": {"codec": "mp3"}}
+    assert model["capabilities"]["reasoning"] == {
+        "supported": False,
+        "control": None,
+        "levels": [],
+        "budget_max": None,
+        "mandatory": False,
+    }
     assert model["usable_connections"] == ["api-key"]
 
 

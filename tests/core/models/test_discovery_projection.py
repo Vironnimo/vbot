@@ -18,6 +18,11 @@ import respx
 from core.models.discovery import refresh_models
 from core.models.models import ModelRegistry
 from core.models.models_dev import ModelsDevCatalog
+from core.providers import OpenCodeZenAdapter
+from core.providers._wire_profile_files import (
+    WIRE_PROFILE_FORMAT_VERSION,
+    parse_wire_profile_file,
+)
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 from .discovery_test_support import (
@@ -36,18 +41,17 @@ from .discovery_test_support import (
     openrouter_config,
     raw_openrouter_model,
     read_models_file,
+    simple_compatible_config,
 )
-
-
-def _raw_ids(resources_dir: Path, provider_id: str, key: str = "id") -> set[str]:
-    raw = read_models_file(resources_dir, f"{provider_id}.raw.json")["raw_response"]
-    entries = raw["data"] if "data" in raw else raw["models"]
-    return {entry[key] for entry in entries}
 
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_opencode_zen_enriches_its_allowlist_and_merges_connections(tmp_path: Path) -> None:
+async def test_opencode_zen_writes_admitted_models_and_merges_connections(tmp_path: Path) -> None:
+    """Zen admits a Model its protocol hint or a reviewed rule routes, unless free or retired.
+
+    A refresh without models.dev keeps what earlier enrichment projected.
+    """
     resources_dir = tmp_path / "resources"
     config = ProviderConfig(
         id="opencode-zen",
@@ -70,6 +74,10 @@ async def test_opencode_zen_enriches_its_allowlist_and_merges_connections(tmp_pa
         catalog_exclusions=frozenset({"glm-5"}),
     )
     modalities = {"input": ["text", "image", "video", "audio", "pdf"], "output": ["text"]}
+
+    def section_model(model_id: str, npm: str | None = None) -> dict[str, Any]:
+        return {"id": model_id, "name": model_id, **({"provider": {"npm": npm}} if npm else {})}
+
     catalog = ModelsDevCatalog(
         {
             "models": {
@@ -84,9 +92,11 @@ async def test_opencode_zen_enriches_its_allowlist_and_merges_connections(tmp_pa
                 "opencode": {
                     "id": "opencode",
                     "name": "OpenCode",
+                    # The section's default package is no Model's protocol hint.
+                    "npm": "@ai-sdk/openai-compatible",
                     "models": {
                         "gemini-3.5-flash": {
-                            "id": "gemini-3.5-flash",
+                            **section_model("gemini-3.5-flash", "@ai-sdk/google"),
                             "name": "Gemini 3.5 Flash",
                             "family": "gemini",
                             "limit": {"context": 1_048_576, "output": 65_536},
@@ -96,7 +106,12 @@ async def test_opencode_zen_enriches_its_allowlist_and_merges_connections(tmp_pa
                             "reasoning_options": [
                                 {"type": "effort", "values": ["minimal", "low", "medium", "high"]}
                             ],
-                        }
+                        },
+                        "claude-future-6": section_model("claude-future-6", "@ai-sdk/anthropic"),
+                        "unreviewed-future-model": section_model("unreviewed-future-model"),
+                        "muse-spark-1.3-contributor-free": section_model(
+                            "muse-spark-1.3-contributor-free", "@ai-sdk/openai"
+                        ),
                     },
                 }
             },
@@ -104,9 +119,11 @@ async def test_opencode_zen_enriches_its_allowlist_and_merges_connections(tmp_pa
     )
     live_ids = [
         "gemini-3.5-flash",
-        "claude-fable-5-1",
+        "claude-future-6",
+        "glm-5.1",
         "glm-5",
         "unreviewed-future-model",
+        "muse-spark-1.3-contributor-free",
         "mimo-v2.6-flash-free",
     ]
     route = respx.get("https://opencode.ai/zen/v1/models").mock(
@@ -128,15 +145,83 @@ async def test_opencode_zen_enriches_its_allowlist_and_merges_connections(tmp_pa
 
     written = read_models_file(resources_dir, "opencode-zen.json")["models"]
     gemini = written["gemini-3.5-flash"]
-    assert counts == [2, 2]
+    assert counts == [3, 3]
     assert route.call_count == 2
-    assert set(written) == {"gemini-3.5-flash", "claude-fable-5-1"}
+    assert set(written) == {"gemini-3.5-flash", "claude-future-6", "glm-5.1"}
     assert gemini["connections"] == ["api-key", "account"]
     assert (gemini["context_window"], gemini["max_output_tokens"]) == (1_048_576, 65_536)
     assert gemini["capabilities"]["input_modalities"] == modalities["input"]
-    assert gemini["metadata"]["opencode_zen"]["protocol"] == "gemini_generate_content"
-    assert written["claude-fable-5-1"]["metadata"]["opencode_zen"]["protocol"] == "messages"
-    assert _raw_ids(resources_dir, "opencode-zen") == set(live_ids)
+    assert written["claude-future-6"]["metadata"] == {"opencode_zen": {"npm": "@ai-sdk/anthropic"}}
+    assert "metadata" not in written["glm-5.1"]
+
+    registry = ModelRegistry.load(resources_dir)
+    adapter = OpenCodeZenAdapter(
+        config, "key", model_lookup=lambda model_id: registry.get("opencode-zen", model_id)
+    )
+    profiles = {model_id: adapter.wire_profile(model_id) for model_id in written}
+    assert {
+        model_id: (profile.protocol, profile.admission.state)
+        for model_id, profile in profiles.items()
+    } == {
+        "gemini-3.5-flash": ("gemini", "available"),
+        "claude-future-6": ("messages", "available"),
+        "glm-5.1": ("chat_completions", "available"),
+    }
+    assert profiles["claude-future-6"].provenance["protocol"] == "catalog_hint"
+    await adapter.aclose()
+
+    # A refresh while models.dev is unreachable keeps every earlier enrichment,
+    # so no hint-routed Model loses its protocol or admission.
+    await refresh_models(
+        config,
+        "api-key-secret",
+        resources_dir,
+        credential_connection=config.get_connection("api-key"),
+    )
+
+    def without_connection_order(models: dict[str, Any]) -> dict[str, Any]:
+        return {
+            model_id: {**data, "connections": sorted(data["connections"])}
+            for model_id, data in models.items()
+        }
+
+    after_outage = read_models_file(resources_dir, "opencode-zen.json")["models"]
+    assert without_connection_order(after_outage) == without_connection_order(written)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_refresh_admits_by_the_wire_files_it_is_given(tmp_path: Path) -> None:
+    """A Runtime's wire data, Custom Provider blocks included, decides what is written."""
+    config = simple_compatible_config()
+    wire_file = parse_wire_profile_file(
+        "simple",
+        {
+            "format_version": WIRE_PROFILE_FORMAT_VERSION,
+            "rules": [
+                {
+                    "when": {"ids": ["old-model"]},
+                    "set": {"admission": {"state": "retired", "message": "gone"}},
+                }
+            ],
+        },
+        source="test",
+        report=pytest.fail,
+    )
+    assert wire_file is not None
+    respx.get("https://simple.example/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "old-model"}, {"id": "new-model"}]})
+    )
+
+    await refresh_models(
+        config,
+        API_KEY,
+        tmp_path,
+        credential_connection=config.get_connection("api-key"),
+        wire_files={"simple": wire_file},
+    )
+
+    assert set(read_models_file(tmp_path, "simple.json")["models"]) == {"new-model"}
 
 
 @respx.mock
@@ -159,7 +244,6 @@ async def test_opencode_go_projects_its_catalog_without_excluded_models(tmp_path
     result = await refresh_models(config, API_KEY, resources_dir)
 
     assert result["model_count"] == 1
-    assert _raw_ids(resources_dir, "opencode-go") == {"deepseek/deepseek-r1", "broken-preview"}
     assert set(read_models_file(resources_dir, "opencode-go.json")["models"]) == {
         "deepseek/deepseek-r1"
     }
@@ -178,7 +262,7 @@ async def test_github_copilot_projects_selectable_models_and_their_metadata(
         (FIXTURES_DIR / "github_copilot_models_raw.json").read_text(encoding="utf-8")
     )
     selectable = {entry["id"] for entry in payload["data"]}
-    # Hidden, non-chat and websocket-only entries stay in the raw audit only.
+    # Hidden, non-chat and websocket-only entries are not projected.
     payload["data"] += [
         {
             "id": "hidden-chat",
@@ -207,7 +291,6 @@ async def test_github_copilot_projects_selectable_models_and_their_metadata(
     written = read_models_file(resources_dir, "github-copilot.json")["models"]
     assert result["model_count"] == len(selectable)
     assert set(written) == selectable
-    assert read_models_file(resources_dir, "github-copilot.raw.json")["raw_response"] == payload
     assert written["gpt-5-mini"]["metadata"]["github_copilot"] == {
         "family": "gpt-5-mini",
         "parallel_tool_calls": True,
@@ -281,7 +364,6 @@ async def test_nous_projects_agent_models_for_the_selected_connection(tmp_path: 
     assert set(written) == {"vendor/agent-model"}
     assert written["vendor/agent-model"]["connections"] == ["subscription"]
     assert written["vendor/agent-model"]["max_output_tokens"] == 32000
-    assert _raw_ids(resources_dir, "nous") == {"vendor/agent-model", "Hermes-4-70B"}
     assert route.calls.last.request.headers["authorization"] == "Bearer nous-oauth-jwt"
 
 
@@ -339,7 +421,6 @@ async def test_stepfun_direct_refresh_keeps_other_connection_memberships(tmp_pat
         "step-3.5-flash": ["step-plan"],
         "step-router-v1": ["step-plan"],
     }
-    assert _raw_ids(resources_dir, "stepfun") == set(live_ids)
     assert route.calls.last.request.headers["authorization"] == "Bearer direct-token"
 
 
@@ -513,7 +594,6 @@ async def test_ollama_enriches_tags_through_api_show(tmp_path: Path) -> None:
     registry = ModelRegistry.load(tmp_path / "resources")
     local = registry.get("ollama", "ministral-3:8b")
     cloud = registry.get("ollama", "kimi-k2.6:cloud")
-    raw = read_models_file(tmp_path / "resources", "ollama.raw.json")
     assert result["model_count"] == 2
     assert show_route.call_count == 2
     assert (local.capabilities.tools, local.capabilities.vision) == (True, True)
@@ -522,7 +602,6 @@ async def test_ollama_enriches_tags_through_api_show(tmp_path: Path) -> None:
     assert local.connections == ("local",)
     assert cloud.capabilities.reasoning.supported is True
     assert cloud.metadata["ollama"] == {"remote": True}
-    assert len(raw["raw_enrichment_responses"]) == 2
 
 
 @respx.mock
@@ -674,7 +753,6 @@ async def test_openrouter_merges_supplementary_and_task_catalogs(tmp_path: Path)
     result = await refresh_models(openrouter_config(), API_KEY, resources_dir)
 
     written = read_models_file(resources_dir, "openrouter.json")["models"]
-    raw = read_models_file(resources_dir, "openrouter.raw.json")
     assert result["model_count"] == 6
     assert set(written) == {
         "openai/gpt-4o",
@@ -684,14 +762,6 @@ async def test_openrouter_merges_supplementary_and_task_catalogs(tmp_path: Path)
         "recraft/recraft-v3",
         "future-lab/pixel-marvel",
     }
-    assert sorted(entry["id"] for entry in raw["raw_response"]["data"]) == [
-        "openai/gpt-4o",
-        "openai/gpt-4o-mini-tts",
-        "openai/gpt-audio",
-        "openai/whisper-1",
-        "recraft/recraft-v3",
-    ]
-    assert "/images/models" in raw["raw_task_responses"]
     recraft = written["recraft/recraft-v3"]
     assert recraft["name"] == "Recraft V3"
     assert recraft["capabilities"]["task_options"]["image_generation"] == {

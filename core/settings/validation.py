@@ -86,6 +86,7 @@ from core.settings.settings import (
     validate_temperature,
     validate_thinking_effort,
     validate_timezone_name,
+    validate_top_p,
 )
 from core.utils.errors import StorageError
 
@@ -179,6 +180,7 @@ CUSTOM_PROVIDER_SHAPE = json_object(
                 {"capabilities": json_object(CUSTOM_MODEL_CAPABILITY_FIELDS)},
             )
         ),
+        "wire": OPAQUE,
     },
 )
 _OPENROUTER_ROUTING_POLICY_SHAPE = json_object(OPENROUTER_ROUTING_POLICY_FIELDS)
@@ -1011,6 +1013,27 @@ def _validate_local_models(diagnostics: list[JsonDiagnostic], value: Any) -> Non
             _error(diagnostics, key_path, "must be a positive integer")
 
 
+def _warn_custom_provider_wire(
+    diagnostics: list[JsonDiagnostic],
+    provider_path: str,
+    provider_id: str,
+    provider: Mapping[str, Any],
+) -> None:
+    """Report wire block entries the Provider ignores; they never invalidate the record."""
+
+    if provider.get("wire") is None:
+        return
+    # Imported here: the Providers package imports Settings modules at import time.
+    from core.providers.wire_profiles import custom_provider_wire_file
+
+    issues: list[str] = []
+    custom_provider_wire_file(provider_id, provider, report=issues.append, source="wire")
+    wire_path = _child_path(provider_path, "wire")
+    diagnostics.extend(
+        JsonDiagnostic(severity="warning", path=wire_path, message=issue) for issue in issues
+    )
+
+
 def _validate_providers(diagnostics: list[JsonDiagnostic], value: Any) -> None:
     if value is None:
         return
@@ -1047,7 +1070,7 @@ def _validate_providers(diagnostics: list[JsonDiagnostic], value: Any) -> None:
                     label="custom provider field",
                 )
                 try:
-                    normalize_custom_provider_settings(
+                    normalized = normalize_custom_provider_settings(
                         str(provider_id), strip_unknown_fields(provider, CUSTOM_PROVIDER_SHAPE)
                     )
                 except StorageError as exc:
@@ -1055,6 +1078,10 @@ def _validate_providers(diagnostics: list[JsonDiagnostic], value: Any) -> None:
                         diagnostics,
                         provider_path,
                         str(exc).replace("settings.providers.custom.", "", 1),
+                    )
+                else:
+                    _warn_custom_provider_wire(
+                        diagnostics, provider_path, str(provider_id), normalized
                     )
 
     openrouter = value.get("openrouter")
@@ -1147,6 +1174,12 @@ def validate_temperature_diagnostic(
     diagnostics: list[JsonDiagnostic], path: str, value: Any, *, allow_none: bool
 ) -> None:
     _delegate_field_rule(diagnostics, path, validate_temperature, value, allow_none=allow_none)
+
+
+def validate_top_p_diagnostic(
+    diagnostics: list[JsonDiagnostic], path: str, value: Any, *, allow_none: bool
+) -> None:
+    _delegate_field_rule(diagnostics, path, validate_top_p, value, allow_none=allow_none)
 
 
 def validate_thinking_effort_diagnostic(

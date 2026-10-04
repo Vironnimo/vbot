@@ -6,13 +6,13 @@ Read this reference when changing repository Agent discovery, supported source f
 
 `core/projects/scanners/base.py` defines the `AgentDetector` contract and `ScannedAgent` representation. The scanner registry has one detector per supported source format and a stable rank: OpenCode first, Claude second. A persisted Project selects exactly one detector through `source_format`; multi-format detection is advisory and does not merge formats into one Team.
 
-A `ScannedAgent` carries the normalized Agent id and display metadata plus the repository-derived runtime inputs needed by resolution: description, raw model, temperature, instructions body, source format/path, denied Tools, ordered Agent-target rules, and thinking effort. `AgentTargetRule` is the source-neutral pattern/allow representation; the resolver materializes it only against the current Project Team. A scanned Agent does not contain Project defaults, per-Agent overrides, global defaults, or the final effective capability set.
+A `ScannedAgent` carries the normalized Agent id and display metadata plus the repository-derived runtime inputs needed by resolution: description, raw model, temperature, top_p, instructions body, source format/path, denied Tools, ordered Agent-target rules, and thinking effort. `AgentTargetRule` is the source-neutral pattern/allow representation; the resolver materializes it only against the current Project Team. A scanned Agent does not contain Project defaults, per-Agent overrides, global defaults, or the final effective capability set.
 
 ## Format Mappings
 
 ### OpenCode
 
-`core/projects/scanners/opencode.py` reads Agent files directly under `.opencode/agents/`; discovery there is non-recursive. It parses frontmatter and body, retains supported model/temperature/thinking fields, converts explicit Tool or permission denials into `denied_tools`, and maps ordered scoped Sub-Agent target rules into `agent_target_rules`. Unknown or malformed permission structures fail open rather than accidentally disabling capabilities.
+`core/projects/scanners/opencode.py` reads Agent files directly under `.opencode/agents/`; discovery there is non-recursive. It parses frontmatter and body, retains supported model/temperature/top_p/thinking fields (a `top_p` outside 0-1 is dropped), converts explicit Tool or permission denials into `denied_tools`, and maps ordered scoped Sub-Agent target rules into `agent_target_rules`. Unknown or malformed permission structures fail open rather than accidentally disabling capabilities.
 
 ### Claude
 

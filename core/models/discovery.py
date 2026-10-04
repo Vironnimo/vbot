@@ -7,15 +7,17 @@ provider model file.
 
 from __future__ import annotations
 
+import copy
 import json
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
 
+from core.models.assembly import REASONING_CONTROL_FIELDS
 from core.models.models import (
     Model,
     ModelRegistry,
@@ -24,16 +26,19 @@ from core.models.models import (
 from core.models.models_dev import (
     ModelsDevCatalog,
     auto_canonical_pointer,
+    interleaved_field,
     provider_family,
     provider_limits,
     provider_modalities,
+    provider_npm,
     provider_pricing,
     provider_reasoning_block,
     provider_reasoning_supported,
-    reasoning_response_field,
 )
 from core.providers._http_shared import classify_http_status, wrap_network_error
+from core.providers._wire_profile_files import WireProfileFile
 from core.providers.adapter import ProviderAdapter
+from core.providers.adapter_types import ADAPTER_TYPES
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.errors import CatalogEntrySkipped, NetworkError
 from core.providers.github_copilot import GitHubCopilotAdapter
@@ -51,6 +56,7 @@ from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig
 from core.providers.stepfun import StepFunAdapter
 from core.providers.token_getter import OAuthRequestRecovery, StaticTokenGetter, TokenGetter
+from core.providers.wire_profiles import standalone_wire_binding
 from core.providers.xai import XAIAdapter
 from core.utils.errors import ProviderError, VBotError
 from core.utils.logging import get_logger
@@ -157,6 +163,7 @@ async def refresh_models(
     model_filter: ModelFilter | None = None,
     credential_connection: ConnectionConfig | None = None,
     models_dev_catalog: ModelsDevCatalog | None = None,
+    wire_files: Mapping[str, WireProfileFile] | None = None,
 ) -> dict[str, Any]:
     """Fetch, normalize, project, write, and invalidate one provider catalog.
 
@@ -179,6 +186,9 @@ async def refresh_models(
             written (the join is enrichment, not a dependency). Fetching the
             catalog ONCE per refresh is the caller's job (the RPC refresh path
             and the regen script) so it is not re-fetched per provider.
+        wire_files: The wire profile data whose admission decides which Models
+            are written; the bundled files when ``None``. A Runtime passes its
+            own, so a Custom Provider's Settings ``wire`` block applies.
     """
 
     _require_discovery_target(provider_config, credential_connection)
@@ -210,7 +220,7 @@ async def refresh_models(
                 else None
             )
 
-        raw_payload, raw_models = await _fetch_raw_models(
+        raw_models = await _fetch_raw_models(
             url, build_headers, auth_recovery=request_auth_recovery()
         )
 
@@ -224,7 +234,7 @@ async def refresh_models(
             for params in supplementary_params:
                 supplementary_url = _append_query_params(url, params)
                 try:
-                    _, supplementary_models = await _fetch_raw_models(
+                    supplementary_models = await _fetch_raw_models(
                         supplementary_url, build_headers, auth_recovery=request_auth_recovery()
                     )
                 except (httpx.HTTPError, ProviderError, NetworkError, ValueError) as exc:
@@ -238,26 +248,11 @@ async def refresh_models(
                 for supplementary_model in supplementary_models:
                     model_id = supplementary_model.get("id")
                     if isinstance(model_id, str) and model_id not in seen_ids:
-                        # ``raw_models`` is the same list object held inside
-                        # ``raw_payload`` (see ``_fetch_raw_models``), so this
-                        # single append also extends the persisted raw payload.
                         raw_models.append(supplementary_model)
                         seen_ids.add(model_id)
 
         models_dir = resources_dir / "models"
         models_dir.mkdir(parents=True, exist_ok=True)
-
-        # The raw dump is written before normalization so a schema mismatch
-        # still leaves the payload on disk for inspection.
-        raw_output_path = models_dir / f"{provider_config.id}.raw.json"
-        raw_output_data: dict[str, Any] = {
-            "provider_id": provider_config.id,
-            "fetched_at": fetched_at,
-            "raw_response": raw_payload,
-        }
-        raw_output_path.write_text(
-            json.dumps(raw_output_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
 
         catalog = models_dev_catalog
 
@@ -303,24 +298,18 @@ async def refresh_models(
         # listing endpoint omits (e.g. Ollama's POST /api/show for tool/vision/
         # thinking support and the context window). The adapter owns the
         # endpoints and the projection; discovery supplies POST plumbing with
-        # the same retry semantics as the catalog GET and records the raw
-        # responses. A failure degrades to the un-enriched catalog, never a
-        # failed refresh.
-        raw_enrichment_responses: list[dict[str, Any]] = []
+        # the same retry semantics as the catalog GET. A failure degrades to
+        # the un-enriched catalog, never a failed refresh.
         enrich_discovered_models = getattr(adapter_class, "enrich_discovered_models", None)
         if callable(enrich_discovered_models):
 
             async def _post_enrichment_json(endpoint: str, payload: dict[str, Any]) -> Any:
-                response_payload = await _post_json_payload(
+                return await _post_json_payload(
                     _join_url(base_url, endpoint),
                     build_headers,
                     payload,
                     auth_recovery=request_auth_recovery(),
                 )
-                raw_enrichment_responses.append(
-                    {"endpoint": endpoint, "request": payload, "response": response_payload}
-                )
-                return response_payload
 
             try:
                 enriched_models = await enrich_discovered_models(
@@ -334,31 +323,22 @@ async def refresh_models(
                 )
             else:
                 normalized_models.update(enriched_models)
-            if raw_enrichment_responses:
-                raw_output_data["raw_enrichment_responses"] = raw_enrichment_responses
-                raw_output_path.write_text(
-                    json.dumps(raw_output_data, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8",
-                )
 
         # A provider may expose dedicated task-capability catalogs (e.g. the
         # OpenRouter image API) whose typed per-model option schemas the
         # default models endpoint omits. The adapter owns those endpoints and
         # their projection into ``capabilities.task_options``; discovery only
-        # supplies the fetch plumbing and records the raw responses. A failure
-        # degrades to a catalog without task options, never a failed refresh.
-        raw_task_responses: dict[str, Any] = {}
+        # supplies the fetch plumbing. A failure degrades to a catalog without
+        # task options, never a failed refresh.
         discover_task_models = getattr(adapter_class, "discover_task_models", None)
         if callable(discover_task_models):
 
             async def _fetch_task_json(endpoint: str) -> Any:
-                payload = await _fetch_json_payload(
+                return await _fetch_json_payload(
                     _join_url(base_url, endpoint),
                     build_headers,
                     auth_recovery=request_auth_recovery(),
                 )
-                raw_task_responses[endpoint] = payload
-                return payload
 
             try:
                 task_models = await discover_task_models(normalized_models, _fetch_task_json)
@@ -370,27 +350,25 @@ async def refresh_models(
                 )
             else:
                 normalized_models.update(task_models)
-            if raw_task_responses:
-                # Rewrite the raw dump with the task-catalog responses so the
-                # safety net covers them too (a later wanted field is a
-                # projection edit, not a re-fetch).
-                raw_output_data["raw_task_responses"] = raw_task_responses
-                raw_output_path.write_text(
-                    json.dumps(raw_output_data, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8",
-                )
 
         # Refresh writes the PURE provider projection — NO override baking (that
         # cross-file merge moved to LOAD in Phase 2). Each model is serialized to
         # data and enriched with a models.dev canonical pointer / deviating ladder.
+        output_path = models_dir / f"{provider_config.id}.json"
+        existing_models = _read_existing_provider_models(output_path)
         projected_models = _project_provider_models(
             normalized_models,
             provider_config,
             catalog,
+            existing_models,
         )
-
-        output_path = models_dir / f"{provider_config.id}.json"
-        existing_models = _read_existing_provider_models(output_path)
+        projected_models = _admitted_models(
+            projected_models,
+            normalized_models,
+            provider_config,
+            credential_connection,
+            wire_files,
+        )
         connection_id = credential_connection.id if credential_connection is not None else None
         tagged_fresh = _tag_fresh_models(projected_models, connection_id)
         final_models = _merge_models_by_connection(existing_models, tagged_fresh, connection_id)
@@ -430,6 +408,7 @@ def _project_provider_models(
     normalized_models: Mapping[str, Model],
     provider_config: ProviderConfig,
     catalog: ModelsDevCatalog | None,
+    previous_models: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     """Serialize provider models to data and enrich each from models.dev.
 
@@ -439,6 +418,11 @@ def _project_provider_models(
     wire-id match and a **deviating reasoning ladder** when the provider's own
     ``reasoning_options`` differ from the lab spec. No cross-file merge — this is
     the pure provider projection.
+
+    When models.dev is unavailable, a wire id the current catalog already holds
+    keeps the facts an earlier enrichment gave it (``previous_models``): an
+    outage must not strip pricing, limits, canonical joins or the protocol hint
+    that routes and admits a gateway Model.
     """
 
     projected: dict[str, dict[str, Any]] = {}
@@ -447,8 +431,126 @@ def _project_provider_models(
         data = _model_to_data(model)
         if catalog is not None:
             _enrich_provider_model(data, provider_config.id, models_dev_id, wire_id, catalog)
+        elif wire_id in previous_models:
+            _carry_forward_enrichment(data, previous_models[wire_id], provider_config.id)
         projected[wire_id] = data
     return projected
+
+
+def _carry_forward_enrichment(
+    data: dict[str, Any], previous: Mapping[str, Any], provider_id: str
+) -> None:
+    """Keep what ``_enrich_provider_model`` added to ``previous``, under its own rules.
+
+    Fill, don't overwrite: a fact the endpoint reported now wins over the
+    earlier value, modalities only widen, and an adapter-reported reasoning
+    control is kept. Otherwise the reasoning control description is taken as
+    one unit from ``previous`` - including its absence, which lets a canonical
+    ladder flow through at load - while adapter facts outside it stay.
+    """
+
+    for key in ("canonical", "pricing"):
+        if key in previous and key not in data:
+            data[key] = copy.deepcopy(previous[key])
+    for key in ("context_window", "max_output_tokens", "family"):
+        if previous.get(key) and not data.get(key):
+            data[key] = previous[key]
+
+    metadata_key = _provider_metadata_key(provider_id)
+    previous_metadata = previous.get("metadata")
+    previous_facts = (
+        previous_metadata.get(metadata_key) if isinstance(previous_metadata, Mapping) else None
+    )
+    if isinstance(previous_facts, Mapping):
+        for fact in ("npm", "interleaved_field"):
+            if fact in previous_facts:
+                metadata = data.setdefault("metadata", {})
+                provider_metadata = metadata.setdefault(metadata_key, {})
+                provider_metadata.setdefault(fact, previous_facts[fact])
+
+    capabilities = data.get("capabilities")
+    previous_capabilities = previous.get("capabilities")
+    if not isinstance(capabilities, dict) or not isinstance(previous_capabilities, Mapping):
+        return
+    for direction in ("input_modalities", "output_modalities"):
+        earlier = previous_capabilities.get(direction)
+        if isinstance(earlier, list) and set(capabilities.get(direction) or []) < set(earlier):
+            capabilities[direction] = list(earlier)
+            if direction == "input_modalities":
+                capabilities["vision"] = "image" in earlier
+    current = capabilities.get("reasoning")
+    if isinstance(current, dict) and current.get("control") is not None:
+        return
+    adapter_facts = (
+        {key: value for key, value in current.items() if key not in REASONING_CONTROL_FIELDS}
+        if isinstance(current, dict)
+        else {}
+    )
+    earlier_reasoning = previous_capabilities.get("reasoning")
+    earlier_control = (
+        {
+            key: copy.deepcopy(value)
+            for key, value in earlier_reasoning.items()
+            if key in REASONING_CONTROL_FIELDS
+        }
+        if isinstance(earlier_reasoning, Mapping)
+        else {}
+    )
+    if earlier_control or adapter_facts:
+        capabilities["reasoning"] = {**earlier_control, **adapter_facts}
+    else:
+        capabilities.pop("reasoning", None)
+
+
+def _admitted_models(
+    projected: dict[str, dict[str, Any]],
+    normalized_models: Mapping[str, Model],
+    provider_config: ProviderConfig,
+    connection: ConnectionConfig | None,
+    wire_files: Mapping[str, WireProfileFile] | None,
+) -> dict[str, dict[str, Any]]:
+    """Keep the Models the Provider's wire profile admits on this Connection.
+
+    Admission is judged on the projected Model: a rule may depend on a fact
+    enrichment just added (the models.dev protocol hint decides which OpenCode
+    Zen Models have a reviewed wire). A restricted or retired Model is not
+    written, so it never appears in the Model DB.
+    """
+
+    adapter_class = ADAPTER_TYPES.get(provider_config.adapter)
+    if adapter_class is None:
+        return projected
+
+    def projected_model(model_id: str) -> Model | None:
+        model = normalized_models.get(model_id)
+        data = projected.get(model_id)
+        if model is None or data is None:
+            return None
+        return replace(
+            model,
+            family=data.get("family") or model.family,
+            metadata=data.get("metadata") or model.metadata,
+        )
+
+    binding = standalone_wire_binding(
+        provider_id=provider_config.id,
+        connection_id=connection.id if connection is not None else "",
+        protocols=adapter_class.WIRE_PROTOCOLS,
+        model_lookup=projected_model,
+        files=wire_files,
+    )
+    admitted: dict[str, dict[str, Any]] = {}
+    for model_id, data in projected.items():
+        admission = binding.profile(model_id).admission
+        if admission.state == "available":
+            admitted[model_id] = data
+            continue
+        _LOGGER.debug(
+            "Skipping model during discovery for provider '%s': %s",
+            provider_config.id,
+            admission.message or f"{model_id} is {admission.state}",
+        )
+    return admitted
 
 
 def _provider_metadata_key(provider_id: str) -> str:
@@ -481,15 +583,22 @@ def _enrich_provider_model(
       models.dev carries the provider-specific limits; "fill, don't overwrite",
       so a provider that DID report a limit keeps its own;
     * projects the models.dev ``interleaved`` response field into
-      ``metadata.<provider>.reasoning_response_field`` (Phase 5) when present;
+      ``metadata.<provider>.interleaved_field`` (Phase 5) when present;
+    * projects the Model's own AI SDK package (models.dev per-model
+      ``provider.npm``) into ``metadata.<provider>.npm``, the catalog protocol
+      hint of wire profiles;
     * when models.dev reports a ladder that *deviates* from the lab spec, sets
-      ``capabilities.reasoning`` to that deviating block (provider layer wins at
-      load);
-    * when the model joins the canonical layer and does NOT deviate, REMOVES the
-      provider's bare ``reasoning`` sub-field so the canonical lifted ladder is
-      inherited at load (the assembly merges ``capabilities`` one level deep, so
-      a present-but-bare provider ``reasoning`` would otherwise shadow the
-      canonical one — handoff: non-deviating provider layer is empty).
+      the reasoning control description to that deviating block (provider layer
+      wins at load);
+    * when the model joins the canonical layer and does NOT deviate, keeps an
+      adapter-reported control description (one with a ``control``) and drops
+      only a bare ``supported`` flag, so the canonical lifted ladder is
+      inherited at load. Adapters default that flag when the endpoint is silent,
+      so it is not a reported fact and must not shadow the canonical ladder (the
+      assembly takes the control description as one unit).
+
+    Reasoning facts outside the control description (``mandatory``) are always
+    kept: they are adapter facts that no models.dev or canonical source carries.
     """
 
     pointer = auto_canonical_pointer(catalog, models_dev_id=models_dev_id, wire_id=wire_id)
@@ -531,7 +640,7 @@ def _enrich_provider_model(
         if md_output and set(capabilities.get("output_modalities") or []) < set(md_output):
             capabilities["output_modalities"] = md_output
 
-    response_field = reasoning_response_field(
+    response_field = interleaved_field(
         catalog,
         models_dev_id=models_dev_id,
         wire_id=wire_id,
@@ -541,7 +650,15 @@ def _enrich_provider_model(
         if isinstance(metadata, dict):
             provider_metadata = metadata.setdefault(_provider_metadata_key(provider_id), {})
             if isinstance(provider_metadata, dict):
-                provider_metadata["reasoning_response_field"] = response_field
+                provider_metadata["interleaved_field"] = response_field
+
+    npm = provider_npm(catalog, models_dev_id=models_dev_id, wire_id=wire_id)
+    if npm is not None:
+        metadata = data.setdefault("metadata", {})
+        if isinstance(metadata, dict):
+            provider_metadata = metadata.setdefault(_provider_metadata_key(provider_id), {})
+            if isinstance(provider_metadata, dict):
+                provider_metadata["npm"] = npm
 
     deviating = provider_reasoning_block(
         catalog,
@@ -551,14 +668,26 @@ def _enrich_provider_model(
     capabilities = data.get("capabilities")
     if not isinstance(capabilities, dict):
         return
+    current = capabilities.get("reasoning")
+    adapter_facts = (
+        {key: value for key, value in current.items() if key not in REASONING_CONTROL_FIELDS}
+        if isinstance(current, dict)
+        else {}
+    )
     if deviating is not None:
-        capabilities["reasoning"] = deviating
+        capabilities["reasoning"] = {**deviating, **adapter_facts}
         return
-    # No deviation: let the canonical ladder flow through at load by dropping the
-    # provider's own reasoning block — but only when a canonical join exists to
-    # inherit from (an explicit pointer, or the wire-id is itself a canonical id).
+    # No deviation: let the canonical ladder flow through at load by dropping a
+    # bare adapter flag — but only when a canonical join exists to inherit from
+    # (an explicit pointer, or the wire-id is itself a canonical id). An adapter
+    # that reported a control keeps its whole block.
     if _has_canonical_join(catalog, pointer, wire_id):
-        capabilities.pop("reasoning", None)
+        if isinstance(current, dict) and current.get("control") is not None:
+            return
+        if adapter_facts:
+            capabilities["reasoning"] = adapter_facts
+        else:
+            capabilities.pop("reasoning", None)
         return
     # No deviating control AND no canonical base to inherit from (a gateway model
     # whose wire-id cannot reach the canonical layer): still project the bare
@@ -568,10 +697,9 @@ def _enrich_provider_model(
     md_reasoning = provider_reasoning_supported(
         catalog, models_dev_id=models_dev_id, wire_id=wire_id
     )
-    current = capabilities.get("reasoning")
     current_supported = current.get("supported") if isinstance(current, dict) else False
     if md_reasoning and not current_supported:
-        capabilities["reasoning"] = {"supported": True}
+        capabilities["reasoning"] = {**adapter_facts, "supported": True}
 
 
 def _has_canonical_join(catalog: ModelsDevCatalog, pointer: str | None, wire_id: str) -> bool:
@@ -592,7 +720,7 @@ async def _fetch_raw_models(
     headers: _HeaderSource,
     *,
     auth_recovery: OAuthRequestRecovery | None = None,
-) -> tuple[Any, list[Mapping[str, Any]]]:
+) -> list[Mapping[str, Any]]:
     payload = await _fetch_json_payload(url, headers, auth_recovery=auth_recovery)
 
     raw_models = _raw_models_from_payload(payload)
@@ -602,7 +730,7 @@ async def _fetch_raw_models(
     for raw_model in raw_models:
         if not isinstance(raw_model, dict):
             raise ValueError("Every raw model entry must be an object")
-    return payload, raw_models
+    return raw_models
 
 
 async def _fetch_json_payload(
@@ -913,12 +1041,12 @@ def _model_to_data(model: Model | Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _reasoning_to_data(reasoning: ReasoningCapabilities) -> dict[str, Any]:
-    """Serialize the typed reasoning block, omitting unset control fields.
+    """Serialize the typed reasoning block, omitting unset optional fields.
 
-    ``control``/``levels``/``budget_max`` are emitted only when present so the
-    on-disk form stays minimal — a model with no projected ladder serializes
-    back to the bare ``{"supported": bool}`` shape, matching "absent when not
-    supported (or not yet known)".
+    ``control``/``levels``/``budget_max`` are emitted only when present and
+    ``mandatory`` only when true, so the on-disk form stays minimal — a model
+    with no projected ladder serializes back to the bare ``{"supported": bool}``
+    shape, matching "absent when not supported (or not yet known)".
     """
 
     data: dict[str, Any] = {"supported": reasoning.supported}
@@ -928,6 +1056,8 @@ def _reasoning_to_data(reasoning: ReasoningCapabilities) -> dict[str, Any]:
         data["levels"] = list(reasoning.levels)
     if reasoning.budget_max is not None:
         data["budget_max"] = reasoning.budget_max
+    if reasoning.mandatory:
+        data["mandatory"] = True
     return data
 
 

@@ -1,5 +1,5 @@
-"""ProviderAdapter contract: abstract interface, defaults, Reasoning replay precedence,
-scoped request input budgets and public stream closure across nested wire routes."""
+"""ProviderAdapter contract: abstract interface, defaults, scoped request input
+budgets and public stream closure across nested wire routes."""
 
 from __future__ import annotations
 
@@ -26,11 +26,7 @@ from core.providers.lmstudio import LMStudioAdapter
 from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.openrouter import OpenRouterAdapter
-from core.providers.reasoning import (
-    REASONING_REPLAY_CURRENT_RUN,
-    REASONING_REPLAY_FULL_HISTORY,
-    REASONING_REPLAY_NONE,
-)
+from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 from core.providers.xai import XAIAdapter
 
 from .adapter_test_support import TOKEN, bearer_config, catalog_model
@@ -74,8 +70,14 @@ def test_concrete_adapter_must_implement_aclose_send_and_stream(missing: str) ->
 def test_optional_capabilities_degrade_safely_by_default() -> None:
     adapter = _StubAdapter()
 
-    # A forgotten media declaration degrades attachments instead of crashing the wire.
-    assert adapter.wire_media_support("any-model") == frozenset()
+    # Media support, byte limits, replay and listed Tools come from the wire profile.
+    profile = adapter.wire_profile("any-model")
+    assert adapter.wire_media_support("any-model") == profile.media.types
+    assert adapter.image_size_limit("any-model") is None
+    assert adapter.request_body_limit("any-model") is None
+    assert adapter.reasoning_replay_fidelity("any-model") == profile.replay.fidelity
+    assert adapter.reasoning_replay_policy("any-model") == REASONING_REPLAY_FULL_HISTORY
+    assert adapter.list_announced_tools("any-model") is False
     # Debug context is a no-op without a recorder.
     adapter.set_debug_context(
         DebugContext(
@@ -96,35 +98,6 @@ def test_optional_capabilities_degrade_safely_by_default() -> None:
     assert frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"}) == (
         IMAGE_WIRE_MEDIA_TYPES
     )
-
-
-@pytest.mark.parametrize(
-    ("model_override", "provider_default", "expected"),
-    [
-        pytest.param(None, None, REASONING_REPLAY_FULL_HISTORY, id="system-default"),
-        pytest.param(
-            None, REASONING_REPLAY_CURRENT_RUN, REASONING_REPLAY_CURRENT_RUN, id="provider-override"
-        ),
-        pytest.param(
-            REASONING_REPLAY_NONE,
-            REASONING_REPLAY_CURRENT_RUN,
-            REASONING_REPLAY_NONE,
-            id="model-override-wins",
-        ),
-    ],
-)
-def test_reasoning_replay_policy_precedence(
-    model_override: str | None, provider_default: str | None, expected: str
-) -> None:
-    kwargs: dict[str, Any] = {}
-    if provider_default is not None:
-        model = catalog_model("any-model", reasoning_replay=model_override)
-        kwargs = {
-            "model_lookup": lambda _model_id: model,
-            "reasoning_replay_default": provider_default,
-        }
-
-    assert _StubAdapter(**kwargs).reasoning_replay_policy("any-model") == expected
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +135,7 @@ def test_request_input_budget_evaluates_a_fallback_only_without_a_matching_scope
     assert len(calls) == 2
 
 
-_BUDGET_MODEL_ID = "gpt-4.1"
+_BUDGET_MODEL_ID = "gpt-5.5"  # the OpenAI wire file routes it to Responses on api-key
 _BUDGET_MESSAGES = [{"role": "user", "content": "Keep this request unchanged."}]
 _BUDGET_TOOLS = [
     {
@@ -188,7 +161,6 @@ def _budget_adapter(wire: str) -> tuple[Any, str]:
         context_window=256_000,
         max_output_tokens=256_000,
         metadata={
-            "openai": {"wire_policies": {"api-key": {"protocol": "responses"}}},
             "github_copilot": {
                 "vendor": "OpenAI",
                 "family": _BUDGET_MODEL_ID,

@@ -8,6 +8,7 @@
   } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
+  import OptionMarker from './OptionMarker.svelte';
 
   const noop = () => {};
   const componentId = $props.id();
@@ -401,7 +402,11 @@
         aria-hidden="true"
       ></span>
     {/if}
-    <span class="dropdown-primitive__option-label">{option.label}</span>
+    <span class="dropdown-primitive__option-label">{option.label}</span
+    >{#if option.marker}<OptionMarker
+        label={option.marker.label}
+        tooltip={option.marker.tooltip}
+      />{/if}
     {#if option.secondaryLabel}
       <span class="dropdown-primitive__option-meta">
         {option.secondaryLabel}

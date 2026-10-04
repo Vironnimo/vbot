@@ -18,14 +18,15 @@
     memberFieldIsOverridden,
     projectAgentTargetSummary,
   } from '$lib/projectsView.js';
-  import TextField from '../ui/TextField.svelte';
   import Dropdown from '../Dropdown.svelte';
   import CompactionPolicyEditor from '../compaction/CompactionPolicyEditor.svelte';
+  import SamplingSettings from '../sampling/SamplingSettings.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import ToolAccessEditor from '../tools/ToolAccessEditor.svelte';
   import {
     effortOptionsForReasoning,
     reasoningForModelValue,
+    samplingRecommendationsForModelValue,
   } from '$lib/agentForm.js';
   let {
     projectsState = $bindable(),
@@ -58,15 +59,20 @@
       label: () => t('projects.team.effectiveModel'),
       empty: () => t('projects.team.valueNotConfigured'),
     },
-    temperature: {
-      label: () => t('projects.team.effectiveTemperature'),
-      empty: () => t('projects.team.valueProviderDefault'),
-    },
     thinking_effort: {
       label: () => t('projects.team.effectiveThinkingEffort'),
       empty: () => t('projects.team.valueProviderDefault'),
     },
+    temperature: {
+      label: () => t('projects.team.effectiveTemperature'),
+      empty: () => t('projects.team.valueProviderDefault'),
+    },
+    top_p: {
+      label: () => t('projects.team.effectiveTopP'),
+      empty: () => t('projects.team.valueProviderDefault'),
+    },
   });
+  const EFFECTIVE_FIELDS = Object.keys(EFFECTIVE_FIELD_META);
 
   // The collapsed row's details card: the description leads; the rows give
   // the Agent's address, its effective run values with where each comes
@@ -95,9 +101,7 @@
           value: projectId ? `${member.agent_id}@${projectId}` : '',
           mono: true,
         },
-        effectiveRow('model'),
-        effectiveRow('temperature'),
-        effectiveRow('thinking_effort'),
+        ...EFFECTIVE_FIELDS.map(effectiveRow),
         {
           label: t('projects.team.sourceFileLabel'),
           value: member.source_path,
@@ -176,6 +180,39 @@
           ? t('projects.manage.providerThinkingEffortDefault')
           : t(`agents.form.thinkingEffortOption.${option}`),
     }));
+  }
+
+  // The sampling overrides with the recommendations of the Model this member
+  // runs: the drafted override Model, else the effective one.
+  function overrideSamplingFields(member) {
+    const draft = overrideDraft(member.agent_id);
+    const recommendations = samplingRecommendationsForModelValue(
+      draft.model || member?.effective?.model?.value || '',
+      projectsState.availableModels,
+    );
+    const field = (fieldName) => ({
+      value: draft[fieldName] ?? '',
+      hint: inheritedSamplingHint(member, fieldName),
+      explicit: memberFieldIsOverridden(member, fieldName),
+      recommended: recommendations[fieldName],
+      clearLabel: t('projects.team.clearOverride'),
+    });
+    return { temperature: field('temperature'), top_p: field('top_p') };
+  }
+
+  // What applies while the box is empty: the repository, Project or global value
+  // with its source, or the Provider default. An overridden field has no
+  // inherited value to show, so it gets no hint.
+  function inheritedSamplingHint(member, field) {
+    if (memberFieldIsOverridden(member, field)) return '';
+    const display = effectiveDisplay(member, field);
+    const value = display.sourceLabel
+      ? t('projects.team.valueWithSource', {
+          value: display.value,
+          source: display.sourceLabel,
+        })
+      : display.value;
+    return t('projects.team.samplingInherited', { value });
   }
 
   function overrideModelOptions(member) {
@@ -328,7 +365,7 @@
               {#if expanded}
                 <div class="projects-team-detail">
                   <ul class="projects-effective-list">
-                    {#each ['model', 'temperature', 'thinking_effort'] as field (field)}
+                    {#each EFFECTIVE_FIELDS as field (field)}
                       {@const display = effectiveDisplay(member, field)}
                       <li class="projects-effective-row">
                         <span class="projects-effective-label">
@@ -419,51 +456,6 @@
                         <div class="projects-member-field__info">
                           <label
                             class="s-row-label"
-                            for={`project-override-temperature-${member.agent_id}`}
-                          >
-                            {t('projects.team.effectiveTemperature')}
-                          </label>
-                          {#if memberFieldIsOverridden(member, 'temperature')}
-                            <Button
-                              variant="tertiary"
-                              class="projects-clear-override"
-                              data-testid={`project-override-clear-temperature-${member.agent_id}`}
-                              onClick={() =>
-                                applyClearOverride(
-                                  member.agent_id,
-                                  'temperature',
-                                )}
-                            >
-                              {t('projects.team.clearOverride')}
-                            </Button>
-                          {/if}
-                        </div>
-                        <div
-                          class="projects-member-field__control projects-number-control"
-                        >
-                          <TextField
-                            id={`project-override-temperature-${member.agent_id}`}
-                            class="projects-number-input"
-                            inputmode="decimal"
-                            value={overrideDraft(member.agent_id).temperature}
-                            placeholder={t(
-                              'projects.team.overrideTemperaturePlaceholder',
-                            )}
-                            ariaLabel={t('projects.team.effectiveTemperature')}
-                            onInput={(next) =>
-                              updateOverrideDraft(
-                                member.agent_id,
-                                'temperature',
-                                next,
-                              )}
-                          />
-                        </div>
-                      </div>
-
-                      <div class="projects-member-field">
-                        <div class="projects-member-field__info">
-                          <label
-                            class="s-row-label"
                             for={`project-override-thinking-${member.agent_id}`}
                           >
                             {t('projects.team.effectiveThinkingEffort')}
@@ -501,6 +493,17 @@
                               )}
                           />
                         </div>
+                      </div>
+
+                      <div class="projects-sampling">
+                        <SamplingSettings
+                          idPrefix={`project-override-${member.agent_id}`}
+                          fields={overrideSamplingFields(member)}
+                          onChange={(field, value) =>
+                            updateOverrideDraft(member.agent_id, field, value)}
+                          onClear={(field) =>
+                            applyClearOverride(member.agent_id, field)}
+                        />
                       </div>
 
                       <div

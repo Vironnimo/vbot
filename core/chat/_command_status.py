@@ -23,12 +23,14 @@ from core.chat.status_report import (
     STATUS_PLACEHOLDER,
     ReasoningRenderDescriber,
     StatusSessionFacts,
+    WireProfileDescriber,
     build_status_reply,
     resolve_reported_thinking_effort,
     resolve_status_activity,
     resolve_status_model_details,
     resolve_status_project_label,
-    resolve_status_temperature,
+    resolve_status_sampling,
+    resolve_status_wire_profile,
 )
 from core.projects import format_agent_address
 from core.runs import ChatRunManager
@@ -181,6 +183,7 @@ async def _execute_status(
     sessions: ChatSessionManager | None,
     started_at: datetime | None,
     storage: Any | None,
+    wire_profile_describer: WireProfileDescriber | None,
 ) -> CommandOutcome:
     agent: RuntimeAgent | None = None
     status_session: list[ChatMessage] | StatusSessionFacts = []
@@ -246,6 +249,17 @@ async def _execute_status(
         context.session_id,
         context.project_id,
     )
+    # Resolving the Connection reads credential state, so it runs off the loop.
+    wire_profile = await _COMMAND_WORKERS.run(
+        resolve_status_wire_profile, agent, wire_profile_describer
+    )
+    actual_thinking_effort = await _COMMAND_WORKERS.run(
+        resolve_reported_thinking_effort,
+        agent=agent,
+        models=models,
+        model_details=model_details,
+        describe_render=reasoning_render_describer,
+    )
     text = build_status_reply(
         agent,
         status_session,
@@ -253,18 +267,11 @@ async def _execute_status(
         started_at,
         model_details.display_name,
         activity,
-        actual_thinking_effort=resolve_reported_thinking_effort(
-            agent=agent,
-            models=models,
-            model_details=model_details,
-            describe_render=reasoning_render_describer,
-        ),
+        actual_thinking_effort=actual_thinking_effort,
         project_label=resolve_status_project_label(projects, context.project_id),
-        temperature_status=resolve_status_temperature(
-            agent.temperature if agent is not None else None,
-            model_details,
-        ),
+        sampling_status=resolve_status_sampling(agent, model_details),
         timezone=_status_timezone(storage=storage),
+        wire_profile=wire_profile,
     )
     return CommandOutcome(
         command="status",

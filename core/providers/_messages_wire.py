@@ -26,6 +26,7 @@ from core.providers.reasoning import (
     reasoning_token_count,
 )
 from core.providers.tool_schema import render_tool_definitions
+from core.providers.wire_profile import ToolSchemaProfile
 
 
 def _to_anthropic_messages(
@@ -243,6 +244,14 @@ def _reasoning_blocks_from_meta(reasoning_meta: Any) -> list[dict[str, Any]]:
     return [dict(block) for block in blocks if _is_supported_reasoning_block(block)]
 
 
+def messages_returned_reasoning(response: Mapping[str, Any]) -> bool:
+    """Whether a Messages reply carries a thinking or redacted-thinking block."""
+
+    return any(
+        _is_supported_reasoning_block(block) for block in _content_blocks(response.get("content"))
+    )
+
+
 def _is_supported_reasoning_block(block: Any) -> bool:
     if not isinstance(block, dict):
         return False
@@ -252,14 +261,13 @@ def _is_supported_reasoning_block(block: Any) -> bool:
 def _apply_anthropic_tools(
     payload: dict[str, Any],
     kwargs: dict[str, Any],
+    *,
+    profile: ToolSchemaProfile = "omit_strict",
 ) -> None:
     tools = kwargs.pop("tools", None)
     if not tools:
         return
-    rendered = render_tool_definitions(
-        tools,
-        profile="omit_strict",
-    )
+    rendered = render_tool_definitions(tools, profile=profile)
     payload["tools"] = [
         {
             "name": tool["name"],

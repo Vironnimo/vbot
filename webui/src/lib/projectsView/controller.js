@@ -28,7 +28,7 @@ import {
   normalizeProjects,
   projectTeam,
   seedTeamOverrideDraft,
-  normalizeOverrideTemperature,
+  normalizeOverrideNumber,
   normalizeScanReport,
 } from './presentation.js';
 import { createProjectDialogs } from './dialogs.js';
@@ -134,6 +134,7 @@ export function createProjectsController({
         default_model: state.editForm.default_model,
         source_format: state.editForm.source_format,
         default_temperature: state.editForm.default_temperature,
+        default_top_p: state.editForm.default_top_p,
         default_thinking_effort: state.editForm.default_thinking_effort,
         auto_load: state.editForm.auto_load,
         allowed_tools: state.editForm.allowed_tools,
@@ -217,22 +218,7 @@ export function createProjectsController({
   }
 
   function overrideDraftsHaveChanges() {
-    return state.activeTeam.some((member) => {
-      const draft = state.overrideDrafts[member.agent_id];
-      if (!draft) {
-        return false;
-      }
-      const savedDraft = seedTeamOverrideDraft(member);
-      return (
-        draft.model !== savedDraft.model ||
-        draft.temperature !== savedDraft.temperature ||
-        draft.thinking_effort !== savedDraft.thinking_effort ||
-        JSON.stringify(draft.compaction_policy) !==
-          JSON.stringify(savedDraft.compaction_policy) ||
-        JSON.stringify(draft.tool_access) !==
-          JSON.stringify(savedDraft.tool_access)
-      );
-    });
+    return pendingOverrideChanges().length > 0;
   }
 
   function projectReloadCanApply() {
@@ -612,6 +598,7 @@ export function createProjectsController({
       state.overrideDrafts[agentId] ?? {
         model: '',
         temperature: '',
+        top_p: '',
         thinking_effort: '',
         compaction_policy: null,
         tool_access: { mode: 'all' },
@@ -641,8 +628,8 @@ export function createProjectsController({
     if (field === 'model') {
       return draft.model.trim();
     }
-    if (field === 'temperature') {
-      return normalizeOverrideTemperature(draft.temperature);
+    if (field === 'temperature' || field === 'top_p') {
+      return normalizeOverrideNumber(draft[field]);
     }
     if (field === 'compaction_policy') {
       return draft.compaction_policy;
@@ -661,8 +648,8 @@ export function createProjectsController({
     if (field === 'model') {
       return typeof draft.model === 'string' && draft.model.trim().length > 0;
     }
-    if (field === 'temperature') {
-      return normalizeOverrideTemperature(draft.temperature) !== null;
+    if (field === 'temperature' || field === 'top_p') {
+      return normalizeOverrideNumber(draft[field]) !== null;
     }
     if (field === 'compaction_policy') {
       return draft.compaction_policy !== null;
@@ -695,6 +682,11 @@ export function createProjectsController({
   async function savePendingOverrides() {
     clearToolAccessOverrideAutoSave({ flushPending: false });
     for (const change of pendingOverrideChanges()) {
+      if (isClearedSamplingDraft(change.agentId, change.field)) {
+        if (!(await clearMemberOverride(change.agentId, change.field)))
+          return false;
+        continue;
+      }
       if (!canSetOverride(change.agentId, change.field)) {
         state.editError = t('errors.validation');
         return false;
@@ -705,6 +697,14 @@ export function createProjectsController({
         return false;
     }
     return true;
+  }
+
+  // An emptied sampling box means "no override": saving it clears the override.
+  function isClearedSamplingDraft(agentId, field) {
+    return (
+      (field === 'temperature' || field === 'top_p') &&
+      String(overrideDraft(agentId)[field] ?? '').trim() === ''
+    );
   }
 
   async function setMemberOverride(agentId, field, explicitValue = undefined) {
@@ -769,7 +769,7 @@ export function createProjectsController({
   async function clearMemberOverride(agentId, field) {
     const project = selectedProject();
     if (!project || state.overrideBusyKey) {
-      return;
+      return false;
     }
     if (field === 'tool_access') {
       clearToolAccessOverrideAutoSave({ flushPending: false });
@@ -783,13 +783,14 @@ export function createProjectsController({
         field,
       );
       if (!active) {
-        return;
+        return false;
       }
       applyScan(result?.scan, { replaceDrafts: true });
       onToast({
         title: t('projects.team.overrideCleared'),
         variant: 'success',
       });
+      return true;
     } catch (error) {
       if (active) {
         onToast({
@@ -798,6 +799,7 @@ export function createProjectsController({
           sticky: true,
         });
       }
+      return false;
     } finally {
       if (active) {
         state.overrideBusyKey = '';

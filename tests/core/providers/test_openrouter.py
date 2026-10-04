@@ -223,7 +223,7 @@ def _marked(message: dict[str, Any]) -> bool:
     ("model_id", "marked"),
     [
         ("anthropic/claude-sonnet-4.6", True),
-        pytest.param("~anthropic/CLAUDE-haiku-latest", True, id="auto-router-any-case"),
+        pytest.param("~anthropic/claude-haiku-latest", True, id="auto-router"),
         ("openai/gpt-5.2", False),
     ],
 )

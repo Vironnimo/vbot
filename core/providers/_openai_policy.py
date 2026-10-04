@@ -1,95 +1,9 @@
-"""Openai policy."""
+"""OpenAI catalog normalization helpers (Codex ``/codex/models`` entries)."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 from typing import Any
-
-from core.providers._openai_constants import (
-    OPENAI_SUBSCRIPTION_REQUEST_PARAMETERS,
-    OPTIONAL_REQUEST_PARAMETER_NAMES,
-    REASONING_PARAMETER_NAMES,
-    RESPONSES_POLICY_ENDPOINT,
-    STRUCTURED_OUTPUT_PARAMETER_NAMES,
-    TOOL_PARAMETER_NAMES,
-)
-from core.providers.reasoning import (
-    closest_supported_effort,
-    normalize_thinking_effort,
-)
-
-
-@dataclass(frozen=True)
-class OpenAISubscriptionResponsesPolicy:
-    """Responses request policy for OpenAI Subscription models."""
-
-    allowed_reasoning_efforts: frozenset[str]
-    supports_tools: bool
-    supports_parallel_tool_calls: bool
-    supports_structured_outputs: bool
-    supports_streaming: bool = True
-    endpoint_path: str = RESPONSES_POLICY_ENDPOINT
-    supported_request_parameters: frozenset[str] = OPENAI_SUBSCRIPTION_REQUEST_PARAMETERS
-    supports_explicit_none_effort: bool = False
-    minimum_reasoning_effort: str | None = None
-
-    @property
-    def allows_any_reasoning_controls(self) -> bool:
-        return bool(self.allowed_reasoning_efforts)
-
-    def filter_request_kwargs(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
-        filtered_kwargs = dict(kwargs)
-        if not self.supports_tools:
-            for parameter_name in TOOL_PARAMETER_NAMES:
-                filtered_kwargs.pop(parameter_name, None)
-        elif not self.supports_parallel_tool_calls:
-            filtered_kwargs.pop("parallel_tool_calls", None)
-
-        if not self.supports_structured_outputs:
-            for parameter_name in STRUCTURED_OUTPUT_PARAMETER_NAMES:
-                filtered_kwargs.pop(parameter_name, None)
-
-        if not self.allows_any_reasoning_controls:
-            for parameter_name in REASONING_PARAMETER_NAMES:
-                filtered_kwargs.pop(parameter_name, None)
-        else:
-            self._normalize_reasoning_effort(filtered_kwargs, "thinking_effort")
-            self._normalize_reasoning_effort(filtered_kwargs, "reasoning_effort")
-
-        for parameter_name in OPTIONAL_REQUEST_PARAMETER_NAMES:
-            if (
-                parameter_name in filtered_kwargs
-                and parameter_name not in self.supported_request_parameters
-            ):
-                filtered_kwargs.pop(parameter_name, None)
-        return filtered_kwargs
-
-    def closest_reasoning_effort(self, effort: Any) -> str | None:
-        normalized_effort = normalize_thinking_effort(effort)
-        if not normalized_effort:
-            return None
-        if normalized_effort == "none":
-            if self.minimum_reasoning_effort in self.allowed_reasoning_efforts:
-                return self.minimum_reasoning_effort
-            return "none" if self.allows_any_reasoning_controls else None
-        return closest_supported_effort(normalized_effort, self.allowed_reasoning_efforts)
-
-    def supports_request_parameter(self, parameter_name: str) -> bool:
-        return parameter_name in self.supported_request_parameters
-
-    def _normalize_reasoning_effort(
-        self,
-        filtered_kwargs: dict[str, Any],
-        parameter_name: str,
-    ) -> None:
-        if parameter_name not in filtered_kwargs:
-            return
-        safe_effort = self.closest_reasoning_effort(filtered_kwargs.get(parameter_name))
-        if safe_effort is None:
-            filtered_kwargs.pop(parameter_name, None)
-            return
-        filtered_kwargs[parameter_name] = safe_effort
 
 
 def _normalize_catalog_raw(raw: Mapping[str, Any]) -> Mapping[str, Any]:

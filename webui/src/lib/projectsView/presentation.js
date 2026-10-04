@@ -23,6 +23,10 @@ export function createProjectEditForm(project = null) {
       typeof project?.default_temperature === 'number'
         ? String(project.default_temperature)
         : '',
+    default_top_p:
+      typeof project?.default_top_p === 'number'
+        ? String(project.default_top_p)
+        : '',
     default_thinking_effort:
       project?.default_thinking_effort === null ||
       project?.default_thinking_effort === undefined
@@ -118,9 +122,10 @@ const FINDING_TYPES = Object.freeze([
 ]);
 
 // The mutable fields a manage form can change through project.set. cwd is
-// handled by the dedicated re-point path, and default_temperature /
-// default_thinking_effort have their own typed diff (number/null and
-// null/''/level), so they are not part of this generic string-trim diff.
+// handled by the dedicated re-point path, and the sampling defaults
+// (default_temperature / default_top_p) and default_thinking_effort have their
+// own typed diff (number/null and null/''/level), so they are not part of this
+// generic string-trim diff.
 const MANAGE_FIELDS = Object.freeze([
   'display_name',
   'default_agent',
@@ -132,6 +137,12 @@ const MANAGE_FIELDS = Object.freeze([
 // empty form value is "no change", never a clear-to-null. Display name is
 // intentionally clearable and then falls back to the stable Project id.
 const NON_CLEARABLE_MANAGE_FIELDS = Object.freeze(new Set(['source_format']));
+
+// The Project's sampling defaults, each a number or null.
+const PROJECT_SAMPLING_FIELDS = Object.freeze([
+  'default_temperature',
+  'default_top_p',
+]);
 
 // The per-project source format vocabulary (mirrors the backend
 // PROJECT_SOURCE_FORMATS): which coding-agent ecosystem the project's Team
@@ -231,15 +242,14 @@ export function buildManageProjectPayload(formValues, project) {
     changes[field] = next === '' ? null : next;
   }
 
-  // Temperature: form string → number|null; send only when it differs from the
+  // Sampling: form string → number|null; send only when it differs from the
   // stored value. null clears the project default (fall through the chain), a
   // number sets it (0 is a real value, the sampling floor).
-  const nextTemperature = normalizeProjectTemperature(
-    formValues?.default_temperature,
-  );
-  const currentTemperature = numberOrNull(project?.default_temperature);
-  if (nextTemperature !== currentTemperature) {
-    changes.default_temperature = nextTemperature;
+  for (const field of PROJECT_SAMPLING_FIELDS) {
+    const next = normalizeProjectNumber(formValues?.[field]);
+    if (next !== numberOrNull(project?.[field])) {
+      changes[field] = next;
+    }
   }
 
   // Thinking effort: form (sentinel|''|level) → null|''|level; send only on a
@@ -527,6 +537,7 @@ export function normalizeProject(project) {
     default_agent: asText(project?.default_agent),
     default_model: asText(project?.default_model),
     default_temperature: numberOrNull(project?.default_temperature),
+    default_top_p: numberOrNull(project?.default_top_p),
     default_thinking_effort: stringOrNull(project?.default_thinking_effort),
     source_format: PROJECT_SOURCE_FORMATS.includes(project?.source_format)
       ? project.source_format
@@ -550,13 +561,14 @@ export function normalizeProjects(projects) {
   return raw.map((project) => normalizeProject(project));
 }
 
-// The three per-agent overridable / effective run fields, in display order. Each is
+// The per-agent overridable / effective run fields, in display order. Each is
 // resolved through the config-agent chain (override → agent file → project default →
 // global default) and reported by the scan as `effective[field] = {value, source}`.
 const TEAM_EFFECTIVE_FIELDS = Object.freeze([
   'model',
-  'temperature',
   'thinking_effort',
+  'temperature',
+  'top_p',
 ]);
 
 // The winning-source discriminant the scan reports on `effective[field].source`
@@ -580,19 +592,20 @@ export function projectTeam(scan) {
     model: asText(member?.model),
     temperature:
       typeof member?.temperature === 'number' ? member.temperature : null,
+    top_p: typeof member?.top_p === 'number' ? member.top_p : null,
     thinking_effort: stringOrNull(member?.thinking_effort),
     source_format: asText(member?.source_format),
     source_path: asText(member?.source_path),
     denied_tools: normalizeStringList(member?.denied_tools),
     tools:
       member?.tools && typeof member.tools === 'object' ? member.tools : {},
-    // The per-agent override object (any subset of model/temperature/thinking_effort),
+    // The per-agent override object (any subset of the run fields above),
     // or null when the agent has no override. Read shape-only here — the row derives
     // whether a field is overridden from `effective[field].source === 'override'`.
     overrides: normalizeOverrides(member?.overrides),
     // The provenance-aware resolved values, one entry per run field:
     // `{ value, source }`. A null value means "not configured" (model) or
-    // "provider default" (temperature/thinking); a null source means no tier won.
+    // "provider default" (sampling/thinking); a null source means no tier won.
     effective: normalizeEffective(member?.effective),
   }));
 }
@@ -628,7 +641,7 @@ export function projectAgentTargetSummary(member, team = []) {
 
 // Normalize the member's `overrides` object into a plain map of the known fields, or
 // null when absent/empty. The value shapes are field-specific and passed through
-// verbatim (model string, temperature number, thinking-effort string).
+// verbatim (model string, sampling number, thinking-effort string).
 function normalizeOverrides(overrides) {
   if (!isPlainObject(overrides)) {
     return null;
@@ -689,9 +702,10 @@ export function memberFieldIsOverridden(member, field) {
 
 // Seed the per-field override draft (the values the override controls edit) for one
 // team member. The model draft is the member's overridden model (or the
-// effective/repo model as a starting suggestion), the temperature draft a text box
-// seeded from the overridden/effective number, the thinking-effort draft the
-// overridden/effective level. A blank draft means "nothing typed yet".
+// effective/repo model as a starting suggestion), the thinking-effort draft the
+// overridden/effective level. Each sampling draft (temperature, top_p) holds only
+// the override itself: an empty box means "no override", so the inherited value,
+// or the Provider default, stays in effect and is never copied into an override.
 export function seedTeamOverrideDraft(member) {
   const overrides = isPlainObject(member?.overrides) ? member.overrides : {};
   const effective = member?.effective ?? {};
@@ -699,9 +713,8 @@ export function seedTeamOverrideDraft(member) {
   const modelSeed = hasText(overrides.model)
     ? String(overrides.model)
     : effectiveTextValue(effective.model);
-  const temperatureSeed = hasNumber(overrides.temperature)
-    ? String(overrides.temperature)
-    : effectiveTextValue(effective.temperature);
+  const samplingSeed = (field) =>
+    hasNumber(overrides[field]) ? String(overrides[field]) : '';
   const thinkingSeed =
     typeof overrides.thinking_effort === 'string'
       ? overrides.thinking_effort
@@ -709,7 +722,8 @@ export function seedTeamOverrideDraft(member) {
 
   return {
     model: modelSeed,
-    temperature: temperatureSeed,
+    temperature: samplingSeed('temperature'),
+    top_p: samplingSeed('top_p'),
     thinking_effort: thinkingSeed,
     compaction_policy: isPlainObject(overrides.compaction_policy)
       ? normalizeCompactionPolicy(overrides.compaction_policy)
@@ -720,11 +734,11 @@ export function seedTeamOverrideDraft(member) {
   };
 }
 
-// The temperature override value for the payload: a comma-tolerant number, or null
-// when the box is empty/non-numeric (the Set button is disabled on null — an
-// override must carry a value; clearing is a separate action).
-export function normalizeOverrideTemperature(value) {
-  return normalizeProjectTemperature(value);
+// A sampling override value (temperature, top_p) for the payload: a
+// comma-tolerant number, or null when the box is empty/non-numeric. An emptied
+// box clears the override (see the controller's savePendingOverrides).
+export function normalizeOverrideNumber(value) {
+  return normalizeProjectNumber(value);
 }
 
 function effectiveTextValue(entry) {
@@ -786,10 +800,10 @@ function normalizeAutoLoad(value) {
   return normalizeStringList(value);
 }
 
-// Form temperature (a string, possibly comma-decimal) → number|null. Mirrors
-// settingsView.js' normalizeAgentDefaultsTemperature: an empty/non-numeric box
-// is "no value" (null), so the chain falls through.
-function normalizeProjectTemperature(value) {
+// Form sampling value (a string, possibly comma-decimal) → number|null. Mirrors
+// settingsView.js' normalizeAgentDefaultsNumber: an empty/non-numeric box is
+// "no value" (null), so the chain falls through.
+function normalizeProjectNumber(value) {
   const normalized = String(value).trim();
   if (normalized.length === 0) {
     return null;

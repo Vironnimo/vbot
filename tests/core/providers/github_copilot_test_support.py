@@ -3,6 +3,8 @@
 The Adapter routes each Model to ``/chat/completions``, ``/responses`` or
 ``/v1/messages``. The helpers mock all three endpoints at once, so a test
 observes the selected route from the endpoint that was actually called.
+Synthetic Models are normalized from ``/models`` entries, so their catalog
+capabilities and ``github_copilot`` metadata agree as they do in production.
 """
 
 from __future__ import annotations
@@ -17,11 +19,12 @@ import httpx
 import respx
 
 from core.models.models import Model
-from core.providers.github_copilot import GitHubCopilotAdapter
-from core.providers.github_copilot_policy import (
+from core.providers.github_copilot import (
     CHAT_COMPLETIONS_ENDPOINT,
+    COPILOT_METADATA_KEY,
     MESSAGES_ENDPOINT,
     RESPONSES_ENDPOINT,
+    GitHubCopilotAdapter,
 )
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.token_getter import TokenGetter
@@ -136,6 +139,45 @@ def copilot_model(model_id: str) -> Model:
     return GitHubCopilotAdapter.normalize_catalog_entry(raw_copilot_models()[model_id], {})
 
 
+_SUPPORT_FACTS = (
+    "min_thinking_budget",
+    "max_thinking_budget",
+    "adaptive_thinking",
+    "parallel_tool_calls",
+    "streaming",
+    "structured_outputs",
+    "tool_calls",
+)
+
+
+def _raw_catalog_entry(model_id: str, metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """The ``/models`` entry whose normalized ``github_copilot`` metadata is ``metadata``."""
+
+    facts = {
+        key: value
+        for key, value in metadata.get(COPILOT_METADATA_KEY, {}).items()
+        if value is not None
+    }
+    supports: dict[str, Any] = {key: facts[key] for key in _SUPPORT_FACTS if key in facts}
+    if "reasoning_efforts" in facts:
+        supports["reasoning_effort"] = list(facts["reasoning_efforts"])
+    limits: dict[str, Any] = {}
+    if "max_prompt_tokens" in facts:
+        limits["max_prompt_tokens"] = facts["max_prompt_tokens"]
+    if "vision" in facts:
+        supports["vision"] = True
+        limits["vision"] = dict(facts["vision"])
+    raw: dict[str, Any] = {
+        "id": model_id,
+        "name": model_id,
+        "capabilities": {"family": facts.get("family", ""), "supports": supports, "limits": limits},
+    }
+    for key in ("vendor", "version", "supported_endpoints"):
+        if key in facts:
+            raw[key] = facts[key]
+    return raw
+
+
 def copilot_model_with_metadata(
     model_id: str,
     metadata: Mapping[str, Any],
@@ -143,13 +185,10 @@ def copilot_model_with_metadata(
     family: str = "",
     context_window: int | None = None,
 ) -> Model:
-    """A catalog Model without an output limit that carries only the given metadata."""
+    """A catalog Model without an output limit, normalized from the given metadata's facts."""
 
-    base_model = GitHubCopilotAdapter.normalize_catalog_entry(
-        {"id": model_id, "name": model_id, "capabilities": {"supports": {}}},
-        {},
-    )
-    return replace(base_model, metadata=metadata, family=family, context_window=context_window)
+    model = GitHubCopilotAdapter.normalize_catalog_entry(_raw_catalog_entry(model_id, metadata), {})
+    return replace(model, family=family, context_window=context_window)
 
 
 def copilot_metadata(

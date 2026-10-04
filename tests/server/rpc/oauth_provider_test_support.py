@@ -13,6 +13,7 @@ from typing import Any
 
 from core.providers.providers import AuthConfig, ConnectionConfig, OAuthConfig, ProviderConfig
 from core.providers.token_store import TokenStore
+from core.providers.wire_profiles import bundled_wire_profile_files
 from core.storage.layout import DataDirectoryLayout
 from server.events import ServerEventBus
 
@@ -113,7 +114,7 @@ class _ModelRegistry:
     def list_for_provider(self, _provider_id: str) -> list[Any]:
         return []
 
-    def reload(self, _resources_dir: Any, **_kwargs: Any) -> None:
+    async def reload_async(self, _resources_dir: Any, **_kwargs: Any) -> None:
         # ``model.refresh_db`` reloads the registry after writing layer files;
         # nothing here reads the reloaded catalog.
         pass
@@ -138,6 +139,7 @@ def oauth_provider_state(tmp_path: Path, provider: ProviderConfig) -> SimpleName
                 load_custom_providers_settings=dict,
             ),
             models=_ModelRegistry(),
+            wire_profile_files=bundled_wire_profile_files,
         ),
         event_bus=ServerEventBus(),
     )

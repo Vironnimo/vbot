@@ -177,7 +177,7 @@ async def test_profile_compaction_policy_reaches_every_participant(lifecycle, tm
             "name": "Compaction policy",
             "participants": [
                 {"model": "fixture/model", "count": 1},
-                {"model": "fixture/model", "count": 1, "temperature": 0.2},
+                {"model": "fixture/model", "count": 1, "temperature": 0.2, "top_p": 0.9},
             ],
             "working_directory": {"kind": "directory", "path": str(tmp_path)},
             "tool_access": {"mode": "selected", "allowed": []},
@@ -209,11 +209,15 @@ async def test_profile_compaction_policy_reaches_every_participant(lifecycle, tm
     assert swarm["profile_snapshot"]["compaction_policy"] == policy
     bindings = await lifecycle.groups.list(started["swarm_id"])
     assert len(bindings) == 2
+    sampling = set()
     for binding in bindings:
         agent = lifecycle.runtime.agent_resolver.temporary_agents.resolve(
             binding.address, generation_id=binding.generation_id
         )
         assert agent.compaction_policy == policy
+        sampling.add((agent.temperature, agent.top_p))
+    # Formation rows carry their sampling to their participants only.
+    assert sampling == {(None, None), (0.2, 0.9)}
     # Profiles and snapshots saved before the field existed have no key and inherit.
     legacy = {
         key: value for key, value in swarm["profile_snapshot"].items() if key != "compaction_policy"

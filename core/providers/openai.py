@@ -1,15 +1,18 @@
 """OpenAI provider adapter.
 
-Handles the model-selected OpenAI Platform endpoint (``api-key`` connection)
-and the ChatGPT Codex ``/codex/responses`` endpoint (``subscription``
-connection with ``mode: codex_responses``)."""
+The wire profile (``resources/wire/openai.json``) decides per Model and
+Connection whether a request speaks Chat Completions or Responses and how it is
+shaped. Responses requests go to the Platform ``/responses`` endpoint
+(``api-key`` connection) or to the ChatGPT Codex ``/codex/responses`` endpoint
+(``subscription`` connection with ``mode: codex_responses``), whose WebSocket
+continuation and SSE transport live here."""
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import aclosing
-from typing import TYPE_CHECKING, Any, cast, override
+from typing import TYPE_CHECKING, Any, ClassVar, cast, override
 
 import httpx
 from websockets.asyncio.client import connect as websocket_connect
@@ -50,15 +53,8 @@ from core.providers._openai_constants import (
     DISCOVERY_REASONING_PARAMETER_NAMES,
     DISCOVERY_TOOL_PARAMETER_NAMES,
     OPENAI_API_KEY_WIRE_KEY,
-    OPENAI_METADATA_KEY,
-    OPENAI_PLATFORM_RESPONSES_REQUEST_PARAMETERS,
-    OPENAI_REASONING_CONTEXTS,
-    OPENAI_RESPONSES_PROTOCOL,
     OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS,
-    OPENAI_SUBSCRIPTION_REASONING_EFFORTS,
-    OPENAI_SUBSCRIPTION_REQUEST_PARAMETERS,
     OPENAI_SUBSCRIPTION_WIRE_KEY,
-    OPENAI_WIRE_POLICIES_KEY,
     OPTIONAL_REQUEST_PARAMETER_NAMES,
     PROMPT_CACHE_AFFINITY_ID_KWARG,
     REASONING_PARAMETER_NAMES,
@@ -70,15 +66,23 @@ from core.providers._openai_constants import (
     CodexWebSocketRoute,
 )
 from core.providers._openai_policy import (
-    OpenAISubscriptionResponsesPolicy,
     _normalize_catalog_raw,
     _optional_mapping,
-    _optional_string,
     _string_set,
     _subscription_capability_supported,
     _subscription_supported_parameters,
 )
-from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, ModelLookup
+from core.providers._responses_profile import (
+    RESPONSES_DOCUMENT_TYPES,
+    RESPONSES_REASONING_FIELDS,
+    profile_responses_policy,
+    take_reasoning_renderer,
+)
+from core.providers._wire_learning import (
+    execute_learning_from_rejections,
+    stream_learning_from_rejections,
+)
+from core.providers.adapter import ModelLookup
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
@@ -91,17 +95,13 @@ from core.providers.github_copilot_responses import (
     estimate_responses_input_tokens,
     iter_responses_sse_deltas_with_state,
     normalize_responses_response,
+    responses_returned_reasoning,
 )
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.openai_subscription_auth import extract_chatgpt_account_id
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
-from core.providers.reasoning import (
-    REASONING_INTENT_EFFORT,
-    ReasoningIntent,
-    model_reasoning_levels,
-    normalize_thinking_effort,
-)
 from core.providers.token_getter import OAuthRequestRecovery, TokenGetter
+from core.providers.wire_profile import Protocol
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
@@ -122,18 +122,10 @@ __all__ = [
     "DISCOVERY_REASONING_PARAMETER_NAMES",
     "DISCOVERY_TOOL_PARAMETER_NAMES",
     "OPENAI_API_KEY_WIRE_KEY",
-    "OPENAI_METADATA_KEY",
-    "OPENAI_PLATFORM_RESPONSES_REQUEST_PARAMETERS",
-    "OPENAI_REASONING_CONTEXTS",
-    "OPENAI_RESPONSES_PROTOCOL",
     "OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS",
-    "OPENAI_SUBSCRIPTION_REASONING_EFFORTS",
-    "OPENAI_SUBSCRIPTION_REQUEST_PARAMETERS",
     "OPENAI_SUBSCRIPTION_WIRE_KEY",
-    "OPENAI_WIRE_POLICIES_KEY",
     "OPTIONAL_REQUEST_PARAMETER_NAMES",
     "OpenAIAdapter",
-    "OpenAISubscriptionResponsesPolicy",
     "PROMPT_CACHE_AFFINITY_ID_KWARG",
     "REASONING_PARAMETER_NAMES",
     "RESPONSES_POLICY_ENDPOINT",
@@ -145,14 +137,16 @@ __all__ = [
 class OpenAIAdapter(OpenAICompatibleAdapter):
     """Adapter for the unified ``openai`` provider.
 
-    The connection's ``mode`` selects the wire variant:
-
-    - ``CODEX_RESPONSES_MODE`` (``"codex_responses"``): Codex Responses API
-      (``/codex/responses``) — used by the ``subscription`` connection.
-    - ``None`` (default): the Model's ``metadata.openai.wire_policies.api-key``
-      selects public ``/responses`` or the inherited ``/chat/completions``
-      fallback.
+    The wire profile's ``protocol`` selects Chat Completions (the inherited
+    ``/chat/completions`` codec) or Responses for each Model. A Responses
+    request goes to ``/codex/responses`` when the Connection's ``mode`` is
+    ``CODEX_RESPONSES_MODE`` (the ``subscription`` Connection) and to the
+    Platform ``/responses`` otherwise. Its reasoning is the profile's plan in
+    the ``responses_reasoning`` dialect; optional parameters, media and the
+    output limit follow the profile too.
     """
+
+    WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("chat_completions", "responses")
 
     def __init__(
         self,
@@ -367,22 +361,6 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         }
 
     @override
-    def wire_media_support(self, model_id: str) -> frozenset[str]:
-        """Wire media depends on the connection's wire variant.
-
-        The Codex Responses wire (``subscription`` connection) carries images
-        only; the inherited ``/chat/completions`` wire (``api-key`` connection)
-        additionally carries the OpenAI ``input_audio`` formats and, on this
-        verified adapter, native ``application/pdf`` documents (Chat Completions
-        ``file`` parts).
-        """
-        if self._connection_mode == CODEX_RESPONSES_MODE:
-            return IMAGE_WIRE_MEDIA_TYPES
-        if self._uses_platform_responses(model_id):
-            return IMAGE_WIRE_MEDIA_TYPES | {"application/pdf"}
-        return super().wire_media_support(model_id) | {"application/pdf"}
-
-    @override
     def estimate_request_input_tokens(
         self,
         messages: Sequence[Mapping[str, Any]],
@@ -392,28 +370,24 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
     ) -> int:
         """Estimate the selected OpenAI wire's rendered request footprint."""
 
-        if self._connection_mode == CODEX_RESPONSES_MODE or self._uses_platform_responses(model_id):
-            request_messages = [dict(message) for message in messages]
-            if self._connection_mode == CODEX_RESPONSES_MODE and not any(
-                message.get("role") == "system" and str(message.get("content") or "").strip()
-                for message in request_messages
-            ):
-                request_messages.insert(
-                    0,
-                    {"role": "system", "content": OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS},
-                )
-            return estimate_responses_input_tokens(
-                request_messages,
-                document_media_types=(
-                    frozenset({"application/pdf"})
-                    if self._uses_platform_responses(model_id)
-                    else frozenset()
-                ),
+        if not self._uses_responses(model_id):
+            return super().estimate_request_input_tokens(
+                messages,
                 model_id=model_id,
                 tools=tools,
             )
-        return super().estimate_request_input_tokens(
-            messages,
+        request_messages = [dict(message) for message in messages]
+        if self._connection_mode == CODEX_RESPONSES_MODE and not any(
+            message.get("role") == "system" and str(message.get("content") or "").strip()
+            for message in request_messages
+        ):
+            request_messages.insert(
+                0,
+                {"role": "system", "content": OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS},
+            )
+        return estimate_responses_input_tokens(
+            request_messages,
+            document_media_types=self._responses_document_types(model_id),
             model_id=model_id,
             tools=tools,
         )
@@ -438,6 +412,8 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         # The Codex Responses endpoint owns its required headers; provider-level
         # extra_headers are deliberately not merged here so a stray config entry can
         # never leak onto the Codex wire (the OpenAI provider forbids extra_headers).
+        # A wire profile's per-Model ``request.extra_headers`` is a deliberate
+        # declaration: the request paths add it after these headers.
         headers.update(CODEX_EXTRA_HEADERS)
         # Pin the prompt cache to the conversation (see CODEX_CACHE_SCOPE_HEADERS).
         if cache_scope_id:
@@ -456,12 +432,13 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
     ) -> dict[str, Any]:
         """Return one completed response without exposing stream deltas.
 
-        Routes to the Codex Responses endpoint when ``connection_mode`` is
-        ``CODEX_RESPONSES_MODE``. That wire requires ``stream: true``, so the
-        adapter consumes its single streaming exchange internally and returns
-        the completed Responses object. Session-scoped subscription calls prefer
-        the cached WebSocket transport and otherwise use SSE. Other connections
-        delegate to the inherited non-streaming ``/chat/completions`` request.
+        A Chat Completions Model delegates to the inherited non-streaming
+        ``/chat/completions`` request. A Responses Model on the Codex
+        Connection (``connection_mode`` ``CODEX_RESPONSES_MODE``) must stream,
+        so the adapter consumes its single streaming exchange internally and
+        returns the completed Responses object; Session-scoped calls prefer the
+        cached WebSocket transport and otherwise use SSE. Other Responses
+        Models post to the Platform ``/responses``.
         """
 
         conversation_id = kwargs.pop(CONVERSATION_ID_KWARG, None)
@@ -469,23 +446,17 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             PROMPT_CACHE_AFFINITY_ID_KWARG,
             conversation_id,
         )
+        if not self._uses_responses(model_id):
+            return await super().send(messages, model_id=model_id, **kwargs)
         if self._connection_mode == CODEX_RESPONSES_MODE:
-            payload = self._build_responses_payload(
+            states: list[ResponsesStreamState] = []
+            response_events = self._stream_codex_responses(
                 messages,
                 model_id=model_id,
-                stream=True,
-                **self._request_kwargs_with_defaults(kwargs),
-            )
-            state = _responses_stream_state()
-            response_events = cast(
-                AsyncGenerator[dict[str, Any]],
-                self._stream_responses(
-                    payload,
-                    endpoint_path=CODEX_RESPONSES_ENDPOINT,
-                    cache_scope_id=prompt_cache_affinity_id,
-                    conversation_id=conversation_id,
-                    state=state,
-                ),
+                kwargs=kwargs,
+                cache_scope_id=prompt_cache_affinity_id,
+                conversation_id=conversation_id,
+                states=states,
             )
             try:
                 while True:
@@ -502,17 +473,33 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 ) from exc
             finally:
                 await response_events.aclose()
-            if state.completed_response is None:
+            if not states or states[-1].completed_response is None:
                 raise NetworkError("Stream ended without a completed Responses object")
-            return {_NORMALIZED_CODEX_STREAM_RESPONSE_KEY: state.normalized_response()}
-        if self._uses_platform_responses(model_id):
-            payload = self._build_responses_payload(
+            return {_NORMALIZED_CODEX_STREAM_RESPONSE_KEY: states[-1].normalized_response()}
+
+        request_headers = self._stable_request_headers(model_id, kwargs)
+
+        def build() -> dict[str, Any]:
+            return self._build_responses_payload(
                 messages,
                 model_id=model_id,
                 **self._request_kwargs_with_defaults(kwargs),
             )
-            return await self._post_json(RESPONSES_POLICY_ENDPOINT, payload)
-        return await super().send(messages, model_id=model_id, **kwargs)
+
+        payload = build()
+        response = await execute_learning_from_rejections(
+            lambda: self._post_json(
+                RESPONSES_POLICY_ENDPOINT, payload, request_headers=request_headers
+            ),
+            payload,
+            rebuild=build,
+            wire=self.wire,
+            model_id=model_id,
+            provider_label=self._config.id,
+        )
+        if responses_returned_reasoning(response):
+            self.wire.observe_reasoning_returned(model_id)
+        return response
 
     @override
     async def stream(
@@ -524,9 +511,10 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream a request as normalized vBot deltas.
 
-        Routes to the Codex Responses endpoint when ``connection_mode`` is
-        ``CODEX_RESPONSES_MODE``; otherwise delegates to the inherited
-        ``/chat/completions`` stream.
+        A Chat Completions Model delegates to the inherited
+        ``/chat/completions`` stream; a Responses Model streams from the Codex
+        endpoint (``connection_mode`` ``CODEX_RESPONSES_MODE``) or the Platform
+        ``/responses``.
         """
 
         conversation_id = kwargs.pop(CONVERSATION_ID_KWARG, None)
@@ -534,17 +522,22 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             PROMPT_CACHE_AFFINITY_ID_KWARG,
             conversation_id,
         )
-        if self._connection_mode == CODEX_RESPONSES_MODE:
-            payload = self._build_responses_payload(
-                messages,
-                model_id=model_id,
-                stream=True,
-                **self._request_kwargs_with_defaults(kwargs),
-            )
+        if not self._uses_responses(model_id):
             async with aclosing(
-                self._stream_responses(
-                    payload,
-                    endpoint_path=CODEX_RESPONSES_ENDPOINT,
+                cast(
+                    AsyncGenerator[dict[str, Any]],
+                    super().stream(messages, model_id=model_id, **kwargs),
+                )
+            ) as chat_deltas:
+                async for delta in chat_deltas:
+                    yield delta
+            return
+        if self._connection_mode == CODEX_RESPONSES_MODE:
+            async with aclosing(
+                self._stream_codex_responses(
+                    messages,
+                    model_id=model_id,
+                    kwargs=kwargs,
                     cache_scope_id=prompt_cache_affinity_id,
                     conversation_id=conversation_id,
                 )
@@ -552,23 +545,37 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 async for delta in deltas:
                     yield delta
             return
-        if self._uses_platform_responses(model_id):
-            payload = self._build_responses_payload(
+
+        request_headers = self._stable_request_headers(model_id, kwargs)
+
+        def build() -> dict[str, Any]:
+            return self._build_responses_payload(
                 messages,
                 model_id=model_id,
                 stream=True,
                 **self._request_kwargs_with_defaults(kwargs),
             )
+
+        payload = build()
+
+        async def stream_payload() -> AsyncGenerator[dict[str, Any]]:
+            response = await self._connect_stream(
+                RESPONSES_POLICY_ENDPOINT, payload, request_headers=request_headers
+            )
             async with aclosing(
-                self._stream_responses(payload, endpoint_path=RESPONSES_POLICY_ENDPOINT)
+                self._responses_sse_deltas(response, _responses_stream_state())
             ) as deltas:
                 async for delta in deltas:
                     yield delta
-            return
+
         async with aclosing(
-            cast(
-                AsyncGenerator[dict[str, Any]],
-                super().stream(messages, model_id=model_id, **kwargs),
+            stream_learning_from_rejections(
+                stream_payload,
+                payload,
+                rebuild=build,
+                wire=self.wire,
+                model_id=model_id,
+                provider_label=self._config.id,
             )
         ) as deltas:
             async for delta in deltas:
@@ -613,16 +620,14 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         stream: bool = False,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        self._refuse_unadmitted_model(model_id)
         request_kwargs = dict(kwargs)
-        document_media_types = (
-            frozenset({"application/pdf"})
-            if self._uses_platform_responses(model_id)
-            else frozenset()
-        )
-        policy = self._responses_policy_for_model(model_id)
-        # Codex rejects output-token fields. Budgeting them locally would abort
-        # a still-valid subscription request (the 25% reserve sits at the same
-        # 80% line as Compaction, but Compaction never sees this pre-send path).
+        profile = self.wire_profile(model_id)
+        policy = profile_responses_policy(profile, self._catalog_model(model_id))
+        reasoning_renderer = take_reasoning_renderer(profile, request_kwargs)
+        # A wire that takes no output-token field (Codex) is never budgeted
+        # locally: the reserve would abort a still-valid request (it sits at the
+        # same 80% line as Compaction, which never sees this pre-send path).
         if policy.supports_request_parameter("max_tokens") or policy.supports_request_parameter(
             "max_output_tokens"
         ):
@@ -641,13 +646,23 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             model_id=model_id,
             policy=policy,
             stream=stream,
-            document_media_types=document_media_types,
+            document_media_types=self._responses_document_types(model_id),
+            reasoning_renderer=reasoning_renderer,
             **request_kwargs,
         )
         if self._connection_mode == CODEX_RESPONSES_MODE:
             self._ensure_required_instructions(payload)
-        self._apply_reasoning_context(payload, model_id)
         payload["store"] = False
+        rules = profile.request
+        rules.apply_body(payload)
+        # Configured or learned parameter rules; the reasoning fields are
+        # the dialect's own output.
+        rules.shape_parameters(
+            payload,
+            reasoning_active="reasoning" in payload,
+            protected=RESPONSES_REASONING_FIELDS,
+            provider_label=self._config.name,
+        )
         return payload
 
     def _ensure_required_instructions(self, payload: dict[str, Any]) -> None:
@@ -656,81 +671,71 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             return
         payload["instructions"] = OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS
 
-    def _responses_policy_for_model(self, model_id: str) -> OpenAISubscriptionResponsesPolicy:
-        model = self._model_lookup(model_id) if self._model_lookup is not None else None
-        capabilities = model.capabilities if model is not None else None
-        supported_parameters = set(capabilities.supported_parameters) if capabilities else set()
-        reasoning_supported = True
-        if capabilities is not None:
-            reasoning_supported = capabilities.reasoning.supported
-        supports_tools = capabilities.tools if capabilities is not None else True
-        supports_structured_outputs = capabilities.json_mode if capabilities is not None else True
-        allowed_reasoning_efforts = self._allowed_reasoning_efforts(model_id, reasoning_supported)
-        return OpenAISubscriptionResponsesPolicy(
-            allowed_reasoning_efforts=allowed_reasoning_efforts,
-            supports_tools=supports_tools,
-            supports_parallel_tool_calls=(
-                supports_tools
-                and (
-                    not supported_parameters
-                    or "parallel_tool_calls" in supported_parameters
-                    or "tools" in supported_parameters
-                )
-            ),
-            supports_structured_outputs=supports_structured_outputs,
-            minimum_reasoning_effort=_optional_string(
-                self._model_wire_policy(model_id).get("minimum_reasoning_effort")
-            )
-            or None,
-            supports_explicit_none_effort=(
-                self._connection_mode != CODEX_RESPONSES_MODE
-                and "none" in allowed_reasoning_efforts
-            ),
-            supported_request_parameters=(
-                OPENAI_SUBSCRIPTION_REQUEST_PARAMETERS
-                if self._connection_mode == CODEX_RESPONSES_MODE
-                else OPENAI_PLATFORM_RESPONSES_REQUEST_PARAMETERS
-            ),
-        )
+    def _uses_responses(self, model_id: str) -> bool:
+        """Whether ``model_id``'s requests speak Responses on this Connection."""
 
-    def _uses_platform_responses(self, model_id: str) -> bool:
-        if self._connection_mode == CODEX_RESPONSES_MODE:
-            return False
-        return self._model_wire_policy(model_id).get("protocol") == OPENAI_RESPONSES_PROTOCOL
+        return self.wire_profile(model_id).protocol == "responses"
 
-    @classmethod
-    @override
-    def describe_reasoning_render(
-        cls,
+    def _catalog_model(self, model_id: str) -> Model | None:
+        return self._model_lookup(model_id) if self._model_lookup is not None else None
+
+    def _responses_document_types(self, model_id: str) -> frozenset[str]:
+        """Document media the Responses wire carries as native ``input_file`` parts."""
+
+        return self.wire_profile(model_id).media.types & RESPONSES_DOCUMENT_TYPES
+
+    def _stream_codex_responses(
+        self,
+        messages: list[dict[str, Any]],
         *,
-        model_lookup: ModelLookup | None,
         model_id: str,
-        effort: str | None,
-        provider_config: ProviderConfig | None = None,
-    ) -> ReasoningIntent:
-        model = model_lookup(model_id) if model_lookup is not None else None
-        if (
-            model is not None
-            and model.capabilities.reasoning.supported
-            and normalize_thinking_effort(effort) == "none"
-        ):
-            provider_metadata = _optional_mapping(model.metadata.get(OPENAI_METADATA_KEY))
-            policies = _optional_mapping(provider_metadata.get(OPENAI_WIRE_POLICIES_KEY))
-            # Without a Connection argument, describe a minimum only when all
-            # allowed Connections agree. Do not guess another wire's behavior.
-            minima = [
-                _optional_mapping(policies.get(connection)).get("minimum_reasoning_effort")
-                for connection in model.connections
-            ]
-            if minima and all(value == minima[0] for value in minima):
-                minimum = minima[0]
-                if isinstance(minimum, str) and minimum in model.capabilities.reasoning.levels:
-                    return ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=minimum)
-        return super().describe_reasoning_render(
-            model_lookup=model_lookup,
+        kwargs: Mapping[str, Any],
+        cache_scope_id: str | None,
+        conversation_id: str | None,
+        states: list[ResponsesStreamState] | None = None,
+    ) -> AsyncGenerator[dict[str, Any]]:
+        """Stream one Codex request, learning from a rejection before its first delta.
+
+        The Codex wire reports a rejected request as an HTTP error on SSE and as
+        an error event on the WebSocket; either arrives before the first delta.
+        A failed WebSocket exchange drops its continuation and socket, so the
+        rebuilt request opens a fresh exchange with full context. ``states``
+        collects the stream state of every attempt (the last one completed).
+        """
+
+        request_kwargs = dict(kwargs)
+        request_headers = self._stable_request_headers(model_id, request_kwargs)
+
+        def build() -> dict[str, Any]:
+            return self._build_responses_payload(
+                messages,
+                model_id=model_id,
+                stream=True,
+                **self._request_kwargs_with_defaults(request_kwargs),
+            )
+
+        payload = build()
+
+        def open_stream() -> AsyncGenerator[dict[str, Any]]:
+            state = _responses_stream_state()
+            if states is not None:
+                states.append(state)
+            return self._stream_responses(
+                payload,
+                endpoint_path=CODEX_RESPONSES_ENDPOINT,
+                request_headers=request_headers,
+                cache_scope_id=cache_scope_id,
+                conversation_id=conversation_id,
+                state=state,
+            )
+
+        return stream_learning_from_rejections(
+            open_stream,
+            payload,
+            rebuild=build,
+            wire=self.wire,
             model_id=model_id,
-            effort=effort,
-            provider_config=provider_config,
+            provider_label=self._config.id,
         )
 
     @override
@@ -749,59 +754,6 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         )
         return model.context_window_for(connection_id)
 
-    def _model_wire_policy(self, model_id: str) -> Mapping[str, Any]:
-        if self._model_lookup is None:
-            return {}
-        model = self._model_lookup(model_id.split("::", 1)[0])
-        if model is None:
-            return {}
-        provider_metadata = model.metadata.get(OPENAI_METADATA_KEY)
-        if not isinstance(provider_metadata, Mapping):
-            return {}
-        wire_policies = provider_metadata.get(OPENAI_WIRE_POLICIES_KEY)
-        if not isinstance(wire_policies, Mapping):
-            return {}
-        wire_key = (
-            OPENAI_SUBSCRIPTION_WIRE_KEY
-            if self._connection_mode == CODEX_RESPONSES_MODE
-            else OPENAI_API_KEY_WIRE_KEY
-        )
-        policy = wire_policies.get(wire_key)
-        return policy if isinstance(policy, Mapping) else {}
-
-    def _apply_reasoning_context(
-        self,
-        payload: dict[str, Any],
-        model_id: str,
-    ) -> None:
-        context = self._model_wire_policy(model_id).get("reasoning_context")
-        if context not in OPENAI_REASONING_CONTEXTS:
-            return
-        reasoning = payload.get("reasoning")
-        reasoning_payload = dict(reasoning) if isinstance(reasoning, Mapping) else {}
-        reasoning_payload.setdefault("context", context)
-        payload["reasoning"] = reasoning_payload
-
-    def _allowed_reasoning_efforts(
-        self,
-        model_id: str,
-        reasoning_supported: bool,
-    ) -> frozenset[str]:
-        """Return the effort ladder the Responses policy snaps against for a model.
-
-        The effective per-model ladder from the DB wins when present, so a
-        subscription model that publishes its own ladder snaps against it. The
-        ``OPENAI_SUBSCRIPTION_REASONING_EFFORTS`` constant is only the floor for a
-        reasoning model without a feed ladder. A non-reasoning model gets an empty
-        set, which suppresses every reasoning control downstream.
-        """
-        if not reasoning_supported:
-            return frozenset()
-        ladder = model_reasoning_levels(self._model_lookup, model_id)
-        if ladder is not None:
-            return frozenset(ladder)
-        return OPENAI_SUBSCRIPTION_REASONING_EFFORTS
-
     def _handle_error_status(
         self,
         status_code: int,
@@ -815,18 +767,28 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             response_headers=response_headers,
         )
 
+    async def _attempt_headers(
+        self, cache_scope_id: str | None, request_headers: Mapping[str, str]
+    ) -> dict[str, str]:
+        """Rebuild one attempt's auth headers, then add the request's stable headers."""
+
+        headers = await self._build_headers(cache_scope_id)
+        headers.update(request_headers)
+        return headers
+
     async def _post_json(
         self,
         endpoint_path: str,
         payload: dict[str, Any],
         *,
+        request_headers: Mapping[str, str],
         cache_scope_id: str | None = None,
     ) -> dict[str, Any]:
         return await post_json_with_retry(
             self._client,
             endpoint_path,
             payload,
-            build_headers=lambda: self._build_headers(cache_scope_id),
+            build_headers=lambda: self._attempt_headers(cache_scope_id, request_headers),
             handle_error_status=self._handle_error_status,
             provider_context="OpenAI provider",
             auth_recovery=OAuthRequestRecovery(self._token_getter, self._auth_config),
@@ -837,13 +799,14 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         endpoint_path: str,
         payload: dict[str, Any],
         *,
+        request_headers: Mapping[str, str],
         cache_scope_id: str | None = None,
     ) -> httpx.Response:
         return await connect_streaming_with_retry(
             self._client,
             endpoint_path,
             payload,
-            build_headers=lambda: self._build_headers(cache_scope_id),
+            build_headers=lambda: self._attempt_headers(cache_scope_id, request_headers),
             handle_error_status=self._handle_error_status,
             auth_recovery=OAuthRequestRecovery(self._token_getter, self._auth_config),
         )
@@ -853,6 +816,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         payload: dict[str, Any],
         *,
         endpoint_path: str,
+        request_headers: Mapping[str, str],
         cache_scope_id: str | None = None,
         conversation_id: str | None = None,
         state: ResponsesStreamState | None = None,
@@ -867,6 +831,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             async with aclosing(
                 self._stream_codex_auto(
                     payload,
+                    request_headers=request_headers,
                     cache_scope_id=cache_scope_id,
                     conversation_id=conversation_id,
                     state=stream_state,
@@ -879,6 +844,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             self._stream_responses_sse(
                 payload,
                 endpoint_path=endpoint_path,
+                request_headers=request_headers,
                 cache_scope_id=cache_scope_id,
                 state=stream_state,
             )
@@ -891,10 +857,27 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         payload: dict[str, Any],
         *,
         endpoint_path: str,
+        request_headers: Mapping[str, str],
         cache_scope_id: str | None,
         state: ResponsesStreamState,
     ) -> AsyncGenerator[dict[str, Any]]:
-        response = await self._connect_stream(endpoint_path, payload, cache_scope_id=cache_scope_id)
+        response = await self._connect_stream(
+            endpoint_path,
+            payload,
+            request_headers=request_headers,
+            cache_scope_id=cache_scope_id,
+        )
+        async with aclosing(self._responses_sse_deltas(response, state)) as deltas:
+            async for delta in deltas:
+                yield delta
+
+    async def _responses_sse_deltas(
+        self,
+        response: httpx.Response,
+        state: ResponsesStreamState,
+    ) -> AsyncGenerator[dict[str, Any]]:
+        """Yield the normalized deltas of an established Responses SSE stream, then close it."""
+
         event_lines: list[str] = []
         seen_finish_delta = False
         try:
@@ -925,12 +908,16 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         self,
         payload: dict[str, Any],
         *,
+        request_headers: Mapping[str, str],
         cache_scope_id: str,
         conversation_id: str,
         state: ResponsesStreamState,
     ) -> AsyncGenerator[dict[str, Any]]:
         websocket_headers = await self._build_codex_websocket_headers(cache_scope_id)
         account_id = websocket_headers["chatgpt-account-id"]
+        # The socket sends its handshake headers once; the request's stable
+        # headers ride on that handshake like on an SSE request.
+        websocket_headers.update(request_headers)
         model_id = payload.get("model")
         if not isinstance(model_id, str) or not model_id:
             raise ProviderError("Codex WebSocket request is missing a model", retryable=False)
@@ -943,6 +930,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 self._stream_responses_sse(
                     payload,
                     endpoint_path=CODEX_RESPONSES_ENDPOINT,
+                    request_headers=request_headers,
                     cache_scope_id=cache_scope_id,
                     state=state,
                 )
@@ -970,6 +958,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 self._stream_responses_sse(
                     payload,
                     endpoint_path=CODEX_RESPONSES_ENDPOINT,
+                    request_headers=request_headers,
                     cache_scope_id=cache_scope_id,
                     state=state,
                 )

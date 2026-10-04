@@ -1,0 +1,91 @@
+{
+  "format_version": 1,
+  "_comment": "OpenAI first-party wire. The api-key Connection speaks Chat Completions unless a Model entry selects public Responses; the subscription Connection is the ChatGPT Codex Responses endpoint for every Model. Chat Completions accepts reasoning_effort 'none', wants explicit non-strict Tool schemas and carries images, wav/mp3 audio and PDF documents. Public Responses accepts max_output_tokens and top_p as its only optional parameters, carries images and PDF documents, and treats a Model the catalog does not know as a reasoning Model. Codex rejects every optional parameter (so no output limit is budgeted), carries images only and never receives the 'none' effort.",
+  "protocols": {
+    "chat_completions": {
+      "request": {"tool_schema": "explicit_non_strict"},
+      "reasoning": {"floor": ["none", "low", "medium", "high"]},
+      "media": {
+        "types": [
+          "image/jpeg",
+          "image/png",
+          "image/gif",
+          "image/webp",
+          "audio/wav",
+          "audio/mpeg",
+          "application/pdf"
+        ]
+      }
+    },
+    "responses": {
+      "request": {"allowed_parameters": ["max_tokens", "max_output_tokens", "top_p"]},
+      "reasoning": {"supported": true, "floor": ["low", "medium", "high", "xhigh"]},
+      "media": {"types": ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"]}
+    }
+  },
+  "connections": {
+    "subscription": {
+      "protocol": "responses",
+      "request": {"allowed_parameters": []},
+      "reasoning": {"off": "omit"},
+      "media": {"types": ["image/jpeg", "image/png", "image/gif", "image/webp"]}
+    }
+  },
+  "models": {
+    "gpt-5.2": {
+      "connections": {"api-key": {"protocol": "responses"}}
+    },
+    "gpt-5.5": {
+      "connections": {"api-key": {"protocol": "responses"}}
+    },
+    "gpt-5.6": {
+      "connections": {
+        "api-key": {"protocol": "responses", "reasoning": {"options": {"context": "all_turns"}}}
+      },
+      "note": "Public reasoning guidance documents reasoning.context all_turns for GPT-5.6; it is not sent on Codex."
+    },
+    "gpt-5.6-luna": {
+      "connections": {
+        "api-key": {"protocol": "responses", "reasoning": {"options": {"context": "all_turns"}}}
+      }
+    },
+    "gpt-5.6-sol": {
+      "connections": {
+        "api-key": {"protocol": "responses", "reasoning": {"options": {"context": "all_turns"}}}
+      }
+    },
+    "gpt-5.6-terra": {
+      "connections": {
+        "api-key": {"protocol": "responses", "reasoning": {"options": {"context": "all_turns"}}}
+      }
+    },
+    "gpt-6-astra": {
+      "connections": {"subscription": {"reasoning": {"off": "low"}}},
+      "note": "Codex rejected effort none with HTTP 400 on 2026-09-10; off asks for the lowest accepted effort."
+    },
+    "gpt-6-luna": {
+      "connections": {
+        "api-key": {"protocol": "responses"},
+        "subscription": {"reasoning": {"off": "low"}}
+      },
+      "note": "Chat Completions restricts function calling to effort none, so the Platform uses Responses. Codex support for none is unverified; off is low there."
+    },
+    "gpt-6-sol": {
+      "connections": {
+        "api-key": {"protocol": "responses"},
+        "subscription": {"reasoning": {"off": "low"}}
+      },
+      "note": "Chat Completions restricts function calling to effort none, so the Platform uses Responses. Codex support for none is unverified; off is low there."
+    },
+    "gpt-6.1-sol": {
+      "set": {"reasoning": {"off": "low"}},
+      "connections": {"api-key": {"protocol": "responses"}},
+      "note": "The ladder is low..max; Codex rejected none and minimal with HTTP 400 on 2026-10-02, so off is low on both Connections.",
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["subscription"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:medium, effort:high, effort:xhigh, effort:max, effort:none, sampling, tool_replay, replay, image"
+      }
+    }
+  }
+}

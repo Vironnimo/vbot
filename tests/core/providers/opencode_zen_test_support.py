@@ -27,6 +27,14 @@ MESSAGES_MODEL = "claude-sonnet-5"
 CHAT_MODEL = "deepseek-v4-flash"
 WIRE_MODELS = (RESPONSES_MODEL, MESSAGES_MODEL, CHAT_MODEL, GEMINI_MODEL)
 
+# The catalog protocol hint (models.dev AI SDK package) that routes the hinted Models;
+# the reviewed Chat Model has none and is routed by a wire profile rule.
+NPM = {
+    RESPONSES_MODEL: "@ai-sdk/openai",
+    MESSAGES_MODEL: "@ai-sdk/anthropic",
+    GEMINI_MODEL: "@ai-sdk/google",
+}
+
 
 def zen_config() -> ProviderConfig:
     return ProviderConfig(
@@ -51,7 +59,7 @@ def zen_config() -> ProviderConfig:
 
 
 def zen_model(model_id: str) -> Model:
-    """A reviewed catalog Model with a levels ladder and Gemini-only vision."""
+    """A reviewed catalog Model with its protocol hint, a levels ladder and Gemini-only vision."""
 
     normalized = OpenCodeZenAdapter.normalize_catalog_entry({"id": model_id}, {})
     gemini = model_id.startswith("gemini")
@@ -71,6 +79,7 @@ def zen_model(model_id: str) -> Model:
         ),
         context_window=1_048_576,
         max_output_tokens=65_536,
+        metadata={"opencode_zen": {"npm": NPM[model_id]}} if model_id in NPM else {},
     )
 
 

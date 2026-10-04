@@ -26,6 +26,7 @@ from core.chat import (
 )
 from core.database import SnapshotBarrier, write_bootstrap_marker
 from core.memory import MemoryService
+from core.providers._wire_profile_files import WireProfileFile
 from core.providers.accounts import (
     DEFAULT_ACCOUNT_ID,
     ConnectionRef,
@@ -35,6 +36,9 @@ from core.providers.accounts import (
     split_connection_id,
 )
 from core.providers.reasoning import DEFAULT_REASONING_REPLAY_POLICY, ReasoningReplayPolicy
+from core.providers.wire_observations import ObservedFacts, WireObservations
+from core.providers.wire_profile import ProfileStatus, Verification, WireProfile
+from core.providers.wire_profiles import WireProfiles
 from core.recall import IndexStatus
 from core.runs import ChatRunManager
 from core.runtime import AgentRenameOutcome, SettingsChangeEffects
@@ -440,6 +444,8 @@ class StubRecall:
 class StubRuntime:
     def __init__(self, tmp_path: Path, adapter: StubAdapter) -> None:
         self._model_database_refresh_lock = asyncio.Lock()
+        # Connection ids the stub's credential resolver reports as disabled.
+        self.disabled_connections: set[str] = set()
         self.storage = StorageManager(tmp_path)
         self.build = BuildIdentity("0.4.4", "a" * 40, branch="main")
         self.agents = StubAgents(
@@ -469,6 +475,16 @@ class StubRuntime:
         self.models: Any = StubModels()
         self.providers = StubProviders()
         self.adapter = adapter
+        # Real wire profile resolution over no files; tests add files with
+        # ``wire_profiles.replace_files`` and learned facts on ``wire_observations``.
+        self.wire_observations = WireObservations(None, save_delay=None)
+        self.wire_profiles = WireProfiles(
+            files={},
+            protocol_support=lambda _provider_id: None,
+            model_resolver=self._wire_profile_model,
+            report=lambda _issue: None,
+            observations=self.wire_observations,
+        )
         self.chat_runs: ChatRunManager | None = None
         self.extensions: Any = None
         self.process_manager = StubProcessManager()
@@ -493,6 +509,7 @@ class StubRuntime:
         self.recall: Any = StubRecall()
         self.extension_reload_count = 0
         self.skill_changed_callbacks: list[Callable[[], None]] = []
+        self.model_catalog_changed_callbacks: list[Callable[[], None]] = []
         self.extension_disabled_changes: list[set[str]] = []
         self.chat_loop = build_chat_loop(cast(Any, self))
         self.streaming_chat_loop = build_chat_loop(cast(Any, self), streaming=True)
@@ -580,6 +597,12 @@ class StubRuntime:
         self.skill_changed_callbacks.append(callback)
         return lambda: self.skill_changed_callbacks.remove(callback)
 
+    def add_model_catalog_changed_callback(
+        self, callback: Callable[[], None]
+    ) -> Callable[[], None]:
+        self.model_catalog_changed_callbacks.append(callback)
+        return lambda: self.model_catalog_changed_callbacks.remove(callback)
+
     def start(self) -> None:
         return None
 
@@ -602,6 +625,33 @@ class StubRuntime:
 
     def get_adapter(self, connection: ConnectionRef) -> StubAdapter:
         return self.adapter
+
+    def _wire_profile_model(self, provider_id: str, model_id: str) -> Any:
+        try:
+            return self.models.get(provider_id, model_id)
+        except KeyError:
+            return None
+
+    def wire_profile(self, provider_id: str, connection_id: str, model_id: str) -> WireProfile:
+        return self.wire_profiles.resolve(provider_id, connection_id, model_id)
+
+    def wire_status(
+        self, provider_id: str, connection_id: str, model_id: str
+    ) -> tuple[ProfileStatus, Verification | None]:
+        return self.wire_profiles.status(provider_id, connection_id, model_id)
+
+    def forget_wire_facts(
+        self, provider_id: str, connection_id: str | None = None, model_id: str | None = None
+    ) -> int:
+        return self.wire_observations.forget(provider_id, connection_id, model_id)
+
+    def wire_profile_files(self) -> Mapping[str, WireProfileFile]:
+        return self.wire_profiles.files
+
+    def learned_wire_facts(
+        self, provider_id: str, connection_id: str, model_id: str
+    ) -> ObservedFacts:
+        return self.wire_observations.facts_for(provider_id, connection_id, model_id)
 
     def model_database_refresh(self) -> asyncio.Lock:
         return self._model_database_refresh_lock
@@ -681,10 +731,12 @@ class StubRuntime:
             def is_connection_enabled(
                 self, provider_id: str, connection_id: str | None = None
             ) -> bool:
-                return True
+                return connection_id not in runtime.disabled_connections
 
             def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool:
-                return self.has_credentials(provider_id, connection_id)
+                return self.is_connection_enabled(
+                    provider_id, connection_id
+                ) and self.has_credentials(provider_id, connection_id)
 
             def resolve_account_id(
                 self,

@@ -5,7 +5,7 @@
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import SaveStatus from '../ui/SaveStatus.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
-  import TextField from '../ui/TextField.svelte';
+  import SamplingSettings from '../sampling/SamplingSettings.svelte';
   import { tooltip } from '$lib/tooltip.js';
   import { listConnections, listModels } from '$lib/api.js';
   import {
@@ -49,6 +49,7 @@
       fallback_models: normalized.fallback_models,
       temperature:
         normalized.temperature === null ? '' : String(normalized.temperature),
+      top_p: normalized.top_p === null ? '' : String(normalized.top_p),
       thinking_effort:
         normalized.thinking_effort === null
           ? AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT
@@ -136,6 +137,18 @@
       label: t(`agents.form.thinkingEffortOption.${option}`),
     })),
   ]);
+  // A global default serves every Model, so no single Model's recommendation
+  // is offered here.
+  let samplingFields = $derived({
+    temperature: {
+      value: agentDefaults.temperature,
+      clearLabel: t('inherit.resetToProviderDefault'),
+    },
+    top_p: {
+      value: agentDefaults.top_p,
+      clearLabel: t('inherit.resetToProviderDefault'),
+    },
+  });
   let saveDisabled = $derived(saving || !agentDefaultsDraftHasChanges());
   const autosaveContext = useAutosaveContext();
   const modelCatalogLoader = createModelCatalogLoader({
@@ -255,13 +268,14 @@
       JSON.stringify(normalizedLeft.fallback_models) ===
         JSON.stringify(normalizedRight.fallback_models) &&
       normalizedLeft.temperature === normalizedRight.temperature &&
+      normalizedLeft.top_p === normalizedRight.top_p &&
       normalizedLeft.thinking_effort === normalizedRight.thinking_effort
     );
   }
 
   // Dirty state, scheduling and saving all compare the normalized draft (the
   // payload that would be sent) with the persisted values, so an empty
-  // fallback row or a respelled temperature that normalizes to the stored
+  // fallback row or a respelled sampling value that normalizes to the stored
   // value is not a pending change.
   function agentDefaultsDraftHasChanges() {
     return !agentDefaultsMatch(agentDefaults, settings);
@@ -379,27 +393,6 @@
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.defaults.temperature')}
-        <InfoHint text={t('settings.defaults.temperatureHelp')} />
-      </div>
-      <div class="s-row-desc">
-        {t('settings.defaults.temperatureDescription')}
-      </div>
-    </div>
-    <div class="s-row-control s-row-control--number">
-      <TextField
-        id="settings-defaults-temperature"
-        inputmode="decimal"
-        value={agentDefaults.temperature}
-        ariaLabel={t('settings.defaults.temperature')}
-        onInput={(next) => handleAgentDefaultsChange('temperature', next)}
-      />
-    </div>
-  </div>
-
-  <div class="s-row">
-    <div class="s-row-info">
-      <div class="s-row-label">
         {t('settings.defaults.fallbackModels')}
         <InfoHint text={t('agents.form.fallbackModelsHelp')} />
       </div>
@@ -446,6 +439,13 @@
       {/if}
     </div>
   </div>
+
+  <SamplingSettings
+    idPrefix="settings-defaults"
+    fields={samplingFields}
+    onChange={handleAgentDefaultsChange}
+    onClear={(key) => handleAgentDefaultsChange(key, '')}
+  />
 </div>
 <div class="s-footer">
   <SaveStatus

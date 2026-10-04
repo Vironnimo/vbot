@@ -1,53 +1,24 @@
-"""xAI Responses adapter for API-key and SuperGrok OAuth Connections."""
+"""xAI Responses adapter for API-key and SuperGrok OAuth Connections.
+
+Every xAI request speaks the stateless ``/responses`` protocol. Its request
+shape (optional parameters, reasoning, media) comes from the wire profile
+(``resources/wire/xai.json``) through the inherited Responses codec.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
-from typing import Any, override
+from typing import Any, ClassVar, override
 
-from core.providers.github_copilot_responses import (
-    REASONING_ENCRYPTED_CONTENT_INCLUDE,
-    build_responses_payload,
-)
-from core.providers.openai import OpenAIAdapter, OpenAISubscriptionResponsesPolicy
+from core.providers.openai import OpenAIAdapter
 from core.providers.providers import ConnectionConfig
-from core.providers.reasoning import (
-    closest_supported_effort,
-    model_reasoning_levels,
-    model_reasoning_supported,
-    normalize_thinking_effort,
-)
-
-XAI_RESPONSES_REQUEST_PARAMETERS = frozenset(
-    {
-        "max_tokens",
-        "max_output_tokens",
-        "prompt_cache_key",
-        "service_tier",
-        "temperature",
-        "top_p",
-    }
-)
-XAI_IMAGE_MEDIA_TYPES = frozenset({"image/jpeg", "image/png"})
-
-
-@dataclass(frozen=True)
-class XAIResponsesPolicy(OpenAISubscriptionResponsesPolicy):
-    """Responses policy that respects xAI's models which cannot disable reasoning."""
-
-    @override
-    def closest_reasoning_effort(self, effort: Any) -> str | None:
-        normalized = normalize_thinking_effort(effort)
-        if not normalized:
-            return None
-        if normalized == "none" and "none" not in self.allowed_reasoning_efforts:
-            return closest_supported_effort("low", self.allowed_reasoning_efforts)
-        return closest_supported_effort(normalized, self.allowed_reasoning_efforts)
+from core.providers.wire_profile import Protocol
 
 
 class XAIAdapter(OpenAIAdapter):
     """Translate vBot requests to xAI's stateless ``/responses`` protocol."""
+
+    WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("responses",)
 
     @classmethod
     @override
@@ -75,86 +46,3 @@ class XAIAdapter(OpenAIAdapter):
         del project_id
         conversation_id = f"{agent_id}:{session_id}"
         return {"prompt_cache_key": prompt_cache_affinity_id or conversation_id}
-
-    @override
-    def wire_media_support(self, model_id: str) -> frozenset[str]:
-        """xAI's current language-model wire accepts JPEG and PNG images."""
-
-        del model_id
-        return XAI_IMAGE_MEDIA_TYPES
-
-    @override
-    def _uses_platform_responses(self, model_id: str) -> bool:
-        del model_id
-        return True
-
-    @override
-    def _allowed_reasoning_efforts(
-        self,
-        model_id: str,
-        reasoning_supported: bool,
-    ) -> frozenset[str]:
-        if not reasoning_supported:
-            return frozenset()
-        levels = model_reasoning_levels(self._model_lookup, model_id)
-        return frozenset(levels or ())
-
-    @override
-    def _responses_policy_for_model(self, model_id: str) -> XAIResponsesPolicy:
-        base_policy = super()._responses_policy_for_model(model_id)
-        supported_request_parameters = XAI_RESPONSES_REQUEST_PARAMETERS
-        model = self._model_lookup(model_id) if self._model_lookup is not None else None
-        if model is not None and model.capabilities.supported_parameters:
-            advertised_parameters = frozenset(model.capabilities.supported_parameters)
-            supported_request_parameters = frozenset(
-                parameter
-                for parameter in XAI_RESPONSES_REQUEST_PARAMETERS
-                if parameter in advertised_parameters
-                or (parameter == "max_tokens" and "max_output_tokens" in advertised_parameters)
-            )
-        return XAIResponsesPolicy(
-            allowed_reasoning_efforts=base_policy.allowed_reasoning_efforts,
-            supports_tools=base_policy.supports_tools,
-            supports_parallel_tool_calls=base_policy.supports_parallel_tool_calls,
-            supports_structured_outputs=base_policy.supports_structured_outputs,
-            supports_streaming=base_policy.supports_streaming,
-            supported_request_parameters=supported_request_parameters,
-        )
-
-    @override
-    def _build_responses_payload(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        model_id: str,
-        stream: bool = False,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        request_kwargs = dict(kwargs)
-        policy = self._responses_policy_for_model(model_id)
-        if policy.supports_request_parameter("max_tokens") or policy.supports_request_parameter(
-            "max_output_tokens"
-        ):
-            self._apply_model_output_limit(
-                request_kwargs,
-                model_id,
-                messages,
-                estimated_input_tokens=lambda: self.estimate_request_input_tokens(
-                    messages,
-                    model_id=model_id,
-                    tools=request_kwargs.get("tools"),
-                ),
-            )
-        payload = build_responses_payload(
-            messages,
-            model_id=model_id,
-            policy=policy,
-            stream=stream,
-            **request_kwargs,
-        )
-        if model_reasoning_supported(self._model_lookup, model_id) is True:
-            include = payload.setdefault("include", [])
-            if REASONING_ENCRYPTED_CONTENT_INCLUDE not in include:
-                include.append(REASONING_ENCRYPTED_CONTENT_INCLUDE)
-        payload["store"] = False
-        return payload

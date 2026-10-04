@@ -9,13 +9,11 @@ import httpx
 import pytest
 import respx
 
-from core.chat import ChatMessage
 from core.providers.reasoning import (
-    DEFAULT_REASONING_REPLAY_FIDELITY,
+    REASONING_REPLAY_FIDELITY_META_ONLY,
     REASONING_REPLAY_FIDELITY_READABLE_ONLY,
     REASONING_REPLAY_FULL_HISTORY,
 )
-from tests.core.chat.assistant_turn_test_support import request_history
 
 from .opencode_go_test_support import (
     CHAT_MODEL,
@@ -27,11 +25,8 @@ from .opencode_go_test_support import (
     bundled_go,
     go_adapter,
     go_request,
-    profile_lookup,
     success_response,
 )
-
-EFFORTS = [None, "none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
 
 def _sent_payload(route: respx.Route) -> dict[str, Any]:
@@ -48,7 +43,7 @@ def _sent_payload(route: respx.Route) -> dict[str, Any]:
     ("model_id", "effort", "thinking", "wire_effort", "intent"),
     [
         # DeepSeek V4.1 Flash and its latest-Flash alias: a toggle independent of the ladder.
-        ("deepseek-v4.1-flash", None, {"type": "enabled"}, None, ("default", None)),
+        ("deepseek-v4.1-flash", None, {"type": "enabled"}, None, ("on", None)),
         ("deepseek-v4.1-flash", "none", {"type": "disabled"}, None, ("off", None)),
         ("deepseek-v4.1-flash", "medium", {"type": "enabled"}, "low", ("effort", "low")),
         ("deepseek-v4.1-flash", "max", {"type": "enabled"}, "max", ("effort", "max")),
@@ -76,7 +71,7 @@ async def test_bundled_chat_models_render_their_reasoning_controls(
     wire_effort: str | None,
     intent: tuple[str, str | None],
 ) -> None:
-    adapter, lookup, config = bundled_go()
+    adapter, _, config = bundled_go()
 
     with respx.mock:
         route = respx.post(f"{config.base_url}/chat/completions").mock(
@@ -91,9 +86,7 @@ async def test_bundled_chat_models_render_their_reasoning_controls(
     assert payload["model"] == model_id
     assert payload.get("thinking") == thinking
     assert payload.get("reasoning_effort") == wire_effort
-    description = adapter.describe_reasoning_render(
-        model_lookup=lookup, model_id=model_id, effort=effort, provider_config=config
-    )
+    description = adapter.describe_reasoning_render(model_id, effort)
     assert (description.kind, description.effort_level) == intent
     assert adapter.reasoning_replay_policy(model_id) == REASONING_REPLAY_FULL_HISTORY
     assert adapter.reasoning_replay_fidelity(model_id) == REASONING_REPLAY_FIDELITY_READABLE_ONLY
@@ -109,7 +102,8 @@ async def test_bundled_chat_models_render_their_reasoning_controls(
         pytest.param(
             "kimi-k2.7-code", "none", {"type": "enabled"}, "on", id="always-enabled-ignores-off"
         ),
-        pytest.param(CHAT_MODEL, "none", None, "off", id="no-control-profile"),
+        # No control and no off rung: nothing reaches the wire.
+        pytest.param(CHAT_MODEL, "none", None, "default", id="no-control-profile"),
     ],
 )
 @pytest.mark.asyncio
@@ -127,9 +121,7 @@ async def test_profile_thinking_controls_replace_the_effort_ladder(
     payload = _sent_payload(route)
     assert payload.get("thinking") == thinking
     assert "reasoning_effort" not in payload
-    description = adapter.describe_reasoning_render(
-        model_lookup=profile_lookup, model_id=model_id, effort=effort
-    )
+    description = adapter.describe_reasoning_render(model_id, effort)
     assert description.kind == intent_kind
 
 
@@ -138,7 +130,7 @@ async def test_profile_thinking_controls_replace_the_effort_ladder(
     [
         pytest.param(RESPONSES_MODEL, "none", {"effort": "none", "summary": "auto"}, id="off-rung"),
         pytest.param("muse-spark-1.3-contributor", "none", None, id="no-off-rung-omits"),
-        pytest.param("grok-4.5", "none", {"effort": "low", "summary": "auto"}, id="minimum-rung"),
+        pytest.param("grok-4.6", "none", {"effort": "low", "summary": "auto"}, id="minimum-rung"),
     ],
 )
 @pytest.mark.asyncio
@@ -157,68 +149,6 @@ async def test_responses_wire_never_sends_an_unsupported_off_effort(
     assert _sent_payload(route).get("reasoning") == reasoning
 
 
-@pytest.mark.parametrize("effort", EFFORTS)
-@pytest.mark.asyncio
-async def test_provider_default_messages_profile_preserves_native_history(
-    effort: str | None,
-) -> None:
-    """Union Alpha's retired profile stays a test-owned Messages ``provider_default`` fixture."""
-    adapter = go_adapter()
-    scope = "opencode-go/union-alpha::api-key"
-    # Native state protects the wire contract independently of a live catalog.
-    native = {"type": "thinking", "thinking": "test-native-state", "signature": "test-signature"}
-    history = [
-        ChatMessage.user("First"),
-        ChatMessage.assistant(
-            model="opencode-go/union-alpha",
-            content="Prior answer",
-            reasoning="test-native-state",
-            reasoning_meta={"content_blocks": [native]},
-            reasoning_scope=scope,
-        ),
-        ChatMessage.user("Next"),
-    ]
-    persisted = [ChatMessage.from_dict(message.to_dict()) for message in history]
-    messages = request_history(
-        persisted, replay_policy=adapter.reasoning_replay_policy("union-alpha"), agent_model=scope
-    )
-    reply = {
-        "type": "message",
-        "role": "assistant",
-        "content": [{"type": "text", "text": "Next answer"}],
-        "stop_reason": "end_turn",
-        "usage": {"input_tokens": 49, "output_tokens": 66, "cache_read_input_tokens": 0},
-    }
-
-    with respx.mock:
-        route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json=reply))
-        raw = await adapter.send(
-            messages,
-            model_id="union-alpha",
-            thinking_effort=effort,
-            **adapter.request_context_kwargs(agent_id="audit", session_id="test-session"),
-        )
-
-    payload = _sent_payload(route)
-    assert payload["model"] == "union-alpha"
-    assert not (
-        {"thinking", "output_config", "reasoning_effort", "thinking_effort"} & payload.keys()
-    )
-    assert payload["messages"][1]["content"][0] == native
-    assert "reasoning" not in payload["messages"][1]
-    assert adapter.reasoning_replay_policy("union-alpha") == REASONING_REPLAY_FULL_HISTORY
-    description = adapter.describe_reasoning_render(
-        model_lookup=profile_lookup, model_id="union-alpha", effort=effort
-    )
-    assert description.kind == "default"
-    normalized = adapter.normalize_response(raw, model_id="union-alpha")
-    assert normalized["terminal_outcome"] == "stop"
-    assert not normalized.get("reasoning")
-    assert not normalized.get("reasoning_meta")
-    assert normalized["usage"]["input_tokens"] == 49
-    assert normalized["usage"]["output_tokens"] == 66
-
-
 # ---------------------------------------------------------------------------
 # Reasoning replay
 # ---------------------------------------------------------------------------
@@ -229,8 +159,8 @@ async def test_provider_default_messages_profile_preserves_native_history(
     [
         pytest.param("kimi-k3", REASONING_REPLAY_FIDELITY_READABLE_ONLY, id="chat"),
         pytest.param("unprofiled-model", REASONING_REPLAY_FIDELITY_READABLE_ONLY, id="unknown"),
-        pytest.param(MESSAGES_MODEL, DEFAULT_REASONING_REPLAY_FIDELITY, id="messages"),
-        pytest.param(RESPONSES_MODEL, DEFAULT_REASONING_REPLAY_FIDELITY, id="responses"),
+        pytest.param(MESSAGES_MODEL, REASONING_REPLAY_FIDELITY_META_ONLY, id="messages"),
+        pytest.param(RESPONSES_MODEL, REASONING_REPLAY_FIDELITY_META_ONLY, id="responses"),
     ],
 )
 def test_every_wire_replays_full_history_with_its_own_fidelity(

@@ -22,10 +22,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from core.providers.reasoning import (
-    DEFAULT_REASONING_REPLAY_POLICY,
-    ReasoningReplayPolicy,
-)
 from core.utils.errors import ConfigError, ProviderError
 
 _LOGGER = logging.getLogger("vbot.providers")
@@ -40,13 +36,15 @@ _PROVIDER_CONFIG_ERRORS = (
 
 # Last-resort context-window floor, used when neither the model nor the
 # provider config supplies a window (e.g. custom models and thin providers
-# whose endpoint reports no window). Deliberately small and conservative:
-# better to under-promise the budget — compaction triggers a little early,
-# the token badge reads a little low — than to over-promise and let a real
-# request blow past the model's true window. 8192 is a safe floor every
-# modern chat model clears. This is a read-side FLOOR, never written into the
-# catalog as a discovered fact (see ``resolve_context_window``).
-GLOBAL_CONTEXT_WINDOW_FLOOR = 8192
+# whose endpoint reports no window). Conservative: better to under-promise the
+# budget (compaction triggers a little early, the token badge reads a little
+# low) than to over-promise and let a real request blow past the model's true
+# window. It must still hold a normal Session, though: vBot's own System Prompt
+# and Tool definitions alone can exceed 8k tokens, so 32768, which every
+# current chat model clears, keeps an unknown Model usable. This is a read-side
+# FLOOR, never written into the catalog as a discovered fact (see
+# ``resolve_context_window``).
+GLOBAL_CONTEXT_WINDOW_FLOOR = 32768
 
 # Default cap for the EFFECTIVE context window of flagged-local models (e.g.
 # Ollama). A local endpoint reports the model's *theoretical* max (262k for an
@@ -322,10 +320,6 @@ class ProviderConfig:
             all the way to the global floor. Distinct from ``defaults`` (which
             holds request-shaping params like ``max_tokens``). Consumed by
             :func:`resolve_context_window`.
-        reasoning_replay: Effective Provider-level native Reasoning replay
-            policy. Runtime overlays the optional value from the Provider's
-            Model-DB Override file; direct construction uses the system
-            ``full_history`` default.
     """
 
     id: str
@@ -340,7 +334,6 @@ class ProviderConfig:
     context_window: int | None = None
     catalog_exclusions: frozenset[str] = frozenset()
     custom: bool = False
-    reasoning_replay: ReasoningReplayPolicy = DEFAULT_REASONING_REPLAY_POLICY
 
     def effective_models_dev_id(self) -> str:
         """Return the models.dev provider key for this provider.

@@ -279,31 +279,6 @@
           />
         </FormField>
 
-        <FormField
-          controlId="agent-create-temperature"
-          error={formErrors.temperature ? fieldError('temperature') : ''}
-        >
-          {#snippet labelContent()}
-            {t('agents.form.temperature')}
-            <InfoHint text={t('agents.form.temperatureHelp')} />
-          {/snippet}
-          {#snippet children(field)}
-            <TextField
-              id={field.controlId}
-              inputmode="decimal"
-              invalid={field.invalid}
-              aria-describedby={field.describedBy}
-              value={formValues.temperature}
-              disabled={isSaving}
-              onInput={(next) => {
-                formValues.temperature = next;
-                formErrors.temperature = '';
-                errorMessage = '';
-              }}
-            />
-          {/snippet}
-        </FormField>
-
         {#if errorMessage}
           <Banner variant="error" role="alert">
             {errorMessage}

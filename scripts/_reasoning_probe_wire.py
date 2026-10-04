@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -72,46 +71,6 @@ def _extract_openai_message(message: dict[str, Any]) -> TurnResult:
     )
 
 
-def _find_secret(reasoning: str) -> str | None:
-    numbers = re.findall(r"\b\d{5}\b", reasoning)
-    return numbers[0] if numbers else None
-
-
-def _replay_tool_calls(tool_calls: list[dict[str, Any]], wire: str) -> list[dict[str, Any]]:
-    replayed: list[dict[str, Any]] = []
-    for position, call in enumerate(tool_calls):
-        if not isinstance(call, dict):
-            continue
-        function = call.get("function", {})
-        if not isinstance(function, dict):
-            function = {}
-        name = function.get("name") or ""
-        arguments = function.get("arguments") or {}
-        if wire == "openai":
-            if isinstance(arguments, dict):
-                arguments = json.dumps(arguments, separators=(",", ":"))
-            replayed.append(
-                {
-                    "id": call.get("id") or f"call_{position}",
-                    "type": "function",
-                    "function": {"name": name, "arguments": arguments},
-                }
-            )
-        else:
-            if isinstance(arguments, str):
-                try:
-                    arguments = json.loads(arguments)
-                except json.JSONDecodeError:
-                    arguments = {}
-            replayed.append(
-                {
-                    "id": call.get("id") or f"call_{position}",
-                    "function": {"name": name, "arguments": arguments},
-                }
-            )
-    return replayed
-
-
 async def _run_turn(
     adapter: Any,
     model_id: str,
@@ -144,16 +103,17 @@ def _build_exact_payload(
 ) -> dict[str, Any]:
     """Build the payload for the same model-selected wire used by ``send``."""
 
-    protocol_resolver = getattr(adapter, "_model_protocol", None)
-    protocol = protocol_resolver(model_id) if callable(protocol_resolver) else "openai"
+    protocol = adapter.wire_profile(model_id).protocol
     kwargs: dict[str, Any] = {
         "temperature": 1.0,
         "thinking_effort": effort,
     }
     if tools:
         kwargs["tools"] = tools
-    if protocol == "anthropic":
-        return dict(adapter._messages._build_payload(messages, model_id, **kwargs))
+    if protocol == "messages":
+        # A multi-wire Adapter delegates Messages to its inner Messages adapter.
+        messages_wire = getattr(adapter, "_messages", adapter)
+        return dict(messages_wire._build_payload(messages, model_id, **kwargs))
     if protocol == "responses":
         return dict(adapter._build_responses_payload(messages, model_id=model_id, **kwargs))
     return dict(adapter._build_payload(messages, model_id, **kwargs))

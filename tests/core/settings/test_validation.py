@@ -335,6 +335,12 @@ def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> N
                                     }
                                 }
                             },
+                            "wire": {
+                                "defaults": {"reasoning": {"dialect": "thinking_toggle"}},
+                                "models": {
+                                    "chat-model": {"set": {"replay": {"strip_when_off": True}}}
+                                },
+                            },
                         }
                     }
                 },
@@ -629,6 +635,41 @@ def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> N
                 ),
             ],
             id="custom-provider-secrets",
+        ),
+        # The Provider ignores invalid wire block entries; the record stays valid.
+        pytest.param(
+            {
+                "providers": {
+                    "custom": {
+                        "local-ai": {
+                            "name": "Local AI",
+                            "adapter": "openai_compatible",
+                            "base_url": "http://127.0.0.1:8080/v1",
+                            "wire": "thinking_toggle",
+                        },
+                        "other-ai": {
+                            "name": "Other AI",
+                            "adapter": "openai_compatible",
+                            "base_url": "http://127.0.0.1:8081/v1",
+                            "wire": {"connections": {"api-key": {}}},
+                        },
+                    }
+                }
+            },
+            [
+                (
+                    "warning",
+                    "$.providers.custom['local-ai'].wire",
+                    "wire: expected a JSON object, ignoring the block",
+                ),
+                (
+                    "warning",
+                    "$.providers.custom['other-ai'].wire",
+                    "wire.connections.api-key: unknown Connection (this Provider has default), "
+                    "ignoring it",
+                ),
+            ],
+            id="custom-provider-wire-issues-warn",
         ),
         pytest.param(
             {

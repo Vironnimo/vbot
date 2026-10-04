@@ -1130,6 +1130,14 @@ summary:not([class])::-webkit-details-marker {
   text-align: left;
 }
 
+/* A marker (OptionMarker.svelte) sits right after the option label; the
+   remaining space follows it, so the meta and count stay at the end. */
+.dropdown-option .option-marker,
+.s-dropdown-opt .option-marker {
+  margin-right: auto;
+  margin-left: -6px;
+}
+
 /* Compact numeric count pill (for example unread results). Blue like the
    other info badges, never the accent. */
 .count-badge {

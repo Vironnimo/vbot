@@ -316,6 +316,73 @@ describe('buildModelSelectOptions', () => {
     ]);
   });
 
+  it('marks a Model with the latest verification of its usable Connections', () => {
+    const withProfiles = (id, profiles) => ({
+      ...catalogModel(id, 'demo'),
+      wire_profiles: Object.fromEntries(
+        Object.entries(profiles).map(([connection, [wireStatus, date]]) => [
+          connection,
+          { wire_status: wireStatus, verified_at: date },
+        ]),
+      ),
+    });
+    const models = [
+      withProfiles('demo/verified', {
+        'api-key': ['verified', '2026-09-30'],
+        oauth: ['verified', '2026-08-15'],
+      }),
+      withProfiles('demo/undated', {
+        'api-key': ['verified', null],
+        oauth: ['inferred', null],
+      }),
+      withProfiles('demo/configured', { 'api-key': ['configured', null] }),
+      withProfiles('demo/inferred', {
+        'api-key': ['inferred', null],
+        oauth: ['inferred', null],
+      }),
+      catalogModel('demo/unreported', 'demo'),
+    ];
+    const verified = {
+      label: t('models.wire.verifiedOn', { date: '2026-09-30' }),
+    };
+    const undated = { label: t('models.wire.verified') };
+    const markers = (options) =>
+      options.slice(1).map((option) => [option.value, option.marker]);
+
+    expect(
+      markers(
+        buildModelSelectOptions({
+          models,
+          connections: [
+            usableConnection('demo:api-key', 'demo', 'API key'),
+            usableConnection('demo:oauth', 'demo', 'Subscription'),
+          ],
+        }),
+      ),
+    ).toEqual([
+      ['demo/verified::api-key', verified],
+      ['demo/verified::oauth', verified],
+      ['demo/undated::api-key', undated],
+      ['demo/undated::oauth', undated],
+      ['demo/configured::api-key', undefined],
+      ['demo/configured::oauth', undefined],
+      ['demo/inferred::api-key', undefined],
+      ['demo/inferred::oauth', undefined],
+      ['demo/unreported::api-key', undefined],
+      ['demo/unreported::oauth', undefined],
+    ]);
+    expect(verified.label).toBe('Wire profile verified on 2026-09-30');
+    expect(
+      markers(buildModelSelectOptions({ models, modelOnly: true })),
+    ).toEqual([
+      ['demo/verified', verified],
+      ['demo/undated', undated],
+      ['demo/configured', undefined],
+      ['demo/inferred', undefined],
+      ['demo/unreported', undefined],
+    ]);
+  });
+
   it('reuses suitability and keeps one exact selected value without connection pins', () => {
     const options = buildModelSelectOptions({
       models: [catalogModel('demo/model', 'demo'), { id: 'demo/no-tools' }],

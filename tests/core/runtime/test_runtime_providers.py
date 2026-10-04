@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -20,8 +21,9 @@ from core.providers.openai import CODEX_RESPONSES_MODE, OpenAIAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.openrouter import OpenRouterAdapter
+from core.providers.reasoning_dialects import describe_profile_reasoning
 from core.providers.runtime import ADAPTER_TYPES
-from core.providers.stepfun import STEPFUN_DIRECT_MODE, STEPFUN_PLAN_MODE, StepFunAdapter
+from core.providers.stepfun import StepFunAdapter
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter
 from core.providers.token_store import OAuthToken
 from core.providers.xai import XAIAdapter
@@ -132,11 +134,11 @@ def test_bundled_provider_configs_expose_their_connections(shared_runtime: Runti
         "step-plan",
     ]
     stepfun_direct = stepfun_config.get_connection("direct-api")
-    assert stepfun_direct.mode == STEPFUN_DIRECT_MODE
+    assert stepfun_direct.mode == "direct_api"
     assert stepfun_direct.auth.credential_key == "STEPFUN_DIRECT_API_KEY"
     assert stepfun_direct.models_endpoint == "/models"
     stepfun_plan = stepfun_config.get_connection("step-plan")
-    assert stepfun_plan.mode == STEPFUN_PLAN_MODE
+    assert stepfun_plan.mode == "step_plan"
     assert stepfun_plan.base_url == "https://api.stepfun.com/step_plan/v1"
     assert stepfun_plan.auth.credential_key == "STEPFUN_API_KEY"
     assert stepfun_plan.models_endpoint == "/models"
@@ -248,7 +250,6 @@ def test_runtime_loads_opencode_zen_current_catalog_and_connection_allowlist(
     assert gemini.context_window == 1_048_576
     assert gemini.max_output_tokens == 65_536
     assert gemini.capabilities.input_modalities == ("text", "image", "video", "audio", "pdf")
-    assert gemini.metadata["opencode_zen"]["protocol"] == "gemini_generate_content"
     assert {model.model_id for model in models}.isdisjoint(
         {
             "big-pickle",
@@ -335,10 +336,6 @@ def test_runtime_loads_stepfun_models_with_connection_limits(shared_runtime: Run
     assert models["step-3.7-flash"].capabilities.input_modalities == ("text", "image", "video")
     assert models["step-router-v1"].connections == ("step-plan",)
     assert models["step-router-v1"].max_output_tokens == 250000
-    assert models["step-router-v1"].metadata["stepfun"]["routes_between"] == (
-        "deepseek-v4-pro",
-        "step-3.7-flash",
-    )
 
 
 # Adapter internals are read directly: the Runtime's contract is what it hands
@@ -376,7 +373,7 @@ _ADAPTER_WIRING: list[tuple[str, type, Callable[[Any], bool]]] = [
         "stepfun:step-plan",
         StepFunAdapter,
         lambda adapter: (
-            adapter._connection_mode == STEPFUN_PLAN_MODE
+            adapter._connection_mode == "step_plan"
             and str(adapter._client.base_url) == "https://api.stepfun.com/step_plan/v1/"
         ),
     ),
@@ -420,7 +417,7 @@ async def test_get_adapter_builds_the_bundled_adapter_for_each_api_key_connectio
     assert wired(adapter)
 
 
-def test_get_adapter_scopes_model_lookup_and_reasoning_replay_to_the_provider(
+def test_get_adapter_scopes_model_lookup_wire_profiles_and_replay_to_its_connection(
     shared_runtime: Runtime, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-token")
@@ -434,14 +431,63 @@ def test_get_adapter_scopes_model_lookup_and_reasoning_replay_to_the_provider(
     )
     # An OpenRouter-only model id is invisible to the Anthropic adapter.
     assert lookup("anthropic/claude-sonnet-4") is None
+    profile = anthropic.wire_profile("claude-sonnet-4-6::api-key")
+    assert (profile.provider_id, profile.connection_id, profile.model_id) == (
+        "anthropic",
+        "api-key",
+        "claude-sonnet-4-6",
+    )
+    assert profile.protocol == "messages"
+    assert profile.known_model
+    assert anthropic.wire_profile("unknown-model").known_model is False
+    # The Runtime reports the profile requests use, learned facts included.
+    assert shared_runtime.wire_profile("anthropic", "api-key", "claude-sonnet-4-6") is profile
+    assert shared_runtime.wire_status("anthropic", "api-key", "claude-sonnet-4-6") == (
+        profile.status,
+        profile.verification,
+    )
+    assert shared_runtime.learned_wire_facts("anthropic", "api-key", "claude-sonnet-4-6").is_empty()
 
     cloud = shared_runtime.get_adapter(ConnectionRef("ollama-cloud", "ollama-cloud:api-key"))
-    # The Provider-level policy applies to every model without a Model-level override.
+    # The wire file's default scope applies to every Model no rule narrows.
     assert cloud.reasoning_replay_policy("unprofiled-model") == "full_history"
     assert cloud.reasoning_replay_policy("glm-5.2") == "full_history"
-    # Model-level overrides win over the Provider policy.
+    # Rules narrow exact Models.
     assert cloud.reasoning_replay_policy("minimax-m3") == "none"
     assert cloud.reasoning_replay_policy("kimi-k2.6") == "current_run"
+
+
+@pytest.mark.parametrize(
+    ("model", "connection_id"),
+    [
+        pytest.param("openai/gpt-5.2", "openai:api-key", id="first-usable"),
+        pytest.param("openai/gpt-5.2::api-key:work", "openai:api-key:work", id="pinned"),
+        pytest.param("anthropic/claude-sonnet-4-6", None, id="no-usable-connection"),
+    ],
+)
+def test_status_describes_the_wire_profile_of_the_connection_chat_resolves(
+    shared_runtime: Runtime,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    connection_id: str | None,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-default")
+    monkeypatch.setenv("OPENAI_API_KEY__WORK", "sk-work")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    agent = SimpleNamespace(model=model, thinking_effort="high")
+    described = shared_runtime.describe_agent_wire_profile(agent)
+    reasoning = shared_runtime.describe_agent_reasoning_render(agent)
+
+    if connection_id is None:
+        assert (described, reasoning) == (None, None)
+        return
+    assert described is not None
+    profile = shared_runtime.wire_profile("openai", "api-key", "gpt-5.2")
+    assert (described.connection_id, described.status) == (connection_id, profile.status)
+    assert described.learned.is_empty()
+    # The thinking-effort report describes the same Connection's profile.
+    assert reasoning == describe_profile_reasoning(profile, "high")
 
 
 @pytest.mark.asyncio

@@ -9,7 +9,7 @@ file to a :class:`ScannedAgent` per the v1 minimal rule (see add-projects.md →
 
 - ``agent_id`` = filename stem **slugified** (``slugify_agent_id``); a name that
   cannot be slugified becomes a parse failure the report turns into a finding.
-- ``description`` / ``temperature`` taken from the front matter.
+- ``description`` / ``temperature`` / ``top_p`` taken from the front matter.
 - ``thinking_effort`` taken from the front matter's ``reasoningEffort`` (the
   OpenCode key), defensively normalized to vBot's effort ladder; an unknown or
   empty value becomes ``None`` so a foreign effort never crashes the scan.
@@ -146,6 +146,7 @@ class OpenCodeDetector:
             description=string_field(fields.get("description")),
             model=string_field(fields.get("model")),
             temperature=_temperature_field(fields.get("temperature")),
+            top_p=_top_p_field(fields.get("top_p")),
             thinking_effort=_thinking_effort_field(fields.get("reasoningEffort")),
             body=body,
             source_format=OPENCODE_FORMAT_KEY,
@@ -167,6 +168,14 @@ def _temperature_field(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _top_p_field(value: Any) -> float | None:
+    """Return a ``top_p`` in ``[0, 1]``, or ``None`` when absent, non-numeric or out of range."""
+    top_p = _temperature_field(value)
+    if top_p is None or not 0.0 <= top_p <= 1.0:
+        return None
+    return top_p
 
 
 def _thinking_effort_field(value: Any) -> str | None:

@@ -12,6 +12,7 @@ from core.providers.providers import (
     model_is_local,
     resolve_effective_context_window,
 )
+from core.providers.wire_observations import EXCLUSIVE_GROUP_SEPARATOR
 from core.runs import QueuedRunItem, Run
 from core.tools import tool_is_ready
 
@@ -201,6 +202,7 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         # ``workspace`` differs from this (a custom identity/Memory home).
         "default_workspace": state.runtime.agents.default_workspace(agent.id),
         "temperature": agent.temperature,
+        "top_p": agent.top_p,
         "thinking_effort": agent.thinking_effort,
         "memory_prompt_mode": agent.memory_prompt_mode,
         "tool_access": agent.tool_access.to_dict(),
@@ -239,6 +241,7 @@ def _agent_raw_config(state: Any, agent_id: str) -> JsonObject:
         "model": raw.model,
         "fallback_models": list(getattr(raw, "fallback_models", ()) or ()),
         "temperature": raw.temperature,
+        "top_p": raw.top_p,
         "thinking_effort": raw.thinking_effort,
         "compaction_policy": dict(raw_policy) if raw_policy is not None else None,
     }
@@ -269,6 +272,7 @@ def _model_response(
                 "supported": model.capabilities.reasoning.supported,
                 "control": model.capabilities.reasoning.control,
                 "levels": list(model.capabilities.reasoning.levels),
+                "mandatory": model.capabilities.reasoning.mandatory,
             },
             "input_modalities": list(model.capabilities.input_modalities),
             "output_modalities": list(model.capabilities.output_modalities),
@@ -287,6 +291,9 @@ def _model_response(
         "local": model_is_local(model.metadata),
         "max_output_tokens": model.max_output_tokens,
         "connections": list(model.connections),
+        # Shown as hints next to the sampling settings; never sent on their own.
+        "recommended_temperature": model.recommended_temperature,
+        "recommended_top_p": model.recommended_top_p,
     }
 
 
@@ -311,9 +318,42 @@ def _model_detail_response(
     capabilities["supported_voices"] = list(model.capabilities.supported_voices)
     capabilities["task_options"] = _json_compatible(model.capabilities.task_options)
     response["family"] = model.family
-    response["recommended_temperature"] = model.recommended_temperature
     response["metadata"] = _json_compatible(model.metadata)
     return response
+
+
+def _wire_status_response(status: str, verification: Any) -> JsonObject:
+    """Return how far vBot trusts one Connection's wire profile of a Model."""
+
+    return {
+        "wire_status": status,
+        "verified_at": verification.date if verification is not None else None,
+    }
+
+
+def _wire_profile_detail_response(profile: Any, learned: Any) -> JsonObject:
+    """Return the compact wire profile of one Connection and its learned facts.
+
+    ``learned`` names only facts live traffic showed, never request or
+    response content.
+    """
+
+    return {
+        **_wire_status_response(profile.status, profile.verification),
+        "protocol": profile.protocol,
+        "reasoning_dialect": profile.reasoning.dialect,
+        "reasoning_ladder": list(profile.reasoning.ladder),
+        "replay_fidelity": profile.replay.fidelity,
+        "learned": {
+            "reasoning_field": learned.reasoning_field,
+            "rejected_parameters": list(learned.rejected_parameters),
+            "exclusive_parameters": [
+                group.split(EXCLUSIVE_GROUP_SEPARATOR) for group in learned.exclusive_parameters
+            ],
+            "rejected_efforts": list(learned.rejected_efforts),
+            "reasoning_returned": learned.reasoning_returned,
+        },
+    }
 
 
 def _json_compatible(value: Any) -> Any:

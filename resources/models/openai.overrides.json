@@ -7,32 +7,6 @@
       "connection_context_windows": {
         "api-key": 1050000,
         "subscription": 272000
-      },
-      "metadata": {
-        "openai": {
-          "wire_policies": {
-            "api-key": {
-              "protocol": "responses",
-              "minimum_reasoning_effort": "low"
-            },
-            "subscription": {
-              "protocol": "responses",
-              "minimum_reasoning_effort": "low"
-            }
-          }
-        }
-      }
-    },
-    "gpt-6-astra": {
-      "metadata": {
-        "openai": {
-          "wire_policies": {
-            "subscription": {
-              "protocol": "responses",
-              "minimum_reasoning_effort": "low"
-            }
-          }
-        }
       }
     },
     "gpt-6-luna": {
@@ -41,19 +15,6 @@
       "connection_context_windows": {
         "api-key": 1050000,
         "subscription": 272000
-      },
-      "metadata": {
-        "openai": {
-          "wire_policies": {
-            "api-key": {
-              "protocol": "responses"
-            },
-            "subscription": {
-              "protocol": "responses",
-              "minimum_reasoning_effort": "low"
-            }
-          }
-        }
       }
     },
     "gpt-6-sol": {
@@ -62,34 +23,11 @@
       "connection_context_windows": {
         "api-key": 1050000,
         "subscription": 272000
-      },
-      "metadata": {
-        "openai": {
-          "wire_policies": {
-            "api-key": {
-              "protocol": "responses"
-            },
-            "subscription": {
-              "protocol": "responses",
-              "minimum_reasoning_effort": "low"
-            }
-          }
-        }
       }
     },
     "gpt-5.6": {
       "canonical": "openai/gpt-5.6-sol",
-      "connections": ["api-key"],
-      "metadata": {
-        "openai": {
-          "wire_policies": {
-            "api-key": {
-              "protocol": "responses",
-              "reasoning_context": "all_turns"
-            }
-          }
-        }
-      }
+      "connections": ["api-key"]
     },
     "gpt-5.2": {
       "canonical": "openai/gpt-5.2",
@@ -104,34 +42,13 @@
         ]
       },
       "context_window": 400000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "openai": {
-          "wire_policies": {
-            "api-key": {
-              "protocol": "responses"
-            }
-          }
-        }
-      }
+      "max_output_tokens": 128000
     },
     "gpt-5.5": {
       "connections": ["api-key", "subscription"],
       "connection_context_windows": {
         "api-key": 1050000,
         "subscription": 272000
-      },
-      "metadata": {
-        "openai": {
-          "wire_policies": {
-            "api-key": {
-              "protocol": "responses"
-            },
-            "subscription": {
-              "protocol": "responses"
-            }
-          }
-        }
       }
     },
     "gpt-5.6-luna": {
@@ -139,19 +56,6 @@
       "connection_context_windows": {
         "api-key": 1050000,
         "subscription": 272000
-      },
-      "metadata": {
-        "openai": {
-          "wire_policies": {
-            "api-key": {
-              "protocol": "responses",
-              "reasoning_context": "all_turns"
-            },
-            "subscription": {
-              "protocol": "responses"
-            }
-          }
-        }
       }
     },
     "gpt-5.6-sol": {
@@ -159,19 +63,6 @@
       "connection_context_windows": {
         "api-key": 1050000,
         "subscription": 272000
-      },
-      "metadata": {
-        "openai": {
-          "wire_policies": {
-            "api-key": {
-              "protocol": "responses",
-              "reasoning_context": "all_turns"
-            },
-            "subscription": {
-              "protocol": "responses"
-            }
-          }
-        }
       }
     },
     "gpt-5.6-terra": {
@@ -179,19 +70,6 @@
       "connection_context_windows": {
         "api-key": 1050000,
         "subscription": 272000
-      },
-      "metadata": {
-        "openai": {
-          "wire_policies": {
-            "api-key": {
-              "protocol": "responses",
-              "reasoning_context": "all_turns"
-            },
-            "subscription": {
-              "protocol": "responses"
-            }
-          }
-        }
       }
     },
     "tts-1": {

@@ -1,4 +1,4 @@
-"""Model, temperature, and thinking resolution chains and their effective provenance."""
+"""Model, sampling, and thinking resolution chains and their effective provenance."""
 
 from typing import Any
 
@@ -144,6 +144,48 @@ _GHOST = "openai/ghost-model"
             None,
             id="temperature-unset",
         ),
+        # top_p walks the same tiers as temperature.
+        pytest.param(
+            "top_p",
+            {"model": _GPT, "top_p": 0.8},
+            {"default_top_p": 0.7},
+            {"top_p": 0.6},
+            {"global_top_p": 0.5},
+            0.6,
+            "override",
+            id="top-p-override",
+        ),
+        pytest.param(
+            "top_p",
+            {"model": _GPT, "top_p": 0.8},
+            {"default_top_p": 0.7},
+            {},
+            {"global_top_p": 0.5},
+            0.8,
+            "agent",
+            id="top-p-agent",
+        ),
+        pytest.param(
+            "top_p",
+            {"model": _GPT},
+            {"default_top_p": 0.7},
+            {},
+            {"global_top_p": 0.5},
+            0.7,
+            "project_default",
+            id="top-p-project-default",
+        ),
+        pytest.param(
+            "top_p",
+            {"model": _GPT},
+            {},
+            {},
+            {"global_top_p": 0.5},
+            0.5,
+            "global_default",
+            id="top-p-global-default",
+        ),
+        pytest.param("top_p", {"model": _GPT}, {}, {}, {}, None, None, id="top-p-unset"),
         # "" means Provider default, a real value that stops the chain.
         pytest.param(
             "thinking_effort",
@@ -285,13 +327,15 @@ def _provenance(value: object, source: str | None) -> dict[str, object]:
                 "model": _GPT,
                 "fallback_models": [_MINI],
                 "temperature": 0.3,
+                "top_p": 0.9,
                 "thinking_effort": "high",
             },
-            {"global_default": "openai/ghost"},
+            {"global_default": "openai/ghost", "global_top_p": 0.5},
             {
                 "model": _provenance(_GPT, "agent"),
                 "fallback_models": _provenance([_MINI], "agent"),
                 "temperature": _provenance(0.3, "agent"),
+                "top_p": _provenance(0.9, "agent"),
                 "thinking_effort": _provenance("high", "agent"),
             },
             id="own-values",
@@ -313,12 +357,14 @@ def _provenance(value: object, source: str | None) -> dict[str, object]:
             {
                 "global_default": _GPT,
                 "global_temperature": 0.9,
+                "global_top_p": 0.5,
                 "global_thinking_effort": "medium",
             },
             {
                 "model": _provenance(_GPT, "global_default"),
                 "fallback_models": _provenance(None, None),
                 "temperature": _provenance(0.9, "global_default"),
+                "top_p": _provenance(0.5, "global_default"),
                 "thinking_effort": _provenance("medium", "global_default"),
             },
             id="global-defaults",

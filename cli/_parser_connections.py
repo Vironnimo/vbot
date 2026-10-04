@@ -285,6 +285,17 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         metavar="<model-id>",
         help="Manual chat Model id; repeat to add several",
     )
+    wire_source = custom_save_parser.add_mutually_exclusive_group()
+    wire_source.add_argument(
+        "--wire-file",
+        metavar="<path>",
+        help="JSON file with the wire block that replaces the stored one",
+    )
+    wire_source.add_argument(
+        "--clear-wire",
+        action="store_true",
+        help="Remove the stored wire block",
+    )
     custom_delete_parser = _add_command_parser(
         provider_subparsers,
         "custom-delete",
@@ -300,7 +311,11 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
     status_parser = _add_command_parser(
         provider_subparsers, "status", PROVIDER_HELP["status"], example="provider status openai"
     )
-    status_parser.add_argument("provider", metavar="<provider-id>", help="Provider id to inspect")
+    status_parser.add_argument(
+        "provider",
+        metavar="<provider-id>",
+        help="Provider id to inspect, or one Connection id such as openai:api-key",
+    )
     status_parser.add_argument(
         "--connection",
         metavar="<provider:connection-id>",
@@ -348,7 +363,9 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         "Example: vbot provider key set openai --stdin --refresh-models"
     )
     set_key_parser.add_argument(
-        "provider", metavar="<provider-id>", help="Provider id to configure"
+        "provider",
+        metavar="<provider-id>",
+        help="Provider id to configure, or one Connection id such as openai:api-key",
     )
     key_source = set_key_parser.add_mutually_exclusive_group(required=True)
     key_source.add_argument(
@@ -386,7 +403,11 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         "Remove an API key from the target data-dir .env through the server RPC contract. "
         "Process-environment credentials are not touched. Example: vbot provider key unset openai"
     )
-    unset_key_parser.add_argument("provider", metavar="<provider-id>", help="Provider id to clear")
+    unset_key_parser.add_argument(
+        "provider",
+        metavar="<provider-id>",
+        help="Provider id to clear, or one Connection id such as openai:api-key",
+    )
     unset_key_parser.add_argument(
         "--connection",
         metavar="<provider:connection-id>",
@@ -412,7 +433,9 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
             f"Example: vbot provider {command} ollama"
         )
         toggle_parser.add_argument(
-            "provider", metavar="<provider-id>", help="Provider id to toggle"
+            "provider",
+            metavar="<provider-id>",
+            help="Provider id to toggle, or one Connection id as provider list shows it",
         )
         toggle_parser.add_argument(
             "--connection",
@@ -428,7 +451,9 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
             example=f"provider {command} openai",
         )
         command_parser.add_argument(
-            "provider", metavar="<provider-id>", help="Provider id of the OAuth connection"
+            "provider",
+            metavar="<provider-id>",
+            help="Provider id of the OAuth connection, or that Connection's id",
         )
         command_parser.add_argument(
             "--connection",
@@ -505,6 +530,22 @@ def _add_model_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         nargs="?",
         metavar="<provider-id>",
         help="Refresh only this provider; omitted means all refreshable providers",
+    )
+    forget_parser = _add_command_parser(
+        model_subparsers,
+        "forget-wire-facts",
+        MODEL_HELP["forget-wire-facts"],
+        example="model forget-wire-facts openrouter/qwen/qwen3.8-max --connection api-key",
+    )
+    forget_parser.add_argument(
+        "model",
+        metavar="<provider>[/<model-id>]",
+        help="A Provider id (all its Models) or one exact Model",
+    )
+    forget_parser.add_argument(
+        "--connection",
+        metavar="<connection-id>",
+        help="Only the facts learned on this Connection",
     )
 
 

@@ -4,12 +4,17 @@ The helpers in this module intentionally implement a conservative,
 Anthropic-like subset for Copilot's Messages endpoint. They build request
 payloads from vBot's canonical chat dictionaries and normalize provider
 responses/stream events back to the adapter delta contract consumed by chat.
+Reasoning, the sampling-parameter rules and the accepted request fields come
+from the Model's wire profile.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Any
 
+from core.providers._chat_completions_wire import _selected_thinking_effort
+from core.providers._openai_constants import REASONING_PARAMETER_NAMES
 from core.providers.adapter import (
     canonical_tool_result_is_error,
     normalize_tool_call_candidates,
@@ -22,10 +27,11 @@ from core.providers.anthropic_compatible import (
     apply_anthropic_reasoning_usage,
 )
 from core.providers.errors import ProviderError
-from core.providers.github_copilot_policy import GitHubCopilotModelPolicy
 from core.providers.openai_compatible import DEFAULT_MAX_OUTPUT_TOKENS
-from core.providers.reasoning import effort_to_budget
+from core.providers.reasoning_dialects import dialect_request_fields, render_reasoning
 from core.providers.tool_schema import render_tool_definitions
+from core.providers.wire_profile import WireProfile
+from core.utils.tokens import estimate_structured_tokens
 
 TEXT_BLOCK_TYPE = "text"
 IMAGE_BLOCK_TYPE = "image"
@@ -42,7 +48,7 @@ SAFE_TOP_LEVEL_PARAMETERS = {
     "top_k",
     "stop_sequences",
 }
-SAFE_THINKING_TYPES = {"adaptive", "disabled", "enabled"}
+ACTIVE_THINKING_TYPES = frozenset({"adaptive", "enabled"})
 SAFE_TOOL_CHOICE_TYPES = {"auto", "any", "tool"}
 
 
@@ -63,36 +69,84 @@ def build_copilot_messages_payload(
     messages: list[dict[str, Any]],
     *,
     model_id: str,
-    policy: GitHubCopilotModelPolicy,
+    profile: WireProfile,
+    provider_label: str = "GitHub Copilot",
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Build a conservative Copilot ``/v1/messages`` request payload."""
+    """Build a conservative Copilot ``/v1/messages`` request payload.
 
-    request_kwargs = policy.filter_request_kwargs(kwargs)
-    system_parts: list[str] = []
-    conversation_messages: list[dict[str, Any]] = []
+    ``kwargs`` carry only the request features the Model takes. The caller's
+    thinking effort is planned on ``profile`` against the resolved output
+    allowance and spelled in its reasoning dialect; the profile's body rules are
+    added and its parameter rules then shape the sampling parameters (for
+    example, a parameter dropped while thinking).
+    """
 
-    for message in messages:
-        role = message.get("role")
-        if role == "system":
-            system_text = _text_from_content(message.get("content"))
-            if system_text:
-                system_parts.append(system_text)
-            continue
-        if role in {"user", "assistant", "tool"}:
-            conversation_messages.append(message)
-
+    request_kwargs = dict(kwargs)
+    effort = _selected_thinking_effort(request_kwargs)
+    for name in REASONING_PARAMETER_NAMES:
+        request_kwargs.pop(name, None)
+    system, conversation_messages = _split_system(messages)
     payload: dict[str, Any] = {
         "model": model_id,
         "messages": _to_copilot_messages(conversation_messages),
     }
-    if system_parts:
-        payload["system"] = "\n\n".join(system_parts)
+    if system is not None:
+        payload["system"] = system
 
-    _apply_safe_messages_tools(payload, request_kwargs, policy)
-    _apply_safe_messages_thinking(payload, dict(kwargs), policy)
-    _apply_safe_top_level_parameters(payload, request_kwargs)
+    _apply_safe_messages_tools(payload, request_kwargs)
+    # A thinking budget is part of the Messages output allowance, so the plan
+    # keeps it strictly under the resolved max tokens.
+    max_tokens = _resolve_messages_max_tokens(request_kwargs)
+    wire = profile.reasoning
+    render_reasoning(
+        wire,
+        wire.plan(effort, output_allowance=max_tokens),
+        payload,
+        output_allowance=max_tokens,
+    )
+    payload["max_tokens"] = max_tokens
+    for parameter_name in SAFE_TOP_LEVEL_PARAMETERS:
+        if parameter_name in request_kwargs:
+            payload[parameter_name] = request_kwargs[parameter_name]
+    rules = profile.request
+    rules.apply_body(payload)
+    thinking = payload.get("thinking")
+    rules.shape_parameters(
+        payload,
+        reasoning_active=isinstance(thinking, Mapping)
+        and thinking.get("type") in ACTIVE_THINKING_TYPES,
+        protected=dialect_request_fields(wire.dialect),
+        provider_label=provider_label,
+    )
     return payload
+
+
+def estimate_copilot_messages_input_tokens(
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    model_id: str,
+    tools: Sequence[Mapping[str, Any]] | None = None,
+) -> int:
+    """Estimate one ``/v1/messages`` request's input as it is rendered.
+
+    Counts the system text, the history with its signed thinking blocks and the
+    rendered Tool definitions exactly as :func:`build_copilot_messages_payload`
+    builds them, so readable reasoning the Messages wire never sends is not
+    counted.
+    """
+
+    system, conversation_messages = _split_system([dict(message) for message in messages])
+    payload: dict[str, Any] = {}
+    if system is not None:
+        payload["system"] = system
+    _apply_safe_messages_tools(payload, {"tools": list(tools)} if tools else {})
+    # Count the growing history apart from the stable System Prompt and Tools so
+    # the shared per-item count cache also serves this wire.
+    history_tokens = estimate_structured_tokens(
+        _to_copilot_messages(conversation_messages), model_id=model_id
+    )[0]
+    return history_tokens + estimate_structured_tokens(payload, model_id=model_id)[0]
 
 
 def normalize_copilot_messages_response(response: dict[str, Any]) -> dict[str, Any]:
@@ -119,6 +173,25 @@ def normalize_copilot_messages_stream_event(
     """Normalize one parsed Copilot Messages stream event."""
 
     return state.normalize(event)
+
+
+def _split_system(
+    messages: list[dict[str, Any]],
+) -> tuple[str | None, list[dict[str, Any]]]:
+    """Return the joined system text and the conversation the Messages wire carries."""
+
+    system_parts: list[str] = []
+    conversation_messages: list[dict[str, Any]] = []
+    for message in messages:
+        role = message.get("role")
+        if role == "system":
+            system_text = _text_from_content(message.get("content"))
+            if system_text:
+                system_parts.append(system_text)
+            continue
+        if role in {"user", "assistant", "tool"}:
+            conversation_messages.append(message)
+    return ("\n\n".join(system_parts) if system_parts else None), conversation_messages
 
 
 def _to_copilot_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -308,12 +381,11 @@ def _safe_reasoning_block(block: Any) -> dict[str, Any]:
 def _apply_safe_messages_tools(
     payload: dict[str, Any],
     kwargs: dict[str, Any],
-    policy: GitHubCopilotModelPolicy,
 ) -> None:
     tools = kwargs.pop("tools", None)
     tool_choice = kwargs.pop("tool_choice", None)
     kwargs.pop("parallel_tool_calls", None)
-    if not policy.supports_tools or not isinstance(tools, list) or not tools:
+    if not isinstance(tools, list) or not tools:
         return
 
     rendered = render_tool_definitions(tools, profile="omit_strict")
@@ -358,168 +430,6 @@ def _safe_tool_choice(tool_choice: Any) -> dict[str, Any] | None:
     if choice_type != "tool":
         return safe_choice
     return None
-
-
-def _apply_safe_messages_thinking(
-    payload: dict[str, Any],
-    kwargs: dict[str, Any],
-    policy: GitHubCopilotModelPolicy,
-) -> None:
-    thinking = kwargs.pop("thinking", None)
-    output_config = kwargs.pop("output_config", None)
-    thinking_budget = kwargs.pop("thinking_budget", None)
-    thinking_effort = kwargs.pop("thinking_effort", "")
-    kwargs.pop("reasoning_effort", None)
-    kwargs.pop("reasoning", None)
-    kwargs.pop("include_reasoning", None)
-    # A thinking ``budget_tokens`` is part of the Messages output allowance, so a
-    # budget derived from effort is kept strictly under the resolved max tokens.
-    max_tokens = _resolve_messages_max_tokens(dict(kwargs))
-
-    safe_thinking = _safe_explicit_thinking(thinking, policy)
-    if safe_thinking is None:
-        safe_thinking = _thinking_from_budget(thinking_budget, policy)
-    if safe_thinking is None:
-        safe_thinking = _thinking_from_effort(thinking_effort, policy, max_tokens=max_tokens)
-    if safe_thinking is not None:
-        payload["thinking"] = safe_thinking
-
-    safe_output_config = _safe_output_config(output_config, policy)
-    if safe_output_config is None and isinstance(thinking_effort, str):
-        safe_output_config = _output_config_from_effort(thinking_effort, policy)
-    if safe_output_config is not None:
-        payload["output_config"] = safe_output_config
-
-
-def _safe_explicit_thinking(
-    thinking: Any,
-    policy: GitHubCopilotModelPolicy,
-) -> dict[str, Any] | None:
-    if not isinstance(thinking, dict):
-        return None
-    thinking_type = thinking.get("type")
-    if thinking_type not in SAFE_THINKING_TYPES:
-        return None
-    if thinking_type == "adaptive" and not policy.supports_adaptive_thinking:
-        return None
-    if thinking_type == "enabled":
-        budget = thinking.get("budget_tokens")
-        if not _budget_allowed(budget, policy):
-            return None
-        return {"type": "enabled", "budget_tokens": budget}
-    safe_thinking = {"type": thinking_type}
-    display = thinking.get("display")
-    if thinking_type == "adaptive" and display in {"summarized", "omitted"}:
-        safe_thinking["display"] = display
-    return safe_thinking
-
-
-def _thinking_from_budget(
-    thinking_budget: Any,
-    policy: GitHubCopilotModelPolicy,
-) -> dict[str, Any] | None:
-    if not _budget_allowed(thinking_budget, policy):
-        return None
-    return {"type": "enabled", "budget_tokens": thinking_budget}
-
-
-def _thinking_from_effort(
-    thinking_effort: Any,
-    policy: GitHubCopilotModelPolicy,
-    *,
-    max_tokens: int | None = None,
-) -> dict[str, Any] | None:
-    if not isinstance(thinking_effort, str) or not thinking_effort:
-        return None
-    if thinking_effort == "none":
-        return {"type": "disabled"} if policy.supports_adaptive_thinking else None
-    safe_effort = policy.closest_reasoning_effort(thinking_effort)
-    if policy.supports_adaptive_thinking and safe_effort is not None:
-        return {"type": "adaptive", "display": "summarized"}
-    if policy.supports_adaptive_thinking and not policy.allowed_reasoning_efforts:
-        return {"type": "adaptive", "display": "summarized"}
-    # A budget-only Claude (thinking budget, no adaptive thinking) gets a native
-    # ``budget_tokens`` derived from the effort via the shared budget policy.
-    budget = _budget_tokens_from_effort(thinking_effort, policy, max_tokens)
-    if budget is not None:
-        return {"type": "enabled", "budget_tokens": budget}
-    return None
-
-
-def _budget_tokens_from_effort(
-    thinking_effort: str,
-    policy: GitHubCopilotModelPolicy,
-    max_tokens: int | None,
-) -> int | None:
-    """Map an effort to a thinking budget for a budget-capable Copilot model.
-
-    Uses the shared :func:`effort_to_budget` policy with the model's
-    ``max_thinking_budget`` as the ceiling, then clamps into the policy's
-    ``[min_thinking_budget, max_thinking_budget]`` bounds and keeps it strictly
-    under ``max_tokens``. Returns ``None`` when the model has no thinking budget
-    or no valid budget fits.
-    """
-
-    if not policy.supports_thinking_budget:
-        return None
-    budget = effort_to_budget(
-        thinking_effort,
-        budget_max=policy.facts.max_thinking_budget,
-        max_tokens=max_tokens,
-    )
-    if budget is None:
-        return None
-    min_budget = policy.facts.min_thinking_budget
-    if min_budget is not None:
-        budget = max(budget, min_budget)
-    if max_tokens is not None and budget >= max_tokens:
-        return None
-    return budget if _budget_allowed(budget, policy) else None
-
-
-def _safe_output_config(
-    output_config: Any,
-    policy: GitHubCopilotModelPolicy,
-) -> dict[str, Any] | None:
-    if not isinstance(output_config, dict):
-        return None
-    effort = output_config.get("effort")
-    safe_effort = policy.closest_reasoning_effort(effort)
-    if safe_effort is None:
-        return None
-    return {"effort": safe_effort}
-
-
-def _output_config_from_effort(
-    thinking_effort: str,
-    policy: GitHubCopilotModelPolicy,
-) -> dict[str, Any] | None:
-    if thinking_effort in {"", "none"}:
-        return None
-    safe_effort = policy.closest_reasoning_effort(thinking_effort)
-    if safe_effort is None:
-        return None
-    return {"effort": safe_effort}
-
-
-def _budget_allowed(value: Any, policy: GitHubCopilotModelPolicy) -> bool:
-    if not policy.supports_thinking_budget or isinstance(value, bool) or not isinstance(value, int):
-        return False
-    min_budget = policy.facts.min_thinking_budget
-    max_budget = policy.facts.max_thinking_budget
-    if min_budget is not None and value < min_budget:
-        return False
-    return not (max_budget is not None and value > max_budget)
-
-
-def _apply_safe_top_level_parameters(
-    payload: dict[str, Any],
-    kwargs: dict[str, Any],
-) -> None:
-    payload["max_tokens"] = _resolve_messages_max_tokens(kwargs)
-    for parameter_name in SAFE_TOP_LEVEL_PARAMETERS:
-        if parameter_name in kwargs:
-            payload[parameter_name] = kwargs[parameter_name]
 
 
 def _resolve_messages_max_tokens(kwargs: dict[str, Any]) -> int:

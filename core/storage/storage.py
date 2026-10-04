@@ -9,6 +9,7 @@ owns the section schemas) and prompt fragments to
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -33,6 +34,7 @@ from core.settings import (
 )
 from core.settings.normalizers import (
     SUPPORTED_APPEARANCE_LANGUAGES,
+    custom_provider_revision,
     normalize_appearance_settings,
     normalize_archive_settings,
     normalize_compaction_settings,
@@ -501,8 +503,16 @@ class StorageManager:
         self,
         provider_id: str,
         provider: Mapping[str, Any],
+        *,
+        expected_revision: str | None = None,
     ) -> dict[str, Any]:
-        """Create or replace one Custom Provider in a Settings transaction."""
+        """Create or replace one Custom Provider in a Settings transaction.
+
+        With ``expected_revision`` (the ``custom_provider_revision()`` of the
+        record the caller read), the write is refused with
+        :class:`SettingsConflictError` when the stored record has changed or
+        is gone.
+        """
 
         normalized_id = normalize_custom_provider_id(provider_id)
         normalized_provider = normalize_custom_provider_settings(normalized_id, provider)
@@ -510,12 +520,51 @@ class StorageManager:
         def _mutate(settings: dict[str, Any]) -> dict[str, Any]:
             current = normalize_providers_settings(settings.get("providers"))
             custom = dict(current["custom"])
+            if expected_revision is not None:
+                stored = custom.get(normalized_id)
+                if stored is None or custom_provider_revision(stored) != expected_revision:
+                    raise SettingsConflictError((f"providers.custom.{normalized_id}",))
             custom[normalized_id] = normalized_provider
             connections = dict(current["connections"])
             connections.setdefault(f"{normalized_id}:default", True)
             settings["providers"] = normalize_providers_settings(
                 {
                     "connections": connections,
+                    "custom": custom,
+                    "openrouter": current["openrouter"],
+                }
+            )
+            return dict(settings["providers"]["custom"][normalized_id])
+
+        return self.update_settings(_mutate)
+
+    def update_custom_provider_settings(
+        self,
+        provider_id: str,
+        update: Callable[[dict[str, Any]], Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Replace one existing Custom Provider with ``update(current)`` atomically.
+
+        ``update`` receives a copy of the normalized record and returns the new
+        record; it runs inside the Settings transaction, so a concurrent write
+        to another Settings field is not lost. Raises :class:`StorageError`
+        when the Provider does not exist or the new record is invalid.
+        """
+
+        normalized_id = normalize_custom_provider_id(provider_id)
+
+        def _mutate(settings: dict[str, Any]) -> dict[str, Any]:
+            current = normalize_providers_settings(settings.get("providers"))
+            custom = dict(current["custom"])
+            existing = custom.get(normalized_id)
+            if existing is None:
+                raise StorageError(f"Custom Provider '{normalized_id}' does not exist")
+            custom[normalized_id] = normalize_custom_provider_settings(
+                normalized_id, update(copy.deepcopy(dict(existing)))
+            )
+            settings["providers"] = normalize_providers_settings(
+                {
+                    "connections": current["connections"],
                     "custom": custom,
                     "openrouter": current["openrouter"],
                 }

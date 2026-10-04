@@ -12,6 +12,7 @@ only logs their failures: the startup error is the one its caller re-raises.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
@@ -151,6 +152,14 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
         yield _Step("provider_usage", provider_usage.close, provider_usage.aclose)
     # Every Provider call has ended; persist the Debug traces they handed off.
     yield _Step("debug_traces", None, drain_debug_traces)
+    if (provider_runtime := runtime._provider_runtime) is not None:
+        # Every Provider call has ended; write the wire facts they taught.
+        close_observations = provider_runtime.close_wire_observations
+        yield _Step(
+            "wire_observations",
+            close_observations,
+            partial(asyncio.to_thread, close_observations),
+        )
     if (performance := runtime._performance) is not None:
         yield _Step("performance", performance.stop, performance.aclose)
     if (processes := runtime._process_manager) is not None:

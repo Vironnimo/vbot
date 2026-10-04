@@ -23,7 +23,7 @@ _PROFILE_INPUT = {
         "Skill, and Project ids from catalog. For creation, replace the example's Model and "
         "absolute server directory. working_directory can instead be "
         "{kind: project, project_id: <id>}. Formation rows also accept thinking_effort, "
-        "temperature, and fallback_models. Optional profile fields: slug, tools (per-Tool "
+        "temperature, top_p, and fallback_models. Optional profile fields: slug, tools (per-Tool "
         "settings), allowed_skills, instructions, prompt_blocks, reminders, delivery, and "
         "compaction_policy. compaction_policy is null to use the global Compaction settings, "
         "or one complete Policy for every participant: {enabled (automatic Compaction), "

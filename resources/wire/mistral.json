@@ -1,0 +1,10 @@
+{
+  "format_version": 1,
+  "_comment": "Mistral Chat Completions. Reasoning is binary: every active effort is sent as reasoning_effort 'high' and off as 'none'. Tool-call ids must be exactly nine alphanumerics. History replays the captured content chunks only, never a readable text field. The vision FAQ documents at most 8 images per request (another page says it depends on the Model).",
+  "defaults": {
+    "request": {"tool_call_ids": "mistral"},
+    "reasoning": {"levels": ["none", "high"], "off": "none"},
+    "replay": {"fidelity": "meta_only"},
+    "media": {"request_max_images": 8}
+  }
+}

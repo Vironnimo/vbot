@@ -9,7 +9,6 @@ import asyncio
 import json
 from argparse import Namespace
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, override
 
 import pytest
@@ -69,9 +68,7 @@ def test_probe_cli_runs_a_scenario_against_the_configured_adapter(
 
     class Runtime:
         def __init__(self, _config: Any) -> None:
-            self.models = SimpleNamespace(
-                get=lambda _provider, _model: SimpleNamespace(recommended_temperature=None)
-            )
+            pass
 
         def get_adapter(self, _ref: Any) -> ScriptedAdapter:
             return adapter
@@ -121,7 +118,7 @@ def test_learning_evaluation_runs_a_text_pack_arm_and_compares_reports(
 
     class Runtime:
         def __init__(self, _config: Any) -> None:
-            self.models = SimpleNamespace(get=lambda _provider, _model: SimpleNamespace())
+            pass
 
         def get_adapter(self, _ref: Any) -> ScriptedAdapter:
             return adapter

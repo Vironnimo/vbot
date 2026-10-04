@@ -7,6 +7,7 @@ import json
 import string
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from core.providers._tool_result_text import tool_result_envelope
@@ -388,6 +389,15 @@ RESPONSES_TOOL_CALL_ID_PROFILE = ToolCallIdProfile(
     trim_trailing_underscores=True,
     rewrite_responses_output_items=True,
 )
+
+WIRE_TOOL_CALL_ID_PROFILES: Mapping[str, ToolCallIdProfile] = MappingProxyType(
+    {
+        "anthropic": ANTHROPIC_MESSAGES_TOOL_CALL_ID_PROFILE,
+        "mistral": MISTRAL_TOOL_CALL_ID_PROFILE,
+        "responses": RESPONSES_TOOL_CALL_ID_PROFILE,
+    }
+)
+"""Tool-call id constraints by wire profile ``request.tool_call_ids`` (``none`` has none)."""
 
 
 def normalize_tool_call_ids(

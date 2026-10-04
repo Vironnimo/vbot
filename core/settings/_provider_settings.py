@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -10,6 +12,7 @@ from urllib.parse import urlsplit
 from core.models.models import MODEL_TASK_ORDER
 from core.settings._json_settings import (
     normalize_json_object,
+    normalize_json_value,
 )
 from core.settings.settings import (
     SettingsValidationError,
@@ -30,7 +33,7 @@ CUSTOM_PROVIDER_CONNECTION_ID = "default"
 
 
 CUSTOM_PROVIDER_FIELDS = frozenset(
-    {"name", "adapter", "base_url", "auth", "models_endpoint", "defaults", "models"}
+    {"name", "adapter", "base_url", "auth", "models_endpoint", "defaults", "models", "wire"}
 )
 
 
@@ -177,6 +180,17 @@ def normalize_custom_provider_id(value: Any) -> str:
     return value
 
 
+def custom_provider_revision(provider: Mapping[str, Any]) -> str:
+    """Return a short fingerprint of one normalized Custom Provider record.
+
+    Writers send the revision they read so a save based on an outdated record
+    is refused instead of silently undoing another writer's change.
+    """
+
+    canonical = json.dumps(provider, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
 def normalize_custom_provider_settings(
     provider_id: str,
     provider: Any,
@@ -218,7 +232,7 @@ def normalize_custom_provider_settings(
 
     defaults = normalize_json_object(provider.get("defaults", {}), f"{path}.defaults")
     models = _normalize_custom_provider_models(provider.get("models", {}), path=path)
-    return {
+    normalized: dict[str, Any] = {
         "name": name,
         "adapter": adapter,
         "base_url": base_url,
@@ -227,6 +241,13 @@ def normalize_custom_provider_settings(
         "defaults": defaults,
         "models": models,
     }
+    # The wire block is the Provider's wire profile data. Its schema belongs to
+    # the Providers domain, which reports and ignores invalid entries (or a
+    # block that is not an object) without invalidating this record.
+    wire = provider.get("wire")
+    if wire is not None:
+        normalized["wire"] = normalize_json_value(wire, f"{path}.wire")
+    return normalized
 
 
 def _normalize_custom_provider_base_url(value: Any, *, path: str) -> str:

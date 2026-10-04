@@ -8,11 +8,10 @@ import inspect
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Protocol
 
 from core.attachments import sniff_media_type
 from core.attachments.images import ImageConversionError, ImageConverter, PreparedImage
-from core.chat.model_resolution import resolve_request_temperature
 from core.debug import DebugContext
 from core.model_tasks.constants import TASK_IMAGE_GENERATION, TASK_IMAGE_UNDERSTANDING
 from core.model_tasks.image_providers import ProviderImageClient
@@ -33,9 +32,6 @@ from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, TaskError, VBotError
 from core.utils.ids import write_id_file
 from core.utils.logging import get_logger
-
-if TYPE_CHECKING:
-    from core.models.models import ModelRegistry
 
 JsonObject = JsonObject
 _LOGGER = get_logger("image")
@@ -64,11 +60,6 @@ IMAGE_UNDERSTANDING_SYSTEM_PROMPT = (
 
 class ImageRuntime(TaskClientRuntime, Protocol):
     """Runtime seams required by image task execution."""
-
-    @property
-    def models(self) -> ModelRegistry:
-        """Model registry read access for per-model request facts."""
-        ...
 
     def get_adapter(self, connection: ConnectionRef) -> Any:
         """Build one configured Chat Adapter for image understanding."""
@@ -445,12 +436,6 @@ class ImageService:
                         {"role": "user", "content": content},
                     ],
                     model_id=target_ref.model_id,
-                    temperature=resolve_request_temperature(
-                        None,
-                        self._runtime.models,
-                        target_ref.provider_id,
-                        target_ref.model_id,
-                    ),
                     tools=[],
                 )
                 normalized = adapter.normalize_response(response, model_id=target_ref.model_id)

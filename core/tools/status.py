@@ -17,7 +17,7 @@ from core.chat.status_report import (
     resolve_status_activity,
     resolve_status_model_details,
     resolve_status_project_label,
-    resolve_status_temperature,
+    resolve_status_sampling,
 )
 from core.models.models import ModelRegistry
 from core.projects import (
@@ -294,10 +294,7 @@ def make_status_handler(
                     describe_render=reasoning_render_describer,
                 ),
                 project_label=resolve_status_project_label(projects, context.project_id),
-                temperature_status=resolve_status_temperature(
-                    agent.temperature,
-                    model_details,
-                ),
+                sampling_status=resolve_status_sampling(agent, model_details),
                 timezone=_configured_zone(timezone_name_loader),
             )
         except Exception:

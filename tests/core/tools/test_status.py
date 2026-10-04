@@ -23,7 +23,7 @@ from core.chat import (
     ReplySurface,
 )
 from core.chat.messages import ChatMessage
-from core.chat.status_report import ReasoningIntent, status_session_facts
+from core.chat.status_report import STATUS_PLACEHOLDER, ReasoningIntent, status_session_facts
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.projects import (
     AgentResolutionError,
@@ -31,6 +31,7 @@ from core.projects import (
     ProjectStore,
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
+    RuntimeAgent,
 )
 from core.runs import ChatRunManager, Run
 from core.sessions import ChatSessionManager, SessionAddress
@@ -269,9 +270,15 @@ def test_status_tool_reports_the_current_session_like_the_status_command(tmp_pat
             if not line.startswith(("Session started:", "App uptime:", "Current time:"))
         ]
 
-    assert _without_live_time_lines(data["text"]) == _without_live_time_lines(
-        command_result.feedback.text
-    )
+    # Only the user's /status reports the wire profile; Agents cannot act on it.
+    wire_lines = ("Wire profile:", "Learned wire facts:")
+    assert _without_live_time_lines(data["text"]) == [
+        line
+        for line in _without_live_time_lines(command_result.feedback.text)
+        if not line.startswith(wire_lines)
+    ]
+    assert f"Wire profile: {STATUS_PLACEHOLDER}" in command_result.feedback.text.splitlines()
+    assert not any(line.startswith(wire_lines) for line in data["text"].splitlines())
     assert "Agent: Coder (openai/gpt-5.2)" in data["text"]
     assert "Activity: idle" in data["text"]
     assert "Session cache: read 800 / 1234 (64.8% hit), write 100, turns 1" in data["text"]
@@ -283,10 +290,10 @@ def test_status_tool_reports_through_the_services_it_was_registered_with(tmp_pat
     # registry, the Project store and the reasoning describer each feed their report line.
     resolver = _StubResolver(_make_agent(thinking_effort="xhigh", temperature=None))
     sessions = _StubSessions([])
-    described: list[tuple[str, str, str | None]] = []
+    described: list[tuple[str, str | None]] = []
 
-    def describe_render(provider_id: str, model_id: str, effort: str | None) -> ReasoningIntent:
-        described.append((provider_id, model_id, effort))
+    def describe_render(agent: RuntimeAgent) -> ReasoningIntent:
+        described.append((agent.model, agent.thinking_effort))
         return ReasoningIntent("effort", effort_level="max")
 
     registry = _registry(
@@ -302,13 +309,14 @@ def test_status_tool_reports_through_the_services_it_was_registered_with(tmp_pat
     text = result["data"]["text"]
     assert resolver.calls == [("vbot", "coder", "session-one")]
     assert sessions.calls == [("coder", "session-one", "vbot")]
-    assert described == [("openai", "gpt-5.2", "xhigh")]
+    assert described == [("openai/gpt-5.2", "xhigh")]
     for line in (
         "Project: vBot (vbot)",
         "Model display name: GPT-5.2 Registry",
         "Selected thinking effort: xhigh",
         "Actual model thinking effort: max",
-        "Temperature: 1 (model recommendation)",
+        "Temperature: provider default (Model recommends 1)",
+        "Top P: provider default",
     ):
         assert line in text
 

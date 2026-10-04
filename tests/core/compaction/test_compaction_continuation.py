@@ -40,8 +40,6 @@ async def test_continuation_preserves_request_prefix_and_active_tools() -> None:
         active_adapter=active,
         active_model_id="openai/active",
         active_tools=tools,
-        summary_temperature=1.0,
-        active_temperature=0.2,
     )
 
     assert summary.requests == []
@@ -49,7 +47,7 @@ async def test_continuation_preserves_request_prefix_and_active_tools() -> None:
     assert sent["messages"][:-1] == request
     assert "checkpoint" in sent["messages"][-1]["content"]
     assert sent["tools"] == tools
-    assert sent["temperature"] == 0.2
+    assert "temperature" not in sent
     assert result.content == "ACTIVE SUMMARY"
     assert result.projection is not None
     assert len(result.projection) == 1

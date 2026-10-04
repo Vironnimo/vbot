@@ -50,6 +50,7 @@ from core.settings import (
     SettingsValidationError,
     validate_temperature,
     validate_thinking_effort,
+    validate_top_p,
 )
 from core.tools.availability import normalize_tool_access
 from core.utils.ids import is_reserved_name, reserved_name_message
@@ -96,6 +97,7 @@ _ADD_FIELDS = frozenset(
         "default_model",
         "default_temperature",
         "default_thinking_effort",
+        "default_top_p",
         "source_format",
         "auto_load",
     }
@@ -108,6 +110,7 @@ _SET_MUTABLE_FIELDS = frozenset(
         "default_model",
         "default_temperature",
         "default_thinking_effort",
+        "default_top_p",
         "source_format",
         "auto_load",
         "allowed_tools",
@@ -186,6 +189,9 @@ def _add_project_record(state: Any, params: JsonObject) -> tuple[Project, JsonOb
         if "default_thinking_effort" in params
         else None
     )
+    default_top_p = (
+        _validate_default_top_p(params["default_top_p"]) if "default_top_p" in params else None
+    )
     source_format = (
         _validated_source_format(params["source_format"])
         if "source_format" in params
@@ -204,6 +210,7 @@ def _add_project_record(state: Any, params: JsonObject) -> tuple[Project, JsonOb
             default_model=default_model or "",
             default_temperature=default_temperature,
             default_thinking_effort=default_thinking_effort,
+            default_top_p=default_top_p,
             source_format=source_format,
             auto_load=auto_load,
         )
@@ -327,11 +334,11 @@ async def _set_override(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _set_override_record(state: Any, params: JsonObject) -> JsonObject:
-    """Override one field (``model`` / ``temperature`` / ``thinking_effort``) for an agent.
+    """Override one field (``model`` / ``temperature`` / ``top_p`` / …) for an agent.
 
     Validates the field name and its value before the store write: ``model`` through
     the same usable-model check the ``/model`` command uses (configured here + any
-    pinned ``::connection`` allowed), ``temperature`` / ``thinking_effort`` through
+    pinned ``::connection`` allowed), ``temperature`` / ``top_p`` / ``thinking_effort`` through
     the canonical agent field validators. Returns the refreshed project + scan
     (``clear_override`` returns the same shape). No cache invalidation is needed —
     ``project.json`` is read fresh on every resolve.
@@ -434,7 +441,7 @@ def _validate_override_value(
     """Validate an override value against the field's rule; raise ``invalid_request`` on error.
 
     ``model`` reuses the ``/model`` usable-model gate (configured in this instance +
-    any pinned connection allowed); ``temperature`` / ``thinking_effort`` reuse the
+    any pinned connection allowed); ``temperature`` / ``top_p`` / ``thinking_effort`` reuse the
     canonical agent field validators (``""`` thinking effort forces the provider
     default). ``None`` is never a valid override value — clearing is
     ``project.clear_override``.
@@ -449,6 +456,11 @@ def _validate_override_value(
     if field == "temperature":
         try:
             return validate_temperature(value, label="params.value", allow_none=False)
+        except SettingsValidationError as exc:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    if field == "top_p":
+        try:
+            return validate_top_p(value, label="params.value", allow_none=False)
         except SettingsValidationError as exc:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     if field == "compaction_policy":
@@ -667,6 +679,8 @@ def _set_changes(params: JsonObject) -> JsonObject:
         changes["default_thinking_effort"] = _validate_default_thinking_effort(
             params["default_thinking_effort"]
         )
+    if "default_top_p" in params:
+        changes["default_top_p"] = _validate_default_top_p(params["default_top_p"])
     if "source_format" in params:
         changes["source_format"] = _validated_source_format(params["source_format"])
     if "auto_load" in params:
@@ -721,6 +735,14 @@ def _validate_default_temperature(value: Any) -> float | None:
     """
     try:
         return validate_temperature(value, label="params.default_temperature", allow_none=True)
+    except SettingsValidationError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+
+
+def _validate_default_top_p(value: Any) -> float | None:
+    """Validate the optional project-default top_p (null allowed = no default)."""
+    try:
+        return validate_top_p(value, label="params.default_top_p", allow_none=True)
     except SettingsValidationError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
@@ -847,6 +869,7 @@ def _project_response(project: Project) -> JsonObject:
         "default_model": project.default_model,
         "default_temperature": project.default_temperature,
         "default_thinking_effort": project.default_thinking_effort,
+        "default_top_p": project.default_top_p,
         "source_format": project.source_format,
         "auto_load": list(project.auto_load),
         "allowed_tools": list(project.allowed_tools),
@@ -872,6 +895,7 @@ def _team_member_response(resolver: Any, member: ScannedAgent, project: Project)
         "description": member.description,
         "model": member.model,
         "temperature": member.temperature,
+        "top_p": member.top_p,
         "thinking_effort": member.thinking_effort,
         "source_format": member.source_format,
         "source_path": str(member.source_path),

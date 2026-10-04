@@ -62,7 +62,9 @@ class PreparedAttempt:
     denial_resolver: Callable[[str], str | None] | None
     session_id: str
     run_id: str
+    # The Agent's configured sampling; ``None`` leaves the Provider default.
     agent_temperature: float | None
+    agent_top_p: float | None
     activated: dict[str, str]
     # The production Run kind value of the attempt's Tool calls.
     run_kind: str = "user"
@@ -372,6 +374,7 @@ class EvalWorker:
             session_id=f"eval-{attempt_id}",
             run_id=f"eval-{attempt_id}-run",
             agent_temperature=getattr(agent, "temperature", None),
+            agent_top_p=getattr(agent, "top_p", None),
             activated={},
             run_kind=run_kind,
         )

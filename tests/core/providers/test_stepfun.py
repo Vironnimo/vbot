@@ -3,23 +3,20 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 import respx
 
-from core.models.models import Model
+from core.models.models import Model, ModelRegistry
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
-from core.providers.errors import CatalogEntrySkipped, ProviderError
+from core.providers.errors import ProviderError
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
-from core.providers.stepfun import (
-    STEPFUN_CONTEXT_WINDOW,
-    STEPFUN_DIRECT_MODE,
-    STEPFUN_PLAN_MODE,
-    STEPFUN_ROUTER_MAX_OUTPUT_TOKENS,
-    StepFunAdapter,
-)
+from core.providers.stepfun import StepFunAdapter
+
+from .adapter_test_support import bind_connection
 
 STEPFUN_DIRECT_CHAT_URL = "https://api.stepfun.com/v1/chat/completions"
 STEPFUN_PLAN_CHAT_URL = "https://api.stepfun.com/step_plan/v1/chat/completions"
@@ -41,7 +38,7 @@ def _config() -> ProviderConfig:
                 id="direct-api",
                 type="api_key",
                 label="Direct API",
-                mode=STEPFUN_DIRECT_MODE,
+                mode="direct_api",
                 auth=AuthConfig(
                     header="Authorization",
                     prefix="Bearer ",
@@ -53,7 +50,7 @@ def _config() -> ProviderConfig:
                 type="api_key",
                 label="Step Plan",
                 base_url="https://api.stepfun.com/step_plan/v1",
-                mode=STEPFUN_PLAN_MODE,
+                mode="step_plan",
                 auth=AuthConfig(
                     header="Authorization",
                     prefix="Bearer ",
@@ -62,13 +59,17 @@ def _config() -> ProviderConfig:
             ),
         ],
         defaults={"temperature": 0.5},
-        context_window=STEPFUN_CONTEXT_WINDOW,
+        context_window=256_000,
     )
+
+
+# The bundled Model DB records: StepFun's per-Model facts live in its override file.
+_REGISTRY = ModelRegistry.load(Path(__file__).resolve().parents[3] / "resources")
 
 
 def _models() -> dict[str, Model]:
     return {
-        model_id: StepFunAdapter.normalize_catalog_entry({"id": model_id}, {})
+        model_id: _REGISTRY.get("stepfun", model_id)
         for model_id in (
             "step-3.5-flash",
             "step-3.5-flash-2603",
@@ -81,13 +82,17 @@ def _models() -> dict[str, Model]:
 def _adapter(connection_id: str) -> StepFunAdapter:
     config = _config()
     connection = config.get_connection(connection_id)
-    return StepFunAdapter(
+    models = _models()
+    adapter = StepFunAdapter(
         config,
         "plan-secret" if connection_id == "step-plan" else "direct-secret",
         base_url=connection.base_url or config.base_url,
         auth_config=connection.auth,
-        model_lookup=_models().get,
+        model_lookup=models.get,
         connection_mode=connection.mode,
+    )
+    return bind_connection(
+        adapter, provider_id="stepfun", connection_id=connection_id, model_lookup=models.get
     )
 
 
@@ -131,7 +136,7 @@ def _chat_url(connection_id: str) -> str:
             "step-plan",
             "step-router-v1",
             {"max_tokens": 999_999, "thinking_effort": "medium"},
-            {"max_tokens": STEPFUN_ROUTER_MAX_OUTPUT_TOKENS, "reasoning_effort": "medium"},
+            {"max_tokens": 250_000, "reasoning_effort": "medium"},
             id="plan-router-caps-output",
         ),
     ],
@@ -172,7 +177,7 @@ async def test_request_follows_the_model_policy(
             "direct-api", "step-3.7-flash", {"frequency_penalty": -2.1}, "frequency_penalty"
         ),
         pytest.param("direct-api", "step-3.7-flash", {"n": 2}, "exactly 1"),
-        pytest.param("direct-api", "step-3.7-flash", {"seed": 7}, "does not document"),
+        pytest.param("direct-api", "step-3.7-flash", {"seed": 7}, "does not accept"),
         pytest.param(
             "direct-api", "step-3.7-flash", {"reasoning_format": "future"}, "reasoning_format"
         ),
@@ -190,29 +195,6 @@ async def test_invalid_or_undocumented_requests_fail_before_network(
 
     assert exc_info.value.retryable is False
     assert route.call_count == 0
-
-
-def test_catalog_is_exact_and_carries_current_capabilities() -> None:
-    multimodal = StepFunAdapter.normalize_catalog_entry(
-        {"id": "step-3.7-flash", "name": "Current 3.7"},
-        {},
-    )
-    optimized = StepFunAdapter.normalize_catalog_entry(
-        {"id": "step-3.5-flash-2603"},
-        {},
-    )
-
-    assert multimodal.name == "Current 3.7"
-    assert multimodal.context_window == STEPFUN_CONTEXT_WINDOW
-    assert multimodal.capabilities.input_modalities == ("text", "image", "video")
-    assert multimodal.capabilities.reasoning.levels == ("low", "medium", "high")
-    assert multimodal.capabilities.tools is True
-    assert multimodal.capabilities.json_mode is True
-    assert multimodal.metadata["stepfun"]["prompt_cache"] == "automatic"
-    assert optimized.capabilities.reasoning.levels == ("low", "high")
-
-    with pytest.raises(CatalogEntrySkipped):
-        StepFunAdapter.normalize_catalog_entry({"id": "stepaudio-2.5-chat"}, {})
 
 
 def test_response_normalizes_reasoning_tools_cache_and_terminal_outcome() -> None:

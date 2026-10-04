@@ -49,7 +49,7 @@ def test_catalog_entry_maps_all_openrouter_fields() -> None:
             vision=True,
             tools=True,
             json_mode=True,
-            reasoning=ReasoningCapabilities(supported=True),
+            reasoning=ReasoningCapabilities(supported=True, mandatory=True),
             input_modalities=("text", "image"),
             output_modalities=("text",),
             supported_parameters=("reasoning", "response_format", "tools"),
@@ -57,7 +57,7 @@ def test_catalog_entry_maps_all_openrouter_fields() -> None:
         ),
         context_window=128000,
         max_output_tokens=64000,
-        metadata={"openrouter": {"modality": "text+image->text", "reasoning_mandatory": True}},
+        metadata={"openrouter": {"modality": "text+image->text"}},
     )
 
 

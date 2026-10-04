@@ -52,9 +52,7 @@ async def test_mandatory_reasoning_model_never_renders_off(
     await adapter.send(HELLO, model_id=SPACE_BUNNY, thinking_effort=effort)
 
     body = sent_body(route)
-    intent = adapter.describe_reasoning_render(
-        model_lookup=lookup, model_id=SPACE_BUNNY, effort=effort
-    )
+    intent = adapter.describe_reasoning_render(SPACE_BUNNY, effort)
     if expected is None:
         assert "reasoning" not in body
         assert intent.kind == "default"

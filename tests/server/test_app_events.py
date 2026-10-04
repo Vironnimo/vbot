@@ -101,6 +101,8 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
         )
         # An Agent's Skill authoring Tool reports its package changes.
         skill_events = publishes(lambda: runtime.skill_changed_callbacks[0]())
+        # A local catalog sweep publishes a changed Model catalog.
+        model_events = publishes(lambda: runtime.model_catalog_changed_callbacks[0]())
         index_status = IndexStatus(semantic_enabled=True, state="indexing", waiting=4)
         index_events = publishes(lambda: runtime.recall.listeners[0](index_status))
 
@@ -125,8 +127,10 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
         ("bash_process_status_changed", {"process_id": "process-one", "status": "completed"})
     ]
     assert skill_events == [("resource_changed", {"kind": "skills"})]
+    assert model_events == [("resource_changed", {"kind": "models"})]
     assert index_events == [("recall_index_status", index_status.to_dict())]
     # App shutdown releases the bridges.
     assert process_manager.terminal_callbacks == []
     assert runtime.skill_changed_callbacks == []
+    assert runtime.model_catalog_changed_callbacks == []
     assert runtime.recall.listeners == []

@@ -7,8 +7,9 @@ wire shapes vBot uses in production:
 - ``ProviderRegistry.load(resources)`` — the real provider config
   (base_url, defaults, auth header from ``resources/providers/<id>.json``)
 - ``ModelRegistry.load(resources)`` — the real model DB including the
-  bundled overrides (``reasoning_response_field``, ``reasoning_replay``,
-  ``recommended_temperature``, ``recommended_top_p``)
+  bundled overrides (``recommended_temperature``, ``recommended_top_p``)
+- The bundled wire profiles (``resources/wire/<provider>.json``) — the
+  reasoning carriers and the replay scope the Adapter resolves per Model
 - The real Provider adapter and selected Connection, including refresh-capable
   OAuth credentials, with its ``send()`` / ``normalize_response()`` /
   ``_format_assistant_message()`` pipeline
@@ -134,9 +135,9 @@ async def _run_exact_probe(
     policy: str | None,
     effort: str,
 ) -> None:
-    # Determine the wire carrier field the adapter's model profile uses.
+    # Determine the wire carrier field the Model's wire profile replays into.
     try:
-        carrier_field = adapter._reasoning_response_field(model_id) or "reasoning_content"
+        carrier_field = adapter.wire_profile(model_id).replay.history_field or "reasoning_content"
     except Exception:
         carrier_field = "reasoning_content"
     effective_policy = adapter.reasoning_replay_policy(model_id)
@@ -842,7 +843,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument(
-        "--policy", choices=("auto", "none", "current_run", "full_history"), default="auto"
+        "--policy",
+        choices=("auto", "none", "current_run", "tool_turns", "full_history"),
+        default="auto",
     )
     parser.add_argument(
         "--api-key-env",

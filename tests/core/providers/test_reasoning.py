@@ -65,7 +65,7 @@ def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
 
 def test_reasoning_vocabularies_are_pinned() -> None:
     """The replay-policy axis and the intent kinds are deliberate contracts."""
-    assert REASONING_REPLAY_POLICIES == ("none", "current_run", "full_history")
+    assert REASONING_REPLAY_POLICIES == ("none", "current_run", "tool_turns", "full_history")
     assert REASONING_INTENT_KINDS == ("default", "off", "effort", "budget", "on")
 
 

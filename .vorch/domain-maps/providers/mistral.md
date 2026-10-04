@@ -5,6 +5,7 @@ OpenAI-style runtime provider with Mistral-specific reasoning and model catalog 
 ## Interfaces
 
 - Provider config: `resources/providers/mistral.json`
+- Wire profile: `resources/wire/mistral.json` (reasoning ladder and off spelling, Tool-call ids, replay fidelity)
 - Adapter selector: `mistral`
 - Adapter class: `MistralAdapter`
 - Runtime endpoint: `POST /chat/completions`
@@ -14,10 +15,10 @@ OpenAI-style runtime provider with Mistral-specific reasoning and model catalog 
 ## Reasoning
 
 - Mistral accepts only active high reasoning or disabled reasoning in current vBot wiring. Active vBot efforts (`minimal`, `low`, `medium`, `high`, `xhigh`, `max`) map to high; `none` disables reasoning; unset values omit reasoning parameters.
-- Most models receive `reasoning_effort: "high"` or `"none"`.
-- Models carrying the per-model wire fact `metadata.mistral.prompt_mode == "reasoning"` use `prompt_mode: "reasoning"` for active reasoning and omit both `prompt_mode` and `reasoning_effort` for `none`. This is DATA, not a name-prefix guess. The fact lives in the **override** (`resources/models/mistral.overrides.json`) for `magistral-medium-2509`/`magistral-medium-latest`. An adapter with no `model_lookup`, or a model with no such metadata, uses the default `reasoning_effort` wire.
-- Injected `model_lookup` suppresses both `reasoning_effort` and `prompt_mode` when normalized catalog facts say reasoning is unsupported. Pinned connection suffixes such as `::<connection-local-id>` are stripped before catalog lookup by the shared reasoning helper.
-- Reasoning replay inherits the shared `full_history` default; a non-reasoning Model simply has no native Reasoning to return. Fidelity is the declared `meta_only`: Mistral's docs require the full Assistant message including the thinking trace across turns, so current responses persist the exact original structured content chunks in `reasoning_meta.content_chunks` and replay them verbatim - never a top-level readable field. A Mistral `ThinkChunk` carries more structure than flattened text, so readable `reasoning` is never rebuilt into one: a turn without captured chunks (Sessions from before chunk capture) replays its visible content only. Once a stream enters structured-content mode, generic `delta.tool_calls` fragments are still normalized independently, so mixed thinking/text/Tool streams retain their Tool slots and finish as `tool_calls`. **No thinking-disabled guard is needed** (unlike Anthropic). Probe-verified against the live API (2026-06-13, `mistral-small-latest`): the raw response replay, a reconstructed `[ThinkChunk, TextChunk]` replay, and that same reconstructed replay sent with `reasoning_effort: "none"` all returned 200.
+- Every Model receives `reasoning_effort: "high"` or `"none"`. The wire profile's explicit `levels: ["none", "high"]` beat any catalog ladder, and `off: "none"` sends the explicit off even to Models whose reasoning support is unknown. `/status` describes the same plan (`high` / `off`).
+- A Model the catalog marks as non-reasoning gets no reasoning field. Pinned connection suffixes such as `::<connection-local-id>` are stripped before catalog lookup by the profile resolver.
+- Tool-call ids are rewritten to Mistral's nine-alphanumeric shape by the shared Chat Completions codec (`request.tool_call_ids: "mistral"`), before the output-limit estimate; canonical history stays untouched.
+- Reasoning replay inherits the shared `full_history` default; a non-reasoning Model simply has no native Reasoning to return. Fidelity is the wire profile's `meta_only`: Mistral's docs require the full Assistant message including the thinking trace across turns, so current responses persist the exact original structured content chunks in `reasoning_meta.content_chunks` and replay them verbatim - never a top-level readable field. A Mistral `ThinkChunk` carries more structure than flattened text, so readable `reasoning` is never rebuilt into one: a turn without captured chunks (Sessions from before chunk capture) replays its visible content only. Once a stream enters structured-content mode, generic `delta.tool_calls` fragments are still normalized independently, so mixed thinking/text/Tool streams retain their Tool slots and finish as `tool_calls`. **No thinking-disabled guard is needed** (unlike Anthropic). Probe-verified against the live API (2026-06-13, `mistral-small-latest`): the raw response replay, a reconstructed `[ThinkChunk, TextChunk]` replay, and that same reconstructed replay sent with `reasoning_effort: "none"` all returned 200.
 
 ## Catalog Normalization
 
@@ -40,7 +41,6 @@ OpenAI-style runtime provider with Mistral-specific reasoning and model catalog 
 
 ## Constraints & Gotchas
 
-- Do not infer reasoning support or the reasoning mode by model-id prefix; use raw Mistral capability fields, injected catalog reasoning facts, or the `metadata.mistral.prompt_mode` wire fact.
-- The `prompt_mode` selector is runtime wire behavior driven by `metadata.mistral.prompt_mode`; the wire MECHANICS (building the `prompt_mode` vs `reasoning_effort` request) stay in the adapter.
-- **magistral generation is deprecated** (docs state 2026-06): `magistral-small-latest`/`magistral-medium-latest` are superseded by `mistral-small-latest` and `mistral-medium-3-5`, which take `reasoning_effort` (`"high"`/`"none"`) - the same mapping the adapter already applies to non-magistral models. The `prompt_mode` branch only matters while the deprecated magistral models stay reachable; drop the `mistral.overrides.json` `prompt_mode` entries once the catalog refresh removes them.
+- Do not infer reasoning support by model-id prefix; use raw Mistral capability fields or injected catalog reasoning facts.
+- **magistral generation is deprecated** (docs state 2026-06): `magistral-small-latest`/`magistral-medium-latest` are superseded by `mistral-small-latest` and `mistral-medium-3-5`, which take `reasoning_effort` (`"high"`/`"none"`). The former `prompt_mode: "reasoning"` wire for magistral-medium was removed with its override entries once the catalog stopped publishing those Models; vBot never sends `prompt_mode`.
 - Bundled config uses `Authorization: Bearer <MISTRAL_API_KEY>` through an API-key connection.

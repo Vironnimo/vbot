@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 
 from core.models.models import Model
 from core.providers._tool_calls import (
@@ -38,18 +38,14 @@ from core.providers._tool_result_text import (
     tool_result_text,
 )
 from core.providers.reasoning import (
-    DEFAULT_REASONING_REPLAY_FIDELITY,
-    DEFAULT_REASONING_REPLAY_POLICY,
-    REASONING_REPLAY_POLICIES,
     ReasoningIntent,
     ReasoningReplayFidelity,
     ReasoningReplayPolicy,
-    model_reasoning_budget_max,
-    model_reasoning_control,
-    model_reasoning_levels,
-    model_reasoning_supported,
-    resolve_reasoning_intent,
 )
+from core.providers.reasoning_dialects import describe_profile_reasoning
+from core.providers.wire_profile import Protocol, WireProfile
+from core.providers.wire_profiles import WireBinding, standalone_wire_binding
+from core.utils.errors import ProviderError
 
 if TYPE_CHECKING:
     from core.debug import DebugContext, ProviderDebugRecorder
@@ -230,16 +226,19 @@ class ProviderAdapter(ABC):
     # subclasses (and test doubles) that do not call ``super().__init__()``.
     _debug_recorder: ProviderDebugRecorder | None = None
 
+    WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("chat_completions",)
+    """Wire protocols this Adapter implements; the first is its default."""
+
+    _wire_binding: WireBinding | None = None
+
     def __init__(
         self,
         model_lookup: ModelLookup | None = None,
         debug_recorder: ProviderDebugRecorder | None = None,
-        reasoning_replay_default: ReasoningReplayPolicy = DEFAULT_REASONING_REPLAY_POLICY,
     ) -> None:
-        """Store model policy lookup, Provider replay default, and debug recorder."""
+        """Store the Model lookup and debug recorder."""
         self._model_lookup = model_lookup
         self._debug_recorder = debug_recorder
-        self._reasoning_replay_default = reasoning_replay_default
 
     # ------------------------------------------------------------------
     # Debug hooks
@@ -260,6 +259,85 @@ class ProviderAdapter(ABC):
             self._debug_recorder.set_context(ctx)
 
     # ------------------------------------------------------------------
+    # Wire profile
+    # ------------------------------------------------------------------
+
+    def bind_wire_profiles(self, binding: WireBinding) -> None:
+        """Bind the Runtime's wire profiles and learned facts for this Adapter's Connection."""
+
+        self._wire_binding = binding
+
+    @property
+    def wire(self) -> WireBinding:
+        """Profiles and learned facts of this Adapter's Connection.
+
+        The Runtime binds its shared view (bundled and Custom Provider data,
+        learned facts). An Adapter constructed directly resolves against the
+        bundled files and its own Model lookup on its first configured
+        Connection (the first one with the Adapter's connection mode, when it
+        was given one) and keeps learned facts in memory only.
+        """
+
+        binding = self._wire_binding
+        if binding is None:
+            binding = type(self)._standalone_wire_binding(
+                getattr(self, "_config", None),
+                getattr(self, "_model_lookup", None),
+                connection_mode=getattr(self, "_connection_mode", None),
+            )
+            self._wire_binding = binding
+        return binding
+
+    def wire_profile(self, model_id: str) -> WireProfile:
+        """Return the resolved wire profile for ``model_id`` on this Adapter's Connection."""
+
+        return self.wire.profile(model_id)
+
+    @classmethod
+    def _standalone_wire_binding(
+        cls,
+        config: ProviderConfig | None,
+        model_lookup: ModelLookup | None,
+        *,
+        connection_mode: str | None = None,
+    ) -> WireBinding:
+        connections = getattr(config, "connections", ()) or ()
+        connection = next(
+            (
+                candidate
+                for candidate in connections
+                if connection_mode is not None
+                and getattr(candidate, "mode", None) == connection_mode
+            ),
+            connections[0] if connections else None,
+        )
+        return standalone_wire_binding(
+            provider_id=str(getattr(config, "id", "") or ""),
+            connection_id=str(getattr(connection, "id", "")) if connection is not None else "",
+            protocols=cls.WIRE_PROTOCOLS,
+            model_lookup=model_lookup,
+        )
+
+    def _refuse_unadmitted_model(self, model_id: str) -> None:
+        """Refuse a request the wire profile does not admit, before any network I/O.
+
+        Raises:
+            ProviderError: (not retryable) when the Model is restricted or
+                retired on this Adapter's Connection; the profile's admission
+                message explains why.
+        """
+
+        profile = self.wire_profile(model_id)
+        admission = profile.admission
+        if admission.state == "available":
+            return
+        refusal = f"Model '{profile.model_id}' is {admission.state} on this Connection"
+        raise ProviderError(
+            f"{refusal}: {admission.message}" if admission.message else refusal,
+            retryable=False,
+        )
+
+    # ------------------------------------------------------------------
     # History shaping policy
     # ------------------------------------------------------------------
 
@@ -268,18 +346,12 @@ class ProviderAdapter(ABC):
 
         The chat layer queries this once per request build and shapes the
         request history accordingly; adapters must not re-implement
-        history-wide reasoning strips on top of it. The effective precedence is
-        Model Override, then Provider Override, then the system
-        ``full_history`` default. ``model_id`` is part of the contract because
-        one Provider can explicitly narrow an individual older Model without
-        reducing every other Model on the same Adapter.
+        history-wide reasoning strips on top of it. ``model_id`` is part of the
+        contract because one Provider can narrow an individual Model without
+        reducing every other Model on the same Adapter. The wire profile's
+        ``replay.scope`` decides.
         """
-        model_lookup = getattr(self, "_model_lookup", None)
-        if model_lookup is not None:
-            model = model_lookup(model_id.split("::", 1)[0])
-            if model is not None and model.reasoning_replay in REASONING_REPLAY_POLICIES:
-                return cast(ReasoningReplayPolicy, model.reasoning_replay)
-        return getattr(self, "_reasoning_replay_default", DEFAULT_REASONING_REPLAY_POLICY)
+        return self.wire_profile(model_id).replay.scope
 
     def reasoning_replay_fidelity(self, model_id: str) -> ReasoningReplayFidelity:
         """Return which class of reasoning state this wire carries back.
@@ -290,51 +362,33 @@ class ProviderAdapter(ABC):
         never both. Adapters must not re-implement class filtering on top of
         the declaration. ``model_id`` is part of the contract for parity with
         ``reasoning_replay_policy`` because one adapter can route models to
-        different wires. The default ``meta_preferred`` matches OpenRouter's
-        documented contract (``reasoning_details`` supersede plaintext) and
-        degrades safely for raw-string-only wires.
+        different wires. The wire profile's ``replay.fidelity`` decides.
         """
-        del model_id
-        return DEFAULT_REASONING_REPLAY_FIDELITY
+        return self.wire_profile(model_id).replay.fidelity
+
+    def list_announced_tools(self, model_id: str) -> bool:
+        """Return whether Tools announced mid-Session must also join the request's Tool list.
+
+        True for a route that drops calls to Tool names outside the request's
+        ``tools[]``: the chat layer then lists each Tool a System Reminder
+        announces. The wire profile's ``request.list_announced_tools`` decides.
+        """
+        return self.wire_profile(model_id).request.list_announced_tools
 
     # ------------------------------------------------------------------
     # Reasoning render description
     # ------------------------------------------------------------------
 
-    @classmethod
-    def describe_reasoning_render(
-        cls,
-        *,
-        model_lookup: ModelLookup | None,
-        model_id: str,
-        effort: str | None,
-        provider_config: ProviderConfig | None = None,
-    ) -> ReasoningIntent:
-        """Return the provider-neutral intent this wire renders for (model, effort).
+    def describe_reasoning_render(self, model_id: str, effort: str | None) -> ReasoningIntent:
+        """Return the provider-neutral reasoning decision a request with ``effort`` carries.
 
-        ``/status`` asks this instead of re-deriving the report from the
-        declared Model control, so the reported line matches what a request
-        with the selected effort would actually carry. The default resolves
-        the shared intent against the Model's declared control and ladder —
-        the semantics of a wire whose render follows the declaration (binary
-        thinking toggles, native token budgets). Wires whose render deviates
-        from the declaration override this; the generic OpenAI-compatible wire
-        is the main case (it sends the snapped effort level even for an
-        ``on_off``-declared Model and has no native budget field).
-
-        ``provider_config`` is only consulted by adapters whose floor ladder
-        depends on the Provider identity; the default render ignores it.
+        Describes this Adapter's resolved wire profile for ``model_id``: a
+        known Model that does not reason reports ``off``; otherwise the
+        profile plans ``effort`` exactly like the request render and its
+        reasoning dialect reports what the rendered request carries.
         """
 
-        del provider_config
-        return resolve_reasoning_intent(
-            supported=model_reasoning_supported(model_lookup, model_id),
-            control=model_reasoning_control(model_lookup, model_id),
-            levels=model_reasoning_levels(model_lookup, model_id) or (),
-            effort=effort,
-            budget_max=model_reasoning_budget_max(model_lookup, model_id),
-            max_tokens=None,
-        )
+        return describe_profile_reasoning(self.wire_profile(model_id), effort)
 
     # ------------------------------------------------------------------
     # Wire media capability
@@ -350,11 +404,9 @@ class ProviderAdapter(ABC):
         ``model_id`` is part of the contract for parity with
         ``reasoning_replay_policy`` and because one adapter can route models to
         different wires; concrete adapters may also branch on their connection
-        mode.  The ABC default carries nothing — a forgotten declaration
-        degrades the attachment, never crashes the wire.
+        mode. The wire profile's ``media.types`` decides.
         """
-        del model_id
-        return frozenset()
+        return self.wire_profile(model_id).media.types
 
     # ------------------------------------------------------------------
     # Request-context estimation
@@ -366,8 +418,7 @@ class ProviderAdapter(ABC):
         Callers can prepare compatible copies before serialization. Unknown
         limits stay absent; request-body and image-count limits remain separate.
         """
-        del model_id
-        return None
+        return self.wire_profile(model_id).media.image_max_bytes
 
     def request_body_limit(self, model_id: str) -> int | None:
         """Verified maximum serialized request bytes for this Model's wire, if known.
@@ -376,20 +427,20 @@ class ProviderAdapter(ABC):
         ProviderRequestTooLargeError with the actual byte count; an HTTP 413
         raises the same error without sizes. Chat then retires already
         delivered images and submits a smaller request. Unknown limits stay
-        absent; this is independent of tokens.
+        absent; this is independent of tokens. The default reads the wire
+        profile's ``media.request_max_bytes``.
         """
-        del model_id
-        return None
+        return self.wire_profile(model_id).media.request_max_bytes
 
     def request_image_limit(self, model_id: str) -> int | None:
         """Documented maximum number of images in one request to this Model, if known.
 
         Counts every image in the request, earlier turns and Tool Results
         included. Chat keeps requests within it by retiring the oldest
-        delivered images; unknown limits stay absent.
+        delivered images; unknown limits stay absent. The default reads the
+        wire profile's ``media.request_max_images``.
         """
-        del model_id
-        return None
+        return self.wire_profile(model_id).media.request_max_images
 
     def estimate_request_input_tokens(
         self,
@@ -491,6 +542,24 @@ class ProviderAdapter(ABC):
 
         del request_kwargs
         return {}
+
+    def _stable_request_headers(
+        self,
+        model_id: str,
+        request_kwargs: JsonObject,
+    ) -> dict[str, str]:
+        """Return the headers every attempt of one request to ``model_id`` adds.
+
+        These are the Adapter's own context headers
+        (:meth:`_request_headers_from_kwargs`, which may pop its private kwargs)
+        plus the wire profile's ``request.extra_headers``, which win. Every
+        request path merges them over each attempt's rebuilt auth and Provider
+        headers, so a profile header also replaces one of those.
+        """
+
+        headers = self._request_headers_from_kwargs(request_kwargs)
+        headers.update(self.wire_profile(model_id).request.extra_headers)
+        return headers
 
     @abstractmethod
     async def aclose(self) -> None:

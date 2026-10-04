@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from core.memory import MemoryPromptMode
-from core.settings import validate_temperature, validate_thinking_effort
+from core.settings import validate_temperature, validate_thinking_effort, validate_top_p
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -46,7 +46,8 @@ class RuntimeAgent(Protocol):
       config agent, the model chain has already run; never empty).
     - ``fallback_models`` — ordered fallback chain (empty for a config agent in v1).
     - ``workspace`` — identity/memory home; **empty** for a config agent.
-    - ``temperature`` / ``thinking_effort`` — run knobs (may be ``None``).
+    - ``temperature`` / ``top_p`` / ``thinking_effort`` — run knobs (``None`` leaves
+      them to the Provider).
     - ``tool_access`` — explicit Tool Access Policy; ``allowed_skills`` remains
       an allow-list and ``tools`` carries optional Tool-owned settings (for a
       config agent, Project-derived).
@@ -73,6 +74,8 @@ class RuntimeAgent(Protocol):
     @property
     def temperature(self) -> float | None: ...
     @property
+    def top_p(self) -> float | None: ...
+    @property
     def thinking_effort(self) -> str | None: ...
     @property
     def tool_access(self) -> ToolAccess: ...
@@ -94,7 +97,7 @@ class RuntimeAgent(Protocol):
     def compaction_policy(self) -> dict[str, Any] | None: ...
 
 
-AGENT_OVERRIDE_FIELDS = ("model", "thinking_effort", "temperature")
+AGENT_OVERRIDE_FIELDS = ("model", "thinking_effort", "temperature", "top_p")
 
 
 @dataclass(frozen=True)
@@ -110,6 +113,7 @@ class AgentOverrides:
     model: str | None = None
     thinking_effort: str | None = None
     temperature: float | None = None
+    top_p: float | None = None
 
     def __post_init__(self) -> None:
         if self.model is not None and (not isinstance(self.model, str) or not self.model):
@@ -128,6 +132,8 @@ class AgentOverrides:
                 "temperature",
                 validate_temperature(self.temperature, label="temperature"),
             )
+        if self.top_p is not None:
+            object.__setattr__(self, "top_p", validate_top_p(self.top_p, label="top_p"))
 
     @classmethod
     def from_stored(cls, value: Any) -> AgentOverrides:
@@ -179,10 +185,11 @@ class ConfigAgent:
     body: str
     source_path: Path
     source_format: str
-    # Resolved through the chain (agent → project default → global default); both
-    # ``temperature`` and ``thinking_effort`` carry the first tier that delivered,
-    # or ``None`` when all tiers fell through → the provider default.
+    # Resolved through the chain (agent → project default → global default);
+    # ``temperature``, ``top_p`` and ``thinking_effort`` carry the first tier that
+    # delivered, or ``None`` when all tiers fell through → the provider default.
     project_id: str | None = None
+    top_p: float | None = None
     thinking_effort: str | None = None
     fallback_models: list[str] = field(default_factory=lambda: list(_CONFIG_AGENT_FALLBACK_MODELS))
     workspace: str = _CONFIG_AGENT_WORKSPACE

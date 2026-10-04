@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable, Iterable
 from contextlib import AbstractContextManager, nullcontext
+from dataclasses import dataclass
 from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
@@ -15,6 +17,7 @@ from core.models.database import (
     ModelDatabaseRefresh,
     begin_runtime_model_database_refresh,
     begin_system_model_database_refresh,
+    read_model_database_manifest,
 )
 from core.models.discovery import ModelDiscoveryError, refresh_models
 from core.models.models import ModelRegistry
@@ -34,7 +37,12 @@ from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.event_bridge import publish_resource_changed
-from server.rpc.payloads import _model_detail_response, _model_response
+from server.rpc.payloads import (
+    _model_detail_response,
+    _model_response,
+    _wire_profile_detail_response,
+    _wire_status_response,
+)
 from server.rpc.provider_access import (
     _connection_models_endpoint,
     _connection_reachability,
@@ -72,6 +80,15 @@ _MODEL_REFRESH_TARGETS = frozenset({_MODEL_REFRESH_TARGET_RUNTIME, _MODEL_REFRES
 LOCAL_CATALOG_REFRESH_WAIT_SECONDS = 3.0
 
 _BACKGROUND_REFRESH_TASKS: dict[int, set[asyncio.Task[None]]] = {}
+
+
+@dataclass(frozen=True)
+class _RefreshOutcome:
+    """One refresh's result and the catalogs it fetched."""
+
+    result: JsonObject
+    providers: frozenset[str]
+    canonical: bool
 
 
 async def _list_models(state: Any, params: JsonObject) -> JsonObject:
@@ -123,6 +140,12 @@ async def _list_models(state: Any, params: JsonObject) -> JsonObject:
                 provider_config=_provider_config_or_none(runtime, provider_id),
                 local_context_windows=local_context_windows,
             )
+            response["wire_profiles"] = {
+                connection.id: _wire_status_response(
+                    *runtime.wire_status(provider_id, connection.id, model.model_id)
+                )
+                for connection in allowed_connections
+            }
             reachable = _model_reachability(runtime, provider_id, allowed_connections)
             if reachable is not None:
                 response["reachable"] = reachable
@@ -185,10 +208,49 @@ async def _get_model(state: Any, params: JsonObject) -> JsonObject:
             f"{provider_id}:{connection.id}",
         )
     ]
+    response["wire_profiles"] = {
+        connection_id: _wire_profile_detail_response(
+            runtime.wire_profile(provider_id, connection_id, model.model_id),
+            runtime.learned_wire_facts(provider_id, connection_id, model.model_id),
+        )
+        for connection_id in response["usable_connections"]
+    }
     reachable = _model_reachability(runtime, provider_id, allowed_connections)
     if reachable is not None:
         response["reachable"] = reachable
     return {"model": response}
+
+
+async def _forget_wire_facts(state: Any, params: JsonObject) -> JsonObject:
+    """Drop learned wire facts for a Provider or one of its Models, optionally on one Connection."""
+
+    _reject_unsupported(params, {"model", "connection"}, "model.forget_wire_facts")
+    reference = _required_string(params, "model")
+    bare_reference = reference.rpartition("::")[0] if "::" in reference else reference
+    provider_id, _separator, model_id = bare_reference.partition("/")
+    connection_id = params.get("connection")
+    if connection_id is not None and (not isinstance(connection_id, str) or not connection_id):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.connection must be a non-empty string")
+    runtime = state.runtime
+    provider = _provider_config_or_none(runtime, provider_id)
+    if provider is None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"unknown Provider {provider_id!r}")
+    if connection_id is not None:
+        connection_id = connection_id.removeprefix(f"{provider_id}:")
+        known = [connection.id for connection in getattr(provider, "connections", ())]
+        if connection_id not in known:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"unknown Connection {connection_id!r} of {provider_id!r}; "
+                f"choices: {', '.join(known)}",
+            )
+    forgotten = runtime.forget_wire_facts(provider_id, connection_id, model_id or None)
+    return {
+        "provider_id": provider_id,
+        "model_id": model_id or None,
+        "connection_id": connection_id,
+        "forgotten": forgotten,
+    }
 
 
 async def _routing_provider_options(state: Any, params: JsonObject) -> JsonObject:
@@ -279,15 +341,18 @@ async def _await_local_catalog_refresh(runtime: Any) -> None:
         if exception is not None:
             _LOGGER.warning("Local catalog auto-refresh failed: %s", exception)
     if pending:
-        runtime_key = id(runtime)
-        tasks = _BACKGROUND_REFRESH_TASKS.setdefault(runtime_key, set())
-        tasks.add(refresh_task)
-        refresh_task.add_done_callback(
-            lambda completed, key=runtime_key: _discard_background_refresh_task(
-                key,
-                completed,
-            )
-        )
+        _track_background_refresh_task(runtime, refresh_task)
+
+
+def _track_background_refresh_task(runtime: Any, task: asyncio.Task[None]) -> None:
+    """Keep a background refresh until it ends so Runtime shutdown can drain it."""
+    runtime_key = id(runtime)
+    _BACKGROUND_REFRESH_TASKS.setdefault(runtime_key, set()).add(task)
+
+    def discard(completed: asyncio.Task[None]) -> None:
+        _discard_background_refresh_task(runtime_key, completed)
+
+    task.add_done_callback(discard)
 
 
 def _discard_background_refresh_task(runtime_key: int, task: asyncio.Task[None]) -> None:
@@ -300,7 +365,7 @@ def _discard_background_refresh_task(runtime_key: int, task: asyncio.Task[None])
 
 
 async def shutdown_background_refresh_tasks(runtime: Any) -> None:
-    """Cancel and drain model.list refresh sweeps owned by one Runtime."""
+    """Cancel and drain the background Model DB refreshes owned by one Runtime."""
     tasks = tuple(_BACKGROUND_REFRESH_TASKS.pop(id(runtime), ()))
     for task in tasks:
         task.cancel()
@@ -320,8 +385,6 @@ async def _refresh_model_db_admitted(state: Any, params: JsonObject) -> JsonObje
         "model refresh",
     )
 
-    database_refresh: ModelDatabaseRefresh | None = None
-    refresh_resources_dir: Path | None = None
     try:
         runtime = state.runtime
         target = params.get("target", _MODEL_REFRESH_TARGET_RUNTIME)
@@ -331,18 +394,14 @@ async def _refresh_model_db_admitted(state: Any, params: JsonObject) -> JsonObje
                 "model refresh target must be 'runtime' or 'system'",
             )
         system_resources_dir = runtime.storage.resources_dir
-        data_dir = Path(runtime.storage.data_dir)
+        begin: Callable[[], ModelDatabaseRefresh]
         if target == _MODEL_REFRESH_TARGET_RUNTIME:
             if "expected_resources_dir" in params:
                 raise RpcError(
                     RPC_ERROR_INVALID_REQUEST,
                     "expected_resources_dir is only valid for a system Model DB refresh",
                 )
-            database_refresh = begin_runtime_model_database_refresh(
-                system_resources_dir,
-                data_dir,
-            )
-            refresh_resources_dir = database_refresh.resources_dir
+            begin = _runtime_refresh_beginner(runtime)
         else:
             expected_resources_dir = _required_string(params, "expected_resources_dir")
             if Path(expected_resources_dir).resolve() != system_resources_dir.resolve():
@@ -350,35 +409,44 @@ async def _refresh_model_db_admitted(state: Any, params: JsonObject) -> JsonObje
                     RPC_ERROR_INVALID_REQUEST,
                     "the serving checkout does not match the requested system Model DB",
                 )
-            database_refresh = begin_system_model_database_refresh(system_resources_dir)
-            refresh_resources_dir = database_refresh.resources_dir
+
+            def begin() -> ModelDatabaseRefresh:
+                return begin_system_model_database_refresh(system_resources_dir)
+
+        include_custom = target == _MODEL_REFRESH_TARGET_RUNTIME
+        refresh: Callable[[Path], Awaitable[_RefreshOutcome]]
         if "provider_id" in params:
             provider_id = _required_string(params, "provider_id")
-            result = await _refresh_provider_model_db(
-                runtime,
-                provider_id,
-                refresh_resources_dir,
-            )
+
+            async def refresh(resources_dir: Path) -> _RefreshOutcome:
+                return await _refresh_provider_model_db(
+                    runtime,
+                    provider_id,
+                    resources_dir,
+                    include_custom=include_custom,
+                )
+
             scope = provider_id
-            provider_count = 1
-            model_count = _model_count(result)
         else:
-            result = await _refresh_global_model_db(runtime, refresh_resources_dir)
+
+            async def refresh(resources_dir: Path) -> _RefreshOutcome:
+                return await _refresh_global_model_db(
+                    runtime,
+                    resources_dir,
+                    include_custom=include_custom,
+                )
+
             scope = "all"
-            provider_count = int(result.get("refreshed_count", 0))
-            model_count = int(result.get("model_count", 0))
-        # Validation collects instead of logging: the live reload below logs
-        # each entry Load ignores, so the refresh reports it once.
-        invalid_entry_count = len(ModelRegistry.validate(refresh_resources_dir))
-        database_refresh.commit()
-        _reload_runtime_model_registry(runtime, system_resources_dir)
+        outcome, invalid_entry_count = await _publish_model_db_refresh(runtime, begin, refresh)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    finally:
-        if refresh_resources_dir is not None:
-            ModelRegistry.invalidate(refresh_resources_dir)
-        if database_refresh is not None:
-            database_refresh.discard()
+    result = outcome.result
+    if scope == "all":
+        provider_count = int(result.get("refreshed_count", 0))
+        model_count = int(result.get("model_count", 0))
+    else:
+        provider_count = 1
+        model_count = _model_count(result)
     # Both refresh paths reloaded the registry in place; tell open windows to
     # reload their model lists. Single tail emit so the per-provider early
     # return cannot skip the signal.
@@ -398,6 +466,119 @@ async def _refresh_model_db_admitted(state: Any, params: JsonObject) -> JsonObje
         invalid_entry_count,
     )
     return result
+
+
+def _runtime_refresh_beginner(runtime: Any) -> Callable[[], ModelDatabaseRefresh]:
+    """Return how a runtime refresh stages its working copy of the Model DB."""
+
+    def begin() -> ModelDatabaseRefresh:
+        return begin_runtime_model_database_refresh(
+            runtime.storage.resources_dir,
+            Path(runtime.storage.data_dir),
+            provider_ids=_existing_provider_ids(runtime),
+        )
+
+    return begin
+
+
+async def _publish_model_db_refresh(
+    runtime: Any,
+    begin: Callable[[], ModelDatabaseRefresh],
+    refresh: Callable[[Path], Awaitable[_RefreshOutcome]],
+) -> tuple[_RefreshOutcome, int]:
+    """Stage, refresh, validate, publish, and reload one Model DB refresh.
+
+    The caller holds the Runtime's Model DB refresh admission. Any failure
+    discards the working copy and leaves the published root untouched. Returns
+    the outcome and the number of entries Load ignores.
+    """
+
+    database_refresh = begin()
+    try:
+        outcome = await refresh(database_refresh.resources_dir)
+        # Validation collects instead of logging: the live reload below logs
+        # each entry Load ignores, so the refresh reports it once.
+        invalid_entry_count = len(ModelRegistry.validate(database_refresh.resources_dir))
+        database_refresh.commit(providers=outcome.providers, canonical=outcome.canonical)
+        await _reload_runtime_model_registry(runtime, runtime.storage.resources_dir)
+    finally:
+        ModelRegistry.invalidate(database_refresh.resources_dir)
+        database_refresh.discard()
+    return outcome, invalid_entry_count
+
+
+def start_installation_catalog_restore(state: Any) -> asyncio.Task[None] | None:
+    """Rebuild a missing or incompatible runtime Model DB once, in the background.
+
+    Without a usable runtime Model DB, Load serves every catalog from the bundled
+    Model DB, so the catalogs only this installation produces are gone. Call this
+    once after startup, before any refresh can publish a new runtime root. It
+    refreshes each Custom Provider with a catalog endpoint through the same
+    admission and publication as ``model.refresh_db``; the published root also
+    replaces an incompatible one, so this happens once. Local catalogs return
+    with their automatic refresh; built-in Providers use the bundled catalogs
+    until the next manual refresh. Returns the started background refresh, if
+    any; Runtime shutdown drains it.
+    """
+
+    runtime = state.runtime
+    runtime_models_dir = runtime.storage.layout.models
+    if read_model_database_manifest(runtime_models_dir) is not None:
+        return None
+    condition = "incompatible" if runtime_models_dir.exists() else "missing"
+    provider_ids = [
+        provider_id
+        for provider_id in runtime.providers.list_ids()
+        if _is_custom_provider(provider := runtime.providers.get(provider_id))
+        and _provider_supports_refresh(provider)
+    ]
+    if condition == "missing" and not provider_ids:
+        return None
+    task = asyncio.create_task(
+        _restore_installation_catalogs(state, provider_ids, condition),
+        name="model-db-restore",
+    )
+    _track_background_refresh_task(runtime, task)
+    return task
+
+
+async def _restore_installation_catalogs(
+    state: Any,
+    provider_ids: list[str],
+    condition: str,
+) -> None:
+    runtime = state.runtime
+
+    async def refresh(resources_dir: Path) -> _RefreshOutcome:
+        successes, errors = await _refresh_providers(runtime, provider_ids, resources_dir, None)
+        return _RefreshOutcome(
+            result={"providers": successes, "errors": errors},
+            providers=_refreshed_provider_ids(successes),
+            canonical=False,
+        )
+
+    try:
+        async with runtime.model_database_refresh():
+            outcome, _invalid_entry_count = await _publish_model_db_refresh(
+                runtime,
+                _runtime_refresh_beginner(runtime),
+                refresh,
+            )
+    except Exception as error:
+        _LOGGER.warning("Could not rebuild the %s runtime Model DB: %s", condition, error)
+        return
+    publish_resource_changed(state, RESOURCE_KIND_MODELS)
+    provider_count, model_count = _summarize_refreshed_providers(outcome.result["providers"])
+    _LOGGER.info(
+        "Rebuilt the %s runtime Model DB "
+        "(custom_providers=%s refreshed=%s models=%s errors=%s); built-in Providers use "
+        "the bundled catalogs and local catalogs return with their automatic refresh",
+        condition,
+        len(provider_ids),
+        provider_count,
+        model_count,
+        len(outcome.result["errors"]),
+    )
 
 
 async def _fetch_catalog_for_refresh() -> ModelsDevCatalog | None:
@@ -421,26 +602,20 @@ async def _fetch_catalog_for_refresh() -> ModelsDevCatalog | None:
         return None
 
 
-async def _refresh_global_model_db(runtime: Any, resources_dir: Path) -> JsonObject:
+async def _refresh_global_model_db(
+    runtime: Any,
+    resources_dir: Path,
+    *,
+    include_custom: bool,
+) -> _RefreshOutcome:
     catalog = await _fetch_catalog_for_refresh()
-    refreshed_providers: list[JsonObject] = []
-    refresh_errors: list[JsonObject] = []
-    for provider_id in runtime.providers.list_ids():
-        provider = runtime.providers.get(provider_id)
-        if not _provider_supports_refresh(provider):
-            continue
-
-        successes, errors = await _refresh_provider_connections(
-            runtime,
-            provider_id,
-            provider,
-            resources_dir,
-            catalog,
-        )
-        refreshed_providers.extend(successes)
-        refresh_errors.extend(errors)
-
-    canonical_result = await _refresh_canonical_layer_if_possible(catalog, resources_dir, runtime)
+    provider_ids = _refresh_provider_ids(runtime, include_custom=include_custom)
+    refreshed_providers, refresh_errors = await _refresh_providers(
+        runtime, provider_ids, resources_dir, catalog
+    )
+    canonical_result = await _refresh_canonical_layer_if_possible(
+        catalog, resources_dir, runtime, provider_ids
+    )
     provider_count, model_count = _summarize_refreshed_providers(refreshed_providers)
     result: JsonObject = {
         "providers": refreshed_providers,
@@ -450,18 +625,58 @@ async def _refresh_global_model_db(runtime: Any, resources_dir: Path) -> JsonObj
     }
     if refresh_errors:
         result["errors"] = refresh_errors
-    return result
+    return _RefreshOutcome(
+        result=result,
+        providers=_refreshed_provider_ids(refreshed_providers),
+        canonical=canonical_result is not None,
+    )
+
+
+async def _refresh_providers(
+    runtime: Any,
+    provider_ids: Iterable[str],
+    resources_dir: Path,
+    catalog: ModelsDevCatalog | None,
+) -> tuple[list[JsonObject], list[JsonObject]]:
+    """Refresh every refreshable Provider of ``provider_ids``; collect successes and errors."""
+
+    successes: list[JsonObject] = []
+    errors: list[JsonObject] = []
+    for provider_id in provider_ids:
+        provider = runtime.providers.get(provider_id)
+        if not _provider_supports_refresh(provider):
+            continue
+        provider_successes, provider_errors = await _refresh_provider_connections(
+            runtime,
+            provider_id,
+            provider,
+            resources_dir,
+            catalog,
+        )
+        successes.extend(provider_successes)
+        errors.extend(provider_errors)
+    return successes, errors
+
+
+def _refreshed_provider_ids(successes: list[JsonObject]) -> frozenset[str]:
+    """Return the Providers whose catalog at least one Connection refreshed."""
+
+    return frozenset(
+        entry["provider_id"] for entry in successes if isinstance(entry.get("provider_id"), str)
+    )
 
 
 async def _refresh_canonical_layer_if_possible(
     catalog: ModelsDevCatalog | None,
     resources_dir: Path,
     runtime: Any,
+    provider_ids: list[str],
 ) -> JsonObject | None:
     """Project the canonical layer when a catalog is available; else ``None``.
 
-    Writes ``models.json`` + the raw dump + seeds ``models.overrides.json``.
-    Skipped (returns ``None``) when the catalog could not be fetched.
+    Writes ``models.json``, seeds ``models.overrides.json`` and reprices the
+    existing catalogs of ``provider_ids``. Skipped (returns ``None``) when the
+    catalog could not be fetched.
     """
 
     if catalog is None:
@@ -471,20 +686,55 @@ async def _refresh_canonical_layer_if_possible(
         catalog=catalog,
         provider_catalog_ids={
             provider_id: runtime.providers.get(provider_id).effective_models_dev_id()
-            for provider_id in runtime.providers.list_ids()
+            for provider_id in provider_ids
         },
     )
+
+
+def _refresh_provider_ids(runtime: Any, *, include_custom: bool) -> list[str]:
+    """Return the Providers one refresh covers.
+
+    Custom Providers exist only in this installation's Settings, so a system
+    refresh, which writes the shipped Model DB, leaves them out.
+    """
+
+    return [
+        provider_id
+        for provider_id in runtime.providers.list_ids()
+        if include_custom or not _is_custom_provider(runtime.providers.get(provider_id))
+    ]
+
+
+def _is_custom_provider(provider: Any) -> bool:
+    return bool(getattr(provider, "custom", False))
+
+
+def _existing_provider_ids(runtime: Any) -> set[str]:
+    """Return every Provider that currently exists, Custom Providers included.
+
+    Settings may hold a Custom Provider the registry skipped as invalid; its
+    catalog still belongs to an existing Provider.
+    """
+
+    return set(runtime.providers.list_ids()) | set(runtime.storage.load_custom_providers_settings())
 
 
 async def _refresh_provider_model_db(
     runtime: Any,
     provider_id: str,
     resources_dir: Path,
-) -> JsonObject:
+    *,
+    include_custom: bool,
+) -> _RefreshOutcome:
     try:
         provider = runtime.providers.get(provider_id)
     except KeyError as exc:
         raise RpcError(RPC_ERROR_DOMAIN, f"unknown provider: {provider_id}") from exc
+    if not include_custom and _is_custom_provider(provider):
+        raise RpcError(
+            RPC_ERROR_DOMAIN,
+            f"Custom Provider '{provider_id}' can only be refreshed into the runtime Model DB",
+        )
     if not _provider_supports_refresh(provider):
         raise RpcError(
             RPC_ERROR_DOMAIN,
@@ -501,19 +751,28 @@ async def _refresh_provider_model_db(
     )
     if not successes:
         # An explicit single-provider refresh that produced nothing useful
-        # still reports why: a discovery failure surfaces its message, an
-        # absent credential keeps the existing "not found" wording.
+        # still reports why: a discovery failure surfaces its message, a
+        # disabled catalog Connection is named, an absent credential keeps the
+        # "not found" wording.
         if errors:
             raise RpcError(RPC_ERROR_DOMAIN, str(errors[0]["error"]))
         raise RpcError(
-            RPC_ERROR_DOMAIN,
-            f"Provider credentials not found for provider '{provider_id}'",
+            RPC_ERROR_DOMAIN, _no_refreshable_connection_message(runtime, provider_id, provider)
         )
-    await _refresh_canonical_layer_if_possible(catalog, resources_dir, runtime)
+    canonical_result = await _refresh_canonical_layer_if_possible(
+        catalog,
+        resources_dir,
+        runtime,
+        _refresh_provider_ids(runtime, include_custom=include_custom),
+    )
     result = dict(successes[0])
     if errors:
         result["errors"] = errors
-    return result
+    return _RefreshOutcome(
+        result=result,
+        providers=frozenset({provider_id}),
+        canonical=canonical_result is not None,
+    )
 
 
 def _provider_supports_refresh(provider: Any) -> bool:
@@ -530,6 +789,26 @@ def _provider_supports_refresh(provider: Any) -> bool:
     return any(
         getattr(connection, "models_endpoint", None)
         for connection in getattr(provider, "connections", [])
+    )
+
+
+def _no_refreshable_connection_message(runtime: Any, provider_id: str, provider: Any) -> str:
+    """Explain why no catalog Connection of *provider* could be refreshed."""
+
+    disabled = [
+        f"{provider_id}:{connection.id}"
+        for connection in getattr(provider, "connections", [])
+        if _connection_models_endpoint(connection, provider)
+        and not runtime.provider_credentials.is_connection_enabled(
+            provider_id, f"{provider_id}:{connection.id}"
+        )
+    ]
+    if not disabled:
+        return f"Provider credentials not found for provider '{provider_id}'"
+    verb = "is" if len(disabled) == 1 else "are"
+    return (
+        f"Provider '{provider_id}' has no enabled Connection to refresh: "
+        f"{', '.join(disabled)} {verb} disabled; enable it to refresh its Models"
     )
 
 
@@ -580,6 +859,7 @@ async def _refresh_provider_connections(
                         resources_dir,
                         credential_connection=discovery_connection,
                         models_dev_catalog=models_dev_catalog,
+                        wire_files=runtime.wire_profile_files(),
                     )
         except (ConfigError, RpcError, ModelDiscoveryError, ProviderError, NetworkError) as exc:
             _LOGGER.warning(
@@ -610,12 +890,13 @@ def _single_attempt_if(auto_refresh: bool) -> AbstractContextManager[None]:
     return caller_owns_retries() if auto_refresh else nullcontext()
 
 
-def _reload_runtime_model_registry(runtime: Any, system_resources_dir: Path) -> None:
+async def _reload_runtime_model_registry(runtime: Any, system_resources_dir: Path) -> None:
     # Reload in place rather than rebinding ``runtime._models``: services that
     # captured the registry at construction (task-model targets for
     # speech/image/embeddings, the status display, the recall backend) hold the
     # same instance, so an in-place swap reaches all of them without re-wiring.
-    runtime.models.reload(
+    # The catalog files are read and assembled off the Event Loop.
+    await runtime.models.reload_async(
         system_resources_dir,
         runtime_models_dir=runtime.storage.layout.models,
         custom_providers=runtime.storage.load_custom_providers_settings(),
@@ -655,6 +936,7 @@ def _summarize_refreshed_providers(successes: list[JsonObject]) -> tuple[int, in
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the registered model RPC handlers."""
     return {
+        "model.forget_wire_facts": _forget_wire_facts,
         "model.get": _get_model,
         "model.list": _list_models,
         "model.refresh_db": _refresh_model_db,

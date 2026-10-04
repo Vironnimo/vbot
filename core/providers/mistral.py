@@ -29,29 +29,11 @@ from core.providers._chat_completions_wire import (
     _first_choice_message,
     _normalize_openai_finish_reason,
 )
-from core.providers.adapter import MISTRAL_TOOL_CALL_ID_PROFILE, normalize_tool_call_ids
 from core.providers.errors import CatalogEntrySkipped
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
 )
-from core.providers.reasoning import (
-    REASONING_REPLAY_FIDELITY_META_ONLY,
-    ReasoningReplayFidelity,
-    closest_supported_effort,
-    model_reasoning_levels,
-)
 
-MISTRAL_REASONING_EFFORTS = {"none", "high"}
-
-# Provider-scoped metadata blob + field carrying the magistral reasoning-mode
-# wire fact (Phase 5). The decision "this model engages reasoning via
-# ``prompt_mode: reasoning`` instead of ``reasoning_effort``" is a published
-# per-model FACT, so it lives in model data as
-# ``metadata.mistral.prompt_mode == "reasoning"``, not in a name-prefix guess.
-# The adapter still owns the MECHANICS — building the wire request from that fact.
-MISTRAL_METADATA_KEY = "mistral"
-PROMPT_MODE_METADATA_KEY = "prompt_mode"
-PROMPT_MODE_REASONING = "reasoning"
 MISTRAL_CONTENT_CHUNKS_META_KEY = "content_chunks"
 # Mistral's catalog has no embedding capability flag; its embedding Models are
 # the non-chat ``*-embed`` ids (``mistral-embed``, ``codestral-embed-2505``).
@@ -78,17 +60,12 @@ def _flatten_thinking(value: Any) -> str:
     return ""
 
 
-# Mistral's vision FAQ documents at most 8 images per request.
-MISTRAL_MAX_IMAGES = 8
-
-
 class MistralAdapter(OpenAICompatibleAdapter):
-    """OpenAI-compatible adapter with Mistral-specific catalog and reasoning behavior."""
+    """OpenAI-compatible adapter with Mistral's catalog and content-chunk responses.
 
-    @override
-    def request_image_limit(self, model_id: str) -> int | None:
-        del model_id
-        return MISTRAL_MAX_IMAGES
+    The request wire (binary reasoning effort, nine-character Tool-call ids,
+    chunk-only replay) is described by ``resources/wire/mistral.json``.
+    """
 
     @classmethod
     @override
@@ -154,77 +131,6 @@ class MistralAdapter(OpenAICompatibleAdapter):
             context_window=context_window,
             max_output_tokens=None,
         )
-
-    @override
-    def _build_payload(
-        self,
-        messages: list[dict[str, Any]],
-        model_id: str,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        """Build a Mistral payload with model-specific reasoning protocol mapping."""
-
-        thinking_effort = kwargs.pop("thinking_effort", "")
-        wire_messages = normalize_tool_call_ids(messages, MISTRAL_TOOL_CALL_ID_PROFILE)
-        payload = super()._build_payload(wire_messages, model_id, **kwargs)
-
-        if self._model_reasoning_supported(model_id) is False:
-            payload.pop("reasoning_effort", None)
-            payload.pop("prompt_mode", None)
-            return payload
-
-        use_prompt_mode_reasoning = self._uses_prompt_mode_reasoning(model_id)
-
-        # Snap against the effective per-model ladder when present; the binary
-        # ``{none, high}`` constant is the floor for a model without a feed
-        # ladder (all Mistral models today — their ladder is not yet projected).
-        ladder = model_reasoning_levels(self._model_lookup, model_id) or MISTRAL_REASONING_EFFORTS
-        supported_effort = closest_supported_effort(thinking_effort, ladder)
-        # Mistral's wire reasoning is a binary thinking toggle: any active
-        # (non-``none``) snapped effort engages thinking, ``none`` disables it.
-        # Mapping every active effort to Mistral's single thinking mode keeps a
-        # multi-level feed ladder from silently dropping a mid-level selection.
-        if supported_effort is not None and supported_effort != "none":
-            if use_prompt_mode_reasoning:
-                payload["prompt_mode"] = "reasoning"
-                payload.pop("reasoning_effort", None)
-            else:
-                payload["reasoning_effort"] = "high"
-        elif supported_effort == "none":
-            if use_prompt_mode_reasoning:
-                payload.pop("reasoning_effort", None)
-                payload.pop("prompt_mode", None)
-            else:
-                payload["reasoning_effort"] = "none"
-
-        return payload
-
-    def _uses_prompt_mode_reasoning(self, model_id: str) -> bool:
-        """Return whether this model engages reasoning via ``prompt_mode``.
-
-        Reads the per-model wire fact ``metadata.mistral.prompt_mode ==
-        "reasoning"`` from the injected catalog (Phase 5) instead of guessing
-        from a ``magistral-medium`` name prefix. A model with no such metadata
-        (every non-magistral model) uses the default ``reasoning_effort`` wire.
-        The connection-pin suffix is stripped before lookup, mirroring the
-        shared reasoning helpers.
-        """
-
-        if self._model_lookup is None:
-            return False
-        model = self._model_lookup(model_id.split("::", 1)[0])
-        if model is None:
-            return False
-        mistral_metadata = model.metadata.get(MISTRAL_METADATA_KEY)
-        if not isinstance(mistral_metadata, Mapping):
-            return False
-        return mistral_metadata.get(PROMPT_MODE_METADATA_KEY) == PROMPT_MODE_REASONING
-
-    @override
-    def reasoning_replay_fidelity(self, model_id: str) -> ReasoningReplayFidelity:
-        """Mistral replays structured thinking chunks only, never a text field."""
-        del model_id
-        return REASONING_REPLAY_FIDELITY_META_ONLY
 
     @override
     def _format_assistant_message(

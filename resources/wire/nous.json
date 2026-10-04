@@ -1,0 +1,8 @@
+{
+  "format_version": 1,
+  "_comment": "Nous Portal spells reasoning as reasoning: {enabled, effort}; disabled reasoning is an omission. No native media is carried until the Portal documents multipart content.",
+  "defaults": {
+    "reasoning": {"dialect": "nous_reasoning"},
+    "media": {"types": []}
+  }
+}

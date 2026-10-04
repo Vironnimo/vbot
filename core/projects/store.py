@@ -156,6 +156,7 @@ class ProjectStore:
         default_thinking_effort: str | None = None,
         source_format: str = DEFAULT_PROJECT_SOURCE_FORMAT,
         auto_load: list[str] | None = None,
+        default_top_p: float | None = None,
     ) -> Project:
         """Create and persist a project anchor.
 
@@ -176,6 +177,7 @@ class ProjectStore:
                 default_model=default_model,
                 default_temperature=default_temperature,
                 default_thinking_effort=default_thinking_effort,
+                default_top_p=default_top_p,
                 source_format=source_format,
                 auto_load=seed_default_auto_load(auto_load),
             )
@@ -277,6 +279,7 @@ class ProjectStore:
                 "default_model",
                 "default_temperature",
                 "default_thinking_effort",
+                "default_top_p",
                 "source_format",
                 "auto_load",
                 "allowed_tools",
@@ -300,6 +303,7 @@ class ProjectStore:
                 default_thinking_effort=changes.get(
                     "default_thinking_effort", project.default_thinking_effort
                 ),
+                default_top_p=changes.get("default_top_p", project.default_top_p),
                 source_format=changes.get("source_format", project.source_format),
                 auto_load=changes.get("auto_load", list(project.auto_load)),
                 allowed_tools=changes.get("allowed_tools", list(project.allowed_tools)),
@@ -327,7 +331,7 @@ class ProjectStore:
             return updated
 
     def set_override(self, project_id: str, agent_id: str, field: str, value: Any) -> Project:
-        """Override one field (``model`` / ``temperature`` / ``thinking_effort``) for an agent.
+        """Override one field (``model`` / ``temperature`` / ``top_p`` / …) for an agent.
 
         Atomic read-modify-write over ``project.json``: load the project, copy its
         override map, set ``agent_id`` → ``{…, field: value}`` (merging into any
@@ -386,6 +390,7 @@ class ProjectStore:
             default_model=project.default_model,
             default_temperature=project.default_temperature,
             default_thinking_effort=project.default_thinking_effort,
+            default_top_p=project.default_top_p,
             source_format=project.source_format,
             auto_load=list(project.auto_load),
             allowed_tools=list(project.allowed_tools),

@@ -24,6 +24,7 @@ from core.settings import (
     SettingsValidationError,
     validate_temperature,
     validate_thinking_effort,
+    validate_top_p,
 )
 from core.tools.availability import (
     BASH_ALLOWED_ENV_KEY,
@@ -368,6 +369,7 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
         "fallback_models",
         "memory_prompt_mode",
         "temperature",
+        "top_p",
         "thinking_effort",
         "tool_access",
         "allowed_skills",
@@ -463,6 +465,11 @@ def _validate_agent_field(key: str, value: Any) -> Any:
         return value
     if key == "temperature":
         return _validate_temperature(value, allow_none=True)
+    if key == "top_p":
+        try:
+            return validate_top_p(value, label="params.top_p", allow_none=True)
+        except SettingsValidationError as exc:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     if key == "thinking_effort":
         return _validate_thinking_effort(value, allow_none=True)
     if key == "memory_prompt_mode":

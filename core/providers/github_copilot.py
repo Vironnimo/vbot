@@ -1,10 +1,16 @@
-"""GitHub Copilot provider adapter."""
+"""GitHub Copilot provider adapter.
+
+Copilot fronts three wires: Chat Completions, Anthropic-style Messages and
+stateless Responses. The Model's wire profile (``resources/wire/github-copilot.json``)
+picks one from the endpoints and vendor the Copilot catalog reports; this
+Adapter sends each request through the profile's protocol.
+"""
 
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextlib import aclosing
-from typing import Any, cast, override
+from typing import Any, ClassVar, cast, override
 
 import httpx
 
@@ -25,21 +31,28 @@ from core.providers._http_shared import (
     post_json_with_retry,
     wrap_network_error,
 )
-from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, resolve_request_input_budget
+from core.providers._messages_wire import messages_returned_reasoning
+from core.providers._openai_constants import OPTIONAL_REQUEST_PARAMETER_NAMES
+from core.providers._responses_profile import (
+    RESPONSES_DOCUMENT_TYPES,
+    RESPONSES_REASONING_FIELDS,
+    catalog_tool_support,
+    drop_unsupported_request_kwargs,
+    profile_responses_policy,
+    take_reasoning_renderer,
+)
+from core.providers._wire_learning import (
+    execute_learning_from_rejections,
+    stream_learning_from_rejections,
+)
+from core.providers.adapter import resolve_request_input_budget
 from core.providers.errors import CatalogEntrySkipped, NetworkError, ProviderError
 from core.providers.github_copilot_messages import (
     CopilotMessagesStreamState,
     build_copilot_messages_payload,
+    estimate_copilot_messages_input_tokens,
     normalize_copilot_messages_response,
     normalize_copilot_messages_stream_event,
-)
-from core.providers.github_copilot_policy import (
-    CHAT_COMPLETIONS_ENDPOINT,
-    COPILOT_METADATA_KEY,
-    MESSAGES_ENDPOINT,
-    RESPONSES_ENDPOINT,
-    GitHubCopilotModelPolicy,
-    copilot_model_policy,
 )
 from core.providers.github_copilot_responses import (
     ResponsesStreamState,
@@ -47,37 +60,55 @@ from core.providers.github_copilot_responses import (
     estimate_responses_input_tokens,
     iter_responses_sse_deltas_with_state,
     normalize_responses_response,
+    responses_returned_reasoning,
 )
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
 )
 from core.providers.reasoning import THINKING_EFFORT_RANKS
 from core.providers.token_getter import OAuthRequestRecovery
+from core.providers.wire_profile import Protocol
+
+CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
+RESPONSES_ENDPOINT = "/responses"
+MESSAGES_ENDPOINT = "/v1/messages"
+
+COPILOT_METADATA_KEY = "github_copilot"
+"""The ``Model.metadata`` key of the facts Copilot's ``/models`` catalog reports."""
+
+_FOREIGN_REASONING_FIELDS = (
+    "thinking",
+    "thinking_budget",
+    "output_config",
+    "reasoning",
+    "include_reasoning",
+)
+"""Raw reasoning fields a caller may pass; the wire profile renders reasoning instead."""
 
 
 class GitHubCopilotAdapter(OpenAICompatibleAdapter):
     """Routing adapter for GitHub Copilot endpoint families."""
 
+    WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("chat_completions", "messages", "responses")
+
     @override
     def wire_media_support(self, model_id: str) -> frozenset[str]:
-        """Return the exact catalog-advertised image formats for this Model.
+        """Return the wire's image formats, narrowed to the Model's reported ones.
 
-        Both the ``/responses`` and ``/v1/messages`` routes accept image input
-        but no audio; overriding the OpenAI-compatible base (which advertises
-        WAV/MP3) keeps the chat layer from emitting audio the Copilot wire
-        cannot carry.
+        The wire profile carries images only, on every Copilot wire; the
+        catalog's ``vision.supported_media_types`` narrows them per Model.
         """
-        metadata = self._runtime_metadata_for_model(model_id)
-        vision = metadata.get("vision")
+        wire_types = super().wire_media_support(model_id)
+        vision = self._runtime_metadata_for_model(model_id).get("vision")
         if not isinstance(vision, Mapping):
-            return IMAGE_WIRE_MEDIA_TYPES
+            return wire_types
         media_types = vision.get("supported_media_types")
         if not isinstance(media_types, tuple | list):
-            return IMAGE_WIRE_MEDIA_TYPES
+            return wire_types
         return frozenset(
             media_type
             for media_type in media_types
-            if isinstance(media_type, str) and media_type in IMAGE_WIRE_MEDIA_TYPES
+            if isinstance(media_type, str) and media_type in wire_types
         )
 
     # ------------------------------------------------------------------
@@ -107,11 +138,12 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        policy = self._policy_for_model(model_id)
+        """Build a Chat Completions payload from the kwargs Copilot takes for the Model."""
+
         return super()._build_payload(
             messages,
             model_id,
-            **self._chat_request_kwargs(policy, kwargs),
+            **self._copilot_request_kwargs(model_id, kwargs),
         )
 
     @override
@@ -122,36 +154,36 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Send one Copilot request through the model-selected endpoint."""
+        """Send one Copilot request through the wire profile's protocol."""
 
-        policy = self._policy_for_model(model_id)
-        if policy.endpoint_path == CHAT_COMPLETIONS_ENDPOINT:
-            return await super().send(
-                messages,
-                model_id=model_id,
-                **self._chat_request_kwargs(policy, kwargs),
-            )
-        if policy.endpoint_path == RESPONSES_ENDPOINT:
-            payload = build_responses_payload(
-                messages,
-                model_id=model_id,
-                policy=policy,
-                **self._responses_request_kwargs_with_defaults(messages, model_id, kwargs),
-            )
-            return await self._post_json(RESPONSES_ENDPOINT, payload, messages)
-        if policy.endpoint_path == MESSAGES_ENDPOINT:
-            payload = build_copilot_messages_payload(
-                messages,
-                model_id=model_id,
-                policy=policy,
-                **self._request_kwargs_with_defaults(messages, model_id, kwargs),
-            )
-            return await self._post_json(MESSAGES_ENDPOINT, payload, messages)
-        return await super().send(
-            messages,
+        protocol = self.wire_profile(model_id).protocol
+        if protocol not in ("responses", "messages"):
+            return await super().send(messages, model_id=model_id, **kwargs)
+        request_headers = self._stable_request_headers(model_id, kwargs)
+
+        def build() -> dict[str, Any]:
+            if protocol == "responses":
+                return self._build_copilot_responses_payload(messages, model_id, kwargs)
+            return self._build_copilot_messages_payload(messages, model_id, kwargs)
+
+        endpoint = RESPONSES_ENDPOINT if protocol == "responses" else MESSAGES_ENDPOINT
+        payload = build()
+        response = await execute_learning_from_rejections(
+            lambda: self._post_json(endpoint, payload, messages, request_headers),
+            payload,
+            rebuild=build,
+            wire=self.wire,
             model_id=model_id,
-            **self._chat_request_kwargs(policy, kwargs),
+            provider_label=self._config.id,
         )
+        returned_reasoning = (
+            responses_returned_reasoning(response)
+            if protocol == "responses"
+            else messages_returned_reasoning(response)
+        )
+        if returned_reasoning:
+            self.wire.observe_reasoning_returned(model_id)
+        return response
 
     @override
     async def stream(
@@ -163,65 +195,50 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
     ) -> AsyncGenerator[dict[str, Any]]:
         """Stream one Copilot request as normalized vBot deltas."""
 
-        policy = self._policy_for_model(model_id)
-        if policy.endpoint_path == CHAT_COMPLETIONS_ENDPOINT:
-            emitted_visible_reasoning = ""
+        protocol = self.wire_profile(model_id).protocol
+        if protocol in ("responses", "messages"):
+            request_headers = self._stable_request_headers(model_id, kwargs)
+
+            def build() -> dict[str, Any]:
+                if protocol == "responses":
+                    return self._build_copilot_responses_payload(
+                        messages, model_id, kwargs, stream=True
+                    )
+                built = self._build_copilot_messages_payload(messages, model_id, kwargs)
+                built["stream"] = True
+                return built
+
+            payload = build()
+            open_stream = (
+                self._stream_responses if protocol == "responses" else self._stream_messages
+            )
             async with aclosing(
-                cast(
-                    AsyncGenerator[dict[str, Any]],
-                    super().stream(
-                        messages,
-                        model_id=model_id,
-                        **self._chat_request_kwargs(policy, kwargs),
-                    ),
+                stream_learning_from_rejections(
+                    lambda: open_stream(payload, messages, request_headers),
+                    payload,
+                    rebuild=build,
+                    wire=self.wire,
+                    model_id=model_id,
+                    provider_label=self._config.id,
                 )
             ) as deltas:
                 async for delta in deltas:
-                    normalized_deltas, emitted_visible_reasoning = (
-                        _normalize_copilot_chat_stream_delta(
-                            delta,
-                            emitted_visible_reasoning,
-                        )
-                    )
-                    for normalized_delta in normalized_deltas:
-                        yield normalized_delta
-            return
-        if policy.endpoint_path == RESPONSES_ENDPOINT:
-            payload = build_responses_payload(
-                messages,
-                model_id=model_id,
-                policy=policy,
-                stream=True,
-                **self._responses_request_kwargs_with_defaults(messages, model_id, kwargs),
-            )
-            async with aclosing(self._stream_responses(payload, messages)) as deltas:
-                async for delta in deltas:
                     yield delta
             return
-        if policy.endpoint_path == MESSAGES_ENDPOINT:
-            payload = build_copilot_messages_payload(
-                messages,
-                model_id=model_id,
-                policy=policy,
-                **self._request_kwargs_with_defaults(messages, model_id, kwargs),
-            )
-            payload["stream"] = True
-            async with aclosing(self._stream_messages(payload, messages)) as deltas:
-                async for delta in deltas:
-                    yield delta
-            return
+        emitted_visible_reasoning = ""
         async with aclosing(
             cast(
                 AsyncGenerator[dict[str, Any]],
-                super().stream(
-                    messages,
-                    model_id=model_id,
-                    **self._chat_request_kwargs(policy, kwargs),
-                ),
+                super().stream(messages, model_id=model_id, **kwargs),
             )
         ) as deltas:
             async for delta in deltas:
-                yield delta
+                normalized_deltas, emitted_visible_reasoning = _normalize_copilot_chat_stream_delta(
+                    delta,
+                    emitted_visible_reasoning,
+                )
+                for normalized_delta in normalized_deltas:
+                    yield normalized_delta
 
     @override
     def normalize_response(
@@ -237,62 +254,98 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             super().normalize_response(response, model_id=model_id)
         )
 
-    def _policy_for_model(self, model_id: str) -> GitHubCopilotModelPolicy:
-        metadata: Mapping[str, Any] | None = None
-        family = ""
-        if self._model_lookup is not None:
-            model = self._model_lookup(model_id)
-            if model is not None:
-                metadata = model.metadata
-                # ``Model.family`` (Phase 3) is the authoritative lineage fact;
-                # passing it lets the policy route by data instead of guessing
-                # the family from the model name.
-                family = model.family
-        return copilot_model_policy(model_id, metadata, family)
+    def _catalog_model(self, model_id: str) -> Model | None:
+        if self._model_lookup is None:
+            return None
+        return self._model_lookup(model_id.split("::", 1)[0])
 
     def _runtime_metadata_for_model(self, model_id: str) -> Mapping[str, Any]:
-        if self._model_lookup is None:
-            return {}
-        model = self._model_lookup(model_id.split("::", 1)[0])
+        model = self._catalog_model(model_id)
         if model is None:
             return {}
         metadata = model.metadata.get(COPILOT_METADATA_KEY)
         return metadata if isinstance(metadata, Mapping) else {}
 
-    def _request_kwargs_with_defaults(
+    def _copilot_request_kwargs(self, model_id: str, kwargs: Mapping[str, Any]) -> dict[str, Any]:
+        """Return the caller kwargs without the request features Copilot does not take.
+
+        Tools, parallel Tool calls and structured output follow the support
+        the catalog reports for the Model; output limits and sampling
+        parameters follow the wire profile's ``request.allowed_parameters``.
+        Raw reasoning fields are dropped: the wire profile renders reasoning
+        from the thinking effort.
+        """
+
+        allowed = self.wire_profile(model_id).request.allowed_parameters
+        request_kwargs = drop_unsupported_request_kwargs(
+            {key: value for key, value in kwargs.items() if value is not None},
+            support=catalog_tool_support(self._catalog_model(model_id)),
+            allowed_parameters=allowed if allowed is not None else OPTIONAL_REQUEST_PARAMETER_NAMES,
+        )
+        for name in _FOREIGN_REASONING_FIELDS:
+            request_kwargs.pop(name, None)
+        return request_kwargs
+
+    def _endpoint_request_kwargs(
         self,
         messages: list[dict[str, Any]],
         model_id: str,
         kwargs: Mapping[str, Any],
     ) -> dict[str, Any]:
+        """Messages and Responses kwargs: output limit, provider defaults, then the filter."""
+
         request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
         self._apply_model_output_limit(request_kwargs, model_id, messages)
         if self._config.defaults:
             for key, value in self._config.defaults.items():
                 request_kwargs.setdefault(key, value)
-        return request_kwargs
+        return self._copilot_request_kwargs(model_id, request_kwargs)
 
-    def _responses_request_kwargs_with_defaults(
+    def _build_copilot_responses_payload(
+        self,
+        messages: list[dict[str, Any]],
+        model_id: str,
+        kwargs: Mapping[str, Any],
+        *,
+        stream: bool = False,
+    ) -> dict[str, Any]:
+        request_kwargs = self._endpoint_request_kwargs(messages, model_id, kwargs)
+        profile = self.wire_profile(model_id)
+        reasoning_renderer = take_reasoning_renderer(profile, request_kwargs)
+        payload = build_responses_payload(
+            messages,
+            model_id=model_id,
+            policy=profile_responses_policy(profile, self._catalog_model(model_id)),
+            stream=stream,
+            document_media_types=profile.media.types & RESPONSES_DOCUMENT_TYPES,
+            reasoning_renderer=reasoning_renderer,
+            **request_kwargs,
+        )
+        rules = profile.request
+        rules.apply_body(payload)
+        # Configured or learned parameter rules; the reasoning fields are
+        # the dialect's own output.
+        rules.shape_parameters(
+            payload,
+            reasoning_active="reasoning" in payload,
+            protected=RESPONSES_REASONING_FIELDS,
+            provider_label=self._config.name,
+        )
+        return payload
+
+    def _build_copilot_messages_payload(
         self,
         messages: list[dict[str, Any]],
         model_id: str,
         kwargs: Mapping[str, Any],
     ) -> dict[str, Any]:
-        request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
-        self._apply_model_output_limit(
-            request_kwargs,
-            model_id,
+        return build_copilot_messages_payload(
             messages,
-            estimated_input_tokens=lambda: self.estimate_request_input_tokens(
-                messages,
-                model_id=model_id,
-                tools=request_kwargs.get("tools"),
-            ),
+            model_id=model_id,
+            profile=self.wire_profile(model_id),
+            provider_label=self._config.name,
+            **self._endpoint_request_kwargs(messages, model_id, kwargs),
         )
-        if self._config.defaults:
-            for key, value in self._config.defaults.items():
-                request_kwargs.setdefault(key, value)
-        return request_kwargs
 
     @override
     def _apply_model_output_limit(
@@ -340,10 +393,13 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
     ) -> int:
         """Estimate the selected GitHub Copilot wire's rendered request footprint."""
 
-        if self._policy_for_model(model_id).endpoint_path == RESPONSES_ENDPOINT:
+        protocol = self.wire_profile(model_id).protocol
+        if protocol == "responses":
             return estimate_responses_input_tokens(
                 [dict(message) for message in messages], model_id=model_id, tools=tools
             )
+        if protocol == "messages":
+            return estimate_copilot_messages_input_tokens(messages, model_id=model_id, tools=tools)
         return super().estimate_request_input_tokens(
             messages,
             model_id=model_id,
@@ -396,16 +452,6 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                     retryable=False,
                 )
 
-    def _chat_request_kwargs(
-        self,
-        policy: GitHubCopilotModelPolicy,
-        kwargs: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        request_kwargs = policy.filter_request_kwargs(kwargs)
-        for endpoint_specific_key in ("thinking", "thinking_budget", "output_config"):
-            request_kwargs.pop(endpoint_specific_key, None)
-        return request_kwargs
-
     def _handle_error_status(
         self,
         status_code: int,
@@ -420,17 +466,30 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             response_headers=response_headers,
         )
 
+    async def _attempt_headers(
+        self,
+        messages: list[dict[str, Any]],
+        payload: Mapping[str, Any],
+        request_headers: Mapping[str, str],
+    ) -> dict[str, str]:
+        """Rebuild one attempt's auth and request headers, then add the stable ones."""
+
+        headers = await self._build_request_headers(messages, payload)
+        headers.update(request_headers)
+        return headers
+
     async def _post_json(
         self,
         endpoint_path: str,
         payload: dict[str, Any],
         messages: list[dict[str, Any]],
+        request_headers: Mapping[str, str],
     ) -> dict[str, Any]:
         return await post_json_with_retry(
             self._client,
             endpoint_path,
             payload,
-            build_headers=lambda: self._build_request_headers(messages, payload),
+            build_headers=lambda: self._attempt_headers(messages, payload, request_headers),
             handle_error_status=self._handle_error_status,
             provider_context="GitHub Copilot provider",
             auth_recovery=OAuthRequestRecovery(self._token_getter, self._auth_config),
@@ -441,12 +500,13 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         endpoint_path: str,
         payload: dict[str, Any],
         messages: list[dict[str, Any]],
+        request_headers: Mapping[str, str],
     ) -> httpx.Response:
         return await connect_streaming_with_retry(
             self._client,
             endpoint_path,
             payload,
-            build_headers=lambda: self._build_request_headers(messages, payload),
+            build_headers=lambda: self._attempt_headers(messages, payload, request_headers),
             handle_error_status=self._handle_error_status,
             auth_recovery=OAuthRequestRecovery(self._token_getter, self._auth_config),
         )
@@ -455,8 +515,11 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         self,
         payload: dict[str, Any],
         messages: list[dict[str, Any]],
+        request_headers: Mapping[str, str],
     ) -> AsyncGenerator[dict[str, Any]]:
-        response = await self._connect_stream(RESPONSES_ENDPOINT, payload, messages)
+        response = await self._connect_stream(
+            RESPONSES_ENDPOINT, payload, messages, request_headers
+        )
         state = ResponsesStreamState()
         event_lines: list[str] = []
         seen_finish_delta = False
@@ -488,8 +551,9 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         self,
         payload: dict[str, Any],
         messages: list[dict[str, Any]],
+        request_headers: Mapping[str, str],
     ) -> AsyncGenerator[dict[str, Any]]:
-        response = await self._connect_stream(MESSAGES_ENDPOINT, payload, messages)
+        response = await self._connect_stream(MESSAGES_ENDPOINT, payload, messages, request_headers)
         state = CopilotMessagesStreamState()
         seen_finish_delta = False
         try:

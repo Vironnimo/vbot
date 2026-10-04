@@ -211,7 +211,7 @@ class _ModelTarget:
     # Documented image-count limit of one request on this route, if known.
     max_request_images: int | None = None
     # Whether the route returns calls to Tools outside the request's Tool list
-    # (Model capability ``unlisted_tool_calls``).
+    # (the Adapter's ``list_announced_tools`` is false).
     unlisted_tool_calls: bool = True
 
 

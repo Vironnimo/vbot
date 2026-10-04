@@ -39,7 +39,6 @@ from core.chat.messages import (
 )
 from core.chat.model_resolution import (
     _first_usable_connection_id,
-    _model_accepts_unlisted_tool_calls,
     _model_connection_allowlist,
     _model_input_modalities,
     _model_input_modalities_for_target,
@@ -244,11 +243,7 @@ class RequestBuilder:
             chunk_timeout_seconds=self._wire_requests.resolve_chunk_timeout(connection),
             max_image_bytes=self._image_size_limit(adapter, model_id),
             max_request_images=_resolve_request_image_limit(adapter, model_id),
-            unlisted_tool_calls=_model_accepts_unlisted_tool_calls(
-                self._dependencies,
-                provider_id,
-                model_id,
-            ),
+            unlisted_tool_calls=not adapter.list_announced_tools(model_id),
         )
 
     def _image_size_limit(self, adapter: Any, model_id: str) -> int | None:

@@ -109,16 +109,15 @@ def test_direct_construction_leaves_optional_facts_unset() -> None:
     assert model.capabilities.reasoning.control is None
     assert model.capabilities.reasoning.levels == ()
     assert model.capabilities.reasoning.budget_max is None
+    assert model.capabilities.reasoning.mandatory is False
     assert model.capabilities.supported_parameters == ()
     assert model.capabilities.supported_voices == ()
-    assert model.capabilities.unlisted_tool_calls is True
     assert (model.context_window, model.max_output_tokens) == (None, None)
     assert model.family == ""
     assert model.metadata == {}
     assert model.connections == ()
     assert model.connection_context_windows == {}
     assert (model.recommended_temperature, model.recommended_top_p) == (None, None)
-    assert model.reasoning_replay is None
     assert model.pricing is None
 
 
@@ -325,6 +324,9 @@ def test_load_projects_every_record_fact(tmp_path: Path) -> None:
             )
         ),
         "minimal": _record(capabilities=_capabilities(reasoning={"supported": True})),
+        "mandatory": _record(
+            capabilities=_capabilities(reasoning={"supported": True, "mandatory": True})
+        ),
         "family": _record(family="gpt-5.2"),
         "connections": _record(connections=["api-key"]),
         "metadata": _record(
@@ -341,7 +343,10 @@ def test_load_projects_every_record_fact(tmp_path: Path) -> None:
                 supported_voices=["af_sky", "af_aoede", "af_bella"],
             )
         ),
-        "unlisted-tool-calls": _record(capabilities=_capabilities(unlisted_tool_calls=False)),
+        # Wire decisions are no Model DB facts: retired keys load as unknown fields.
+        "retired-wire-keys": _record(
+            capabilities=_capabilities(unlisted_tool_calls=False), reasoning_replay="none"
+        ),
         "null-limits": _record(context_window=None, max_output_tokens=None),
         "absent-limits": {
             key: value
@@ -368,6 +373,7 @@ def test_load_projects_every_record_fact(tmp_path: Path) -> None:
             "budget", capabilities=reasoning(supported=True, control="budget", budget_max=32000)
         ),
         "minimal": _model("minimal", capabilities=reasoning(supported=True)),
+        "mandatory": _model("mandatory", capabilities=reasoning(supported=True, mandatory=True)),
         "family": _model("family", family="gpt-5.2"),
         "connections": _model("connections", connections=("api-key",)),
         "metadata": _model(
@@ -390,10 +396,7 @@ def test_load_projects_every_record_fact(tmp_path: Path) -> None:
                 supported_voices=("af_aoede", "af_bella", "af_sky"),
             ),
         ),
-        "unlisted-tool-calls": _model(
-            "unlisted-tool-calls",
-            capabilities=replace(_PLAIN_CAPABILITIES, unlisted_tool_calls=False),
-        ),
+        "retired-wire-keys": _model("retired-wire-keys"),
         "null-limits": _model("null-limits", context_window=None, max_output_tokens=None),
         "absent-limits": _model("absent-limits", context_window=None, max_output_tokens=None),
         "sampling-upper-bounds": _model(
@@ -412,38 +415,64 @@ def test_load_projects_every_record_fact(tmp_path: Path) -> None:
     assert type(upper.recommended_top_p) is float
 
 
+_SAMPLING_FIELDS = ["recommended_temperature", "recommended_top_p"]
+_MANDATORY_FIELD = ["capabilities.reasoning.mandatory"]
+
+
 @pytest.mark.parametrize(
-    ("temperature", "top_p", "warning"),
+    ("changes", "warning", "warned_fields"),
     [
-        (2.1, 1.1, "outside"),
-        (True, True, "not a number"),
-        (math.nan, math.nan, "not finite"),
+        pytest.param(
+            {"recommended_temperature": 2.1, "recommended_top_p": 1.1},
+            "outside",
+            _SAMPLING_FIELDS,
+            id="sampling-out-of-range",
+        ),
+        pytest.param(
+            {"recommended_temperature": True, "recommended_top_p": True},
+            "not a number",
+            _SAMPLING_FIELDS,
+            id="sampling-bool",
+        ),
+        pytest.param(
+            {"recommended_temperature": math.nan, "recommended_top_p": math.nan},
+            "not finite",
+            _SAMPLING_FIELDS,
+            id="sampling-nan",
+        ),
+        pytest.param(
+            {"capabilities": _capabilities(reasoning={"supported": True, "mandatory": "yes"})},
+            "not a boolean",
+            _MANDATORY_FIELD,
+            id="mandatory-not-a-boolean",
+        ),
+        pytest.param(
+            {"capabilities": _capabilities(reasoning={"supported": False, "mandatory": True})},
+            "not supported",
+            _MANDATORY_FIELD,
+            id="mandatory-without-reasoning",
+        ),
     ],
-    ids=["out-of-range", "bool", "nan"],
 )
-def test_invalid_recommended_sampling_is_ignored_without_hiding_the_model(
+def test_invalid_optional_facts_are_ignored_without_hiding_the_model(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
-    temperature: object,
-    top_p: object,
+    changes: dict[str, Any],
     warning: str,
+    warned_fields: list[str],
 ) -> None:
-    _write_catalog(
-        tmp_path,
-        "p",
-        {"m": _record(recommended_temperature=temperature, recommended_top_p=top_p)},
-    )
+    _write_catalog(tmp_path, "p", {"m": _record(**changes)})
 
     with caplog.at_level(logging.WARNING, logger="vbot.models"):
         model = ModelRegistry.load(tmp_path).get("p", "m")
 
     assert (model.recommended_temperature, model.recommended_top_p) == (None, None)
-    warned_fields = [
+    assert model.capabilities.reasoning.mandatory is False
+    assert [
         record.getMessage().split()[0]
         for record in caplog.records
         if warning in record.getMessage()
-    ]
-    assert warned_fields == ["recommended_temperature", "recommended_top_p"]
+    ] == warned_fields
 
 
 # ---------------------------------------------------------------------------
@@ -485,25 +514,6 @@ def test_invalid_recommended_sampling_is_ignored_without_hiding_the_model(
             id="override-entry-not-an-object",
         ),
         pytest.param(
-            {
-                "healthy.overrides.json": {
-                    "reasoning_replay": "conservative",
-                    "models": {"model-a": {"name": "Hidden"}},
-                }
-            },
-            ["healthy.overrides.json", "reasoning_replay must be one of"],
-            id="invalid-provider-replay-rejects-the-override-file",
-        ),
-        pytest.param(
-            {
-                "healthy.overrides.json": {
-                    "models": {"model-b": _record("B", reasoning_replay="conservative")}
-                }
-            },
-            ["healthy/model-b", "reasoning_replay must be one of"],
-            id="invalid-model-replay-drops-only-that-model",
-        ),
-        pytest.param(
             {"models.json": '{"models":'},
             ["models.json"],
             id="corrupt-canonical-file",
@@ -535,7 +545,6 @@ def test_invalid_model_db_files_are_skipped_with_a_warning(
         (provider_id, model.model_id, model.name)
         for provider_id, model in registry.query(ModelQuery())
     ] == [("healthy", "model-a", "Generated")]
-    assert registry.provider_reasoning_replay("healthy") is None
     for warning in warnings:
         assert warning in caplog.text
     assert issues == [record.getMessage() for record in caplog.records]
@@ -613,6 +622,60 @@ def test_override_files_apply_at_load_without_becoming_providers(
     assert caplog.records == []
 
 
+@pytest.mark.parametrize(
+    ("catalog_capabilities", "override_capabilities", "task_types"),
+    [
+        pytest.param(
+            {"input_modalities": ["text", "image"], "task_types": ["chat", "text_output"]},
+            None,
+            ("chat", "text_output", "image_input", "image_understanding"),
+            id="stale-catalog-list",
+        ),
+        pytest.param(
+            {"input_modalities": ["text"], "task_types": ["chat", "text_output"]},
+            {"input_modalities": ["text", "video"]},
+            ("chat", "text_output", "video_input", "video_understanding"),
+            id="override-widens-modalities",
+        ),
+        pytest.param(
+            {
+                "input_modalities": ["text"],
+                "output_modalities": ["text", "audio"],
+                "task_types": ["chat", "text_output", "audio_generation", "music_generation"],
+            },
+            {"input_modalities": ["text", "audio"]},
+            ("chat", "text_output", "audio_input", "audio_generation", "music_generation"),
+            id="route-tasks-stay-as-listed",
+        ),
+        pytest.param(
+            {"input_modalities": ["audio", "text"], "output_modalities": ["transcription"]},
+            {"task_types": ["audio_input", "speech_to_text", "text_output"]},
+            ("audio_input", "speech_to_text", "text_output"),
+            id="override-list-wins",
+        ),
+    ],
+)
+def test_derived_task_types_follow_the_assembled_modalities(
+    tmp_path: Path,
+    catalog_capabilities: dict[str, Any],
+    override_capabilities: dict[str, Any] | None,
+    task_types: tuple[str, ...],
+) -> None:
+    _write_catalog(
+        tmp_path, "p", {"model-a": _record(capabilities=_capabilities(**catalog_capabilities))}
+    )
+    if override_capabilities is not None:
+        _write_json(
+            tmp_path / "models" / "p.overrides.json",
+            {"models": {"model-a": {"capabilities": override_capabilities}}},
+        )
+
+    model = ModelRegistry.load(tmp_path).get("p", "model-a")
+
+    assert model is not None
+    assert model.capabilities.task_types == task_types
+
+
 # ---------------------------------------------------------------------------
 # Registry: cache and reload
 # ---------------------------------------------------------------------------
@@ -650,38 +713,29 @@ def test_cache_serves_one_instance_until_invalidated(tmp_path: Path) -> None:
 def test_reload_swaps_contents_in_place_and_repoints_the_cache(tmp_path: Path) -> None:
     """Holders that captured the registry see the new catalog without re-wiring."""
 
-    def write(name: str, provider_replay: str, model_replay: str) -> None:
-        reasoning = _capabilities(reasoning={"supported": True})
+    def write(name: str, override_name: str) -> None:
         _write_catalog(
             tmp_path,
             "provider",
-            {
-                model_id: _record(name, capabilities=reasoning)
-                for model_id in ("inherited", "overridden")
-            },
+            {model_id: _record(name) for model_id in ("inherited", "overridden")},
         )
         _write_json(
             tmp_path / "models" / "provider.overrides.json",
-            {
-                "reasoning_replay": provider_replay,
-                "models": {"overridden": {"reasoning_replay": model_replay}},
-            },
+            {"models": {"overridden": {"name": override_name}}},
         )
 
-    write("Original", "current_run", "full_history")
+    write("Original", "Original override")
     registry = ModelRegistry.load(tmp_path)
 
-    assert registry.provider_reasoning_replay("provider") == "current_run"
-    assert registry.get("provider", "inherited").reasoning_replay is None
-    assert registry.get("provider", "overridden").reasoning_replay == "full_history"
+    assert registry.get("provider", "inherited").name == "Original"
+    assert registry.get("provider", "overridden").name == "Original override"
 
-    write("Updated", "full_history", "none")
+    write("Updated", "Updated override")
     ModelRegistry.invalidate(tmp_path)
     registry.reload(tmp_path)
 
     assert registry.get("provider", "inherited").name == "Updated"
-    assert registry.provider_reasoning_replay("provider") == "full_history"
-    assert registry.get("provider", "overridden").reasoning_replay == "none"
+    assert registry.get("provider", "overridden").name == "Updated override"
     assert ModelRegistry.load(tmp_path) is registry
 
 
@@ -716,11 +770,13 @@ async def test_reload_async_assembles_off_the_loop_and_swaps_in_place(
         assert registry.get("test_provider", "model-a").name == "Original"
     finally:
         release.set()
-    await asyncio.wait_for(reloading, timeout=5)
+    # The result reports whether the swap changed the catalog.
+    assert await asyncio.wait_for(reloading, timeout=5) is True
 
     assert threads and threading.get_ident() not in threads
     assert registry.get("test_provider", "model-a").name == "Updated"
     assert ModelRegistry.load(tmp_path) is registry
+    assert await registry.reload_async(tmp_path) is False
 
 
 @pytest.mark.asyncio
@@ -740,7 +796,7 @@ async def test_newer_reload_supersedes_an_in_flight_assembly(
 
     def blocked_assemble(cls: Any, *args: Any) -> Any:
         result = assemble(cls, *args)
-        if result[0][("test_provider", "model-a")].name == "Stale":
+        if result[("test_provider", "model-a")].name == "Stale":
             stale_assembled.set()
             assert release_stale.wait(timeout=5)
         elif newer_async:
@@ -756,27 +812,28 @@ async def test_newer_reload_supersedes_an_in_flight_assembly(
         _write_catalog(tmp_path, "test_provider", {"model-a": _record("Latest")})
         _write_json(
             models_dir / "test_provider.overrides.json",
-            {"reasoning_replay": "current_run", "models": {}},
+            {"models": {"model-a": {"family": "latest-family"}}},
         )
         if newer_async:
             latest_reload = asyncio.create_task(registry.reload_async(tmp_path))
             # The newer request enters before the old worker is released.
             await asyncio.sleep(0)
             release_stale.set()
-            await asyncio.wait_for(stale_reload, timeout=5)
+            # A superseded reload changes nothing.
+            assert await asyncio.wait_for(stale_reload, timeout=5) is False
             assert await asyncio.to_thread(latest_assembled.wait, 5)
             # Keep the last published catalog while the latest one assembles.
             assert registry.get("test_provider", "model-a").name == "Original"
             release_latest.set()
-            await asyncio.wait_for(latest_reload, timeout=5)
+            assert await asyncio.wait_for(latest_reload, timeout=5) is True
         else:
-            registry.reload(tmp_path)
+            assert registry.reload(tmp_path) is True
             assert registry.get("test_provider", "model-a").name == "Latest"
             release_stale.set()
-            await asyncio.wait_for(stale_reload, timeout=5)
+            assert await asyncio.wait_for(stale_reload, timeout=5) is False
 
         assert registry.get("test_provider", "model-a").name == "Latest"
-        assert registry.provider_reasoning_replay("test_provider") == "current_run"
+        assert registry.get("test_provider", "model-a").family == "latest-family"
         assert ModelRegistry.load(tmp_path) is registry
     finally:
         release_stale.set()

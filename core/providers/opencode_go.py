@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import AsyncIterator, Mapping, Sequence
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, override
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, ClassVar, override
 
 import httpx
 
+from core.models.models import Model
 from core.providers._http_shared import (
     classify_http_status,
     connect_streaming_with_retry,
@@ -18,10 +18,18 @@ from core.providers._http_shared import (
     iter_stream_lines,
     wrap_network_error,
 )
+from core.providers._responses_profile import (
+    RESPONSES_REASONING_FIELDS,
+    profile_responses_policy,
+    take_reasoning_renderer,
+)
+from core.providers._wire_learning import (
+    execute_learning_from_rejections,
+    stream_learning_from_rejections,
+)
 from core.providers.adapter import ModelLookup
 from core.providers.anthropic_compatible import (
     ANTHROPIC_OVERLOADED_STATUS,
-    ANTHROPIC_REASONING_PARAMETER_NAMES,
     ANTHROPIC_VERSION,
     AnthropicCompatibleAdapter,
 )
@@ -32,59 +40,23 @@ from core.providers.github_copilot_responses import (
     estimate_responses_input_tokens,
     iter_responses_sse_deltas_with_state,
     normalize_responses_response,
+    responses_returned_reasoning,
 )
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ProviderConfig
-from core.providers.reasoning import (
-    REASONING_INTENT_DEFAULT,
-    REASONING_INTENT_OFF,
-    REASONING_INTENT_ON,
-    REASONING_REPLAY_FIDELITY_READABLE_ONLY,
-    ReasoningIntent,
-    ReasoningReplayFidelity,
-    closest_supported_effort,
-    model_reasoning_levels,
-    normalize_thinking_effort,
-    remove_reasoning_kwargs,
-)
 from core.providers.token_getter import TokenGetter
+from core.providers.wire_profile import Protocol
+from core.providers.wire_profiles import WireBinding
 from core.utils.http_status import parse_retry_after
-from core.utils.log_conditions import LoggedConditions
-from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
 
 
-_LOGGER = get_logger("providers.opencode_go")
-
-# Provider-scoped metadata blob + field carrying the per-model wire protocol
-# (Phase 5). The published opencode-go protocol table is a per-model FACT, so it
-# lives in data (the opencode-go override's ``metadata.opencode_go.protocol``),
-# not in a hardcoded adapter set. The adapter only owns the MECHANICS — how to
-# build an Anthropic ``/messages``, an OpenAI ``/chat/completions``, or an
-# OpenAI ``/responses`` request.
-OPENCODE_GO_METADATA_KEY = "opencode_go"
-PROTOCOL_METADATA_KEY = "protocol"
-PROTOCOL_ANTHROPIC = "anthropic"
-PROTOCOL_OPENAI = "openai"
-PROTOCOL_RESPONSES = "responses"
 OPENCODE_GO_RESPONSES_ENDPOINT = "/responses"
 OPENCODE_SESSION_HEADER = "x-opencode-session"
 OPENCODE_SESSION_ID_KWARG = "_opencode_session_id"
-THINKING_KEEP_METADATA_KEY = "thinking_keep"
-THINKING_KEEP_ALL = "all"
-THINKING_CONTROL_METADATA_KEY = "thinking_control"
-THINKING_CONTROL_TOGGLE = "toggle"
-THINKING_CONTROL_TOGGLE_WITH_EFFORT = "toggle_with_effort"
-THINKING_CONTROL_ALWAYS_ENABLED = "always_enabled"
-THINKING_CONTROL_PROVIDER_DEFAULT = "provider_default"
-MINIMUM_REASONING_EFFORT_METADATA_KEY = "minimum_reasoning_effort"
-# The endpoint returns bare ids with no protocol, so a model the override does
-# not mark is unknown: route it the SAFE default (OpenAI chat/completions) and
-# warn, so a newly added model is never silently misrouted onto the wrong wire.
-_DEFAULT_PROTOCOL = PROTOCOL_OPENAI
 
 # OpenCode returns account/subscription exhaustion through the same HTTP 429
 # status as transient throttling. These stable error identifiers and phrases
@@ -103,17 +75,6 @@ _PERMANENT_RATE_LIMIT_MARKERS = (
     "billing hard limit",
     "billing limit reached",
 )
-
-# ``_model_protocol`` runs on every send/stream, so an unmarked model would re-log
-# its routing warning on each request and flood the log. The warning is logged when
-# a model id starts lacking its protocol and the end once the Model data names one.
-_UNMARKED_MODELS = LoggedConditions()
-
-# The Responses wire documents a minimal..max effort ladder and rejects an
-# explicit ``"none"`` rung with HTTP 400 (live-verified 2026-08-25); omitting
-# the whole reasoning object is accepted instead. Used as the default ladder
-# when the Model DB carries no per-model levels.
-_OPENCODE_GO_RESPONSES_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh"})
 
 
 def _raise_if_permanent_rate_limit(status_code: int, detail: str) -> None:
@@ -164,72 +125,6 @@ def _opencode_request_headers(request_kwargs: dict[str, Any]) -> dict[str, str]:
     return {OPENCODE_SESSION_HEADER: session_id}
 
 
-@dataclass(frozen=True)
-class OpenCodeGoResponsesPolicy:
-    """Request-shaping facts for one OpenCode Go Responses-routed Model.
-
-    Implements the shared ``ResponsesRequestPolicy`` surface so
-    ``build_responses_payload`` can shape the stateless ``/responses``
-    request from Provider-neutral data.
-    """
-
-    allowed_reasoning_efforts: frozenset[str]
-    minimum_reasoning_effort: str | None = None
-    supports_tools: bool = True
-    supports_parallel_tool_calls: bool = True
-    supports_structured_outputs: bool = True
-
-    @property
-    def allows_any_reasoning_controls(self) -> bool:
-        return bool(self.allowed_reasoning_efforts)
-
-    @property
-    def supports_explicit_none_effort(self) -> bool:
-        return "none" in self.allowed_reasoning_efforts
-
-    def filter_request_kwargs(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
-        filtered = {key: value for key, value in kwargs.items() if value is not None}
-        if not self.allows_any_reasoning_controls:
-            for name in ("thinking_effort", "reasoning_effort", "reasoning", "include_reasoning"):
-                filtered.pop(name, None)
-        else:
-            self._normalize_effort(filtered, "thinking_effort")
-            self._normalize_effort(filtered, "reasoning_effort")
-        return filtered
-
-    def closest_reasoning_effort(self, effort: Any) -> str | None:
-        normalized = normalize_thinking_effort(effort)
-        if not normalized:
-            return None
-        if normalized == "none":
-            if self.supports_explicit_none_effort:
-                return "none"
-            # Models without an off rung fall back to their cheapest
-            # documented rung when one is known; otherwise omission lets the
-            # Provider apply its fixed/default reasoning behavior.
-            return self.minimum_reasoning_effort
-        return closest_supported_effort(normalized, self.allowed_reasoning_efforts)
-
-    def supports_request_parameter(self, parameter_name: str) -> bool:
-        # Conservative like Copilot's Responses route: temperature is omitted
-        # because GPT-5-family reasoning models reject it; no gateway evidence
-        # exists for prompt_cache_key or service_tier on this endpoint.
-        return parameter_name in ("max_output_tokens", "top_p")
-
-    def _normalize_effort(
-        self,
-        filtered: dict[str, Any],
-        parameter_name: str,
-    ) -> None:
-        if parameter_name not in filtered:
-            return
-        safe_effort = self.closest_reasoning_effort(filtered[parameter_name])
-        if safe_effort is None:
-            filtered.pop(parameter_name, None)
-        else:
-            filtered[parameter_name] = safe_effort
-
-
 class _OpenCodeGoMessagesAdapter(AnthropicCompatibleAdapter):
     """OpenCode Go's Anthropic Messages wire adapter."""
 
@@ -239,35 +134,6 @@ class _OpenCodeGoMessagesAdapter(AnthropicCompatibleAdapter):
         # Gateway classification needs the structured code as well as the type
         # and message. Preserve the complete body on this wire too.
         return format_http_error_detail(status_code, response_body)
-
-    @override
-    def _apply_reasoning(
-        self,
-        payload: dict[str, Any],
-        request_kwargs: dict[str, Any],
-        model_id: str,
-        *,
-        reasoning_supported: bool | None,
-        max_tokens: int | None,
-    ) -> None:
-        if _model_profile_value(self._model_lookup, model_id, THINKING_CONTROL_METADATA_KEY) == (
-            THINKING_CONTROL_PROVIDER_DEFAULT
-        ):
-            # Union Alpha publishes no controls and returns no Thinking blocks
-            # even with enabled/adaptive thinking (verified 2026-09-16).
-            # Leave its internal reasoning to the Provider; preserve any native
-            # history independently rather than claiming thinking is disabled.
-            remove_reasoning_kwargs(
-                request_kwargs, "thinking_effort", *ANTHROPIC_REASONING_PARAMETER_NAMES
-            )
-            return
-        super()._apply_reasoning(
-            payload,
-            request_kwargs,
-            model_id,
-            reasoning_supported=reasoning_supported,
-            max_tokens=max_tokens,
-        )
 
     @override
     def _request_headers_from_kwargs(
@@ -294,18 +160,17 @@ class _OpenCodeGoMessagesAdapter(AnthropicCompatibleAdapter):
 
 
 class OpenCodeGoAdapter(OpenAICompatibleAdapter):
-    """OpenAI-compatible adapter for the OpenCode Go gateway.
+    """Adapter for the OpenCode Go gateway's three wires.
 
-    Chat Models normalize readable Reasoning from their profiled response
-    carrier and replay it as ``reasoning_content``. The two field names are
-    intentionally independent: Kimi K3 and Hy currently respond with
-    ``reasoning`` plus ``reasoning_details``, while their compatible Assistant
-    history uses ``reasoning_content``.
-
-    Replay scope follows the shared System → Provider → Model hierarchy. Wire
-    controls remain explicit per-Model facts because some gateway backends need
-    a different request representation than the field they return.
+    The wire profile (``resources/wire/opencode-go.json``) routes each Model to
+    Chat Completions (the inherited codec), Anthropic Messages (an inner
+    Messages adapter sharing this Adapter's client and wire profiles) or
+    stateless Responses (``/responses``), and shapes its reasoning, parameters,
+    media and replay. Every wire carries the ``x-opencode-session`` prompt-cache
+    affinity header and the gateway's error classification.
     """
+
+    WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("chat_completions", "messages", "responses")
 
     def __init__(
         self,
@@ -332,9 +197,9 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             debug_recorder=debug_recorder,
         )
         selected_auth_config = auth_config or config.connections[0].auth
-        # The inner adapter shares the same recorder, so the single context
-        # set via set_debug_context() is seen by whichever client handles the
-        # request (OpenAI chat/completions or the Anthropic messages path).
+        # The inner adapter shares the same recorder, client and wire profiles,
+        # so the debug context and the Model's profile are the same whichever
+        # wire handles the request.
         self._messages = _OpenCodeGoMessagesAdapter(
             config,
             self._token_getter,
@@ -348,9 +213,14 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             debug_recorder=debug_recorder,
             client=self._client,
             api_version=ANTHROPIC_VERSION,
-            prompt_caching=True,
             extra_retryable_statuses=frozenset({ANTHROPIC_OVERLOADED_STATUS}),
         )
+        self._messages.bind_wire_profiles(self.wire)
+
+    @override
+    def bind_wire_profiles(self, binding: WireBinding) -> None:
+        super().bind_wire_profiles(binding)
+        self._messages.bind_wire_profiles(binding)
 
     @override
     async def aclose(self) -> None:
@@ -387,92 +257,6 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         return _opencode_request_headers(request_kwargs)
 
     @override
-    def reasoning_replay_fidelity(self, model_id: str) -> ReasoningReplayFidelity:
-        """Declare the reasoning class accepted by the selected wire.
-
-        OpenCode's own OpenAI-compatible client serializes historical
-        Reasoning as readable ``reasoning_content`` and does not replay
-        ``reasoning_details``. The Messages and Responses routes already own
-        their native block/item fidelity and bypass this Chat serializer.
-        """
-
-        if self._model_protocol(model_id) == PROTOCOL_OPENAI:
-            return REASONING_REPLAY_FIDELITY_READABLE_ONLY
-        return super().reasoning_replay_fidelity(model_id)
-
-    @override
-    def _format_assistant_message(
-        self,
-        message: dict[str, Any],
-        *,
-        model_id: str | None = None,
-    ) -> dict[str, Any]:
-        """Give every Chat-routed Assistant Tool Call its ``reasoning_content``.
-
-        DeepSeek's thinking mode rejects a request whose historical Tool Call
-        lacks ``reasoning_content``, also when the Model produced no Reasoning
-        for that call or its Reasoning belongs to another route. An empty
-        carrier states exactly that.
-        """
-
-        wire = super()._format_assistant_message(message, model_id=model_id)
-        if (
-            wire.get("tool_calls")
-            and self.reasoning_replay_fidelity(model_id or "")
-            == REASONING_REPLAY_FIDELITY_READABLE_ONLY
-        ):
-            wire.setdefault("reasoning_content", "")
-        return wire
-
-    @classmethod
-    @override
-    def describe_reasoning_render(
-        cls,
-        *,
-        model_lookup: ModelLookup | None,
-        model_id: str,
-        effort: str | None,
-        provider_config: ProviderConfig | None = None,
-    ) -> ReasoningIntent:
-        thinking_control = _model_profile_value(
-            model_lookup, model_id, THINKING_CONTROL_METADATA_KEY
-        )
-        if thinking_control in (THINKING_CONTROL_TOGGLE, THINKING_CONTROL_ALWAYS_ENABLED):
-            # These profiles replace generic effort with an explicit toggle,
-            # including enabled when no effort was selected.
-            enabled = (
-                thinking_control == THINKING_CONTROL_ALWAYS_ENABLED
-                or normalize_thinking_effort(effort) != "none"
-            )
-            return ReasoningIntent(REASONING_INTENT_ON if enabled else REASONING_INTENT_OFF)
-        if (
-            _model_profile_value(model_lookup, model_id, PROTOCOL_METADATA_KEY)
-            == PROTOCOL_ANTHROPIC
-            and thinking_control == THINKING_CONTROL_PROVIDER_DEFAULT
-        ):
-            return ReasoningIntent(REASONING_INTENT_DEFAULT)
-        if normalize_thinking_effort(effort) == "none":
-            minimum_effort = _model_profile_value(
-                model_lookup, model_id, MINIMUM_REASONING_EFFORT_METADATA_KEY
-            )
-            if minimum_effort in {"minimal", "low", "medium", "high", "xhigh", "max"}:
-                effort = minimum_effort
-        return super().describe_reasoning_render(
-            model_lookup=model_lookup,
-            model_id=model_id,
-            effort=effort,
-            provider_config=provider_config,
-        )
-
-    @override
-    def wire_media_support(self, model_id: str) -> frozenset[str]:
-        """Resolve media support from the wire selected for this model."""
-
-        if self._uses_anthropic_messages_path(model_id):
-            return self._messages.wire_media_support(model_id)
-        return super().wire_media_support(model_id)
-
-    @override
     def estimate_request_input_tokens(
         self,
         messages: Sequence[Mapping[str, Any]],
@@ -482,13 +266,14 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     ) -> int:
         """Estimate the rendered request for the model-selected OpenCode Go wire."""
 
-        if self._model_protocol(model_id) == PROTOCOL_RESPONSES:
+        protocol = self.wire_profile(model_id).protocol
+        if protocol == "responses":
             return estimate_responses_input_tokens(
                 [dict(message) for message in messages],
                 model_id=model_id,
                 tools=tools,
             )
-        if self._uses_anthropic_messages_path(model_id):
+        if protocol == "messages":
             return self._messages.estimate_request_input_tokens(
                 messages, model_id=model_id, tools=tools
             )
@@ -507,21 +292,35 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         **kwargs: Any,
     ) -> dict[str, Any]:
         request_kwargs = self._kwargs_with_model_output_limit(model_id, messages, kwargs)
-        protocol = self._model_protocol(model_id)
-        if protocol == PROTOCOL_ANTHROPIC:
+        protocol = self.wire_profile(model_id).protocol
+        if protocol == "messages":
             return await self._messages.send(
                 messages,
                 model_id=model_id,
                 **request_kwargs,
             )
-        if protocol == PROTOCOL_RESPONSES:
-            request_headers = self._request_headers_from_kwargs(request_kwargs)
-            payload = self._build_responses_payload(
-                messages,
+        if protocol == "responses":
+            request_headers = self._stable_request_headers(model_id, request_kwargs)
+
+            def build() -> dict[str, Any]:
+                return self._build_responses_payload(
+                    messages,
+                    model_id=model_id,
+                    **self._request_kwargs_with_defaults(request_kwargs),
+                )
+
+            payload = build()
+            response = await execute_learning_from_rejections(
+                lambda: self._post_responses_json(payload, request_headers=request_headers),
+                payload,
+                rebuild=build,
+                wire=self.wire,
                 model_id=model_id,
-                **self._request_kwargs_with_defaults(request_kwargs),
+                provider_label=self._config.id,
             )
-            return await self._post_responses_json(payload, request_headers=request_headers)
+            if responses_returned_reasoning(response):
+                self.wire.observe_reasoning_returned(model_id)
+            return response
         return await super().send(messages, model_id=model_id, **request_kwargs)
 
     @override
@@ -533,22 +332,33 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
         request_kwargs = self._kwargs_with_model_output_limit(model_id, messages, kwargs)
-        protocol = self._model_protocol(model_id)
-        if protocol == PROTOCOL_ANTHROPIC:
+        protocol = self.wire_profile(model_id).protocol
+        if protocol == "messages":
             return self._messages.stream(
                 messages,
                 model_id=model_id,
                 **request_kwargs,
             )
-        if protocol == PROTOCOL_RESPONSES:
-            request_headers = self._request_headers_from_kwargs(request_kwargs)
-            payload = self._build_responses_payload(
-                messages,
+        if protocol == "responses":
+            request_headers = self._stable_request_headers(model_id, request_kwargs)
+
+            def build() -> dict[str, Any]:
+                return self._build_responses_payload(
+                    messages,
+                    model_id=model_id,
+                    stream=True,
+                    **self._request_kwargs_with_defaults(request_kwargs),
+                )
+
+            payload = build()
+            return stream_learning_from_rejections(
+                lambda: self._stream_responses(payload, request_headers=request_headers),
+                payload,
+                rebuild=build,
+                wire=self.wire,
                 model_id=model_id,
-                stream=True,
-                **self._request_kwargs_with_defaults(request_kwargs),
+                provider_label=self._config.id,
             )
-            return self._stream_responses(payload, request_headers=request_headers)
         return super().stream(messages, model_id=model_id, **request_kwargs)
 
     @override
@@ -556,10 +366,10 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         self, response: dict[str, Any], *, model_id: str | None = None
     ) -> dict[str, Any]:
         if model_id is not None:
-            protocol = self._model_protocol(model_id)
-            if protocol == PROTOCOL_ANTHROPIC:
+            protocol = self.wire_profile(model_id).protocol
+            if protocol == "messages":
                 return self._messages.normalize_response(response, model_id=model_id)
-            if protocol == PROTOCOL_RESPONSES:
+            if protocol == "responses":
                 return normalize_responses_response(response)
             return super().normalize_response(response, model_id=model_id)
         if "choices" in response:
@@ -583,43 +393,6 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             detail=detail,
             response_headers=response_headers,
         )
-
-    @override
-    def _build_payload(
-        self,
-        messages: list[dict[str, Any]],
-        model_id: str,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        selected_effort = normalize_thinking_effort(
-            kwargs.get("thinking_effort") or kwargs.get("reasoning_effort")
-        )
-        payload = super()._build_payload(messages, model_id, **kwargs)
-        thinking_control = self._profile_value(model_id, THINKING_CONTROL_METADATA_KEY)
-        if thinking_control in (
-            THINKING_CONTROL_TOGGLE,
-            THINKING_CONTROL_TOGGLE_WITH_EFFORT,
-            THINKING_CONTROL_ALWAYS_ENABLED,
-        ):
-            # Binary thinking profiles suppress effort; DeepSeek's toggle is
-            # independent of its effort ladder and must preserve both controls.
-            if thinking_control != THINKING_CONTROL_TOGGLE_WITH_EFFORT or selected_effort == "none":
-                payload.pop("reasoning_effort", None)
-            thinking_enabled = (
-                thinking_control == THINKING_CONTROL_ALWAYS_ENABLED or selected_effort != "none"
-            )
-            thinking: dict[str, str] = {"type": "enabled" if thinking_enabled else "disabled"}
-            if thinking_enabled and self._thinking_keep(model_id) == THINKING_KEEP_ALL:
-                thinking["keep"] = THINKING_KEEP_ALL
-            payload["thinking"] = thinking
-        elif selected_effort == "none" and (
-            minimum_effort := self._profile_value(model_id, MINIMUM_REASONING_EFFORT_METADATA_KEY)
-        ) in {"minimal", "low", "medium", "high", "xhigh", "max"}:
-            # Always-reasoning effort models cannot honor ``none``. Explicitly
-            # request their cheapest supported rung instead of omitting the
-            # field and accidentally falling back to a much higher default.
-            payload["reasoning_effort"] = minimum_effort
-        return payload
 
     def _request_kwargs_with_defaults(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
         """Merge provider ``defaults`` under caller kwargs for the Responses route.
@@ -647,38 +420,49 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
 
         Complete history every request, every original output item preserved,
         ``store: false`` — the same stateless Responses shape the OpenRouter
-        adapter uses. Body-level session routing kwargs are dropped because
-        OpenCode Go receives its cache affinity through a request header.
+        adapter uses. The wire profile shapes the optional parameters and
+        renders the reasoning plan. Body-level session routing kwargs are
+        dropped because OpenCode Go receives its cache affinity through a
+        request header.
+
+        Raises:
+            ProviderError: (not retryable, nothing sent) when the wire profile
+                does not admit the Model or refuses a request parameter.
         """
 
+        self._refuse_unadmitted_model(model_id)
         kwargs.pop("session_id", None)
+        profile = self.wire_profile(model_id)
+        reasoning_renderer = take_reasoning_renderer(profile, kwargs)
         payload = build_responses_payload(
             messages,
             model_id=model_id,
-            policy=self._responses_policy_for_model(model_id),
+            policy=profile_responses_policy(profile, self._catalog_model(model_id)),
             stream=stream,
+            reasoning_renderer=reasoning_renderer,
             **kwargs,
         )
         payload["store"] = False
+        rules = profile.request
+        rules.apply_body(payload)
+        # Configured or learned parameter rules; the reasoning fields are
+        # the dialect's own output.
+        rules.shape_parameters(
+            payload,
+            reasoning_active="reasoning" in payload,
+            protected=RESPONSES_REASONING_FIELDS,
+            provider_label=self._config.name,
+        )
         return payload
 
-    def _responses_policy_for_model(self, model_id: str) -> OpenCodeGoResponsesPolicy:
-        model = (
-            self._model_lookup(_bare_model_id(model_id)) if self._model_lookup is not None else None
-        )
-        capabilities = model.capabilities if model is not None else None
-        reasoning_supported = capabilities.reasoning.supported if capabilities is not None else True
-        levels = frozenset(model_reasoning_levels(self._model_lookup, model_id) or ())
-        allowed_efforts = (
-            levels
-            if reasoning_supported and levels
-            else (_OPENCODE_GO_RESPONSES_EFFORTS if reasoning_supported else frozenset())
-        )
-        minimum_effort = self._profile_value(model_id, MINIMUM_REASONING_EFFORT_METADATA_KEY)
-        return OpenCodeGoResponsesPolicy(
-            allowed_reasoning_efforts=allowed_efforts,
-            minimum_reasoning_effort=(minimum_effort if isinstance(minimum_effort, str) else None),
-        )
+    def _catalog_model(self, model_id: str) -> Model | None:
+        if self._model_lookup is None:
+            return None
+        for candidate in _model_lookup_candidates(model_id):
+            model = self._model_lookup(candidate)
+            if model is not None:
+                return model
+        return None
 
     def _classify_responses_status(
         self,
@@ -727,7 +511,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         payload: dict[str, Any],
         *,
         request_headers: Mapping[str, str],
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         response = await self._connect_responses_stream(
             payload,
             request_headers=request_headers,
@@ -797,12 +581,12 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     ) -> dict[str, Any]:
         """Copy the caller kwargs with the model output ceiling defaulted in.
 
-        Both wire routes need it stamped here: the OpenAI path funnels through
-        the shared ``_build_payload`` (which would apply it anyway), but the
-        Anthropic messages path bypasses ``_build_payload``, so the ceiling has
-        to be resolved before the request splits. The explicit-vs-ceiling logic
-        lives in the base ``_apply_model_output_limit``; this adapter only
-        contributes flat-namespace candidate resolution via its
+        Every wire needs it stamped here: the Chat path funnels through the
+        shared ``_build_payload`` (which would apply it anyway), but the
+        Messages and Responses paths bypass ``_build_payload``, so the ceiling
+        has to be resolved before the request splits. The explicit-vs-ceiling
+        logic lives in the base ``_apply_model_output_limit``; this adapter
+        only contributes flat-namespace candidate resolution via its
         ``_model_max_output_tokens`` override.
         """
 
@@ -835,68 +619,6 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             if model is not None and model.context_window is not None and model.context_window > 0:
                 return model.context_window
         return None
-
-    def _uses_anthropic_messages_path(self, model_id: str) -> bool:
-        """Route by the per-model ``metadata.opencode_go.protocol`` wire fact.
-
-        ``"anthropic"`` → the internal Messages adapter; anything else →
-        the OpenAI ``/chat/completions`` default. A model the override does not
-        mark (no metadata, or no ``protocol`` key) is unknown: it takes the
-        safe OpenAI default AND logs a ``warn``, so a newly added model is never
-        silently misrouted onto the wrong wire.
-        """
-
-        return self._model_protocol(model_id) == PROTOCOL_ANTHROPIC
-
-    def _model_protocol(self, model_id: str) -> str:
-        protocol = self._lookup_protocol(model_id)
-        if protocol in (PROTOCOL_ANTHROPIC, PROTOCOL_OPENAI, PROTOCOL_RESPONSES):
-            if _UNMARKED_MODELS.ended(model_id):
-                _LOGGER.info(
-                    "OpenCode Go model routed by its metadata protocol (model=%s protocol=%s)",
-                    model_id,
-                    protocol,
-                )
-            return protocol
-        # Unknown model (or a malformed/absent protocol fact): default safe and
-        # warn so a misroute surfaces in logs instead of silently picking a wire.
-        if _UNMARKED_MODELS.started(model_id):
-            _LOGGER.warning(
-                "OpenCode Go model has no metadata protocol; defaulted to the chat wire "
-                "(model=%s protocol=%s). Add metadata.opencode_go.protocol to its override "
-                "entry to route it explicitly.",
-                model_id,
-                _DEFAULT_PROTOCOL,
-            )
-        return _DEFAULT_PROTOCOL
-
-    def _lookup_protocol(self, model_id: str) -> str | None:
-        value = self._profile_value(model_id, PROTOCOL_METADATA_KEY)
-        return value if isinstance(value, str) else None
-
-    def _profile_value(self, model_id: str, key: str) -> Any:
-        return _model_profile_value(getattr(self, "_model_lookup", None), model_id, key)
-
-    def _thinking_keep(self, model_id: str) -> str | None:
-        value = self._profile_value(model_id, THINKING_KEEP_METADATA_KEY)
-        return value if isinstance(value, str) else None
-
-
-def _model_profile_value(model_lookup: ModelLookup | None, model_id: str, key: str) -> Any:
-    if model_lookup is None:
-        return None
-    for candidate in _model_lookup_candidates(model_id):
-        model = model_lookup(candidate)
-        if model is None:
-            continue
-        profile = model.metadata.get(OPENCODE_GO_METADATA_KEY)
-        # An exact Model without a profile must not inherit a weaker match.
-        return profile.get(key) if isinstance(profile, Mapping) else None
-    return None
-
-
-def _bare_model_id(model_id: str) -> str:
-    return model_id.split("::", 1)[0]
 
 
 def _opencode_go_http_error_detail(response: httpx.Response) -> str:

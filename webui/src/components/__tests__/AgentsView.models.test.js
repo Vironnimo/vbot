@@ -104,9 +104,10 @@ describe('AgentsView models', () => {
     ).toEqual([
       t('agents.form.model'),
       t('agents.form.thinkingEffort'),
-      t('agents.modelOptions'),
-      t('agents.form.temperature'),
       t('agents.form.fallbackModels'),
+      t('sampling.title'),
+      t('sampling.temperature'),
+      t('sampling.topP'),
     ]);
     expect(document.querySelectorAll('#agent-model')).toHaveLength(1);
     // The trigger's card splits the choice into Model and Connection.
@@ -128,18 +129,19 @@ describe('AgentsView models', () => {
     ).toHaveLength(1);
     expect(document.querySelectorAll('#agent-thinking-effort')).toHaveLength(1);
     expect(document.querySelectorAll('#agent-temperature')).toHaveLength(1);
+    expect(document.querySelectorAll('#agent-top-p')).toHaveLength(1);
   });
 
-  it('opens model options and focuses an invalid field when saving the continuous page', async () => {
+  it('opens advanced sampling and focuses an invalid field when saving the continuous page', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
     await waitForCondition(() => document.querySelector('#agent-temperature'));
     const temperature = document.querySelector('#agent-temperature');
-    const toggle = document.querySelector('#agent-model-options-toggle');
-    const options = document.querySelector('#agent-model-options');
+    const toggle = document.querySelector('#agent-sampling-toggle');
+    const options = document.querySelector('#agent-sampling');
     expect(options.contains(temperature)).toBe(true);
-    expect(toggle.getAttribute('aria-controls')).toBe('agent-model-options');
+    expect(toggle.getAttribute('aria-controls')).toBe('agent-sampling');
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(options.hidden).toBe(true);
     toggle.click();
@@ -513,9 +515,10 @@ describe('AgentsView models', () => {
     expect(thinkingTriggerLabel()).toBe(inherited('high'));
   });
 
-  it('shows the temperature inherit hint and a reset affordance', async () => {
+  it('shows the sampling inherit hint, the Model recommendation and a reset affordance', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
+        models: [{ ...openaiModel(), recommended_top_p: 0.95 }],
         agents: [
           {
             ...baseAgent(),
@@ -559,6 +562,18 @@ describe('AgentsView models', () => {
       document.body.querySelector('[aria-label="Reset to inherited value"]'),
     ).toBeNull();
     expect(document.querySelector('#agent-temperature-help')).toBeTruthy();
+
+    // The selected Model's recommendation fills the field only on request.
+    const topP = document.querySelector('#agent-top-p');
+    expect(topP.value).toBe('');
+    getButton(t('sampling.useRecommendation', { value: 0.95 })).click();
+    flushSync();
+    expect(topP.value).toBe('0.95');
+    expect(await submitAndReadUpdate()).toEqual({
+      id: 'alpha',
+      temperature: null,
+      top_p: 0.95,
+    });
   });
 
   it('reloads the catalog on modelsRefreshToken and defers the option swap while a picker is open', async () => {

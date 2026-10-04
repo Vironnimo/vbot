@@ -1,6 +1,5 @@
 {
-  "_comment": "Verified MiMo V2.6 Flash/Pro on 2026-09-22: Chat reasoning_content, binary thinking.type toggle (default enabled), readable-only full_history replay, 131072 output ceiling. Replay accounting with original Tool Call ids is confounded by apparent server-side recovery; fresh correlated ids prove explicit transport. Full catalog refresh removed glm-5, grok-4.5, kimi-k2.5, qwen3.5-plus and union-alpha; their orphan profiles were removed. Grok 4.7 uses the official Responses route (live low-effort smoke verified); its other capabilities were not audited. Earlier model-specific evidence and gateway divergences remain in providers/opencode-go.md. Provider full_history is intentional, including where an upstream preserved-thinking contract is stronger than a particular gateway measurement. Protocol, response carrier, historical carrier, control and replay scope are independent facts. Metadata is replaced wholesale at load, so Chat profiles repeat protocol and reasoning_response_field. Go publishes a monthly DeepSeek ZDR agreement through 2026-09-30 (read 2026-09-22).",
-  "reasoning_replay": "full_history",
+  "_comment": "Hand-authored OpenCode Go Model facts. Wire decisions (each Model's wire, response carrier, thinking controls, cheapest rung for none, replay scope and fidelity, listed Tools, media) live in resources/wire/opencode-go.json. Verified MiMo V2.6 Flash/Pro on 2026-09-22: binary thinking, readable-only full_history replay, 131072 output ceiling. GLM 5.1, MiniMax M2.5, Omen Alpha and Kimi K2.6 are complete records so they stay usable when a refreshed catalog lacks them (all four listed live on 2026-10-02). Earlier model-specific evidence and gateway divergences remain in providers/opencode-go.md. Go publishes a monthly DeepSeek ZDR agreement through 2026-09-30 (read 2026-09-22).",
   "models": {
     "deepseek-flash": {
       "name": "DeepSeek V4.1 Flash",
@@ -8,18 +7,18 @@
       "max_output_tokens": 384000,
       "capabilities": {
         "vision": true,
-        "input_modalities": ["text", "image"],
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "reasoning": {
           "supported": true,
           "control": "levels",
-          "levels": ["low", "high", "max"]
-        }
-      },
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content",
-          "thinking_control": "toggle_with_effort"
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ]
         }
       }
     },
@@ -29,58 +28,34 @@
       "max_output_tokens": 384000,
       "capabilities": {
         "vision": true,
-        "input_modalities": ["text", "image"],
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "reasoning": {
           "supported": true,
           "control": "levels",
-          "levels": ["low", "high", "max"]
-        }
-      },
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content",
-          "thinking_control": "toggle_with_effort"
-        }
-      }
-    },
-    "deepseek-v4-flash": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content"
-        }
-      }
-    },
-    "deepseek-v4-flash-vision-exp": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content"
-        }
-      }
-    },
-    "deepseek-v4-pro": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content"
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ]
         }
       }
     },
     "glm-5.1": {
+      "canonical": "zhipuai/glm-5.1",
+      "name": "glm-5.1",
       "capabilities": {
-        "reasoning": {"supported": true}
-      },
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content"
-        }
+        "reasoning": {
+          "supported": true
+        },
+        "vision": false,
+        "tools": true,
+        "json_mode": false
       }
     },
     "glm-5.2": {
-      "reasoning_replay": "full_history",
       "capabilities": {
         "reasoning": {
           "control": "levels",
@@ -90,100 +65,25 @@
           ],
           "supported": true
         }
-      },
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content"
-        }
-      }
-    },
-    "glm-5.3": {
-      "reasoning_replay": "full_history",
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content"
-        }
-      }
-    },
-    "glm-5.3-flash": {
-      "capabilities": {
-        "unlisted_tool_calls": false
-      },
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content"
-        }
-      }
-    },
-    "gpt-5.6-luna": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "responses"
-        }
-      }
-    },
-    "gpt-6-luna": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "responses"
-        }
-      }
-    },
-    "grok-4.7": {
-      "metadata": {
-        "opencode_go": {
-          "minimum_reasoning_effort": "low",
-          "protocol": "responses"
-        }
-      }
-    },
-    "grok-4.6": {
-      "metadata": {
-        "opencode_go": {
-          "minimum_reasoning_effort": "low",
-          "protocol": "responses"
-        }
-      }
-    },
-    "hy3": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning"
-        }
-      }
-    },
-    "hy4-preview": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning"
-        }
       }
     },
     "kimi-k2.6": {
+      "name": "kimi-k2.6",
+      "context_window": 262144,
+      "max_output_tokens": 65536,
       "capabilities": {
-        "reasoning": {"supported": true, "control": "on_off"}
-      },
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning",
-          "thinking_control": "toggle",
-          "thinking_keep": "all"
-        }
-      }
-    },
-    "kimi-k2.7-code": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content",
-          "thinking_control": "always_enabled"
-        }
+        "reasoning": {
+          "supported": true,
+          "control": "on_off"
+        },
+        "vision": true,
+        "tools": true,
+        "json_mode": false,
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ]
       }
     },
     "kimi-k3": {
@@ -197,48 +97,10 @@
           ],
           "supported": true
         }
-      },
-      "metadata": {
-        "opencode_go": {
-          "minimum_reasoning_effort": "low",
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning"
-        }
-      }
-    },
-    "longcat-2.0": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content"
-        }
       }
     },
     "longcat-2.5-preview-free": {
-      "name": "LongCat 2.5 Preview Free",
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content",
-          "thinking_control": "toggle"
-        }
-      }
-    },
-    "mimo-v2.5": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content"
-        }
-      }
-    },
-    "mimo-v2.5-pro": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content"
-        }
-      }
+      "name": "LongCat 2.5 Preview Free"
     },
     "mimo-v2.6-flash": {
       "name": "MiMo V2.6 Flash",
@@ -248,13 +110,6 @@
         "reasoning": {
           "supported": true,
           "control": "on_off"
-        }
-      },
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content",
-          "thinking_control": "toggle"
         }
       }
     },
@@ -267,102 +122,33 @@
           "supported": true,
           "control": "on_off"
         }
-      },
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content",
-          "thinking_control": "toggle"
-        }
       }
     },
     "minimax-m2.5": {
+      "canonical": "minimax/MiniMax-M2.5",
+      "name": "minimax-m2.5",
       "capabilities": {
-        "reasoning": {"supported": true}
-      },
-      "metadata": {
-        "opencode_go": {"protocol": "anthropic"}
-      }
-    },
-    "minimax-m2.7": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "anthropic"
-        }
-      }
-    },
-    "minimax-m3": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "anthropic"
-        }
-      }
-    },
-    "muse-spark-1.2-contributor": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "responses"
-        }
-      }
-    },
-    "muse-spark-1.3-contributor": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "responses"
-        }
+        "reasoning": {
+          "supported": true
+        },
+        "vision": false,
+        "tools": true,
+        "json_mode": false
       }
     },
     "omen-alpha": {
+      "name": "omen-alpha",
       "capabilities": {
-        "reasoning": {"supported": true}
-      },
-      "metadata": {
-        "opencode_go": {
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content"
-        }
-      }
-    },
-    "qwen3.6-plus": {
-      "metadata": {
-        "opencode_go": {"protocol": "anthropic"}
-      }
-    },
-    "qwen3.7-max": {
-      "metadata": {
-        "opencode_go": {"protocol": "anthropic"}
-      }
-    },
-    "qwen3.7-plus": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "anthropic"
-        }
-      }
-    },
-    "qwen3.8-max": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "anthropic"
-        }
-      }
-    },
-    "qwen3.8-flash": {
-      "metadata": {
-        "opencode_go": {
-          "protocol": "anthropic"
-        }
+        "reasoning": {
+          "supported": true
+        },
+        "vision": false,
+        "tools": true,
+        "json_mode": false
       }
     },
     "space-bunny-free": {
-      "name": "Space Bunny Free",
-      "metadata": {
-        "opencode_go": {
-          "minimum_reasoning_effort": "low",
-          "protocol": "openai",
-          "reasoning_response_field": "reasoning_content"
-        }
-      }
+      "name": "Space Bunny Free"
     }
   }
 }

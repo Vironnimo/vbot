@@ -292,9 +292,9 @@ async def test_a_refused_project_request_leaves_the_projects_unchanged(
             id="registered-extension-tool",
         ),
         pytest.param(
-            {"default_temperature": 0.2, "default_thinking_effort": "low"},
-            {"default_temperature": 0.2, "default_thinking_effort": "low"},
-            id="temperature-and-thinking",
+            {"default_temperature": 0.2, "default_top_p": 0.9, "default_thinking_effort": "low"},
+            {"default_temperature": 0.2, "default_top_p": 0.9, "default_thinking_effort": "low"},
+            id="sampling-and-thinking",
         ),
         # "" (provider default) is a real value, distinct from null.
         pytest.param(

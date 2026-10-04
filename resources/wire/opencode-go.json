@@ -1,0 +1,139 @@
+{
+  "format_version": 1,
+  "_comment": "OpenCode Go gateway. One API key reaches three wires; the catalog protocol hint (the Model's AI SDK package on models.dev) routes the Messages and Responses Models (Grok 4.7 on Responses live low-effort smoke verified), a rule routes the Messages Models the catalog names no package for, and every other Model speaks Chat Completions. Every wire carries the x-opencode-session prompt-cache affinity header (Adapter code). Chat replays readable reasoning_content only (OpenCode's own client never replays reasoning_details) and gives every historical Tool Call a reasoning_content carrier, empty when the call had no readable Reasoning: DeepSeek's thinking mode rejects a Tool Call without it. Responses is stateless (store false), takes only max_output_tokens (max_tokens maps onto it) and top_p, and structured output on every Model; its default ladder has no none rung because the gateway rejected an explicit none (live 2026-08-25), so only a Model whose ladder lists none sends it. Models that cannot stop reasoning get their cheapest rung for none. Replay scope is full_history, also where an upstream preserved-thinking contract is stronger than a particular gateway measurement; only Qwen replays tool_turns. GLM 5.3 Flash drops calls to Tools outside the request's Tool list, so Tools announced mid-Session are listed there.",
+  "defaults": {
+    "replay": {"scope": "full_history"}
+  },
+  "protocols": {
+    "chat_completions": {
+      "replay": {"fidelity": "readable_only", "echo_empty_on_tool_calls": true}
+    },
+    "messages": {
+      "request": {"prompt_cache": "anthropic_breakpoints"}
+    },
+    "responses": {
+      "request": {
+        "allowed_parameters": ["max_tokens", "max_output_tokens", "top_p"],
+        "options": {"structured_outputs": true}
+      },
+      "reasoning": {
+        "supported": true,
+        "floor": ["minimal", "low", "medium", "high", "xhigh"]
+      }
+    }
+  },
+  "rules": [
+    {
+      "when": {"prefix": ["gpt-"]},
+      "set": {"request": {"allowed_parameters": ["max_tokens", "max_output_tokens"]}},
+      "note": "The GPT Models (gpt-5.6-luna, gpt-6-luna) answer top_p with HTTP 400 {\"model\": ...}, which names no parameter, so it cannot be learned; Grok and Muse Spark accept it (live 2026-10-03)."
+    },
+    {
+      "when": {
+        "ids": ["minimax-m2.5", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus", "qwen3.8-max"]
+      },
+      "set": {"protocol": "messages"},
+      "note": "The gateway serves these MiniMax and Qwen Models on Anthropic Messages (/messages), but the catalog names no package for them."
+    },
+    {
+      "when": {"ids": ["hy3", "hy4-preview", "kimi-k2.6", "kimi-k3"]},
+      "set": {
+        "response": {
+          "reasoning_fields": ["reasoning", "reasoning_content", "reasoning_text", "thinking"]
+        }
+      },
+      "note": "Hy and Kimi answer with readable reasoning plus reasoning_details; their history still replays reasoning_content."
+    },
+    {
+      "when": {"ids": ["deepseek-flash", "glm-5.1", "omen-alpha"]},
+      "set": {
+        "response": {
+          "reasoning_fields": ["reasoning_content", "reasoning", "reasoning_text", "thinking"]
+        }
+      },
+      "note": "These Models answer with readable reasoning_content; the listing carries no response-field hint for them."
+    },
+    {
+      "when": {"ids": ["deepseek-flash", "deepseek-v4.1-flash"]},
+      "set": {
+        "reasoning": {
+          "dialect": "thinking_toggle_with_effort",
+          "unset": "enabled",
+          "options": {"switch_with_effort": true}
+        }
+      },
+      "note": "DeepSeek's thinking switch is independent of its effort ladder: thinking stays enabled by default and with an effort; none disables it and sends no effort."
+    },
+    {
+      "when": {"ids": ["longcat-2.5-preview-free", "mimo-v2.6-flash", "mimo-v2.6-pro"]},
+      "set": {"reasoning": {"dialect": "thinking_toggle", "unset": "enabled"}},
+      "note": "Binary thinking.type switch, enabled by default (MiMo V2.6 verified 2026-09-22)."
+    },
+    {
+      "when": {"ids": ["kimi-k2.6"]},
+      "set": {
+        "reasoning": {"dialect": "thinking_toggle", "unset": "enabled", "options": {"keep": "all"}}
+      },
+      "note": "Kimi K2.6 switches thinking on or off and keeps every earlier thinking turn (keep all) while enabled."
+    },
+    {
+      "when": {"ids": ["kimi-k2.7-code"]},
+      "set": {"reasoning": {"dialect": "thinking_toggle", "unset": "enabled", "off": "enabled"}},
+      "note": "Kimi K2.7 Code always thinks: the request always enables thinking and sends no effort."
+    },
+    {
+      "when": {"ids": ["grok-4.6", "grok-4.7", "kimi-k3", "space-bunny-free"]},
+      "set": {"reasoning": {"off": "low"}},
+      "note": "These Models always reason; none asks for the cheapest rung (low) instead of the higher default."
+    },
+    {
+      "when": {"ids": ["glm-5.3-flash"]},
+      "set": {"request": {"list_announced_tools": true}},
+      "note": "GLM 5.3 Flash drops calls to Tools that are not in the request's Tool list."
+    },
+    {
+      "when": {"prefix": ["qwen"]},
+      "set": {"replay": {"scope": "tool_turns"}},
+      "note": "The gateway bills historical answer-turn Reasoning of every Qwen Model (verify_wire_profile replay check, live 2026-10-03). Qwen's own chat template keeps earlier Reasoning only with preserve_thinking, so answer turns drop it and Tool Call turns keep it."
+    }
+  ],
+  "models": {
+    "glm-5.1": {
+      "set": {
+        "response": {"reasoning_fields": ["reasoning_content", "reasoning", "reasoning_text", "thinking"]}
+      },
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:medium, effort:high, effort:none, sampling, tool_replay, replay"
+      }
+    },
+    "kimi-k2.6": {
+      "set": {
+        "response": {"reasoning_fields": ["reasoning", "reasoning_content", "reasoning_text", "thinking"]}
+      },
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:medium, effort:high, effort:none, sampling, tool_replay, replay, image"
+      }
+    },
+    "deepseek-flash": {
+      "set": {
+        "response": {"reasoning_fields": ["reasoning_content", "reasoning", "reasoning_text", "thinking"]}
+      },
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:high, effort:max, effort:none, sampling, tool_replay, replay, image"
+      }
+    },
+    "grok-4.7": {
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:medium, effort:high, effort:xhigh, effort:none, sampling, tool_replay, replay, image"
+      }
+    }
+  }
+}

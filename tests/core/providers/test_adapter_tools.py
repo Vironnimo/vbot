@@ -34,32 +34,23 @@ from core.providers.adapter import (
 )
 from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
 from core.providers.github_copilot_messages import build_copilot_messages_payload
-from core.providers.github_copilot_policy import GitHubCopilotModelPolicy, copilot_model_policy
 from core.providers.github_copilot_responses import build_responses_payload
 from core.providers.mistral import MistralAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.tool_schema import render_tool_definitions, sanitize_anthropic_tool_input_schema
+from core.providers.wire_profiles import standalone_wire_binding
 from core.tools import tool_failure, tool_success
 
 from .adapter_test_support import TOKEN, bearer_config
+from .responses_test_support import responses_policy, responses_reasoning
 
 _DASH_UNDERSCORE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 _ALPHANUMERIC_ID = re.compile(r"^[A-Za-z0-9]+$")
 _FOREIGN_ID = f"call|{'+/=' * 40}"
 
 
-def _copilot_policy(endpoint: str) -> GitHubCopilotModelPolicy:
-    return copilot_model_policy(
-        "test-model",
-        {
-            "github_copilot": {
-                "vendor": "OpenAI",
-                "family": "test-model",
-                "supported_endpoints": [endpoint],
-                "tool_calls": True,
-            }
-        },
-    )
+_RESPONSES_POLICY = responses_policy()
+_NO_REASONING = responses_reasoning(supported=False)
 
 
 # ---------------------------------------------------------------------------
@@ -390,12 +381,14 @@ def _chat_wire_ids(body: dict[str, Any]) -> tuple[str, str]:
     return body["messages"][0]["tool_calls"][0]["id"], body["messages"][1]["tool_call_id"]
 
 
-# Only Adapters with a verified profile rewrite ids; the generic Chat wire sends them as-is.
+# Only wires whose profile names Tool-call id constraints rewrite ids; the
+# generic Chat wire sends them as-is.
 @pytest.mark.parametrize(
-    ("adapter_type", "path", "wire_ids", "profile"),
+    ("adapter_type", "provider_id", "path", "wire_ids", "profile"),
     [
         pytest.param(
             AnthropicCompatibleAdapter,
+            "wire",
             "/messages",
             _messages_wire_ids,
             ANTHROPIC_MESSAGES_TOOL_CALL_ID_PROFILE,
@@ -403,6 +396,7 @@ def _chat_wire_ids(body: dict[str, Any]) -> tuple[str, str]:
         ),
         pytest.param(
             MistralAdapter,
+            "mistral",
             "/chat/completions",
             _chat_wire_ids,
             MISTRAL_TOOL_CALL_ID_PROFILE,
@@ -410,6 +404,7 @@ def _chat_wire_ids(body: dict[str, Any]) -> tuple[str, str]:
         ),
         pytest.param(
             OpenAICompatibleAdapter,
+            "wire",
             "/chat/completions",
             _chat_wire_ids,
             None,
@@ -420,13 +415,16 @@ def _chat_wire_ids(body: dict[str, Any]) -> tuple[str, str]:
 @pytest.mark.asyncio
 async def test_adapter_sends_paired_wire_ids_without_mutating_canonical_history(
     adapter_type: Callable[..., ProviderAdapter],
+    provider_id: str,
     path: str,
     wire_ids: Any,
     profile: ToolCallIdProfile | None,
 ) -> None:
     messages = _tool_cycle(_FOREIGN_ID)
     original = copy.deepcopy(messages)
-    config = bearer_config("wire", defaults={"max_tokens": 1024})
+    config = bearer_config(
+        provider_id, base_url="https://wire.example.test/v1", defaults={"max_tokens": 1024}
+    )
     adapter = adapter_type(config, TOKEN)
     try:
         with respx.mock:
@@ -478,7 +476,7 @@ def test_responses_replay_rewrites_foreign_call_ids_without_forging_item_ids(
     original = copy.deepcopy(messages)
 
     payload = build_responses_payload(
-        messages, model_id="test-model", policy=_copilot_policy("/responses")
+        messages, model_id="test-model", policy=_RESPONSES_POLICY, reasoning_renderer=_NO_REASONING
     )
 
     replayed_reasoning, function_call, function_output = payload["input"]
@@ -531,7 +529,7 @@ def test_responses_replay_neutralizes_readable_item_text_and_keeps_opaque_state(
     original = copy.deepcopy(messages)
 
     payload = build_responses_payload(
-        messages, model_id="test-model", policy=_copilot_policy("/responses")
+        messages, model_id="test-model", policy=_RESPONSES_POLICY, reasoning_renderer=_NO_REASONING
     )
 
     # Readable text cannot forge a reminder; encrypted content and ids replay verbatim.
@@ -747,7 +745,10 @@ _RESULT_BATCH: list[dict[str, Any]] = [
 
 def test_responses_wire_sends_the_rendered_result_text() -> None:
     payload = build_responses_payload(
-        _RESULT_BATCH, model_id="test-model", policy=_copilot_policy("/responses")
+        _RESULT_BATCH,
+        model_id="test-model",
+        policy=_RESPONSES_POLICY,
+        reasoning_renderer=_NO_REASONING,
     )
 
     outputs = [
@@ -757,9 +758,14 @@ def test_responses_wire_sends_the_rendered_result_text() -> None:
 
 
 def test_copilot_messages_wire_sends_the_rendered_text_and_marks_failures() -> None:
-    payload = build_copilot_messages_payload(
-        _RESULT_BATCH, model_id="test-model", policy=_copilot_policy("/v1/messages")
-    )
+    profile = standalone_wire_binding(
+        provider_id="github-copilot",
+        connection_id="oauth",
+        protocols=("messages",),
+        model_lookup=None,
+    ).profile("test-model")
+
+    payload = build_copilot_messages_payload(_RESULT_BATCH, model_id="test-model", profile=profile)
 
     results = [
         block

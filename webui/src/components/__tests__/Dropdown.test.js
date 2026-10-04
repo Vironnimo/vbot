@@ -243,7 +243,7 @@ describe('Dropdown', () => {
     dateNow.mockRestore();
   });
 
-  it('renders status dots, count badges and accessible names from option fields', async () => {
+  it('renders status dots, count badges, markers and accessible names from option fields', async () => {
     mountedComponent = mount(Dropdown, {
       target: document.body,
       props: {
@@ -263,6 +263,7 @@ describe('Dropdown', () => {
             statusDot: 'unread',
             badge: 2,
             ariaLabel: 'Gamma: 2 unread results',
+            marker: { label: 'Verified' },
           },
           { value: 'delta', label: 'Delta', statusDot: 'bogus' },
         ],
@@ -287,6 +288,10 @@ describe('Dropdown', () => {
     expect(gamma.getAttribute('aria-label')).toBe('Gamma: 2 unread results');
     expect(gamma.querySelector('.tab-indicator--unread')).toBeTruthy();
     expect(gamma.querySelector('.count-badge')?.textContent).toBe('2');
+    expect(
+      gamma.querySelector('[role="img"][aria-label="Verified"]'),
+    ).toBeTruthy();
+    expect(delta.querySelector('.option-marker')).toBeNull();
     expect(delta.hasAttribute('aria-label')).toBe(false);
     expect(delta.querySelector('.tab-indicator')).toBeNull();
     expect(delta.querySelector('.count-badge')).toBeNull();

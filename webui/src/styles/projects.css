@@ -171,22 +171,6 @@
 
 /* ── Repository and Agent defaults ────────────────────────────────────────── */
 
-/* Number fields keep the shared number width; the optional reset action sits
-   in front of the input instead of widening the control column. */
-.projects-view .s-row > .projects-number-control {
-  width: auto;
-  justify-self: end;
-  gap: 6px;
-}
-
-.projects-view .projects-number-input {
-  width: var(--s-number-width, 148px);
-}
-
-.projects-view .projects-inherit-hint {
-  color: var(--text-med);
-}
-
 /* The jump link to Settings → Agent defaults, under the row description. */
 .projects-view .projects-inherit-link {
   margin: 4px 0 0 -8px;
@@ -360,10 +344,11 @@
   padding: 6px 18px 22px 39px;
 }
 
-/* Effective values: one column per field, value above its provenance. */
+/* Effective values: one column per field, value above its provenance. The
+   Model's name gets the widest column. */
 .projects-view .projects-effective-list {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 2fr) repeat(3, minmax(0, 1fr));
   gap: 12px 24px;
   margin: 0;
   padding: 0;
@@ -382,7 +367,7 @@
   font-size: var(--fs-label-sm);
 }
 
-/* Model, temperature and Thinking effort: a mix of names and numbers, so the
+/* Model, Thinking effort and sampling: a mix of names and numbers, so the
    interface face with aligned figures. */
 .projects-view .projects-effective-value {
   color: var(--text-hi);
@@ -458,10 +443,6 @@
   width: 100%;
 }
 
-.projects-view .projects-member-field__control.projects-number-control > * {
-  width: 120px;
-}
-
 .projects-view .projects-member-field__control > .btn-secondary {
   width: auto;
 }
@@ -469,6 +450,41 @@
 .projects-view .projects-member-field__wide {
   grid-column: 1 / -1;
   min-width: 0;
+}
+
+/* Advanced sampling among the override fields: the shared disclosure keeps
+   the fields' alignment instead of group padding and hairlines; its rows
+   indent to the disclosure label. */
+.projects-view .projects-sampling > .s-disclosure-row {
+  width: 100%;
+  min-height: 40px;
+  margin: 0;
+  padding: 0;
+  border-radius: var(--r-md);
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+
+.projects-view
+  .projects-sampling
+  > .s-disclosure-row:hover
+  .disclosure-chevron {
+  color: var(--text-hi);
+}
+
+.projects-view .projects-sampling > .s-disclosure-row:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.projects-view .projects-sampling .sampling-settings__note {
+  padding: 0 0 0 15px;
+}
+
+.projects-view .projects-sampling .s-group__rows > .s-row {
+  padding: 10px 0 0 15px;
+  border-top: 0;
 }
 
 .projects-view .projects-clear-override {
@@ -637,10 +653,6 @@
 
   .projects-view .project-list-pane {
     max-height: min(220px, 32vh);
-  }
-
-  .projects-view .s-row > .projects-number-control {
-    justify-self: start;
   }
 
   .projects-view .projects-team-header,

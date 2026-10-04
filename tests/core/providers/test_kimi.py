@@ -3,20 +3,18 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 import respx
 
-from core.models.models import Capabilities, Model, ReasoningCapabilities
-from core.providers.errors import ProviderError
-from core.providers.kimi import (
-    KIMI_CODING_MODE,
-    KIMI_IMAGE_VIDEO_MEDIA_TYPES,
-    KimiAdapter,
-)
+from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
+from core.providers.kimi import KIMI_CODING_MODE, KimiAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+
+from .adapter_test_support import bind_connection
 
 PLATFORM_URL = "https://api.moonshot.ai/v1/chat/completions"
 CODING_URL = "https://api.kimi.com/coding/v1/chat/completions"
@@ -48,14 +46,10 @@ CONFIG = ProviderConfig(
 )
 
 
-def _model(model_id: str) -> Model:
-    return KimiAdapter.normalize_catalog_entry(
-        {"id": model_id, "supports_reasoning": True}, {"max_tokens": 32768}
-    )
-
-
+# The bundled Model DB records: Kimi's per-Model facts live in its override file.
+_REGISTRY = ModelRegistry.load(Path(__file__).resolve().parents[3] / "resources")
 MODELS = {
-    model_id: _model(model_id)
+    model_id: _REGISTRY.get("kimi", model_id)
     for model_id in ("kimi-k3", "kimi-k2.6", "kimi-k2.7-code", "k3", "kimi-for-coding")
 }
 MODELS["plain-model"] = Model(
@@ -74,14 +68,20 @@ MODELS["plain-model"] = Model(
 
 def _adapter(connection: str) -> KimiAdapter:
     if connection == "coding":
-        return KimiAdapter(
+        adapter = KimiAdapter(
             CONFIG,
             "kimi-coding-secret",
             base_url="https://api.kimi.com/coding/v1",
             model_lookup=MODELS.get,
             connection_mode=KIMI_CODING_MODE,
         )
-    return KimiAdapter(CONFIG, "kimi-secret", model_lookup=MODELS.get)
+        connection_id = "coding-plan"
+    else:
+        adapter = KimiAdapter(CONFIG, "kimi-secret", model_lookup=MODELS.get)
+        connection_id = "api-key"
+    return bind_connection(
+        adapter, provider_id="kimi", connection_id=connection_id, model_lookup=MODELS.get
+    )
 
 
 async def _sent_body(
@@ -252,43 +252,31 @@ async def test_image_and_video_content_use_kimi_data_url_parts() -> None:
         {"type": "image_url", "image_url": {"url": "data:image/webp;base64,aW1n"}},
         {"type": "video_url", "video_url": {"url": "data:video/mp4;base64,dmlk"}},
     ]
-    assert _adapter("platform").wire_media_support("kimi-k3") == KIMI_IMAGE_VIDEO_MEDIA_TYPES
+    assert _adapter("platform").wire_media_support("kimi-k3") == frozenset(
+        {
+            "image/jpeg",
+            "image/png",
+            "image/gif",
+            "image/webp",
+            "video/mp4",
+            "video/quicktime",
+            "video/webm",
+        }
+    )
 
 
-@pytest.mark.asyncio
-async def test_multimodal_body_over_the_connection_limit_fails_before_io(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("core.providers.kimi.KIMI_CODING_MAX_REQUEST_BODY_BYTES", 10)
-    adapter = _adapter("coding")
-    image = {"type": "media", "media_type": "image/png", "base64": "bGFyZ2UtZW5vdWdo"}
-
-    with respx.mock:
-        route = respx.post(CODING_URL).mock(return_value=httpx.Response(200, json=CHAT_SUCCESS))
-        with pytest.raises(ProviderError, match="multimodal size limit") as caught:
-            await adapter.send([{"role": "user", "content": [image]}], model_id="k3")
-    await adapter.aclose()
-
-    assert caught.value.retryable is False
-    assert route.call_count == 0
+@pytest.mark.parametrize(
+    ("connection", "limit"),
+    [
+        pytest.param("coding", 80 * 1024 * 1024, id="coding-plan-80-mib"),
+        pytest.param("platform", 100_000_000, id="platform-100-mb"),
+    ],
+)
+def test_request_body_limit_follows_the_connection(connection: str, limit: int) -> None:
+    assert _adapter(connection).request_body_limit("kimi-k3") == limit
 
 
-def test_catalog_normalization_applies_current_kimi_facts() -> None:
-    k3 = KimiAdapter.normalize_catalog_entry({"id": "k3"})
-    k3_256k = KimiAdapter.normalize_catalog_entry({"id": "k3-256k"})
-    k2 = KimiAdapter.normalize_catalog_entry({"id": "kimi-k2.6"})
-
-    assert k3.context_window == 1048576
-    assert k3.max_output_tokens == 131072
-    assert k3.capabilities.input_modalities == ("text", "image", "video")
-    assert k3.capabilities.reasoning.levels == ("low", "high", "max")
-    assert k3_256k.context_window == 262144
-    assert k3_256k.capabilities.input_modalities == ("text", "image")
-    assert k2.capabilities.reasoning.control == "on_off"
-    assert k2.max_output_tokens == 32768
-
-
-def test_unknown_catalog_entry_preserves_discovered_media_and_reasoning_flags() -> None:
+def test_catalog_entry_preserves_discovered_media_and_reasoning_flags() -> None:
     model = KimiAdapter.normalize_catalog_entry(
         {
             "id": "future-kimi",

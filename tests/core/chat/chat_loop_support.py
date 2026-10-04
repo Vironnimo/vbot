@@ -175,7 +175,8 @@ class StubAgent:
     id: str
     model: str
     fallback_models: list[str] = field(default_factory=list)
-    temperature: float = 0.1
+    temperature: float | None = 0.1
+    top_p: float | None = None
     thinking_effort: str = "high"
     allowed_tools: list[str] | None = None
     allowed_skills: list[str] | None = None
@@ -784,10 +785,8 @@ class StubModels:
         recommended_temperatures: dict[tuple[str, str], float] | None = None,
         recommended_top_ps: dict[tuple[str, str], float] | None = None,
         connection_context_windows: dict[tuple[str, str], dict[str, int]] | None = None,
-        unlisted_tool_calls: dict[tuple[str, str], bool] | None = None,
     ) -> None:
         modality_map = input_modalities or {}
-        unlisted_map = unlisted_tool_calls or {}
         temp_map = recommended_temperatures or {}
         top_p_map = recommended_top_ps or {}
         connection_window_map = connection_context_windows or {}
@@ -797,7 +796,6 @@ class StubModels:
                 connection_context_windows=connection_window_map.get((provider_id, model_id), {}),
                 capabilities=SimpleNamespace(
                     input_modalities=modality_map.get((provider_id, model_id), ()),
-                    unlisted_tool_calls=unlisted_map.get((provider_id, model_id), True),
                 ),
                 recommended_temperature=temp_map.get((provider_id, model_id)),
                 recommended_top_p=top_p_map.get((provider_id, model_id)),
@@ -904,8 +902,6 @@ class StubCompactionService:
                     dict(message) for message in kwargs.get("request_messages") or []
                 ],
                 "active_tools": [dict(tool) for tool in kwargs.get("active_tools") or []],
-                "summary_temperature": kwargs.get("summary_temperature"),
-                "active_temperature": kwargs.get("active_temperature"),
             }
         )
         if self._compact_error is not None:

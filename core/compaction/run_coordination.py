@@ -85,12 +85,6 @@ class ManualCompactionRequest(Protocol):
     @property
     def summary_provider_id(self) -> str: ...
 
-    @property
-    def summary_temperature(self) -> float | None: ...
-
-    @property
-    def active_temperature(self) -> float | None: ...
-
 
 class CompactionRunHost(Protocol):
     """Complete Chat-owned request operation used by the coordinator."""
@@ -216,8 +210,6 @@ class CompactionRunHost(Protocol):
 
     def resolve_context_window(self, agent: Any, target: Any) -> int | None: ...
 
-    def resolve_temperature(self, provider_id: str, model_id: str) -> float | None: ...
-
 
 class CompactionRunCoordinator:
     """Runs manual and automatic Compaction against its host loop's seam.
@@ -312,8 +304,6 @@ class CompactionRunCoordinator:
                     active_adapter=request.active_adapter,
                     active_model_id=request.active_model_id,
                     active_tools=request.request_state.tools,
-                    summary_temperature=request.summary_temperature,
-                    active_temperature=request.active_temperature,
                     summary_model_reference=f"{request.summary_provider_id}/{request.summary_model_id}",
                     active_model_reference=f"{request.active_provider_id}/{request.active_model_id}",
                 )
@@ -561,14 +551,6 @@ class CompactionRunCoordinator:
                     active_model_id=target.model_id,
                     active_tools=tools,
                     minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
-                    summary_temperature=self._host.resolve_temperature(
-                        summary_provider_id,
-                        summary_model_id,
-                    ),
-                    active_temperature=self._host.resolve_temperature(
-                        target.provider_id,
-                        target.model_id,
-                    ),
                 )
             except CompactionInsufficientReclaimError as exc:
                 run.emit(

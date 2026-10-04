@@ -15,6 +15,7 @@ from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal
 
 from core.chat.messages import ChatMessage, usage_token_is_estimated
@@ -28,6 +29,7 @@ from core.providers.reasoning import (
     ReasoningIntent,
     resolve_reasoning_intent,
 )
+from core.providers.wire_observations import EXCLUSIVE_GROUP_SEPARATOR, ObservedFacts
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -51,11 +53,18 @@ STATUS_PLACEHOLDER = "—"
 REASONING_STATE_ON = "on"
 REASONING_STATE_OFF = "off"
 
-# Runtime-wired seam: ``(provider_id, model_id, effort)`` -> the provider-neutral
-# intent the target adapter would render, or ``None`` when it cannot resolve.
-# The runtime answers it from the adapter class without constructing an
-# instance, so no credentials or HTTP are involved.
-ReasoningRenderDescriber = Callable[[str, str, str | None], ReasoningIntent | None]
+# ``/status`` wording of a wire profile status other than ``verified``, which
+# names its verification date instead.
+_WIRE_STATUS_TEXT = {
+    "configured": "configured, unverified",
+    "inferred": "inferred from defaults, unverified",
+}
+
+# Runtime-wired seam: Agent -> the provider-neutral reasoning decision a request
+# with its thinking effort carries on the Connection its Model resolves to, or
+# ``None`` when the Model cannot resolve to one. Resolving the Connection reads
+# credential state, so callers run it off the Event Loop.
+ReasoningRenderDescriber = Callable[[RuntimeAgent], ReasoningIntent | None]
 _STATUS_TIME_FORMAT = "%Y-%m-%d %H:%M:%S %Z"
 _CACHE_PERCENT_SCALE = 100
 _CACHE_HIT_RATE_DECIMALS = 1
@@ -89,9 +98,9 @@ class StatusModelDetails:
     reasoning sent on the wire — a snapped effort for a ladder, ``on``/``off`` for
     a toggle, or the rendered token budget for a budget model.
 
-    ``recommended_temperature`` and ``provider_default_temperature`` feed
-    ``resolve_status_temperature`` so the temperature line reports the resolved
-    value with its source rather than only the configured agent field.
+    The ``recommended_*`` and ``provider_default_*`` sampling values feed
+    ``resolve_status_sampling`` so the temperature and top_p lines report the
+    resolved value with its source rather than only the configured agent field.
     """
 
     context_window: int | None
@@ -101,6 +110,43 @@ class StatusModelDetails:
     reasoning_budget_max: int | None = None
     recommended_temperature: float | None = None
     provider_default_temperature: float | None = None
+    recommended_top_p: float | None = None
+    provider_default_top_p: float | None = None
+
+
+@dataclass(frozen=True)
+class StatusSampling:
+    """The rendered temperature and top_p lines, each with its source."""
+
+    temperature: str
+    top_p: str
+
+
+@dataclass(frozen=True)
+class StatusWireProfile:
+    """Wire profile of the Connection the Agent's Model resolves to.
+
+    ``connection_id`` is the ``provider:connection[:account]`` id chat uses,
+    ``status`` is ``verified`` / ``configured`` / ``inferred``, ``verified_at``
+    the date a verified profile was checked, and ``learned`` what live traffic
+    showed for the Model on that Connection.
+    """
+
+    connection_id: str
+    status: str
+    verified_at: str | None
+    learned: ObservedFacts
+
+
+# Runtime-wired seam: Agent -> the wire profile of the Connection its Model
+# resolves to as chat resolves it, or ``None`` when it resolves to none.
+WireProfileDescriber = Callable[[RuntimeAgent], StatusWireProfile | None]
+
+
+class _WireProfileOmitted(Enum):
+    """Default of the status renderers' ``wire_profile``: the report has no wire lines."""
+
+    OMITTED = "omitted"
 
 
 @dataclass(frozen=True)
@@ -171,17 +217,19 @@ def resolve_status_model_details(
         reasoning_control=model.capabilities.reasoning.control,
         reasoning_budget_max=model.capabilities.reasoning.budget_max,
         recommended_temperature=model.recommended_temperature,
-        provider_default_temperature=_provider_default_temperature(provider_config),
+        provider_default_temperature=_provider_default_number(provider_config, "temperature"),
+        recommended_top_p=model.recommended_top_p,
+        provider_default_top_p=_provider_default_number(provider_config, "top_p"),
     )
 
 
-def _provider_default_temperature(provider_config: Any) -> float | None:
-    """Read the provider-config ``defaults.temperature``, None when absent."""
+def _provider_default_number(provider_config: Any, key: str) -> float | None:
+    """Read a numeric provider-config ``defaults`` entry, None when absent."""
 
     defaults = getattr(provider_config, "defaults", None)
     if not isinstance(defaults, Mapping):
         return None
-    value = defaults.get("temperature")
+    value = defaults.get(key)
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
     return float(value)
@@ -278,26 +326,24 @@ def resolve_reported_thinking_effort(
 ) -> str | None:
     """Resolve the reported "Actual model thinking effort" — wire truth first.
 
-    Prefers the adapter's own render description
-    (:meth:`ProviderAdapter.describe_reasoning_render`, wired by the runtime):
-    what a request with the selected effort would actually carry. When no
-    describer is wired, or it cannot resolve the provider/model, falls back to
-    the declared-control rendering (:func:`resolve_actual_thinking_effort`).
+    Prefers the wire profile's render description of the Connection the
+    Agent's Model resolves to (wired by the runtime): what a request with the
+    selected effort would actually carry. When no describer is wired, or the
+    Model cannot resolve to a Connection, falls back to the declared-control
+    rendering (:func:`resolve_actual_thinking_effort`).
     """
     if agent is None or models is None:
         return None
     if describe_render is not None:
-        provider_id, model_id = _parse_registry_model_key(agent.model)
-        if provider_id and model_id:
-            try:
-                intent = describe_render(provider_id, model_id, agent.thinking_effort)
-            except Exception:
-                _LOGGER.warning(
-                    "Failed to describe reasoning render for %s", agent.model, exc_info=True
-                )
-                intent = None
-            if intent is not None:
-                return _render_actual_thinking_effort(intent)
+        try:
+            intent = describe_render(agent)
+        except Exception:
+            _LOGGER.warning(
+                "Failed to describe reasoning render for %s", agent.model, exc_info=True
+            )
+            intent = None
+        if intent is not None:
+            return _render_actual_thinking_effort(intent)
     return resolve_actual_thinking_effort(
         agent.thinking_effort,
         model_details.reasoning_levels,
@@ -306,24 +352,56 @@ def resolve_reported_thinking_effort(
     )
 
 
-def resolve_status_temperature(
-    agent_temperature: float | None,
+def resolve_status_sampling(
+    agent: RuntimeAgent | None,
     model_details: StatusModelDetails,
-) -> str:
-    """Render the resolved temperature with the tier that supplied it.
+) -> StatusSampling:
+    """Render the temperature and top_p a request sends, each with its source.
 
-    Mirrors the chat resolution chain — explicit agent value, then the model's
-    recommended temperature, then the provider-config default — and reports the
-    API default when no tier has a value. Adapter-level sampling drops (active
-    thinking, sampling-free models) are wire policy and stay invisible here.
+    Chat sends the Agent's configured value; without one, a Custom Provider's
+    configured default goes out, else nothing and the Provider's own default
+    applies. A known Model recommendation is only named, never sent.
+    Adapter-level sampling drops (active thinking, sampling-free models) are
+    wire policy and stay invisible here.
     """
-    if agent_temperature is not None:
-        return f"{agent_temperature:g} (agent)"
-    if model_details.recommended_temperature is not None:
-        return f"{model_details.recommended_temperature:g} (model recommendation)"
-    if model_details.provider_default_temperature is not None:
-        return f"{model_details.provider_default_temperature:g} (provider default)"
-    return "default"
+    return StatusSampling(
+        temperature=_sampling_status(
+            agent.temperature if agent is not None else None,
+            model_details.provider_default_temperature,
+            model_details.recommended_temperature,
+        ),
+        top_p=_sampling_status(
+            agent.top_p if agent is not None else None,
+            model_details.provider_default_top_p,
+            model_details.recommended_top_p,
+        ),
+    )
+
+
+def _sampling_status(
+    configured: float | None, provider_default: float | None, recommended: float | None
+) -> str:
+    if configured is not None:
+        return f"{configured:g} (agent)"
+    if provider_default is not None:
+        return f"{provider_default:g} (provider config)"
+    if recommended is not None:
+        return f"provider default (Model recommends {recommended:g})"
+    return "provider default"
+
+
+def resolve_status_wire_profile(
+    agent: RuntimeAgent | None,
+    describe_wire_profile: WireProfileDescriber | None,
+) -> StatusWireProfile | None:
+    """Return the wire profile of the Agent's Connection, ``None`` when unavailable."""
+    if agent is None or describe_wire_profile is None:
+        return None
+    try:
+        return describe_wire_profile(agent)
+    except Exception:
+        _LOGGER.warning("Failed to describe the wire profile for %s", agent.model, exc_info=True)
+        return None
 
 
 def build_status_reply(
@@ -335,8 +413,9 @@ def build_status_reply(
     activity: StatusActivity | None = None,
     actual_thinking_effort: str | None = None,
     project_label: str | None = None,
-    temperature_status: str | None = None,
+    sampling_status: StatusSampling | None = None,
     timezone: tzinfo | None = None,
+    wire_profile: StatusWireProfile | None | _WireProfileOmitted = _WireProfileOmitted.OMITTED,
 ) -> str:
     """Build status text while applying an optional model-display override."""
     with _STATUS_MODEL_DISPLAY_OVERRIDE.set(model_display_name):
@@ -348,8 +427,9 @@ def build_status_reply(
             activity,
             actual_thinking_effort=actual_thinking_effort,
             project_label=project_label,
-            temperature_status=temperature_status,
+            sampling_status=sampling_status,
             timezone=timezone,
+            wire_profile=wire_profile,
         )
 
 
@@ -361,19 +441,25 @@ def build_status_text(
     activity: StatusActivity | None = None,
     actual_thinking_effort: str | None = None,
     project_label: str | None = None,
-    temperature_status: str | None = None,
+    sampling_status: StatusSampling | None = None,
     timezone: tzinfo | None = None,
+    wire_profile: StatusWireProfile | None | _WireProfileOmitted = _WireProfileOmitted.OMITTED,
 ) -> str:
     """Build human-readable status text for the current session and runtime state.
 
     ``actual_thinking_effort`` is what reaches the wire after the model's ladder
     snaps the agent's selection (see :func:`resolve_actual_thinking_effort`); it
     is rendered alongside the selected effort so the two can differ visibly.
-    ``temperature_status`` is the resolved temperature with its source (see
-    :func:`resolve_status_temperature`); without it the line degrades to the
-    configured agent value alone.
+    ``sampling_status`` is the resolved temperature and top_p with their sources
+    (see :func:`resolve_status_sampling`); without it the lines degrade to the
+    configured agent values alone.
     ``project_label`` names the session's project (``None`` for an identity
     session, rendered as the placeholder).
+    ``wire_profile`` describes the Connection the Model resolves to (see
+    :class:`StatusWireProfile`), ``None`` rendering the placeholder when nothing
+    resolves; learned wire facts get a line only when any exist. Left out, the
+    text has no wire profile lines: the user's ``/status`` passes it, while the
+    status Tool does not, because Agents cannot act on wire profiles.
     """
     now_utc = datetime.now(UTC)
     now_local = now_utc.astimezone(timezone)
@@ -384,17 +470,18 @@ def build_status_text(
         fallback_models = STATUS_PLACEHOLDER
         selected_thinking_effort = STATUS_PLACEHOLDER
         temperature = STATUS_PLACEHOLDER
+        top_p = STATUS_PLACEHOLDER
     else:
         model_string = agent.model.strip() or STATUS_PLACEHOLDER
         agent_summary = f"{agent.name} ({model_string})"
         model_display = _STATUS_MODEL_DISPLAY_OVERRIDE.get() or _model_display_name(model_string)
         fallback_models = ", ".join(agent.fallback_models) or STATUS_PLACEHOLDER
         selected_thinking_effort = _thinking_effort_text(agent.thinking_effort)
-        temperature = (
-            temperature_status
-            if temperature_status is not None
-            else _temperature_text(agent.temperature)
-        )
+        if sampling_status is not None:
+            temperature, top_p = sampling_status.temperature, sampling_status.top_p
+        else:
+            temperature = _sampling_text(agent.temperature)
+            top_p = _sampling_text(agent.top_p)
 
     actual_thinking_effort_text = _actual_thinking_effort_text(actual_thinking_effort)
     facts = messages if isinstance(messages, StatusSessionFacts) else status_session_facts(messages)
@@ -416,6 +503,8 @@ def build_status_text(
         f"Selected thinking effort: {selected_thinking_effort}",
         f"Actual model thinking effort: {actual_thinking_effort_text}",
         f"Temperature: {temperature}",
+        f"Top P: {top_p}",
+        *_wire_profile_lines(wire_profile),
         f"Activity: {activity_name}",
         f"Run created at: {run_created_at or STATUS_PLACEHOLDER}",
         f"Run updated at: {run_updated_at or STATUS_PLACEHOLDER}",
@@ -478,9 +567,43 @@ def _actual_thinking_effort_text(value: str | None) -> str:
     return value
 
 
-def _temperature_text(value: float | None) -> str:
+def _wire_profile_lines(wire_profile: StatusWireProfile | None | _WireProfileOmitted) -> list[str]:
+    if isinstance(wire_profile, _WireProfileOmitted):
+        return []
+    if wire_profile is None:
+        return [f"Wire profile: {STATUS_PLACEHOLDER}"]
+    status = _WIRE_STATUS_TEXT.get(wire_profile.status, wire_profile.status)
+    if wire_profile.status == "verified" and wire_profile.verified_at:
+        status = f"verified on {wire_profile.verified_at}"
+    lines = [f"Wire profile: {status} (Connection {wire_profile.connection_id})"]
+    learned = _learned_wire_facts_text(wire_profile.learned)
+    if learned:
+        lines.append(f"Learned wire facts: {learned}")
+    return lines
+
+
+def _learned_wire_facts_text(facts: ObservedFacts) -> str:
+    parts: list[str] = []
+    if facts.reasoning_field:
+        parts.append(f"reasoning arrives in {facts.reasoning_field}")
+    elif facts.reasoning_returned:
+        parts.append("reasoning is returned")
+    if facts.rejected_parameters:
+        parts.append(f"rejected parameters: {', '.join(facts.rejected_parameters)}")
+    if facts.exclusive_parameters:
+        groups = ", ".join(
+            " or ".join(group.split(EXCLUSIVE_GROUP_SEPARATOR))
+            for group in facts.exclusive_parameters
+        )
+        parts.append(f"only one of: {groups}")
+    if facts.rejected_efforts:
+        parts.append(f"rejected reasoning efforts: {', '.join(facts.rejected_efforts)}")
+    return "; ".join(parts)
+
+
+def _sampling_text(value: float | None) -> str:
     if value is None:
-        return "default"
+        return "provider default"
     return f"{value:g}"
 
 

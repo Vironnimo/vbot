@@ -192,16 +192,6 @@ export function setTextInputValueWithin(container, index, value) {
   flushSync();
 }
 
-export function setNumberInputValueWithin(container, index, value) {
-  const input = Array.from(
-    container.querySelectorAll('input.s-input[inputmode="decimal"]'),
-  )[index];
-  expect(input).toBeTruthy();
-  input.value = value;
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-  flushSync();
-}
-
 export function getButtonByAriaLabel(label) {
   const button = document.body.querySelector(`button[aria-label="${label}"]`);
   expect(button).toBeTruthy();
@@ -209,7 +199,7 @@ export function getButtonByAriaLabel(label) {
 }
 
 export function temperatureInput() {
-  return document.body.querySelector('input.s-input[inputmode="decimal"]');
+  return document.body.querySelector('#agent-temperature');
 }
 
 export function getAgentButton(label) {

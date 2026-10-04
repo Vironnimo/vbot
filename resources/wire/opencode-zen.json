@@ -1,0 +1,193 @@
+{
+  "format_version": 1,
+  "_comment": "OpenCode Zen gateway. One credential reaches four wires; the catalog protocol hint (the Model's AI SDK package on models.dev) routes and admits every Model it names a known package for (today the Messages, Responses and Gemini Models), a rule routes and admits the reviewed Chat Completions Models the catalog names no package for, and a Model with neither is refused. Free Models serve only OpenCode itself (FreeTierError) and retired Models are refused before sending; discovery writes none of these refused Models. Messages carries images and PDFs with prompt-cache breakpoints and sends only temperature when a request carries temperature and top_p (Claude Haiku 4.5 rejected both, live 2026-10-03); Chat Completions and Responses carry images only (Zen's converters establish no native document, audio or video forwarding there). Responses is stateless (store false) and takes only max_output_tokens and top_p. Gemini generateContent carries Gemini's inline media up to Zen's documented 20 MB request body and reasons at thinkingLevel; none asks for the lowest level.",
+  "defaults": {
+    "admission": {
+      "state": "restricted",
+      "message": "This OpenCode Zen Model has no reviewed wire protocol in vBot; choose a listed OpenCode Zen Model."
+    }
+  },
+  "protocols": {
+    "chat_completions": {
+      "media": {"types": ["image/jpeg", "image/png", "image/gif", "image/webp"]}
+    },
+    "messages": {
+      "request": {
+        "prompt_cache": "anthropic_breakpoints",
+        "exclusive_parameters": [["temperature", "top_p"]]
+      },
+      "media": {
+        "types": ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"]
+      }
+    },
+    "responses": {
+      "request": {"allowed_parameters": ["max_tokens", "max_output_tokens", "top_p"]},
+      "reasoning": {"floor": ["low", "medium", "high", "xhigh"]}
+    },
+    "gemini": {
+      "reasoning": {"floor": ["minimal", "low", "medium", "high"], "off": "lowest"},
+      "media": {
+        "types": [
+          "image/png",
+          "image/jpeg",
+          "image/webp",
+          "image/heic",
+          "image/heif",
+          "audio/wav",
+          "audio/mp3",
+          "audio/mpeg",
+          "audio/aiff",
+          "audio/aac",
+          "audio/ogg",
+          "audio/flac",
+          "video/mp4",
+          "video/mpeg",
+          "video/quicktime",
+          "video/avi",
+          "video/x-flv",
+          "video/mpg",
+          "video/webm",
+          "video/wmv",
+          "video/3gpp",
+          "application/pdf"
+        ],
+        "request_max_bytes": 20000000,
+        "request_max_images": 3600
+      }
+    }
+  },
+  "rules": [
+    {
+      "when": {
+        "npm": [
+          "@ai-sdk/anthropic",
+          "@ai-sdk/google",
+          "@ai-sdk/openai",
+          "@ai-sdk/openai-compatible"
+        ]
+      },
+      "set": {"admission": {"state": "available", "message": null}},
+      "note": "The catalog protocol hint routes these Models (Anthropic: Messages, Google: Gemini generateContent, OpenAI: Responses, OpenAI-compatible: Chat Completions), so they are usable."
+    },
+    {
+      "when": {"suffix": "-free"},
+      "set": {
+        "admission": {
+          "state": "restricted",
+          "message": "This OpenCode Zen free Model is only available inside OpenCode. Choose a supported Zen Model or an OpenCode Go Model. Another API key does not enable access to this Model from vBot."
+        }
+      },
+      "note": "Free Models answer every vBot request with FreeTierError (HTTP 403), also those the catalog gives a protocol hint."
+    },
+    {
+      "when": {"ids": ["big-pickle"]},
+      "set": {
+        "admission": {
+          "state": "restricted",
+          "message": "This OpenCode Zen free Model is only available inside OpenCode. Choose a supported Zen Model or an OpenCode Go Model. Another API key does not enable access to this Model from vBot."
+        }
+      },
+      "note": "Big Pickle is a free Model without the -free suffix."
+    },
+    {
+      "when": {
+        "ids": [
+          "deepseek-v4-flash",
+          "deepseek-v4-flash-vision-exp",
+          "deepseek-v4-pro",
+          "deepseek-v4.1-flash",
+          "glm-5.1",
+          "glm-5.2",
+          "glm-5.3",
+          "glm-5.3-flash",
+          "kimi-k2.6",
+          "kimi-k2.7-code",
+          "kimi-k3",
+          "minimax-m2.7",
+          "minimax-m3",
+          "qwen3.8-max",
+          "space-bunny-free"
+        ]
+      },
+      "set": {
+        "protocol": "chat_completions",
+        "admission": {"state": "available", "message": null}
+      },
+      "note": "Zen's Model table serves these Models on Chat Completions (/chat/completions); the catalog names no package for them. Space Bunny is usable despite its -free suffix, so this rule comes after the free-Model rule."
+    },
+    {
+      "when": {
+        "ids": [
+          "claude-opus-4-1",
+          "claude-sonnet-4",
+          "glm-5",
+          "gpt-5-codex",
+          "gpt-5.1-codex",
+          "gpt-5.1-codex-max",
+          "gpt-5.1-codex-mini",
+          "gpt-5.2-codex",
+          "kimi-k2.5",
+          "minimax-m2.5"
+        ]
+      },
+      "set": {
+        "admission": {
+          "state": "retired",
+          "message": "This OpenCode Zen Model is retired; choose another OpenCode Zen Model."
+        }
+      },
+      "note": "Zen retired these Models; the listing and the catalog may still name them."
+    },
+    {
+      "when": {"ids": ["qwen3.8-max"]},
+      "set": {
+        "reasoning": {"dialect": "thinking_toggle", "unset": "enabled"},
+        "response": {
+          "reasoning_fields": ["reasoning_content", "reasoning", "reasoning_text", "thinking"]
+        }
+      },
+      "note": "Qwen3.8 Max on Chat switches thinking.type on or off, enabled by default, and answers with reasoning_content (verified 2026-09-28)."
+    },
+    {
+      "when": {"ids": ["claude-fable-5", "claude-opus-4-7"]},
+      "set": {"reasoning": {"off": "omit"}},
+      "note": "Zen forwards Messages to Anthropic, where these adaptive-only Models reject thinking type disabled (resources/wire/anthropic.json), so effort none sends no thinking field."
+    },
+    {
+      "when": {"ids": ["gpt-6.1-sol", "space-bunny-free"]},
+      "set": {"reasoning": {"off": "low"}},
+      "note": "These Models always reason; none asks for the cheapest rung, low (GPT 6.1 Sol verified 2026-10-02, Space Bunny 2026-09-24)."
+    },
+    {
+      "when": {"ids": ["gpt-6.1-sol"]},
+      "set": {"replay": {"scope": "none"}},
+      "note": "GPT 6.1 Sol ignores historical Reasoning (verified 2026-10-02), so none is replayed."
+    }
+  ],
+  "models": {
+    "glm-5.3": {
+      "set": {
+        "response": {"reasoning_fields": ["reasoning_content", "reasoning", "reasoning_text", "thinking"]}
+      },
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:high, effort:max, effort:none, sampling, tool_replay, replay"
+      }
+    },
+    "gpt-5.4-mini": {
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:none, effort:low, effort:medium, effort:high, effort:xhigh, sampling, tool_replay, replay, image"
+      }
+    },
+    "claude-haiku-4-5": {
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:minimal, effort:low, effort:medium, effort:high, effort:xhigh, effort:max, effort:none, sampling, tool_replay, replay, image"
+      }
+    }
+  }
+}

@@ -1,0 +1,853 @@
+"""Wire profile files, layered resolution and the reasoning decision."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers._wire_profile_files import (
+    load_wire_profile_files,
+    parse_wire_profile_file,
+)
+from core.providers.adapter_types import ADAPTER_TYPES
+from core.providers.providers import ProviderRegistry
+from core.providers.reasoning import ReasoningIntent
+from core.providers.wire_observations import REJECTION_TTL, ObservedFacts, WireObservations
+from core.providers.wire_profile import (
+    BudgetRule,
+    ParameterRule,
+    ReasoningWire,
+    RequestRules,
+    WireProfile,
+)
+from core.providers.wire_profiles import (
+    WireProfiles,
+    custom_provider_wire_file,
+    wire_profile_files,
+)
+from core.utils.errors import ProviderError
+
+RESOURCES = Path(__file__).resolve().parents[3] / "resources"
+
+
+def _model(
+    model_id: str,
+    *,
+    supported: bool = True,
+    control: str | None = None,
+    levels: tuple[str, ...] = (),
+    budget_max: int | None = None,
+    mandatory: bool = False,
+    family: str = "",
+    metadata: Mapping[str, Any] | None = None,
+) -> Model:
+    return Model(
+        model_id=model_id,
+        name=model_id,
+        capabilities=Capabilities(
+            vision=False,
+            tools=True,
+            json_mode=False,
+            reasoning=ReasoningCapabilities(
+                supported=supported,
+                control=control,
+                levels=levels,
+                budget_max=budget_max,
+                mandatory=mandatory,
+            ),
+        ),
+        context_window=100_000,
+        max_output_tokens=8_000,
+        family=family,
+        metadata=metadata or {},
+    )
+
+
+def _profiles(
+    document: Mapping[str, Any] | None,
+    models: Mapping[str, Model] = {},
+    *,
+    protocols: tuple[str, ...] = ("chat_completions", "messages", "responses"),
+    observed: ObservedFacts | None = None,
+) -> tuple[WireProfiles, list[str]]:
+    issues: list[str] = []
+    files = {}
+    if document is not None:
+        parsed = parse_wire_profile_file("acme", document, source="acme.json", report=issues.append)
+        assert parsed is not None
+        files["acme"] = parsed
+
+    store = WireObservations(None)
+    if observed is not None:
+        for target in ("m",):
+            if observed.reasoning_field:
+                store.record_reasoning_field("acme", "api-key", target, observed.reasoning_field)
+            for parameter in observed.rejected_parameters:
+                store.record_rejected_parameter("acme", "api-key", target, parameter)
+            for effort in observed.rejected_efforts:
+                store.record_rejected_effort("acme", "api-key", target, effort)
+
+    profiles = WireProfiles(
+        files=files,
+        protocol_support=lambda provider_id: protocols,  # type: ignore[arg-type,return-value]
+        model_resolver=lambda provider_id, model_id: models.get(model_id),
+        report=issues.append,
+        observations=store,
+    )
+    return profiles, issues
+
+
+def _resolve(profiles: WireProfiles, model_id: str, connection: str = "api-key") -> WireProfile:
+    return profiles.resolve("acme", connection, model_id)
+
+
+def test_invalid_values_are_reported_and_omitted_individually() -> None:
+    issues: list[str] = []
+    parsed = parse_wire_profile_file(
+        "acme",
+        {
+            "format_version": 1,
+            "defaults": {
+                "request": {
+                    "output_limit_field": "max_completion_tokens",
+                    "tool_schema": "loose",
+                    "extra_body": {"stream": False, "store": False},
+                },
+                "reasoning": {"levels": ["low", "ultra"], "dialect": "reasoning_effort"},
+                "bogus": True,
+            },
+            "rules": [
+                {"when": {"prefix": "x-"}, "set": {"reasoning": {"dialect": "none"}}},
+                {"when": {"colour": "red"}, "set": {}},
+            ],
+            "models": {"m": {"set": {"replay": {"scope": "forever"}}, "verified": {"date": "x"}}},
+        },
+        source="acme.json",
+        report=issues.append,
+    )
+
+    assert parsed is not None
+    request = parsed.defaults["request"]
+    assert request["output_limit_field"] == "max_completion_tokens"
+    # The request path decides streaming; a body rule cannot.
+    assert dict(request["extra_body"]) == {"store": False}
+    assert set(request) == {"output_limit_field", "extra_body"}
+    assert dict(parsed.defaults["reasoning"]) == {"dialect": "reasoning_effort"}
+    assert [rule.index for rule in parsed.rules] == [0]
+    assert dict(parsed.models["m"].values) == {"replay": {}}
+    assert parsed.models["m"].verification is None
+    assert len(issues) == 7
+    assert any("tool_schema" in issue for issue in issues)
+    assert any("extra_body.stream" in issue for issue in issues)
+    assert any("colour" in issue for issue in issues)
+
+
+@pytest.mark.parametrize(
+    "document",
+    [[], {"format_version": 2}, {"defaults": {}}],
+    ids=["not-an-object", "future-format", "missing-format"],
+)
+def test_a_document_without_the_supported_format_is_rejected(document: Any) -> None:
+    issues: list[str] = []
+    assert (
+        parse_wire_profile_file("acme", document, source="acme.json", report=issues.append) is None
+    )
+    assert issues
+
+
+def test_layers_apply_in_order_and_record_their_provenance() -> None:
+    model = _model(
+        "m", control="levels", levels=("low", "high"), mandatory=True, metadata={"acme": {}}
+    )
+    profiles, issues = _profiles(
+        {
+            "format_version": 1,
+            "defaults": {
+                "request": {"output_limit_cap": 1000, "body_defaults": {"a": 1, "b": 1}},
+                "reasoning": {"control": "budget"},
+                "replay": {"echo_response_field": True},
+            },
+            "protocols": {"chat_completions": {"request": {"output_limit_cap": 2000}}},
+            "connections": {"api-key": {"request": {"body_defaults": {"b": 2}}}},
+            "rules": [
+                {"when": {"prefix": "m"}, "set": {"replay": {"scope": "current_run"}}},
+                {"when": {"ids": ["other"]}, "set": {"replay": {"scope": "none"}}},
+            ],
+            "models": {
+                "m": {
+                    "set": {"response": {"reasoning_fields": ["thinking"]}},
+                    "connections": {"api-key": {"request": {"output_limit_cap": 3000}}},
+                }
+            },
+        },
+        {"m": model},
+        observed=ObservedFacts(reasoning_field="reasoning", rejected_parameters=("top_k",)),
+    )
+
+    profile = _resolve(profiles, "m::pinned")
+
+    assert issues == []
+    assert profile.model_id == "m"
+    assert profile.request.output_limit_field == "max_tokens"
+    assert profile.source_of("request.output_limit_field") == "protocol"
+    assert profile.request.output_limit_cap == 3000
+    assert profile.source_of("request.output_limit_cap") == "model_connection"
+    assert dict(profile.request.body_defaults) == {"a": 1, "b": 2}
+    assert profile.source_of("request.body_defaults.b") == "connections"
+    # The catalog control beats file defaults; rules beat the catalog.
+    assert profile.reasoning.control == "levels"
+    assert profile.source_of("reasoning.control") == "catalog"
+    assert profile.reasoning.ladder == ("low", "high")
+    assert profile.reasoning.mandatory is True
+    assert profile.source_of("reasoning.mandatory") == "catalog"
+    assert profile.replay.scope == "current_run"
+    assert profile.source_of("replay.scope") == "rule[0]"
+    # Observations beat rules and catalog, never Model entries.
+    assert profile.replay.history_field == "reasoning"
+    assert profile.source_of("replay.history_field") == "observed"
+    assert profile.request.parameters["top_k"].mode == "drop"
+    assert profile.response.reasoning_fields == ("thinking",)
+    assert profile.source_of("response.reasoning_fields") == "model"
+    assert profile.status == "configured"
+
+
+@pytest.mark.parametrize(
+    ("interleaved", "fields", "history_field", "source"),
+    [
+        (
+            "reasoning",
+            ("reasoning", "reasoning_content", "reasoning_text", "thinking"),
+            "reasoning",
+            "catalog",
+        ),
+        # A structured carrier is opaque state, not a readable field: defaults stay.
+        (
+            "reasoning_details",
+            ("reasoning", "reasoning_content", "reasoning_text", "thinking"),
+            "reasoning_content",
+            "protocol",
+        ),
+    ],
+)
+def test_catalog_hints_prefer_the_reported_reasoning_carrier(
+    interleaved: str, fields: tuple[str, ...], history_field: str, source: str
+) -> None:
+    model = _model("m", metadata={"acme": {"interleaved_field": interleaved}})
+    profiles, _ = _profiles(None, {"m": model})
+
+    profile = _resolve(profiles, "m")
+
+    assert profile.response.reasoning_fields == fields
+    assert profile.replay.history_field == history_field
+    assert profile.source_of("replay.history_field") == source
+
+
+def test_protocol_follows_precedence_and_skips_protocols_the_adapter_cannot_speak() -> None:
+    document = {
+        "format_version": 1,
+        "defaults": {"protocol": "responses"},
+        "connections": {"subscription": {"protocol": "messages"}},
+        "rules": [
+            {"when": {"prefix": "claude-"}, "set": {"protocol": "messages"}},
+            {"when": {"ids": ["claude-x"]}, "set": {"protocol": "gemini"}},
+        ],
+        "models": {"gpt-y": {"connections": {"subscription": {"protocol": "chat_completions"}}}},
+    }
+    # The catalog protocol hint: the Model's own AI SDK package (models.dev).
+    hinted = {
+        model_id: _model(model_id, metadata={"acme": {"npm": npm}})
+        for model_id, npm in {
+            "claude-x": "@ai-sdk/openai",
+            "gpt-y": "@ai-sdk/anthropic",
+            "compat": "@ai-sdk/openai-compatible",
+            "undeclared": "@ai-sdk/google",
+            "unmapped": "@ai-sdk/mistral",
+        }.items()
+    }
+    profiles, issues = _profiles(document, hinted)
+
+    def protocol(model_id: str, connection: str = "api-key") -> tuple[str, str | None]:
+        profile = _resolve(profiles, model_id, connection)
+        return profile.protocol, profile.source_of("protocol")
+
+    assert protocol("unknown") == ("responses", "defaults")
+    assert protocol("unknown", "subscription") == ("messages", "connections")
+    assert protocol("gpt-y", "subscription") == ("chat_completions", "model_connection")
+    assert protocol("gpt-y") == ("messages", "catalog_hint")
+    assert protocol("compat", "subscription") == ("chat_completions", "catalog_hint")
+    assert protocol("claude-x") == ("messages", "rule[0]")
+    # A hint the Adapter cannot speak, or a package without a protocol, is no data issue.
+    assert protocol("undeclared") == ("responses", "defaults")
+    assert protocol("unmapped") == ("responses", "defaults")
+    assert issues and all("'gemini' from rule[1]" in issue for issue in issues)
+
+    bare, _ = _profiles(None, protocols=("ollama_chat",))
+    assert _resolve(bare, "anything").protocol == "ollama_chat"
+
+
+@pytest.mark.parametrize(
+    ("when", "model_id", "connection", "matches"),
+    [
+        ({"ids": ["a", "b"]}, "b", "api-key", True),
+        ({"prefix": ["x-", "y-"]}, "y-1", "api-key", True),
+        ({"suffix": ":free"}, "q:free", "api-key", True),
+        ({"family": "fam"}, "known", "api-key", True),
+        ({"npm": "@ai-sdk/anthropic"}, "known", "api-key", True),
+        ({"metadata": {"endpoints": {"contains": "/messages"}}}, "known", "api-key", True),
+        ({"metadata": {"vendor": "Acme"}}, "known", "api-key", True),
+        ({"metadata": {"vendor": "Other"}}, "known", "api-key", False),
+        ({"control": "none"}, "known", "api-key", True),
+        ({"unknown": True}, "missing", "api-key", True),
+        ({"unknown": True}, "known", "api-key", False),
+        ({"connections": "subscription"}, "known", "api-key", False),
+        ({"prefix": "kn", "connections": "subscription"}, "known", "subscription", True),
+    ],
+)
+def test_rule_conditions_must_all_hold(
+    when: dict[str, Any], model_id: str, connection: str, matches: bool
+) -> None:
+    known = _model(
+        "known",
+        family="fam",
+        metadata={
+            "acme": {"npm": "@ai-sdk/anthropic", "endpoints": ["/messages"], "vendor": "Acme"}
+        },
+    )
+    profiles, issues = _profiles(
+        {
+            "format_version": 1,
+            "rules": [{"when": when, "set": {"admission": {"state": "restricted"}}}],
+        },
+        {"known": known},
+    )
+
+    profile = _resolve(profiles, model_id, connection)
+
+    assert issues == []
+    assert (profile.admission.state == "restricted") is matches
+
+
+def test_status_reflects_verification_entries_and_explicit_rules() -> None:
+    document = {
+        "format_version": 1,
+        "rules": [
+            {"when": {"prefix": "p-"}, "set": {}},
+            {"when": {"ids": ["listed"]}, "set": {}},
+        ],
+        "models": {
+            "checked": {"verified": {"date": "2026-10-02", "connections": ["api-key"]}},
+            "entry": {"set": {}},
+        },
+    }
+    profiles, _ = _profiles(document)
+
+    assert _resolve(profiles, "checked").status == "verified"
+    assert _resolve(profiles, "checked").verification is not None
+    assert _resolve(profiles, "checked", "subscription").status == "configured"
+    assert _resolve(profiles, "entry").status == "configured"
+    assert _resolve(profiles, "listed").status == "configured"
+    assert _resolve(profiles, "p-1").status == "inferred"
+    assert _resolve(profiles, "p-1").known_model is False
+    # The listing accessor answers the same without resolving the profile.
+    for model_id, connection in (
+        ("checked", "api-key"),
+        ("checked", "subscription"),
+        ("entry", "api-key"),
+        ("listed", "api-key"),
+        ("p-1", "api-key"),
+    ):
+        profile = _resolve(profiles, model_id, connection)
+        assert profiles.status("acme", connection, model_id) == (
+            profile.status,
+            profile.verification,
+        )
+
+
+def test_profiles_are_cached_until_the_model_or_the_files_change() -> None:
+    models = {"m": _model("m", supported=True)}
+    profiles, _ = _profiles(None, models)
+
+    first = _resolve(profiles, "m")
+    assert _resolve(profiles, "m") is first
+
+    models["m"] = _model("m", supported=False)
+    second = _resolve(profiles, "m")
+    assert second.reasoning.supported is False
+
+    parsed = parse_wire_profile_file(
+        "acme",
+        {"format_version": 1, "defaults": {"request": {"output_limit_cap": 5}}},
+        source="acme.json",
+        report=lambda message: None,
+    )
+    assert parsed is not None
+    profiles.replace_files({"acme": parsed})
+    assert _resolve(profiles, "m").request.output_limit_cap == 5
+
+
+def test_bundled_wire_profile_files_are_valid(tmp_path: Path) -> None:
+    """Every bundled file parses and names only its Provider's Connections and protocols."""
+    providers = ProviderRegistry.load(RESOURCES)
+
+    def limits(provider_id: str) -> tuple[list[str], tuple[str, ...]]:
+        config = providers.get(provider_id)
+        return (
+            [connection.id for connection in config.connections],
+            ADAPTER_TYPES[config.adapter].WIRE_PROTOCOLS,
+        )
+
+    issues: list[str] = []
+    files = load_wire_profile_files(RESOURCES, report=issues.append, limits=limits)
+    assert issues == []
+
+    (tmp_path / "wire").mkdir()
+    (tmp_path / "wire" / "acme.json").write_text(
+        json.dumps({"format_version": 1, "defaults": {"protocol": "messages"}}), encoding="utf-8"
+    )
+    (tmp_path / "wire" / "broken.json").write_text("{", encoding="utf-8")
+    loaded = load_wire_profile_files(tmp_path, report=issues.append)
+    assert set(loaded) == {"acme"}
+    assert len(issues) == 1
+    assert all(name == files[name].provider_id for name in files)
+
+
+def test_a_custom_provider_wire_block_is_its_file_within_the_providers_limits() -> None:
+    """The block has a file's body; names of other Connections or protocols are dropped."""
+
+    issues: list[str] = []
+    record = {
+        "adapter": "openai_compatible",
+        "wire": {
+            "format_version": 1,
+            "defaults": {"protocol": "responses", "reasoning": {"dialect": "thinking_toggle"}},
+            "protocols": {"messages": {}},
+            "connections": {"default": {"request": {"output_limit_cap": 10}}, "api-key": {}},
+            "rules": [
+                {"when": {"connections": "api-key"}, "set": {}},
+                {"when": {"prefix": "m"}, "set": {"replay": {"fidelity": "readable_only"}}},
+            ],
+            "models": {
+                "m": {
+                    "set": {"response": {"reasoning_fields": ["thinking"]}},
+                    "verified": {"date": "2026-10-02", "connections": ["default"]},
+                },
+                "n": {"verified": {"date": "2026-10-02", "connections": ["api-key"]}},
+            },
+        },
+    }
+
+    parsed = custom_provider_wire_file("acme", record, report=issues.append, source="wire")
+    files = wire_profile_files({"acme": record, "plain": {"adapter": "openai_compatible"}})
+
+    assert parsed is not None
+    assert dict(parsed.defaults) == {"reasoning": {"dialect": "thinking_toggle"}}
+    assert (dict(parsed.protocols), list(parsed.connections)) == ({}, ["default"])
+    assert [rule.index for rule in parsed.rules] == [1]
+    assert parsed.models["m"].verification is not None
+    assert parsed.models["n"].verification is None
+    assert issues == [
+        "wire.format_version: a wire block has no format_version (only wire profile files "
+        "do), ignoring it",
+        "wire.defaults.protocol: expected a protocol this Provider's Adapter speaks "
+        "(chat_completions), ignoring 'responses'",
+        "wire.protocols.messages: not spoken by this Provider's Adapter (chat_completions), "
+        "ignoring it",
+        "wire.connections.api-key: unknown Connection (this Provider has default), ignoring it",
+        "wire.rules[0].when.connections: unknown Connection(s) ['api-key'] (this Provider has "
+        "default), ignoring the rule",
+        "wire.models.n.verified.connections: unknown Connection(s) ['api-key'] (this Provider "
+        "has default), ignoring the verification",
+    ]
+    assert files["acme"] == parsed
+    assert "plain" not in files
+    assert "openai" in files  # bundled files stay
+
+    issues.clear()
+    not_an_object = {"adapter": "openai_compatible", "wire": ["thinking_toggle"]}
+    assert custom_provider_wire_file("acme", not_an_object, report=issues.append) is None
+    assert issues == [
+        "settings.json:providers.custom.acme.wire: expected a JSON object, ignoring the block"
+    ]
+
+
+_LADDER = ("low", "medium", "high")
+
+
+@pytest.mark.parametrize(
+    ("wire", "effort", "expected"),
+    [
+        (ReasoningWire(dialect="reasoning_effort", supported=False), "high", ("default", None)),
+        (ReasoningWire(dialect="none"), "high", ("default", None)),
+        (ReasoningWire(dialect="reasoning_effort", floor=_LADDER), None, ("default", None)),
+        (
+            ReasoningWire(dialect="reasoning_effort", floor=_LADDER, unset="enabled"),
+            None,
+            ("on", None),
+        ),
+        (
+            ReasoningWire(dialect="reasoning_effort", floor=_LADDER, unset="medium"),
+            "",
+            ("effort", "medium"),
+        ),
+        (ReasoningWire(dialect="reasoning_effort", floor=_LADDER), "minimal", ("effort", "low")),
+        (ReasoningWire(dialect="reasoning_effort", floor=_LADDER), "max", ("effort", "high")),
+        (
+            ReasoningWire(dialect="reasoning_effort", catalog_levels=("low", "high", "max")),
+            "xhigh",
+            ("effort", "high"),
+        ),
+        (
+            ReasoningWire(
+                dialect="reasoning_effort", catalog_levels=("low", "high", "max"), snap="up"
+            ),
+            "xhigh",
+            ("effort", "max"),
+        ),
+        (
+            ReasoningWire(
+                dialect="reasoning_effort", catalog_levels=("low", "high"), levels=("medium",)
+            ),
+            "high",
+            ("effort", "medium"),
+        ),
+        (
+            ReasoningWire(dialect="reasoning_effort", floor=_LADDER, effort_map={"max": "max"}),
+            "max",
+            ("effort", "max"),
+        ),
+        (
+            ReasoningWire(
+                dialect="reasoning_effort",
+                catalog_levels=("low", "medium", "high"),
+                effort_map={"xhigh": "max"},
+            ),
+            "xhigh",
+            ("effort", "high"),
+        ),
+        (ReasoningWire(dialect="reasoning_effort", floor=_LADDER), "none", ("off", None)),
+        (
+            ReasoningWire(dialect="reasoning_effort", supported=True, floor=("none", *_LADDER)),
+            "none",
+            ("off", "none"),
+        ),
+        (
+            ReasoningWire(dialect="reasoning_effort", floor=("none", *_LADDER)),
+            "none",
+            ("off", None),
+        ),
+        (
+            ReasoningWire(dialect="thinking_toggle", control="on_off", floor=("none", *_LADDER)),
+            "none",
+            ("off", None),
+        ),
+        (
+            ReasoningWire(dialect="reasoning_effort", floor=_LADDER, mandatory=True),
+            "none",
+            ("effort", "low"),
+        ),
+        (
+            ReasoningWire(dialect="reasoning_effort", control="on_off", off="none"),
+            "none",
+            ("off", "none"),
+        ),
+        (
+            ReasoningWire(dialect="reasoning_effort", floor=_LADDER, off="omit"),
+            "none",
+            ("default", None),
+        ),
+        (
+            ReasoningWire(dialect="reasoning_effort", floor=_LADDER, off="enabled"),
+            "none",
+            ("on", None),
+        ),
+        (
+            ReasoningWire(dialect="reasoning_effort", floor=_LADDER, off="medium"),
+            "none",
+            ("effort", "medium"),
+        ),
+        (
+            ReasoningWire(dialect="thinking_toggle", control="on_off", floor=_LADDER),
+            "max",
+            ("on", "high"),
+        ),
+    ],
+)
+def test_reasoning_plan_turns_an_effort_into_one_wire_decision(
+    wire: ReasoningWire, effort: str | None, expected: tuple[str, str | None]
+) -> None:
+    plan = wire.plan(effort)
+    assert (plan.kind, plan.effort_level) == expected
+
+
+@pytest.mark.parametrize(
+    ("wire", "allowance", "expected"),
+    [
+        (ReasoningWire(budget_max=32_000), None, ReasoningIntent("budget", "high", 24_000)),
+        (ReasoningWire(), None, ReasoningIntent("budget", "high", 16_384)),
+        (ReasoningWire(budget_max=32_000), 10_000, ReasoningIntent("budget", "high", 9_999)),
+        (ReasoningWire(budget_max=32_000), 1_024, ReasoningIntent("on", "high")),
+        (
+            ReasoningWire(budget_max=32_000, budget=BudgetRule(strategy="absolute")),
+            None,
+            ReasoningIntent("budget", "high", 16_384),
+        ),
+        (
+            ReasoningWire(budget=BudgetRule(minimum=2_048, maximum=8_000)),
+            None,
+            ReasoningIntent("budget", "high", 8_000),
+        ),
+    ],
+)
+def test_budget_controls_plan_a_token_budget_within_the_output_allowance(
+    wire: ReasoningWire, allowance: int | None, expected: ReasoningIntent
+) -> None:
+    budget_wire = ReasoningWire(
+        dialect="anthropic_thinking",
+        control="budget",
+        floor=("low", "medium", "high"),
+        budget_max=wire.budget_max,
+        budget=wire.budget,
+    )
+    assert budget_wire.plan("high", output_allowance=allowance) == expected
+
+
+def test_learned_facts_shape_unconfigured_profiles_and_survive_a_restart(tmp_path: Path) -> None:
+    path = tmp_path / "artifacts" / "wire-observations.json"
+    store = WireObservations.load(path, save_delay=None)
+    models = {"m": _model("m", control="levels", levels=("none", "low", "high", "xhigh"))}
+    profiles, _ = _profiles(None, models)
+    profiles.set_observations(store)
+    before = _resolve(profiles, "m")
+    assert _resolve(profiles, "unknown").reasoning.supported is None
+
+    store.record_reasoning_returned("acme", "api-key", "unknown")
+    store.record_reasoning_field("acme", "api-key", "m", "reasoning_content")
+    store.record_rejected_effort("acme", "api-key", "m::pinned", "xhigh")
+    store.record_rejected_parameter("acme", "api-key", "m", "temperature")
+    store.record_rejected_parameter("acme", "other", "m", "top_p")
+    store.record_exclusive_parameters("acme", "api-key", "m", ("temperature", "top_p"))
+    store.flush()
+    after = _resolve(profiles, "m")
+
+    assert before.response.reasoning_fields[0] == "reasoning"
+    assert after.response.reasoning_fields == (
+        "reasoning_content",
+        "reasoning",
+        "reasoning_text",
+        "thinking",
+    )
+    assert after.replay.history_field == "reasoning_content"
+    assert after.reasoning.ladder == ("none", "low", "high")
+    assert after.reasoning.plan("max").effort_level == "high"
+    assert set(after.request.parameters) == {"temperature"}
+    assert after.request.exclusive_parameters == (("temperature", "top_p"),)
+    assert _resolve(profiles, "unknown").reasoning.supported is True
+
+    reloaded = WireObservations.load(path, save_delay=None)
+    assert reloaded.facts_for("acme", "api-key", "m") == store.facts_for("acme", "api-key", "m")
+    assert reloaded.forget("acme", model_id="unknown") == 1
+    assert reloaded.facts_for("acme", "api-key", "m").reasoning_field == "reasoning_content"
+    assert reloaded.forget("acme", "api-key") == 1
+    assert reloaded.facts_for("acme", "api-key", "m").is_empty()
+    assert reloaded.facts_for("acme", "other", "m").rejected_parameters == ("top_p",)
+
+
+def test_learned_rejections_expire_and_the_profile_follows(tmp_path: Path) -> None:
+    path = tmp_path / "wire-observations.json"
+    now = [datetime(2026, 10, 1, tzinfo=UTC)]
+    store = WireObservations.load(path, save_delay=None, clock=lambda: now[0])
+    profiles, _ = _profiles(None, {"m": _model("m")})
+    profiles.set_observations(store)
+    store.record_reasoning_field("acme", "api-key", "m", "reasoning_content")
+    store.record_rejected_parameter("acme", "api-key", "m", "temperature")
+    store.record_exclusive_parameters("acme", "api-key", "m", ("temperature", "top_k"))
+    now[0] += timedelta(days=10)
+    store.record_rejected_parameter("acme", "api-key", "m", "top_p")
+    store.flush()
+    assert set(_resolve(profiles, "m").request.parameters) == {"temperature", "top_p"}
+    assert _resolve(profiles, "m").request.exclusive_parameters == (("temperature", "top_k"),)
+
+    now[0] += REJECTION_TTL - timedelta(days=10)
+    remaining = ObservedFacts(
+        reasoning_field="reasoning_content",
+        rejected_parameters=("top_p",),
+        reasoning_returned=True,
+    )
+    assert set(_resolve(profiles, "m").request.parameters) == {"top_p"}
+    assert _resolve(profiles, "m").request.exclusive_parameters == ()
+    assert store.facts_for("acme", "api-key", "m") == remaining
+    store.flush()
+    assert (
+        WireObservations.load(path, save_delay=None, clock=lambda: now[0]).facts_for(
+            "acme", "api-key", "m"
+        )
+        == remaining
+    )
+
+    now[0] += timedelta(days=10)
+    reloaded = WireObservations.load(path, save_delay=None, clock=lambda: now[0])
+    assert reloaded.facts_for("acme", "api-key", "m").rejected_parameters == ()
+
+
+@pytest.mark.parametrize(
+    ("protocol", "levels", "entry", "off", "ladder"),
+    [
+        pytest.param("messages", ("low", "high"), {}, "omit", ("low", "high"), id="off-switch"),
+        pytest.param(
+            "chat_completions",
+            ("none", "low", "high"),
+            {},
+            "auto",
+            ("low", "high"),
+            id="ladder-rung",
+        ),
+        pytest.param(
+            "messages",
+            ("low", "high"),
+            {"m": {"set": {"reasoning": {"off": "auto"}}}},
+            "auto",
+            ("low", "high"),
+            id="model-entry-wins",
+        ),
+    ],
+)
+def test_a_learned_none_rejection_omits_an_off_switch_or_narrows_the_ladder(
+    protocol: str,
+    levels: tuple[str, ...],
+    entry: Mapping[str, Any],
+    off: str,
+    ladder: tuple[str, ...],
+) -> None:
+    """A rejected explicit off: an off spelled outside the ladder becomes omission."""
+
+    profiles, _ = _profiles(
+        {"format_version": 1, "defaults": {"protocol": protocol}, "models": entry},
+        {"m": _model("m", control="levels", levels=levels)},
+        observed=ObservedFacts(rejected_efforts=("none",)),
+    )
+
+    profile = _resolve(profiles, "m")
+
+    assert profile.protocol == protocol
+    assert profile.reasoning.off == off
+    assert profile.reasoning.ladder == ladder
+
+
+@pytest.mark.parametrize(
+    ("document", "metadata"),
+    [
+        (
+            {
+                "format_version": 1,
+                "models": {"m": {"set": {"replay": {"history_field": "reasoning_content"}}}},
+            },
+            None,
+        ),
+        (None, {"acme": {"interleaved_field": "reasoning_content"}}),
+    ],
+    ids=["model-entry", "catalog-hint"],
+)
+def test_learned_facts_never_override_a_known_history_carrier(
+    document: Mapping[str, Any] | None, metadata: Mapping[str, Any] | None
+) -> None:
+    profiles, _ = _profiles(
+        document,
+        {"m": _model("m", metadata=metadata)},
+        observed=ObservedFacts(reasoning_field="reasoning"),
+    )
+
+    profile = _resolve(profiles, "m")
+
+    assert profile.replay.history_field == "reasoning_content"
+    assert profile.response.reasoning_fields[0] == "reasoning"
+
+
+@pytest.mark.parametrize("content", ["{", '{"format_version": 99, "targets": {}}', "[]"])
+def test_an_unreadable_observation_cache_starts_empty(tmp_path: Path, content: str) -> None:
+    path = tmp_path / "wire-observations.json"
+    path.write_text(content, encoding="utf-8")
+
+    store = WireObservations.load(path, save_delay=None)
+
+    assert store.snapshot() == {}
+
+
+REFUSED = object()
+
+
+@pytest.mark.parametrize(
+    ("rule", "reasoning_active", "value", "expected"),
+    [
+        (ParameterRule(mode="drop"), False, 0.5, None),
+        (ParameterRule(mode="drop_while_thinking"), True, 0.5, None),
+        (ParameterRule(mode="drop_while_thinking"), False, 0.5, 0.5),
+        (ParameterRule(minimum=0.0, maximum=1.0), False, 1.5, 1.0),
+        (ParameterRule(minimum=0.0, maximum=1.0, out_of_range="drop"), False, 1.5, None),
+        (ParameterRule(minimum=0.0, exclusive_minimum=True), False, 0.0, None),
+        (ParameterRule(minimum=0.0, exclusive_minimum=True), False, 0.1, 0.1),
+        (ParameterRule(mode="reject"), False, 0.5, REFUSED),
+        (ParameterRule(minimum=0.0, maximum=1.0, out_of_range="reject"), False, 1.5, REFUSED),
+        (ParameterRule(values=(0.5,), out_of_range="reject"), False, 0.5, 0.5),
+        (ParameterRule(values=(0.5,), out_of_range="reject"), False, 0.7, REFUSED),
+    ],
+    ids=[
+        "drop",
+        "drop-while-thinking",
+        "kept-without-thinking",
+        "clamped",
+        "out-of-range-dropped",
+        "exclusive-bound-dropped",
+        "inside-exclusive-bound",
+        "rejected-parameter-refused",
+        "out-of-range-refused",
+        "listed-value-kept",
+        "unlisted-value-refused",
+    ],
+)
+def test_parameter_rules_shape_the_request_fields(
+    rule: ParameterRule, reasoning_active: bool, value: float, expected: object
+) -> None:
+    payload: dict[str, Any] = {"temperature": value, "model": "m"}
+    rules = RequestRules(parameters={"temperature": rule})
+
+    def shape() -> None:
+        rules.shape_parameters(payload, reasoning_active=reasoning_active, provider_label="Acme")
+
+    if expected is REFUSED:
+        with pytest.raises(ProviderError, match="Acme .*temperature") as refused:
+            shape()
+        assert refused.value.retryable is False
+        return
+    shape()
+
+    assert payload.get("temperature") == expected
+    assert payload["model"] == "m"
+
+
+@pytest.mark.parametrize(
+    ("payload", "parameters", "sent"),
+    [
+        ({"temperature": 0.3, "top_p": 0.9}, {}, {"temperature": 0.3}),
+        ({"top_p": 0.9}, {}, {"top_p": 0.9}),
+        (
+            {"temperature": 0.3, "top_p": 0.9},
+            {"temperature": ParameterRule(mode="drop")},
+            {"top_p": 0.9},
+        ),
+    ],
+    ids=["first-listed-kept", "alone-kept", "after-drops"],
+)
+def test_exclusive_parameter_groups_send_one_parameter_of_each_group(
+    payload: dict[str, Any], parameters: dict[str, ParameterRule], sent: dict[str, Any]
+) -> None:
+    rules = RequestRules(parameters=parameters, exclusive_parameters=(("temperature", "top_p"),))
+
+    rules.shape_parameters(payload, reasoning_active=False)
+
+    assert payload == sent

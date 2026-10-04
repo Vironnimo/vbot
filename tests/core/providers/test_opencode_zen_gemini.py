@@ -10,10 +10,9 @@ import httpx
 import pytest
 import respx
 
-import core.providers.opencode_zen as zen_module
 from core.chat.streaming import StreamingAccumulator
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
-from core.providers.errors import NetworkError, ProviderError
+from core.providers.errors import NetworkError, ProviderError, ProviderRequestTooLargeError
 from core.tools import tool_failure, tool_success
 from core.utils.retry import caller_owns_retries
 
@@ -214,15 +213,19 @@ async def test_gemini_rejects_invalid_requests_before_network(
 async def test_gemini_enforces_the_inline_request_size_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(zen_module, "_ZEN_INLINE_REQUEST_MAX_BYTES", 100)
     adapter = zen_adapter()
+    # Zen documents a 20 MB inline request body; a small limit keeps the test fast.
+    assert adapter.request_body_limit(GEMINI_MODEL) == 20_000_000
+    monkeypatch.setattr(adapter, "request_body_limit", lambda _model_id: 100)
 
     with respx.mock:
         route = respx.route(method="POST")
-        with pytest.raises(ProviderError) as caught:
+        with pytest.raises(ProviderRequestTooLargeError) as caught:
             await adapter.send([{"role": "user", "content": "x" * 200}], model_id=GEMINI_MODEL)
 
     assert caught.value.retryable is False
+    assert caught.value.max_bytes == 100
+    assert (caught.value.size_bytes or 0) > 100
     assert not route.called
 
 

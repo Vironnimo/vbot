@@ -46,6 +46,8 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
     assert data["workspace"] == "agents/coder/workspace"
     assert data["root_project_id"] is None
     assert data["temperature"] is None
+    # An unset top_p is not written.
+    assert "top_p" not in data
     assert data["thinking_effort"] is None
     assert data["memory_prompt_mode"] == "agent_user"
     assert data["tool_access"] == {"mode": "all"}
@@ -269,13 +271,15 @@ def test_the_librarian_keeps_its_id_and_existence_and_changes_only_model_setting
         model="openai/gpt-5",
         fallback_models=["anthropic/claude"],
         temperature=0.2,
+        top_p=0.9,
         thinking_effort="high",
     )
 
-    assert (updated.model, updated.fallback_models, updated.temperature) == (
+    assert (updated.model, updated.fallback_models, updated.temperature, updated.top_p) == (
         "openai/gpt-5",
         ["anthropic/claude"],
         0.2,
+        0.9,
     )
     for operation in (
         lambda: store.update(LIBRARIAN_AGENT_ID, name="Curator"),
@@ -310,6 +314,7 @@ def test_create_with_custom_values_persists_schema_and_keeps_workspace_files(
         fallback_models=["openai/gpt-5.2", "anthropic/claude-haiku-4.5"],
         workspace=custom_workspace,
         temperature=0.7,
+        top_p=0.9,
         thinking_effort="high",
         memory_prompt_mode="agent",
         tool_access={"mode": "selected", "allowed": []},
@@ -330,6 +335,7 @@ def test_create_with_custom_values_persists_schema_and_keeps_workspace_files(
     assert data["workspace"] == str(custom_workspace.resolve())
     assert data["tools"] == tools
     assert data["excluded_skills"] == ["pdf", "xlsx"]
+    assert data["top_p"] == 0.9
     assert store.get("researcher_1") == agent
     # Seeding never overwrites an existing workspace file, and memory files belong to
     # the memory system.
@@ -404,6 +410,7 @@ def test_workspace_inside_data_dir_persists_relative_and_follows_a_moved_data_di
         ("fallback_models", ["openai/gpt-5.2"] * 6, "accepts at most 5 entries"),
         ("temperature", "0.4", "temperature must be a number"),
         ("temperature", 2.1, "temperature must be between"),
+        ("top_p", 1.5, "top_p must be between 0 and 1"),
         ("thinking_effort", "extreme", "thinking_effort must be one of"),
         ("memory_prompt_mode", "sometimes", "memory_prompt_mode must be one of"),
         ("memory_prompt_mode", True, "memory_prompt_mode must be a string"),

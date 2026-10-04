@@ -4,6 +4,7 @@
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Button from '../ui/Button.svelte';
+  import SamplingSettings from '../sampling/SamplingSettings.svelte';
   import {
     PROJECT_SOURCE_FORMATS,
     buildDefaultAgentOptions,
@@ -87,9 +88,25 @@
     })),
   ]);
 
-  let temperatureIsInherit = $derived(
-    projectsState.editForm.default_temperature === '',
-  );
+  // Project defaults serve every Team member's Model, so no single Model's
+  // recommendation is offered here.
+  let samplingFields = $derived({
+    temperature: samplingField('temperature'),
+    top_p: samplingField('top_p'),
+  });
+
+  function samplingField(fieldName) {
+    const inherited = globalDefaultText(fieldName);
+    return {
+      value: projectsState.editForm[`default_${fieldName}`],
+      hint: inherited
+        ? t('inherit.hint', { value: inherited })
+        : t('inherit.hintProviderDefault'),
+      clearLabel: inherited
+        ? t('inherit.resetToValue', { value: inherited })
+        : t('inherit.resetToProviderDefault'),
+    };
+  }
 
   function defaultModelInheritLabel() {
     const value = globalDefaultText('model');
@@ -132,10 +149,6 @@
       'default_model',
       modelSelectionValue(selection.model, selection.connectionLocalId),
     );
-  }
-
-  function clearDefaultTemperature() {
-    projectsController.updateEditField('default_temperature', '');
   }
 </script>
 
@@ -289,51 +302,13 @@
               />
             </div>
           </div>
-          <div class="s-row">
-            <div class="s-row-info">
-              <label class="s-row-label" for="project-edit-temperature">
-                {t('projects.manage.defaultTemperature')}
-              </label>
-              <div class="s-row-desc">
-                {t('projects.manage.defaultTemperatureHelp')}
-              </div>
-              {#if temperatureIsInherit}
-                <div class="s-row-desc projects-inherit-hint">
-                  {#if globalDefaultText('temperature')}
-                    {t('inherit.hint', {
-                      value: globalDefaultText('temperature'),
-                    })}
-                  {:else}
-                    {t('inherit.hintProviderDefault')}
-                  {/if}
-                </div>
-              {/if}
-            </div>
-            <div class="s-row-control projects-number-control">
-              {#if !temperatureIsInherit}
-                <Button
-                  variant="tertiary"
-                  tooltip={globalDefaultText('temperature')
-                    ? t('inherit.resetToValue', {
-                        value: globalDefaultText('temperature'),
-                      })
-                    : t('inherit.resetToProviderDefault')}
-                  ariaLabel={t('inherit.resetToInherit')}
-                  onClick={clearDefaultTemperature}
-                >
-                  —
-                </Button>
-              {/if}
-              <TextField
-                id="project-edit-temperature"
-                class="projects-number-input"
-                inputmode="decimal"
-                value={projectsState.editForm.default_temperature}
-                ariaLabel={t('projects.manage.defaultTemperature')}
-                onInput={(next) => updateEditField('default_temperature', next)}
-              />
-            </div>
-          </div>
+          <SamplingSettings
+            idPrefix="project-edit"
+            fields={samplingFields}
+            onChange={(fieldName, value) =>
+              updateEditField(`default_${fieldName}`, value)}
+            onClear={(fieldName) => updateEditField(`default_${fieldName}`, '')}
+          />
         </div>
       </div>
     </section>

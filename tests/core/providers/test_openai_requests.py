@@ -30,13 +30,13 @@ from .openai_test_support import (
     codex_adapter,
     codex_payload,
     codex_sse_response,
+    gpt_reasoning_model,
     jwt_with_account,
     ladder_model_lookup,
     platform_adapter,
     platform_payload,
     send_codex_request,
     subscription_config,
-    wire_policy_model,
 )
 
 # ---------------------------------------------------------------------------
@@ -86,7 +86,7 @@ async def test_api_key_fallback_posts_chat_completions_without_codex_routing(
         route = respx.post(CHAT_COMPLETIONS_URL).mock(
             return_value=httpx.Response(200, json=completion)
         )
-        response = await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", **context)
+        response = await adapter.send(SAMPLE_MESSAGES, model_id="gpt-4.1", **context)
 
     request = route.calls.last.request
     assert request.headers["Authorization"] == f"Bearer {API_KEY}"
@@ -99,8 +99,8 @@ async def test_api_key_fallback_posts_chat_completions_without_codex_routing(
     ):
         assert codex_header not in request.headers
     payload = json.loads(request.content)
-    assert 0 < payload.pop("max_tokens") < 8192
-    assert payload == {"model": "gpt-5.2", "messages": SAMPLE_MESSAGES}
+    assert payload.pop("max_tokens") > 0
+    assert payload == {"model": "gpt-4.1", "messages": SAMPLE_MESSAGES}
     assert adapter.normalize_response(response) == {
         "role": "assistant",
         "content": "Hello back",
@@ -115,7 +115,7 @@ async def test_api_key_fallback_posts_chat_completions_without_codex_routing(
 async def test_platform_401_does_not_refresh_static_api_key() -> None:
     """Static API keys never acquire an OAuth recovery capability."""
 
-    adapter = platform_adapter(model_lookup=wire_policy_model)
+    adapter = platform_adapter(model_lookup=gpt_reasoning_model)
 
     with respx.mock:
         route = respx.post(PLATFORM_RESPONSES_URL).mock(
@@ -135,10 +135,10 @@ async def test_platform_401_does_not_refresh_static_api_key() -> None:
     ],
 )
 @pytest.mark.asyncio
-async def test_platform_responses_sends_reasoning_context_only_when_the_wire_policy_declares_it(
+async def test_platform_responses_sends_reasoning_context_only_when_the_wire_profile_declares_it(
     model_id: str, effort: str | None, reasoning_context: str | None
 ) -> None:
-    adapter = platform_adapter(model_lookup=wire_policy_model)
+    adapter = platform_adapter(model_lookup=gpt_reasoning_model)
     output = [
         {"type": "reasoning", "id": "rs_1", "encrypted_content": "opaque"},
         {
@@ -181,7 +181,7 @@ async def test_platform_responses_sends_reasoning_context_only_when_the_wire_pol
 async def test_platform_output_budget_uses_the_api_key_context_window() -> None:
     """Output budgeting clamps against the active Connection's window, not the Model-wide one."""
 
-    model = wire_policy_model(
+    model = gpt_reasoning_model(
         "gpt-5.5", connection_context_windows={"api-key": 16_000, "subscription": 272_000}
     )
     adapter = platform_adapter(model_lookup=lambda _model_id: model)
@@ -192,23 +192,25 @@ async def test_platform_output_budget_uses_the_api_key_context_window() -> None:
 
 
 @pytest.mark.parametrize(
-    ("adapter_factory", "expected"),
+    ("adapter_factory", "model_id", "expected"),
     [
         pytest.param(
             platform_adapter,
+            "gpt-4.1",
             IMAGE_WIRE_MEDIA_TYPES | {"audio/wav", "audio/mpeg", "application/pdf"},
             id="chat-completions",
         ),
         pytest.param(
-            lambda: platform_adapter(model_lookup=wire_policy_model),
+            platform_adapter,
+            "gpt-5.5",
             IMAGE_WIRE_MEDIA_TYPES | {"application/pdf"},
             id="platform-responses",
         ),
-        pytest.param(codex_adapter, IMAGE_WIRE_MEDIA_TYPES, id="codex-responses"),
+        pytest.param(codex_adapter, "gpt-5.5", IMAGE_WIRE_MEDIA_TYPES, id="codex-responses"),
     ],
 )
-def test_wire_media_support_follows_the_selected_wire(adapter_factory, expected) -> None:
-    assert adapter_factory().wire_media_support("gpt-5.5") == expected
+def test_wire_media_support_follows_the_selected_wire(adapter_factory, model_id, expected) -> None:
+    assert adapter_factory().wire_media_support(model_id) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -452,9 +454,7 @@ async def test_codex_gpt6_uses_catalog_efforts_and_verified_minimum(
     assert "top_p" not in payload
     assert all(tool["strict"] is False for tool in payload["tools"])
     assert adapter.reasoning_replay_policy(model_id) == "full_history"
-    intent = OpenAIAdapter.describe_reasoning_render(
-        model_lookup=lookup, model_id=model_id, effort=effort
-    )
+    intent = adapter.describe_reasoning_render(model_id, effort)
     assert intent.effort_level == expected
 
 
@@ -518,7 +518,7 @@ async def test_gpt6_sol_renders_catalog_effort_per_connection(
 
 @pytest.mark.asyncio
 async def test_codex_gpt_5_6_does_not_assume_the_public_reasoning_context() -> None:
-    adapter = codex_adapter(model_lookup=wire_policy_model)
+    adapter = codex_adapter(model_lookup=gpt_reasoning_model)
 
     payload = await codex_payload(adapter, model_id="gpt-5.6-sol", thinking_effort="high")
 

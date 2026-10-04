@@ -99,11 +99,18 @@ def test_canonical_join_is_deterministic(
             },
             id="null-fills-but-never-erases",
         ),
+        # The reasoning control description is one unit: a higher block replaces
+        # the lower ladder whole, while the independent ``mandatory`` fact survives.
         pytest.param(
             [
                 {
                     "capabilities": {
-                        "reasoning": {"supported": True, "control": "levels", "levels": ["high"]},
+                        "reasoning": {
+                            "supported": True,
+                            "control": "levels",
+                            "levels": ["high"],
+                            "mandatory": True,
+                        },
                         "vision": False,
                         "tools": True,
                         "input_modalities": ["text", "image"],
@@ -123,7 +130,7 @@ def test_canonical_join_is_deterministic(
             ],
             {
                 "capabilities": {
-                    "reasoning": {"supported": True, "control": "on_off"},
+                    "reasoning": {"supported": True, "control": "on_off", "mandatory": True},
                     "vision": False,
                     "tools": False,
                     "input_modalities": ["text"],
@@ -131,7 +138,54 @@ def test_canonical_join_is_deterministic(
                     "json_mode": None,
                 }
             },
-            id="capabilities-merge-one-level-deep-with-nested-values-wholesale",
+            id="capabilities-merge-one-level-deep-with-the-reasoning-control-as-one-unit",
+        ),
+        # A provider block with only independent facts keeps the canonical ladder.
+        pytest.param(
+            [
+                {
+                    "capabilities": {
+                        "reasoning": {"supported": True, "control": "levels", "levels": ["high"]}
+                    }
+                },
+                {"capabilities": {"reasoning": {"mandatory": True}}},
+            ],
+            {
+                "capabilities": {
+                    "reasoning": {
+                        "supported": True,
+                        "control": "levels",
+                        "levels": ["high"],
+                        "mandatory": True,
+                    }
+                }
+            },
+            id="reasoning-facts-merge-under-an-inherited-ladder",
+        ),
+        pytest.param(
+            [
+                {
+                    "metadata": {
+                        "acme": {"protocol": "responses", "routes": ["a"], "remote": True},
+                        "other": {"flag": True},
+                        "note": "generated",
+                    }
+                },
+                {
+                    "metadata": {
+                        "acme": {"routes": ["b"], "remote": None, "extra": 1},
+                        "note": {"text": "hand"},
+                    }
+                },
+            ],
+            {
+                "metadata": {
+                    "acme": {"protocol": "responses", "routes": ["b"], "remote": True, "extra": 1},
+                    "other": {"flag": True},
+                    "note": {"text": "hand"},
+                }
+            },
+            id="metadata-merges-per-provider-key-then-per-field",
         ),
     ],
 )
@@ -145,20 +199,21 @@ def test_layers_merge_field_by_field(
 
 
 def test_canonical_layer_applies_its_overrides(tmp_path: Path) -> None:
-    models_dir = tmp_path / "models"
-    models_dir.mkdir()
+    base_file = tmp_path / "models.json"
+    overrides_file = tmp_path / "models.overrides.json"
 
-    assert load_canonical_layer(models_dir) == {}
+    assert load_canonical_layer(base_file, overrides_file) == {}
+    assert load_canonical_layer(None, None) == {}
 
-    (models_dir / "models.json").write_text(
+    base_file.write_text(
         json.dumps({"models": {"lab/x": {"name": "Base", "family": "base"}}}), encoding="utf-8"
     )
-    (models_dir / "models.overrides.json").write_text(
+    overrides_file.write_text(
         json.dumps({"models": {"lab/x": {"name": "Corrected"}, "lab/y": {"name": "Y"}}}),
         encoding="utf-8",
     )
 
-    assert load_canonical_layer(models_dir) == {
+    assert load_canonical_layer(base_file, overrides_file) == {
         "lab/x": {"name": "Corrected", "family": "base"},
         "lab/y": {"name": "Y"},
     }
@@ -217,7 +272,7 @@ def test_worked_example_loads_one_canonical_model_with_per_provider_ladders() ->
     )
     assert standalone.capabilities.reasoning.supported is False
     # The override (no provider_id, manual pointer) wins, and its ladder replaces
-    # both the provider ladder [low, medium] and the canonical [high, max] wholesale.
+    # both the provider ladder [low, medium] and the canonical [high, max] as one unit.
     assert (hand_corrected.name, hand_corrected.family) == (
         "Thin DeepSeek (hand-corrected)",
         "deepseek-v4",

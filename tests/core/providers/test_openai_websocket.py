@@ -7,10 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections import deque
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -28,7 +26,10 @@ from .openai_test_support import (
     CODEX_TOOLS,
     OPENAI_SUBSCRIPTION_URL,
     SAMPLE_MESSAGES,
+    FakeCodexWebSocket,
+    FakeCodexWebSocketConnector,
     RotatingTokenGetter,
+    bundled_model_lookup,
     codex_adapter,
     codex_sse_response,
     jwt_with_account,
@@ -36,52 +37,6 @@ from .openai_test_support import (
 
 MODEL_ID = "gpt-5.6-terra"
 CONVERSATION_ID = "orchestrator:sess-42"
-
-
-class _FakeCodexWebSocket:
-    """Replays one scripted event batch per ``response.create`` sent."""
-
-    def __init__(self, event_batches: Sequence[Sequence[dict[str, Any] | BaseException]]) -> None:
-        self._event_batches = deque(deque(batch) for batch in event_batches)
-        self._active_events: deque[dict[str, Any] | BaseException] = deque()
-        self.sent_payloads: list[dict[str, Any]] = []
-        self.closed = False
-        self.response = SimpleNamespace(status_code=101, headers={"x-test-transport": "ws"})
-
-    async def send(self, data: str) -> None:
-        self.sent_payloads.append(json.loads(data))
-        if not self._event_batches:
-            raise AssertionError("unexpected WebSocket request")
-        self._active_events = self._event_batches.popleft()
-
-    async def recv(self) -> str:
-        if not self._active_events:
-            raise AssertionError("WebSocket response ended without a terminal event")
-        event = self._active_events.popleft()
-        if isinstance(event, BaseException):
-            raise event
-        return json.dumps(event)
-
-    async def close(self) -> None:
-        self.closed = True
-
-
-class _FakeCodexWebSocketConnector:
-    def __init__(self, connections: list[_FakeCodexWebSocket | BaseException]) -> None:
-        self._connections = deque(connections)
-        self.calls: list[tuple[str, dict[str, Any]]] = []
-
-    async def __call__(self, url: str, **kwargs: Any) -> _FakeCodexWebSocket:
-        self.calls.append((url, kwargs))
-        if not self._connections:
-            raise AssertionError("unexpected WebSocket connection")
-        connection = self._connections.popleft()
-        if isinstance(connection, BaseException):
-            raise connection
-        return connection
-
-    def headers(self, name: str) -> list[str]:
-        return [kwargs["additional_headers"][name] for _url, kwargs in self.calls]
 
 
 def _completed(response_id: str, output: list[dict[str, Any]]) -> dict[str, Any]:
@@ -187,7 +142,7 @@ async def test_codex_websocket_reuses_connection_and_sends_only_new_tool_result(
     conversation id keeps keying the local route.
     """
 
-    websocket = _FakeCodexWebSocket(
+    websocket = FakeCodexWebSocket(
         [
             [
                 _output_item_done(0, dict(_REASONING_ITEM)),
@@ -197,7 +152,7 @@ async def test_codex_websocket_reuses_connection_and_sends_only_new_tool_result(
             _final_turn("resp_2"),
         ]
     )
-    connector = _FakeCodexWebSocketConnector([websocket])
+    connector = FakeCodexWebSocketConnector([websocket])
     adapter = codex_adapter(codex_websocket_connect=connector)
     conversation_id = "orchestrator:" + ("session-" * 20)
     request: dict[str, Any] = {
@@ -232,9 +187,9 @@ async def test_codex_websocket_reuses_connection_and_sends_only_new_tool_result(
 
 @pytest.mark.asyncio
 async def test_closing_a_partial_codex_stream_releases_the_socket_for_the_next_request() -> None:
-    partial = _FakeCodexWebSocket([[{"type": "response.output_text.delta", "delta": "partial"}]])
-    replacement = _FakeCodexWebSocket([_final_turn("resp_2")])
-    connector = _FakeCodexWebSocketConnector([partial, replacement])
+    partial = FakeCodexWebSocket([[{"type": "response.output_text.delta", "delta": "partial"}]])
+    replacement = FakeCodexWebSocket([_final_turn("resp_2")])
+    connector = FakeCodexWebSocketConnector([partial, replacement])
     adapter = codex_adapter(codex_websocket_connect=connector)
     stream = cast(
         AsyncGenerator[dict[str, Any]],
@@ -256,7 +211,7 @@ async def test_closing_a_partial_codex_stream_releases_the_socket_for_the_next_r
 
 @pytest.mark.asyncio
 async def test_codex_websocket_missing_continuation_reconnects_with_full_context() -> None:
-    first_websocket = _FakeCodexWebSocket(
+    first_websocket = FakeCodexWebSocket(
         [
             _tool_call_turn("resp_1"),
             [
@@ -270,8 +225,8 @@ async def test_codex_websocket_missing_continuation_reconnects_with_full_context
             ],
         ]
     )
-    replacement_websocket = _FakeCodexWebSocket([_final_turn("resp_2")])
-    connector = _FakeCodexWebSocketConnector([first_websocket, replacement_websocket])
+    replacement_websocket = FakeCodexWebSocket([_final_turn("resp_2")])
+    connector = FakeCodexWebSocketConnector([first_websocket, replacement_websocket])
     adapter = codex_adapter(codex_websocket_connect=connector)
 
     first = await _send(adapter, tools=CODEX_TOOLS)
@@ -308,9 +263,9 @@ async def test_codex_websocket_never_chains_across_a_route_change(
 ) -> None:
     """Conversation, Model and ChatGPT Account isolate continuation; cache affinity does not."""
 
-    first_websocket = _FakeCodexWebSocket([_tool_call_turn("resp_1")])
-    second_websocket = _FakeCodexWebSocket([_final_turn("resp_2")])
-    connector = _FakeCodexWebSocketConnector([first_websocket, second_websocket])
+    first_websocket = FakeCodexWebSocket([_tool_call_turn("resp_1")])
+    second_websocket = FakeCodexWebSocket([_final_turn("resp_2")])
+    connector = FakeCodexWebSocketConnector([first_websocket, second_websocket])
     adapter = codex_adapter(
         RotatingTokenGetter([jwt_with_account(account) for account in accounts]),
         codex_websocket_connect=connector,
@@ -422,7 +377,7 @@ async def test_codex_error_events_follow_codex_retry_classification(
 ) -> None:
     """Unknown codes retry; known fatal codes and rejected requests stop; facts stay visible."""
 
-    connector = _FakeCodexWebSocketConnector([_FakeCodexWebSocket([[event]])])
+    connector = FakeCodexWebSocketConnector([FakeCodexWebSocket([[event]])])
     adapter = codex_adapter(codex_websocket_connect=connector)
 
     with pytest.raises(ProviderError) as caught:
@@ -437,6 +392,51 @@ async def test_codex_error_events_follow_codex_retry_classification(
     await adapter.aclose()
 
 
+@pytest.mark.asyncio
+async def test_a_rejection_event_before_the_first_delta_is_learned_on_a_fresh_socket() -> None:
+    """An in-band rejection teaches the wire like an HTTP one (test_wire_learning.py).
+
+    The failed exchange drops its socket and continuation, so the retry in the
+    learned shape opens a fresh socket with the full context.
+    """
+
+    rejected = FakeCodexWebSocket(
+        [
+            [
+                _error_frame(
+                    400,
+                    type="invalid_request_error",
+                    param="reasoning.effort",
+                    message="Invalid value for 'reasoning.effort': 'max'",
+                )
+            ]
+        ]
+    )
+    replacement = FakeCodexWebSocket([_final_turn("resp_1"), _final_turn("resp_2")])
+    connector = FakeCodexWebSocketConnector([rejected, replacement])
+    adapter = codex_adapter(codex_websocket_connect=connector, model_lookup=bundled_model_lookup())
+
+    for _ in range(2):
+        deltas = [
+            delta
+            async for delta in adapter.stream(
+                SAMPLE_MESSAGES,
+                model_id="gpt-6-sol",
+                conversation_id=CONVERSATION_ID,
+                thinking_effort="max",
+            )
+        ]
+        assert deltas[-1]["type"] == "finish"
+
+    assert rejected.closed is True
+    assert len(connector.calls) == 2
+    payloads = [*rejected.sent_payloads, *replacement.sent_payloads]
+    assert [payload["reasoning"]["effort"] for payload in payloads] == ["max", "xhigh", "xhigh"]
+    assert "previous_response_id" not in replacement.sent_payloads[0]
+    assert replacement.sent_payloads[0]["input"] == rejected.sent_payloads[0]["input"]
+    await adapter.aclose()
+
+
 # ---------------------------------------------------------------------------
 # Transport failure and SSE fallback
 # ---------------------------------------------------------------------------
@@ -444,7 +444,7 @@ async def test_codex_error_events_follow_codex_retry_classification(
 
 @pytest.mark.asyncio
 async def test_codex_websocket_failure_before_events_disables_route_and_falls_back_to_sse() -> None:
-    connector = _FakeCodexWebSocketConnector([OSError("upgrade unavailable")])
+    connector = FakeCodexWebSocketConnector([OSError("upgrade unavailable")])
     adapter = codex_adapter(codex_websocket_connect=connector)
 
     with respx.mock:
@@ -472,7 +472,7 @@ async def test_codex_websocket_failure_before_events_disables_route_and_falls_ba
 async def test_codex_websocket_failure_after_event_propagates_and_next_attempt_uses_sse() -> None:
     """An in-flight exchange is never replayed internally; Chat's next attempt uses SSE."""
 
-    websocket = _FakeCodexWebSocket(
+    websocket = FakeCodexWebSocket(
         [
             [
                 {"type": "response.created", "response": {"id": "resp_started"}},
@@ -480,7 +480,7 @@ async def test_codex_websocket_failure_after_event_propagates_and_next_attempt_u
             ]
         ]
     )
-    connector = _FakeCodexWebSocketConnector([websocket])
+    connector = FakeCodexWebSocketConnector([websocket])
     adapter = codex_adapter(codex_websocket_connect=connector)
 
     with respx.mock:
@@ -509,12 +509,12 @@ async def test_codex_websocket_failure_after_event_propagates_and_next_attempt_u
 
 @pytest.mark.asyncio
 async def test_codex_websocket_exchange_keeps_canonical_debug_trace(tmp_path: Path) -> None:
-    websocket = _FakeCodexWebSocket([_final_turn("resp_1")])
+    websocket = FakeCodexWebSocket([_final_turn("resp_1")])
     # chatgpt.com answers the upgrade with several Set-Cookie headers.
     websocket.response.headers = Headers(
         [("x-test-transport", "ws"), ("set-cookie", "a=1"), ("set-cookie", "b=2")]
     )
-    connector = _FakeCodexWebSocketConnector([websocket])
+    connector = FakeCodexWebSocketConnector([websocket])
     debug_store = DebugTraceStore(tmp_path, trace_limit=10)
     adapter = codex_adapter(
         codex_websocket_connect=connector,

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers.adapter import ProviderAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.providers.wire_profiles import standalone_wire_binding
 
 TOKEN = "test-token"
 
@@ -32,6 +34,30 @@ class AdapterHookDefaults:
 
     def set_debug_context(self, context: Any) -> None:
         del context
+
+    def list_announced_tools(self, model_id: str) -> bool:
+        del model_id
+        return False
+
+
+def bind_connection[A: ProviderAdapter](
+    adapter: A,
+    *,
+    provider_id: str,
+    connection_id: str,
+    model_lookup: Callable[[str], Model | None] | None,
+) -> A:
+    """Bind ``adapter`` to the bundled wire profiles of one Connection, as the Runtime does."""
+
+    adapter.bind_wire_profiles(
+        standalone_wire_binding(
+            provider_id=provider_id,
+            connection_id=connection_id,
+            protocols=type(adapter).WIRE_PROTOCOLS,
+            model_lookup=model_lookup,
+        )
+    )
+    return adapter
 
 
 def bearer_config(
@@ -70,7 +96,6 @@ def catalog_model(
     context_window: int | None = None,
     max_output_tokens: int | None = None,
     metadata: Mapping[str, Any] | None = None,
-    reasoning_replay: str | None = None,
 ) -> Model:
     """A Tool-capable, non-reasoning catalog Model carrying the given wire facts."""
 
@@ -87,5 +112,4 @@ def catalog_model(
         context_window=context_window,
         max_output_tokens=max_output_tokens,
         metadata=dict(metadata or {}),
-        reasoning_replay=reasoning_replay,
     )

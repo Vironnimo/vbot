@@ -16,8 +16,8 @@ agent's system prompt. Mapping to the uniform :class:`ScannedAgent` profile
   ``sonnet``, bare Anthropic ids, ``inherit``) is never vBot's
   ``<provider>/<model-id>`` form, and dropping it avoids a BAD_MODEL finding on
   every Claude agent. The vBot-native way to pin a model is the per-agent
-  override layer (``/model``). Claude agents carry no temperature/reasoning
-  field either → ``temperature=None``, ``thinking_effort=None``.
+  override layer (``/model``). Claude agents carry no sampling/reasoning
+  field either → ``temperature=None``, ``top_p=None``, ``thinking_effort=None``.
 - ``body`` = the file body after the front matter, **verbatim** (opaque text).
 - ``denied_tools`` = the mapped vBot tools of every ``disallowedTools`` entry,
   plus — when a ``tools`` allow-list is present — the mapped vBot tools of every

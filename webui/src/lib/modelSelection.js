@@ -124,6 +124,41 @@ function suitabilityBadgeLabel(reasons) {
     .join(' · ');
 }
 
+// Option fields every catalog Model option carries: its suitability and, when
+// at least one of its usable Connections has a verified wire profile
+// (model.list `wire_profiles`), a quiet "verified" check naming the latest
+// verification date. Inferred and configured Models carry no marker.
+function modelOptionFields(model) {
+  return { ...suitabilityFields(model), ...wireProfileFields(model) };
+}
+
+function wireProfileFields(model) {
+  const profiles = model?.wire_profiles;
+  const verified =
+    profiles !== null && typeof profiles === 'object'
+      ? Object.values(profiles).filter(
+          (profile) => profile?.wire_status === 'verified',
+        )
+      : [];
+  if (verified.length === 0) {
+    return {};
+  }
+
+  // Dates are ISO (YYYY-MM-DD), so the greatest string is the latest.
+  const latest = verified
+    .map((profile) => profile.verified_at)
+    .filter((date) => typeof date === 'string' && date)
+    .sort()
+    .at(-1);
+  return {
+    marker: {
+      label: latest
+        ? t('models.wire.verifiedOn', { date: latest })
+        : t('models.wire.verified'),
+    },
+  };
+}
+
 function suitabilityFields(model) {
   const { suitable, reasons } = modelSuitability(model);
   // A known-down local endpoint (model.list `reachable: false`, e.g. Ollama
@@ -184,7 +219,7 @@ export function buildModelSelectOptions({
           label: selectedModel.model,
           code: true,
           isUnavailable: false,
-          ...suitabilityFields(selectedCatalogModel),
+          ...modelOptionFields(selectedCatalogModel),
         }
       : null;
   const emptyOption = {
@@ -200,7 +235,7 @@ export function buildModelSelectOptions({
           label: model.id,
           code: true,
           isUnavailable: false,
-          ...suitabilityFields(model),
+          ...modelOptionFields(model),
         },
       ];
     }
@@ -331,7 +366,7 @@ export function modelShortName(modelValue) {
 function connectionModelOptions(model, connection, providerConnectionCount) {
   const localId = connectionLocalIdFromConnectionId(connection.id);
   const usableAccounts = usableConnectionAccounts(connection);
-  const suitability = suitabilityFields(model);
+  const modelFields = modelOptionFields(model);
 
   if (usableAccounts.length <= 1) {
     return [
@@ -340,7 +375,7 @@ function connectionModelOptions(model, connection, providerConnectionCount) {
         label: modelOptionLabel(model, connection, providerConnectionCount),
         code: true,
         isUnavailable: false,
-        ...suitability,
+        ...modelFields,
       },
     ];
   }
@@ -358,7 +393,7 @@ function connectionModelOptions(model, connection, providerConnectionCount) {
     ),
     code: true,
     isUnavailable: false,
-    ...suitability,
+    ...modelFields,
   }));
 }
 

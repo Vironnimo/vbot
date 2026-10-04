@@ -15,7 +15,9 @@ from core.providers.accounts import (
     validate_account_id,
 )
 from core.providers.providers import custom_provider_credential_key
+from core.providers.wire_profiles import custom_provider_wire_file
 from core.settings.normalizers import (
+    custom_provider_revision,
     normalize_custom_provider_id,
     normalize_custom_provider_settings,
 )
@@ -138,6 +140,7 @@ def custom_provider_items(runtime: Any) -> list[JsonObject]:
             {
                 "id": provider_id,
                 **provider,
+                "revision": custom_provider_revision(provider),
                 "connection_id": connection_id,
                 "credentials_configured": runtime.provider_credentials.has_credentials(
                     provider_id,
@@ -160,7 +163,16 @@ def _list_custom_providers(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _save_custom_provider(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"provider", "api_key"}, "provider custom-save")
+    _reject_unsupported(
+        params, {"provider", "api_key", "expected_revision"}, "provider custom-save"
+    )
+    expected_revision = params.get("expected_revision")
+    if expected_revision is not None and (
+        not isinstance(expected_revision, str) or not expected_revision
+    ):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST, "params.expected_revision must be a non-empty string"
+        )
     raw_provider = params.get("provider")
     if not isinstance(raw_provider, dict):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.provider must be an object")
@@ -176,6 +188,7 @@ def _save_custom_provider(state: Any, params: JsonObject) -> JsonObject:
         if isinstance(exc, RpcError):
             raise
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    _reject_ignored_wire_entries(provider_id, provider)
 
     api_key = params.get("api_key")
     if api_key is not None and (not isinstance(api_key, str) or not api_key.strip()):
@@ -207,7 +220,9 @@ def _save_custom_provider(state: Any, params: JsonObject) -> JsonObject:
 
     previous = existing_custom.get(provider_id)
     try:
-        runtime.storage.save_custom_provider_settings(provider_id, provider)
+        runtime.storage.save_custom_provider_settings(
+            provider_id, provider, expected_revision=expected_revision
+        )
         runtime.reload_custom_providers()
         if api_key is not None:
             runtime.storage.set_data_dir_credential(
@@ -230,6 +245,25 @@ def _save_custom_provider(state: Any, params: JsonObject) -> JsonObject:
         len(provider["models"]),
     )
     return {"provider": item}
+
+
+def _reject_ignored_wire_entries(provider_id: str, provider: JsonObject) -> None:
+    """Refuse a ``wire`` block with entries the Runtime would ignore.
+
+    A hand-edited ``settings.json`` degrades gracefully (the Runtime logs and
+    ignores invalid entries); a save names every problem instead, and
+    ``data.wire_issues`` lists them for inline display.
+    """
+
+    issues: list[str] = []
+    custom_provider_wire_file(provider_id, provider, report=issues.append, source="wire")
+    if issues:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"Custom Provider '{provider_id}' was not saved: its wire block has entries "
+            f"vBot would ignore: {'; '.join(issues)}",
+            data={"wire_issues": issues},
+        )
 
 
 def _delete_custom_provider(state: Any, params: JsonObject) -> JsonObject:

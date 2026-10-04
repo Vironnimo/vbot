@@ -27,7 +27,11 @@ RESPONSES_RESPONSE_OUTPUT_META_KEY = "response_output"
 
 
 class ResponsesRequestPolicy(Protocol):
-    """Provider policy surface needed by the shared Responses payload builder."""
+    """Provider policy surface needed by the shared Responses payload builder.
+
+    It filters Tools, structured output and optional parameters; reasoning is
+    rendered by the caller's reasoning renderer, not by the policy.
+    """
 
     @property
     def supports_tools(self) -> bool: ...
@@ -38,15 +42,7 @@ class ResponsesRequestPolicy(Protocol):
     @property
     def supports_structured_outputs(self) -> bool: ...
 
-    @property
-    def allows_any_reasoning_controls(self) -> bool: ...
-
-    @property
-    def supports_explicit_none_effort(self) -> bool: ...
-
     def filter_request_kwargs(self, kwargs: Mapping[str, Any]) -> dict[str, Any]: ...
-
-    def closest_reasoning_effort(self, effort: Any) -> str | None: ...
 
     def supports_request_parameter(self, parameter_name: str) -> bool: ...
 

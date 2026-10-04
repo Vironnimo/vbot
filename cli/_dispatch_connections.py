@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any
 
 from cli._input import (
@@ -11,6 +13,7 @@ from cli._input import (
 )
 from cli.channel_management import channel_set_app_token, channel_whatsapp
 from cli.extensions_management import extensions_operation
+from cli.model_management import model_forget_wire_facts
 from cli.provider_management import (
     provider_connect,
     provider_connect_status,
@@ -203,6 +206,9 @@ def dispatch_provider_command(
 ) -> CommandResult:
     """Dispatch one parsed provider command against the server RPC client."""
 
+    target_error = _accept_connection_target(args, instance)
+    if target_error is not None:
+        return target_error
     if args.command == "list":
         if args.details:
             return list_providers(instance, details=True)
@@ -216,6 +222,18 @@ def dispatch_provider_command(
             return CommandResult(
                 ok=False, message="cannot read API key from UTF-8 stdin", instance=instance
             )
+        wire = None
+        if args.wire_file is not None:
+            try:
+                wire = json.loads(Path(args.wire_file).read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, ValueError) as exc:
+                return CommandResult(
+                    ok=False, message=f"cannot read wire file: {exc}", instance=instance
+                )
+            if not isinstance(wire, dict):
+                return CommandResult(
+                    ok=False, message="wire file must hold a JSON object", instance=instance
+                )
         return custom_save_fn(
             instance,
             args.provider,
@@ -226,6 +244,8 @@ def dispatch_provider_command(
             api_key=api_key,
             models_endpoint=args.models_endpoint,
             model_ids=args.model,
+            wire=wire,
+            clear_wire=args.clear_wire,
         )
     if args.command == "custom-delete":
         return custom_delete_fn(instance, args.provider)
@@ -265,6 +285,29 @@ def dispatch_provider_command(
     raise ValueError(f"Unsupported provider command: {args.command}")
 
 
+def _accept_connection_target(
+    args: argparse.Namespace, instance: ServerInstance
+) -> CommandResult | None:
+    """Let a Connection id such as ``ollama:local`` stand where a provider id goes.
+
+    ``provider list`` names Connections ``<provider>:<connection>``; every
+    command that also takes ``--connection`` accepts that id as its target.
+    """
+
+    target = getattr(args, "provider", None)
+    if not isinstance(target, str) or ":" not in target or not hasattr(args, "connection"):
+        return None
+    if args.connection is not None and args.connection != target:
+        return CommandResult(
+            ok=False,
+            message=f"conflicting targets: {target} and --connection {args.connection}",
+            instance=instance,
+        )
+    args.provider = target.split(":", 1)[0]
+    args.connection = target
+    return None
+
+
 def dispatch_model_command(
     args: argparse.Namespace,
     instance: ServerInstance,
@@ -272,6 +315,7 @@ def dispatch_model_command(
     list_models_fn: Callable[[ServerInstance, dict[str, Any]], CommandResult],
     show_model_fn: Callable[[ServerInstance, str], CommandResult],
     refresh_models_fn: Callable[[ServerInstance, str | None], CommandResult],
+    forget_wire_facts_fn: Callable[..., CommandResult] = model_forget_wire_facts,
 ) -> CommandResult:
     """Dispatch one parsed model command against the server RPC client."""
 
@@ -281,6 +325,8 @@ def dispatch_model_command(
         return show_model_fn(instance, args.model)
     if args.command == "refresh":
         return refresh_models_fn(instance, args.provider)
+    if args.command == "forget-wire-facts":
+        return forget_wire_facts_fn(instance, args.model, args.connection)
     raise ValueError(f"Unsupported model command: {args.command}")
 
 

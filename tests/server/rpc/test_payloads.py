@@ -27,6 +27,7 @@ def _model(
     context_window: int | None,
     metadata: dict[str, Any] | None = None,
     recommended_temperature: float | None = None,
+    recommended_top_p: float | None = None,
 ) -> Model:
     return Model(
         model_id=model_id,
@@ -41,6 +42,7 @@ def _model(
         max_output_tokens=None,
         metadata=metadata or {},
         recommended_temperature=recommended_temperature,
+        recommended_top_p=recommended_top_p,
     )
 
 
@@ -83,11 +85,25 @@ def test_model_payload_carries_raw_and_effective_context_window(
     assert payload["effective_context_window"] == effective
 
 
-@pytest.mark.parametrize("temperature", [1.0, None])
-def test_model_detail_projects_the_recommended_temperature(temperature: float | None) -> None:
-    model = _model("glm-5.2", context_window=976000, recommended_temperature=temperature)
+@pytest.mark.parametrize(("temperature", "top_p"), [(1.0, 0.95), (None, None)])
+def test_model_list_and_detail_project_the_recommended_sampling(
+    temperature: float | None, top_p: float | None
+) -> None:
+    model = _model(
+        "glm-5.2",
+        context_window=976000,
+        recommended_temperature=temperature,
+        recommended_top_p=top_p,
+    )
 
-    assert _model_detail_response("ollama-cloud", model)["recommended_temperature"] == temperature
+    for payload in (
+        _model_response("ollama-cloud", model),
+        _model_detail_response("ollama-cloud", model),
+    ):
+        assert (payload["recommended_temperature"], payload["recommended_top_p"]) == (
+            temperature,
+            top_p,
+        )
 
 
 def _agent_window_state(model: Model, local_windows: dict[str, int]) -> SimpleNamespace:

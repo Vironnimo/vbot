@@ -16,17 +16,20 @@ from core.chat.status_report import (
     STATUS_PLACEHOLDER,
     ReasoningIntent,
     StatusModelDetails,
+    StatusWireProfile,
+    WireProfileDescriber,
     build_status_text,
     resolve_actual_thinking_effort,
     resolve_reported_thinking_effort,
     resolve_status_model_details,
     resolve_status_project_label,
-    resolve_status_temperature,
+    resolve_status_sampling,
     status_session_facts,
 )
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.projects import AgentResolver, ProjectStore
 from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR, ProviderConfig
+from core.providers.wire_observations import ObservedFacts
 from core.runs import ChatRunManager, Run
 from core.sessions import ChatSessionManager, SessionAddress
 from tests.core.chat.commands_test_support import (
@@ -47,6 +50,7 @@ def _make_model(
     model_id: str = "gpt-5.2",
     name: str = "GPT-5.2",
     recommended_temperature: float | None = None,
+    recommended_top_p: float | None = None,
     context_window: int | None = 200_000,
     reasoning: ReasoningCapabilities | None = None,
 ) -> Model:
@@ -62,6 +66,7 @@ def _make_model(
         context_window=context_window,
         max_output_tokens=8_192,
         recommended_temperature=recommended_temperature,
+        recommended_top_p=recommended_top_p,
     )
 
 
@@ -138,6 +143,7 @@ def _status_dispatcher(
     resolver: _StubResolver | None = None,
     messages: list[ChatMessage] | None = None,
     model: Model | None = None,
+    wire_profile_describer: WireProfileDescriber | None = None,
 ) -> tuple[CommandDispatcher, _StubResolver, _RecordingModels]:
     resolver = resolver or _StubResolver(_make_agent())
     models = _RecordingModels(model or _make_model())
@@ -148,6 +154,7 @@ def _status_dispatcher(
         models=cast(ModelRegistry, models),
         projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
         started_at=_APP_STARTED,
+        wire_profile_describer=wire_profile_describer,
     )
     return dispatcher, resolver, models
 
@@ -217,7 +224,7 @@ def test_status_in_a_project_session_resolves_its_config_agent() -> None:
     assert "Project: vBot (vbot)" in result.feedback.text
 
 
-def test_status_reports_the_model_recommended_temperature() -> None:
+def test_status_names_the_model_recommended_temperature_without_sending_it() -> None:
     dispatcher, _, _ = _status_dispatcher(
         resolver=_StubResolver(_make_agent(temperature=None)),
         model=_make_model(recommended_temperature=1.0),
@@ -226,7 +233,83 @@ def test_status_reports_the_model_recommended_temperature() -> None:
     result = _execute_sync(dispatcher, "/status")
 
     assert result.feedback is not None
-    assert "Temperature: 1 (model recommendation)" in result.feedback.text
+    assert "Temperature: provider default (Model recommends 1)" in result.feedback.text
+
+
+def _wire_profile_fails(_agent: Any) -> StatusWireProfile | None:
+    raise RuntimeError("profile files unavailable")
+
+
+@pytest.mark.parametrize(
+    ("described", "expected"),
+    [
+        pytest.param(
+            StatusWireProfile("openai:api-key", "verified", "2026-09-30", ObservedFacts()),
+            ["Wire profile: verified on 2026-09-30 (Connection openai:api-key)"],
+            id="verified",
+        ),
+        pytest.param(
+            StatusWireProfile(
+                "openai:api-key:work",
+                "configured",
+                None,
+                ObservedFacts(
+                    reasoning_field="reasoning_content",
+                    rejected_parameters=("temperature", "top_p"),
+                    exclusive_parameters=("temperature+top_k",),
+                    rejected_efforts=("xhigh",),
+                    reasoning_returned=True,
+                ),
+            ),
+            [
+                "Wire profile: configured, unverified (Connection openai:api-key:work)",
+                "Learned wire facts: reasoning arrives in reasoning_content; "
+                "rejected parameters: temperature, top_p; only one of: temperature or top_k; "
+                "rejected reasoning efforts: xhigh",
+            ],
+            id="configured-with-learned-facts",
+        ),
+        pytest.param(
+            StatusWireProfile(
+                "openai:api-key", "inferred", None, ObservedFacts(reasoning_returned=True)
+            ),
+            [
+                "Wire profile: inferred from defaults, unverified (Connection openai:api-key)",
+                "Learned wire facts: reasoning is returned",
+            ],
+            id="inferred-with-returned-reasoning",
+        ),
+        pytest.param(None, [f"Wire profile: {STATUS_PLACEHOLDER}"], id="no-usable-connection"),
+        pytest.param(
+            _wire_profile_fails, [f"Wire profile: {STATUS_PLACEHOLDER}"], id="describer-fails"
+        ),
+    ],
+)
+def test_status_reports_the_wire_profile_of_the_models_connection(
+    described: Any, expected: list[str]
+) -> None:
+    described_agents: list[str] = []
+
+    def describe(agent: Any) -> StatusWireProfile | None:
+        described_agents.append(agent.model)
+        if callable(described):
+            return cast("StatusWireProfile | None", described(agent))
+        return cast("StatusWireProfile | None", described)
+
+    dispatcher, _, _ = _status_dispatcher(
+        resolver=_StubResolver(_make_agent(model="openai/gpt-5.2::api-key:work")),
+        wire_profile_describer=describe,
+    )
+
+    result = _execute_sync(dispatcher, "/status")
+
+    assert result.feedback is not None
+    assert described_agents == ["openai/gpt-5.2::api-key:work"]
+    assert [
+        line
+        for line in result.feedback.text.splitlines()
+        if line.startswith(("Wire profile:", "Learned wire facts:"))
+    ] == expected
 
 
 @pytest.mark.asyncio
@@ -446,7 +529,7 @@ def test_status_text_renders_unset_defaults_and_the_effort_split() -> None:
     )
 
     assert "Selected thinking effort: default" in unset
-    assert "Temperature: default" in unset
+    assert "Temperature: provider default" in unset
     assert "Selected thinking effort: max" in snapped
     assert "Actual model thinking effort: high" in snapped
 
@@ -526,8 +609,9 @@ def test_reported_thinking_effort_prefers_the_adapter_description(
         assert describe is not None
         return describe(*args)
 
+    agent = _make_agent(model="ollama-cloud/glm-5.3-flash", thinking_effort=effort)
     reported = resolve_reported_thinking_effort(
-        agent=_make_agent(model="ollama-cloud/glm-5.3-flash", thinking_effort=effort),
+        agent=agent,
         models=cast(ModelRegistry, object()),
         model_details=StatusModelDetails(
             context_window=1_048_576,
@@ -539,7 +623,8 @@ def test_reported_thinking_effort_prefers_the_adapter_description(
     )
 
     assert reported == expected
-    assert calls == ([] if describe is None else [("ollama-cloud", "glm-5.3-flash", effort)])
+    # The describer resolves the Agent's Provider, Connection and Model itself.
+    assert calls == ([] if describe is None else [(agent,)])
 
 
 def test_reported_thinking_effort_without_an_agent_is_unknown() -> None:
@@ -572,12 +657,17 @@ def test_reported_thinking_effort_without_an_agent_is_unknown() -> None:
         ),
         (_make_model(context_window=None), None, {"context_window": GLOBAL_CONTEXT_WINDOW_FLOOR}),
         (
-            _make_model(recommended_temperature=1.0),
-            _provider(defaults={"temperature": 0.7}),
-            {"recommended_temperature": 1.0, "provider_default_temperature": 0.7},
+            _make_model(recommended_temperature=1.0, recommended_top_p=0.95),
+            _provider(defaults={"temperature": 0.7, "top_p": 0.9}),
+            {
+                "recommended_temperature": 1.0,
+                "provider_default_temperature": 0.7,
+                "recommended_top_p": 0.95,
+                "provider_default_top_p": 0.9,
+            },
         ),
     ],
-    ids=["reasoning-ladder", "provider-window", "global-floor-window", "temperature-tiers"],
+    ids=["reasoning-ladder", "provider-window", "global-floor-window", "sampling-tiers"],
 )
 def test_status_model_details_resolve_through_the_model_and_provider(
     model: Model, provider: ProviderConfig | None, expected: dict[str, Any]
@@ -592,16 +682,16 @@ def test_status_model_details_resolve_through_the_model_and_provider(
 
 
 @pytest.mark.parametrize(
-    ("agent_temperature", "recommended", "provider_default", "expected"),
+    ("configured", "recommended", "provider_default", "expected"),
     [
         (0.2, 1.0, 0.7, "0.2 (agent)"),
-        (None, 1.0, 0.7, "1 (model recommendation)"),
-        (None, None, 0.7, "0.7 (provider default)"),
-        (None, None, None, "default"),
+        (None, 1.0, 0.7, "0.7 (provider config)"),
+        (None, 1.0, None, "provider default (Model recommends 1)"),
+        (None, None, None, "provider default"),
     ],
 )
-def test_status_temperature_names_the_winning_tier(
-    agent_temperature: float | None,
+def test_status_sampling_names_what_the_request_sends(
+    configured: float | None,
     recommended: float | None,
     provider_default: float | None,
     expected: str,
@@ -611,6 +701,11 @@ def test_status_temperature_names_the_winning_tier(
         display_name=None,
         recommended_temperature=recommended,
         provider_default_temperature=provider_default,
+        recommended_top_p=recommended,
+        provider_default_top_p=provider_default,
     )
+    agent = replace(_make_agent(), temperature=configured, top_p=configured)
 
-    assert resolve_status_temperature(agent_temperature, details) == expected
+    sampling = resolve_status_sampling(agent, details)
+
+    assert (sampling.temperature, sampling.top_p) == (expected, expected)

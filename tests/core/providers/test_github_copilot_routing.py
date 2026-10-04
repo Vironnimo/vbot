@@ -14,7 +14,7 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
 )
 from core.providers.errors import ProviderError
-from core.providers.github_copilot_policy import (
+from core.providers.github_copilot import (
     CHAT_COMPLETIONS_ENDPOINT,
     MESSAGES_ENDPOINT,
     RESPONSES_ENDPOINT,
@@ -102,35 +102,25 @@ _IMAGE = {"type": "media", "media_type": "image/png", "base64": "aW1hZ2VkYXRh"}
         ),
         pytest.param(
             "copilot-model",
-            {
-                "metadata": copilot_metadata(
-                    "", "", [CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT]
-                ),
-                "family": "claude-sonnet-4.6",
-            },
+            {"metadata": copilot_metadata("", "", [RESPONSES_ENDPOINT, MESSAGES_ENDPOINT])},
             MESSAGES_ENDPOINT,
-            id="model-family-with-blank-metadata",
+            id="first-advertised-wire-without-a-preference",
+        ),
+        pytest.param(
+            "claude-next",
+            {"metadata": copilot_metadata("", "", [CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT])},
+            MESSAGES_ENDPOINT,
+            id="model-id-prefix-without-vendor",
         ),
         pytest.param(
             "gpt-5.2",
             {
                 "metadata": copilot_metadata(
-                    "", "stale-metadata-family", [CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT]
-                ),
-                "family": "claude-sonnet-4.6",
-            },
-            MESSAGES_ENDPOINT,
-            id="model-family-overrides-metadata-family",
-        ),
-        pytest.param(
-            "copilot-model",
-            {
-                "metadata": copilot_metadata(
-                    "", "claude-sonnet-4.6", [CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT]
+                    "OpenAI", "gpt-5.2", [CHAT_COMPLETIONS_ENDPOINT, "ws:/responses"]
                 )
             },
-            MESSAGES_ENDPOINT,
-            id="metadata-family-without-model-family",
+            CHAT_COMPLETIONS_ENDPOINT,
+            id="websocket-responses-is-not-an-http-wire",
         ),
     ],
 )

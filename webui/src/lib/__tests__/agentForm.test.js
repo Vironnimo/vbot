@@ -21,6 +21,7 @@ describe('createAgentFormValues', () => {
       workspace: '',
       root_project_id: null,
       temperature: '',
+      top_p: '',
       thinking_effort: '',
       memory_prompt_mode: 'agent_user',
       tool_access: { mode: 'all' },
@@ -41,10 +42,17 @@ describe('createAgentFormValues', () => {
           model: '',
           fallback_models: [],
           temperature: null,
+          top_p: null,
           thinking_effort: null,
         },
       },
-      { model: '', fallback_models: [], temperature: '', thinking_effort: '' },
+      {
+        model: '',
+        fallback_models: [],
+        temperature: '',
+        top_p: '',
+        thinking_effort: '',
+      },
     ],
     [
       'the top-level values without a config block',
@@ -53,6 +61,7 @@ describe('createAgentFormValues', () => {
         model: 'openai/gpt-5.2',
         fallback_models: ['openai/gpt-5.2-mini'],
         temperature: '0.7',
+        top_p: '0.9',
         thinking_effort: 'high',
       },
     ],
@@ -63,6 +72,7 @@ describe('createAgentFormValues', () => {
       model: 'openai/gpt-5.2',
       fallback_models: ['openai/gpt-5.2-mini'],
       temperature: 0.7,
+      top_p: 0.9,
       thinking_effort: 'high',
       ...extra,
     });
@@ -113,6 +123,7 @@ describe('normalizeAgentForm', () => {
       workspace: ' C:/workspace-coder ',
       root_project_id: 'vbot',
       temperature: '0.25',
+      top_p: '',
       thinking_effort: ' low ',
       memory_prompt_mode: ' off ',
       tool_access: {
@@ -129,7 +140,8 @@ describe('normalizeAgentForm', () => {
     });
 
     expect(result.isValid).toBe(true);
-    // Workspace and Project are edit-only; create payloads omit them.
+    // Workspace and Project are edit-only and an unset sampling field stays
+    // inherited; create payloads omit them.
     expect(result.payload).toEqual({
       id: 'coder',
       name: 'Coder',
@@ -164,19 +176,21 @@ describe('normalizeAgentForm', () => {
   });
 
   it.each([
-    ['0,25', 0.25, {}],
-    ['', null, {}],
-    ['warm', null, { temperature: 'invalid_number' }],
-  ])('parses temperature %j as %j', (temperature, expected, errors) => {
-    const result = normalizeAgentForm({
-      id: 'coder',
-      temperature,
-      thinking_effort: '',
-    });
+    ['temperature', '0,25', 0.25, {}],
+    ['top_p', '1', 1, {}],
+    ['top_p', '', null, {}],
+    ['temperature', 'warm', null, { temperature: 'invalid_number' }],
+    ['temperature', '2.5', null, { temperature: 'out_of_range' }],
+    ['top_p', '1.2', null, { top_p: 'out_of_range' }],
+  ])('parses %s %j as %j', (field, text, expected, errors) => {
+    const result = normalizeAgentForm(
+      { id: 'coder', [field]: text, thinking_effort: '' },
+      { mode: AGENT_FORM_MODE_EDIT },
+    );
 
     expect(result.errors).toEqual(errors);
     expect(result.payload).toMatchObject({
-      temperature: expected,
+      [field]: expected,
       thinking_effort: null,
       memory_prompt_mode: 'agent_user',
     });
@@ -234,6 +248,7 @@ describe('normalizeAgentForm', () => {
       fallback_models: ['openai/gpt-5.2-mini'],
       workspace: 'C:/workspace-coder',
       temperature: 0.2,
+      top_p: 0.9,
       thinking_effort: 'high',
       memory_prompt_mode: 'agent_user',
       tool_access: { mode: 'all' },
@@ -256,6 +271,13 @@ describe('normalizeAgentForm', () => {
 
     expect(edit({})).toEqual({ id: 'coder' });
     expect(edit(change)).toEqual({ id: 'coder', ...change });
+    // Sampling text compares as the number it saves; clearing sends null.
+    expect(edit({ top_p: '0,90' })).toEqual({ id: 'coder' });
+    expect(edit({ top_p: '0.5', temperature: '' })).toEqual({
+      id: 'coder',
+      top_p: 0.5,
+      temperature: null,
+    });
   });
 });
 
@@ -313,5 +335,14 @@ describe('thinking-effort gating', () => {
       'high',
       'xhigh',
     ]);
+  });
+
+  it('never offers turning mandatory reasoning off', () => {
+    expect(
+      effortOptionsForReasoning({ supported: true, mandatory: true }),
+    ).toEqual(THINKING_EFFORT_OPTIONS.filter((option) => option !== 'none'));
+    expect(
+      effortOptionsForReasoning({ ...reasoning, mandatory: true }),
+    ).toEqual(['', 'high', 'xhigh']);
   });
 });

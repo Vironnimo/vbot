@@ -8,21 +8,21 @@ CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
 
 OPENAI_REASONING_EFFORTS = {"low", "medium", "high"}
 
-OPENAI_REASONING_EFFORTS_WITH_NONE = {"none", *OPENAI_REASONING_EFFORTS}
-
-OPENAI_NONE_REASONING_PROVIDER_IDS = {"openai"}
-
 OPENAI_REASONING_KEYS = ("reasoning", "reasoning_content", "reasoning_text", "thinking")
 
 OPENAI_REASONING_META_KEYS = ("encrypted_content", "reasoning_details")
 
 _OPENAI_STREAM_REASONING_DETAILS_STATE_KEY = "openai_reasoning_details"
 
+_OPENAI_STREAM_REASONING_FIELDS_STATE_KEY = "openai_reasoning_fields"
+"""Stream state: the profile's readable reasoning fields, in priority order."""
+
+_OPENAI_STREAM_REASONING_FIELD_SEEN_STATE_KEY = "openai_reasoning_field_seen"
+"""Stream state: the field the stream's readable reasoning first arrived in."""
+
 _OPENAI_TOOL_CALL_INDEX_IDS_STATE_KEY = "openai_tool_call_index_ids"
 
 _OPENAI_TOOL_CALL_NAMES_STATE_KEY = "openai_tool_call_names"
-
-REASONING_RESPONSE_FIELD_METADATA_KEY = "reasoning_response_field"
 
 OPENAI_TOOL_FINISH_REASONS = {"tool_calls", "function_call"}
 

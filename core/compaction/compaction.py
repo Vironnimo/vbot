@@ -446,8 +446,6 @@ class CompactionService:
         active_model_id: str | None = None,
         active_tools: list[JsonObject] | None = None,
         minimum_reclaim_tokens: int = 0,
-        summary_temperature: float | None = None,
-        active_temperature: float | None = None,
         summary_model_reference: str | None = None,
         active_model_reference: str | None = None,
         run_id: str | None = None,
@@ -481,16 +479,10 @@ class CompactionService:
                     active_adapter=active_adapter,
                     active_model_id=active_model_id,
                 )
-                # Internal task, not the agent's voice: only the model/provider
-                # tiers of the temperature chain apply (None = unspecified, so
-                # provider-config defaults or the API default reach the wire).
+                # Internal task, not the agent's voice: no sampling parameters,
+                # so the Provider's own defaults apply.
                 request_options: dict[str, Any] = {
                     "model_id": model_id,
-                    "temperature": (
-                        summary_temperature
-                        if plan.model_target == "summary"
-                        else active_temperature
-                    ),
                     "thinking_effort": "",
                 }
                 request_options.update(

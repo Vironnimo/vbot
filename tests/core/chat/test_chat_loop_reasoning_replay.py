@@ -16,6 +16,7 @@ from core.providers.reasoning import (
     REASONING_REPLAY_CURRENT_RUN,
     REASONING_REPLAY_FULL_HISTORY,
     REASONING_REPLAY_NONE,
+    REASONING_REPLAY_TOOL_TURNS,
 )
 from core.tools import (
     ToolRegistry,
@@ -252,6 +253,66 @@ async def test_none_policy_strips_reasoning_from_live_tool_continuation(
     assert persisted[1].reasoning == "Need weather."
     assert persisted[1].reasoning_meta == {"encrypted_content": "opaque-current-turn"}
     assert assistant.content == "Sunny"
+
+
+@pytest.mark.asyncio
+async def test_tool_turns_policy_replays_only_tool_call_reasoning_unchanged_across_runs(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["get_weather"])
+    adapter = PolicyStubAdapter(
+        [
+            {
+                "content": None,
+                "reasoning": EXACT_REASONING,
+                "reasoning_meta": {"encrypted_content": "opaque-tool-turn"},
+                "tool_calls": [
+                    {"id": "call_abc", "name": "get_weather", "arguments": {"city": "Berlin"}}
+                ],
+            },
+            {
+                "content": "Sunny",
+                "reasoning": "Answer reasoning",
+                "reasoning_meta": {"encrypted_content": "opaque-answer-turn"},
+                "tool_calls": None,
+            },
+            {"content": "No umbrella", "tool_calls": None},
+        ],
+        policy=REASONING_REPLAY_TOOL_TURNS,
+    )
+    tools = ToolRegistry()
+    tools.register(
+        "get_weather",
+        "Get weather.",
+        {"type": "object"},
+        lambda _context, arguments: tool_success({"temp": 22, "city": arguments["city"]}),
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    chat = build_chat_loop(runtime)
+
+    await chat.send("coder", "Weather?", session_id="session-one")
+    await chat.send("coder", "Umbrella?", session_id="session-one")
+
+    continuation = adapter.requests[1]["messages"]
+    later_run = adapter.requests[2]["messages"]
+    assert [message["role"] for message in later_run] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "user",
+    ]
+    # The Tool Call turn keeps its reasoning and is sent in the later Run exactly
+    # as in its own Tool loop, so the Provider prompt cache keeps its prefix.
+    assert continuation[2]["reasoning"] == EXACT_REASONING
+    assert later_run[2] == continuation[2]
+    # The answer turn never carries its reasoning.
+    assert later_run[4]["content"] == "Sunny"
+    assert "reasoning" not in later_run[4]
+    assert "reasoning_meta" not in later_run[4]
+    persisted = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
+    assert persisted[3].reasoning == "Answer reasoning"
 
 
 @pytest.mark.asyncio

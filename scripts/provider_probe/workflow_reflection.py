@@ -21,7 +21,11 @@ from typing import Any
 
 from scripts.provider_probe.common import PROJECT_ROOT
 from scripts.provider_probe.learning_eval import ReflectionReport, format_pass_rate_table
-from scripts.provider_probe.learning_fixture import EvalWorker, tool_message_content
+from scripts.provider_probe.learning_fixture import (
+    EvalWorker,
+    PreparedAttempt,
+    tool_message_content,
+)
 from scripts.provider_probe.learning_scoring import CallObserver, score_attempt
 from scripts.provider_probe.learning_texts import TextPack, load_text_pack
 
@@ -79,20 +83,10 @@ def _tool_iteration_limit(scope: str) -> int:
     return MAX_TOOL_ITERATIONS
 
 
-def _sampling_kwargs(
-    args: argparse.Namespace, models: Any, agent_temperature: float | None
-) -> dict[str, Any]:
-    """Resolve temperature and top_p like Chat does for the evaluated Model."""
-    if models is None:
-        return {}
-    from core.chat.model_resolution import resolve_request_temperature, resolve_request_top_p
-
-    return {
-        "temperature": resolve_request_temperature(
-            agent_temperature, models, args.provider, args.model
-        ),
-        "top_p": resolve_request_top_p(models, args.provider, args.model),
-    }
+def _sampling_kwargs(prepared: PreparedAttempt) -> dict[str, Any]:
+    """Send sampling like Chat: only the Agent's configured values, else the Provider default."""
+    sampling = {"temperature": prepared.agent_temperature, "top_p": prepared.agent_top_p}
+    return {name: value for name, value in sampling.items() if value is not None}
 
 
 def _record_results(
@@ -232,7 +226,6 @@ async def _run_attempt(
     case: dict[str, Any],
     scope: str,
     repetition: int,
-    models: Any,
 ) -> dict[str, Any]:
     """Run one attempt; a crash is recorded on the attempt, never dropped.
 
@@ -274,7 +267,7 @@ async def _run_attempt(
             before = worker.state()
             observer = CallObserver(case, scope)
             request_kwargs: dict[str, Any] = {
-                **_sampling_kwargs(args, models, prepared.agent_temperature),
+                **_sampling_kwargs(prepared),
                 **adapter.request_context_kwargs(agent_id="main", session_id=prepared.session_id),
             }
             if args.max_tokens:
@@ -374,9 +367,7 @@ async def _run_attempt(
     return attempt
 
 
-async def _probe_reflection_workflow(
-    adapter: Any, args: argparse.Namespace, *, models: Any = None
-) -> dict[str, Any]:
+async def _probe_reflection_workflow(adapter: Any, args: argparse.Namespace) -> dict[str, Any]:
     """Run every selected (case, scope) ``--repetitions`` times and report all attempts."""
     import sys
 
@@ -421,7 +412,7 @@ async def _probe_reflection_workflow(
                     case, scope, repetition = jobs.get_nowait()
                 except asyncio.QueueEmpty:
                     return
-                attempt = await _run_attempt(worker, adapter, args, case, scope, repetition, models)
+                attempt = await _run_attempt(worker, adapter, args, case, scope, repetition)
                 report.add(attempt)
                 print(
                     f"{attempt['case']}/{attempt['scope']} #{repetition}: "

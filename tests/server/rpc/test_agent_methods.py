@@ -211,6 +211,7 @@ async def test_agent_get_reports_raw_config_and_the_effective_source(
         "model",
         "fallback_models",
         "temperature",
+        "top_p",
         "thinking_effort",
         "compaction_policy",
     }
@@ -220,6 +221,7 @@ async def test_agent_get_reports_raw_config_and_the_effective_source(
     assert result["model"] == "openai/gpt-5.2"
     assert result["effective"]["model"] == {"value": "openai/gpt-5.2", "source": source}
     assert result["effective"]["temperature"] == {"value": None, "source": None}
+    assert result["effective"]["top_p"] == {"value": None, "source": None}
 
 
 @pytest.mark.asyncio

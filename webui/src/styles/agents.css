@@ -222,40 +222,8 @@
   overflow-y: auto;
 }
 
-.agent-model-settings .agent-model-settings__inherit-hint {
-  color: var(--text-med);
-}
-
-/* Validation message under the temperature description; the input carries
-   aria-invalid and points here with aria-describedby. */
-.agent-model-settings .agent-model-settings__error {
-  margin: 4px 0 0;
-  color: var(--red);
-  font-size: var(--fs-body-sm);
-  line-height: 1.4;
-}
-
-/* Temperature keeps the shared number width; the reset action sits in front
-   of the input instead of widening the column. */
-.agent-model-settings
-  .s-group__rows
-  > .s-row
-  > .agent-model-settings__temperature-control {
-  width: auto;
-  justify-self: end;
-  gap: 6px;
-}
-
-.agent-model-settings .agent-model-settings__temperature-control > .s-input {
-  width: var(--s-number-width);
-}
-
-.agent-model-settings .agent-model-settings__reset-inherit {
-  flex-shrink: 0;
-  padding: 4px 10px;
-}
-
-.agent-model-settings .s-group__rows > .agent-model-settings__fallbacks {
+/* The fallback chain grows downward; its label stays at the top. */
+.agent-model-settings > .agent-model-settings__fallbacks {
   align-items: start;
 }
 
@@ -605,13 +573,6 @@
 
   .agents-view .agent-list-pane {
     max-height: min(220px, 32vh);
-  }
-
-  .agent-model-settings
-    .s-group__rows
-    > .s-row
-    > .agent-model-settings__temperature-control {
-    justify-self: start;
   }
 
   .agent-model-settings .agent-model-settings__fallback-add,

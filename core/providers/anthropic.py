@@ -1,4 +1,7 @@
-"""Native Anthropic provider policy layered over the reusable Messages wire."""
+"""Native Anthropic provider policy layered over the reusable Messages wire.
+
+Request shaping (sampling parameters, reasoning, media, prompt caching) lives in
+``resources/wire/anthropic.json``; this Adapter owns discovery and the catalog."""
 
 from __future__ import annotations
 
@@ -14,7 +17,7 @@ from core.models.models import (
     Model,
     ReasoningCapabilities,
 )
-from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, ModelLookup
+from core.providers.adapter import ModelLookup
 from core.providers.anthropic_compatible import (
     ANTHROPIC_OVERLOADED_STATUS,
     ANTHROPIC_VERSION,
@@ -31,8 +34,6 @@ MODELS_DISCOVERY_PAGE_SIZE = "1000"
 ANTHROPIC_METADATA_KEY = "anthropic"
 SUPPORTS_TEMPERATURE_METADATA_FIELD = "supports_temperature"
 ANTHROPIC_EFFORT_LEVEL_ORDER = ("low", "medium", "high", "xhigh", "max")
-ANTHROPIC_MAX_REQUEST_BODY_BYTES = 32_000_000
-ANTHROPIC_MAX_IMAGES = 600
 ANTHROPIC_SMALL_CONTEXT_MAX_IMAGES = 100
 ANTHROPIC_SMALL_CONTEXT_WINDOW = 200_000
 
@@ -62,24 +63,18 @@ class AnthropicAdapter(AnthropicCompatibleAdapter):
             connection_mode=connection_mode,
             client=client,
             api_version=ANTHROPIC_VERSION,
-            wire_media_types=IMAGE_WIRE_MEDIA_TYPES | {"application/pdf"},
-            prompt_caching=True,
             extra_retryable_statuses=frozenset({ANTHROPIC_OVERLOADED_STATUS}),
         )
 
     @override
-    def request_body_limit(self, model_id: str) -> int | None:
-        # Documented Messages API request size limit; larger requests get HTTP 413.
-        del model_id
-        return ANTHROPIC_MAX_REQUEST_BODY_BYTES
-
-    @override
     def request_image_limit(self, model_id: str) -> int | None:
-        # Documented: 600 images per request, 100 for Models with a 200k context.
+        # The wire file declares the documented 600 images per request; Anthropic
+        # documents 100 for Models with a context window up to 200k.
+        limit = super().request_image_limit(model_id)
         context_window = self._model_context_window(model_id)
         if context_window is not None and context_window <= ANTHROPIC_SMALL_CONTEXT_WINDOW:
-            return ANTHROPIC_SMALL_CONTEXT_MAX_IMAGES
-        return ANTHROPIC_MAX_IMAGES
+            return min(limit, ANTHROPIC_SMALL_CONTEXT_MAX_IMAGES) if limit is not None else None
+        return limit
 
     @classmethod
     def discovery_headers(
@@ -162,22 +157,6 @@ class AnthropicAdapter(AnthropicCompatibleAdapter):
                 }
             },
         )
-
-    @override
-    def _model_supports_temperature(self, model_id: str) -> bool:
-        """Read Anthropic's discovery-derived per-model sampling policy."""
-
-        if self._model_lookup is None:
-            return True
-        model = self._model_lookup(model_id.split("::", 1)[0])
-        if model is None:
-            return True
-        provider_metadata = model.metadata.get(ANTHROPIC_METADATA_KEY)
-        if isinstance(provider_metadata, Mapping):
-            value = provider_metadata.get(SUPPORTS_TEMPERATURE_METADATA_FIELD)
-            if isinstance(value, bool):
-                return value
-        return True
 
 
 def _anthropic_reasoning_control(

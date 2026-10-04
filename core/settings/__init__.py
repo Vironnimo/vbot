@@ -47,7 +47,9 @@ from core.settings.settings import (
     DEFAULT_PROJECT_SOURCE_FORMAT,
     MAX_FALLBACK_MODELS,
     MAX_TEMPERATURE,
+    MAX_TOP_P,
     MIN_TEMPERATURE,
+    MIN_TOP_P,
     PROJECT_ID_PATTERN,
     PROJECT_SOURCE_FORMATS,
     PROJECT_TOOL_ALLOWLIST_WILDCARD,
@@ -60,6 +62,7 @@ from core.settings.settings import (
     parse_settings_update_base,
     validate_temperature,
     validate_thinking_effort,
+    validate_top_p,
 )
 from core.settings.validation import (
     SETTINGS_FORMAT,
@@ -100,7 +103,9 @@ __all__ = [
     "JsonValidationReport",
     "MAX_FALLBACK_MODELS",
     "MAX_TEMPERATURE",
+    "MAX_TOP_P",
     "MIN_TEMPERATURE",
+    "MIN_TOP_P",
     "PROJECT_ID_PATTERN",
     "PROJECT_SOURCE_FORMATS",
     "PROJECT_TOOL_ALLOWLIST_WILDCARD",
@@ -137,4 +142,5 @@ __all__ = [
     "validate_settings_file",
     "validate_temperature",
     "validate_thinking_effort",
+    "validate_top_p",
 ]

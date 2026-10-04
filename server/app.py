@@ -53,6 +53,7 @@ from server._app_lifecycle import (
     _unregister_bash_process_change_bridge,
     _unregister_calendar_change_bridge,
     _unregister_cron_change_bridge,
+    _unregister_model_catalog_change_bridge,
     _unregister_recall_index_status_bridge,
     _unregister_run_event_bridge,
     _unregister_session_completion_read_bridge,
@@ -102,6 +103,7 @@ from server.file_delivery import PREVIEW_URL_PREFIX
 from server.live.owner import LIVE_SOCKET_CLOSE_UNKNOWN_CALL
 from server.rpc.errors import RPC_ERROR_INTERNAL, RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.methods import dispatch_rpc
+from server.rpc.model_methods import start_installation_catalog_restore
 from server.rpc.operations_methods import FILE_PREVIEW_WORKERS
 from server.rpc.skill_methods import install_skill_upload
 
@@ -298,6 +300,9 @@ def create_app(
         if effective_safe_mode is None:
             await _fire_extension_startup(app_runtime)
             _start_speech_preload(app_runtime)
+            # A missing or incompatible runtime Model DB is detected before the
+            # sweep below can publish a new one.
+            start_installation_catalog_restore(app.state)
         # Local model catalogs (auto_refresh connections, e.g. Ollama) refresh
         # in the background — never blocking startup; the method itself is
         # throttled and swallows failures.
@@ -337,6 +342,7 @@ def create_app(
                 _unregister_calendar_change_bridge(app.state)
                 _unregister_archive_change_bridge(app.state)
                 _unregister_skill_change_bridge(app.state)
+                _unregister_model_catalog_change_bridge(app.state)
                 _unregister_terminal_change_bridge(app.state)
                 _unregister_bash_process_change_bridge(app.state)
                 _unregister_recall_index_status_bridge(app.state)

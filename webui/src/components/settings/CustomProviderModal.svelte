@@ -3,9 +3,11 @@
 
   import { saveCustomProvider } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import { isSettingsConflict } from '$lib/settingsSave.js';
   import Button from '../ui/Button.svelte';
   import FormField from '../ui/FormField.svelte';
   import Modal from '../ui/Modal.svelte';
+  import TextArea from '../ui/TextArea.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
 
@@ -60,6 +62,50 @@
     );
   }
 
+  function initialWireText() {
+    const wire = provider?.wire;
+    return wire === undefined || wire === null
+      ? ''
+      : JSON.stringify(wire, null, 2);
+  }
+
+  // The wire block is optional JSON: empty means no block (the Provider uses
+  // the protocol defaults). The server checks its fields on save.
+  function parseWire(text) {
+    const trimmed = String(text ?? '').trim();
+    if (!trimmed) {
+      return { value: undefined, error: '' };
+    }
+    let value;
+    try {
+      value = JSON.parse(trimmed);
+    } catch (error) {
+      return {
+        value: undefined,
+        error: t('settings.providers.custom.wireInvalidJson', {
+          detail: error.message,
+        }),
+      };
+    }
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      return {
+        value: undefined,
+        error: t('settings.providers.custom.wireNotObject'),
+      };
+    }
+    return { value, error: '' };
+  }
+
+  const WIRE_FIELD_HELP = [
+    t('settings.providers.custom.wireFieldDialect'),
+    t('settings.providers.custom.wireFieldLevels'),
+    t('settings.providers.custom.wireFieldOff'),
+    t('settings.providers.custom.wireFieldResponse'),
+    t('settings.providers.custom.wireFieldReplay'),
+    t('settings.providers.custom.wireFieldRequest'),
+    t('settings.providers.custom.wireFieldSupported'),
+  ];
+
   let providerId = $state(untrack(() => provider?.id ?? ''));
   let name = $state(untrack(() => provider?.name ?? ''));
   let adapter = $state(untrack(() => provider?.adapter ?? 'openai_compatible'));
@@ -70,9 +116,13 @@
     untrack(() => provider?.models_endpoint ?? '/models'),
   );
   let models = $state(untrack(initialModels));
+  let wireText = $state(untrack(initialWireText));
+  let wireOpen = $state(untrack(() => initialWireText() !== ''));
+  let wireIssues = $state([]);
   let saving = $state(false);
   let errorMessage = $state('');
   let editing = $derived(provider !== null);
+  let wireError = $derived(parseWire(wireText).error);
 
   function addModel() {
     models = [...models, modelDraft()];
@@ -185,7 +235,13 @@
       };
     }
 
-    return {
+    const wire = parseWire(wireText);
+    if (wire.error) {
+      wireOpen = true;
+      throw new Error(wire.error);
+    }
+
+    const customProvider = {
       id,
       name: name.trim(),
       adapter,
@@ -195,6 +251,10 @@
       defaults: provider?.defaults ?? {},
       models: modelMap,
     };
+    if (wire.value !== undefined) {
+      customProvider.wire = wire.value;
+    }
+    return customProvider;
   }
 
   async function submit(event) {
@@ -213,8 +273,13 @@
 
     saving = true;
     errorMessage = '';
+    wireIssues = [];
     try {
       const params = { provider: customProvider };
+      if (provider?.revision) {
+        // The server refuses the save if the record changed after this modal opened.
+        params.expected_revision = provider.revision;
+      }
       if (auth === 'api_key' && apiKey.trim()) {
         params.api_key = apiKey.trim();
       }
@@ -226,9 +291,20 @@
       await onSaved();
       onClose();
     } catch (error) {
-      errorMessage = `${t(
-        'settings.providers.custom.saveError',
-      )} ${error.message}`;
+      const issues = error.details?.data?.wire_issues;
+      if (isSettingsConflict(error)) {
+        errorMessage = t('settings.providers.custom.changedElsewhere');
+      } else if (Array.isArray(issues) && issues.length > 0) {
+        wireIssues = issues.map(String);
+        wireOpen = true;
+        errorMessage = `${t('settings.providers.custom.saveError')} ${t(
+          'settings.providers.custom.wireIssuesHint',
+        )}`;
+      } else {
+        errorMessage = `${t(
+          'settings.providers.custom.saveError',
+        )} ${error.message}`;
+      }
     } finally {
       saving = false;
     }
@@ -574,6 +650,58 @@
         {/each}
       </section>
 
+      <details class="custom-wire" bind:open={wireOpen}>
+        <summary>{t('settings.providers.custom.wireTitle')}</summary>
+        <div class="custom-wire__body">
+          <p class="custom-wire__intro">
+            {t('settings.providers.custom.wireIntro')}
+          </p>
+          <FormField
+            controlId="custom-provider-wire"
+            label={t('settings.providers.custom.wireLabel')}
+            help={t('settings.providers.custom.wireHint')}
+            error={wireError}
+            full
+          >
+            {#snippet children(field)}
+              <TextArea
+                id={field.controlId}
+                code
+                rows={10}
+                value={wireText}
+                invalid={field.invalid || wireIssues.length > 0}
+                placeholder={t('settings.providers.custom.wirePlaceholder')}
+                disabled={saving}
+                aria-describedby={field.describedBy}
+                onInput={(value) => {
+                  wireText = value;
+                  wireIssues = [];
+                  errorMessage = '';
+                }}
+              />
+            {/snippet}
+          </FormField>
+          {#if wireIssues.length > 0}
+            <div class="custom-wire__issues" role="alert">
+              <p>{t('settings.providers.custom.wireIssues')}</p>
+              <ul>
+                {#each wireIssues as issue, index (`${index}-${issue}`)}
+                  <li><code>{issue}</code></li>
+                {/each}
+              </ul>
+            </div>
+          {/if}
+          <div class="custom-wire__fields">
+            <h5>{t('settings.providers.custom.wireFieldsTitle')}</h5>
+            <ul>
+              {#each WIRE_FIELD_HELP as line (line)}
+                <li>{line}</li>
+              {/each}
+            </ul>
+          </div>
+        </div>
+      </details>
+
       {#if errorMessage}
         <p class="custom-provider-form__error" role="alert">
           {errorMessage}
@@ -696,6 +824,61 @@
     margin: 0;
     color: var(--red);
     font-size: var(--fs-body-md);
+  }
+
+  .custom-wire {
+    padding-top: var(--space-xs);
+    border-top: 1px solid var(--border);
+  }
+
+  .custom-wire summary {
+    padding: var(--space-xs) 0;
+    color: var(--text-hi);
+    font-size: var(--fs-heading-sm);
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .custom-wire__body {
+    display: grid;
+    gap: var(--space-md);
+    padding-top: var(--space-sm);
+  }
+
+  .custom-wire__intro,
+  .custom-wire__fields li,
+  .custom-wire__issues p {
+    margin: 0;
+    color: var(--text-med);
+    font-size: var(--fs-body-md);
+    line-height: 1.45;
+  }
+
+  .custom-wire__fields h5 {
+    margin: 0 0 var(--space-xs);
+    font-size: var(--fs-body-md);
+  }
+
+  .custom-wire__fields ul,
+  .custom-wire__issues ul {
+    display: grid;
+    gap: var(--space-xs);
+    margin: 0;
+    padding-left: var(--space-lg);
+  }
+
+  .custom-wire__issues {
+    display: grid;
+    gap: var(--space-xs);
+    padding: var(--space-sm) var(--space-md);
+    border: 1px solid var(--red);
+    border-radius: var(--r-md);
+  }
+
+  .custom-wire__issues li {
+    color: var(--red);
+    font-size: var(--fs-body-sm);
+    overflow-wrap: anywhere;
   }
 
   @media (max-width: 720px) {

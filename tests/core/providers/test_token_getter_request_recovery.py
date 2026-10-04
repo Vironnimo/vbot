@@ -35,6 +35,7 @@ from core.providers.token_store import OAuthToken, TokenStore
 from core.providers.xai import XAIAdapter
 from core.utils.tls import shared_ssl_context
 
+from .adapter_test_support import bind_connection
 from .oauth_test_support import (
     expired_token,
     github_oauth_config,
@@ -277,11 +278,17 @@ WIRES = {
 }
 
 
+# OpenCode Zen routes these wires by the catalog protocol hint (models.dev package).
+_ZEN_NPM = {
+    "messages": "@ai-sdk/anthropic",
+    "responses": "@ai-sdk/openai",
+    "gemini_generate_content": "@ai-sdk/google",
+}
+
+
 def _model(wire: Wire) -> Model:
     metadata: dict[str, Any] = {}
-    if wire.provider_id == "opencode-zen":
-        metadata = {"opencode_zen": {"protocol": wire.protocol}}
-    elif wire.provider_id == "github-copilot":
+    if wire.provider_id == "github-copilot":
         metadata = {
             "github_copilot": {
                 "family": wire.model_id,
@@ -289,6 +296,8 @@ def _model(wire: Wire) -> Model:
                 "streaming": True,
             }
         }
+    elif wire.provider_id == "opencode-zen" and wire.protocol in _ZEN_NPM:
+        metadata = {"opencode_zen": {"npm": _ZEN_NPM[wire.protocol]}}
     return Model(
         model_id=wire.model_id,
         name=wire.model_id,
@@ -321,7 +330,12 @@ def _adapter(
         model_lookup=lambda _model_id: model,
         connection_mode=connection.mode,
     )
-    return cast(ProviderAdapter, adapter)
+    return bind_connection(
+        cast(ProviderAdapter, adapter),
+        provider_id=wire.provider_id,
+        connection_id=connection.id,
+        model_lookup=lambda _model_id: model,
+    )
 
 
 def _url(bundled: ProviderRegistry, wire: Wire, streaming: bool) -> str:

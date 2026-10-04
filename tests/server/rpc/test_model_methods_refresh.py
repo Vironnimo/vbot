@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from shutil import copy2
 from types import SimpleNamespace
@@ -15,7 +16,7 @@ import pytest
 import respx
 
 from core.database import write_bootstrap_marker
-from core.models.database import read_model_database_manifest
+from core.models.database import read_model_database_manifest, write_model_database_manifest
 from core.models.discovery import ModelDiscoveryError
 from core.providers.accounts import ConnectionRef
 from core.providers.credentials import ProviderCredentialResolver
@@ -52,6 +53,8 @@ __all__ = ["_no_models_dev_fetch"]
 
 _REPO_RESOURCES = Path(__file__).resolve().parents[3] / "resources"
 _FETCHED_AT = "2026-05-08T19:08:00+00:00"
+# Stands for the serving checkout's resources directory in parametrized params.
+_SERVING_RESOURCES = "<serving resources>"
 
 
 @pytest.fixture
@@ -82,6 +85,18 @@ def _api_key_provider(provider_id: str, credential_key: str) -> SimpleNamespace:
             )
         ],
     )
+
+
+def _custom_provider(provider_id: str, credential_key: str) -> SimpleNamespace:
+    provider = _api_key_provider(provider_id, credential_key)
+    provider.custom = True
+    return provider
+
+
+def _serve_resources_from(state: SimpleNamespace, resources_dir: Path) -> None:
+    """Point the stub Runtime's system Model DB at a scratch checkout."""
+
+    state.runtime.storage.resources_dir = resources_dir
 
 
 def _multi_connection_openai() -> SimpleNamespace:
@@ -124,9 +139,10 @@ def _multi_connection_openai() -> SimpleNamespace:
 async def test_model_refresh_uses_started_runtime_storage_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, target: str
 ) -> None:
-    """A runtime refresh copies the complete system DB (overrides included) into
-    the runtime root; a system refresh writes only the serving checkout. Both
-    count the entries Load ignores and log each of them once."""
+    """A runtime refresh publishes the catalogs it fetched to the runtime root,
+    while Load keeps reading the bundled overrides; a system refresh writes only
+    the serving checkout. Both record what they fetched, count the entries Load
+    ignores and log each of them once."""
 
     resources_dir = tmp_path / "configured-resources"
     (resources_dir / "providers").mkdir(parents=True)
@@ -170,14 +186,19 @@ async def test_model_refresh_uses_started_runtime_storage_paths(
             runtime.storage.layout.models if target == "runtime" else resources_dir / "models"
         )
         other = resources_dir / "models" if target == "runtime" else runtime.storage.layout.models
-        assert (destination / "openrouter.json").is_file()
         assert not (other / "openrouter.json").exists()
-        assert (destination / "openrouter.overrides.json").read_text(
+        assert sorted(path.name for path in destination.iterdir()) == [
+            "manifest.json",
+            "openrouter.json",
+            *(["openrouter.overrides.json"] if target == "system" else []),
+        ]
+        assert (resources_dir / "models/openrouter.overrides.json").read_text(
             encoding="utf-8"
         ) == override_text
         manifest = read_model_database_manifest(destination)
         assert manifest is not None
         assert manifest.source == target
+        assert set(manifest.catalogs) == {"openrouter.json"}
     finally:
         await runtime.aclose()
 
@@ -208,9 +229,19 @@ async def test_provider_refresh_reloads_the_shared_registry_and_signals_models(
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("fake_discovery")
+@pytest.mark.parametrize(
+    ("target", "refreshed"),
+    [
+        ("runtime", ["custom", "openrouter", "secondary"]),
+        # The system Model DB ships with vBot; Custom Providers exist only in Settings.
+        ("system", ["openrouter", "secondary"]),
+    ],
+)
 async def test_global_refresh_covers_only_eligible_providers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    refreshed: list[str],
 ) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
@@ -218,25 +249,56 @@ async def test_global_refresh_covers_only_eligible_providers(
     monkeypatch.delenv("MISSING_REFRESH_API_KEY", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
     monkeypatch.setenv("SECONDARY_API_KEY", "secondary-key")
+    monkeypatch.setenv("CUSTOM_API_KEY", "custom-key")
     state = make_state(tmp_path, StubAdapter())
+    resources_dir = tmp_path / "system-resources"
+    _serve_resources_from(state, resources_dir)
     state.runtime.providers.add(openrouter_provider())
     state.runtime.providers.add(_api_key_provider("missing-credentials", "MISSING_REFRESH_API_KEY"))
     state.runtime.providers.add(_api_key_provider("secondary", "SECONDARY_API_KEY"))
+    state.runtime.providers.add(_custom_provider("custom", "CUSTOM_API_KEY"))
     registry = state.runtime.models
+    params: JsonObject = {"target": target}
+    if target == "system":
+        params["expected_resources_dir"] = str(resources_dir)
+    models_dev_catalog = object()
 
-    result = await rpc_result(state, "model.refresh_db")
+    async def fetch_models_dev_catalog() -> object:
+        return models_dev_catalog
+
+    async def project_canonical_layer(
+        catalog: object, refresh_resources_dir: Path, *_args: object
+    ) -> JsonObject:
+        assert catalog is models_dev_catalog
+        (refresh_resources_dir / "models/models.json").write_text(
+            '{"models": {}}', encoding="utf-8"
+        )
+        return {"model_count": 0}
+
+    monkeypatch.setattr(model_methods, "fetch_catalog", fetch_models_dev_catalog)
+    monkeypatch.setattr(
+        model_methods, "_refresh_canonical_layer_if_possible", project_canonical_layer
+    )
+
+    result = await rpc_result(state, "model.refresh_db", **params)
 
     assert result == {
         "providers": [
-            {"provider_id": "openrouter", "model_count": 1, "fetched_at": _FETCHED_AT},
-            {"provider_id": "secondary", "model_count": 1, "fetched_at": _FETCHED_AT},
+            {"provider_id": provider_id, "model_count": 1, "fetched_at": _FETCHED_AT}
+            for provider_id in refreshed
         ],
-        "refreshed_count": 2,
-        "model_count": 2,
-        "canonical": None,
+        "refreshed_count": len(refreshed),
+        "model_count": len(refreshed),
+        "canonical": {"model_count": 0},
     }
-    assert FAKE_REFRESH_MODEL_PROVIDER_IDS == ["openrouter", "secondary"]
-    assert FAKE_REFRESH_MODEL_CALLS == ["openrouter-key", "secondary-key"]
+    destination = (
+        state.runtime.storage.layout.models if target == "runtime" else resources_dir / "models"
+    )
+    manifest = read_model_database_manifest(destination)
+    assert manifest is not None
+    assert set(manifest.catalogs) == {"models.json", *(f"{p}.json" for p in refreshed)}
+    assert refreshed == FAKE_REFRESH_MODEL_PROVIDER_IDS
+    assert [f"{provider_id}-key" for provider_id in refreshed] == FAKE_REFRESH_MODEL_CALLS
     assert state.runtime.models is registry
     assert registry.get("openrouter", "fresh-model").name == "Fresh Model"
     assert registry.get("secondary", "fresh-model").name == "Fresh Model"
@@ -300,6 +362,136 @@ async def test_manual_and_local_refreshes_preserve_each_others_complete_snapshot
         release_first.set()
         await asyncio.gather(*tasks, return_exceptions=True)
         await runtime.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_discovery")
+async def test_runtime_refresh_drops_catalogs_of_providers_that_no_longer_exist(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deleted Custom Provider's catalog leaves the runtime Model DB. Catalogs of
+    existing Providers, Settings-only Custom Providers included, and catalogs the
+    system Model DB ships stay."""
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+    state.runtime.providers.add(_custom_provider("custom", "CUSTOM_API_KEY"))
+    state.runtime.storage.save_custom_provider_settings(
+        "settings-only",
+        {
+            "name": "Settings Only",
+            "adapter": "openai_compatible",
+            "base_url": "https://settings-only.example/v1",
+        },
+    )
+    resources_dir = tmp_path / "system-resources"
+    _serve_resources_from(state, resources_dir)
+    runtime_models_dir = state.runtime.storage.layout.models
+    catalogs = {
+        resources_dir / "models": ["shipped"],
+        runtime_models_dir: ["custom", "deleted-custom", "settings-only", "shipped"],
+    }
+    for models_dir, provider_ids in catalogs.items():
+        models_dir.mkdir(parents=True, exist_ok=True)
+        for provider_id in provider_ids:
+            models_dir.joinpath(f"{provider_id}.json").write_text(
+                json.dumps({"provider_id": provider_id, "models": {}}), encoding="utf-8"
+            )
+    write_model_database_manifest(
+        runtime_models_dir,
+        source="runtime",
+        catalogs={
+            f"{provider_id}.json": datetime.now(UTC) for provider_id in catalogs[runtime_models_dir]
+        },
+    )
+
+    await rpc_result(state, "model.refresh_db", provider_id="openrouter")
+
+    assert sorted(path.name for path in runtime_models_dir.glob("*.json")) == [
+        "custom.json",
+        "manifest.json",
+        "openrouter.json",
+        "settings-only.json",
+        "shipped.json",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Startup restore of a lost runtime Model DB
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_discovery")
+@pytest.mark.parametrize(
+    ("runtime_root", "custom_provider", "rebuilt"),
+    [
+        pytest.param("incompatible", True, True, id="incompatible-with-custom-provider"),
+        pytest.param("missing", True, True, id="missing-with-custom-provider"),
+        pytest.param("incompatible", False, True, id="incompatible-without-custom-provider"),
+        pytest.param("missing", False, False, id="missing-without-custom-provider"),
+        pytest.param("compatible", True, False, id="compatible"),
+    ],
+)
+async def test_startup_rebuilds_a_lost_runtime_model_db_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    runtime_root: str,
+    custom_provider: bool,
+    rebuilt: bool,
+) -> None:
+    """Only the Custom Provider catalogs no other source provides are refreshed;
+    built-in Providers keep the bundled catalogs and local ones their sweep."""
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setenv("CUSTOM_API_KEY", "custom-key")
+    state = make_state(tmp_path, StubAdapter())
+    _serve_resources_from(state, tmp_path / "system-resources")
+    state.runtime.providers.add(openrouter_provider())
+    if custom_provider:
+        state.runtime.providers.add(_custom_provider("custom", "CUSTOM_API_KEY"))
+    runtime_models_dir = state.runtime.storage.layout.models
+    if runtime_root != "missing":
+        runtime_models_dir.mkdir(parents=True)
+        runtime_models_dir.joinpath("custom.json").write_text(
+            json.dumps({"provider_id": "custom", "models": {}}), encoding="utf-8"
+        )
+        write_model_database_manifest(
+            runtime_models_dir, source="runtime", catalogs={"custom.json": datetime.now(UTC)}
+        )
+    if runtime_root == "incompatible":
+        manifest_path = runtime_models_dir / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest_path.write_text(json.dumps(manifest | {"schema_version": 1}), encoding="utf-8")
+    with caplog.at_level(logging.INFO, logger=model_methods._LOGGER.name):
+        task = model_methods.start_installation_catalog_restore(state)
+        if task is not None:
+            await task
+
+    assert (task is not None) == rebuilt
+    assert (["custom"] if rebuilt and custom_provider else []) == FAKE_REFRESH_MODEL_PROVIDER_IDS
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if "runtime Model DB" in record.getMessage()
+    ]
+    if not rebuilt:
+        assert messages == []
+        assert resource_changes(state) == []
+        return
+    assert len(messages) == 1
+    assert messages[0].startswith(f"Rebuilt the {runtime_root} runtime Model DB")
+    assert resource_changes(state) == [{"kind": "models"}]
+    manifest_after = read_model_database_manifest(runtime_models_dir)
+    assert manifest_after is not None
+    assert set(manifest_after.catalogs) == ({"custom.json"} if custom_provider else set())
+    if custom_provider:
+        assert state.runtime.models.get("custom", "fresh-model").name == "Fresh Model"
+    # The rebuilt root is compatible, so the next startup leaves it alone.
+    assert model_methods.start_installation_catalog_restore(state) is None
 
 
 # ---------------------------------------------------------------------------
@@ -514,6 +706,15 @@ async def test_global_refresh_continues_when_one_provider_fails(
             "the serving checkout does not match",
         ),
         ({"provider_id": "missing"}, "domain_error", "unknown provider: missing"),
+        (
+            {
+                "provider_id": "custom",
+                "target": "system",
+                "expected_resources_dir": _SERVING_RESOURCES,
+            },
+            "domain_error",
+            "Custom Provider 'custom' can only be refreshed into the runtime Model DB",
+        ),
         # Neither the Provider nor its Connection declares a catalog endpoint.
         ({"provider_id": "openai"}, "domain_error", "does not support model refresh"),
         (
@@ -531,9 +732,15 @@ async def test_refused_model_refreshes_change_nothing(
     named: str,
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("CUSTOM_API_KEY", "custom-key")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     state = make_state(tmp_path, StubAdapter())
+    resources_dir = tmp_path / "system-resources"
+    _serve_resources_from(state, resources_dir)
     state.runtime.providers.add(openrouter_provider())
+    state.runtime.providers.add(_custom_provider("custom", "CUSTOM_API_KEY"))
+    if params.get("expected_resources_dir") == _SERVING_RESOURCES:
+        params = {**params, "expected_resources_dir": str(resources_dir)}
 
     error = await rpc_error(state, "model.refresh_db", **params)
 
@@ -541,6 +748,28 @@ async def test_refused_model_refreshes_change_nothing(
     assert named in error["message"]
     assert FAKE_REFRESH_MODEL_CALLS == []
     assert resource_changes(state) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_discovery")
+async def test_refreshing_a_provider_whose_catalog_connection_is_disabled_names_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A disabled Connection is skipped even with a credential; the refusal must
+    # say so instead of reporting missing credentials.
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+    state.runtime.disabled_connections.add("openrouter:api-key")
+
+    error = await rpc_error(state, "model.refresh_db", provider_id="openrouter")
+
+    assert (error["code"], error["message"]) == (
+        "domain_error",
+        "Provider 'openrouter' has no enabled Connection to refresh: "
+        "openrouter:api-key is disabled; enable it to refresh its Models",
+    )
+    assert FAKE_REFRESH_MODEL_CALLS == []
 
 
 # ---------------------------------------------------------------------------

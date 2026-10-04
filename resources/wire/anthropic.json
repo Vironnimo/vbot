@@ -1,0 +1,44 @@
+{
+  "format_version": 1,
+  "_comment": "Native Anthropic Messages. Stable prefixes carry prompt-cache breakpoints, PDFs ride as document blocks, and sampling parameters are not sent while thinking is active (protocol default). Every catalog Model (Claude 4.5 and later) rejects temperature together with top_p, so only temperature is sent then (live 2026-10-03). Models without sampling drop it always; adaptive-only Models cannot disable thinking, so off sends nothing. Documented request limits: 32 MB per body, 600 images (the Adapter caps Models with a context window up to 200k at 100).",
+  "defaults": {
+    "request": {
+      "prompt_cache": "anthropic_breakpoints",
+      "exclusive_parameters": [["temperature", "top_p"]]
+    },
+    "media": {
+      "types": ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"],
+      "request_max_bytes": 32000000,
+      "request_max_images": 600
+    }
+  },
+  "rules": [
+    {
+      "when": {"metadata": {"supports_temperature": false}},
+      "set": {
+        "request": {
+          "parameters": {
+            "temperature": {"mode": "drop"},
+            "top_p": {"mode": "drop"},
+            "top_k": {"mode": "drop"}
+          }
+        }
+      },
+      "note": "The catalog marks Models whose API removed sampling parameters; they are never sent."
+    },
+    {
+      "when": {"ids": ["claude-fable-5", "claude-opus-4-7"]},
+      "set": {"reasoning": {"off": "omit"}},
+      "note": "These adaptive-only Models reject thinking type disabled, so the Agent effort none sends no thinking field."
+    }
+  ],
+  "models": {
+    "claude-sonnet-4-6": {
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:medium, effort:high, effort:max, effort:none, sampling, tool_replay, replay, image"
+      }
+    }
+  }
+}

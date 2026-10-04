@@ -1,0 +1,56 @@
+{
+  "format_version": 1,
+  "_comment": "MiniMax. The API-key Connections speak Chat Completions, the subscription Connection speaks Anthropic Messages. temperature must lie in (0, 1]. M2.x reasons on every request and takes no reasoning control; Chat asks for the trace as reasoning_details (reasoning_split). M3 on Chat toggles adaptive thinking. The Messages wire takes no Claude thinking controls and no media and replays only signed thinking blocks (the Messages default meta_only). Both wires document a 64 MB request body limit.",
+  "defaults": {
+    "request": {
+      "parameters": {
+        "temperature": {
+          "minimum": 0,
+          "exclusive_minimum": true,
+          "maximum": 1,
+          "out_of_range": "reject"
+        }
+      }
+    },
+    "media": {"request_max_bytes": 64000000}
+  },
+  "protocols": {
+    "chat_completions": {
+      "request": {
+        "parameters": {
+          "reasoning": {"mode": "drop"},
+          "reasoning_effort": {"mode": "drop"},
+          "include_reasoning": {"mode": "drop"},
+          "thinking": {"mode": "drop"}
+        }
+      },
+      "reasoning": {"dialect": "minimax_split"}
+    },
+    "messages": {
+      "request": {
+        "prompt_cache": "anthropic_breakpoints",
+        "parameters": {
+          "thinking": {"mode": "drop"},
+          "output_config": {"mode": "drop"},
+          "reasoning_split": {"mode": "drop"},
+          "reasoning_effort": {"mode": "drop"}
+        }
+      },
+      "reasoning": {"dialect": "none"},
+      "media": {"types": []}
+    }
+  },
+  "connections": {
+    "subscription": {"protocol": "messages"}
+  },
+  "rules": [
+    {
+      "when": {"ids": ["MiniMax-M3"], "connections": ["api-key", "api-key-cn"]},
+      "set": {
+        "request": {"parameters": {"thinking": {"mode": "send"}}},
+        "reasoning": {"dialect": "minimax_thinking"}
+      },
+      "note": "M3 switches thinking between adaptive and disabled; no effort level or budget reaches the wire."
+    }
+  ]
+}

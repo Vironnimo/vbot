@@ -68,6 +68,7 @@ from core.settings import (
     is_valid_agent_id,
     validate_temperature,
     validate_thinking_effort,
+    validate_top_p,
 )
 from core.settings.agent_defaults import validate_fallback_chain
 from core.settings.validation import (
@@ -75,6 +76,7 @@ from core.settings.validation import (
     validate_optional_compaction_policy,
     validate_temperature_diagnostic,
     validate_thinking_effort_diagnostic,
+    validate_top_p_diagnostic,
 )
 from core.tools.availability import (
     BASH_ALLOWED_ENV_KEY,
@@ -138,6 +140,7 @@ _AGENT_CONFIG_FIELDS = frozenset(
         "temperature",
         "thinking_effort",
         "tool_access",
+        "top_p",
         "updated_at",
         "workspace",
     }
@@ -286,6 +289,7 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
     validate_temperature_diagnostic(
         diagnostics, "$.temperature", data.get("temperature"), allow_none=True
     )
+    validate_top_p_diagnostic(diagnostics, "$.top_p", data.get("top_p"), allow_none=True)
     validate_thinking_effort_diagnostic(
         diagnostics,
         "$.thinking_effort",
@@ -454,6 +458,13 @@ def _validate_temperature(value: Any) -> float | None:
         raise AgentError(str(exc)) from exc
 
 
+def _validate_top_p(value: Any) -> float | None:
+    try:
+        return validate_top_p(value, label="top_p", allow_none=True)
+    except SettingsValidationError as exc:
+        raise AgentError(str(exc)) from exc
+
+
 def _validate_thinking_effort(value: Any) -> str | None:
     try:
         return validate_thinking_effort(value, label="thinking_effort", allow_none=True)
@@ -605,6 +616,7 @@ def _agent_from_dict(
     agent_id = cast(str, data["id"])
     timestamp_default = utc_now_timestamp()
     temperature = data.get("temperature")
+    top_p = data.get("top_p")
     memory_prompt_mode = data.get("memory_prompt_mode")
     librarian_enabled = data.get("librarian_enabled")
     agent = Agent(
@@ -623,6 +635,7 @@ def _agent_from_dict(
         ),
         root_project_id=data.get("root_project_id"),
         temperature=None if temperature is None else float(temperature),
+        top_p=None if top_p is None else float(top_p),
         thinking_effort=data.get("thinking_effort"),
         memory_prompt_mode=cast(MemoryPromptMode, memory_prompt_mode or DEFAULT_MEMORY_PROMPT_MODE),
         tool_access=_validate_tool_access(data.get("tool_access")),
@@ -671,6 +684,8 @@ def _agent_document(agent: Agent, *, workspace: str) -> JsonObject:
         persisted.pop("tools")
     if not persisted["excluded_skills"]:
         persisted.pop("excluded_skills")
+    if persisted["top_p"] is None:
+        persisted.pop("top_p")
     if persisted["builtin"] is None:
         persisted.pop("builtin")
     persisted.pop("skill_agent_id")
@@ -736,6 +751,7 @@ def _apply_defaults(agent: Agent, defaults: AgentDefaults) -> Agent:
         model=agent.model,
         fallback_models=agent.fallback_models,
         temperature=agent.temperature,
+        top_p=agent.top_p,
         thinking_effort=agent.thinking_effort,
         defaults=defaults,
     )

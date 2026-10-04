@@ -25,10 +25,18 @@ from core.utils.errors import StorageError
 
 # Only literal enumeration of the defaults.agent field names. Every consumer
 # imports this; none may repeat the set.
-AGENT_DEFAULT_FIELDS = frozenset({"model", "fallback_models", "temperature", "thinking_effort"})
+AGENT_DEFAULT_FIELDS = frozenset(
+    {"model", "fallback_models", "temperature", "top_p", "thinking_effort"}
+)
 
 # Stable catalog order (matches the historical Settings-path listing).
-AGENT_DEFAULT_FIELD_ORDER = ("model", "fallback_models", "temperature", "thinking_effort")
+AGENT_DEFAULT_FIELD_ORDER = ("model", "fallback_models", "temperature", "top_p", "thinking_effort")
+
+# Sampling bounds, shared with the canonical validators in ``settings.py``.
+MIN_TEMPERATURE = 0.0
+MAX_TEMPERATURE = 2.0
+MIN_TOP_P = 0.0
+MAX_TOP_P = 1.0
 
 # Value kinds: the shape each field carries. Consumers branch on shape through
 # these names rather than re-listing field names.
@@ -49,6 +57,8 @@ class AgentDefaultSpec:
     parse: Callable[[Any, str], Any]
     diagnose: Callable[[list[JsonDiagnostic], str, Any], None]
     normalize: Callable[[Any], str | list[str] | float | None]
+    # Inclusive bounds of a number field.
+    bounds: tuple[float, float] | None = None
 
 
 def _parse_model_binding(value: Any, label: str) -> str:
@@ -96,6 +106,12 @@ def _parse_temperature(value: Any, label: str) -> float | None:
     return validate_temperature(value, label=label, allow_none=True)
 
 
+def _parse_top_p(value: Any, label: str) -> float | None:
+    from core.settings.settings import validate_top_p
+
+    return validate_top_p(value, label=label, allow_none=True)
+
+
 def _parse_thinking_effort(value: Any, label: str) -> str | None:
     from core.settings.settings import validate_thinking_effort
 
@@ -122,6 +138,12 @@ def _diagnose_temperature(diagnostics: list[JsonDiagnostic], path: str, value: A
     from core.settings.validation import validate_temperature_diagnostic
 
     validate_temperature_diagnostic(diagnostics, path, value, allow_none=True)
+
+
+def _diagnose_top_p(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
+    from core.settings.validation import validate_top_p_diagnostic
+
+    validate_top_p_diagnostic(diagnostics, path, value, allow_none=True)
 
 
 def _diagnose_thinking_effort(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
@@ -154,6 +176,19 @@ def _normalize_temperature(value: Any) -> float:
         raise StorageError(str(error)) from error
     assert temperature is not None
     return temperature
+
+
+def _normalize_top_p(value: Any) -> float:
+    from core.settings.settings import SettingsValidationError, validate_top_p
+
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise StorageError("Agent default top_p must be a number or null")
+    try:
+        top_p = validate_top_p(value, label="Agent default top_p")
+    except SettingsValidationError as error:
+        raise StorageError(str(error)) from error
+    assert top_p is not None
+    return top_p
 
 
 def _normalize_thinking_effort(value: Any) -> str:
@@ -190,10 +225,21 @@ _AGENT_DEFAULT_SPECS: dict[str, AgentDefaultSpec] = {
         name="temperature",
         kind=KIND_NULLABLE_NUMBER,
         value_type="number",
-        description="Default sampling temperature.",
+        description="Default sampling temperature; unset leaves it to the Provider.",
         parse=_parse_temperature,
         diagnose=_diagnose_temperature,
         normalize=_normalize_temperature,
+        bounds=(MIN_TEMPERATURE, MAX_TEMPERATURE),
+    ),
+    "top_p": AgentDefaultSpec(
+        name="top_p",
+        kind=KIND_NULLABLE_NUMBER,
+        value_type="number",
+        description="Default nucleus sampling top_p; unset leaves it to the Provider.",
+        parse=_parse_top_p,
+        diagnose=_diagnose_top_p,
+        normalize=_normalize_top_p,
+        bounds=(MIN_TOP_P, MAX_TOP_P),
     ),
     "thinking_effort": AgentDefaultSpec(
         name="thinking_effort",
@@ -260,26 +306,16 @@ def agent_default_catalog() -> list[
     so the public path entries never drift from the registry. Bounds and allowed
     values are derived from the field's kind, not re-listed per field name.
     """
-    from core.settings.settings import ALLOWED_THINKING_EFFORTS, MAX_TEMPERATURE, MIN_TEMPERATURE
+    from core.settings.settings import ALLOWED_THINKING_EFFORTS
 
-    bounds_by_kind: dict[str, dict[str, Any]] = {
-        KIND_NULLABLE_ENUM: {"allowed_values": tuple(sorted(ALLOWED_THINKING_EFFORTS))},
-        KIND_NULLABLE_NUMBER: {"minimum": MIN_TEMPERATURE, "maximum": MAX_TEMPERATURE},
-    }
     entries: list[tuple[str, str, str, tuple[str, ...], float | None, float | None]] = []
     for field in AGENT_DEFAULT_FIELD_ORDER:
         spec = _AGENT_DEFAULT_SPECS[field]
-        bounds = bounds_by_kind.get(spec.kind, {})
-        entries.append(
-            (
-                field,
-                spec.value_type,
-                spec.description,
-                bounds.get("allowed_values", ()),
-                bounds.get("minimum"),
-                bounds.get("maximum"),
-            )
+        allowed: tuple[str, ...] = (
+            tuple(sorted(ALLOWED_THINKING_EFFORTS)) if spec.kind == KIND_NULLABLE_ENUM else ()
         )
+        minimum, maximum = spec.bounds if spec.bounds is not None else (None, None)
+        entries.append((field, spec.value_type, spec.description, allowed, minimum, maximum))
     return entries
 
 
@@ -296,6 +332,7 @@ class AgentDefaults:
     model: str | None = None
     fallback_models: list[str] | None = None
     temperature: float | None = None
+    top_p: float | None = None
     thinking_effort: str | None = None
 
     @classmethod
@@ -308,6 +345,7 @@ class AgentDefaults:
             model=data.get("model"),
             fallback_models=list(fallback_models) if fallback_models is not None else None,
             temperature=data.get("temperature"),
+            top_p=data.get("top_p"),
             thinking_effort=data.get("thinking_effort"),
         )
 
@@ -320,6 +358,8 @@ class AgentDefaults:
             result["fallback_models"] = list(self.fallback_models)
         if self.temperature is not None:
             result["temperature"] = self.temperature
+        if self.top_p is not None:
+            result["top_p"] = self.top_p
         if self.thinking_effort is not None:
             result["thinking_effort"] = self.thinking_effort
         return result
@@ -330,6 +370,7 @@ def bake_agent_defaults(
     model: str,
     fallback_models: list[str],
     temperature: float | None,
+    top_p: float | None,
     thinking_effort: str | None,
     defaults: AgentDefaults,
 ) -> dict[str, Any]:
@@ -350,6 +391,8 @@ def bake_agent_defaults(
         changes["fallback_models"] = _normalize_fallback_models(defaults.fallback_models)
     if temperature is None and defaults.temperature is not None:
         changes["temperature"] = _normalize_temperature(defaults.temperature)
+    if top_p is None and defaults.top_p is not None:
+        changes["top_p"] = _normalize_top_p(defaults.top_p)
     if thinking_effort is None and defaults.thinking_effort is not None:
         changes["thinking_effort"] = _normalize_thinking_effort(defaults.thinking_effort)
     return changes

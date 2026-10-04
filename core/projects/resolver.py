@@ -16,7 +16,7 @@ from core.projects._model_configuration import (
 )
 from core.projects._resolution_values import (
     _build_config_agent,
-    _config_temperature_source,
+    _config_sampling_source,
     _config_thinking_effort_source,
     _config_tool_access_source,
     _effective_allowed_agents,
@@ -26,7 +26,7 @@ from core.projects._resolution_values import (
     _overridden_model,
     _project_agent_tool_access,
     _project_agent_tools,
-    _resolve_temperature,
+    _resolve_sampling,
     _resolve_thinking_effort,
     effective_project_allowed_skills,
 )
@@ -445,6 +445,7 @@ class AgentResolver:
             instructions=config.instructions,
             prompt_blocks=config.prompt_blocks,
             temperature=config.temperature,
+            top_p=config.top_p,
             thinking_effort=config.thinking_effort,
             compaction_policy=config.compaction_policy,
         )
@@ -518,7 +519,8 @@ class AgentResolver:
         # never reads the settings file three times (model + temp + thinking).
         global_defaults = AgentDefaults.from_dict(self._global_agent_defaults())
         resolved_model = self._resolve_model_or_raise(scanned, project, global_defaults)
-        resolved_temperature = _resolve_temperature(scanned, project, global_defaults)
+        resolved_temperature = _resolve_sampling("temperature", scanned, project, global_defaults)
+        resolved_top_p = _resolve_sampling("top_p", scanned, project, global_defaults)
         resolved_thinking_effort = _resolve_thinking_effort(scanned, project, global_defaults)
         tool_access = _project_agent_tool_access(project, scanned)
         allowed_skills = effective_project_allowed_skills(
@@ -536,6 +538,7 @@ class AgentResolver:
             tools,
             project.overrides.get(agent_id, {}).get("compaction_policy"),
             project_id=project_id,
+            resolved_top_p=resolved_top_p,
         )
 
     def effective_config(
@@ -548,8 +551,9 @@ class AgentResolver:
         ``{"value": ..., "source": ...}``:
 
         - **Config agents** (``project_id`` set): fields ``model``, ``temperature``,
-          ``thinking_effort``. Sources: ``"override"`` (the vBot override layer),
-          ``"agent"`` (the repo-declared scanned value), ``"project_default"``,
+          ``top_p``, ``thinking_effort``, ``tool_access``. Sources: ``"override"``
+          (the vBot override layer), ``"agent"`` (the repo-declared scanned value),
+          ``"project_default"``,
           ``"global_default"``, or ``None`` when every tier fell through. Unlike
           :meth:`resolve_agent`, a model chain that falls all the way through does
           **not** raise here — it returns ``{"value": None, "source": None}`` (an
@@ -557,12 +561,12 @@ class AgentResolver:
           tier is gated by the same ``is_configured`` model check, so an unconfigured
           override/agent/default model falls through exactly as at run time.
         - **Identity agents** (``project_id is None``): fields ``model``,
-          ``fallback_models``, ``temperature``, ``thinking_effort``. Sources:
+          ``fallback_models``, ``temperature``, ``top_p``, ``thinking_effort``. Sources:
           ``"agent"`` (the own persisted value) or ``"global_default"``, or ``None``
           when neither has a value. No ``is_configured`` gating — this mirrors
           ``core.agents._config.apply_defaults`` exactly: a default applies when the persisted
           ``model`` is ``""`` / ``fallback_models`` is ``[]`` or
-          ``temperature``/``thinking_effort`` is ``None``.
+          ``temperature``/``top_p``/``thinking_effort`` is ``None``.
 
         With ``session_id``, each field that Session overrides reports its value
         with source ``"session"``.
@@ -612,6 +616,7 @@ class AgentResolver:
                 raw.fallback_models, defaults.fallback_models
             ),
             "temperature": _identity_optional_source(raw.temperature, defaults.temperature),
+            "top_p": _identity_optional_source(raw.top_p, defaults.top_p),
             "thinking_effort": _identity_optional_source(
                 raw.thinking_effort, defaults.thinking_effort
             ),
@@ -633,7 +638,10 @@ class AgentResolver:
     ) -> dict[str, dict[str, Any]]:
         return {
             "model": self._config_model_source(project, scanned, global_defaults),
-            "temperature": _config_temperature_source(project, scanned, global_defaults),
+            "temperature": _config_sampling_source(
+                "temperature", project, scanned, global_defaults
+            ),
+            "top_p": _config_sampling_source("top_p", project, scanned, global_defaults),
             "thinking_effort": _config_thinking_effort_source(project, scanned, global_defaults),
             "tool_access": _config_tool_access_source(project, scanned),
         }

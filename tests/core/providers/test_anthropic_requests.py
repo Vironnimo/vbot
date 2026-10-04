@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 import httpx
 import pytest
@@ -13,6 +12,7 @@ from core.providers import AnthropicCompatibleAdapter
 from core.providers._http_shared import PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.errors import ProviderError, ProviderRequestTooLargeError
+from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 
 from .anthropic_test_support import (
@@ -28,15 +28,12 @@ from .anthropic_test_support import (
     NO_DEFAULTS_CONFIG,
     SAMPLE_MESSAGES,
     SAMPLE_TOOLS,
-    SUCCESS_RESPONSE,
     THINKING_BLOCK,
     claude_model,
     make_adapter,
     sampling_model,
     send_request,
     sent_payload,
-    sse,
-    sse_response,
 )
 
 EPHEMERAL = {"type": "ephemeral"}
@@ -103,7 +100,8 @@ async def test_selected_connection_auth_replaces_the_api_key_header() -> None:
 
 @pytest.mark.asyncio
 async def test_compatible_wire_keeps_native_policy_opt_in_and_borrowed_client_open() -> None:
-    """Only the native Adapter adds PDF input, the version header and cache markers."""
+    """Only the native Adapter sends the version header; only the anthropic wire profile adds
+    PDF input and cache markers."""
     borrowed = httpx.AsyncClient(base_url="https://minimal.anthropic.example/v1")
     compatible = AnthropicCompatibleAdapter(NO_DEFAULTS_CONFIG, API_KEY, client=borrowed)
 
@@ -181,19 +179,20 @@ async def test_output_allowance_prefers_caller_then_model_ceiling_then_config(
 
 
 @pytest.mark.parametrize(
-    ("config", "url", "kwargs"),
-    [
-        (ANTHROPIC_CONFIG, None, {"max_tokens": 8192}),
-        (CUSTOM_CONFIG, CUSTOM_URL, {}),
-    ],
+    ("config", "url"),
+    [(ANTHROPIC_CONFIG, None), (CUSTOM_CONFIG, CUSTOM_URL)],
 )
 @pytest.mark.asyncio
-async def test_unknown_model_output_allowance_is_clamped_to_the_context(
-    config, url, kwargs
-) -> None:
-    payload = await sent_payload(make_adapter(config), **({"url": url} if url else {}), **kwargs)
+async def test_unknown_model_output_allowance_is_clamped_to_the_context(config, url) -> None:
+    # An unknown Model's window is the global floor; an allowance as large as the
+    # whole window leaves room for the request's input.
+    payload = await sent_payload(
+        make_adapter(config),
+        **({"url": url} if url else {}),
+        max_tokens=GLOBAL_CONTEXT_WINDOW_FLOOR,
+    )
 
-    assert 4096 < payload["max_tokens"] < 8192
+    assert GLOBAL_CONTEXT_WINDOW_FLOOR // 2 < payload["max_tokens"] < GLOBAL_CONTEXT_WINDOW_FLOOR
 
 
 def test_request_image_estimate_receives_active_model() -> None:
@@ -617,8 +616,9 @@ def _assert_payload_fields(payload: dict, expected: dict) -> None:
             id="on-off-floor-does-not-fit",
         ),
         pytest.param(
-            claude_model(control="levels", anthropic_metadata={"requires_adaptive_thinking": True}),
-            {"thinking_effort": "none"},
+            # The wire profile lists the adaptive-only Claude Models by id.
+            claude_model(control="levels"),
+            {"thinking_effort": "none", "model_id": "claude-opus-4-7"},
             {"thinking": ABSENT},
             id="adaptive-required-off",
         ),
@@ -712,36 +712,6 @@ async def test_sampling_is_dropped_while_thinking_or_when_the_model_rejects_it(
     payload = await sent_payload(make_adapter(config, model=model), url=url, **kwargs)
 
     _assert_payload_fields(payload, expected)
-
-
-@pytest.mark.parametrize("transport", ["send", "stream"])
-@pytest.mark.asyncio
-async def test_rejected_sampling_parameter_is_retried_once_without_it(transport) -> None:
-    rejection = httpx.Response(
-        400,
-        json={
-            "error": {
-                "type": "invalid_request_error",
-                "message": "temperature is not supported for this model",
-            }
-        },
-    )
-    success = (
-        httpx.Response(200, json=SUCCESS_RESPONSE) if transport == "send" else sse_response(sse())
-    )
-    adapter = make_adapter()
-    kwargs: dict[str, Any] = {"temperature": 0.5, "thinking_effort": "none"}
-
-    with respx.mock:
-        route = respx.post(ANTHROPIC_URL).mock(side_effect=[rejection, success])
-        if transport == "send":
-            await adapter.send(SAMPLE_MESSAGES, model_id=MODEL_ID, **kwargs)
-        else:
-            [chunk async for chunk in adapter.stream(SAMPLE_MESSAGES, model_id=MODEL_ID, **kwargs)]
-
-    assert route.call_count == 2
-    assert json.loads(route.calls[0].request.content)["temperature"] == 0.5
-    assert "temperature" not in json.loads(route.calls[1].request.content)
 
 
 PRIOR_RUN_REDACTED_BLOCK = {"type": "redacted_thinking", "data": "opaque-prior-run-redacted"}

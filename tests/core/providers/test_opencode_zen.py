@@ -15,12 +15,13 @@ import respx
 from core.models.models import Model, ModelRegistry
 from core.providers import OpenCodeZenAdapter
 from core.providers.errors import (
-    CatalogEntrySkipped,
     ProviderAuthError,
     ProviderError,
     ProviderRateLimitError,
 )
 from core.providers.opencode_zen import _FREE_TIER_ACCESS_MESSAGE
+from core.providers.wire_observations import WireObservations
+from core.providers.wire_profiles import WireProfiles, bundled_wire_profile_files
 from core.utils.retry import caller_owns_retries
 
 from .opencode_zen_test_support import (
@@ -66,47 +67,44 @@ async def _request(adapter: OpenCodeZenAdapter, model_id: str, *, streaming: boo
         ("claude-sonnet-5-5", "messages"),
         ("glm-5.3-flash", "chat_completions"),
         ("qwen3.8-max", "chat_completions"),
-        ("gemini-3.8-flash", "gemini_generate_content"),
+        ("gemini-3.8-flash", "gemini"),
     ],
 )
-def test_catalog_records_the_reviewed_wire_protocol(model_id: str, protocol: str) -> None:
-    model = OpenCodeZenAdapter.normalize_catalog_entry({"id": model_id}, {})
+def test_bundled_catalog_models_are_admitted_on_their_reviewed_wire(
+    model_id: str, protocol: str
+) -> None:
+    """The bundled protocol hints and the Chat rule route every listed Model."""
+    adapter = OpenCodeZenAdapter(zen_config(), "zen-secret", model_lookup=_bundled_lookup())
 
-    assert model.metadata["opencode_zen"]["protocol"] == protocol
+    profile = adapter.wire_profile(model_id)
+
+    assert (profile.protocol, profile.admission.state) == (protocol, "available")
 
 
 @pytest.mark.parametrize(
-    "model_id",
+    ("model_id", "stale_entry_of", "streaming"),
     [
-        pytest.param("big-pickle", id="free-tier"),
-        pytest.param("longcat-2.5-preview-free", id="longcat-free-tier"),
-        pytest.param("fledge-alpha-free", id="fledge-free-tier"),
-        pytest.param("claude-opus-4-1", id="retired"),
-        pytest.param("future-model", id="unreviewed"),
-    ],
-)
-def test_catalog_skips_free_retired_and_unreviewed_models(model_id: str) -> None:
-    with pytest.raises(CatalogEntrySkipped):
-        OpenCodeZenAdapter.normalize_catalog_entry({"id": model_id}, {})
-
-
-@pytest.mark.parametrize(
-    ("model_id", "stale_lookup", "streaming"),
-    [
-        pytest.param("big-pickle", True, False, id="free-tier-send"),
-        pytest.param("longcat-2.5-preview-free", True, True, id="longcat-free-tier-stream"),
-        pytest.param("fledge-alpha-free", True, False, id="fledge-free-tier-send"),
-        pytest.param("claude-opus-4-1", True, True, id="retired-stream"),
-        pytest.param("openai/gpt-5.6-sol", False, False, id="unknown-alias-send"),
+        pytest.param("big-pickle", CHAT_MODEL, False, id="free-tier-send"),
+        pytest.param(
+            "longcat-2.5-preview-free", RESPONSES_MODEL, True, id="hinted-free-tier-stream"
+        ),
+        pytest.param("fledge-alpha-free", CHAT_MODEL, False, id="fledge-free-tier-send"),
+        pytest.param("claude-opus-4-1", MESSAGES_MODEL, True, id="hinted-retired-stream"),
+        pytest.param("future-model", CHAT_MODEL, True, id="no-protocol-info-stream"),
+        pytest.param("openai/gpt-5.6-sol", None, False, id="unknown-alias-send"),
     ],
 )
 @pytest.mark.asyncio
 async def test_unusable_selection_fails_before_network(
-    model_id: str, stale_lookup: bool, streaming: bool
+    model_id: str, stale_entry_of: str | None, streaming: bool
 ) -> None:
-    """A stale catalog entry or an unknown alias never guesses a wire protocol."""
-    if stale_lookup:
-        stale_model = replace(zen_model(CHAT_MODEL), model_id=model_id)
+    """A stale catalog entry or an unknown alias never guesses a wire protocol.
+
+    A protocol hint routes a free or retired Model but never admits it, and a
+    catalog Model with neither a hint nor a reviewed rule is refused.
+    """
+    if stale_entry_of is not None:
+        stale_model = replace(zen_model(stale_entry_of), model_id=model_id)
         adapter = OpenCodeZenAdapter(zen_config(), "key", model_lookup=lambda _: stale_model)
     else:
         adapter = zen_adapter()
@@ -119,6 +117,7 @@ async def test_unusable_selection_fails_before_network(
 
     assert type(caught.value) is ProviderError
     assert caught.value.retryable is False
+    assert str(caught.value).startswith(f"Model '{model_id}' is ")
     assert not route.called
 
 
@@ -207,6 +206,28 @@ async def test_each_model_uses_its_reviewed_wire_and_auth_header(
     assert adapter.normalize_response(response, model_id=model_id)["content"] == "done"
 
 
+@pytest.mark.asyncio
+async def test_messages_wire_reads_the_connection_binding_of_the_adapter() -> None:
+    """A fact learned on the Adapter's Connection also shapes its Messages wire."""
+    adapter = zen_adapter()
+    observations = WireObservations(None, save_delay=None)
+    profiles = WireProfiles(
+        files=bundled_wire_profile_files(),
+        protocol_support=lambda _provider_id: OpenCodeZenAdapter.WIRE_PROTOCOLS,
+        model_resolver=lambda _provider_id, model_id: zen_model(model_id),
+        report=lambda issue: None,
+        observations=observations,
+    )
+    adapter.bind_wire_profiles(profiles.bind("opencode-zen", "api-key"))
+    observations.record_rejected_parameter("opencode-zen", "api-key", MESSAGES_MODEL, "top_p")
+
+    with respx.mock:
+        route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json=_MESSAGES_BODY))
+        await adapter.send(HELLO, model_id=MESSAGES_MODEL, top_p=0.5)
+
+    assert "top_p" not in json.loads(route.calls.last.request.content)
+
+
 @pytest.mark.parametrize(
     ("model_id", "selected_effort", "wire_effort"),
     [
@@ -242,9 +263,7 @@ async def test_bundled_gpt6_model_uses_the_responses_wire_with_its_effort(
         assert payload["text"]["format"] == response_format
         assert adapter.reasoning_replay_policy(model_id) == "none"
     assert adapter.normalize_response(response, model_id=model_id)["content"] == "done"
-    intent = adapter.describe_reasoning_render(
-        model_lookup=_bundled_lookup(), model_id=model_id, effort=selected_effort
-    )
+    intent = adapter.describe_reasoning_render(model_id, selected_effort)
     assert intent.effort_level == wire_effort
 
 
@@ -288,12 +307,7 @@ async def test_bundled_chat_models_render_their_reasoning_controls(
     assert payload.get("thinking") == thinking
     normalized = adapter.normalize_response(response, model_id=model_id)
     assert normalized["reasoning"] == "worked"
-    description = adapter.describe_reasoning_render(
-        model_lookup=lookup,
-        model_id=model_id,
-        effort=selected_effort,
-        provider_config=zen_config(),
-    )
+    description = adapter.describe_reasoning_render(model_id, selected_effort)
     assert (description.kind, description.effort_level) == intent
 
 

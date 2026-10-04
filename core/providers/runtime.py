@@ -6,13 +6,13 @@ import asyncio
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
 from core.debug import DebugTraceStore, ProviderDebugRecorder
 from core.models.database import ModelDatabaseRefresh, begin_runtime_model_database_refresh
 from core.models.models import Model, ModelRegistry
+from core.providers._wire_profile_files import WireProfileFile
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, ConnectionRef, split_connection_id
 from core.providers.adapter import ModelLookup, ProviderAdapter
 from core.providers.adapter_types import ADAPTER_TYPES
@@ -28,7 +28,8 @@ from core.providers.providers import (
     model_is_local,
     resolve_effective_context_window,
 )
-from core.providers.reasoning import ReasoningIntent, ReasoningReplayPolicy
+from core.providers.reasoning import ReasoningIntent
+from core.providers.reasoning_dialects import describe_profile_reasoning
 from core.providers.token_getter import (
     COPILOT_API_ENDPOINT_EXTRA_KEY,
     OAuthTokenGetter,
@@ -36,6 +37,17 @@ from core.providers.token_getter import (
     TokenGetter,
 )
 from core.providers.token_store import TokenStore
+from core.providers.wire_observations import (
+    OBSERVATIONS_FILE_NAME,
+    ObservedFacts,
+    WireObservations,
+)
+from core.providers.wire_profile import ProfileStatus, Protocol, Verification, WireProfile
+from core.providers.wire_profiles import (
+    WireProfiles,
+    log_wire_profile_issue,
+    wire_profile_files,
+)
 from core.storage import StorageManager
 from core.utils.errors import ConfigError, StorageError
 from core.utils.retry import caller_owns_retries
@@ -63,6 +75,7 @@ class ProviderRuntime:
         storage: StorageManager,
         resources_path: Path,
         logger: Any,
+        custom_providers: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
         self._providers = providers
         self._models = models
@@ -72,8 +85,17 @@ class ProviderRuntime:
         self._resources_path = resources_path
         self._logger = logger
         self._catalog_refresh_lock: asyncio.Lock | None = None
+        self._catalog_changed_callbacks: list[Callable[[], None]] = []
         self.refresh_at: float | None = None
         self._connection_reachability: dict[str, bool] = {}
+        self._wire_observations = self._load_wire_observations(storage)
+        self._wire_profiles = WireProfiles(
+            files=wire_profile_files(custom_providers, resources_path),
+            protocol_support=self._adapter_protocols,
+            model_resolver=self._resolve_model,
+            report=log_wire_profile_issue,
+            observations=self._wire_observations,
+        )
 
     def rebind(
         self,
@@ -90,19 +112,72 @@ class ProviderRuntime:
         self._models = models
         self._credentials = credentials
         self._token_store = token_store
+        if storage.data_dir != self._storage.data_dir:
+            self._wire_observations.close()
+            self._wire_observations = self._load_wire_observations(storage)
+            self._wire_profiles.set_observations(self._wire_observations)
         self._storage = storage
         self._logger = logger
+
+    def reload_custom_wire_profiles(
+        self, custom_providers: Mapping[str, Mapping[str, Any]]
+    ) -> None:
+        """Apply the Custom Providers' current ``wire`` blocks to every Adapter.
+
+        Adapters resolve profiles through this Runtime's shared wire profiles,
+        so already built Adapters use the new blocks from their next request.
+        """
+        self._wire_profiles.replace_files(
+            wire_profile_files(custom_providers, self._resources_path)
+        )
+
+    @property
+    def wire_profile_files(self) -> Mapping[str, WireProfileFile]:
+        """The wire profile data requests use: bundled files plus Custom Provider blocks."""
+        return self._wire_profiles.files
+
+    @property
+    def wire_observations(self) -> WireObservations:
+        """Wire facts learned from live traffic for every Provider of this Runtime."""
+        return self._wire_observations
+
+    def wire_profile(self, provider_id: str, connection_id: str, model_id: str) -> WireProfile:
+        """Return the resolved wire profile for one Model on one local Connection id.
+
+        It is the profile requests use, learned facts included.
+        """
+        return self._wire_profiles.resolve(provider_id, connection_id, model_id)
+
+    def wire_status(
+        self, provider_id: str, connection_id: str, model_id: str
+    ) -> tuple[ProfileStatus, Verification | None]:
+        """Return the wire profile ``(status, verification)`` for one local Connection id.
+
+        Equals ``wire_profile(...).status`` and ``.verification`` without
+        resolving the profile, so listing every catalog Model stays cheap.
+        """
+        return self._wire_profiles.status(provider_id, connection_id, model_id)
+
+    def learned_wire_facts(
+        self, provider_id: str, connection_id: str, model_id: str
+    ) -> ObservedFacts:
+        """Return what live traffic showed for one Model on one local Connection id."""
+        return self._wire_observations.facts_for(provider_id, connection_id, model_id)
+
+    def forget_wire_facts(
+        self, provider_id: str, connection_id: str | None = None, model_id: str | None = None
+    ) -> int:
+        """Drop learned wire facts; returns how many (Connection, Model) targets lost facts."""
+        return self._wire_observations.forget(provider_id, connection_id, model_id)
+
+    def close_wire_observations(self) -> None:
+        """Write pending learned wire facts (called on Runtime shutdown)."""
+        self._wire_observations.close()
 
     def get_adapter(self, connection: ConnectionRef) -> ProviderAdapter:
         provider_id = connection.provider_id
         connection_id = connection.connection_id
         provider_config = self._providers.get(provider_id)
-        replay_override = self._models.provider_reasoning_replay(provider_id)
-        if replay_override is not None:
-            provider_config = replace(
-                provider_config,
-                reasoning_replay=cast(ReasoningReplayPolicy, replay_override),
-            )
         connection_config, account_id = self._connection_config(
             provider_config,
             connection_id,
@@ -143,6 +218,7 @@ class ProviderRuntime:
             connection_mode=connection_config.mode,
             **extra_kwargs,
         )
+        adapter.bind_wire_profiles(self._wire_profiles.bind(provider_id, connection_config.id))
         return cast(ProviderAdapter, adapter)
 
     def get_connection_token_getter(self, connection: ConnectionRef) -> TokenGetter:
@@ -176,23 +252,17 @@ class ProviderRuntime:
         return {} if token is None else dict(token.extra)
 
     def describe_reasoning_render(
-        self,
-        provider_id: str,
-        model_id: str,
-        effort: str | None,
-    ) -> ReasoningIntent | None:
-        try:
-            provider_config = self._providers.get(provider_id)
-        except KeyError:
-            return None
-        adapter_class = ADAPTER_TYPES.get(provider_config.adapter)
-        if adapter_class is None:
-            return None
-        return adapter_class.describe_reasoning_render(
-            model_lookup=self._model_lookup(provider_id),
-            provider_config=provider_config,
-            model_id=model_id,
-            effort=effort,
+        self, provider_id: str, connection_id: str, model_id: str, effort: str | None
+    ) -> ReasoningIntent:
+        """Return the reasoning decision a request with ``effort`` carries.
+
+        Describes the wire profile requests use for the Model on one local
+        Connection id, learned facts included, exactly like
+        :meth:`ProviderAdapter.describe_reasoning_render` on that Connection's
+        Adapter.
+        """
+        return describe_profile_reasoning(
+            self._wire_profiles.resolve(provider_id, connection_id, model_id), effort
         )
 
     @asynccontextmanager
@@ -226,7 +296,7 @@ class ProviderRuntime:
             # Filled on the worker thread, so a cancelled staging hop still
             # discards its copy.
             staged: list[ModelDatabaseRefresh] = []
-            refreshed_any = False
+            refreshed: set[str] = set()
             try:
                 await _LOCAL_CATALOG_WORKERS.run(
                     _stage_runtime_refresh,
@@ -257,6 +327,7 @@ class ProviderRuntime:
                                 credential_value,
                                 refresh_resources_dir,
                                 credential_connection=connection,
+                                wire_files=self._wire_profiles.files,
                             )
                     except ModelDiscoveryError as error:
                         previous = self._connection_reachability.get(connection_id)
@@ -284,18 +355,20 @@ class ProviderRuntime:
                             provider_id,
                             connection.id,
                         )
-                    refreshed_any = True
+                    refreshed.add(provider_id)
 
-                if refreshed_any:
+                if refreshed:
                     custom_providers = await _LOCAL_CATALOG_WORKERS.run(
                         self._publish_staged_catalog,
                         database_refresh,
+                        refreshed,
                     )
-                    await self._models.reload_async(
+                    if await self._models.reload_async(
                         self._resources_path,
                         runtime_models_dir=self._storage.layout.models,
                         custom_providers=custom_providers,
-                    )
+                    ):
+                        self._notify_catalog_changed()
             except Exception as error:
                 self._logger.warning("Local catalog refresh could not be published: %s", error)
             finally:
@@ -305,15 +378,45 @@ class ProviderRuntime:
                 for staged_refresh in staged:
                     await _LOCAL_CATALOG_WORKERS.run(_discard_staged_refresh, staged_refresh)
 
+    def add_catalog_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
+        """Subscribe to Model catalog changes a local catalog sweep publishes.
+
+        A manual Model DB refresh reports its own result; this channel covers
+        the automatic sweeps. Returns an unsubscribe function.
+        """
+        self._catalog_changed_callbacks.append(callback)
+
+        def unsubscribe() -> None:
+            if callback in self._catalog_changed_callbacks:
+                self._catalog_changed_callbacks.remove(callback)
+
+        return unsubscribe
+
+    def _notify_catalog_changed(self) -> None:
+        for callback in tuple(self._catalog_changed_callbacks):
+            try:
+                callback()
+            except Exception as error:
+                self._logger.error(
+                    "Model catalog change callback failed: %s",
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+
     def _publish_staged_catalog(
         self,
         database_refresh: ModelDatabaseRefresh,
+        refreshed: set[str],
     ) -> dict[str, dict[str, Any]]:
-        """Validate and commit a staged Model DB; return the overlays to reload with."""
+        """Validate and commit a staged Model DB; return the overlays to reload with.
+
+        Only the ``refreshed`` local Providers are recorded as fetched now, so the
+        sweep never makes another catalog look newer than the bundled one.
+        """
         # The live reload after publication logs what Load ignores; validating
         # silently here keeps each entry to one log line per sweep.
         ModelRegistry.validate(database_refresh.resources_dir)
-        database_refresh.commit()
+        database_refresh.commit(providers=refreshed)
         return self._storage.load_custom_providers_settings()
 
     def connection_reachability(self, connection_id: str) -> bool | None:
@@ -361,6 +464,24 @@ class ProviderRuntime:
         return ProviderDebugRecorder(
             store=DebugTraceStore(self._storage.data_dir, trace_limit=trace_limit)
         )
+
+    @staticmethod
+    def _load_wire_observations(storage: StorageManager) -> WireObservations:
+        return WireObservations.load(storage.layout.artifacts / OBSERVATIONS_FILE_NAME)
+
+    def _adapter_protocols(self, provider_id: str) -> tuple[Protocol, ...] | None:
+        try:
+            provider_config = self._providers.get(provider_id)
+        except KeyError:
+            return None
+        adapter_class = ADAPTER_TYPES.get(provider_config.adapter)
+        return adapter_class.WIRE_PROTOCOLS if adapter_class is not None else None
+
+    def _resolve_model(self, provider_id: str, model_id: str) -> Model | None:
+        try:
+            return self._models.get(provider_id, model_id)
+        except KeyError:
+            return None
 
     def _model_lookup(self, provider_id: str) -> ModelLookup:
         def lookup(model_id: str) -> Model | None:

@@ -18,10 +18,7 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
-from core.providers.openai_compatible import (
-    REASONING_RESPONSE_FIELD_METADATA_KEY,
-    OpenAICompatibleAdapter,
-)
+from core.providers.openai_compatible import OpenAICompatibleAdapter
 
 from .openai_compatible_test_support import (
     MODEL_ID,
@@ -31,6 +28,8 @@ from .openai_compatible_test_support import (
     SUCCESS_RESPONSE,
     catalog_model,
     make_adapter,
+    sse,
+    sse_response,
 )
 
 _ADAPTER_LOGGER = "vbot.providers.openai_compatible"
@@ -72,7 +71,7 @@ def test_catalog_entry_maps_standard_fields_to_model() -> None:
     assert "image_generation" in model.capabilities.task_types
 
 
-def test_catalog_entry_without_optional_fields_keeps_limits_unknown() -> None:
+def test_catalog_entry_without_optional_fields_keeps_limits_and_reasoning_unknown() -> None:
     model = OpenAICompatibleAdapter.normalize_catalog_entry({"id": "minimal-model"}, {})
 
     assert model.name == "minimal-model"
@@ -81,10 +80,15 @@ def test_catalog_entry_without_optional_fields_keeps_limits_unknown() -> None:
     assert model.max_output_tokens is None
     assert model.capabilities.tools is True
     assert model.capabilities.json_mode is False
-    assert model.capabilities.reasoning.supported is False
+    # No reasoning signal leaves support unknown; only an explicit false denies it.
+    assert model.capabilities.reasoning.supported is None
     assert model.capabilities.input_modalities == ("text",)
     assert model.capabilities.output_modalities == ("text",)
     assert model.capabilities.task_types == ("chat", "text_output")
+    denied = OpenAICompatibleAdapter.normalize_catalog_entry(
+        {"id": "plain-model", "supports_reasoning": False}, {}
+    )
+    assert denied.capabilities.reasoning.supported is False
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +148,7 @@ def test_normalize_response_reads_the_first_non_empty_reasoning_alias(aliases, e
 
 
 def _reasoning_field_model(provider_key: str, field: str):
-    return catalog_model(metadata={provider_key: {REASONING_RESPONSE_FIELD_METADATA_KEY: field}})
+    return catalog_model(metadata={provider_key: {"interleaved_field": field}})
 
 
 @pytest.mark.parametrize(
@@ -204,6 +208,34 @@ def test_catalog_named_reasoning_field_is_the_preferred_readable_source(
     )
 
     assert normalized["reasoning"] == expected
+
+
+@pytest.mark.parametrize("mode", ["send", "stream"])
+@pytest.mark.asyncio
+async def test_the_field_reasoning_arrives_in_is_learned_for_the_model(mode: str) -> None:
+    adapter = make_adapter(model=catalog_model())
+    with respx.mock:
+        if mode == "send":
+            respx.post(OPENAI_URL).mock(
+                return_value=httpx.Response(
+                    200, json=_response({"content": "Done", "thinking": "Trace"})
+                )
+            )
+            await adapter.send(SAMPLE_MESSAGES, model_id=MODEL_ID)
+        else:
+            respx.post(OPENAI_URL).mock(
+                return_value=sse_response(
+                    sse(
+                        {"choices": [{"delta": {"thinking": "Trace"}}]},
+                        {"choices": [{"delta": {"content": "Done"}, "finish_reason": "stop"}]},
+                    )
+                )
+            )
+            [_ async for _ in adapter.stream(SAMPLE_MESSAGES, model_id=MODEL_ID)]
+
+    profile = adapter.wire_profile(MODEL_ID)
+    assert profile.response.reasoning_fields[0] == "thinking"
+    assert profile.source_of("response.reasoning_fields") == "observed"
 
 
 # ---------------------------------------------------------------------------
@@ -408,14 +440,6 @@ def test_normalize_response_usage_keeps_only_usable_counters(usage, expected) ->
     ("status", "body", "error_type", "retryable", "attempts"),
     [
         pytest.param(401, "Invalid API key", ProviderAuthError, False, 1, id="401-auth"),
-        pytest.param(
-            400,
-            "Unsupported parameter: 'top_k'",
-            ProviderError,
-            False,
-            1,
-            id="400-names-an-unsent-sampling-parameter",
-        ),
         pytest.param(500, "Internal Server Error", ProviderError, False, 1, id="500-fatal"),
         pytest.param(429, "Rate limited", ProviderRateLimitError, True, 4, id="429-rate-limit"),
         pytest.param(502, "Bad Gateway", ProviderError, True, 4, id="502-transient"),
@@ -493,7 +517,7 @@ def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_rejected_effort_warns_and_still_raises_the_fatal_error(
+async def test_an_unattributable_effort_rejection_warns_and_still_raises(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     with respx.mock, caplog.at_level(logging.WARNING, logger=_ADAPTER_LOGGER):

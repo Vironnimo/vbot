@@ -139,17 +139,19 @@ async def test_owner_catalog_projects_registry_metadata_until_the_registration_r
             "additionalProperties": False,
         },
     }
-    # Models list only usable Connections, with capabilities from the Model registry.
+    # Models list only usable Connections the Model allows, with capabilities from
+    # the Model registry.
     models = {model["id"]: model for model in catalog["models"]}
     assert models
     for model_id, entry in models.items():
         provider_id, _, model_name = model_id.partition("/")
+        model = runtime.models.get(provider_id, model_name)
         assert entry["connections"]
         for connection in entry["connections"]:
+            assert model.allows_connection(connection)
             assert runtime.provider_credentials.is_usable(
                 provider_id, f"{provider_id}:{connection}"
             )
-        model = runtime.models.get(provider_id, model_name)
         reasoning = model.capabilities.reasoning
         assert (entry["name"], entry["context_window"]) == (model.name, model.context_window)
         assert entry["capabilities"] == {
@@ -159,9 +161,13 @@ async def test_owner_catalog_projects_registry_metadata_until_the_registration_r
                 "control": reasoning.control,
                 "levels": list(reasoning.levels),
                 "budget_max": reasoning.budget_max,
+                "mandatory": reasoning.mandatory,
             },
         }
     assert any(model_id.startswith("openai/") for model_id in models)
+    # An empty allowlist allows every Connection; only the API key is usable here.
+    assert runtime.models.get("openai", "gpt-image-2").connections == ()
+    assert models["openai/gpt-image-2"]["connections"] == ["api-key"]
 
     # A registration retired while the projection ran on its worker is refused.
     extensions = runtime.extensions

@@ -26,7 +26,6 @@ import {
   getDialog,
   getAgentButton,
   setTextInputValueWithin,
-  setNumberInputValueWithin,
   submitAgentForm,
   findSetToDefaultButton,
   getAgentUpdateCalls,
@@ -473,7 +472,8 @@ describe('AgentsView', () => {
     expect(modal.querySelector('#agent-create-name')).toBeTruthy();
     expect(modal.querySelector('#agent-create-model')).toBeTruthy();
     expect(modal.querySelector('#agent-create-thinking-effort')).toBeTruthy();
-    expect(modal.querySelector('#agent-create-temperature')).toBeTruthy();
+    // Sampling stays with the inherited values; it is set in the editor.
+    expect(modal.querySelector('input[inputmode="decimal"]')).toBeNull();
     expect(modal.querySelector('#agent-fallback-model')).toBeNull();
     expect(modal.querySelector('[aria-label^="Toggle tool "]')).toBeNull();
     expect(
@@ -487,7 +487,6 @@ describe('AgentsView', () => {
 
     setTextInputValueWithin(modal, 0, 'bravo');
     setTextInputValueWithin(modal, 1, 'Bravo');
-    setNumberInputValueWithin(modal, 0, '0.4');
 
     await openSearchableDropdown('agent-create-model');
     selectSearchableOption('agent-create-model', 'openai/gpt-5.2 (API Key)');
@@ -511,8 +510,9 @@ describe('AgentsView', () => {
       name: 'Bravo',
       model: 'openai/gpt-5.2::api-key',
       thinking_effort: 'high',
-      temperature: 0.4,
     });
+    expect(createCall[1]).not.toHaveProperty('temperature');
+    expect(createCall[1]).not.toHaveProperty('top_p');
 
     await waitForCondition(() => listedAgentIds().includes('bravo'), 100);
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();

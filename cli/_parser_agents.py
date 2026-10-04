@@ -132,11 +132,25 @@ def _add_agent_change_arguments(
         parser.add_argument(
             "--clear-fallback-models", action="store_true", help="Clear the fallback chain"
         )
-    parser.add_argument("--temperature", type=float, help="Sampling temperature (0.0-2.0)")
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        help="Sampling temperature (0.0-2.0); unset leaves it to the Provider",
+    )
     parser.add_argument(
         "--clear-temperature",
         action="store_true",
         help="Clear the temperature override and inherit the default",
+    )
+    parser.add_argument(
+        "--top-p",
+        type=float,
+        help="Nucleus sampling top_p (0.0-1.0); unset leaves it to the Provider",
+    )
+    parser.add_argument(
+        "--clear-top-p",
+        action="store_true",
+        help="Clear the top_p override and inherit the default",
     )
     parser.add_argument(
         "--thinking-effort",
@@ -281,6 +295,17 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         help="Clear the project default temperature (fall through to the global default)",
     )
     add_parser.add_argument(
+        "--default-top-p",
+        type=float,
+        metavar="<0.0-1.0>",
+        help="Project default nucleus sampling top_p (0.0-1.0)",
+    )
+    add_parser.add_argument(
+        "--clear-default-top-p",
+        action="store_true",
+        help="Clear the project default top_p (fall through to the global default)",
+    )
+    add_parser.add_argument(
         "--default-thinking-effort",
         choices=THINKING_EFFORTS,
         help="Project default reasoning effort; empty string means provider default",
@@ -355,6 +380,17 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         help="Clear the project default temperature (fall through to the global default)",
     )
     set_parser.add_argument(
+        "--default-top-p",
+        type=float,
+        metavar="<0.0-1.0>",
+        help="New project default nucleus sampling top_p (0.0-1.0)",
+    )
+    set_parser.add_argument(
+        "--clear-default-top-p",
+        action="store_true",
+        help="Clear the project default top_p (fall through to the global default)",
+    )
+    set_parser.add_argument(
         "--default-thinking-effort",
         choices=THINKING_EFFORTS,
         help="New project default reasoning effort; empty string means provider default",
@@ -393,6 +429,7 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         choices=(
             "model",
             "temperature",
+            "top_p",
             "thinking_effort",
             "compaction_policy",
             "tool_access",
@@ -418,6 +455,7 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         choices=(
             "model",
             "temperature",
+            "top_p",
             "thinking_effort",
             "compaction_policy",
             "tool_access",
@@ -714,7 +752,7 @@ def _add_chat_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         help=AREA_HELP["chat"],
         description=(
             f"{AREA_HELP['chat']}. Without -c or --session the message starts a new "
-            "Session. --model, --thinking-effort and --temperature are saved on the "
+            "Session. --model, --thinking-effort, --temperature and --top-p are saved on the "
             "Session and apply to its later messages too. The answer goes to stdout; "
             "Tool calls and retries are reported on stderr. "
             'Example: vbot chat --agent coder@vbot -c "Continue with the next step"'
@@ -758,6 +796,12 @@ def _add_chat_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         type=float,
         metavar="<0.0-2.0>",
         help="Sampling temperature for this Session",
+    )
+    chat_parser.add_argument(
+        "--top-p",
+        type=float,
+        metavar="<0.0-1.0>",
+        help="Nucleus sampling top_p for this Session",
     )
     chat_parser.add_argument(
         "--json",

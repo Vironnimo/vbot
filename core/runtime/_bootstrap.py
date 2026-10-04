@@ -221,6 +221,7 @@ def bootstrap(runtime: Runtime) -> None:
             storage=runtime._storage,
             resources_path=resources_path,
             logger=runtime.logger,
+            custom_providers=custom_providers,
         )
         # Outbound HTTP clients share one TLS context and lazily imported
         # transport modules; prepare both off the Event Loop.
@@ -645,7 +646,8 @@ def bootstrap(runtime: Runtime) -> None:
             reflection_service=runtime._reflection_service,
             storage=runtime._storage,
             terminal_manager=runtime._terminal_manager,
-            reasoning_render_describer=runtime.describe_reasoning_render,
+            reasoning_render_describer=runtime.describe_agent_reasoning_render,
+            wire_profile_describer=runtime.describe_agent_wire_profile,
             automation_references=runtime._automation_references,
             snapshot_barrier=runtime._snapshot_barrier,
         )
@@ -716,7 +718,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._providers,
             runtime._projects,
             runtime.local_context_windows,
-            runtime.describe_reasoning_render,
+            runtime.describe_agent_reasoning_render,
             runtime.timezone_name,
         )
         # Built-ins are all registered now; apply extension tools last so a

@@ -160,6 +160,42 @@ def test_model_refresh_refreshes_the_model_database(
         assert text in out
 
 
+@pytest.mark.parametrize(
+    ("arguments", "params", "forgotten", "shown"),
+    [
+        pytest.param(
+            ("openai/gpt-5.2", "--connection", "oauth"),
+            {"model": "openai/gpt-5.2", "connection": "oauth"},
+            1,
+            "forgot learned wire facts of 1 Model target(s) for openai/gpt-5.2 on oauth",
+            id="one-model-on-one-connection",
+        ),
+        pytest.param(
+            ("openai",),
+            {"model": "openai"},
+            0,
+            "no learned wire facts for openai",
+            id="whole-provider",
+        ),
+    ],
+)
+def test_model_forget_wire_facts(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    arguments: tuple[str, ...],
+    params: dict[str, str],
+    forgotten: int,
+    shown: str,
+) -> None:
+    rpc.reply("model.forget_wire_facts", {"forgotten": forgotten})
+
+    code, out, _err = run_cli("model", "forget-wire-facts", *arguments)
+
+    assert code == 0
+    assert rpc.calls == [("model.forget_wire_facts", params)]
+    assert out.splitlines() == [shown]
+
+
 def test_model_refresh_fails_and_names_the_providers_it_skipped(
     rpc: FakeRpc, run_cli: RunCli
 ) -> None:

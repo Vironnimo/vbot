@@ -17,9 +17,7 @@ What it produces:
   may *deviate* from the lab spec), via :func:`provider_reasoning_block`;
 * the **auto canonical pointer** for a provider model whose wire-id exactly
   matches a canonical provider section (via the provider's models.dev id), via
-  :func:`auto_canonical_pointer`;
-* the raw ``catalog.json`` dump kept as a safety net so a later wanted field is a
-  projection edit, not a re-fetch.
+  :func:`auto_canonical_pointer`.
 
 The runtime read path never imports this module — refresh does.
 
@@ -63,11 +61,6 @@ _LOGGER = get_logger("models.models_dev")
 # Verified 2026-06-15: 215 canonical models, 145 providers, no key required.
 MODELS_DEV_CATALOG_URL = "https://models.dev/catalog.json"
 
-# Raw safety-net dump filename under ``<resources_dir>/models/`` (analog to
-# ``<provider>.raw.json``). NOT read by the runtime read path — kept so a later
-# wanted field is a projection edit, not a re-fetch.
-RAW_CATALOG_FILE_NAME = "models.dev.catalog.raw.json"
-
 # Source prefix of a price projected from models.dev; any other source names a
 # Provider's own catalog price, which refresh never overwrites.
 _MODELS_DEV_PRICE_SOURCE_PREFIX = "models.dev:"
@@ -97,7 +90,7 @@ class ModelsDevError(VBotError):
     Raised when the catalog cannot be fetched, parsed, or — critically — when
     the live shape diverges from the handoff's field table. A shape divergence
     aborts projection with a clear message rather than silently writing a wrong
-    catalog (the raw dump is still the recovery path).
+    catalog.
     """
 
 
@@ -112,7 +105,6 @@ class ModelsDevCatalog:
     """
 
     def __init__(self, raw: Mapping[str, Any]) -> None:
-        self._raw = raw
         models = raw.get("models")
         providers = raw.get("providers")
         self._verify_shape(models, providers)
@@ -129,8 +121,7 @@ class ModelsDevCatalog:
         Checks the two top-level maps exist and are dict-keyed, then spot-checks
         one canonical model and one provider model for the fields the projection
         actually reads (``modalities.input/output``, ``limit``, ``reasoning``,
-        provider ``models`` + ``reasoning_options`` shape). The raw dump remains
-        the recovery path on divergence.
+        provider ``models`` + ``reasoning_options`` shape).
         """
 
         if not isinstance(models, Mapping) or not models:
@@ -179,12 +170,6 @@ class ModelsDevCatalog:
         """The per-provider sections, keyed by models.dev provider id."""
 
         return self._providers
-
-    @property
-    def raw(self) -> Mapping[str, Any]:
-        """The full parsed catalog (for the raw safety-net dump)."""
-
-        return self._raw
 
     def provider_model(self, models_dev_id: str, wire_id: str) -> Mapping[str, Any] | None:
         """Return one provider section's model by exact wire-id, or ``None``.
@@ -264,23 +249,6 @@ async def fetch_catalog(
     return await retry_async(_request)
 
 
-def write_raw_catalog(catalog: ModelsDevCatalog, models_dir: Path) -> Path:
-    """Write the raw ``catalog.json`` dump as the safety net; return its path.
-
-    Analog to ``<provider>.raw.json``: kept so a later wanted field is a
-    projection edit, not a re-fetch. The runtime read path never reads it
-    (``is_provider_file`` rejects it by extension).
-    """
-
-    models_dir.mkdir(parents=True, exist_ok=True)
-    raw_path = models_dir / RAW_CATALOG_FILE_NAME
-    raw_path.write_text(
-        json.dumps(catalog.raw, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-    return raw_path
-
-
 def write_canonical_models(
     projected: Mapping[str, dict[str, Any]],
     models_dir: Path,
@@ -342,11 +310,11 @@ async def refresh_canonical_layer(
     catalog: ModelsDevCatalog | None = None,
     provider_catalog_ids: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Fetch + project the canonical layer (``models.json`` + raw dump + seeds).
+    """Fetch + project the canonical layer (``models.json`` + seeds).
 
     The canonical half of refresh: fetch the public catalog (free, no key),
-    write the raw safety-net dump, project ``catalog.models`` into
-    ``models.json`` with lifted ladders, and seed an empty
+    project ``catalog.models`` into ``models.json`` with lifted ladders,
+    reprice existing Provider files, and seed an empty
     ``models.overrides.json`` structure when absent. Returns a small report
     (model count + how many models lift a ladder vs. fall to the hand path).
 
@@ -359,12 +327,11 @@ async def refresh_canonical_layer(
             refreshes prices in existing generated Provider files without credentials.
 
     Returns:
-        ``{"model_count", "lifted_ladders", "hand_path_reasoning", "raw_path"}``.
+        ``{"model_count", "lifted_ladders", "hand_path_reasoning"}``.
     """
 
     resolved_catalog = catalog or await fetch_catalog(client=client)
     models_dir = resources_dir / "models"
-    raw_path = write_raw_catalog(resolved_catalog, models_dir)
     projected = project_canonical_models(resolved_catalog)
     write_canonical_models(projected, models_dir)
     _refresh_provider_prices(models_dir, resolved_catalog, provider_catalog_ids or {})
@@ -375,7 +342,6 @@ async def refresh_canonical_layer(
         "model_count": len(projected),
         "lifted_ladders": lifted,
         "hand_path_reasoning": hand_path_reasoning,
-        "raw_path": str(raw_path),
     }
 
 
@@ -591,7 +557,7 @@ def provider_reasoning_block(
     return {"supported": bool(provider_model.get("reasoning")), **provider_control}
 
 
-def reasoning_response_field(
+def interleaved_field(
     catalog: ModelsDevCatalog,
     *,
     models_dev_id: str,
@@ -601,7 +567,7 @@ def reasoning_response_field(
 
     Projects the provider section's models.dev ``interleaved`` value into the
     field-name selector the adapter reads from ``metadata.<provider>.\
-    reasoning_response_field``: ``{"field": "reasoning_content"}`` /
+    interleaved_field``: ``{"field": "reasoning_content"}`` /
     ``{"field": "reasoning_details"}`` → that field name. Bare ``interleaved:
     true`` (no field-name override) and an absent ``interleaved`` both yield
     ``None`` so the adapter keeps its hardcoded default-key scan (graceful).
@@ -714,6 +680,24 @@ def provider_family(
         return None
     family = provider_model.get("family")
     return family if isinstance(family, str) and family else None
+
+
+def provider_npm(catalog: ModelsDevCatalog, *, models_dev_id: str, wire_id: str) -> str | None:
+    """Return the per-model AI SDK package (``provider.npm``) of one provider Model.
+
+    A gateway that serves several wire protocols names the client package per
+    Model (e.g. OpenCode Zen ``gpt-5.4`` → ``@ai-sdk/openai``); wire profiles map
+    it to a protocol. Only the per-model value counts: the section-wide ``npm``
+    is the provider's default client, not a fact about one Model, so a Model
+    without its own package yields ``None``.
+    """
+
+    provider_model = catalog.provider_model(models_dev_id, wire_id)
+    if provider_model is None:
+        return None
+    provider = provider_model.get("provider")
+    npm = provider.get("npm") if isinstance(provider, Mapping) else None
+    return npm if isinstance(npm, str) and npm else None
 
 
 def provider_pricing(

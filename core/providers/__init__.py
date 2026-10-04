@@ -51,6 +51,7 @@ from core.providers.reasoning import (
     REASONING_REPLAY_FULL_HISTORY,
     REASONING_REPLAY_NONE,
     REASONING_REPLAY_POLICIES,
+    REASONING_REPLAY_TOOL_TURNS,
     ReasoningReplayPolicy,
 )
 from core.providers.stepfun import StepFunAdapter
@@ -65,6 +66,7 @@ __all__ = [
     "REASONING_REPLAY_FULL_HISTORY",
     "REASONING_REPLAY_NONE",
     "REASONING_REPLAY_POLICIES",
+    "REASONING_REPLAY_TOOL_TURNS",
     "ConnectionRef",
     "AnthropicAdapter",
     "AnthropicCompatibleAdapter",

@@ -48,7 +48,7 @@
   const noop = () => {};
   // Shared Agent defaults live in Agents; these words lead there.
   const AGENT_DEFAULTS_TERMS = normalizeSearchText(
-    'Agent defaults global shared Model Thinking effort temperature fallback compaction',
+    'Agent defaults global shared Model Thinking effort advanced sampling temperature top_p fallback compaction',
   );
   const AGENT_DEFAULTS_RESULT = { key: 'agent_defaults', kind: 'shortcut' };
   // How long an opened search result stays highlighted.

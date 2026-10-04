@@ -41,7 +41,7 @@ def test_agent_list_prints_one_row_per_agent(rpc: FakeRpc, run_cli: RunCli) -> N
     assert rpc.calls == [("agent.list", {})]
     row = (
         "name=Coder model=openai/gpt-5.2 fallback_models=anthropic/claude-sonnet-4 "
-        "temperature=0.4 thinking_effort=high current_session_id=session-one "
+        "temperature=0.4 top_p=- thinking_effort=high current_session_id=session-one "
         "context_window=256000"
     )
     assert out.splitlines()[1:] == [f"- id=writer {row}", f"- id=coder {row}"]
@@ -63,6 +63,7 @@ def test_agent_show_prints_every_agent_field(rpc: FakeRpc, run_cli: RunCli) -> N
         "workspace: C:/data/workspace-coder",
         "project: vbot",
         "temperature: 0.4",
+        "top_p: -",
         "thinking_effort: high",
         "memory_prompt_mode: agent_user",
         "custom_system_prompt_enabled: no",
@@ -83,7 +84,7 @@ def test_agent_show_prints_every_agent_field(rpc: FakeRpc, run_cli: RunCli) -> N
         "id: librarian",
         "name: Coder",
         "builtin: librarian (curates the skills of your other agents; only model, "
-        "fallback_models, temperature and thinking_effort can change)",
+        "fallback_models, temperature, top_p and thinking_effort can change)",
     ]
 
 

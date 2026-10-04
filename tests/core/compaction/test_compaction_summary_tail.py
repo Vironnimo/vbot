@@ -58,15 +58,13 @@ async def test_summary_tail_executes_one_call_and_materializes_projection() -> N
         active_adapter=active_adapter,
         active_model_id="openai/active",
         active_tools=tools,
-        summary_temperature=1.0,
-        active_temperature=0.2,
     )
 
     assert active_adapter.requests == []
     [sent_request] = summary_adapter.requests
     assert sent_request["model_id"] == "openai/summary"
     assert sent_request["tools"] == tools
-    assert sent_request["temperature"] == 1.0
+    assert "temperature" not in sent_request
     sent = sent_request["messages"]
     assert sent[:-1] == request[:3]
     assert [message["role"] for message in sent] == ["system", "user", "assistant", "user"]

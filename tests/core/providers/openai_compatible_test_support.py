@@ -32,8 +32,9 @@ def _api_key_connection(
     )
 
 
-# The ``openai`` id selects OpenAI-only wire policy (explicit ``strict: false``,
-# ``reasoning_effort: "none"``); the defaults exercise config fallbacks.
+# The ``openai`` id selects OpenAI's wire profile (``resources/wire/openai.json``:
+# explicit ``strict: false``, ``reasoning_effort: "none"``); the defaults
+# exercise config fallbacks.
 OPENAI_CONFIG = ProviderConfig(
     id="openai",
     name="OpenAI",

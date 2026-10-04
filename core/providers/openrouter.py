@@ -8,7 +8,7 @@ import json
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import replace
-from typing import Any, cast, override
+from typing import Any, ClassVar, cast, override
 from urllib.parse import quote
 
 import httpx
@@ -16,7 +16,6 @@ import httpx
 from core.models.models import (
     Capabilities,
     Model,
-    ReasoningCapabilities,
 )
 from core.providers._chat_completions_catalog import (
     _parse_optional_int,
@@ -37,6 +36,7 @@ from core.providers._openrouter_catalog import (
     _image_catalog_model,
     _normalize_image_parameters,
     _normalize_video_options,
+    _openrouter_reasoning,
     _openrouter_runtime_metadata,
     _openrouter_task_types,
     _passthrough_from_detail,
@@ -49,33 +49,33 @@ from core.providers._openrouter_constants import (
     _OPENROUTER_SHARED_POLICY_STATUSES,
     IMAGE_MODELS_ENDPOINT,
     MAX_REASONING_PARAGRAPH_NEWLINES,
-    OPENROUTER_ALL_TURNS_RESPONSES_MODELS,
     OPENROUTER_CACHE_BREAKPOINT_LIMIT,
     OPENROUTER_CACHE_CONTROL_EPHEMERAL,
     OPENROUTER_MAX_HISTORY_CACHE_BREAKPOINTS,
-    OPENROUTER_NONE_EFFORT,
-    OPENROUTER_REASONING_EFFORTS,
-    OPENROUTER_REASONING_OFF,
     OPENROUTER_RESPONSES_ENDPOINT,
-    OPENROUTER_RESPONSES_REQUEST_PARAMETERS,
     REASONING_NEWLINE_RUN_PATTERN,
     SUPPLEMENTARY_OUTPUT_MODALITIES,
     VIDEO_MODELS_ENDPOINT,
 )
 from core.providers._openrouter_policy import (
-    OpenRouterResponsesPolicy,
     _apply_openrouter_prompt_caching,
     _collapse_reasoning_delta_texts,
     _collapse_reasoning_newline_runs,
-    _describe_openrouter_intent,
-    _is_claude_family,
     _openrouter_http_error_detail,
     _openrouter_provider_preferences,
     _openrouter_routing_options,
     _openrouter_status_error_payload,
-    _render_openrouter_reasoning,
 )
-from core.providers.adapter import ModelLookup
+from core.providers._responses_profile import (
+    RESPONSES_DOCUMENT_TYPES,
+    RESPONSES_REASONING_FIELDS,
+    profile_responses_policy,
+    take_reasoning_renderer,
+)
+from core.providers._wire_learning import (
+    execute_learning_from_rejections,
+    stream_learning_from_rejections,
+)
 from core.providers.errors import (
     NetworkError,
     classify_in_band_provider_error,
@@ -86,38 +86,23 @@ from core.providers.github_copilot_responses import (
     estimate_responses_input_tokens,
     iter_responses_sse_deltas_with_state,
     normalize_responses_response,
+    responses_returned_reasoning,
 )
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
 )
-from core.providers.providers import ProviderConfig
-from core.providers.reasoning import (
-    ReasoningIntent,
-    closest_supported_effort,
-    model_reasoning_budget_max,
-    model_reasoning_control,
-    model_reasoning_levels,
-    model_reasoning_supported,
-    normalize_thinking_effort,
-    resolve_reasoning_intent,
-)
+from core.providers.wire_profile import Protocol
 from core.settings.settings import parse_openrouter_routing
 from core.utils.retry import retry_async
 
 __all__ = [
     "IMAGE_MODELS_ENDPOINT",
     "MAX_REASONING_PARAGRAPH_NEWLINES",
-    "OPENROUTER_ALL_TURNS_RESPONSES_MODELS",
     "OPENROUTER_CACHE_BREAKPOINT_LIMIT",
     "OPENROUTER_CACHE_CONTROL_EPHEMERAL",
     "OPENROUTER_MAX_HISTORY_CACHE_BREAKPOINTS",
-    "OPENROUTER_NONE_EFFORT",
-    "OPENROUTER_REASONING_EFFORTS",
-    "OPENROUTER_REASONING_OFF",
     "OPENROUTER_RESPONSES_ENDPOINT",
-    "OPENROUTER_RESPONSES_REQUEST_PARAMETERS",
     "OpenRouterAdapter",
-    "OpenRouterResponsesPolicy",
     "REASONING_NEWLINE_RUN_PATTERN",
     "SUPPLEMENTARY_OUTPUT_MODALITIES",
     "VIDEO_MODELS_ENDPOINT",
@@ -142,24 +127,10 @@ def _openrouter_usage_extras(raw: Any) -> dict[str, Any]:
     return extras
 
 
-def _effective_reasoning_effort(
-    model_lookup: ModelLookup | None, model_id: str, effort: Any
-) -> Any:
-    """Use the cheapest supported effort when the catalog forbids disabling reasoning."""
-    if normalize_thinking_effort(effort) != "none" or model_lookup is None:
-        return effort
-    model = model_lookup(model_id.split("::", 1)[0])
-    if model is None:
-        return effort
-    metadata = model.metadata.get("openrouter")
-    if not isinstance(metadata, Mapping) or metadata.get("reasoning_mandatory") is not True:
-        return effort
-    levels = model_reasoning_levels(model_lookup, model_id) or tuple(OPENROUTER_REASONING_EFFORTS)
-    return closest_supported_effort("minimal", levels) or effort
-
-
 class OpenRouterAdapter(OpenAICompatibleAdapter):
     """OpenAI-compatible adapter with OpenRouter-specific behavior."""
+
+    WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("chat_completions", "responses")
 
     def __init__(
         self,
@@ -178,16 +149,31 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Route GPT-5.6 Models through OpenRouter's stateless Responses wire."""
+        """Send through the Model's wire: Chat Completions or stateless Responses."""
 
-        if not self._uses_all_turns_responses(model_id):
+        if not self._uses_responses(model_id):
             return await super().send(messages, model_id=model_id, **kwargs)
-        payload = self._build_openrouter_responses_payload(
-            messages,
+        request_headers = self._stable_request_headers(model_id, kwargs)
+
+        def build() -> dict[str, Any]:
+            return self._build_openrouter_responses_payload(
+                messages,
+                model_id=model_id,
+                **self._request_kwargs_with_defaults(kwargs),
+            )
+
+        payload = build()
+        response = await execute_learning_from_rejections(
+            lambda: self._post_responses_json(payload, request_headers=request_headers),
+            payload,
+            rebuild=build,
+            wire=self.wire,
             model_id=model_id,
-            **self._request_kwargs_with_defaults(kwargs),
+            provider_label=self._config.id,
         )
-        return await self._post_responses_json(payload)
+        if responses_returned_reasoning(response):
+            self.wire.observe_reasoning_returned(model_id)
+        return response
 
     @override
     async def stream(
@@ -197,9 +183,9 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> AsyncGenerator[dict[str, Any]]:
-        """Stream GPT-5.6 via Responses; retain Chat Completions for other Models."""
+        """Stream through the Model's wire: Chat Completions or stateless Responses."""
 
-        if not self._uses_all_turns_responses(model_id):
+        if not self._uses_responses(model_id):
             async with aclosing(
                 cast(
                     AsyncGenerator[dict[str, Any]],
@@ -209,13 +195,27 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                 async for delta in deltas:
                     yield delta
             return
-        payload = self._build_openrouter_responses_payload(
-            messages,
-            model_id=model_id,
-            stream=True,
-            **self._request_kwargs_with_defaults(kwargs),
-        )
-        async with aclosing(self._stream_responses(payload)) as deltas:
+        request_headers = self._stable_request_headers(model_id, kwargs)
+
+        def build() -> dict[str, Any]:
+            return self._build_openrouter_responses_payload(
+                messages,
+                model_id=model_id,
+                stream=True,
+                **self._request_kwargs_with_defaults(kwargs),
+            )
+
+        payload = build()
+        async with aclosing(
+            stream_learning_from_rejections(
+                lambda: self._stream_responses(payload, request_headers=request_headers),
+                payload,
+                rebuild=build,
+                wire=self.wire,
+                model_id=model_id,
+                provider_label=self._config.id,
+            )
+        ) as deltas:
             async for delta in deltas:
                 yield delta
 
@@ -241,8 +241,10 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             normalized["reasoning"] = _collapse_reasoning_newline_runs(reasoning, None)
         return normalized
 
-    def _uses_all_turns_responses(self, model_id: str) -> bool:
-        return model_id.split("::", 1)[0] in OPENROUTER_ALL_TURNS_RESPONSES_MODELS
+    def _uses_responses(self, model_id: str) -> bool:
+        """Whether the wire profile routes ``model_id`` to stateless Responses."""
+
+        return self.wire_profile(model_id).protocol == "responses"
 
     @override
     def _normalize_stream_chunk(
@@ -299,11 +301,14 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         raise classify_in_band_provider_error(error, lenient_unknown=True)
 
     def _request_kwargs_with_defaults(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
+        # Provider defaults are merged as if the caller had set them, so the
+        # Responses output limit is the flat default rather than the catalog
+        # ceiling; a ``None`` caller value removes the default.
         request_kwargs: dict[str, Any] = {}
         if self._config.defaults:
             request_kwargs.update(self._config.defaults)
         request_kwargs.update(kwargs)
-        return request_kwargs
+        return {key: value for key, value in request_kwargs.items() if value is not None}
 
     @override
     def estimate_request_input_tokens(
@@ -313,7 +318,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         model_id: str,
         tools: Sequence[Mapping[str, Any]] | None = None,
     ) -> int:
-        if self._uses_all_turns_responses(model_id):
+        if self._uses_responses(model_id):
             return estimate_responses_input_tokens(
                 [dict(message) for message in messages], model_id=model_id, tools=tools
             )
@@ -328,55 +333,49 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         **kwargs: Any,
     ) -> dict[str, Any]:
         session_id = kwargs.pop("session_id", None)
+        profile = self.wire_profile(model_id)
+        reasoning_renderer = take_reasoning_renderer(profile, kwargs)
         payload = build_responses_payload(
             messages,
             model_id=model_id,
-            policy=self._responses_policy_for_model(model_id),
+            policy=profile_responses_policy(profile, self._catalog_model(model_id)),
             stream=stream,
+            document_media_types=profile.media.types & RESPONSES_DOCUMENT_TYPES,
+            reasoning_renderer=reasoning_renderer,
             **kwargs,
         )
         payload["store"] = False
         if isinstance(session_id, str) and session_id:
             payload["session_id"] = session_id
+        rules = profile.request
+        rules.apply_body(payload)
+        # Configured or learned parameter rules; the reasoning fields are
+        # the dialect's own output.
+        rules.shape_parameters(
+            payload,
+            reasoning_active="reasoning" in payload,
+            protected=RESPONSES_REASONING_FIELDS,
+            provider_label=self._config.name,
+        )
         provider_preferences = _openrouter_provider_preferences(self._routing, model_id)
         if provider_preferences:
             payload["provider"] = provider_preferences
         return payload
 
-    def _responses_policy_for_model(self, model_id: str) -> OpenRouterResponsesPolicy:
-        model = (
-            self._model_lookup(model_id.split("::", 1)[0])
-            if self._model_lookup is not None
-            else None
-        )
-        capabilities = model.capabilities if model is not None else None
-        reasoning_supported = capabilities.reasoning.supported if capabilities is not None else True
-        supports_tools = capabilities.tools if capabilities is not None else True
-        supported_parameters = set(capabilities.supported_parameters) if capabilities else set()
-        return OpenRouterResponsesPolicy(
-            allowed_reasoning_efforts=(
-                frozenset(model_reasoning_levels(self._model_lookup, model_id) or ())
-                if reasoning_supported
-                else frozenset()
-            )
-            or (frozenset(OPENROUTER_REASONING_EFFORTS) if reasoning_supported else frozenset()),
-            supports_tools=supports_tools,
-            supports_parallel_tool_calls=(
-                supports_tools
-                and (
-                    not supported_parameters
-                    or "parallel_tool_calls" in supported_parameters
-                    or "tools" in supported_parameters
-                )
-            ),
-            supports_structured_outputs=(
-                capabilities.json_mode if capabilities is not None else True
-            ),
-        )
+    def _catalog_model(self, model_id: str) -> Model | None:
+        if self._model_lookup is None:
+            return None
+        return self._model_lookup(model_id.split("::", 1)[0])
 
-    async def _post_responses_json(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _post_responses_json(
+        self,
+        payload: dict[str, Any],
+        *,
+        request_headers: Mapping[str, str],
+    ) -> dict[str, Any]:
         async def _do_request() -> dict[str, Any]:
             headers = await self._build_headers()
+            headers.update(request_headers)
             try:
                 response = await self._client.post(
                     OPENROUTER_RESPONSES_ENDPOINT,
@@ -397,8 +396,10 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
     async def _stream_responses(
         self,
         payload: dict[str, Any],
+        *,
+        request_headers: Mapping[str, str],
     ) -> AsyncGenerator[dict[str, Any]]:
-        response = await self._connect_responses_stream(payload)
+        response = await self._connect_responses_stream(payload, request_headers=request_headers)
         state = ResponsesStreamState(lenient_unknown_errors=True)
         newline_state: dict[str, Any] = {}
         event_lines: list[str] = []
@@ -444,7 +445,14 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
     async def _connect_responses_stream(
         self,
         payload: dict[str, Any],
+        *,
+        request_headers: Mapping[str, str],
     ) -> httpx.Response:
+        async def _build_headers() -> dict[str, str]:
+            headers = await self._build_headers()
+            headers.update(request_headers)
+            return headers
+
         def _handle_error_status(
             status_code: int,
             error_body: str,
@@ -460,7 +468,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             self._client,
             OPENROUTER_RESPONSES_ENDPOINT,
             payload,
-            build_headers=self._build_headers,
+            build_headers=_build_headers,
             handle_error_status=_handle_error_status,
         )
 
@@ -677,12 +685,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                     "response_format" in supported_parameters
                     or "structured_outputs" in supported_parameters
                 ),
-                reasoning=ReasoningCapabilities(
-                    supported=(
-                        "reasoning" in supported_parameters
-                        or "include_reasoning" in supported_parameters
-                    ),
-                ),
+                reasoning=_openrouter_reasoning(supported_parameters, raw.get("reasoning")),
                 input_modalities=tuple(input_modalities),
                 output_modalities=tuple(output_modalities),
                 supported_parameters=tuple(supported_parameters),
@@ -695,7 +698,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             # a fake fact; the read-side default chain fills it at use time.
             context_window=_parse_optional_int(raw.get("context_length")) or None,
             max_output_tokens=_parse_optional_int(top_provider.get("max_completion_tokens")),
-            metadata=_openrouter_runtime_metadata(architecture, raw.get("reasoning")),
+            metadata=_openrouter_runtime_metadata(architecture),
             pricing=_embedding_catalog_pricing(model_id, raw, output_modalities),
         )
 
@@ -706,73 +709,14 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Build an OpenRouter payload with OpenRouter reasoning parameters."""
+        """Build a Chat Completions payload plus cache markers and routing preferences."""
 
-        thinking_effort = kwargs.pop("thinking_effort", "")
-        reasoning_effort = kwargs.pop("reasoning_effort", "")
         payload = super()._build_payload(messages, model_id, **kwargs)
-        reasoning_supported = self._model_reasoning_supported(model_id)
-        if reasoning_supported is False:
-            payload.pop("reasoning", None)
-            payload.pop("include_reasoning", None)
-        else:
-            # Snap against the effective per-model ladder when the DB carries one;
-            # the provider-global constant is only the floor for a model without a
-            # feed ladder.
-            intent = resolve_reasoning_intent(
-                supported=reasoning_supported,
-                control=model_reasoning_control(self._model_lookup, model_id),
-                levels=(
-                    model_reasoning_levels(self._model_lookup, model_id)
-                    or tuple(OPENROUTER_REASONING_EFFORTS)
-                ),
-                effort=_effective_reasoning_effort(
-                    self._model_lookup, model_id, thinking_effort or reasoning_effort
-                ),
-                budget_max=model_reasoning_budget_max(self._model_lookup, model_id),
-                # OpenRouter resolves a budget from the effort internally, so vBot
-                # deliberately never sends a token budget here (no ``max_tokens``).
-                max_tokens=None,
-            )
-            _render_openrouter_reasoning(payload, intent)
-
         # Cache stable prefixes last, after every other payload mutation, so the
-        # markers land on the final messages that go on the wire. Claude-only:
-        # non-Claude models cache implicitly and reject a stray marker.
-        if _is_claude_family(model_id):
+        # markers land on the final messages that go on the wire.
+        if self.wire_profile(model_id).request.prompt_cache == "anthropic_breakpoints":
             _apply_openrouter_prompt_caching(payload)
         provider_preferences = _openrouter_provider_preferences(self._routing, model_id)
         if provider_preferences:
             payload["provider"] = provider_preferences
         return payload
-
-    @classmethod
-    @override
-    def describe_reasoning_render(
-        cls,
-        *,
-        model_lookup: ModelLookup | None,
-        model_id: str,
-        effort: str | None,
-        provider_config: ProviderConfig | None = None,
-    ) -> ReasoningIntent:
-        """Describe OpenRouter's reasoning render (``reasoning: {effort}``/``{enabled}``).
-
-        Mirrors :meth:`_build_payload`: the intent resolves against the Model's
-        feed ladder or the OpenRouter floor, then
-        :func:`_describe_openrouter_intent` maps it onto the render — an ``on``
-        selection toggles ``enabled`` rather than sending an effort, and a
-        budget degrades to the effort OpenRouter maps internally.
-        """
-
-        del provider_config
-        intent = resolve_reasoning_intent(
-            supported=model_reasoning_supported(model_lookup, model_id),
-            control=model_reasoning_control(model_lookup, model_id),
-            levels=model_reasoning_levels(model_lookup, model_id)
-            or tuple(OPENROUTER_REASONING_EFFORTS),
-            effort=_effective_reasoning_effort(model_lookup, model_id, effort),
-            budget_max=model_reasoning_budget_max(model_lookup, model_id),
-            max_tokens=None,
-        )
-        return _describe_openrouter_intent(intent)

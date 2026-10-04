@@ -29,6 +29,8 @@ AGENT_UPDATE_FLAGS = (
     "--clear-fallback-models",
     "--temperature",
     "--clear-temperature",
+    "--top-p",
+    "--clear-top-p",
     "--thinking-effort",
     "--clear-thinking-effort",
     "--memory-prompt-mode",
@@ -285,6 +287,7 @@ def _format_agent_row(agent: object) -> str:
     model = _string_or_default(agent.get("model"), "-")
     fallback_models = _format_string_list(agent.get("fallback_models"))
     temperature = _value_text(agent.get("temperature"))
+    top_p = _value_text(agent.get("top_p"))
     thinking_effort = _value_text(agent.get("thinking_effort"))
     current_session_id = _string_or_default(agent.get("current_session_id"), "-")
     context_window = _value_text(agent.get("context_window"))
@@ -295,6 +298,7 @@ def _format_agent_row(agent: object) -> str:
             f" model={model}",
             f" fallback_models={fallback_models}",
             f" temperature={temperature}",
+            f" top_p={top_p}",
             f" thinking_effort={thinking_effort}",
             f" current_session_id={current_session_id}",
             f" context_window={context_window}",
@@ -306,7 +310,7 @@ def _format_agent_row(agent: object) -> str:
 # The built-in Librarian: what it is and what an update may change.
 _LIBRARIAN_LINE = (
     "builtin: librarian (curates the skills of your other agents; only model, "
-    "fallback_models, temperature and thinking_effort can change)"
+    "fallback_models, temperature, top_p and thinking_effort can change)"
 )
 
 
@@ -321,6 +325,7 @@ def _format_agent_detail(agent: Mapping[str, Any]) -> str:
         f"workspace: {_string_or_default(agent.get('workspace'), '-')}",
         f"project: {_string_or_default(agent.get('root_project_id'), '-')}",
         f"temperature: {_value_text(agent.get('temperature'))}",
+        f"top_p: {_value_text(agent.get('top_p'))}",
         f"thinking_effort: {_value_text(agent.get('thinking_effort'))}",
         f"memory_prompt_mode: {_string_or_default(agent.get('memory_prompt_mode'), '-')}",
         f"custom_system_prompt_enabled: {custom_prompt_text}",

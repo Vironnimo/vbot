@@ -31,7 +31,6 @@ from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
     StubCompactionService,
-    StubModels,
     build_chat_loop,
     persisted_roles,
 )
@@ -101,7 +100,6 @@ async def test_automatic_compaction_commits_a_checkpoint_and_rebuilds_the_reques
     assert call["summary_model_id"] == "gpt-5.2"
     assert call["summary_adapter"] is runtime.adapter
     assert call["request_messages"] == probe.request
-    assert (call["summary_temperature"], call["active_temperature"]) == (None, None)
     assert call["minimum_reclaim_tokens"] == MIN_AUTO_COMPACTION_RECLAIM_TOKENS
 
     # The rebuilt request is the summary reminder followed by the native Tail.
@@ -152,34 +150,6 @@ async def test_automatic_compaction_commits_a_checkpoint_and_rebuilds_the_reques
     assert isinstance(duration_ms, int) and duration_ms >= 0
     assert lifecycle[1].payload["duration_ms"] == duration_ms
     assert lifecycle[1].payload["message"]["usage"]["compaction_duration_ms"] == duration_ms
-
-
-@pytest.mark.asyncio
-async def test_compaction_resolves_model_recommended_temperatures_for_both_targets(
-    tmp_path: Path,
-) -> None:
-    agent = StubAgent(id="coder", model="ollama-cloud/glm-5.2", allowed_tools=["*"])
-    runtime = compaction_runtime(
-        tmp_path,
-        agent=agent,
-        settings={"summary_model": "ollama-cloud/qwen3"},
-        models=StubModels(
-            {("ollama-cloud", "glm-5.2"): 100, ("ollama-cloud", "qwen3"): 100},
-            recommended_temperatures={("ollama-cloud", "glm-5.2"): 1.0},
-        ),
-    )
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
-    service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
-
-    await auto_compact(
-        build_chat_loop(runtime, compaction_service=cast(Any, service)),
-        agent,
-        session,
-        usage={"input_tokens": 90},
-    )
-
-    assert service.compact_calls[0]["summary_temperature"] is None
-    assert service.compact_calls[0]["active_temperature"] == 1.0
 
 
 @pytest.mark.asyncio

@@ -17,8 +17,9 @@ Key differences from the OpenAI-compatible adapter:
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Self, override
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
+from contextlib import aclosing
+from typing import TYPE_CHECKING, Any, ClassVar, Self, override
 
 import httpx
 
@@ -28,19 +29,14 @@ from core.providers._http_shared import (
     connect_streaming_with_retry,
     decode_response_json,
     enforce_request_body_limit,
-    execute_with_sampling_fallback,
     iter_sse_data,
     parse_sse_json_data,
     wrap_network_error,
 )
 from core.providers._messages_constants import (
-    ANTHROPIC_EFFORT_FLOOR,
     ANTHROPIC_ERROR_STOP_REASONS,
-    ANTHROPIC_METADATA_KEY,
-    ANTHROPIC_MINIMAL_EFFORT,
     ANTHROPIC_OVERLOADED_STATUS,
     ANTHROPIC_REASONING_PARAMETER_NAMES,
-    ANTHROPIC_SAMPLING_PARAMETER_NAMES,
     ANTHROPIC_STOP_REASONS,
     ANTHROPIC_TOOL_STOP_REASONS,
     ANTHROPIC_VERSION,
@@ -51,7 +47,6 @@ from core.providers._messages_constants import (
     MESSAGES_ENDPOINT,
     REASONING_META_CONTENT_BLOCKS,
     REDACTED_THINKING_BLOCK_TYPE,
-    REQUIRES_ADAPTIVE_THINKING_METADATA_KEY,
     TEXT_BLOCK_TYPE,
     THINKING_BLOCK_TYPE,
     TOOL_USE_BLOCK_TYPE,
@@ -71,10 +66,14 @@ from core.providers._messages_wire import (
     _to_anthropic_messages,
     apply_anthropic_cache_usage,
     apply_anthropic_reasoning_usage,
+    messages_returned_reasoning,
+)
+from core.providers._tool_calls import WIRE_TOOL_CALL_ID_PROFILES
+from core.providers._wire_learning import (
+    execute_learning_from_rejections,
+    stream_learning_from_rejections,
 )
 from core.providers.adapter import (
-    ANTHROPIC_MESSAGES_TOOL_CALL_ID_PROFILE,
-    IMAGE_WIRE_MEDIA_TYPES,
     ModelLookup,
     ProviderAdapter,
     normalize_tool_call_ids,
@@ -88,23 +87,14 @@ from core.providers.providers import (
     resolve_request_output_limit,
 )
 from core.providers.reasoning import (
-    BUDGET_FLOOR_TOKENS,
-    REASONING_INTENT_BUDGET,
-    REASONING_INTENT_EFFORT,
-    REASONING_INTENT_OFF,
-    REASONING_INTENT_ON,
-    REASONING_REPLAY_FIDELITY_META_ONLY,
-    ReasoningIntent,
-    ReasoningReplayFidelity,
-    model_reasoning_budget_max,
-    model_reasoning_control,
-    model_reasoning_levels,
-    model_reasoning_supported,
     remove_reasoning_kwargs,
-    resolve_reasoning_intent,
+)
+from core.providers.reasoning_dialects import (
+    dialect_request_fields,
+    render_reasoning,
 )
 from core.providers.token_getter import OAuthRequestRecovery, StaticTokenGetter, TokenGetter
-from core.utils.logging import get_logger
+from core.providers.wire_profile import Protocol, WireProfile
 from core.utils.retry import retry_async
 from core.utils.tokens import estimate_structured_tokens
 
@@ -112,13 +102,9 @@ if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
 
 __all__ = [
-    "ANTHROPIC_EFFORT_FLOOR",
     "ANTHROPIC_ERROR_STOP_REASONS",
-    "ANTHROPIC_METADATA_KEY",
-    "ANTHROPIC_MINIMAL_EFFORT",
     "ANTHROPIC_OVERLOADED_STATUS",
     "ANTHROPIC_REASONING_PARAMETER_NAMES",
-    "ANTHROPIC_SAMPLING_PARAMETER_NAMES",
     "ANTHROPIC_STOP_REASONS",
     "ANTHROPIC_TOOL_STOP_REASONS",
     "ANTHROPIC_VERSION",
@@ -131,7 +117,6 @@ __all__ = [
     "MESSAGES_ENDPOINT",
     "REASONING_META_CONTENT_BLOCKS",
     "REDACTED_THINKING_BLOCK_TYPE",
-    "REQUIRES_ADAPTIVE_THINKING_METADATA_KEY",
     "TEXT_BLOCK_TYPE",
     "THINKING_BLOCK_TYPE",
     "TOOL_USE_BLOCK_TYPE",
@@ -139,20 +124,24 @@ __all__ = [
     "apply_anthropic_reasoning_usage",
 ]
 
-_LOGGER = get_logger("providers.anthropic_compatible")
-
 
 class AnthropicCompatibleAdapter(ProviderAdapter):
     """Adapter for Anthropic Messages-compatible APIs.
 
     Uses the ``/messages`` endpoint with Anthropic's own request and response
     format.  Provider-specific differences (base URL, auth header, extra
-    headers, default parameters) come from ``ProviderConfig``.
+    headers, default parameters) come from ``ProviderConfig``; tool-call ids,
+    output limits, sampling parameters, reasoning, replay, media and prompt
+    caching come from the Model's wire profile.
 
     Args:
         config: Immutable provider configuration.
         token_getter: Async callable that returns the current auth token.
+        api_version: ``anthropic-version`` header value, when the endpoint needs one.
+        extra_retryable_statuses: Provider-specific retryable HTTP statuses.
     """
+
+    WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("messages",)
 
     def __init__(
         self,
@@ -166,8 +155,6 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         connection_mode: str | None = None,
         client: httpx.AsyncClient | None = None,
         api_version: str | None = None,
-        wire_media_types: frozenset[str] = IMAGE_WIRE_MEDIA_TYPES,
-        prompt_caching: bool = False,
         extra_retryable_statuses: frozenset[int] = frozenset(),
     ) -> None:
         self._config = config
@@ -176,17 +163,11 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         )
         self._auth_config = auth_config or config.connections[0].auth
         self._api_version = api_version
-        self._wire_media_types = wire_media_types
-        self._prompt_caching = prompt_caching
         self._extra_retryable_statuses: set[int] = set(extra_retryable_statuses)
         # ``connection_mode`` is accepted for parity with the unified
         # ``get_adapter`` call site but is not used by the Messages wire.
         del connection_mode
-        super().__init__(
-            model_lookup=model_lookup,
-            debug_recorder=debug_recorder,
-            reasoning_replay_default=config.reasoning_replay,
-        )
+        super().__init__(model_lookup=model_lookup, debug_recorder=debug_recorder)
         self._owns_client = client is None
         self._client = client or build_async_client(
             base_url=base_url or config.base_url,
@@ -208,27 +189,6 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         await self.aclose()
-
-    # ------------------------------------------------------------------
-    # Wire media capability
-    # ------------------------------------------------------------------
-
-    @override
-    def wire_media_support(self, model_id: str) -> frozenset[str]:
-        """Return media types verified for this compatible endpoint profile."""
-        del model_id
-        return self._wire_media_types
-
-    @override
-    def reasoning_replay_fidelity(self, model_id: str) -> ReasoningReplayFidelity:
-        """The Messages wire round-trips signed thinking blocks only.
-
-        Assistant serialization goes through ``_to_anthropic_assistant_content``,
-        which replays ``reasoning_meta.content_blocks`` verbatim and never emits
-        a readable text field; this declaration documents that native shape.
-        """
-        del model_id
-        return REASONING_REPLAY_FIDELITY_META_ONLY
 
     # ------------------------------------------------------------------
     # Header / payload helpers
@@ -283,9 +243,8 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         tools: Sequence[Mapping[str, Any]] | None = None,
     ) -> int:
         """Estimate the Messages wire without counting duplicate readable thinking."""
-        wire = normalize_tool_call_ids(
-            [dict(message) for message in messages], ANTHROPIC_MESSAGES_TOOL_CALL_ID_PROFILE
-        )
+        profile = self.wire_profile(model_id)
+        wire = _normalize_tool_call_ids(profile, [dict(message) for message in messages])
         system = _merge_anthropic_system_parts(
             [
                 message["content"]
@@ -297,13 +256,17 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         payload: dict[str, Any] = {
             "messages": _to_anthropic_messages(
                 [message for message in wire if message.get("role") != "system"],
-                include_thinking_blocks=self._model_reasoning_supported(model_id) is not False,
+                include_thinking_blocks=not (
+                    profile.replay.strip_when_off and profile.reasoning.supported is False
+                ),
             )
         }
         if system is not None:
             payload["system"] = system
         if tools:
-            _apply_anthropic_tools(payload, {"tools": list(tools)})
+            _apply_anthropic_tools(
+                payload, {"tools": list(tools)}, profile=profile.request.tool_schema
+            )
         # Separate the growing history from stable System Prompt/Tools so the
         # shared per-item count cache also benefits the Messages wire.
         history_tokens = estimate_structured_tokens(payload.pop("messages"), model_id=model_id)[0]
@@ -319,15 +282,20 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
 
         Extracts system-role messages into the ``system`` field (required by
         the Anthropic API — system messages must not appear in the messages
-        array) and assembles model, messages, defaults, and overrides.
+        array) and assembles model, messages, defaults, and overrides, shaped
+        by the Model's wire profile.
+
+        Raises:
+            ProviderError: (not retryable, nothing sent) when the wire profile
+                does not admit the Model or refuses a request parameter.
         """
+        self._refuse_unadmitted_model(model_id)
+        profile = self.wire_profile(model_id)
+        rules = profile.request
+        wire_messages = _normalize_tool_call_ids(profile, messages)
         # ``None``-valued caller kwargs mean "not specified" — drop them so they
         # do not clobber provider defaults below. Falsy-but-non-None values
         # (e.g. ``temperature=0.0``) must survive.
-        wire_messages = normalize_tool_call_ids(
-            messages,
-            ANTHROPIC_MESSAGES_TOOL_CALL_ID_PROFILE,
-        )
         request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
         system_parts: list[str | list[dict[str, Any]]] = []
         conversation_messages: list[dict[str, Any]] = []
@@ -347,11 +315,8 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         system_content = _merge_anthropic_system_parts(system_parts)
         if system_content is not None:
             payload["system"] = system_content
-        _apply_anthropic_tools(
-            payload,
-            request_kwargs,
-        )
-        reasoning_supported = self._model_reasoning_supported(model_id)
+        _apply_anthropic_tools(payload, request_kwargs, profile=rules.tool_schema)
+        reasoning_supported = profile.reasoning.supported
         # Resolve the output allowance once: it both bounds any thinking budget
         # and is the ``max_tokens`` that goes on the wire (set after overrides
         # below so it wins over the provider-default fallback).
@@ -361,6 +326,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             wire_messages,
             tools=kwargs.get("tools"),
         )
+        unrendered = set(payload)
         self._apply_reasoning(
             payload,
             request_kwargs,
@@ -368,59 +334,51 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             reasoning_supported=reasoning_supported,
             max_tokens=resolved_max_tokens,
         )
-
-        # Sampling parameters must never reach the wire in two cases: when
-        # thinking is active (Anthropic rejects a sampling temperature alongside
-        # thinking), or when the model is from the adaptive-only generation
-        # (Opus 4.7+, Fable 5) that removed sampling entirely. Both drop the
-        # caller value and skip the provider default below.
-        supports_sampling = self._model_supports_temperature(model_id)
-        thinking_active = _anthropic_thinking_active(payload, request_kwargs)
-        drop_sampling = thinking_active or not supports_sampling
-        if drop_sampling:
-            for sampling_key in ANTHROPIC_SAMPLING_PARAMETER_NAMES:
-                request_kwargs.pop(sampling_key, None)
+        rendered = set(payload) - unrendered
+        provider_label = self._config.name
+        # Shape caller values first so a dropped caller value never
+        # displaces a field the reasoning dialect rendered.
+        rules.shape_parameters(
+            request_kwargs, reasoning_active=False, provider_label=provider_label
+        )
 
         # Replayed thinking blocks must not be sent when the outgoing request
         # explicitly disables thinking or the model cannot reason; with the
         # thinking parameter merely absent they are kept (Anthropic guidance:
         # omitting blocks is the risk, the server drops unusable ones).
+        thinking = request_kwargs.get("thinking", payload.get("thinking"))
+        strip_thinking = profile.replay.strip_when_off and (
+            reasoning_supported is False or _thinking_type(thinking) == "disabled"
+        )
         payload["messages"] = _to_anthropic_messages(
             conversation_messages,
-            include_thinking_blocks=not _anthropic_thinking_disabled(
-                payload,
-                request_kwargs,
-                reasoning_supported=reasoning_supported,
-            ),
+            include_thinking_blocks=not strip_thinking,
         )
 
         # Apply provider defaults (lower priority — caller kwargs win)
         if self._config.defaults:
             for key, value in self._config.defaults.items():
-                if drop_sampling and key in ANTHROPIC_SAMPLING_PARAMETER_NAMES:
-                    continue
                 payload.setdefault(key, value)
         # Apply caller overrides (highest priority)
         payload.update(request_kwargs)
-        # Pin the resolved output allowance last so the model's own ceiling wins
+        # Pin the resolved output allowance so the model's own ceiling wins
         # over the provider-default fallback (Anthropic requires a positive
         # ``max_tokens`` and rejects one above the model's output ceiling).
         if resolved_max_tokens is not None:
             payload["max_tokens"] = resolved_max_tokens
+        rules.apply_body(payload)
+        # Sampling parameters are typically not sent while thinking is active.
+        rules.shape_parameters(
+            payload,
+            reasoning_active=_thinking_type(payload.get("thinking")) in _ACTIVE_THINKING,
+            protected=rendered - set(request_kwargs),
+            provider_label=provider_label,
+        )
         # Cache stable prefixes last, after every other payload mutation, so the
         # markers land on the final system/messages that go on the wire.
-        if self._prompt_caching:
+        if rules.prompt_cache == "anthropic_breakpoints":
             _apply_prompt_caching(payload)
         return payload
-
-    def _model_reasoning_supported(self, model_id: str) -> bool | None:
-        return model_reasoning_supported(self._model_lookup, model_id)
-
-    def _model_supports_temperature(self, model_id: str) -> bool:
-        """Compatible endpoints accept sampling unless a concrete provider says otherwise."""
-
-        del model_id
-        return True
 
     def _classify_http_status(
         self,
@@ -448,81 +406,30 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         reasoning_supported: bool | None,
         max_tokens: int | None,
     ) -> None:
-        """Resolve the shared reasoning intent and render it onto the payload.
+        """Plan the Agent's reasoning effort and render it onto the payload.
 
-        A catalog-known non-reasoning model strips every Anthropic thinking
-        control and sends nothing. Otherwise the provider-neutral intent
-        (:func:`resolve_reasoning_intent`) is rendered into Anthropic's
-        ``thinking``/``output_config`` shape — including native ``budget_tokens``
-        for a ``budget`` Claude. ``max_tokens`` (the resolved output allowance)
-        bounds any thinking budget so it stays strictly under the output cap.
+        Consumes ``thinking_effort`` from ``request_kwargs``;
+        :meth:`ReasoningWire.plan` decides and the profile's reasoning dialect
+        spells the decision. A Model known not to reason has every raw
+        reasoning control (including the dialect's own fields) stripped and
+        gets nothing. ``max_tokens`` (the resolved output allowance) bounds any
+        thinking budget so it stays strictly under the output cap.
         """
 
         thinking_effort = request_kwargs.pop("thinking_effort", "")
+        wire = self.wire_profile(model_id).reasoning
         if reasoning_supported is False:
-            remove_reasoning_kwargs(request_kwargs, *ANTHROPIC_REASONING_PARAMETER_NAMES)
+            remove_reasoning_kwargs(
+                request_kwargs,
+                *ANTHROPIC_REASONING_PARAMETER_NAMES,
+                *dialect_request_fields(wire.dialect),
+            )
             return
-        intent = resolve_reasoning_intent(
-            supported=reasoning_supported,
-            control=model_reasoning_control(self._model_lookup, model_id),
-            levels=model_reasoning_levels(self._model_lookup, model_id) or ANTHROPIC_EFFORT_FLOOR,
-            effort=thinking_effort,
-            budget_max=model_reasoning_budget_max(self._model_lookup, model_id),
-            max_tokens=max_tokens,
-        )
-        self._render_reasoning(payload, intent, model_id=model_id, max_tokens=max_tokens)
-
-    def _render_reasoning(
-        self,
-        payload: dict[str, Any],
-        intent: ReasoningIntent,
-        *,
-        model_id: str,
-        max_tokens: int | None,
-    ) -> None:
-        """Render a reasoning intent onto Anthropic's ``thinking`` shape.
-
-        * ``effort`` → adaptive thinking (summarized) plus ``output_config.effort``
-          for efforts above ``minimal``.
-        * ``budget`` → native ``thinking: {type: enabled, budget_tokens}``.
-        * ``on`` → enabled with a floor budget; skipped with a warning when even
-          the floor cannot fit under ``max_tokens`` (D3).
-        * ``off`` → ``thinking: {type: disabled}``.
-        * ``default`` → leave the provider default untouched (omit ``thinking``).
-        """
-
-        if intent.kind == REASONING_INTENT_EFFORT:
-            payload["thinking"] = {"type": "adaptive", "display": "summarized"}
-            if intent.effort_level != ANTHROPIC_MINIMAL_EFFORT:
-                payload["output_config"] = {"effort": intent.effort_level}
-        elif intent.kind == REASONING_INTENT_BUDGET:
-            payload["thinking"] = {"type": "enabled", "budget_tokens": intent.budget_tokens}
-        elif intent.kind == REASONING_INTENT_ON:
-            budget = _anthropic_floor_budget(max_tokens)
-            if budget is None:
-                _LOGGER.warning(
-                    "Skipping reasoning for %s: floor budget (%d) does not fit max_tokens (%s)",
-                    model_id,
-                    BUDGET_FLOOR_TOKENS,
-                    max_tokens,
-                )
-                return
-            payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
-        elif intent.kind == REASONING_INTENT_OFF:
-            if self._model_requires_adaptive_thinking(model_id):
-                return
-            payload["thinking"] = {"type": "disabled"}
-
-    def _model_requires_adaptive_thinking(self, model_id: str) -> bool:
-        if self._model_lookup is None:
-            return False
-        model = self._model_lookup(model_id.split("::", 1)[0])
-        if model is None:
-            return False
-        metadata = model.metadata.get(ANTHROPIC_METADATA_KEY)
-        return (
-            isinstance(metadata, Mapping)
-            and metadata.get(REQUIRES_ADAPTIVE_THINKING_METADATA_KEY) is True
+        render_reasoning(
+            wire,
+            wire.plan(thinking_effort, output_allowance=max_tokens),
+            payload,
+            output_allowance=max_tokens,
         )
 
     def _resolve_max_tokens(
@@ -544,8 +451,11 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
            its own full allowance instead of a flat provider cap. This is what
            keeps a thinking budget from starving the answer: a shared 8K-style
            cap would let a mid/high effort budget consume the whole allowance.
-        3. The provider-config ``max_tokens`` default, as the fallback only when
-           the ceiling is unknown (no lookup / offline refresh).
+        3. The wire profile's ``output_limit_default``, then the provider-config
+           ``max_tokens`` default, as the fallback only when the ceiling is
+           unknown (no lookup / offline refresh).
+
+        The wire profile's ``output_limit_cap`` bounds the result.
         """
 
         explicit = request_kwargs.get("max_tokens")
@@ -559,8 +469,11 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
                 messages, model_id=model_id, tools=tool_definitions
             ),
         )
-        default = self._config.defaults.get("max_tokens") if self._config.defaults else None
-        return resolve_request_output_limit(
+        rules = self.wire_profile(model_id).request
+        default = rules.output_limit_default or (
+            self._config.defaults.get("max_tokens") if self._config.defaults else None
+        )
+        resolved = resolve_request_output_limit(
             explicit_limit=explicit,
             model_output_limit=self._model_max_output_tokens(model_id),
             provider_default=default,
@@ -569,12 +482,14 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             ),
             estimated_input_tokens=estimated_input,
         )
+        if resolved is not None and rules.output_limit_cap is not None:
+            resolved = min(resolved, rules.output_limit_cap)
+        return resolved
 
     def _model_max_output_tokens(self, model_id: str) -> int | None:
         """The model's catalog output ceiling, or ``None`` when it is unknown.
 
-        Mirrors :meth:`_model_supports_temperature`'s lookup: it strips a
-        ``::variant`` suffix and tolerates a missing lookup or model.
+        Strips a ``::variant`` suffix and tolerates a missing lookup or model.
         """
 
         if self._model_lookup is None:
@@ -667,10 +582,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             ProviderError: Other HTTP errors.
         """
 
-        request_headers = self._request_headers_from_kwargs(kwargs)
-        # Built before the retry loop so the sampling fallback below can strip a
-        # rejected parameter from the exact payload — provider ``defaults`` would
-        # otherwise refill the key on a rebuild.
+        request_headers = self._stable_request_headers(model_id, kwargs)
         payload = self._build_payload(messages, model_id, **kwargs)
         await enforce_request_body_limit(payload, self.request_body_limit(model_id))
 
@@ -699,12 +611,17 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             )
             return dict(decode_response_json(response, f"{self._config.name} provider"))
 
-        return await execute_with_sampling_fallback(
+        response = await execute_learning_from_rejections(
             lambda: auth_recovery.run(lambda: retry_async(_do_request)),
             payload,
-            logger=_LOGGER,
+            rebuild=lambda: self._build_payload(messages, model_id, **kwargs),
+            wire=self.wire,
+            model_id=model_id,
             provider_label=self._config.id,
         )
+        if messages_returned_reasoning(response):
+            self.wire.observe_reasoning_returned(model_id)
+        return response
 
     # ------------------------------------------------------------------
     # stream() — SSE streaming
@@ -749,9 +666,14 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             ProviderError: Other HTTP errors and in-band stream/provider
                 error payloads.
         """
-        request_headers = self._request_headers_from_kwargs(kwargs)
-        payload = self._build_payload(messages, model_id, **kwargs)
-        payload["stream"] = True
+        request_headers = self._stable_request_headers(model_id, kwargs)
+
+        def build_stream_payload() -> dict[str, Any]:
+            built = self._build_payload(messages, model_id, **kwargs)
+            built["stream"] = True
+            return built
+
+        payload = build_stream_payload()
         await enforce_request_body_limit(payload, self.request_body_limit(model_id))
         auth_recovery = OAuthRequestRecovery(self._token_getter, self._auth_config)
 
@@ -771,19 +693,36 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
                 response_headers=response_headers,
             )
 
-        response = await execute_with_sampling_fallback(
-            lambda: connect_streaming_with_retry(
+        async def _stream_payload() -> AsyncGenerator[dict[str, Any]]:
+            response = await connect_streaming_with_retry(
                 self._client,
                 MESSAGES_ENDPOINT,
                 payload,
                 build_headers=_build_headers,
                 handle_error_status=_handle_error_status,
                 auth_recovery=auth_recovery,
-            ),
-            payload,
-            logger=_LOGGER,
-            provider_label=self._config.id,
-        )
+            )
+            async with aclosing(self._stream_response_deltas(response)) as deltas:
+                async for delta in deltas:
+                    yield delta
+
+        async with aclosing(
+            stream_learning_from_rejections(
+                _stream_payload,
+                payload,
+                rebuild=build_stream_payload,
+                wire=self.wire,
+                model_id=model_id,
+                provider_label=self._config.id,
+            )
+        ) as deltas:
+            async for delta in deltas:
+                yield delta
+
+    async def _stream_response_deltas(
+        self, response: httpx.Response
+    ) -> AsyncGenerator[dict[str, Any]]:
+        """Yield the normalized deltas of an established SSE stream, then close it."""
 
         stream_decoder = AnthropicMessagesStreamDecoder()
         seen_message_stop = False
@@ -816,45 +755,22 @@ def _is_positive_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
-def _anthropic_floor_budget(max_tokens: int | None) -> int | None:
-    """Return the floor thinking budget, or ``None`` when it cannot fit ``max_tokens``.
-
-    Anthropic counts ``budget_tokens`` against the output allowance, so the floor
-    budget must stay strictly under a positive ``max_tokens``; when it cannot, no
-    valid budget can be sent (D3 skip).
-    """
-
-    if max_tokens is not None and max_tokens <= BUDGET_FLOOR_TOKENS:
-        return None
-    return BUDGET_FLOOR_TOKENS
+_ACTIVE_THINKING = frozenset({"adaptive", "enabled"})
 
 
-def _anthropic_thinking_active(
-    payload: dict[str, Any],
-    request_kwargs: dict[str, Any],
-) -> bool:
-    """Return True when the outgoing request activates thinking.
+def _thinking_type(thinking: Any) -> str | None:
+    """The ``type`` of a Messages ``thinking`` value, or ``None`` when absent."""
 
-    A raw ``thinking`` caller kwarg wins over the value derived from
-    ``thinking_effort`` because ``request_kwargs`` is applied onto the
-    payload last.
-    """
-    thinking = request_kwargs.get("thinking", payload.get("thinking"))
-    return isinstance(thinking, dict) and thinking.get("type") in {"adaptive", "enabled"}
+    if isinstance(thinking, dict):
+        kind = thinking.get("type")
+        return kind if isinstance(kind, str) else None
+    return None
 
 
-def _anthropic_thinking_disabled(
-    payload: dict[str, Any],
-    request_kwargs: dict[str, Any],
-    *,
-    reasoning_supported: bool | None,
-) -> bool:
-    """Return True when the outgoing request explicitly rules out thinking.
-
-    Only an explicit ``thinking: {type: disabled}`` or a catalog-known
-    non-reasoning model counts — an absent thinking parameter does not.
-    """
-    if reasoning_supported is False:
-        return True
-    thinking = request_kwargs.get("thinking", payload.get("thinking"))
-    return isinstance(thinking, dict) and thinking.get("type") == "disabled"
+def _normalize_tool_call_ids(
+    profile: WireProfile, messages: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    id_profile = WIRE_TOOL_CALL_ID_PROFILES.get(profile.request.tool_call_ids)
+    if id_profile is None:
+        return messages
+    return normalize_tool_call_ids(messages, id_profile)

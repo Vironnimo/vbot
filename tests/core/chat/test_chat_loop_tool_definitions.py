@@ -416,10 +416,10 @@ async def test_a_route_that_drops_unlisted_tool_calls_lists_announced_tools(
     runtime = tool_runtime(
         tmp_path,
         tools,
-        [final("ready"), tool_turn(("call", "extra")), final("done")],
-        models=StubModels(
-            {("openai", "gpt-5.2"): 128_000},
-            unlisted_tool_calls={("openai", "gpt-5.2"): False},
+        [],
+        adapter=StubAdapter(
+            [final("ready"), tool_turn(("call", "extra")), final("done")],
+            list_announced_tools=True,
         ),
     )
     loop = build_chat_loop(runtime)

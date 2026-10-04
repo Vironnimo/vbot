@@ -260,6 +260,8 @@ vbot provider enable ollama
 vbot model refresh openrouter
 ```
 
+vBot learns from Provider responses: when a Provider rejects a sampling parameter or a reasoning effort for a Model, vBot retries without it and leaves it out of later requests. Such a lesson expires after 30 days; `vbot model forget-wire-facts <provider>[/<model-id>] [--connection <id>]` drops it at once, for example after the Provider fixed the Model.
+
 A key passed to `provider key set` may be retained by shell history. Prefer the WebUI, a protected environment variable, or a shell-specific history-safe workflow when entering a real secret.
 
 </details>
@@ -319,7 +321,31 @@ vbot model refresh local-ai
 vbot provider custom delete local-ai
 ```
 
-`custom save` replaces the complete Custom Provider record; repeated `--model` flags create conservative chat Model entries. Use the WebUI for the full manual capability editor. Deleting a Custom Provider removes its generated data-directory API keys but deliberately keeps Agent/default/task Model references, which remain visible as unavailable until reconfigured.
+`custom save` replaces the Custom Provider's endpoint, authentication, discovery path and Model list; repeated `--model` flags create conservative chat Model entries. What its options cannot express survives the replacement: the sampling defaults, the capabilities already stored for a Model id that stays in the list, and the `wire` block. `--wire-file <path>` replaces the `wire` block with the JSON object in that file, and `--clear-wire` removes it. Use the WebUI for the full manual capability editor. Deleting a Custom Provider removes its generated data-directory API keys but deliberately keeps Agent/default/task Model references, which remain visible as unavailable until reconfigured.
+
+#### Wire profile
+
+By default vBot speaks plain OpenAI Chat Completions to a Custom Provider: an effort goes out as `reasoning_effort`, and reasoning text is read from the usual response fields. When the endpoint ignores the effort, returns its reasoning in another field, or rejects a request field, describe its wire in the optional `wire` object of the record (**Settings → Providers → Edit → Advanced: wire profile**). It takes the body of vBot's bundled `resources/wire/<provider>.json` files - `defaults`, `protocols`, `connections` (only `default`), `rules`, and per-Model `models` entries - without `format_version`:
+
+```json
+"wire": {
+  "defaults": {
+    "reasoning": {"dialect": "thinking_toggle"},
+    "response": {"reasoning_fields": ["reasoning_content"]},
+    "request": {"parameters": {"temperature": {"mode": "drop"}}}
+  },
+  "rules": [
+    {"when": {"prefix": "qwen"}, "set": {"reasoning": {"levels": ["low", "high"]}}}
+  ],
+  "models": {
+    "chat-model": {"set": {"replay": {"history_field": "reasoning_content"}}}
+  }
+}
+```
+
+Later layers win: protocol defaults, `defaults`, `protocols`, `connections`, the Model's own facts (such as its Reasoning switch), matching `rules` in order, facts vBot learned from live traffic, the Model entry's `set`, and its `connections`. A manual Model whose Reasoning switch is off therefore sends no reasoning fields whatever `defaults` says; turn the switch on, or set `"reasoning": {"supported": true}` in a rule or Model entry.
+
+A WebUI/RPC save applies the block immediately and refuses entries vBot would ignore, listing each one. In a hand-edited `settings.json`, `vbot doctor settings` reports such entries as warnings, and vBot ignores them. To check a Model against the live endpoint, run `python scripts/verify_wire_profile.py --provider local-ai --model chat-model` from the vBot source tree; `--write` stores the entry the evidence supports under `wire.models` in the data directory's `settings.json`, which a running vBot applies after a restart.
 
 ## Data directory and configuration
 
@@ -1118,7 +1144,7 @@ Installed commands use `vbot`. From a development checkout, `python cli/main.py`
 | Memory | `memory list`, `memory add`, `memory replace`, `memory remove` |
 | System Prompt | `prompt list`, `prompt show`, `prompt update`, `prompt reset`, `prompt create`, `prompt remove`, `prompt layout set`, `prompt layout reset`, `prompt preview` |
 | Providers | `provider list`, `provider status`, `provider usage`, `provider history list`, `provider history clear`, `provider custom list`, `provider custom save`, `provider custom delete`, `provider key set`, `provider key unset`, `provider enable`, `provider disable`, `provider connect`, `provider disconnect`, `provider connection status` |
-| Models | `model list`, `model show`, `model refresh`, `task-model list`, `task-model target list`, `task-model option list`, `task-model set`, `task-model option set`, `task-model option unset`, `task-model clear` |
+| Models | `model list`, `model show`, `model refresh`, `model forget-wire-facts`, `task-model list`, `task-model target list`, `task-model option list`, `task-model set`, `task-model option set`, `task-model option unset`, `task-model clear` |
 | Extensions | `extensions list`, `extensions reload`, `extensions enable`, `extensions disable`, `extensions show <name>`, `extensions set <name>`, `extensions operations <name>`, `extensions run <name> <operation>` |
 | Cron | `cron list`, `cron show`, `cron create`, `cron update`, `cron delete`, `cron enable`, `cron disable` |
 | Bootstrap | `bootstrap list`, `bootstrap show`, `bootstrap create`, `bootstrap update`, `bootstrap delete`, `bootstrap enable`, `bootstrap disable` |

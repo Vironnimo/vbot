@@ -9,11 +9,11 @@ Read this reference when changing the persisted Project shape, Project Anchor li
 `project.json` is a Generation 1 JSON document (`format_version` 1, unknown fields kept on update, never overwritten after a failed load; contract in `settings.md`). Besides `format_version`, a hand-edited persisted file requires `project_id` and `cwd` (they identify the Project Anchor and its repository) and the Tool ceiling `allowed_tools`. Every other field is optional and defaults during load. An override object holding only unknown fields loads as an empty entry that overrides nothing and keeps those fields on every write. The persisted contract contains:
 
 - Identity and location: stable `project_id`, normalized repository `cwd`, optional user-facing `display_name` (missing, `null`, or blank falls back to `project_id`), and optional `created_at` / `updated_at` (missing values default to the current UTC timestamp).
-- Runtime defaults: `default_agent`, `default_model`, `default_temperature`, and `default_thinking_effort`.
+- Runtime defaults: `default_agent`, `default_model`, `default_temperature`, `default_thinking_effort`, and `default_top_p` (written only when set).
 - Discovery: one `source_format` (`opencode` or `claude`) and `auto_load`.
 - Tool ceiling: `allowed_tools`, seeded at creation from `PROJECT_DEFAULT_ALLOWED_TOOLS` (`read`, `apply_patch`, `search_files`, `bash`, `process`, `terminal`, `web_fetch`, `web_search`, `status`, `subagent`, and `skill`). A Project requires explicit names: the all-tools wildcard `"*"` is invalid. A persisted name that is not currently a registered Project Tool remains loadable so disabled Extension permissions survive; `project.show` reports it as `UNAVAILABLE_TOOL`, and the WebUI keeps it visible and removable.
 - Skill ceiling: `skills_bundled_enabled`, `skills_global_enabled`, and `skills_project_disabled`.
-- Per-Agent overrides: an `overrides` object keyed by Project Agent id. Supported override fields are exactly `model`, `temperature`, `thinking_effort`, `compaction_policy`, and `tool_access`. Tool access uses the same strict policy shape as Identity Agents; an override's `allowed` and explicit `granted` names must be subsets of the Project Tool Whitelist.
+- Per-Agent overrides: an `overrides` object keyed by Project Agent id. Supported override fields are exactly `model`, `temperature`, `top_p`, `thinking_effort`, `compaction_policy`, and `tool_access`. Tool access uses the same strict policy shape as Identity Agents; an override's `allowed` and explicit `granted` names must be subsets of the Project Tool Whitelist.
 
 The default Tool ceiling uses `apply_patch` instead of the archived `edit`, and
 `search_files` as its search capability. The application never rewrites explicit

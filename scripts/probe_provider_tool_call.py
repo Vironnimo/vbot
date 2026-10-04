@@ -404,14 +404,9 @@ async def _run(args: argparse.Namespace) -> int:
             adapter = runtime.get_adapter(ConnectionRef(args.provider, args.connection))
             try:
                 if args.scenario == "live_tools":
-                    # Live requests resolve the Model's recommended temperature like production.
-                    result = await _probe_live_tools(
-                        ModelFacingAdapter(adapter), args, models=runtime.models
-                    )
+                    result = await _probe_live_tools(ModelFacingAdapter(adapter), args)
                 elif args.scenario == "reflection_workflow":
-                    result = await _probe_reflection_workflow(
-                        ModelFacingAdapter(adapter), args, models=runtime.models
-                    )
+                    result = await _probe_reflection_workflow(ModelFacingAdapter(adapter), args)
                 else:
                     probe = (
                         _probe_first_use

@@ -20,15 +20,16 @@ Read `providers.md` first. This reference owns vBot's Nous API-key and Portal-su
 
 ## Catalog policy
 
-- Both Connections discover from authenticated `GET /v1/models`; discovery remains Connection-scoped and preserves the complete response in `resources/models/nous.raw.json` before normalization.
+- Both Connections discover from authenticated `GET /v1/models`; discovery remains Connection-scoped.
 - A catalog entry receives Tools, JSON, or reasoning capabilities only from explicit response evidence. Sparse future entries remain visible but do not become agent-capable by assumption. Every discovered output ceiling is capped to the Provider's documented 32,000-token maximum.
-- Nous explicitly says its Hermes 4 family is meant for chat/reasoning rather than an agentic Tool loop. Those ids remain in the raw audit and are omitted from vBot's usable Model projection, matching Hermes Agent's own picker policy.
+- Nous explicitly says its Hermes 4 family is meant for chat/reasoning rather than an agentic Tool loop. Those ids are omitted from vBot's usable Model projection, matching Hermes Agent's own picker policy.
 - The bundled credential-free fallback catalog contains only the exact current agentic slugs Nous documents as recommendations: `anthropic/claude-sonnet-4.6`, `openai/gpt-5.5-pro`, `google/gemini-3-pro-preview`, and `deepseek/deepseek-v4-pro`. There are no aliases, retired-id redirects, or silent Model fallbacks; authenticated discovery is authoritative for the account's current allowlist.
+- That fallback is the hand-curated generated-layer seed `resources/models/nous.json`, not an override file: discovery replaces it per Connection, while an Override entry would keep each Model listed whatever the account's allowlist says (`models.md` -> Constraints & Gotchas). Consequence: the manual `canonical` pointer of `anthropic/claude-sonnet-4.6` (to `anthropic/claude-sonnet-4-6`) does not survive a Nous refresh - models.dev has no Nous section to supply an auto pointer - so the refreshed entry runs on Nous facts alone. The other three slugs join their canonical records by exact id.
 
 ## Verification
 
 - Request/catalog/stream policy: `tests/core/providers/test_nous.py`
 - Device login and scope: `tests/core/providers/test_auth_flow.py`
 - Rotation, reuse quarantine, and no-replay refresh: `tests/core/providers/test_token_getter_refresh.py`
-- Connection-scoped raw/generated discovery: `tests/core/models/test_discovery_projection.py`
+- Connection-scoped generated discovery: `tests/core/models/test_discovery_projection.py`
 - Bundled config, fallback Catalog, and Runtime Adapter selection: `tests/core/runtime/test_runtime_providers.py`

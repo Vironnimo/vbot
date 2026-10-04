@@ -26,11 +26,9 @@ from core.chat.continuation import (
 from core.chat.events import _close_adapter
 from core.chat.messages import ChatMessage, JsonObject
 from core.chat.model_resolution import (
-    _model_accepts_unlisted_tool_calls,
     _model_input_modalities_for_target,
     _resolve_agent_connection,
     _split_agent_model,
-    resolve_request_temperature,
 )
 from core.chat.wire_shaping import PINNED_IMAGE_RETIREMENT_SLOT, RequestImageBudget
 from core.memory import DEFAULT_MEMORY_PROMPT_MODE
@@ -71,8 +69,6 @@ class ManualCompactionRequest:
     summary_adapter: Any
     summary_provider_id: str
     summary_model_id: str
-    summary_temperature: float | None
-    active_temperature: float | None
 
 
 class ChatCompactionHost:
@@ -140,9 +136,6 @@ class ChatCompactionHost:
 
     def resolve_context_window(self, agent: Any, target: Any) -> int | None:
         return self._requests.resolve_context_window(agent, target)
-
-    def resolve_temperature(self, provider_id: str, model_id: str) -> float | None:
-        return resolve_request_temperature(None, self.models, provider_id, model_id)
 
     async def materialize_manual_request(
         self,
@@ -251,11 +244,7 @@ class ChatCompactionHost:
                 skill_registry=skill_registry,
                 skill_catalog=skill_catalog,
                 session_messages_override=messages,
-                list_announced_tools=not _model_accepts_unlisted_tool_calls(
-                    self._dependencies,
-                    provider_id,
-                    model_id,
-                ),
+                list_announced_tools=adapter.list_announced_tools(model_id),
             )
             state = await self._requests.build_request_state(agent, session, inputs=inputs)
             return ManualCompactionRequest(
@@ -269,18 +258,6 @@ class ChatCompactionHost:
                 summary_adapter=summary_adapter,
                 summary_provider_id=summary_provider_id,
                 summary_model_id=summary_model_id,
-                summary_temperature=resolve_request_temperature(
-                    None,
-                    self.models,
-                    summary_provider_id,
-                    summary_model_id,
-                ),
-                active_temperature=resolve_request_temperature(
-                    None,
-                    self.models,
-                    provider_id,
-                    model_id,
-                ),
             )
         except BaseException:
             if summary_adapter is not None and summary_adapter is not adapter:

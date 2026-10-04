@@ -18,17 +18,19 @@ def normalize_json_object(value: Any, path: str) -> dict[str, Any]:
     for key, item in value.items():
         if not isinstance(key, str) or not key:
             raise StorageError(f"Expected {path} keys to be non-empty strings")
-        normalized[key] = _normalize_json_value(item, f"{path}.{key}")
+        normalized[key] = normalize_json_value(item, f"{path}.{key}")
     return normalized
 
 
-def _normalize_json_value(value: Any, path: str) -> Any:
+def normalize_json_value(value: Any, path: str) -> Any:
+    """Return a deep-validated copy of any JSON value, rejecting non-JSON values."""
+
     if isinstance(value, float) and not math.isfinite(value):
         raise StorageError(f"Expected {path} to be a finite number")
     if value is None or isinstance(value, str | int | float | bool):
         return value
     if isinstance(value, list):
-        return [_normalize_json_value(item, f"{path}[{index}]") for index, item in enumerate(value)]
+        return [normalize_json_value(item, f"{path}[{index}]") for index, item in enumerate(value)]
     if isinstance(value, Mapping):
         return normalize_json_object(value, path)
     raise StorageError(f"Unsupported JSON value at {path}")
