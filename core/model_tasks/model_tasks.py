@@ -8,8 +8,11 @@ from typing import Any, Literal, cast
 
 from core.model_tasks.constants import (
     SUPPORTED_TASK_TYPES,
+    TASK_IMAGE_GENERATION,
     TASK_IMAGE_UNDERSTANDING,
+    TASK_MUSIC_GENERATION,
     TASK_TEXT_EMBEDDING,
+    TASK_VIDEO_GENERATION,
 )
 from core.model_tasks.embedding_profiles import embedding_profile
 from core.model_tasks.image_profile import (
@@ -204,6 +207,12 @@ def task_model_targets_equal(left: str | None, right: str | None) -> bool:
     )
 
 
+#: OpenRouter's own router Models pick another Model per request, so they
+#: have no fixed media settings or per-call choices to offer.
+_ROUTER_MODEL_PREFIX = "openrouter/"
+_GENERATION_TASKS = frozenset({TASK_IMAGE_GENERATION, TASK_VIDEO_GENERATION, TASK_MUSIC_GENERATION})
+
+
 def model_supports_task(model: Any, task_type: str) -> bool:
     """Return whether a Model can execute one specialized task.
 
@@ -211,15 +220,35 @@ def model_supports_task(model: Any, task_type: str) -> bool:
     actually used at runtime. A hand-written ``task_types`` list (a Custom
     Provider Model or an override) may omit the derived tag even when its
     modality declarations are accurate, so that task must not depend on it.
+    Music Models also read images but answer with a track, not an analysis.
+
+    Media generation excludes router Models. Video generation also needs a
+    published duration choice: Models without one edit or upscale a video,
+    or animate an avatar, and cannot run from a prompt alone.
     """
 
     capabilities = getattr(model, "capabilities", None)
+    task_types = getattr(capabilities, "task_types", ()) or ()
     if task_type == TASK_IMAGE_UNDERSTANDING:
         input_modalities = set(getattr(capabilities, "input_modalities", ()) or ())
         output_modalities = set(getattr(capabilities, "output_modalities", ()) or ())
-        return {"text", "image"}.issubset(input_modalities) and "text" in output_modalities
-    task_types = getattr(capabilities, "task_types", ()) or ()
-    return task_type in task_types
+        return (
+            {"text", "image"}.issubset(input_modalities)
+            and "text" in output_modalities
+            and TASK_MUSIC_GENERATION not in task_types
+        )
+    if task_type not in task_types:
+        return False
+    if task_type in _GENERATION_TASKS and str(getattr(model, "model_id", "")).startswith(
+        _ROUTER_MODEL_PREFIX
+    ):
+        return False
+    if task_type == TASK_VIDEO_GENERATION:
+        task_options = getattr(capabilities, "task_options", None)
+        facts = task_options.get(task_type) if isinstance(task_options, Mapping) else None
+        parameters = facts.get("parameters") if isinstance(facts, Mapping) else None
+        return isinstance(parameters, Mapping) and "duration" in parameters
+    return True
 
 
 class TaskModelService:
@@ -502,17 +531,13 @@ class TaskModelService:
     def options(self, task_type: str, target: str) -> TaskModelOptionSchema:
         """Return the backend-owned option schema for a target.
 
-        Provider targets get their option schema from the task/provider
-        defaults in :mod:`core.model_tasks.options`, which is now
-        model-aware: we resolve the target's :class:`core.models.Model`
-        from the injected registry and pass its capabilities (voice list,
-        supported parameters) and ``model_id`` (for family-specific
-        Recraft/Sourceful image profiles and aspect-ratio/image-size
-        exceptions) to the schema builder. If the model is missing from
-        the registry we fall back to the provider-level conservative
-        schema that the model-aware branches extend. The registry and the
-        target's local Connection id also reach the builder, so live voice
-        backend choices match between the Settings UI and save validation.
+        Provider targets get their schema from :mod:`core.model_tasks.options`
+        for the target's resolved Model (voices, published parameters) and,
+        for image generation, the Connection's wire, so Settings offer what
+        that wire sends. A Model missing from the registry gets the
+        Provider-level fallback. The registry and the target's local
+        Connection id also reach the builder, so live voice backend choices
+        match between the Settings UI and save validation.
 
         Local targets get the schema declared by the registered
         descriptor — future user-configured local engines advertise their
@@ -637,7 +662,9 @@ class TaskModelService:
             if not usable_connections:
                 continue
 
-            multiple_connections = len(usable_connections) > 1
+            # The Connection decides the wire, so a Provider with several
+            # Connections always names it, even when only one is usable.
+            multiple_connections = len(provider.connections) > 1
             model_query = (
                 ModelQuery(
                     provider_id=provider_id,
@@ -648,6 +675,8 @@ class TaskModelService:
                 else ModelQuery(provider_id=provider_id, tasks=(task_type,))
             )
             for matched_provider_id, model in self._models.query(model_query):
+                if not model_supports_task(model, task_type):
+                    continue
                 for connection in usable_connections:
                     if not model.allows_connection(connection.id):
                         continue

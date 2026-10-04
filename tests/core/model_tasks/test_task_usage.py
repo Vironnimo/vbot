@@ -92,7 +92,11 @@ class _Bindings:
         return SimpleNamespace(
             capabilities=SimpleNamespace(
                 task_types=TASKS,
-                task_options={},
+                task_options={
+                    "video_generation": {
+                        "parameters": {"duration": {"type": "enum", "values": ["5"]}}
+                    }
+                },
                 input_modalities=("text",),
             )
         )
