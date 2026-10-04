@@ -75,8 +75,9 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   Tool (`_EDIT_TEMPLATES`) and a closing that names the edit to fix
   (`_edit_failure`): one edit -> `No file was changed.`; several -> the failed edit
   is labeled `edit K of N` and the closing says no edit was applied and to send all
-  edits again with edit K corrected; a match report for edit K > 1 adds that its
-  line numbers count the text the earlier edits left. Coverage:
+  edits again with edit K corrected or left out (left out when its change is
+  already in the file); a match report for edit K > 1 adds that its line numbers
+  count the text the earlier edits left. Coverage:
   `test_failed_changes_change_nothing_and_say_what_to_send`,
   `test_a_file_changed_during_the_call_is_not_overwritten`.
 
@@ -96,7 +97,7 @@ against about 315 for `apply_patch`.
 | `edits[].old_string`: `Exact text from the file. It must occur only once; add surrounding lines until it does.` | Uniqueness prevents ambiguous edits: a repeated `old_string` fails with its line numbers instead of changing a guessed occurrence; the second sentence gives the fix before the first failure. |
 | `edits[].new_string`: `Replacement text.` | Needs no more; `""` deleting text is said by the half-pair refusals. |
 | `edits[].replace_all`: `Replace every occurrence. Omit to replace exactly one.` | The one opt-in exception to uniqueness; omitting it keeps the safe default. |
-| Failure closings (`Neither edit was applied, so no file was changed. Send both edits again with edit 2 corrected.`, `None of the N edits were applied, ...`) | The call is atomic, so the Agent must resend every edit, not only the failed one; naming the edit avoids a guess. |
+| Failure closings (`Neither edit was applied, so no file was changed. Send both edits again with edit 2 corrected or left out.`, `None of the N edits were applied, ...`) | The call is atomic, so the Agent must resend every edit, not only the failed one; naming the edit avoids a guess. |
 | `file_exists`: `...old_string is empty, which creates a file, but the file already has content. Put the current text to replace in old_string, or call write to replace the whole file.` | An empty `old_string` is the creation form; on an existing file both valid intents are named. |
 
 ## Verification

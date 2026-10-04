@@ -241,7 +241,7 @@ NUL = (
             "text_not_found",
             f"a.txt, edit 2 of 2: old_string was not found.\n{NOT_FOUND}\n"
             "Neither edit was applied, so no file was changed. Send both edits again with edit 2 "
-            "corrected.",
+            "corrected or left out.",
             id="second-of-two-not-found",
         ),
         pytest.param(
@@ -257,7 +257,7 @@ NUL = (
             "text_not_found",
             f"a.txt, edit 2 of 3: old_string was not found.\n{NOT_FOUND}\n"
             "None of the 3 edits were applied, so no file was changed. Send all 3 edits again "
-            "with edit 2 corrected.",
+            "with edit 2 corrected or left out.",
             id="second-of-three-not-found",
         ),
         pytest.param(
@@ -284,7 +284,7 @@ NUL = (
             "occurrence.\nWhere it occurs:\n1| one\n2| one\n3| one\n"
             "Line numbers count the text as edit 1 left it.\n"
             "Neither edit was applied, so no file was changed. Send both edits again with edit 2 "
-            "corrected.",
+            "corrected or left out.",
             id="ambiguous-after-an-earlier-edit",
         ),
         pytest.param(

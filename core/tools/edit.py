@@ -441,7 +441,7 @@ def _edit_failure(
         )
         closing = f"{none} applied, so no file was changed."
         if number is not None:
-            closing += f" Send {every} again with edit {number} corrected."
+            closing += f" Send {every} again with edit {number} corrected or left out."
         lines.append(closing)
     return tool_failure(
         str(error["code"]),
