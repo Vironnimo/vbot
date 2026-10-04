@@ -3,7 +3,7 @@
 Applies ordered V4A file operations. It replaces the archived `edit` and `write` Tools (see `edit.md` and `write.md`)
 and also runs calls shaped for other harnesses' edit/write Tools.
 Add File creation-or-replacement is a vBot extension to the V4A-style interface.
-`core/tools/apply_patch.py` owns the in-memory plan, filesystem execution, and display metadata. Its internal `_patch_requests.py` turns other harnesses' argument shapes into canonical fields and parsed operations; `_patch_syntax.py` owns parsing (V4A, unified/git diffs, SEARCH/REPLACE blocks) and parsed operation values; `_patch_hunks.py` owns matching and applying one hunk or replacement to current text (including patch recoveries); `_patch_entries.py` owns entry snapshots, Delete/Move entry resolution, and entry renames; `_patch_report.py` owns the Model-facing result text; `_change_preview.py` owns bounded preview regions.
+`core/tools/apply_patch.py` owns the in-memory plan, filesystem execution, and display metadata. Its internal `_patch_requests.py` turns other harnesses' argument shapes into canonical fields and parsed operations; `_patch_syntax.py` owns V4A parsing and parsed operation values; `_edit_engine.py` owns locating and splicing one file's hunks and `old_string` replacements in current text (a fixed sequence of matching steps per kind of change); `_patch_entries.py` owns entry snapshots, Delete/Move entry resolution, and entry renames; `_patch_report.py` owns the Model-facing result text; `_change_preview.py` owns bounded preview regions.
 
 ## Contract
 
@@ -24,34 +24,26 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   `normalize_call_arguments` wording). Unsupported fields fail as well. Patch
   contents remain literal. Normalizer refusals end with `No file was changed.`
   (`_normalize_call`). The advertised schema stays `patch` only.
-- Other harnesses' shapes run when they name one exact change. Unadvertised root
-  fields (`PATCH_HIDDEN_PARAMETERS`: `path`, `old_string`, `new_string`,
-  `replace_all`, `expected_replacements`, `edits`, `content`, `insert_line`) are
-  validated but never offered; spelling aliases match ignoring case, `_`, `-` and
-  spaces (`file_path`, `filePath`, `old_str`, `file_text`, ...). Shapes: Claude Code
-  Edit/MultiEdit/Write, Gemini `replace` (`expected_replacements`) and `write_file`,
-  text-editor `command` `str_replace`/`create`/`insert` (`view` and `undo_edit` fail
-  naming the next call), Hermes `mode` replace/patch, and `path` plus a headerless
-  patch body. A single edit travels as an `edits` item and empty `content` as an
-  empty Add File patch, because shared contract normalization drops empty
-  unadvertised root values (`_carry_empty_text`). Remark fields (`explanation`,
-  `instructions`, `description`, Roo's `line_count`; any spelling) are dropped, and
-  so are switches while `false` (Windsurf `EmptyFile`, Roo `use_regex`/`ignore_case`,
-  MCP filesystem `dryRun`). Turned on, each stays an unknown parameter, except
-  `EmptyFile: true` without content, which creates an empty file. Windsurf
-  `replace_file_content` chunks (`ReplacementChunks` of `TargetContent`/
-  `ReplacementContent`/`AllowMultiple`) run as `edits`.
-  Two kinds of change in one call, a `path` that
-  contradicts the patch's file, incomplete old/new pairs and Cursor `code_edit`
-  (placeholder comments leave the change open; the error shows a patch skeleton
-  with the call's real path) fail before any effect. An `old_string` alone beside
-  a nonempty patch (no `new_string` or `insert_line`) is a copy of the lines the
-  patch changes: the patch runs and the result adds `old_string was ignored
-  because patch describes the change.` (`patch_ignores_old_string`). Evidence: 3
-  such calls in one Swarm run, all `old_text` beside a complete patch, were
-  refused as two kinds of change (Sessions, 2026-09).
-  `old_string` replacements match precisely, else as a copy with errors
-  (`copy_match`, below; never with `replace_all` or an expected count); an empty
+- Other harnesses' edit shapes run when they name one exact change. Unadvertised
+  root fields (`PATCH_HIDDEN_PARAMETERS`: `path`, `old_string`, `new_string`,
+  `replace_all`, `edits`, `content`) are validated but never offered; spelling
+  aliases match ignoring case, `_`, `-` and spaces (`file_path`, `filePath`,
+  `old_str`, `oldText`, `file_text`, ...). Shapes: Claude Code Edit/MultiEdit/Write,
+  Gemini `replace` and `write_file`, the MCP filesystem server's `edit_file`
+  (`edits` of `oldText`/`newText`), and `path` plus a headerless patch body. A
+  single edit travels as an `edits` item and empty `content` as an empty Add File
+  patch, because shared contract normalization drops empty unadvertised root
+  values (`_carry_empty_text`). Remark fields (`explanation`, `instructions`,
+  `description`; any spelling) are dropped, and so is `dryRun` while `false`.
+  Every other field is an unknown parameter that fails at dispatch validation,
+  including other harnesses' commands and switches (text-editor `command`, Hermes
+  `mode`, `insert_line`, `expected_replacements`, Cursor `code_edit`, Windsurf
+  chunks); the edit engine rebuild (2026-10) dropped them, and they return only
+  with replay evidence. Two kinds of change in one call (also an `old_string`
+  beside a nonempty patch), a `path` that contradicts the patch's file,
+  incomplete old/new pairs and `replace_all` without `old_string` fail before any
+  effect. `old_string` replacements match as substrings, precisely, else as a copy
+  with errors (`copy_match`, below; never with `replace_all`); an empty
   `old_string` creates a file or fills an empty one and fails with `file_exists`
   otherwise. `patch_targets(arguments)` lists every named path for callers that
   vet targets first (the provider probe).
@@ -136,13 +128,13 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   Missing context prefixes and omitted `@@` are accepted; unknown operation
   headers, unframed prose, and body text after End Patch without a new file header
   are rejected. Explicit `@@` hunks following Move File use Update-plus-Move semantics.
-- Format selection (`_parse`): any V4A header selects V4A; otherwise a `---`/`+++`
-  pair or `diff --git` before the first `@@` selects unified diff (git `a/`/`b/`
-  prefixes, `/dev/null` add/delete, `rename from`/`rename to` as Move, binary
-  diffs rejected, hunk counts only gate `---`/`+++` detection); otherwise
-  SEARCH/REPLACE blocks (Aider filename line, Cline `------- SEARCH`/`+++++++
-  REPLACE`, Roo `:start_line:`; an empty SEARCH creates a file only if absent or
-  empty); otherwise a headerless body updates the `path` field's file.
+- Only V4A is read (`_parse`). Without any file header, the body updates the
+  `path` field's file. Otherwise a line before the first header fails
+  `invalid_patch` with the `before_header` wording, which shows the V4A form;
+  unified/git diffs and SEARCH/REPLACE blocks fail this way
+  (`test_other_patch_dialects_fail_naming_the_patch_form`). Numbered unified
+  hunk headers (`@@ -12,3 +12,4 @@`) are read as `@@` hints and fail
+  `context_not_found` unless the file holds that line.
 - Add bodies tolerate missing `+` prefixes, including blank lines, preserving the
   entire unprefixed line and its indentation. Lines starting with `-` are content
   too while the Add creates a file or fills an empty one. Where it would replace
@@ -156,61 +148,68 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 - `Move to` is operation metadata and may precede, separate, or follow Update
   hunks. Repeated identical destinations are harmless, including after Move File;
   conflicting destinations fail before any writes. Prefixed content remains literal.
-- `@@ context` hints select successive whole lines at the hunk's section.
-  The final hint may also appear as the first context/removal line. Multiple
-  hints can narrow a section. A hint that occurs several times is read from its
-  first occurrence, as in Codex, but only while the hunk's lines then match once
-  through a precise strategy (not `copy_match`, not an already-applied
-  post-state, not an addition-only hunk); otherwise it fails with
-  `ambiguous_context`. That one place is right whichever occurrence was meant.
-  Evidence: in all 4 `ambiguous_context` failures of one Swarm, the hunk's lines
-  occurred once in the file (Sessions, 2026-09). Lines a precise strategy finds several times are
-  ordered as in Codex: after a hint, the first occurrence from the hint on is
-  changed; a hunk without hints takes the first occurrence from the line where
-  the same Update's last completed change ended (`_apply_hunks`,
-  `_Batch.change_ends`, `replace_fuzzy(first=True)`), and fails with
-  `ambiguous_match` when none follows. A note names the count and the changed
-  line. Without a hint or an earlier change of that Update, and for `copy_match`
-  passages, several occurrences stay `ambiguous_match`, unless as many hunks of
-  that Update without a hint name the same lines as the file holds them
-  (`_Hunk.twins`, counted in `_parse`): then the first is changed and the later
-  ones follow as above. As in Codex, where each hunk searches after the previous
-  one, only that order lets every hunk find its occurrence. Evidence (Sessions since
-  2026-09-01, 89 ambiguous hunks): the Agent's later successful edit targeted the
-  first occurrence after the hint in 16 of 16 and after the previous hunk in 44
-  of 45; bare first hunks meant the file's first occurrence only 11 of 15 times,
-  too few to choose silently. In one Swarm run, both refused bare first hunks
-  with as many identical hunks as occurrences meant them in order (Sessions,
-  2026-09). Numeric unified-diff headers are advisory;
-  content remains authoritative. `*** End of File` restricts matching to EOF;
-  when a hunk with context or removed lines fails there, it is retried without
-  the marker and, if that places it, applied with a warning naming the marker.
-  Addition-only hunks insert after a hint or append without a hint; exact
-  adjacent content at a hint makes repeated nonblank insertions no-ops.
-  Unanchored appends always append because an existing suffix cannot distinguish
-  a retry from an intentional repeated line. When the first nonblank `+` line
-  reads like the last hint line rewritten (a hint line of at least 20
-  characters, 80% of them recurring in order; `_rewrites_hint`), the insertion
-  adds `Note: The + lines were inserted below the @@ line '...', which stays in
-  the file, and the first of them resembles it. If that line was meant to be
-  replaced, remove it with a - line.` Evidence: one Session inserted rewritten
-  table rows below the rows it named after `@@` several times, and the stale
-  rows piled up; 7 failed patches followed (Sessions, 2026-09).
-- When the `@@` lines do not place a hunk (`context_not_found`, or
-  `text_not_found` after them), `_without_hints` retries it without them: if
-  its unchanged and removed lines then match exactly one place through a
-  precise strategy (`precise_only`: no `copy_match`, no ordering by an earlier
-  change), it is applied there with a note naming the line: `The @@ line '...'
-  was not found, but the lines to replace occur once in the file; they were
-  changed there, at line N.`, `The lines to replace are not after the @@ line
-  '...', but ...`, or for a context-only block `The lines of the @@ block above
-  the lines to replace were not found together, but ...`. Otherwise the original
-  error stands; addition-only hunks never fall back. Evidence: in one Swarm run,
-  11 failed hunks matched once exactly without their `@@` lines, which were
-  paraphrased, cut from a longer line, a unified-diff range, or below the
-  target. Each replay changed only the lines the hunk names; the Agent's later
-  edits changed the same lines in 10, and it dropped the eleventh change.
-  `copy_match` would have placed one 250 lines off (Sessions, 2026-09).
+- `_edit_engine.py` places a V4A hunk through a fixed sequence; the first step
+  that places it wins, and several matches at a step never fall through to a
+  later, looser one (`apply_hunks`; each hunk sees the text the hunks before it
+  produced):
+  1. Runs of added lines that all carry read gutters lose them
+     (`clean_additions`, gutter rule below).
+  2. `@@` hints select successive whole lines, each after the one before,
+     through precise matching only. A hint that is not found fails
+     `context_not_found`; the hunk is never retried without it. A hint that
+     occurs several times is read from its first occurrence, as in Codex, but
+     only while the hunk's lines then match once through a precise strategy (not
+     `copy_match`, not an already-applied post-state, not an addition-only
+     hunk); otherwise it fails with `ambiguous_context`. That one place is right
+     whichever occurrence was meant. Evidence: in all 4 `ambiguous_context`
+     failures of one Swarm, the hunk's lines occurred once in the file
+     (Sessions, 2026-09).
+  3. An addition-only hunk inserts after the last hint, or appends without one.
+     Exact adjacent content after a hint makes a repeated nonblank insertion a
+     no-op; unanchored appends always append, because an existing suffix cannot
+     distinguish a retry from an intentional repeated line.
+  4. The unchanged and removed lines match precisely as whole lines from the
+     start of the last hint's line, so the final hint may also be the first
+     context/removal line. `*** End of File` restricts matching to EOF; a hunk
+     is never retried without the marker.
+  5. After a miss, read gutters are stripped from the hunk (rule below); then
+     surplus blank context at the hunk's edges is dropped (rule below).
+  6. A change already in the file is a no-op (already-applied rule at the end of
+     this section), never under a repeated hint.
+  7. `copy_match.match_copied_edit` places old lines copied with errors, unless
+     the path is precise-only after an earlier failure or the new text is
+     already present (`copy_match` rule below).
+  8. Lines a precise strategy finds several times are ordered as in Codex:
+     after a hint, the first occurrence from the hint on is changed; a hunk
+     without hints takes the first occurrence from the line where the same
+     Update's last completed change ended (`_Batch.change_ends`,
+     `replace_fuzzy(first=True)`), and fails with `ambiguous_match` when none
+     follows. A note names the count and the changed line. Without a hint or an
+     earlier change of that Update, and for `copy_match` passages, several
+     occurrences stay `ambiguous_match`. Evidence (Sessions since 2026-09-01,
+     89 ambiguous hunks): the Agent's later successful edit targeted the first
+     occurrence after the hint in 16 of 16 and after the previous hunk in 44 of
+     45; bare first hunks meant the file's first occurrence only 11 of 15
+     times, too few to choose silently.
+  `_splice` then writes the placed hunk (byte, indentation and typography rules
+  below).
+- The rebuild (2026-10) dropped every recovery that re-read a hunk as something
+  it did not say: unprefixed lines re-read as `+` lines, retries without the
+  `@@` lines or without `*** End of File`, replacement of part of a line, escape
+  decoding, ordering by identical twin hunks, and the note on insertions that
+  resemble their hint. Replaying 8883 recorded calls (2026-10), re-reading
+  unprefixed lines carried 351 calls, and 46 of them wrote content that
+  conflicts with the file the Session's later calls produced; the other dropped
+  recoveries carried 8 such calls. They return only with replay evidence.
+- Lines a hunk names that the file holds exactly, but not where its markers put
+  them, fail with that reason instead of closest text equal to the patch: not at
+  the end of the file under `*** End of File`, `eof_not_found` (`the file does
+  not end with the lines before *** End of File.`); above its `@@` lines,
+  `not_after_hint` (`the lines to replace are not after the @@ line "..."; they
+  are at line N, above it. After @@, put a line above them, such as the first
+  line of the enclosing function, or leave @@ empty.`). Both still show the
+  candidate excerpt. In the 2026-10 replay, these reports replaced 5 and 2
+  results that the dropped retries had applied.
 - Match errors show bounded candidate excerpts with `read`-style gutters
   (`The closest text in the file, lines A-B:`); touching or overlapping excerpts
   merge. Missing targets use similarity-ranked diagnostics plus `First difference,
@@ -244,8 +243,7 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   `new_string`, as after a deletion); without candidates the text names
   the `read` call. Ambiguity reports the winning match's actual locations
   (including section offsets) under `Where it occurs:`, not guessed alternatives.
-  An `expected_replacements` mismatch fails with `occurrence_mismatch`. These
-  excerpts never authorize a write.
+  These excerpts never authorize a write.
 - A patch line that occurs only inside longer file lines (a fragment copied as a
   line) is named before similarity candidates when it sits in at most 3 lines:
   `The patch line '...' is only part of line(s) N. Each patch line is a whole
@@ -271,13 +269,12 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   `part_of` report: a new line written without `+` can also occur inside a
   longer file line, and calling it a fragment hides the missing `+`.
   `old_string` text is compared by its first difference instead.
-- A hunk that is exactly one `-` line and one `+` line, whose `-` text is not a
-  whole line but occurs exactly once inside one line of the matched window
-  (overlaps count), is replaced within that line, with `Note: The - line is part
-  of line N; only that part of the line was replaced.` (`_replace_within_line`,
-  after the post-state check and before `copy_match`). Context lines, deletions
-  without `+`, EOF markers or several occurrences keep whole-line semantics and
-  fail.
+- When the reported first difference is an unchanged line that only unchanged
+  lines separate from `+` lines on both sides, or one right next to a `+` line,
+  the report adds `That patch line has no + prefix, so it must already be in the
+  file there; if it is new, start it with +.` (difference key `unprefixed`),
+  since identical retries followed the bare difference. Session shape: new lines
+  written without `+` between or after `+` lines.
 - A match failure (`text_not_found`, `context_not_found`, `ambiguous_match`,
   `ambiguous_context`) on a file changed after this Session's last read appends
   `X changed after this Session last read it; read it again before resending.`
@@ -387,92 +384,27 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   gutter error. Two or more gutter-shaped lines among other added lines are
   content, such as `N|value` data rows, and are written as sent with a note
   quoting one of them. Literal matching against gutter-shaped existing content
-  takes precedence over correction.
+  takes precedence over correction. An `old_string` whose every line carries a
+  gutter is retried without the gutters, as whole lines, after its substring
+  match misses.
 - Patch-only typography normalization also recognizes expanded em dashes and
   ellipses, minus signs, and Unicode spaces. Precisely equivalent changed lines
   preserve original glyphs only in unchanged portions; explicit glyph changes
   and merely similar preimages do not trigger restoration.
-- Escape normalization needs a failed literal match plus a precise match of
-  the unescaped old text. Replacement decoding is limited to escape kinds
-  evidenced in the locator; newline escapes remain literal and tab/carriage-return
-  recovery is limited to indentation. Approximate matches cannot introduce
-  doubled quote/backslash escapes absent from the actual target.
+- Escapes stay literal: approximate matches cannot introduce doubled
+  quote/backslash escapes absent from the actual target.
   Surplus blank boundary context can be dropped after the full locator misses.
   Blank lines explicitly marked for deletion remain meaningful operations.
   A blank last context line matches the empty line past the file's final line
   break; `+` lines after it end with that line break, so the file keeps it.
-- Unprefixed or space-prefixed V4A Update lines between two `+` lines parse as
-  context (`_Hunk.written` keeps each line as written). When the hunk, its other
-  recoveries and `copy_match` all miss, `_unmarked_readings` re-reads such runs as
-  `+` lines: first only runs holding a nonblank line the file lacks, then also
-  blank runs, then all runs, so a run the file has stays context while that
-  places the hunk. A blank run stays context only between context/removal lines
-  that stay (`_with_edge_blanks`): beyond them, the file's own blank line there
-  would place it and move into the added block, so the blank line after the
-  block would go missing. `_unmarked_texts` adds each line as written
-  (whitespace-only becomes blank). A Model that wrote the space prefix of
-  unchanged lines instead of `+` indents such a line one space too deep, so
-  `_meant_line` decides line by line: a line keeps its indentation when the
-  nearest new-text line above or below has it, or when the line above aligns
-  continuations to that column (just after a bracket it leaves open, or where
-  the last item inside it starts; `_alignment_columns`). Otherwise it loses its
-  first space when the indentation then fits those lines, or when that space
-  makes the indent width odd both from the line start and beyond the line
-  above's indent. Evidence: in one Swarm run, 2 of 55 re-reads applied
-  wrongly, one adding a real context line `]` a second time after the block
-  because two blank runs kept it from placing the hunk without it, one
-  indenting two statements one space too deep. All 11 of that run's 128
-  re-readable runs that the indentation rule strips were written with the space
-  prefix of unchanged lines (Sessions, 2026-09). In the next Swarm run, some
-  runs mixed lines with and without that prefix, which a rule for the whole run
-  left one space off, and 4 re-reads moved a blank line of the file into the
-  added block. Over that run's 90 re-readable calls, the line rules changed only
-  lines that were off; a plain odd-width rule without the alignment columns and
-  the relative check misaligned hanging and aligned continuation lines
-  (Sessions, 2026-09). A reading needs at
-  least one remaining context/removal line and applies only through precise
-  matching (`precise_only`: no `copy_match`), so the file must hold the
-  surrounding lines adjacent; a failing reading falls back to the original error. A re-read run
-  with no context/removal line after it (or before it) is placed on one side
-  only, so the reading is dropped when the file continues on that side with one
-  of the run's lines or a near copy (similarity >= 0.80, `_repeats_neighbors`):
-  the run was context that differs from the file, and adding it would repeat
-  those lines one space deeper. Evidence: in a replay of one Swarm's last 18
-  minutes, 2 of 5 such hunks applied with duplicated lines before this check
-  (Sessions, 2026-09). Success adds a
-  note naming the lines, saying `Nothing more is needed for those lines` (or
-  `that line`), and asking for `+` on every added line in later patches.
-  Evidence: after the note without that sentence, the next call read the same
-  file again in 28 of 94 cases, against 5% after other successes (Sessions,
-  2026-09). Runs before a block's first `+` line are never re-read: a typo in
-  leading context would otherwise duplicate the line. Runs right after a
-  block's last `+` line (`_trailing_runs`) are re-read only after every reading
-  of the runs between `+` lines missed: first up to the run's last line the file
-  lacks, the rest staying context, then the whole run. Such a run ends before a
-  blank line followed by a line indented at least 2 columns less than the
-  block's last line (`_block_end`): that line opens the next section, which the
-  Agent copied as context. Evidence: one Model family often left the `+` off
-  statement continuation lines and new last lines. Replaying two Swarm runs,
-  re-reading those runs applied 26 and 16 failed hunks, each as the hunk
-  describes; the one wrong reading added a section heading comment after a blank
-  line, which `_block_end` now keeps as context (Sessions, 2026-09). A reading
-  that matches several places fails with that `ambiguous_match` instead of the
-  original error, whose report would show no first difference. Success notes
-  name the lines as `next to + lines`. When no reading applies and the
-  reported first difference is such a line or an unchanged line right next to a
-  `+` line, the report adds `That patch line has no + prefix, so it must already
-  be in the file there; if it is new, start it with +.` (difference key
-  `unprefixed`), since identical retries followed the bare difference. Session
-  shape for leading runs: a new line before the `+` lines written without `+`.
 - Context-only blocks before another `@@` become ordered precise locator hints
-  for that next hunk, including multiline context. A missing anchor falls back
-  only as the `_without_hints` rule above allows, and repeated anchors follow the
-  hint rule above. A multiline block that is not found fails `context_not_found`
+  for that next hunk, including multiline context. A missing anchor fails like a
+  missing hint, and repeated anchors follow the hint rule above (step 2). A multiline block that is not found fails `context_not_found`
   with the `context_block_not_found` wording (`the lines of the @@ block above
   the lines to replace were not found together`), the closest text and its first
   difference. The former report named the block's first line as not found,
   although the file had it (1 failure, Sessions, 2026-09). Duplicate matches after
-  the anchor resolve to the first (see the `@@ context` rule above). Anchors do
+  the anchor resolve to the first (step 8 above). Anchors do
   not leak into subsequent edits or files.
   An entirely context-only patch fails with `no_changes`, says that without a
   `-` or `+` line every line stays unchanged, and repeats the description's
@@ -538,8 +470,7 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 - The display declares detail blocks: after the diffs, `patch_result` records one
   notice per file note (`info`), syntax warning (`warning`) and net-effect note,
   and one `error` notice per failed change with its message alone - not the
-  excerpts, difference and `read` continuations the Model's recovery needs. Call
-  notes about how the arguments were read stay Model-only. The user reads the
+  excerpts, difference and `read` continuations the Model's recovery needs. The user reads the
   Model's result text only in the raw call disclosure.
 - The handler uses the shared cancellation-shielded Tool worker boundary so
   an in-flight mutation settles before cancellation returns.
@@ -565,15 +496,16 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 
 - `tests/core/tools/test_apply_patch_calls.py` covers the description example,
   display metadata (including the file diffs and their shared line budget), patch spellings and wrappers, and other harnesses' shapes
-  (Edit, MultiEdit, Write, text-editor commands, Hermes mode, SEARCH/REPLACE)
-  through production dispatch, including empty-text edits and refused open or
-  conflicting calls. `scripts/tool_lab/cases/files.json` holds the Model-visible
+  (Edit, MultiEdit, Write, text-editor and MCP field names)
+  through production dispatch, including empty-text edits and refused open,
+  unknown or conflicting calls. `scripts/tool_lab/cases/files.json` holds the Model-visible
   result cases.
 - `test_apply_patch_parsing.py` covers framing, concatenated frames, malformed
-  patches, Add syntax repair, unified/git diffs and move headers.
-- `test_apply_patch_matching.py` covers matching: gutters, escapes, copied text
-  with misspellings, code targets, typography, context hints and anchors,
-  within-line replacement and changes already in the file.
+  patches, Add syntax repair, other patch dialects and move headers.
+- `test_apply_patch_matching.py` covers the engine's steps: gutters, copied text
+  with misspellings, code targets, typography, context hints and anchors that
+  do not place a hunk, EOF markers, whole-line matching, ordering of repeated
+  lines and changes already in the file.
 - `test_apply_patch_reports.py` covers previews, `no_changes`, long mismatch
   evidence and failure -> displayed read continuation -> successful correction,
   including Unicode and LF/CRLF/CR, plus `part_of` diagnostics.
