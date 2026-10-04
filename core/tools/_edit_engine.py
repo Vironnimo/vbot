@@ -52,10 +52,10 @@ from core.tools.tools import JsonObject
 
 type _Found = FuzzyReplacement | AmbiguousFuzzyMatch | None
 
-_GUTTER_WARNING = "Removed read-output line-number prefixes before applying the hunk."
+_GUTTER_WARNING = "Removed read-output line-number prefixes before applying the change."
 _GUTTER_KEPT_NOTE = (
     "{count} added lines start with a number and | like read output, such as {example!r}; "
-    "they were written as sent. If they are copied line numbers, remove them with another patch."
+    "they were written as sent. If they are copied line numbers, remove them in another call."
 )
 _FIRST_AFTER_HINT_NOTE = (
     "The lines to replace occur {occurrences} times after {hint!r}; the first, at line "
