@@ -37,7 +37,10 @@ def test_edit_and_write_are_available_exactly_when_apply_patch_is() -> None:
 
 
 def test_edit_and_write_have_minimal_definitions() -> None:
-    assert EDIT_TOOL_DESCRIPTION == "Replace text in a file."
+    assert EDIT_TOOL_DESCRIPTION == (
+        "Replace text in a file. Calls for different files never need each other finished "
+        "first; send them in the same response."
+    )
     assert EDIT_TOOL_PARAMETERS == {
         "type": "object",
         "properties": {

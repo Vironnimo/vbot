@@ -92,7 +92,7 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
 ## Agent-facing text
 
 Texts are minimal by user decision (2026-10-04): the boundary between `edit` and
-`write` comes from the names, details belong in results and errors. About 133
+`write` comes from the names, details belong in results and errors. About 151
 tokens (`python -m scripts.tool_lab definitions` estimate, mostly schema); `write`
 adds about 68, against about 53 for `apply_patch`. A sentence stays only when a
 fresh Agent would often make a failing call without it; occasional extra
@@ -103,6 +103,7 @@ where every form a Model sends is accepted (relative and absolute paths).
 | Text | Reason |
 |---|---|
 | `Replace text in a file.` | Names the effect; what to do with a whole file comes from `write`'s name and the `content` refusal. |
+| `Calls for different files never need each other finished first; send them in the same response.` | Batching changes is a user requirement. Without it, 3 of 8 multi-file eval runs sent the calls for a second file in a later response (a new file before the edit that imports it, a definition before its callers), reading the System Prompt's hold-back rule as a dependency; one round trip each (agent-eval 2026-10-05). |
 | `path`: `File to change.` | Role; both path forms are accepted, so no format text is needed. |
 | `edits`: `All changes to this file.` | Puts every change to the file into one call instead of one call per change. Later edits that build on earlier ones and items naming another file fail with the fix. |
 | `edits[].old_string`: `Text to replace. Without replace_all, it must occur exactly once.` | A repeated `old_string` is the common failing edit; the rule prevents it before the first call. The `replace_all` condition keeps a literal reader from padding an `old_string` it means to replace everywhere. |

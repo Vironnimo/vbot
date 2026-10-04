@@ -52,7 +52,10 @@ _REPLACE_TOOLS = frozenset({EDIT_TOOL_NAME, WRITE_TOOL_NAME})
 
 EditDialect = Literal["patch", "replace"]
 
-EDIT_TOOL_DESCRIPTION = "Replace text in a file."
+EDIT_TOOL_DESCRIPTION = (
+    "Replace text in a file. Calls for different files never need each other finished "
+    "first; send them in the same response."
+)
 EDIT_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
