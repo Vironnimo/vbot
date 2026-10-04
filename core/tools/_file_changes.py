@@ -137,7 +137,10 @@ def _plan(
                 operation.hunks[index], notes = clean_additions(hunk, path)
                 warnings.setdefault(path, []).extend(notes)
             content = "\n".join(t for h in operation.hunks for _, t in h.lines)
-            if operation.hunks and not operation.hunks[-1].no_newline:
+            ends = bool(operation.hunks) and not operation.hunks[-1].no_newline
+            if operation.hunks and operation.keeps_final_break:
+                ends = not source.payload or source.payload.endswith((b"\n", b"\r"))
+            if ends:
                 content += "\n"
             if source.payload is not None:
                 content = content.replace(

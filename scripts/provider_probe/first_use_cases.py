@@ -166,7 +166,6 @@ def _file_edit_cases() -> list[dict[str, Any]]:
             "`TIMEOUT_SECONDS = 30`.",
             {},
             {"src/pkg/constants.py": "MAX_RETRIES = 3\nTIMEOUT_SECONDS = 30\n"},
-            loose_final_newline=["src/pkg/constants.py"],
         ),
         case(
             "rewrite_file",
@@ -174,7 +173,6 @@ def _file_edit_cases() -> list[dict[str, Any]]:
             "'- buy milk', '- call Sam', '- book flights'.",
             {"todo.md": "# Todo\n\n- renew passport\n- water plants\n"},
             {"todo.md": "- buy milk\n- call Sam\n- book flights\n"},
-            loose_final_newline=["todo.md"],
         ),
         case(
             "edit_scattered_long",
@@ -605,9 +603,6 @@ def assess(
             for path in fixture.repo.rglob("*")
             if path.is_file()
         }
-        for name in case.get("loose_final_newline", []):
-            if name in actual_files:
-                actual_files[name] = actual_files[name].rstrip("\n") + "\n"
         differences = sorted(
             name
             for name in expected_files.keys() | actual_files.keys()

@@ -248,7 +248,7 @@ def patch_operations(arguments: JsonObject) -> list[_Operation]:
 def content_operation(
     path: str, content: str, *, only_if_empty: bool = False, label: str = ""
 ) -> _Operation:
-    """Create or replace a file with exactly ``content``."""
+    """Create or replace a file with ``content``; its final line break follows the file."""
     text = content.replace("\r\n", "\n").replace("\r", "\n")
     newline = "\r\n" if "\r\n" in content else "\r" if "\r" in content else "\n"
     hunks = []
@@ -259,7 +259,13 @@ def content_operation(
             lines.pop()
         hunks = [_Hunk(lines=[("+", line) for line in lines], no_newline=no_newline)]
     return _Operation(
-        "add", path, hunks=hunks, only_if_empty=only_if_empty, newline=newline, label=label
+        "add",
+        path,
+        hunks=hunks,
+        only_if_empty=only_if_empty,
+        newline=newline,
+        label=label,
+        keeps_final_break=True,
     )
 
 

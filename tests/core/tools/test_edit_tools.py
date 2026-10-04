@@ -71,7 +71,9 @@ def test_edit_and_write_have_minimal_definitions() -> None:
         },
         "required": ["path", "edits"],
     }
-    assert WRITE_TOOL_DESCRIPTION == "Create a file or replace all of its content."
+    assert WRITE_TOOL_DESCRIPTION == (
+        "Create a file or replace all of its content. To replace an existing file, read it first."
+    )
     assert WRITE_TOOL_PARAMETERS == {
         "type": "object",
         "properties": {
@@ -209,26 +211,30 @@ async def test_write_creates_replaces_after_a_read_and_keeps_identical_content(t
     tools = registry(state)
     path = tmp_path / "a.txt"
     path.write_bytes(b"old\n")
+    bare = tmp_path / "bare.txt"
+    bare.write_bytes(b"old")
 
     created = await call(
-        tmp_path, {"file_path": "deep/w.txt", "file_text": "w\r\n"}, tools=tools, name="write"
+        tmp_path, {"file_path": "deep/w.txt", "file_text": "w\r\nx"}, tools=tools, name="write"
     )
     unchanged = await call(
-        tmp_path, {"path": "a.txt", "contents": "old\n"}, tools=tools, name="write"
+        tmp_path, {"path": "a.txt", "contents": "old"}, tools=tools, name="write"
     )
     state.record_read("session-test", path)
-    replaced = await call(
-        tmp_path, {"path": "a.txt", "content": "new\n"}, tools=tools, name="write"
-    )
+    state.record_read("session-test", bare)
+    replaced = await call(tmp_path, {"path": "a.txt", "content": "new"}, tools=tools, name="write")
+    await call(tmp_path, {"path": "bare.txt", "content": "new"}, tools=tools, name="write")
 
-    assert text(created) == "Created deep/w.txt (1 line)."
-    assert (tmp_path / "deep" / "w.txt").read_bytes() == b"w\r\n"
+    assert text(created) == "Created deep/w.txt (2 lines)."
+    # A missing final line break is added to a new file and follows a replaced one.
+    assert (tmp_path / "deep" / "w.txt").read_bytes() == b"w\r\nx\r\n"
     assert unchanged["data"] == {
         "status": "unchanged",
         "content": "a.txt already has this content. No file was changed.",
     }
     assert text(replaced) == "Replaced the content of a.txt (1 line)."
     assert path.read_bytes() == b"new\n"
+    assert bare.read_bytes() == b"new"
 
 
 FILES = {

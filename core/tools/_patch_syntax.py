@@ -240,6 +240,10 @@ class _Operation:
     # The first Add body line written with a leading - (patch line, text): content
     # of a new file, but a removal the Add cannot apply where it replaces a file.
     minus_line: tuple[int, str] | None = None
+    # Content sent as whole text (write, edit creation): the final line break
+    # follows the replaced file, and a file without content gets one; a patch
+    # marks a missing final line break explicitly.
+    keeps_final_break: bool = False
 
 
 _ACTIONS = {
