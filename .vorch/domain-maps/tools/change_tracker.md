@@ -7,8 +7,7 @@ tracker behind the WebUI's git-style change statistics (`N files changed,
 ## What it counts
 
 A Run's statistics cover only the lines the Run itself changed through
-`apply_patch`, the only file-editing Tool. Shell commands (`bash`, `terminal`,
-`process`), `skill_manage`, Memory and media Tools are not counted: with
+`apply_patch`, the only file-editing Tool. Shell commands (`bash`, `terminal`), `skill_manage`, Memory and media Tools are not counted: with
 several Sessions working in one directory, a change seen on disk cannot be
 attributed to the Run that caused it.
 

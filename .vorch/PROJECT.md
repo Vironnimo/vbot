@@ -154,7 +154,7 @@ Backend: pytest with `--import-mode=importlib`; frontend: Vitest, optionally jsd
 
 **Running tests and checks:** Call the tools directly; their configuration lives in `pyproject.toml` (pytest, Ruff, mypy) and `webui/package.json` (scripts). What to test and run: `AGENTS.md` -> Testing.
 ```bash
-python -m pytest tests/core/tools/test_bash.py         # file, directory, node id; -k/-x/--lf as usual
+python -m pytest tests/core/tools/test_shell.py        # file, directory, node id; -k/-x/--lf as usual
 python -m pytest --durations=25 tests/core/chat        # plus the slowest tests
 python -m pytest -m stress                             # load tests, excluded by default
 python -m pytest tests/core/calendar --cov=core/calendar --cov-branch   # coverage of an owner
