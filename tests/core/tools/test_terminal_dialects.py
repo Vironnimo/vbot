@@ -145,6 +145,11 @@ async def test_start_takes_an_argument_list_as_command(
     assert "every argument in args" in _error(both)["message"]
     assert len(manager[1].calls) == 1
 
+    # Only start takes a command, so a call that names a program without an action starts it.
+    implicit = await terminal({"command": "fake-tui", "args": ["-i"], "name": "console"})
+    assert implicit["ok"] is True
+    assert manager[1].calls[-1][0] == ["fake-tui", "-i"]
+
 
 @pytest.mark.asyncio
 async def test_start_with_a_terminal_id_opens_a_new_terminal_or_refuses_an_existing_one(

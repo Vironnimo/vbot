@@ -210,6 +210,9 @@ def normalize_terminal_arguments(arguments: Any) -> Any:
         normalized["action"] = "input"
         press_enter = True
     _drop_placeholders(normalized)
+    if "action" not in normalized and "command" in normalized and "terminal_id" not in normalized:
+        # Only start takes a command, so a call that names a program starts it.
+        normalized["action"] = "start"
     action = normalized.get("action")
     if action == _RESIZE:
         status = _call("status", normalized)
