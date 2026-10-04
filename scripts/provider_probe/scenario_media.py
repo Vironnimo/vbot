@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any
 
@@ -10,7 +11,6 @@ from core.tools.image import (
     ANALYZE_IMAGE_TOOL_NAME,
     ANALYZE_IMAGE_TOOL_PARAMETERS,
     IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION,
-    IMAGE_GENERATION_TEXT_ONLY_TOOL_PARAMETERS,
     IMAGE_GENERATION_TOOL_DESCRIPTION,
     IMAGE_GENERATION_TOOL_NAME,
     IMAGE_GENERATION_TOOL_PARAMETERS,
@@ -93,11 +93,9 @@ def _image_generation_scenario(case_name: str) -> ProbeScenario:
         if text_only
         else IMAGE_GENERATION_TOOL_DESCRIPTION
     )
-    parameters = (
-        IMAGE_GENERATION_TEXT_ONLY_TOOL_PARAMETERS
-        if text_only
-        else IMAGE_GENERATION_TOOL_PARAMETERS
-    )
+    parameters = copy.deepcopy(IMAGE_GENERATION_TOOL_PARAMETERS)
+    if text_only:
+        parameters["properties"].pop("source_images")
     rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"), ensure_ascii=False)
     instruction = (
         f"Call {IMAGE_GENERATION_TOOL_NAME} exactly once with exactly this JSON object as "
