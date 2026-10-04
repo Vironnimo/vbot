@@ -660,14 +660,16 @@
       </div>
     </div>
   </section>
-</div>
 
-{#if deletingMemory}
-  <ConfirmDialog
-    title={t('agents.memory.deleteConfirmTitle')}
-    body={t('agents.memory.deleteConfirmBody')}
-    confirmLabel={t('agents.memory.deleteConfirmAction')}
-    onConfirm={deleteMemoryEntry}
-    onCancel={cancelDeleteMemory}
-  />
-{/if}
+  <!-- Inside the part: as a direct child of the page's scroll container the
+       dialog overlay would take the page's content measure and spacing. -->
+  {#if deletingMemory}
+    <ConfirmDialog
+      title={t('agents.memory.deleteConfirmTitle')}
+      body={t('agents.memory.deleteConfirmBody')}
+      confirmLabel={t('agents.memory.deleteConfirmAction')}
+      onConfirm={deleteMemoryEntry}
+      onCancel={cancelDeleteMemory}
+    />
+  {/if}
+</div>
