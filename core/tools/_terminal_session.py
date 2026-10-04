@@ -65,11 +65,9 @@ _COMMAND_DRAIN_SECONDS = 1.0
 # A command's progress tail is published at most this often.
 _COMMAND_PROGRESS_SECONDS = 0.5
 _COMMAND_PROGRESS_LINES = 40
-# Output must pause this long before the idle CPU baseline is taken.
+# Output and input must pause this long before the idle CPU baseline is taken.
 _COMMAND_IDLE_BASELINE_SECONDS = 1.0
-# A wait for a pattern reads at most this many lines of output per check.
-_MATCH_PAGE_LINES = 1_000_000
-# While a command printed output during a wait, its idleness is checked this often.
+# While a wait finds no idle baseline yet, it checks for one this often.
 _COMMAND_QUIET_POLL_SECONDS = 0.5
 # Labels in Agent notices are cut to this many characters.
 _NOTICE_LABEL_CHARS = 60
@@ -79,10 +77,10 @@ CommandWaitOutcome = Literal["exited", "deadline", "idle"]
 
 @dataclass(slots=True)
 class _QuietWatch:
-    """One wait's idle tracking: the output count its quiet period belongs to,
+    """A command's idle tracking: the activity count its quiet period belongs to,
     and the time, tree CPU and started processes when its baseline was taken."""
 
-    output_count: int = -1
+    activity_count: int = -1
     since: float | None = None
     cpu_seconds: float = 0.0
     started_processes: int = 0
@@ -188,6 +186,10 @@ class TerminalSession:
         self._settled: tuple[int, str] | None = None
         self._observed: TerminalObservation | None = None
         self._output_count = 0
+        # Quiet boundaries so far: output paused for the quiet period after activity.
+        self._quiet_boundaries = 0
+        # Quiet boundaries when start's text was typed; None until it is typed.
+        self._initial_input_quiet: int | None = None
         self._snapshot_on_settle = False
         self._attention: TerminalAttention | None = None
         self._attention_body = ""
@@ -220,6 +222,10 @@ class TerminalSession:
         self._cleanup = cleanup
         self._timeout_task: asyncio.Task[None] | None = None
         self._last_output_at = services.monotonic()
+        # Output and input: a command is idle only while neither happens.
+        self._activity_count = 0
+        self._last_activity_at = self._last_output_at
+        self._quiet = _QuietWatch()
         self._shell_dead_at: float | None = None
         # Set once vBot killed the command's process tree.
         self._tree_killed = asyncio.Event()
@@ -418,14 +424,13 @@ class TerminalSession:
         """
         command = self._require_command()
         services = self._services
-        quiet = _QuietWatch()
         published_output = -1
         next_progress = 0.0
         while not command.shell_exited:
             now = services.monotonic()
             if deadline is not None and now >= deadline:
                 return "deadline"
-            if idle_seconds is not None and await self._command_idle(command, quiet, idle_seconds):
+            if idle_seconds is not None and await self._command_idle(command, idle_seconds):
                 return "idle"
             if (
                 progress is not None
@@ -443,41 +448,71 @@ class TerminalSession:
             await self._wait_or_sleep(command.exited, pause)
         return "exited"
 
-    async def _command_idle(
-        self, command: CommandState, quiet: _QuietWatch, idle_seconds: float
-    ) -> bool:
-        """Whether the command printed nothing and its tree used no CPU for *idle_seconds*."""
+    async def command_idle_seconds(self) -> float | None:
+        """How long the running command has been idle, counted from its last output or input.
+
+        None while it works: it printed output, got input, used CPU or
+        started a process within ``COMMAND_IDLE_SECONDS``, or its shell exited.
+        """
+        command = self._require_command()
+        if command.shell_exited or not await self._command_idle(command, COMMAND_IDLE_SECONDS):
+            return None
+        return self._services.monotonic() - self._last_activity_at
+
+    async def _command_idle(self, command: CommandState, idle_seconds: float) -> bool:
+        """Whether the command printed nothing, got no input and its tree used no CPU
+        for *idle_seconds*."""
+        if not await self._quiet_baseline(command):
+            return False
+        quiet = self._quiet
         now = self._services.monotonic()
-        if quiet.output_count != self._output_count:
-            # New output ends the quiet period; its CPU baseline is taken once
-            # output has paused for a moment.
-            quiet.output_count = self._output_count
-            quiet.since = None
+        if quiet.since is None or now - quiet.since < idle_seconds:
             return False
-        if quiet.since is None:
-            if now - self._last_output_at < _COMMAND_IDLE_BASELINE_SECONDS:
-                return False
-            facts = await asyncio.to_thread(command.tree_facts)
-            if facts is None:
-                return False
-            quiet.since = now
-            quiet.cpu_seconds = facts.cpu_seconds
-            quiet.started_processes = facts.started
-            return False
-        if now - quiet.since < idle_seconds:
-            return False
+        activity = self._activity_count
         facts = await asyncio.to_thread(command.tree_facts)
-        if facts is None:
+        if facts is None or activity != self._activity_count:
             return False
         if (
             facts.cpu_seconds - quiet.cpu_seconds > COMMAND_IDLE_CPU_SECONDS
             or facts.started != quiet.started_processes
         ):
+            # CPU time or a new process is work: the quiet period starts again.
             quiet.since = now
             quiet.cpu_seconds = facts.cpu_seconds
             quiet.started_processes = facts.started
             return False
         return True
+
+    async def _quiet_baseline(self, command: CommandState) -> bool:
+        """Take the CPU baseline of the current quiet period; True once it is taken.
+
+        Output or input ends a quiet period; the next one's baseline is taken
+        once both have paused for a moment. Every check of the command's
+        idleness shares it: the reader, a wait, and a status.
+        """
+        quiet = self._quiet
+        if quiet.activity_count != self._activity_count:
+            quiet.activity_count = self._activity_count
+            quiet.since = None
+        if quiet.since is not None:
+            return True
+        now = self._services.monotonic()
+        if now - self._last_activity_at < _COMMAND_IDLE_BASELINE_SECONDS:
+            return False
+        activity = self._activity_count
+        facts = await asyncio.to_thread(command.tree_facts)
+        if facts is None or activity != self._activity_count:
+            return False
+        if quiet.since is None:
+            quiet.since = now
+            quiet.cpu_seconds = facts.cpu_seconds
+            quiet.started_processes = facts.started
+        return True
+
+    def _note_activity(self) -> None:
+        """Output arrived or input was written: a command is not idle now."""
+        self._activity_count += 1
+        self._last_activity_at = self._services.monotonic()
 
     async def stop_command(self, reason: StopReason) -> None:
         """Interrupt the command with Ctrl+C, then kill every process still running."""
@@ -518,20 +553,18 @@ class TerminalSession:
     async def wait_for_program(
         self, *, deadline: float, pattern: re.Pattern[str] | None, after_revision: int
     ) -> WaitEnded:
-        """Wait until the program exits, its output matches *pattern*, it goes quiet,
-        or *deadline* (a ``monotonic`` time) passes.
+        """Wait until the program exits, its output matches *pattern*, its new output
+        settles, or *deadline* (a ``monotonic`` time) passes.
 
-        A command exits when its shell exits. Output printed before the call
-        counts for *pattern*. A command is quiet once it printed output during
-        this wait and then nothing, with no CPU in its process tree, for
-        ``COMMAND_IDLE_SECONDS``. An interactive program is quiet when its
-        output settled after activity in an attention revision above
-        *after_revision*; with *pattern* that does not end the wait.
+        A command exits when its shell exits; its wait ends only then, at a
+        match, or at the deadline. Output printed before the call counts for
+        *pattern*, except output before the Agent's last input and that
+        input's echo. An interactive program's new output settled when an
+        ``output_settled`` attention above *after_revision* exists; with
+        *pattern* that does not end the wait.
         """
         command = self._command
         services = self._services
-        quiet = _QuietWatch()
-        output_at_start = self._output_count
         match_from: int | None = None
         while True:
             change = self._change
@@ -541,31 +574,49 @@ class TerminalSession:
                 matched, match_from = await self._output_matches(pattern, match_from)
                 if matched:
                     return "matched"
-            printed = self._output_count != output_at_start
-            if command is None:
-                attention = self._attention
-                if (
-                    pattern is None
-                    and attention is not None
-                    and attention.kind == "output_settled"
-                    and attention.revision > after_revision
-                ):
-                    return "quiet"
-            elif printed and await self._command_idle(command, quiet, COMMAND_IDLE_SECONDS):
+            attention = self._attention
+            if (
+                command is None
+                and pattern is None
+                and attention is not None
+                and attention.kind == "output_settled"
+                and attention.revision > after_revision
+            ):
                 return "quiet"
             now = services.monotonic()
             if now >= deadline:
                 return "timeout"
             pause = deadline - now
-            if command is not None and printed:
+            if command is not None and not await self._quiet_baseline(command):
+                # Output can pause without a change to wake this wait: take the
+                # idle baseline in time, so the result can tell an idle command.
                 pause = min(pause, _COMMAND_QUIET_POLL_SECONDS)
             await self._wait_or_sleep(change, pause)
+
+    async def wait_for_reply(self, *, deadline: float, after_quiet: int) -> WaitEnded:
+        """Wait until the output settles after input, the program exits, or *deadline* passes.
+
+        *after_quiet* is the ``quiet_boundaries`` count the input reported:
+        the output settled once a quiet boundary follows it.
+        """
+        command = self._command
+        while True:
+            change = self._change
+            if self.finished or (command is not None and command.shell_exited):
+                return "exited"
+            if self._quiet_boundaries > after_quiet:
+                return "quiet"
+            now = self._services.monotonic()
+            if now >= deadline:
+                return "timeout"
+            await self._wait_or_sleep(change, deadline - now)
 
     async def wait_started(self, *, deadline: float) -> None:
         """Wait until an Agent start shows its first screen, at the latest *deadline*.
 
         The screen is shown once start-up output has paused for the quiet
-        period, once start's text was typed, or once the program ended.
+        period, once the output after start's text settled, or once the
+        program ended.
         """
         services = self._services
         while not self.finished:
@@ -576,7 +627,9 @@ class TerminalSession:
             initial_input = self._initial_input_task
             if initial_input is not None:
                 if initial_input.done():
-                    return
+                    typed_at = self._initial_input_quiet
+                    if typed_at is None or self._quiet_boundaries > typed_at:
+                        return
                 pause = deadline - now
             else:
                 silent = now - self._last_output_at
@@ -600,17 +653,14 @@ class TerminalSession:
     ) -> tuple[bool, int]:
         """Whether output from *from_line* on matches; also the line to check from next.
 
-        Lines above the screen no longer change, so a later check starts one
-        line above the screen (a match can span two lines).
+        Without *from_line*, output printed before the wait counts, except
+        output before the Agent's last input and its echo. Lines above the
+        screen no longer change, so a later check starts at the logical line
+        just above the screen (a match can span two lines).
         """
         async with self._lock:
-            if from_line is None:
-                # The oldest retained line: output printed before the wait counts.
-                first = await self._screen.page(start_line=None, limit=1)
-                from_line = int(first["first_line"])
-            page = await self._screen.page(start_line=from_line, limit=_MATCH_PAGE_LINES)
-        matched = pattern.search(page["text"]) is not None
-        return matched, max(int(page["first_line"]), int(page["screen_start_line"]) - 1)
+            found = await self._screen.pattern_text(start_line=from_line)
+        return pattern.search(found["text"]) is not None, int(found["next_line"])
 
     def command_report(self) -> CommandReport:
         command = self._require_command()
@@ -655,6 +705,13 @@ class TerminalSession:
         self._next_tree_poll = now + COMMAND_TREE_POLL_SECONDS
         facts = await asyncio.to_thread(command.tree_facts)
         return facts is not None and bool(facts.running)
+
+    async def _keep_idle_baseline(self) -> None:
+        """While output pauses, take the idle baseline, so a status or wait can tell
+        an idle command."""
+        command = self._command
+        if command is not None and not command.shell_exited:
+            await self._quiet_baseline(command)
 
     def _shell_exit_code(self) -> int | None:
         # A liveness check makes a stopped Windows shell's exit status known.
@@ -810,6 +867,9 @@ class TerminalSession:
             # Input invalidates an observation even when the program does
             # not echo it (for example, a password prompt).
             self._screen_revision += 1
+            # A wait's pattern matches what the program prints below this line.
+            await self._screen.mark_input()
+            self._note_activity()
             # A command's result is delivered when it ends, not when its output settles.
             restart, changed = self._activity.input(
                 notify=self._command is None, delivery_pending=self._delivery_pending()
@@ -859,6 +919,7 @@ class TerminalSession:
             self._check_revision(expected_screen_revision)
             self._cancel_task(self._initial_input_task)
             self._screen_revision += 1
+            self._note_activity()
             restart, changed = self._activity.input(
                 notify=self.attachment is not None and self._command is None,
                 delivery_pending=self._delivery_pending(),
@@ -950,6 +1011,11 @@ class TerminalSession:
         data["kind"] = info.kind
         initial_input = self._initial_input_task
         data["initial_input_pending"] = initial_input is not None and not initial_input.done()
+        typed_at = self._initial_input_quiet
+        # Start's text was typed and the output after it has not settled yet.
+        data["initial_output_pending"] = (
+            typed_at is not None and self._quiet_boundaries <= typed_at and not self.finished
+        )
         return data
 
     def acknowledge_screen(self, observation: TerminalObservation) -> None:
@@ -1028,6 +1094,7 @@ class TerminalSession:
                     if command:
                         if not await self._command_alive(read_timed_out=True):
                             break
+                        await self._keep_idle_baseline()
                     elif not await asyncio.to_thread(self._adapter.is_alive):
                         break
                     continue
@@ -1061,6 +1128,7 @@ class TerminalSession:
         self._publish_output(text)
         update = await self._screen.feed(text)
         self._last_output_at = self._services.monotonic()
+        self._note_activity()
         if self._command is not None:
             self._command.add_lines(update.transcript)
         if update.responses:
@@ -1123,8 +1191,12 @@ class TerminalSession:
                 if effect is None:
                     return
                 self._settled = (self._screen_revision, observation.signature)
-                if not effect.record or self._command is not None:
+                if not effect.record:
+                    return
+                self._quiet_boundaries += 1
+                if self._command is not None:
                     # A command's output is its result, delivered when it ends.
+                    self._signal_change()
                     return
                 details = {"screen_revision": self._screen_revision}
                 self._set_attention(
@@ -1165,7 +1237,7 @@ class TerminalSession:
                     await asyncio.wait_for(self._output_event.wait(), timeout=0.1)
             if self.finished or self.attachment is None:
                 return
-            await self.send_input(
+            sent = await self.send_input(
                 data=None,
                 text=text,
                 key="enter",
@@ -1173,6 +1245,7 @@ class TerminalSession:
                 origin_run_id=origin_run_id,
                 execution_owner=self.execution_owner,
             )
+            self._initial_input_quiet = int(sent["quiet_boundaries"])
         except asyncio.CancelledError:
             return
 
@@ -1397,6 +1470,8 @@ class TerminalSession:
             "bracketed_paste": bracketed_paste,
             "superseded_attention_revision": superseded,
             "screen_revision": self._screen_revision,
+            # A wait for the reply ends at the next quiet boundary after this count.
+            "quiet_boundaries": self._quiet_boundaries,
         }
 
     def _finish_files(self) -> None:

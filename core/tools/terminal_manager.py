@@ -481,6 +481,14 @@ class TerminalManager:
     def command_report(self, terminal_id: str) -> CommandReport:
         return self._get(terminal_id).command_report()
 
+    async def command_idle_seconds(self, terminal_id: str) -> float | None:
+        """How long a running command has printed nothing, got no input and used no CPU.
+
+        None while it works, as the command idle rule decides, and once its
+        shell exited.
+        """
+        return await self._get(terminal_id).command_idle_seconds()
+
     def command_status(self, terminal_id: str) -> str | None:
         """The status of a listed command, or None for an unknown or unlisted terminal.
 
@@ -945,15 +953,15 @@ class TerminalManager:
         pattern: re.Pattern[str] | None = None,
         after_revision: int | None = None,
     ) -> WaitEnded:
-        """Wait up to *seconds* until the program exits, prints a match, or goes quiet.
+        """Wait up to *seconds* until the program exits, prints a match, or its output settles.
 
-        A command exits when its shell exits and is quiet once it printed
-        output during the wait and then nothing, with no CPU, for the command
-        idle period. An interactive program is quiet once its output settled
-        after activity in an attention revision above *after_revision*
-        (default: the last one a durable result acknowledged); with *pattern*
-        that does not end its wait. Output printed before the call counts
-        for *pattern*.
+        A command's wait ends only when its shell exits, at a match, or after
+        *seconds*. An interactive program's wait also ends (``quiet``) once
+        its output settled after activity in an attention revision above
+        *after_revision* (default: the last one a durable result
+        acknowledged); with *pattern* that does not end its wait. Output
+        printed before the call counts for *pattern*, except output before the
+        Agent's last input and that input's echo.
         """
         session = self._attached(terminal_id, owner)
         if after_revision is None:
@@ -964,13 +972,25 @@ class TerminalManager:
             after_revision=after_revision,
         )
 
+    async def wait_for_reply(
+        self, terminal_id: str, owner: TerminalOwner, *, seconds: float, after_quiet: int
+    ) -> WaitEnded:
+        """Wait up to *seconds* until the output settles after input, or the program exits.
+
+        *after_quiet* is the ``quiet_boundaries`` count ``send_input`` returned.
+        Ends ``quiet``, ``exited`` or ``timeout``.
+        """
+        return await self._attached(terminal_id, owner).wait_for_reply(
+            deadline=self._services.monotonic() + seconds, after_quiet=after_quiet
+        )
+
     async def wait_for_startup(
         self, terminal_id: str, *, seconds: float = TERMINAL_START_WAIT_SECONDS
     ) -> None:
         """Wait until a started program shows its first screen, at most *seconds*.
 
         Returns once start-up output paused for the activity quiet period,
-        start's text was typed, or the program ended.
+        the output after start's text settled, or the program ended.
         """
         await self._get(terminal_id).wait_started(deadline=self._services.monotonic() + seconds)
 

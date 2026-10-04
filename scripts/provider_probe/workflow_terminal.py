@@ -125,6 +125,7 @@ async def _probe_terminal_case(
 ) -> dict[str, Any]:
     # Reuse the existing disposable PTY fixture; Model output never launches a host program.
     from core.projects import ProjectStore
+    from core.tools._terminal_arguments import normalize_terminal_arguments
     from core.tools._terminal_input import input_chunks
     from core.tools.terminal import register_terminal_tool
     from core.tools.terminal_manager import TerminalManager, TerminalRenderHost
@@ -308,12 +309,12 @@ async def _probe_terminal_case(
                         and len(factory.calls) == launches_before
                     )
                 elif actual["action"] == "input":
+                    # What input writes: text ending in a line break is submitted with Enter.
+                    typed = normalize_terminal_arguments(dict(actual))
                     chunks = input_chunks(
-                        data=actual.get("data"), text=actual.get("text"), key=actual.get("key")
+                        data=typed.get("data"), text=typed.get("text"), key=typed.get("key")
                     )
-                    effect_ok = factory.adapters[0].writes == writes_before + list(
-                        chunks
-                    ) and data.get("characters_sent") == sum(map(len, chunks))
+                    effect_ok = factory.adapters[0].writes == writes_before + list(chunks)
                 elif actual["action"] == "start":
                     child = manager.terminal(data["terminal_id"], owner())
                     effect_ok = (

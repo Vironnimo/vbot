@@ -2,11 +2,12 @@
 
 Agents call the terminal Tool with habits from other harnesses: Codex
 ``write_stdin`` ``chars`` and ``yield_time_ms``, ``session_id`` for the terminal
-id, ``enter: true``, key names such as ``"Ctrl+C"``, ``close`` for kill, and
-every optional field filled with a placeholder. The normalizer maps each shape
-whose intent is exact onto the advertised fields and drops values that request
-nothing. A value that asks for an effect the chosen action cannot provide fails
-before anything runs, with the call that provides it.
+id, ``enter: true``, key names such as ``"Ctrl+C"``, ``close`` for kill, text
+ending in a line break to submit it, and every optional field filled with a
+placeholder. The normalizer maps each shape whose intent is exact onto the
+advertised fields and drops values that request nothing. A value that asks for
+an effect the chosen action cannot provide fails before anything runs, with the
+call that provides it.
 """
 
 from __future__ import annotations
@@ -215,7 +216,8 @@ def normalize_terminal_arguments(arguments: Any) -> Any:
         raise ValueError(
             _not_run(
                 "the terminal's size follows the user's view of it, so no call resizes it; "
-                f"nothing was changed. To read the screen at its current size, call {status}."
+                f"nothing was changed. To read the screen at its current size, call terminal "
+                f"{status}."
             )
         )
     if not isinstance(action, str) or action not in _ACCEPTED_FIELDS:
@@ -341,6 +343,8 @@ def _normalize_start(arguments: dict[str, Any]) -> None:
         raise ValueError(
             _not_run(f'start presses no keys; send key "{key}" with the input action after start.')
         )
+    # start presses Enter after its text; a line break at its end would be a second one.
+    _submit_line_break(arguments)
     if "data" in arguments:
         raise ValueError(
             _not_run(
@@ -351,21 +355,39 @@ def _normalize_start(arguments: dict[str, Any]) -> None:
 
 
 def _normalize_input(arguments: dict[str, Any], press_enter: bool) -> None:
-    if not press_enter:
-        return
-    key = arguments.get("key")
-    if "data" in arguments and "text" not in arguments and key is None:
-        # data is exact; Enter is the carriage return the enter key sends.
-        arguments["data"] = f"{arguments['data']}{_ENTER}"
-        return
-    if key not in (None, "enter"):
-        raise ValueError(
-            _not_run(
-                f'enter asks for Enter and key asks for "{key}"; one input call sends one key. '
-                "Send them in two input calls, or send both sequences as data."
+    if press_enter:
+        key = arguments.get("key")
+        if "data" in arguments and "text" not in arguments and key is None:
+            # data is exact; Enter is the carriage return the enter key sends.
+            arguments["data"] = f"{arguments['data']}{_ENTER}"
+            return
+        if key not in (None, "enter"):
+            raise ValueError(
+                _not_run(
+                    f'enter asks for Enter and key asks for "{key}"; one input call sends one '
+                    "key. Send them in two input calls, or send both sequences as data."
+                )
             )
-        )
-    arguments["key"] = "enter"
+        arguments["key"] = "enter"
+    if arguments.get("key") in (None, "enter") and _submit_line_break(arguments):
+        # Text that ends in a line break is meant to be submitted: press Enter
+        # once, instead of typing the break into a pasted block.
+        arguments["key"] = "enter"
+
+
+def _submit_line_break(arguments: dict[str, Any]) -> bool:
+    """Drop the line breaks that end text; True when there were any."""
+    text = arguments.get("text")
+    if not isinstance(text, str):
+        return False
+    stripped = text.rstrip("\r\n")
+    if stripped == text:
+        return False
+    if stripped:
+        arguments["text"] = stripped
+    else:
+        del arguments["text"]
+    return True
 
 
 def _input_elsewhere_problem(action: str, arguments: dict[str, Any]) -> str:

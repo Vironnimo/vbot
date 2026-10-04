@@ -301,11 +301,14 @@ async def clocked() -> AsyncIterator[tuple[TerminalManager, AdapterFactory, Fake
 
 
 @pytest.mark.asyncio
-async def test_start_returns_after_ten_seconds_and_says_when_its_text_is_not_typed_yet(
-    clocked: tuple[TerminalManager, AdapterFactory, FakeClock], tmp_path: Path
+@pytest.mark.parametrize("program", ["silent", "answers", "keeps-printing"])
+@pytest.mark.usefixtures("quick_readiness")
+async def test_start_with_text_returns_once_its_output_settles_or_after_ten_seconds(
+    clocked: tuple[TerminalManager, AdapterFactory, FakeClock], tmp_path: Path, program: str
 ) -> None:
     terminal_manager, factory, clock = clocked
-    # The program shows nothing yet, so its text waits for its first screen.
+    if program != "silent":
+        factory.initial_output = "Ready> "
     starting = asyncio.ensure_future(
         call(
             terminal_manager,
@@ -314,16 +317,46 @@ async def test_start_returns_after_ten_seconds_and_says_when_its_text_is_not_typ
         )
     )
     await eventually(lambda: clock.sleeping)
-    await clock.advance(9.9)
-    assert not starting.done()
-    await clock.advance(0.1)
+
+    async def emit(output: str) -> None:
+        shown = terminal_manager.list_terminals()[0].screen_revision
+        factory.adapters[0].emit(output)
+        await eventually(lambda: terminal_manager.list_terminals()[0].screen_revision > shown)
+
+    if program == "silent":
+        # The program shows nothing yet, so its text waits for its first screen.
+        await clock.advance(9.9)
+        assert not starting.done()
+        await clock.advance(0.1)
+    else:
+        await eventually(lambda: factory.adapters[0].writes == ["fix the tests", "\r"])
+        if program == "answers":
+            await emit("fix the tests\r\nDone.\r\nReady> ")
+            await clock.advance(2)
+        else:
+            for _ in range(10):
+                await emit("working\r\n")
+                await clock.advance(1)
 
     data = cast(dict[str, Any], (await starting)["data"])
     assert data["state"] == "running"
-    assert data["note"] == (
-        "text is not typed yet: it is typed and submitted once the program's screen stops changing."
-    )
-    assert factory.adapters[0].writes == []
+    if program == "answers":
+        # The result shows the output the text caused.
+        assert data["screen"].splitlines() == ["Ready> fix the tests", "Done.", "Ready>"]
+        assert "note" not in data
+    elif program == "silent":
+        assert data["note"] == (
+            "text is not typed yet: it is typed and submitted once the program's screen stops "
+            "changing."
+        )
+        assert factory.adapters[0].writes == []
+    else:
+        assert data["note"] == (
+            "the text was submitted; its output is not on this screen yet. To see it, call "
+            "terminal "
+            + json.dumps({"action": "wait", "terminal_id": data["terminal_id"]})
+            + "; do not send it again."
+        )
 
 
 @pytest.mark.asyncio
@@ -450,9 +483,8 @@ async def test_capacity_refusal_names_the_terminals_to_stop(
         "terminal_capacity",
         "This Session already runs 2 terminals, the most it can run at once, so no terminal "
         f"was started. Your running terminals: {first} (build watcher); {second} (python -i). "
-        "Stop one you no longer need with terminal "
-        + json.dumps({"action": "kill", "terminal_id": first})
-        + ", using its terminal_id, then start again.",
+        'Stop one you no longer need with terminal action "kill" and its terminal_id from this '
+        "list, then start again.",
         retryable=True,
     )
     assert len(factory.calls) == 2
@@ -477,7 +509,7 @@ async def test_start_name_is_trimmed_and_shown_only_with_launch_facts(
     assert cast(dict[str, Any], status["data"])["name"] == "joe"
 
     for follow_up in (
-        {"action": "wait", "timeout": 0},
+        {"action": "wait", "timeout": 0.01},
         {"action": "input", "text": "x"},
         {"action": "kill"},
     ):
@@ -641,7 +673,8 @@ async def test_attach_grants_full_contract_and_detach_only_removes_binding(
     assert "attached" not in status["data"]
     assert (await run({"action": "input", "text": "hello"}))["ok"] is True
     assert factory.adapters[0].writes == ["hello"]
-    assert (await run({"action": "wait", "timeout": 0}))["data"]["wait_ended"] == "timeout"
+    # The input's result showed the settled reply but was not kept, so a wait returns it.
+    assert (await run({"action": "wait", "timeout": 0.01}))["data"]["wait_ended"] == "quiet"
 
     wrong_detach = await run({"action": "detach"}, other_context)
     assert wrong_detach["error"] == {

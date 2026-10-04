@@ -133,6 +133,18 @@ _POWERSHELL_EQUIVALENTS: dict[str, str | Callable[[_Failure], str]] = {
     "touch": (
         "`touch` does not exist in PowerShell: create a file with `New-Item -ItemType File path`."
     ),
+    "test": (
+        "`test` and `[ ]` are bash: in PowerShell use `Test-Path path` (add `-PathType Leaf` or "
+        "`-PathType Container` for -f or -d) inside `if (...) { ... }`."
+    ),
+    "env": (
+        "`env` is bash: list environment variables with `Get-ChildItem env:` and read one with "
+        "`$env:NAME`."
+    ),
+    "chmod": (
+        "`chmod` has no PowerShell equivalent and Windows needs none: run the script directly, "
+        "such as `./run.ps1` or `python script.py`."
+    ),
     "export": "PowerShell sets environment variables with `$env:NAME = 'value'`, not export.",
     "source": "PowerShell runs a script in the current scope with `. ./script.ps1`, not source.",
     "true": (
@@ -146,6 +158,10 @@ _POWERSHELL_EQUIVALENTS: dict[str, str | Callable[[_Failure], str]] = {
     "pip3": "Windows runs pip as `python -m pip`, not pip3.",
 }
 _BASH_SYNTAX_WORDS = frozenset({"if", "then", "fi", "do", "done", "esac", "elif"})
+_BASH_SYNTAX_HINT = (
+    "This is bash syntax: in PowerShell write `if (cond) { ... }`, "
+    "`foreach ($f in Get-ChildItem *.md) { ... }`, and `Test-Path` for file tests."
+)
 # PowerShell localizes its messages and their quotes; names appear in any of these.
 _QUOTES = "'\"‘’“”„"
 # English and German hosts: the wrapper switches messages to English, but a
@@ -177,14 +193,43 @@ def _hint_powershell_command_not_found(failure: _Failure) -> str | None:
             f"before the command, not `{missing} command`."
         )
     if missing in _BASH_SYNTAX_WORDS:
-        return (
-            "This is bash syntax. PowerShell writes `if (Test-Path x) { ... }` and "
-            "`foreach ($item in $items) { ... }`."
-        )
+        return _BASH_SYNTAX_HINT
     return (
         f"`{missing}` is not installed or not on PATH. Check with `Get-Command {missing}`; "
         "install it or run it by its absolute path instead of retrying the same command."
     )
+
+
+# Windows' app execution alias for Python when no Python is installed under that
+# name: it prints this message and exits with code 9009.
+_STORE_PYTHON_MESSAGE = (
+    "Python was not found; run without arguments to install from the Microsoft Store"
+)
+_PYTHON3 = re.compile(r"(?<![\w.-])python3(?:\.exe)?(?![\w.-])", re.I)
+
+
+def _hint_store_python(failure: _Failure) -> str | None:
+    if _STORE_PYTHON_MESSAGE not in failure.output or not _PYTHON3.search(failure.command):
+        return None
+    return "`python3` is the Microsoft Store placeholder on this machine: run `python` instead."
+
+
+# Windows' find.exe searches text in files; its own messages start with "FIND: "
+# in every display language, such as "FIND: Parameter format not correct".
+_WINDOWS_FIND_MESSAGE = re.compile(r"^FIND: ", re.M)
+_FIND = re.compile(r"(?<![\w.-])find(?:\.exe)?(?![\w.-])", re.I)
+
+
+def _hint_windows_find(failure: _Failure) -> str | None:
+    if not _WINDOWS_FIND_MESSAGE.search(failure.output) or not _FIND.search(failure.command):
+        return None
+    hint = (
+        "`find` here is the Windows text-search program, not Unix find: list files with "
+        "`Get-ChildItem -Recurse -Filter '*.md'`"
+    )
+    if failure.offers(_SEARCH_TOOL):
+        return f"{hint}, or use {_SEARCH_TOOL}."
+    return f"{hint}."
 
 
 # PowerShell aliases that look like Unix commands but take cmdlet parameters.
@@ -244,6 +289,11 @@ _HERE_STRING_OPENER = re.compile(r"@(['\"])[ \t]*\r?\n")
 # '' before a word is a quote doubled as in a single-quoted string; an empty
 # string literal such as ''.join is followed by a sign instead.
 _DOUBLED_QUOTE = re.compile(r"''\w")
+# Bash control flow at the start of a statement: then, fi, done, a do that does not
+# open PowerShell's do { } loop, or a [ or [[ test.
+_BASH_SYNTAX = re.compile(
+    r"(?:^|[;&|])[ \t]*+(?:(?:then|fi|done)\b|do\b(?![ \t]*+\{)|\[\[?[ \t])", re.M
+)
 
 
 def _here_strings(command: str) -> tuple[list[tuple[str, str]], str]:
@@ -273,11 +323,12 @@ def _here_strings(command: str) -> tuple[list[tuple[str, str]], str]:
 
 
 def _hint_powershell_syntax(failure: _Failure) -> str | None:
-    """Explain bash heredocs and quote escapes that break code passed in PowerShell.
+    """Explain bash syntax and quote escapes that break PowerShell or the code it passes on.
 
-    PowerShell itself reports a ParserError. Escapes that PowerShell passes on
-    unchanged break the code the called program reads, so a Python or Node
-    SyntaxError follows; only the Windows shell is PowerShell.
+    PowerShell itself reports a ParserError for heredocs and bash control flow.
+    Escapes that PowerShell passes on unchanged break the code the called
+    program reads, so a Python or Node SyntaxError follows; only the Windows
+    shell is PowerShell.
     """
     command, output = failure.command, failure.output
     here_strings, outside = _here_strings(command)
@@ -288,6 +339,8 @@ def _hint_powershell_syntax(failure: _Failure) -> str | None:
                 "line, the text, then '@ at the start of a line, followed by `| python -` or "
                 "`| Set-Content file`."
             )
+        if _BASH_SYNTAX.search(outside):
+            return _BASH_SYNTAX_HINT
         return _ESCAPED_QUOTE_HINT if '\\"' in outside else None
     if not _POWERSHELL or "SyntaxError" not in output:
         return None
@@ -302,9 +355,15 @@ def _hint_powershell_syntax(failure: _Failure) -> str | None:
 
 
 def _hint_dev_null(failure: _Failure) -> str | None:
+    # The wrapper runs redirections to /dev/null as $null and passes it to native
+    # programs as NUL; a cmdlet that takes it as a path, such as Out-File /dev/null,
+    # reports the missing C:\dev\null.
     if "\\dev\\null" not in failure.output:
         return None
-    return "PowerShell has no /dev/null: discard output with `2>$null`, `>$null`, or `| Out-Null`."
+    return (
+        "PowerShell has no /dev/null file: discard output with `| Out-Null` instead of "
+        "passing /dev/null as a path."
+    )
 
 
 _MISSING_MODULE = re.compile(
@@ -502,6 +561,8 @@ _OUTPUT_HINTS: tuple[Callable[[_Failure], str | None], ...] = (
     _hint_merge_conflict,
     _hint_command_not_found,
     _hint_powershell_command_not_found,
+    _hint_store_python,
+    _hint_windows_find,
     _hint_powershell_syntax,
     _hint_powershell_alias_flags,
     _hint_select_string_recurse,

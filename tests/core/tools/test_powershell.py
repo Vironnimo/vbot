@@ -283,6 +283,52 @@ async def test_exit_status_and_error_records_follow_the_last_statement(
 
 
 @pytest.mark.asyncio
+async def test_bash_null_device_discards_and_reaches_native_programs_as_nul(
+    tmp_path: Path,
+) -> None:
+    # A program beside msys-2.0.dll handles /dev/null itself and would create a NUL file.
+    msys = tmp_path / "msys"
+    msys.mkdir()
+    (msys / "msys-2.0.dll").write_bytes(b"")
+    (msys / "show.cmd").write_bytes(b"@echo %~1\r\n")
+    # The program writes only to arguments that arrived as NUL, so a broken rewrite
+    # prints /dev/null and writes nothing.
+    program = (
+        "import sys; print(sys.argv[1:]); "
+        "[open(a, 'w').write('x') for a in sys.argv[1:] if a == 'NUL']"
+    )
+    command = "\n".join(
+        [
+            # PowerShell resolves /dev/null on a drive rooted in tmp_path, so a file it
+            # writes could only appear there.
+            "$null = New-PSDrive vbot FileSystem $PWD.ProviderPath -ErrorAction Stop",
+            "Set-Location vbot:\\ -ErrorAction Stop",
+            "if ((Get-Location).Drive.Name -ne 'vbot') { exit 99 }",
+            "$null = New-Item -ItemType Directory dev",
+            # Redirections discard in any case and quoting and keep the columns that
+            # show which errors the command silenced.
+            "'silenced-sentinel' >/dev/null; Get-Item silenced-sentinel 2> '\\DEV\\NULL'; "
+            "Get-Item silenced-sentinel -ea 0",
+            f"& '{sys.executable}' -c \"{program}\" /dev/null '\\DEV\\NULL' "
+            "--output=/dev/null --log='\\DEV\\NULL' -o:/dev/null",
+            "Write-Output /dev/null",
+            "& .\\msys\\show.cmd /dev/null",
+        ]
+    )
+
+    data = await _run(tmp_path, command)
+
+    assert data["exit_code"] == 0
+    lines = [line.strip() for line in data["output"].splitlines() if line.strip()]
+    assert sorted(lines) == sorted(
+        ["['NUL', 'NUL', '--output=NUL', '--log=NUL', '-o:NUL']", "/dev/null", "/dev/null"]
+    )
+    assert {path.name for path in tmp_path.iterdir()} - {"temp"} == {"dev", "msys"}
+    assert not any((tmp_path / "dev").iterdir())
+    assert {path.name for path in msys.iterdir()} == {"msys-2.0.dll", "show.cmd"}
+
+
+@pytest.mark.asyncio
 async def test_successful_write_after_method_error_reports_record_without_changing_exit(
     tmp_path: Path,
 ) -> None:

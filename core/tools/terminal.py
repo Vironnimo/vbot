@@ -47,6 +47,7 @@ from core.tools.terminal_manager import (
     TERMINAL_MAX_ROWS,
     TERMINAL_MIN_COLUMNS,
     TERMINAL_MIN_ROWS,
+    TERMINAL_START_WAIT_SECONDS,
     TERMINAL_STATUS_DEFAULT_LINES,
     TERMINAL_STATUS_MAX_LINES,
     TerminalAlreadyAttachedError,
@@ -91,6 +92,10 @@ TERMINAL_ACTIONS = (
 )
 TERMINAL_WAIT_DEFAULT_SECONDS = 60
 TERMINAL_WAIT_MAX_SECONDS = 600
+# input waits this long for the reply to settle, as start does for the first screen.
+TERMINAL_REPLY_SECONDS = TERMINAL_START_WAIT_SECONDS
+# Case-insensitive, with ^ and $ at every line of the output.
+_PATTERN_FLAGS = re.IGNORECASE | re.MULTILINE
 TERMINAL_KEYS = tuple(TERMINAL_INPUT_KEY_SEQUENCES)
 # Terminals named in errors, and the label length for each.
 _LISTED_TERMINALS = 3
@@ -151,9 +156,10 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
                 "start launches a program attached to this Session and returns its first "
                 "screen; list shows terminals; status shows a terminal's screen, or a "
                 "command's output; wait waits until the program exits, prints output "
-                "matching pattern, or goes quiet; input types text and keys; kill stops the "
-                "program and everything it started; attach takes over an unattached terminal; "
-                "detach releases it for another Session."
+                "matching pattern, or the timeout passes; without pattern, it also ends when "
+                "an interactive program's new output settles; input types text and keys; kill "
+                "stops the program and everything it started; attach takes over an unattached "
+                "terminal; detach releases it for another Session."
             ),
         },
         "terminal_id": {
@@ -228,10 +234,11 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
         "pattern": {
             "type": "string",
             "description": (
-                "For wait: a case-insensitive regular expression (Python syntax); the wait ends "
-                "when the output matches it, such as a server's ready line. Output printed "
-                "before the call counts. Omit to wait for the exit or for the program to go "
-                "quiet."
+                "For wait: a case-insensitive regular expression (Python syntax), matched line "
+                "by line; the wait ends when the output matches it, such as a server's ready "
+                "line. Output printed before the call counts, except output before your last "
+                "input and the echo of that input. Omit to wait for the exit, or for an "
+                "interactive program's new output to settle."
             ),
         },
         "timeout": {
@@ -239,8 +246,9 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "minimum": 0,
             "default": TERMINAL_WAIT_DEFAULT_SECONDS,
             "description": (
-                f"For wait: the longest wait in seconds, at most {TERMINAL_WAIT_MAX_SECONDS}. "
-                "The program keeps running when the wait ends."
+                f"For wait: the longest wait in seconds, at most {TERMINAL_WAIT_MAX_SECONDS}; "
+                f"0 for {TERMINAL_WAIT_MAX_SECONDS}. The program keeps running when the wait "
+                "ends."
             ),
         },
     },
@@ -531,6 +539,11 @@ async def _handle_start(
             "text is not typed yet: it is typed and submitted once the program's screen stops "
             "changing."
         )
+    elif snapshot.get("initial_output_pending"):
+        notes.append(
+            "the text was submitted; its output is not on this screen yet. To see it, call "
+            f"terminal {_call('wait', terminal_id)}; do not send it again."
+        )
     if requested_id is not None:
         notes.append(f"start assigns the terminal_id: use {terminal_id}, not {requested_id}.")
     return tool_success(_with_notes(data, notes))
@@ -639,7 +652,9 @@ async def _handle_wait(
     terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
     owner = _owner(context)
     info = _visible_terminal(terminal_manager, owner, terminal_id)
-    seconds, notes = _wait_seconds(arguments, default=TERMINAL_WAIT_DEFAULT_SECONDS)
+    seconds, notes, capped = _wait_seconds(
+        arguments, default=TERMINAL_WAIT_DEFAULT_SECONDS, zero=TERMINAL_WAIT_MAX_SECONDS
+    )
     pattern, pattern_notes = _wait_pattern(arguments)
     notes.extend(pattern_notes)
     after_revision = optional_int(
@@ -651,6 +666,8 @@ async def _handle_wait(
     ended = await terminal_manager.wait(
         terminal_id, owner, seconds=seconds, pattern=pattern, after_revision=after_revision
     )
+    if capped and ended == "timeout":
+        notes.append(_capped_wait_note())
     if info.kind == "command":
         data = await _command_result(terminal_manager, context, terminal_id, wait_ended=ended)
         return tool_success(_with_notes(data, notes))
@@ -692,10 +709,13 @@ async def _handle_input(
             f"{TERMINAL_KEY_SUMMARY}. Type other characters as text, or send exact sequences "
             "as data."
         )
-    # A wait after input is accepted for other harnesses' habits, not advertised.
+    # A pattern or a longer wait after input is accepted for other harnesses'
+    # habits, not advertised; a pattern makes input wait as wait does.
     pattern, pattern_notes = _wait_pattern(arguments)
-    waits = pattern is not None or any(arguments.get(field) for field in ("timeout", "timeout_ms"))
-    seconds, notes = _wait_seconds(arguments, default=TERMINAL_WAIT_DEFAULT_SECONDS)
+    seconds, notes, capped = _wait_seconds(
+        arguments,
+        default=TERMINAL_WAIT_DEFAULT_SECONDS if pattern is not None else TERMINAL_REPLY_SECONDS,
+    )
     notes.extend(pattern_notes)
     expected_revision = optional_int(
         arguments.get("expected_screen_revision"),
@@ -718,40 +738,68 @@ async def _handle_input(
         origin_run_id=context.run_id,
         execution_owner=context.execution_owner,
     )
-    typed: JsonObject = {"terminal_id": terminal_id, "characters_sent": sent["characters_sent"]}
-    if sent.get("key"):
-        typed["key"] = sent["key"]
-    if isinstance(text, str) and ("\n" in text or "\r" in text):
-        # Whether several lines arrived as one pasted block or line by line.
-        typed["bracketed_paste"] = bool(sent.get("bracketed_paste"))
     if not sent["characters_sent"]:
-        return tool_success(typed)
+        return tool_success(
+            {
+                "terminal_id": terminal_id,
+                "note": "nothing was typed, because text, key and data were empty. To see what "
+                f"the terminal shows, call terminal {_call('status', terminal_id)}.",
+            }
+        )
     if prior_attention_revision is not None:
         context.after_result_persisted(
             lambda: terminal_manager.acknowledge_attention(
                 terminal_id, owner, prior_attention_revision
             )
         )
-    if not waits or not seconds:
-        typed["state"] = "running"
-        typed["next"] = _after_input_text(terminal_manager, context, info)
-        return tool_success(typed)
-    # The reply to this input settles after it; wait for that, as wait would.
-    ended = await terminal_manager.wait(
-        terminal_id,
-        owner,
-        seconds=seconds,
-        pattern=pattern,
-        after_revision=revision_before_input,
-    )
+    typed: JsonObject = {}
+    if sent.get("key"):
+        typed["key"] = sent["key"]
+    if isinstance(text, str) and ("\n" in text or "\r" in text):
+        # Whether several lines arrived as one pasted block or line by line.
+        typed["bracketed_paste"] = bool(sent.get("bracketed_paste"))
+    if isinstance(text, str) and key is None and raw_data is None:
+        notes.insert(
+            0,
+            "text was typed but not submitted. To submit it, call terminal "
+            + json.dumps({"action": "input", "terminal_id": terminal_id, "key": "enter"})
+            + ".",
+        )
+    if pattern is not None:
+        ended = await terminal_manager.wait(
+            terminal_id,
+            owner,
+            seconds=seconds,
+            pattern=pattern,
+            after_revision=revision_before_input,
+        )
+    else:
+        # The reply: the output settles after the input, as start's first screen does.
+        ended = await terminal_manager.wait_for_reply(
+            terminal_id, owner, seconds=seconds, after_quiet=int(sent["quiet_boundaries"])
+        )
+    if capped and ended == "timeout":
+        notes.append(_capped_wait_note())
     if info.kind == "command":
-        data = await _command_result(terminal_manager, context, terminal_id, wait_ended=ended)
+        data = await _command_result(
+            terminal_manager,
+            context,
+            terminal_id,
+            wait_ended=ended if pattern is not None else None,
+        )
     else:
         snapshot = await terminal_manager.snapshot(terminal_id, owner, include_name=False)
         _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
-        data = _screen_result(snapshot, view="wait")
-        data["wait_ended"] = ended
-    return tool_success(_with_notes({**typed, **data}, notes))
+        data = _screen_result(snapshot, view="input")
+        if pattern is not None:
+            data["wait_ended"] = ended
+        elif ended == "timeout":
+            data["next"] = _reply_pending_text(context, terminal_id)
+    result = _with_notes({**data, **typed}, notes)
+    if "next" in result:
+        # What to do next closes the result, after what was typed.
+        result["next"] = result.pop("next")
+    return tool_success(result)
 
 
 async def _handle_kill(
@@ -762,10 +810,22 @@ async def _handle_kill(
     terminal_id = required_string(arguments.get("terminal_id"), field_name="terminal_id")
     owner = _owner(context)
     before = _visible_terminal(terminal_manager, owner, terminal_id)
+    report = terminal_manager.command_report(terminal_id) if before.kind == "command" else None
     after = await terminal_manager.kill(terminal_id, owner)
     context.after_result_persisted(lambda: terminal_manager.acknowledge_exit(terminal_id, owner))
     if after.kind == "command":
-        return tool_success(await _command_result(terminal_manager, context, terminal_id))
+        result = await _command_result(terminal_manager, context, terminal_id)
+        if report is not None and report.exited:
+            if report.still_running and not before.finished:
+                names = ", ".join(
+                    f"{process.name} (pid {process.pid})" for process in report.still_running
+                )
+                result["note"] = (
+                    f"the shell had already exited; stopped the processes it left running: {names}."
+                )
+            else:
+                result["note"] = "the command had already ended; nothing was stopped."
+        return tool_success(result)
     data: JsonObject = {"terminal_id": terminal_id, "state": _agent_state(after)}
     if after.exit_code is not None:
         data["exit_code"] = after.exit_code
@@ -801,17 +861,9 @@ async def _command_result(
     return data
 
 
-def _after_input_text(
-    terminal_manager: TerminalManager, context: ToolContext, info: TerminalInfo
-) -> str:
-    wait = f"terminal {_call('wait', info.terminal_id)}"
-    if info.kind == "command":
-        if terminal_manager.command_report(info.terminal_id).delivers_result:
-            return (
-                f"Its result arrives as a new message when it exits. To wait for it now, call "
-                f"{wait}."
-            )
-        return f"To follow it, call {wait}."
+def _reply_pending_text(context: ToolContext, terminal_id: str) -> str:
+    """What to do when an interactive program still printed output as input's wait ended."""
+    wait = f"terminal {_call('wait', terminal_id)}"
     if context.nesting_depth >= 1:
         return f"To see its reply, call {wait}."
     return (
@@ -844,6 +896,7 @@ _HIDDEN_SNAPSHOT_FIELDS = frozenset(
         "command",
         "arguments",
         "initial_input_pending",
+        "initial_output_pending",
     }
 )
 _ALTERNATE_SCREEN_NOTE = (
@@ -961,35 +1014,43 @@ def _with_notes(data: JsonObject, notes: list[str]) -> JsonObject:
     return data
 
 
-def _wait_seconds(arguments: JsonObject, *, default: float) -> tuple[float, list[str]]:
-    """Return how long to wait in seconds, capped, and notes about reading the value."""
+def _capped_wait_note() -> str:
+    return (
+        f"A wait lasts at most {TERMINAL_WAIT_MAX_SECONDS} seconds, so this one ended after "
+        f"{TERMINAL_WAIT_MAX_SECONDS}; wait again to keep following the program."
+    )
+
+
+def _wait_seconds(
+    arguments: JsonObject, *, default: float, zero: float | None = None
+) -> tuple[float, list[str], bool]:
+    """Return how long to wait in seconds, notes about reading the value, and whether
+    the value was capped; *zero* is the wait a timeout of 0 means."""
     timeout = optional_number(arguments.get("timeout"), field_name="timeout", minimum=0)
     timeout_ms = optional_number(arguments.get("timeout_ms"), field_name="timeout_ms", minimum=0)
     seconds, note = resolve_timeout(timeout, timeout_ms, tool_name=TERMINAL_TOOL_NAME)
     notes = [note] if note else []
     if seconds is None:
-        return default, notes
+        return default, notes, False
+    if seconds == 0 and zero is not None:
+        return zero, notes, False
     if seconds > TERMINAL_WAIT_MAX_SECONDS:
-        notes.append(
-            f"A wait lasts at most {TERMINAL_WAIT_MAX_SECONDS} seconds, so this one ended "
-            f"after {TERMINAL_WAIT_MAX_SECONDS} at the latest; wait again to keep following "
-            "the program."
-        )
-        seconds = TERMINAL_WAIT_MAX_SECONDS
-    return seconds, notes
+        return TERMINAL_WAIT_MAX_SECONDS, notes, True
+    return seconds, notes, False
 
 
 def _wait_pattern(arguments: JsonObject) -> tuple[re.Pattern[str] | None, list[str]]:
-    """The case-insensitive pattern a wait looks for; invalid syntax is literal text."""
+    """The pattern a wait looks for, case-insensitive and with ``^``/``$`` at every line;
+    invalid syntax is literal text."""
     raw = arguments.get("pattern")
     if raw is None or raw == "":
         return None, []
     if not isinstance(raw, str):
         raise ToolContractError("terminal was not run: pattern must be text, a regular expression.")
     try:
-        return re.compile(raw, re.IGNORECASE), []
+        return re.compile(raw, _PATTERN_FLAGS), []
     except re.error as error:
-        return re.compile(re.escape(raw), re.IGNORECASE), [
+        return re.compile(re.escape(raw), _PATTERN_FLAGS), [
             f"pattern is not a valid regular expression ({error}), so it was matched as "
             "literal text."
         ]
@@ -1029,15 +1090,25 @@ def _terminal_label(info: TerminalInfo) -> str:
     return label
 
 
-def _terminals_text(terminal_manager: TerminalManager, owner: TerminalOwner) -> str:
-    """Name the terminals attached to this Session, running ones first, newest first."""
-    terminals = [info for info in terminal_manager.list_terminals() if _visible(info, owner)]
-    attached = sorted(
-        (info for info in reversed(terminals) if info.attachment == owner),
+def _attached_terminals(
+    terminal_manager: TerminalManager, owner: TerminalOwner
+) -> list[TerminalInfo]:
+    """The terminals attached to this Session, running ones first, newest first."""
+    return sorted(
+        (
+            info
+            for info in reversed(terminal_manager.list_terminals())
+            if _visible(info, owner) and info.attachment == owner
+        ),
         key=lambda info: info.finished,
     )
+
+
+def _terminals_text(terminal_manager: TerminalManager, owner: TerminalOwner) -> str:
+    """Name the terminals attached to this Session, running ones first, newest first."""
+    attached = _attached_terminals(terminal_manager, owner)
     if not attached:
-        if terminals:
+        if any(_visible(info, owner) for info in terminal_manager.list_terminals()):
             return (
                 "No terminal is attached to this Session; to see every terminal, call terminal "
                 '{"action": "list"}.'
@@ -1069,15 +1140,22 @@ def _not_found_message(
     terminal_manager: TerminalManager, context: ToolContext, terminal_id: str
 ) -> str:
     owner = _owner(context)
-    rerun = (
-        f" To get a command's output again, run the command again with {_SHELL_NAME}."
-        if context.offers(BASH_TOOL_NAME)
+    attached = _attached_terminals(terminal_manager, owner)
+    named = (
+        " Terminals attached to this Session: "
+        + "; ".join(
+            f"{info.terminal_id} ({_agent_state(info)}: {_terminal_label(info)})"
+            for info in attached[:_LISTED_TERMINALS]
+        )
+        + "."
+        if attached
         else ""
     )
     return (
-        f"No terminal with the id {terminal_id} is open for this Session; a terminal is "
-        f"removed {_FINISHED_MINUTES} minutes after its program ends.{rerun} "
-        f"{_terminals_text(terminal_manager, owner)}"
+        f"No terminal with the id {terminal_id} is open for this Session: the id is wrong or "
+        f"belongs to another Session, or its program ended more than {_FINISHED_MINUTES} "
+        f"minutes ago and the terminal was removed, with its output.{named} To see all "
+        'terminals, call terminal {"action": "list"}.'
     )
 
 
@@ -1142,8 +1220,8 @@ def _capacity_message(error: TerminalCapacityError) -> str:
     terminals = error.terminals
     named = "; ".join(f"{info.terminal_id} ({_terminal_label(info)})" for info in terminals)
     stop = (
-        f" Your running terminals: {named}. Stop one you no longer need with terminal "
-        f"{_call('kill', terminals[0].terminal_id)}, using its terminal_id, then start again."
+        f" Your running terminals: {named}. Stop one you no longer need with terminal action "
+        '"kill" and its terminal_id from this list, then start again.'
         if terminals
         else ""
     )

@@ -396,35 +396,63 @@ async def test_terminal_reads_answers_and_waits_for_a_command_in_the_shell_resul
     assert hidden["error"]["code"] == "terminal_not_found"
 
     status = await tools.terminal({"action": "status", "terminal_id": terminal_id, "lines": 50})
-    assert (status["status"], status["terminal_id"], status["output"]) == (
-        "running",
-        terminal_id,
-        "Server LISTENING on :8080\nContinue?",
+    keeps_running = (
+        f"The command keeps running; it has no timeout. Wait for it with "
+        f"{terminal_call('wait', terminal_id)}, or stop it with "
+        f"{terminal_call('kill', terminal_id)}; its result arrives as a new message when it exits."
     )
-    assert status["note"] == (
-        "lines and start_line page an interactive terminal's screen; a command's result shows "
-        "its output, and log_file, when present, holds all of it."
-    )
-    assert status["next"].startswith(f"The command keeps running in terminal {terminal_id};")
-
-    # Output printed before the wait counts for its pattern.
-    matched = await tools.terminal(
-        {"action": "wait", "terminal_id": terminal_id, "pattern": r"listening on :\d+"}
-    )
-    assert (matched["status"], matched["wait_ended"]) == ("running", "matched")
-
-    typed = await tools.terminal(
-        {"action": "input", "terminal_id": terminal_id, "text": "y", "key": "enter"}
-    )
-    assert typed == {
+    assert status == {
+        "status": "running",
         "terminal_id": terminal_id,
-        "characters_sent": 2,
-        "key": "enter",
-        "state": "running",
-        "next": "Its result arrives as a new message when it exits. To wait for it now, call "
-        f"{terminal_call('wait', terminal_id)}.",
+        "output": "Server LISTENING on :8080\nContinue?",
+        "next": keeps_running,
+        "note": "lines and start_line page an interactive terminal's screen; a command's result "
+        "shows its output, and log_file, when present, holds all of it.",
     }
-    assert adapter.writes[-2:] == ["y", "\r"]
+
+    # Output printed before the wait counts for its pattern, matched line by line.
+    matched = await tools.terminal(
+        {"action": "wait", "terminal_id": terminal_id, "pattern": r"^server listening on :\d+$"}
+    )
+    assert (matched["status"], matched["wait_ended"], matched["next"]) == (
+        "running",
+        "matched",
+        "The command keeps running; it has no timeout. Its result arrives as a new message when "
+        "it exits. Continue with your next step; do not start it again.",
+    )
+
+    # input returns the output once it settles after the input.
+    typing = asyncio.ensure_future(
+        tools.terminal({"action": "input", "terminal_id": terminal_id, "text": "y\n"})
+    )
+    await eventually(lambda: adapter.writes[-2:] == ["y", "\r"])
+    adapter.emit("y\r\nSaved.\r\n")
+    await eventually(lambda: shows(tools, terminal_id, "Saved."))
+    await tools.run_clock(typing, until=tools.clock.now + 5)
+    assert typing.result() == {
+        "status": "running",
+        "terminal_id": terminal_id,
+        "output": "Server LISTENING on :8080\nContinue? y\nSaved.",
+        "key": "enter",
+        "next": keeps_running,
+    }
+    # Output before the input and the input's echo no longer match a pattern.
+    waiting = asyncio.ensure_future(
+        tools.terminal(
+            {
+                "action": "wait",
+                "terminal_id": terminal_id,
+                "pattern": "listening|continue",
+                "timeout": 3,
+            }
+        )
+    )
+    await tools.run_clock(waiting, until=tools.clock.now + 5)
+    waited = waiting.result()
+    assert (waited["wait_ended"], waited["next"]) == (
+        "timeout",
+        keeps_running.replace("Wait for it with", "Wait again with"),
+    )
 
     # A command stays attached to the Session that ran it, so its result arrives there.
     attached = await tools.terminal({"action": "attach", "terminal_id": terminal_id})
@@ -472,52 +500,73 @@ async def test_a_command_exit_a_kept_result_showed_is_not_delivered_again(
         assert delivered[0].startswith(f"The command in terminal {terminal_id} (build) exited")
 
 
+@pytest.mark.parametrize("before", ["running", "survivors", "ended"])
 @pytest.mark.asyncio
-async def test_kill_stops_a_command_and_returns_its_stopped_result(tools: Tools) -> None:
+async def test_kill_stops_a_command_and_says_what_it_stopped(tools: Tools, before: str) -> None:
     terminal_id, adapter, tree = await tools.background("watch")
     adapter.emit("watching\r\n")
     await eventually(lambda: shows(tools, terminal_id, "watching"))
+    if before == "survivors":
+        tree.shell_exits(0, survivors=(RunningProcess(42, "server.exe"),))
+        await eventually(lambda: tools.manager.command_report(terminal_id).exited)
+    elif before == "ended":
+        tree.shell_exits(0)
+        await tools.manager.wait_finished(terminal_id)
 
     result = await tools.terminal({"action": "kill", "terminal_id": terminal_id})
 
-    assert (result["status"], result["stopped_because"], result["output"]) == (
-        "stopped",
-        "you stopped it.",
-        "watching",
-    )
-    assert tree.terminated == 1
-    tools.keep_results()
-    await asyncio.sleep(0)
-    assert tools.delivered() == []
+    if before == "running":
+        assert (result["status"], result["stopped_because"], result["output"]) == (
+            "stopped",
+            "you stopped it.",
+            "watching",
+        )
+        assert "note" not in result
+        tools.keep_results()
+        await asyncio.sleep(0)
+        assert tools.delivered() == []
+    else:
+        assert (result["status"], result["note"]) == (
+            "exited",
+            "the shell had already exited; stopped the processes it left running: server.exe "
+            "(pid 42)."
+            if before == "survivors"
+            else "the command had already ended; nothing was stopped.",
+        )
+    assert tree.terminated == (0 if before == "ended" else 1)
 
 
-@pytest.mark.parametrize("ending", ["quiet", "timeout"])
+@pytest.mark.parametrize("working", [False, True], ids=["idle", "working"])
 @pytest.mark.asyncio
-async def test_command_wait_ends_quiet_only_after_output_during_the_wait(
-    tools: Tools, ending: str
-) -> None:
-    terminal_id, adapter, _tree = await tools.background("deploy")
-    # Output from before the wait does not make the command quiet.
+async def test_command_wait_ends_only_at_exit_match_or_timeout(tools: Tools, working: bool) -> None:
+    terminal_id, adapter, tree = await tools.background("deploy")
     adapter.emit("Starting\r\n")
     await eventually(lambda: shows(tools, terminal_id, "Starting"))
     waiting: asyncio.Task[object] = asyncio.ensure_future(
-        tools.terminal({"action": "wait", "terminal_id": terminal_id, "timeout": 40})
+        tools.terminal({"action": "wait", "terminal_id": terminal_id, "timeout": 75})
     )
-    if ending == "quiet":
-        await eventually(lambda: tools.clock.sleeping)
-        adapter.emit("Password: ")
-    await tools.run_clock(waiting, until=45)
+    await eventually(lambda: tools.clock.sleeping)
+    adapter.emit("Password: ")
+    await eventually(lambda: shows(tools, terminal_id, "Password:"))
+    # Silence after output does not end the wait; CPU time near its end is work.
+    await tools.run_clock(waiting, until=70)
+    if working:
+        tree.cpu_seconds += 5
+    await tools.run_clock(waiting, until=80)
 
     result = cast(JsonObject, waiting.result())
-    assert (result["status"], result["wait_ended"]) == ("running", ending)
-    if ending == "quiet":
-        # Printed output, then nothing and no CPU for 15 seconds.
-        assert 16 <= tools.clock.now <= 17
+    assert (result["status"], result["wait_ended"]) == ("running", "timeout")
+    assert tools.clock.now >= 75
+    if working:
         assert result["next"].startswith(
-            f"The command in terminal {terminal_id} has printed nothing for 15 seconds"
+            "The command keeps running; it has no timeout. Wait again with "
         )
     else:
-        assert tools.clock.now >= 40
+        # The idle text says how long the command has printed nothing.
+        assert result["next"].startswith(
+            f"The command in terminal {terminal_id} has printed nothing for 75 seconds and uses "
+            "no CPU; it has no timeout."
+        )
 
 
 @pytest.mark.parametrize("depth", [0, 1])
@@ -533,16 +582,24 @@ async def test_input_to_a_command_says_whether_its_result_arrives_on_its_own(
     await tools.run_clock(call, until=SHELL_HANDOFF_SECONDS)
     terminal_id = cast(JsonObject, call.result())["data"]["terminal_id"]
 
-    typed = await tools.terminal(
-        {"action": "input", "terminal_id": terminal_id, "text": "Ada", "key": "enter"},
-        depth=depth,
+    typing = asyncio.ensure_future(
+        tools.terminal(
+            {"action": "input", "terminal_id": terminal_id, "text": "Ada", "key": "enter"},
+            depth=depth,
+        )
     )
+    await eventually(lambda: tools.factory.adapters[-1].writes[-2:] == ["Ada", "\r"])
+    await tools.run_clock(typing, until=tools.clock.now + 5)
 
-    wait = terminal_call("wait", terminal_id)
-    assert typed["next"] == (
-        f"Its result arrives as a new message when it exits. To wait for it now, call {wait}."
+    typed = cast(JsonObject, typing.result())
+    arrival = (
+        "its result arrives as a new message when it exits."
         if depth == 0
-        else f"To follow it, call {wait}."
+        else "its result does not arrive on its own."
+    )
+    assert typed["next"].endswith(
+        f"Wait for it with {terminal_call('wait', terminal_id)}, or stop it with "
+        f"{terminal_call('kill', terminal_id)}; {arrival}"
     )
 
 

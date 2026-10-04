@@ -64,12 +64,14 @@ def project_workdir(projects: ProjectStore | None, value: str) -> Path:
         ) from error
     except (ProjectError, OSError) as error:
         raise ProjectWorkdirError(
-            f"Project {project_id} could not be read: {error}",
+            f"Project {project_id} could not be read: {str(error).rstrip('.')}. Pass the "
+            "Project's directory path instead.",
             code="project_unavailable",
         ) from error
     if not cwd_exists(project.cwd):
         raise ProjectWorkdirError(
-            f"the directory of Project {project_id}, {model_path(project.cwd)}, does not exist.",
+            f"the directory of Project {project_id}, {model_path(project.cwd)}, does not exist. "
+            "Pass an existing directory, or omit workdir to use the working directory.",
             code="project_unavailable",
         )
     return Path(project.cwd).resolve()

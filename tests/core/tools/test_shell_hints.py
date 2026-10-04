@@ -18,6 +18,14 @@ _NOT_RECOGNIZED_DE = (
     "{name}: Der Begriff \u201e{name}\u201c wird nicht als Name eines Cmdlets, einer "
     "Funktion, einer Skriptdatei oder eines ausf\u00fchrbaren Programms erkannt."
 )
+_STORE_PYTHON = (
+    "Python was not found; run without arguments to install from the Microsoft Store, or "
+    "disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases."
+)
+_BASH_SYNTAX = (
+    "This is bash syntax: in PowerShell write `if (cond) { ... }`, "
+    "`foreach ($f in Get-ChildItem *.md) { ... }`, and `Test-Path` for file tests."
+)
 
 
 @pytest.mark.parametrize(
@@ -92,6 +100,14 @@ _NOT_RECOGNIZED_DE = (
             ["`Get-ChildItem -Recurse -File | Select-String 'text'`"],
             id="long_command_is_scanned_once",
         ),
+        # Windows' app execution alias stands in for python3, not for python.
+        (
+            "python3 app.py",
+            9009,
+            _STORE_PYTHON,
+            ["`python3` is the Microsoft Store placeholder on this machine: run `python` instead."],
+        ),
+        pytest.param("python app.py", 9009, _STORE_PYTHON, None, id="store_python_named_python"),
     ],
 )
 def test_failure_output_gets_the_matching_hint(
@@ -171,10 +187,10 @@ def test_platform_specific_hints_follow_the_host_shell(
     ("command", "output", "expected"),
     [
         (
-            "git fetch 2>/dev/null",
+            "git log | Out-File /dev/null",
             "Out-File: Could not find a part of the path 'C:\\dev\\null'.",
-            "PowerShell has no /dev/null: discard output with `2>$null`, `>$null`, or "
-            "`| Out-Null`.",
+            "PowerShell has no /dev/null file: discard output with `| Out-Null` instead of "
+            "passing /dev/null as a path.",
         ),
         (
             "ls -la src",
@@ -220,7 +236,29 @@ def test_bash_habits_in_powershell_name_the_powershell_form(
         ("make || true", "true", "drop `|| true`", _NOT_RECOGNIZED),
         ("python3 app.py", "python3", "`python` (or `py`)", _NOT_RECOGNIZED),
         ("DEBUG=1 npm test", "DEBUG=1", "`$env:DEBUG = '1'` on its own line", _NOT_RECOGNIZED),
-        ("if [ -f x ]; then echo y; fi", "if", "`if (Test-Path x) { ... }`", _NOT_RECOGNIZED),
+        ("done", "done", _BASH_SYNTAX, _NOT_RECOGNIZED),
+        # Bash commands are not missing installs.
+        (
+            "test -f x && echo yes",
+            "test",
+            "`test` and `[ ]` are bash: in PowerShell use `Test-Path path` (add `-PathType Leaf` "
+            "or `-PathType Container` for -f or -d) inside `if (...) { ... }`.",
+            _NOT_RECOGNIZED,
+        ),
+        (
+            "env | grep PATH",
+            "env",
+            "`env` is bash: list environment variables with `Get-ChildItem env:` and read one "
+            "with `$env:NAME`.",
+            _NOT_RECOGNIZED,
+        ),
+        (
+            "chmod +x run.sh",
+            "chmod",
+            "`chmod` has no PowerShell equivalent and Windows needs none: run the script "
+            "directly, such as `./run.ps1` or `python script.py`.",
+            _NOT_RECOGNIZED,
+        ),
         ("cargo build", "cargo", "Check with `Get-Command cargo`", _NOT_RECOGNIZED_DE),
     ],
 )
@@ -233,27 +271,38 @@ def test_missing_powershell_command_names_the_equivalent(
     assert expected in hint
 
 
+_WINDOWS_FIND = (
+    "`find` here is the Windows text-search program, not Unix find: list files with "
+    "`Get-ChildItem -Recurse -Filter '*.md'`"
+)
+
+
 @pytest.mark.parametrize(
-    ("command", "name", "offered", "expected"),
+    ("command", "output", "offered", "expected"),
     [
         (
             "git log | grep fix",
-            "grep",
+            _NOT_RECOGNIZED_DE.format(name="grep"),
             set(),
             "filter command output with `| Select-String 'text'` (add -CaseSensitive to match "
             "grep, -NotMatch for -v), and search files with "
             "`Get-ChildItem -Recurse -File | Select-String 'text'`.",
         ),
-        ("grep -r todo .", "grep", {"search_files"}, "and search files with search_files."),
+        (
+            "grep -r todo .",
+            _NOT_RECOGNIZED_DE.format(name="grep"),
+            {"search_files"},
+            "and search files with search_files.",
+        ),
         (
             "Select-String -Pattern todo -Recurse",
-            None,
+            "Select-String: A parameter cannot be found that matches parameter name 'Recurse'.",
             {"search_files"},
             "Select-String 'text'`, or search with search_files.",
         ),
         (
             "sed -i 's/a/b/' f",
-            "sed",
+            _NOT_RECOGNIZED_DE.format(name="sed"),
             set(),
             "`sed` does not exist in PowerShell: replace text in a file with "
             "`(Get-Content f) -replace 'old', 'new' | Set-Content f`, and print a line range "
@@ -261,23 +310,30 @@ def test_missing_powershell_command_names_the_equivalent(
         ),
         (
             "sed -n '10,20p' f",
-            "sed",
+            _NOT_RECOGNIZED_DE.format(name="sed"),
             {"apply_patch", "edit", "read"},
             "`sed` does not exist in PowerShell: change files with apply_patch, replace text in "
             "command output with `-replace 'old', 'new'`, and read a line range with read.",
         ),
-        ("sed -i 's/a/b/' f", "sed", {"edit"}, "change files with edit,"),
+        (
+            "sed -i 's/a/b/' f",
+            _NOT_RECOGNIZED_DE.format(name="sed"),
+            {"edit"},
+            "change files with edit,",
+        ),
+        # find.exe's messages follow the Windows display language.
+        ("find . -name '*.md'", "FIND: Parameter format not correct", set(), f"{_WINDOWS_FIND}."),
+        (
+            "find src -type f | Select-Object -First 5",
+            "FIND: Parameterformat falsch",
+            {"search_files"},
+            f"{_WINDOWS_FIND}, or use search_files.",
+        ),
     ],
 )
 def test_hints_name_only_the_tools_the_agent_is_offered(
-    command: str, name: str | None, offered: set[str], expected: str
+    command: str, output: str, offered: set[str], expected: str
 ) -> None:
-    output = (
-        _NOT_RECOGNIZED_DE.format(name=name)
-        if name
-        else "Select-String: A parameter cannot be found that matches parameter name 'Recurse'."
-    )
-
     hint = annotate_failure(command, 1, output, offers=offered.__contains__)
 
     assert hint is not None
@@ -300,6 +356,23 @@ def test_hints_name_only_the_tools_the_agent_is_offered(
             'In PowerShell, \\" does not escape a quote.',
         ),
         ("Write-Output (", "Missing file specification after redirection operator.", None),
+        # Bash control flow and tests, wherever a statement starts.
+        (
+            "for f in *.md; do echo $f; done",
+            "Missing opening '(' after keyword 'for'.",
+            _BASH_SYNTAX,
+        ),
+        ("[ -f README.md ] && echo yes", "Missing type name after '['.", _BASH_SYNTAX),
+        ("if [ -f x ]; then echo y; fi", "Missing '(' after 'if' in if statement.", _BASH_SYNTAX),
+        # PowerShell's own do loop and type literals are not bash.
+        ("do { $i++ } while ($i -lt 3", "Missing closing ')' after expression.", None),
+        ("[int]$n = (", "You must provide a value expression.", None),
+        pytest.param(
+            "\n" * 40_000 + "[ -f x ] && echo yes",
+            "Missing type name after '['.",
+            _BASH_SYNTAX,
+            id="blank_lines_are_scanned_once",
+        ),
         # PowerShell ends the string at \", so Python reads a cut-off line.
         (
             'python -c "import json; print(json.dumps({\\"a\\": 1}))"',
@@ -326,7 +399,7 @@ def test_hints_name_only_the_tools_the_agent_is_offered(
         ("@'\nprint(''.join(parts))\nprint(\"a\\\"b\"\n'@ | python -", "SyntaxError: x", None),
     ],
 )
-def test_bash_quoting_that_breaks_code_in_powershell_is_named(
+def test_bash_syntax_and_quoting_that_break_powershell_are_named(
     monkeypatch: pytest.MonkeyPatch, command: str, output: str, expected: str | None
 ) -> None:
     if output.startswith("SyntaxError"):

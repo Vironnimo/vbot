@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import re
 import shutil
@@ -39,6 +40,7 @@ from core.tools.update_handoff import (
     UpdateHandoffUnavailableError,
     read_update_handoff_ticket,
 )
+from core.utils.paths import model_path
 from tests.core.tools.terminal_manager_helpers import (
     AdapterFactory,
     FakeClock,
@@ -195,23 +197,38 @@ def terminal_calls(text: str) -> list[JsonObject]:
     return [json.loads(call) for call in _TERMINAL_CALL.findall(text)]
 
 
+@pytest.mark.parametrize(
+    ("exits", "exit_code", "failed_programs"),
+    [
+        ((ProgramExit("python.exe", 5),), 1, ["python.exe exited with code 5"]),
+        # One failed program whose code is the exit code repeats it.
+        ((ProgramExit("git.exe", 128),), 128, None),
+        ((ProgramExit("app.exe", 0xC0000005),), 0xC0000005, None),
+        (
+            (ProgramExit("git.exe", 128), ProgramExit("python.exe", 128)),
+            128,
+            ["git.exe exited with code 128", "python.exe exited with code 128"],
+        ),
+    ],
+)
 @pytest.mark.asyncio
 async def test_finished_command_reports_output_exit_code_failed_programs_and_environment(
     shell: Shell,
+    exits: tuple[ProgramExit, ...],
+    exit_code: int,
+    failed_programs: list[str] | None,
 ) -> None:
     call = shell.call({"command": "build --all", "env_keys": ["API_TOKEN"], "env": {"MODE": "ci"}})
     adapter, tree = await shell.started()
     adapter.emit("compiling\r\ndone\r\n")
-    tree.exits = (ProgramExit("python.exe", 5),)
-    tree.shell_exits(1)
+    tree.exits = exits
+    tree.shell_exits(exit_code)
 
     result = data(await call)
-    assert result == {
-        "status": "exited",
-        "exit_code": 1,
-        "output": "compiling\ndone",
-        "failed_programs": ["python.exe exited with code 5"],
-    }
+    expected: JsonObject = {"status": "exited", "exit_code": exit_code, "output": "compiling\ndone"}
+    if failed_programs is not None:
+        expected["failed_programs"] = failed_programs
+    assert result == expected
     argv, cwd, env, _rows, _columns = shell.factory.calls[0]
     assert "build --all" in argv[-1]
     assert argv[1:3] == (
@@ -497,6 +514,7 @@ async def test_failed_command_gets_a_hint_in_its_result_and_its_delivery(shell: 
     running = data(await shell.call({"command": "make", "mode": "background"}))
     adapter, tree = await shell.started()
     adapter.emit(_MISSING_MAKE)
+    tree.exits = (ProgramExit("make.exe", 127),)
     tree.shell_exits(127)
     await eventually(lambda: bool(shell.bodies()))
     # The hint follows the status line, which the status fold reads.
@@ -504,6 +522,8 @@ async def test_failed_command_gets_a_hint_in_its_result_and_its_delivery(shell: 
     terminal_id = running["terminal_id"]
     assert status == f"The command in terminal {terminal_id} (make) exited with code 127."
     assert hint == f"Hint: {data(result)['hint']}"
+    # A single failed program with the exit code the status line names is not repeated.
+    assert "Failed programs" not in shell.bodies()[0]
 
 
 @pytest.mark.asyncio
@@ -513,15 +533,27 @@ async def test_terminal_results_for_a_command_have_the_shell_result_shape(shell:
     adapter.emit("Continue? ")
     await eventually(lambda: shell.manager.command_screen(terminal_id, 1))
 
-    quiet = await command_terminal_result(
-        shell.manager, shell.context(), terminal_id, wait_ended="quiet"
+    def call(action: str) -> str:
+        return "terminal " + json.dumps({"action": action, "terminal_id": terminal_id})
+
+    following = await command_terminal_result(shell.manager, shell.context(), terminal_id)
+    assert (following["status"], following["output"]) == ("running", "Continue?")
+    assert following["next"] == (
+        f"The command keeps running; it has no timeout. Wait for it with {call('wait')}, or stop "
+        f"it with {call('kill')}; its result arrives as a new message when it exits."
     )
-    assert (quiet["status"], quiet["output"], quiet["wait_ended"]) == (
-        "running",
-        "Continue?",
-        "quiet",
+    # Printed nothing and used no CPU for the idle period: the text says how long.
+    await shell.clock.advance(2)
+    await command_terminal_result(shell.manager, shell.context(), terminal_id)
+    await shell.clock.advance(15)
+    idle = await command_terminal_result(
+        shell.manager, shell.context(), terminal_id, wait_ended="timeout"
     )
-    assert quiet["next"].startswith(f"The command in terminal {terminal_id} has printed nothing")
+    assert (idle["status"], idle["wait_ended"]) == ("running", "timeout")
+    assert idle["next"].startswith(
+        f"The command in terminal {terminal_id} has printed nothing for 17 seconds and uses no "
+        "CPU; it has no timeout. If its output ends in a question or prompt, answer it"
+    )
 
     adapter.emit(_MISSING_MAKE)
     tree.shell_exits(127)
@@ -540,8 +572,24 @@ async def test_terminal_results_for_a_command_have_the_shell_result_shape(shell:
 async def test_missing_workdir_and_ungranted_credentials_run_nothing(shell: Shell) -> None:
     missing = await shell.call({"command": "ls", "workdir": "nope"})
     secret = await shell.call({"command": "ls", "env_keys": ["UNKNOWN_SECRET_FOR_TEST"]})
+    gone = shell.tmp_path / "gone"
+    missing_cwd = await dispatch(
+        shell.registry,
+        dataclasses.replace(shell.context(), cwd=gone),
+        {"command": "ls"},
+        [SHELL_TOOL_NAME],
+    )
 
-    assert "is not an existing directory" in missing["error"]["message"]
+    assert missing["error"]["message"] == (
+        f"{SHELL_MODEL_NAME} was not run: workdir {model_path(shell.tmp_path / 'nope')} is not "
+        "an existing directory. Pass an existing directory, or omit workdir to use the working "
+        "directory."
+    )
+    # Omitting workdir cannot help when the working directory itself is missing.
+    assert missing_cwd["error"]["message"] == (
+        f"{SHELL_MODEL_NAME} was not run: the working directory {model_path(gone)} is not an "
+        "existing directory. Pass an existing directory as workdir."
+    )
     assert "not granted to this Agent" in secret["error"]["message"]
     assert shell.factory.calls == []
 
@@ -707,7 +755,14 @@ def test_definition_fits_the_session_depth_and_offered_tools(
     )
     properties = projected["parameters"]["properties"]
     assert ("mode" in properties) is has_mode
-    assert ("no limit with mode background" in properties["timeout"]["description"]) is has_mode
+    assert properties["timeout"]["description"] == (
+        "Seconds before the command is stopped, counted from its start; 0 for no limit. "
+        + (
+            "Omitted, it is 600 in foreground and no limit in background."
+            if has_mode
+            else "Omitted, it is 600."
+        )
+    )
 
 
 @pytest.mark.parametrize(

@@ -113,8 +113,8 @@ _USUAL_TOOLS = frozenset({"read", "search_files", "apply_patch", _WEB_FETCH_TOOL
 if sys.platform == "win32":
     _OPENING = (
         "Run a PowerShell 7 command in a new terminal and return its output and exit code. "
-        "Write PowerShell, not bash or cmd: $env:NAME for variables, $null instead of "
-        "/dev/null, Select-String instead of grep for command output, and single quotes or a "
+        "Write PowerShell, not bash or cmd: $env:NAME for environment variables, $null instead "
+        "of /dev/null, Select-String instead of grep for command output, and single quotes or a "
         "here-string (@'...'@) instead of \\\" escapes and heredocs."
     )
     # How Agents start a program in the background without the Tool.
@@ -232,16 +232,21 @@ _MODE_PARAMETER: JsonObject = {
 
 
 def _timeout_parameter(*, subagent: bool) -> JsonObject:
-    omit = (
-        f"Omit for {SHELL_DEFAULT_TIMEOUT_SECONDS:g}; 0 for no limit."
+    # The handler's defaults: SHELL_DEFAULT_TIMEOUT_SECONDS in the foreground, none
+    # in the background, which a Sub-Agent cannot choose.
+    omitted = (
+        f"Omitted, it is {SHELL_DEFAULT_TIMEOUT_SECONDS:g}."
         if subagent
-        else f"Omit for {SHELL_DEFAULT_TIMEOUT_SECONDS:g}, or for no limit with mode background; "
-        "0 for no limit."
+        else f"Omitted, it is {SHELL_DEFAULT_TIMEOUT_SECONDS:g} in foreground and no limit in "
+        "background."
     )
     return {
         "type": "number",
         "minimum": 0,
-        "description": f"Seconds before the command is stopped, counted from its start. {omit}",
+        "description": (
+            "Seconds before the command is stopped, counted from its start; 0 for no limit. "
+            f"{omitted}"
+        ),
     }
 
 
@@ -409,16 +414,22 @@ def _workdir(context: ToolContext, arguments: JsonObject, projects: ProjectStore
     else:
         workdir = context.resolve_path(raw)
     if not workdir.is_dir():
-        raise _not_run(_missing_workdir(workdir))
+        raise _not_run(_missing_workdir(workdir, given=bool(raw)))
     return workdir
 
 
-def _missing_workdir(workdir: Path) -> str:
+def _missing_workdir(workdir: Path, *, given: bool) -> str:
+    """The failure for a missing directory; *given* when the call named it as workdir."""
+    if not given:
+        return (
+            f"the working directory {model_path(workdir)} is not an existing directory. Pass an "
+            "existing directory as workdir."
+        )
     message = f"workdir {model_path(workdir)} is not an existing directory."
     nearby = similar_entries(workdir, kind="dirs")
     if nearby:
         message += f" Similar directories: {', '.join(model_path(path) for path in nearby)}."
-    return message
+    return f"{message} Pass an existing directory, or omit workdir to use the working directory."
 
 
 def _shell_argv(command: str, environment: dict[str, str]) -> list[str]:
@@ -620,7 +631,13 @@ class ShellTool:
         self, context: ToolContext, call: _ShellCall, terminal_id: str, *, reason: str
     ) -> JsonObject:
         report, screen = await _report_with_screen(self._terminals, terminal_id)
-        data = _result_data(context, report, screen=screen, reason=reason)
+        idle_seconds = None
+        if reason == "idle" and not report.exited:
+            # The hand-off found it idle; the text names how long it has been.
+            idle_seconds = await self._terminals.command_idle_seconds(terminal_id)
+        data = _result_data(
+            context, report, screen=screen, reason=reason, idle_seconds=idle_seconds
+        )
         if call.notes:
             data["notes"] = list(call.notes)
         return tool_success(data)
@@ -665,14 +682,24 @@ async def command_terminal_result(
     ``terminal_id``, ``exit_code``, ``stopped_because``, ``output``,
     ``log_file`` (only when the output was cut), ``failed_programs``,
     ``still_running``, ``hint`` and ``next``, plus ``wait_ended`` when given.
-    A running command's ``next`` is the shell result's follow-up text; with
-    ``wait_ended`` ``"quiet"`` it is the text for a command that went quiet.
+    A running command's ``next`` follows from how the wait ended
+    (``matched``, ``timeout``, or no wait), unless the command is idle: then
+    it is the idle text with the seconds it has been idle.
     Raises ``TerminalManagerError`` for an unknown terminal or one that runs no
     command.
     """
     report, screen = await _report_with_screen(terminals, terminal_id)
-    reason = "idle" if wait_ended == "quiet" else "continues"
-    data = _result_data(context, report, screen=screen, reason=reason)
+    reason = {"matched": "matched", "timeout": "waited"}.get(wait_ended or "", "following")
+    idle_seconds = None
+    if not report.exited and reason != "matched":
+        idle_seconds = await terminals.command_idle_seconds(terminal_id)
+    data = _result_data(
+        context,
+        report,
+        screen=screen,
+        reason="idle" if idle_seconds is not None else reason,
+        idle_seconds=idle_seconds,
+    )
     if wait_ended is not None:
         data["wait_ended"] = wait_ended
     return data
@@ -700,9 +727,15 @@ async def _report_with_screen(
 
 
 def _result_data(
-    context: ToolContext, report: CommandReport, *, screen: str = "", reason: str = "continues"
+    context: ToolContext,
+    report: CommandReport,
+    *,
+    screen: str = "",
+    reason: str = "continues",
+    idle_seconds: float | None = None,
 ) -> JsonObject:
-    """The result data of one command; *reason* says why a running command was returned."""
+    """The result data of one command; *reason* says why a running command was returned,
+    and *idle_seconds* how long an idle one has been idle."""
     if not report.exited:
         output, truncated = command_output_text(report, screen=screen)
         running: JsonObject = {
@@ -712,7 +745,7 @@ def _result_data(
         }
         if truncated and report.transcript.log_path is not None:
             running["log_file"] = model_path(report.transcript.log_path)
-        running["next"] = _running_text(context, report, reason=reason)
+        running["next"] = _running_text(context, report, reason=reason, idle_seconds=idle_seconds)
         return running
     data: JsonObject = {"status": "stopped" if report.stop_reason else "exited"}
     if report.still_running:
@@ -725,8 +758,9 @@ def _result_data(
     data["output"] = output
     if truncated and report.transcript.log_path is not None:
         data["log_file"] = model_path(report.transcript.log_path)
-    if report.nonzero_exits:
-        data["failed_programs"] = list(report.nonzero_exits)
+    failed = _failed_programs(report)
+    if failed:
+        data["failed_programs"] = list(failed)
     if report.still_running:
         data["still_running"] = [_process_text(process) for process in report.still_running]
     hint = _failure_hint(report, output, context.offers)
@@ -735,6 +769,21 @@ def _result_data(
     if report.still_running:
         data["next"] = _still_running_text(context, report)
     return data
+
+
+def _failed_programs(report: CommandReport) -> tuple[str, ...]:
+    """The failed programs that tell more than the exit code.
+
+    A single failed program whose code is the command's exit code repeats it.
+    Each entry reads ``<name> exited with code <code>``, with the hex form after
+    large codes.
+    """
+    exits = report.nonzero_exits
+    if len(exits) == 1:
+        code = exits[0].rpartition(" exited with code ")[2].split(" ", 1)[0]
+        if code == str(report.exit_code):
+            return ()
+    return exits
 
 
 def _failure_hint(report: CommandReport, output: str, offers: Callable[[str], bool]) -> str | None:
@@ -800,12 +849,20 @@ def _limit_text(report: CommandReport) -> str:
     return f"its {report.timeout_seconds:g}-second timeout stops it in {remaining:.0f} seconds"
 
 
-def _running_text(context: ToolContext, report: CommandReport, *, reason: str) -> str:
+def _running_text(
+    context: ToolContext,
+    report: CommandReport,
+    *,
+    reason: str,
+    idle_seconds: float | None = None,
+) -> str:
     """What to do about a command that keeps running after the result.
 
-    *reason* is ``idle`` for a command that printed nothing and used no CPU,
-    ``moved`` when the user moved it to the background, and otherwise any
-    other value.
+    *reason* is ``idle`` for a command that printed nothing and used no CPU
+    (for *idle_seconds*), ``moved`` when the user moved it to the background;
+    for a terminal call, ``matched`` when a wait matched its pattern,
+    ``waited`` when a wait timed out and ``following`` for a status or an
+    input; otherwise the shell call handed the command off.
     """
     terminal_id = report.terminal_id
     limit = _limit_text(report)
@@ -816,14 +873,17 @@ def _running_text(context: ToolContext, report: CommandReport, *, reason: str) -
         else "Its result does not arrive on its own."
     )
     if reason == "idle" and follow_up:
+        silent = COMMAND_IDLE_SECONDS if idle_seconds is None else idle_seconds
         return (
             f"The command in terminal {terminal_id} has printed nothing for "
-            f"{COMMAND_IDLE_SECONDS:g} seconds and uses no CPU; {limit}. If its output ends in "
+            f"{silent:.0f} seconds and uses no CPU; {limit}. If its output ends in "
             f'a question or prompt, answer it with terminal action "input", terminal_id '
             f'"{terminal_id}", your answer as text, and key "enter". Otherwise it is waiting '
             f"for something else: wait for it with {_terminal_call('wait', terminal_id)}, or "
             f"stop it with {_terminal_call('kill', terminal_id)} if it hangs. {delivered}"
         )
+    if reason in {"matched", "waited", "following"} and follow_up:
+        return _followed_text(report, limit, matched=reason == "matched", waited=reason == "waited")
     moved = "The user moved the command to the background. " if reason == "moved" else ""
     if not follow_up:
         text = f"{moved}The command keeps running in the background; {limit}."
@@ -841,6 +901,34 @@ def _running_text(context: ToolContext, report: CommandReport, *, reason: str) -
     return (
         f"{moved}The command keeps running in terminal {terminal_id}; {limit}. {delivered[:-1]}"
         f": wait for it with {wait}; {pattern}. Do not start it again."
+    )
+
+
+def _followed_text(report: CommandReport, limit: str, *, matched: bool, waited: bool) -> str:
+    """What to do about a running command a terminal wait, status or input returned.
+
+    After a match the Agent continues; otherwise it waits again or stops it.
+    """
+    wait = _terminal_call("wait", report.terminal_id)
+    if matched:
+        arrival = (
+            "Its result arrives as a new message when it exits."
+            if report.delivers_result
+            else f"Its result does not arrive on its own; to get it, call {wait}."
+        )
+        return (
+            f"The command keeps running; {limit}. {arrival} Continue with your next step; do "
+            "not start it again."
+        )
+    arrival = (
+        "its result arrives as a new message when it exits"
+        if report.delivers_result
+        else "its result does not arrive on its own"
+    )
+    again = "Wait again" if waited else "Wait for it"
+    return (
+        f"The command keeps running; {limit}. {again} with {wait}, or stop it with "
+        f"{_terminal_call('kill', report.terminal_id)}; {arrival}."
     )
 
 
@@ -914,8 +1002,10 @@ def format_command_delivery(
     hint = _failure_hint(report, output, offers)
     if hint is not None:
         lines.append(f"Hint: {hint}")
-    if report.nonzero_exits:
-        lines.append(f"Failed programs: {'; '.join(report.nonzero_exits)}.")
+    # The status line of a stopped command names no exit code to repeat.
+    failed = report.nonzero_exits if report.stop_reason is not None else _failed_programs(report)
+    if failed:
+        lines.append(f"Failed programs: {'; '.join(failed)}.")
     if report.still_running:
         names = ", ".join(_process_text(process) for process in report.still_running)
         stop = (

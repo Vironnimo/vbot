@@ -21,6 +21,20 @@ PowerShell's own parser: ``using`` statements, ``#requires``, a ``param`` block
 and named blocks keep their meaning, and error positions are the command's own
 line numbers.
 
+Bash's null device. PowerShell resolves ``/dev/null`` as a path on the current
+drive: it writes the file ``C:\\dev\\null`` when ``C:\\dev`` exists, silently, and
+fails otherwise; a native program given ``/dev/null`` opens the same file. Before
+the command runs, the literal ``/dev/null`` or ``\\dev\\null`` (any case and
+quoting) is therefore rewritten as a redirection target, such as ``2>/dev/null``
+or ``*> '/dev/null'``, to ``$null``, and as a native program's argument, alone or
+after ``=`` (``curl -o /dev/null``, ``git diff --output=/dev/null``), to ``NUL``,
+Windows' null device. A program is native when its name resolves, before the
+command runs, to an application. Programs built on MSYS2 or Cygwin (with
+``msys-2.0.dll`` or ``cygwin1.dll`` beside them) keep /dev/null: they handle it
+themselves and would create a file named NUL. So do shells and launchers that
+hand their arguments to Linux: bash, sh, wsl, ssh, docker, podman and kubectl.
+A cmdlet's argument, such as ``Out-File /dev/null``, keeps its PowerShell meaning.
+
 Unix line filters. Agents habitually pipe into ``head``, ``tail`` and ``wc -l``,
 which PowerShell lacks. When such a command is genuinely missing, a
 command-not-found hook runs an equivalent built from Select-Object and
@@ -138,17 +152,73 @@ SETUP_STATEMENT = "; ".join(
     )
 )
 # Parse the command after the setup; a syntax error is thrown as PowerShell reports
-# its own. An error record's position names the command that wrote it, so the
+# its own. A redirection to /dev/null becomes one to $null and a native program's
+# /dev/null argument becomes NUL, each padded to the same length, so every offset,
+# line and column stays as written and the syntax tree keeps describing the text
+# that runs. An error record's position names the command that wrote it, so the
 # command's syntax tree shows whether that command silenced it; a record without
-# such a command, such as a caught throw, stays reportable. The exit status runs
-# at the end of the last block: the unnamed body, a named end block, or an end
-# block added after begin or process blocks.
+# such a command, such as a caught throw, stays reportable. The exit status runs at
+# the end of the last block: the unnamed body, a named end block, or an end block
+# added after begin or process blocks.
 RUN_STATEMENTS = r"""
 $__vbotParseErrors = $null
 $__vbotAst = [System.Management.Automation.Language.Parser]::ParseInput(
     $__vbotCommand, [ref]$null, [ref]$__vbotParseErrors)
 if ($__vbotParseErrors) {
     throw [System.Management.Automation.ParseException]::new($__vbotParseErrors)
+}
+$__vbotCommand = & {
+    $text = [System.Text.StringBuilder]::new($__vbotCommand)
+    $put = {
+        param($start, $end, $value)
+        $null = $text.Remove($start, $end - $start).Insert($start, $value.PadRight($end - $start))
+    }
+    $constant = [System.Management.Automation.Language.StringConstantExpressionAst]
+    $nullPath = {
+        param($node)
+        $node -is $constant -and $node.Value -in '/dev/null', '\dev\null' -and
+        $node.Extent.StartLineNumber -eq $node.Extent.EndLineNumber
+    }
+    $posix = 'bash', 'sh', 'wsl', 'ssh', 'docker', 'podman', 'kubectl'
+    foreach ($node in $__vbotAst.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.FileRedirectionAst] -or
+        $node -is [System.Management.Automation.Language.CommandAst]
+    }, $true)) {
+        if ($node -isnot [System.Management.Automation.Language.CommandAst]) {
+            $extent = $node.Location.Extent
+            if (& $nullPath $node.Location) { & $put $extent.StartOffset $extent.EndOffset '$null' }
+            continue
+        }
+        $elements = $node.CommandElements
+        $arguments = @(for ($index = 1; $index -lt $elements.Count; $index++) {
+            $element = $elements[$index]
+            if ($element -is [System.Management.Automation.Language.CommandParameterAst]) {
+                $element = $element.Argument
+                if (-not $element) { continue }
+            }
+            $extent = $element.Extent
+            if (& $nullPath $element) {
+                , @($extent.StartOffset, $extent.EndOffset)
+            } elseif ($element -is $constant -and
+                "$($element.StringConstantType)" -eq 'BareWord' -and
+                $extent.Text -match '=([''"]?)(/dev/null|\\dev\\null)\1$') {
+                , @(($extent.EndOffset - $Matches[0].Length + 1), $extent.EndOffset)
+            }
+        })
+        $name = $node.GetCommandName()
+        if (-not $arguments.Count -or -not $name) { continue }
+        $program = try { $ExecutionContext.InvokeCommand.GetCommand($name, 'All') } catch { $null }
+        if ($program -isnot [System.Management.Automation.ApplicationInfo]) { continue }
+        $folder = [System.IO.Path]::GetDirectoryName($program.Path)
+        if ([System.IO.Path]::GetFileNameWithoutExtension($program.Path) -in $posix -or
+            [System.IO.File]::Exists("$folder\msys-2.0.dll") -or
+            [System.IO.File]::Exists("$folder\cygwin1.dll")) {
+            continue
+        }
+        foreach ($argument in $arguments) { & $put $argument[0] $argument[1] 'NUL' }
+    }
+    $text.ToString()
 }
 $__vbotSilenced = {
     param($record)
@@ -212,6 +282,8 @@ $global:__vbotExitCode = 0
 if ($global:__vbotExitCode -eq 0) { & $__vbotReportErrors }
 exit $global:__vbotExitCode
 """
+# Indentation only serves readers of this file; the Windows command line is limited.
+RUN_STATEMENTS = re.sub(r"(?m)^[ \t]+", "", RUN_STATEMENTS)
 # The command runs from the first line. Write-Error names its caller's position,
 # which PowerShell shows only beyond the first line, so no wrapper line appears in
 # the command's errors. Dot-sourcing the function keeps the command's own scope.
