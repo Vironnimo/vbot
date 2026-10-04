@@ -318,7 +318,7 @@ def search_cases() -> list[dict[str, Any]]:
             "id": "missing_root",
             "arguments": {"args": ["-e", "alpha", "--", "missing", "src"]},
             "content": "src/a.py:1:alpha alpha",
-            "contains": "Path not found: missing.",
+            "contains": "Path not found: missing (relative to the working directory",
             "searched_paths": ["src"],
         },
         {

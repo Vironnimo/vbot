@@ -71,6 +71,7 @@ async def test_named_fields_search_contents(project: Path, arguments: dict, cont
     ("arguments", "content"),
     [
         ({}, "src/app.py\nsrc/view.ts\ndocs/guide.md"),
+        ({"pattern": "", "path": "", "glob": [""]}, "src/app.py\nsrc/view.ts\ndocs/guide.md"),
         ({"path": "src"}, "src/app.py\nsrc/view.ts"),
         ({"glob": "*.md"}, "docs/guide.md"),
         ({"glob": "*.py", "output": "files"}, "src/app.py"),
@@ -117,6 +118,20 @@ async def test_a_file_name_glob_in_pattern_lists_matching_files(project: Path, a
     assert result["data"]["content"] == "src/app.py"
     if "target" not in arguments:
         assert "is a file name glob" in result["data"]["note"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pattern", "hint"),
+    [(r".*\.[pP][yY]$", True), (r"\.(py|ts)$", True), (r"load\.ts$", True), (r"x\.y", False)],
+)
+async def test_a_file_name_regex_without_content_matches_points_to_glob(
+    project: Path, pattern: str, hint: bool
+):
+    result = await dispatch(project, {"pattern": pattern, "output": "files"})
+    assert result["data"]["content"] == ""
+    note = 'To list files by name, omit pattern and pass glob, such as "*.py".'
+    assert (note in result["data"].get("note", "")) is hint
 
 
 @pytest.mark.asyncio
@@ -228,6 +243,11 @@ async def test_grep_habits_in_args_keep_their_meaning(project: Path, args: list[
         ({"pattern": "def", "path": "src/*.py"}, 'so src was searched with glob "/src/*.py"'),
         ({"pattern": "def", "path": "{src,docs}"}, "names several paths, so src, docs"),
         ({"pattern": "def", "path": "src,docs"}, "names several paths, so src, docs"),
+        # A missing path starting with ! is an excluding glob; alone it searches the cwd.
+        (
+            {"args": ["load", "!docs/**", "!*.ts"]},
+            'path "!docs/**" starts with !, so it was applied as an excluding glob.',
+        ),
     ],
 )
 async def test_a_path_written_as_a_glob_or_list_searches_what_it_names(
@@ -266,6 +286,13 @@ async def test_missing_path_suggests_similar_existing_paths(project: Path) -> No
     assert "(similar: src/utils)" in misspelled["error"]["message"]
     assert "Nothing was searched." in misspelled["error"]["message"]
 
+    unknown = await dispatch(project, {"pattern": "load", "path": "nothing/like/this"})
+    assert unknown["error"]["message"] == (
+        "Path not found: nothing/like/this (relative to the working directory "
+        f"{project.as_posix()}). Nothing was searched. Correct path, or omit it to search "
+        "the working directory."
+    )
+
     repeated = await dispatch(project, {"pattern": "load", "path": f"{project.name}/src/utils"})
     assert "(similar: src/utils)" in repeated["error"]["message"]
 
@@ -303,7 +330,9 @@ async def test_missing_explicit_roots_preserve_results_and_name_the_missing_path
     result = await dispatch(tmp_path, {"args": args})
     assert result["ok"]
     data = result["data"]
-    assert data["warnings"][0] == "Path not found: missing."
+    assert data["warnings"][0] == (
+        f"Path not found: missing (relative to the working directory {tmp_path.as_posix()})."
+    )
     assert data["searched_paths"] == [(tmp_path / "src").as_posix()]
     assert data["content"] == ("src/a.py" if mode else "src/a.py:1:needle")
 
@@ -619,17 +648,17 @@ _PATHS = "path must name a file or directory"
         (
             {"args": ["needle", "--offset=1"], "offset": 2},
             "invalid_arguments",
-            "Conflicting offset values",
+            "offset was given different values",
         ),
         (
             {"args": ["needle", "--offset=1", "--offset=2"]},
             "invalid_arguments",
-            "Conflicting offset values",
+            "offset was given different values",
         ),
         (
             {"args": ["needle", "--limit=1"], "limit": 2},
             "invalid_arguments",
-            "Conflicting limit values",
+            "limit was given different values",
         ),
         ({"args": ["needle", "--offset=-1"]}, "invalid_arguments", "between 0 and 1000000"),
         ({"args": ["needle", "--offset=1.5"]}, "invalid_arguments", "between 0 and 1000000"),
@@ -638,8 +667,16 @@ _PATHS = "path must name a file or directory"
         ({"args": ["needle", "--limit=0"]}, "invalid_arguments", "between 1 and 10000"),
         ({"args": ["needle", "--limit=10001"]}, "invalid_arguments", "between 1 and 10000"),
         # Rejected before the search runs.
-        ({"args": ["--files"], "limit": 0}, None, '"limit" must be at least 1'),
-        ({"args": ["--files"], "offset": -1}, None, '"offset" must be at least 0'),
+        (
+            {"args": ["--files"], "limit": 0},
+            "invalid_arguments",
+            "limit must be between 1 and 10000; received 0",
+        ),
+        (
+            {"args": ["--files"], "offset": -1},
+            "invalid_arguments",
+            "offset must be between 0 and 1000000; received -1",
+        ),
         ({"args": ["needle"], "fuzzy": True}, None, '"fuzzy" is not a parameter'),
         ({"args": ["needle"], "argv": ["other"]}, None, "Conflicting values for args"),
         ({"args": r'["-e", "\bcall\("]'}, None, _LIST),

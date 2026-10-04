@@ -421,6 +421,8 @@ def interpret_search_call(arguments: Any, *, edit_tool: str | None = None) -> Se
 
 
 _GLOB_CHARACTERS = re.compile(r"[*?\[]")
+# A regex that ends in a file extension, such as \.py$ or \.[pP][yY]$, was meant for names.
+_NAME_REGEX = re.compile(r"\\\.(?:\w+|\[[^\]]+\]|\([\w|]+\))+\$$")
 
 
 @dataclass
@@ -436,9 +438,11 @@ def _resolve_roots(query: SearchQuery, cwd: Path) -> _Roots:
 
     A missing path written with glob characters, braces or commas runs as what
     it evidently means when that names existing paths: ``src/**/*.py`` searches
-    ``src`` with that glob, ``{src,tests}`` and ``src,tests`` search both.
+    ``src`` with that glob, ``{src,tests}`` and ``src,tests`` search both. A
+    missing path written as ``!vendor/**`` is the excluding glob it reads as.
     """
     roots = _Roots()
+    excluded = False
     for raw in query.roots or [str(cwd)]:
         text = str(_path_argument(raw, windows=os.name == "nt"))
         if not text.strip() or text == "-":
@@ -457,16 +461,25 @@ def _resolve_roots(query: SearchQuery, cwd: Path) -> _Roots:
             shown = ", ".join(path_label(path, cwd) for path in alternatives)
             query.notes.append(f'path "{raw}" names several paths, so {shown} were searched.')
             continue
+        if text.startswith("!") and len(text) > 1:
+            query.globs.append(text)
+            query.notes.append(
+                f'path "{raw}" starts with !, so it was applied as an excluding glob.'
+            )
+            excluded = True
+            continue
         base = _glob_root(text, cwd, query)
         if base is not None:
             _add(roots.paths, base)
             continue
         roots.missing.append((raw, resolved))
+    if excluded and not roots.paths and not roots.missing:
+        roots.paths.append(cwd)
     return roots
 
 
 def _missing_warnings(query: SearchQuery, roots: _Roots, cwd: Path) -> list[str]:
-    warnings = [_missing_root_message(path, cwd) for _, path in roots.missing]
+    warnings = [_missing_root_message(raw, path, cwd) for raw, path in roots.missing]
     missing_operands = [raw for raw, _ in roots.missing if raw in query.operand_roots]
     if missing_operands and query.mode == "list_files":
         warnings.append(
@@ -537,12 +550,27 @@ def _glob_root(text: str, cwd: Path, query: SearchQuery) -> Path | None:
     return base
 
 
-def _missing_root_message(root: Path, cwd: Path) -> str:
+def _missing_root_message(raw: str, root: Path, cwd: Path) -> str:
     message = f"Path not found: {path_label(root, cwd)}"
     suggestions = corrected_paths(root, cwd)
     if suggestions:
         message += f" (similar: {', '.join(path_label(path, cwd) for path in suggestions)})"
+    elif not Path(raw).expanduser().is_absolute():
+        # Agents pass paths relative to another directory than the one search_files uses.
+        message += f" (relative to the working directory {cwd.as_posix()})"
     return message + "."
+
+
+def _ignored_summary(paths: list[Path], cwd: Path) -> str:
+    """Name the shallowest paths ignore files excluded, so empty or listed results are not
+    mistaken for everything there is."""
+    unique = {os.path.normcase(path): path for path in paths}
+    ordered = sorted(unique.values(), key=lambda path: (len(path.parts), str(path).lower()))
+    shown = [path_label(path, cwd) + ("/" if path.is_dir() else "") for path in ordered[:5]]
+    listed = ", ".join(shown)
+    if len(ordered) > len(shown):
+        listed += f" and {len(ordered) - len(shown)} more"
+    return f"Ignore rules such as .gitignore excluded {listed}. Add -u to args to include them."
 
 
 def _scopes(roots: list[Path], cwd: Path) -> list[Scope]:
@@ -580,12 +608,15 @@ class _Found:
     warnings: list[str] = field(default_factory=list)
     files_searched: int | None = None
     complete: bool = True
+    # Paths that ignore files excluded from the walk.
+    ignored: list[Path] = field(default_factory=list)
 
     def take(self, index: int, scope: Scope, result: ScanResult, cwd: Path) -> None:
         self.entries.extend(
             _entry(index, scope, path, count, cwd) for path, count in result.entries
         )
         self.warnings.extend(result.warnings)
+        self.ignored.extend(result.ignored)
         if result.truncated:
             self.warnings.append(
                 "The search stopped after 500000 files; narrow path or glob to see the rest."
@@ -638,7 +669,7 @@ def _list_directories(
         result = list_scan(binary, query, scope, context, budget, cwd, directories=True)
         files.take(index, scope, result, cwd)
         skipped.update(os.path.normcase(path) for path in result.skipped)
-    found.warnings, found.complete = files.warnings, files.complete
+    found.warnings, found.complete, found.ignored = files.warnings, files.complete, files.ignored
     holding: set[str] | None = None
     if any(argument.startswith(("--type=", "--type-not=")) for argument in query.rg_args):
         holding = set()
@@ -871,7 +902,12 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         roots = _resolve_roots(query, cwd)
         missing = _missing_warnings(query, roots, cwd)
         if not roots.paths:
-            return tool_failure("path_not_found", " ".join(missing) + " Nothing was searched.")
+            return tool_failure(
+                "path_not_found",
+                " ".join(missing)
+                + " Nothing was searched. Correct path, or omit it to search the working "
+                "directory.",
+            )
         outcome = _search(context, query, roots.paths, cwd, binary, budget)
     except (SearchArgumentError, ToolContractError, ValueError) as error:
         return tool_failure("invalid_arguments", str(error))
@@ -894,6 +930,15 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
     elif budget.stopped:
         warnings.append("The Run was cancelled, so results are partial.")
     complete = found.complete and not budget.stopped
+    if (
+        not outcome.total
+        and query.mode in {"content", "files_with_matches", "count"}
+        and any(_NAME_REGEX.search(pattern) for pattern in outcome.patterns)
+    ):
+        query.notes.append(
+            "pattern searches file contents, not file names. To list files by name, omit "
+            'pattern and pass glob, such as "*.py".'
+        )
     if query.mode in {"files_without_match", *LIST_MODES}:
         files = len(found.entries)
     else:
@@ -920,6 +965,8 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         data["searched_paths"] = [path.as_posix() for path in roots.paths]
     if not outcome.total and outcome.patterns:
         data["patterns"] = outcome.patterns
+    if found.ignored and (not outcome.total or query.mode in LIST_MODES):
+        data["skipped"] = _ignored_summary(found.ignored, cwd)
     data["content"] = "\n".join(page.lines)
     context.add_display_count(
         page.returned, "results", at_least="next_offset" in data or not complete
@@ -1036,25 +1083,17 @@ args items, one flag or value per item. Other ripgrep flags work as well:
   -d N                  descend at most N directory levels
   --max-filesize SIZE   skip larger files, such as 1M
   -E ENCODING / -a      read files in an encoding / search binary files as text
-  --files / --dirs      list files / list directories, empty ones included; with --dirs
+  --files / --dirs      list files / list directories, empty directories included; with --dirs
                         a pattern matches directory names
   --sort KEY / --sortr KEY
                         order ascending / descending by path, modified, accessed or created
 """
 
 
-_STRING_OR_LIST: JsonObject = {
-    "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]
-}
+_STRING_LIST: JsonObject = {"type": "array", "items": {"type": "string"}}
 SEARCH_FILES_TOOL_DESCRIPTION = (
-    "Search file contents with a regular expression, or list files and directories. Use this "
-    "instead of grep, rg, find, or ls in the shell. "
-    'Find text: {"pattern": "def load_config", "path": "src"}. '
-    'List files: {"glob": "*.py", "path": "src"}. '
-    'List directories: {"glob": "build", "args": ["--dirs"]}. '
-    "Matches come back as path:line:text; file lists are newest first. Hidden files are "
-    "included, .gitignore rules apply, and .git is skipped. Results come in pages; "
-    "continue with next_offset."
+    "Search file contents with a regular expression, or find files and directories by name. "
+    "Use this instead of grep, rg, find, or ls in the shell."
 )
 SEARCH_FILES_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -1062,58 +1101,45 @@ SEARCH_FILES_TOOL_PARAMETERS: JsonObject = {
         "pattern": {
             "type": "string",
             "description": (
-                "Regular expression (ripgrep syntax) to find in file contents. Omit it to "
-                'list files. To match text containing ( [ . * literally, add "-F" to args.'
+                "Regular expression (ripgrep syntax) for file contents. Omit to list files."
             ),
         },
         "path": {
-            **_STRING_OR_LIST,
-            "description": (
-                "File or directory to search, or a list of them. Relative paths start at the "
-                "working directory. Omit to search the working directory."
-            ),
+            **_STRING_LIST,
+            "description": "Files or directories to search. Omit for the working directory.",
         },
         "glob": {
-            **_STRING_OR_LIST,
-            "description": (
-                "File name filter such as *.py or *.{ts,tsx}; a leading ! excludes. Without "
-                "a / it matches names at any depth. Case-insensitive. A list applies each."
-            ),
+            **_STRING_LIST,
+            "description": "Case-insensitive name filters such as *.py; a leading ! excludes.",
         },
         "output": {
             "type": "string",
             "enum": ["content", "files", "count"],
             "description": (
-                "content (default) shows matching lines; files lists only the matching "
-                'files; count gives matching lines per file, or every match with "--count-matches" '
-                "in args."
+                "files lists matching files; count counts matching lines per file, every match "
+                'with "--count-matches" in args. Omit for matching lines.'
             ),
         },
         "context": {
             "type": "integer",
-            "minimum": 0,
-            "description": "Lines to show before and after each match.",
+            "description": "Lines around each match. Omit for none.",
         },
         "args": {
-            "type": "array",
-            "items": {"type": "string"},
+            **_STRING_LIST,
             "description": (
-                "More ripgrep arguments, one per item: -i ignore case, -F literal text, "
-                "-w whole words, -t py file type, -u include ignored files, --dirs list "
-                "directories. A plain ripgrep argument list also works: the first operand "
-                'is the pattern, later ones are paths. ["--help"] lists every option.'
+                "More ripgrep arguments, one per item, such as -i, -w, -F, -t py, -u (include "
+                "ignored files), --dirs (list directories, empty ones included). "
+                '["--help"] lists all.'
             ),
         },
         "limit": {
             "type": "integer",
-            "minimum": 1,
             "default": 100,
-            "description": "Maximum results per page. Omit for 100.",
+            "description": "Results per page.",
         },
         "offset": {
             "type": "integer",
-            "minimum": 0,
-            "description": "Results to skip; pass next_offset to get the next page.",
+            "description": "Pass next_offset to continue.",
         },
     },
 }

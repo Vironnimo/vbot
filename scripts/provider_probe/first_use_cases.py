@@ -436,6 +436,23 @@ def first_use_cases() -> list[dict[str, Any]]:
     ]
 
 
+_EXCLUSION_WORDS = re.compile(r"exclud|omit|skip|ignor|left out|not included|filtered", re.I)
+
+
+def _reported_as_excluded(value: str, final: str) -> bool:
+    """Whether every mention of value in the answer says it was left out, as asked.
+
+    A mention counts as excluded when its line, or one of the two non-empty
+    lines before it (such as an "Excluded:" heading), says so.
+    """
+    lines = [line for line in final.splitlines() if line.strip()]
+    return all(
+        _EXCLUSION_WORDS.search(" ".join(lines[max(0, index - 2) : index + 1]))
+        for index, line in enumerate(lines)
+        if value in line
+    )
+
+
 def preferred_tools(case: dict) -> set[str]:
     """Tool names whose successful calls carry the task's evidence or effect."""
     expected_tool = case.get("expected_tool", case["tool"])
@@ -553,7 +570,7 @@ def assess(
                         )
             outcome = outcome and final_ok
             outcome = outcome and all(
-                value not in final for value in case.get("final_excludes", [])
+                _reported_as_excluded(value, final) for value in case.get("final_excludes", [])
             )
             details = {
                 "missing_rows": sorted(case["rows"] - actual),
