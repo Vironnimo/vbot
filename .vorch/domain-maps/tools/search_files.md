@@ -74,8 +74,12 @@ Modes:
 
 - With no pattern, the call lists files. `{}` lists the working directory, and
   `glob` or `path` narrow it.
-- A pattern beside `--files` or `--dirs` is rejected with the field that was
-  sent.
+- A pattern beside `--files` is rejected with the field that was sent.
+- A pattern beside `--dirs` filters directory names (`name_patterns`,
+  `_name_matcher`: Python `re.search` on the name, ORed, `-F` literal; letter
+  case follows `-i`/`-S`/`-s`, case-sensitive by default) with a `note`. An
+  invalid expression is rejected. Agents sent `--dirs` with `pattern: "^empty$"`
+  (first-use probe, 2026-10).
 - `output: "count"` or context without a pattern is rejected.
 - Context with count or file-list output is dropped with a note (Sessions,
   2026-09: Agents sent `output: "files"` with `context: 3`).
@@ -145,7 +149,12 @@ following selection:
 - binary files are skipped;
 - `.git` is never searched.
 
-A positive glob overrides ignore rules, as in ripgrep. Globs without `/` match
+A positive glob overrides ignore rules, as in ripgrep. File types match names in
+any letter case while globs do (the default): ripgrep compares type globs
+case-sensitively, so `widen_type_case` reads `--type-list` (honoring the query's
+`--type-add`/`--type-clear`) and adds each selected type's globs again with every
+letter as `[xX]`; `-t py` then finds `b.PY` (first-use probe, 2026-10).
+`--no-glob-case-insensitive` keeps ripgrep's case-sensitive types. Globs without `/` match
 names at any depth. A glob with `/` is anchored at the cwd scope and also at each
 searched directory root (`rg_globs`), and `./` anchors like `/`.
 
@@ -303,9 +312,9 @@ remain readable.
 
 | Text | Reason |
 |---|---|
-| `Search file contents with a regular expression, or list files.` | Names both jobs of the single Tool so Agents pick it for name and content discovery (F1). |
+| `Search file contents with a regular expression, or list files and directories.` | Names every job of the single Tool so Agents pick it for name and content discovery (F1). Without "directories", Agents asked for directories went straight to the shell (first-use probe, 2026-10). |
 | `Use this instead of grep, rg, find, or ls in the shell.` | Agents otherwise fall back to the shell for search (F1). |
-| `Find text: {...}. List files: {...}.` | Complete canonical first calls; weak Models copy examples (F2). |
+| `Find text: {...}. List files: {...}. List directories: {...}.` | Complete canonical first calls; weak Models copy examples (F2). The directory example shows `--dirs`, which Agents otherwise did not find (first-use probe, 2026-10). |
 | `Matches come back as path:line:text; file lists are newest first.` | Agents need the output shape and order to read results without rereading files (F4). |
 | `Hidden files are included, .gitignore rules apply, and .git is skipped.` | Explains why ignored files are absent, so a missing hit is not read as absence (F4). |
 | `Results come in pages; continue with next_offset.` | Prevents reading page 1 as everything (F4). |
