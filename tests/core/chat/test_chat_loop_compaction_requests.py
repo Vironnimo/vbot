@@ -10,9 +10,9 @@ import pytest
 
 from core.chat import ChatMessage
 from core.chat._request_history import _restore_in_run_tool_result_content
-from core.chat._run_state import RequestBuildInputs
 from core.compaction import TOOL_RESULT_COMPACTED_FIELD, CompactionService
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
+from core.runs import Run
 from core.utils.tokens import estimate_request_input_tokens
 from tests.core.chat.chat_loop_compaction_test_support import (
     CompactOnceService,
@@ -20,6 +20,7 @@ from tests.core.chat.chat_loop_compaction_test_support import (
     RecordingCompactionAdapter,
     compaction_runtime,
     real_compaction_runtime,
+    run_context,
     word_count_tools,
 )
 from tests.core.chat.chat_loop_support import (
@@ -242,10 +243,10 @@ async def test_final_answer_checkpoint_keeps_the_tool_list_of_the_next_run(tmp_p
     checkpoint = next(
         message for message in session.load() if message.role == "compaction_checkpoint"
     )
-    next_request = await loop._requests.build_request_state(
-        agent, session, inputs=RequestBuildInputs()
-    )
-    # The stored after-count covers the next request including its Tool definitions.
+    probe = Run(run_id="probe", agent_id="coder", session_id="session-one")
+    next_request = (await run_context(loop, probe, session)).request_state
+    # The stored after-count covers the next request on the Run's route, including
+    # the Tail's replayed reasoning and its Tool definitions.
     tokens_after, _ = estimate_request_input_tokens(next_request.messages, next_request.tools)
     messages_only_tokens, _ = estimate_request_input_tokens(next_request.messages)
     assert checkpoint.usage is not None
@@ -258,3 +259,60 @@ async def test_final_answer_checkpoint_keeps_the_tool_list_of_the_next_run(tmp_p
         [tool["name"] for tool in request["kwargs"]["tools"]] for request in adapter.requests
     ]
     assert tool_names == [["word_count"], ["word_count"]]
+
+
+@pytest.mark.asyncio
+async def test_next_run_continues_the_compacting_runs_request_byte_for_byte(
+    tmp_path: Path,
+) -> None:
+    usage = {"input_tokens": 50_000, "output_tokens": 10}
+    adapter = RecordingCompactionAdapter(
+        [
+            {
+                "content": None,
+                "reasoning": "TAIL_PLAN",
+                "reasoning_meta": {"encrypted_content": "opaque-tail"},
+                "usage": usage,
+                "tool_calls": [
+                    {"id": "call-one", "name": "word_count", "arguments": {"text": "a"}}
+                ],
+            },
+            {"content": "FIRST_DONE", "usage": {"input_tokens": 10}, "tool_calls": None},
+            {"content": "SECOND_DONE", "usage": {"input_tokens": 10}, "tool_calls": None},
+        ],
+        summaries=["SUMMARY"],
+    )
+    runtime = real_compaction_runtime(
+        tmp_path,
+        adapter,
+        {
+            "enabled": True,
+            "trigger": {"type": "input_tokens", "tokens": 40_000},
+            "strategy": {"type": "summary_tail", "tail_tokens": 1, "summary_model": None},
+        },
+        agent=StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["word_count"]),
+        tools=word_count_tools(),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("OLD_CONTEXT " + ("old context " * 5_000)))
+    session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="old answer " * 5_000))
+    loop = build_chat_loop(runtime, compaction_service=CompactionService())
+
+    await loop.send("coder", "First", session_id=session.id)
+    await loop.send("coder", "Second", session_id=session.id)
+
+    def sent(request: JsonObject) -> list[tuple[Any, ...]]:
+        return [
+            tuple(message.get(key) for key in ("role", "content", "reasoning", "reasoning_meta"))
+            + (json.dumps(message.get("tool_calls"), sort_keys=True), message.get("tool_call_id"))
+            for message in request["messages"]
+        ]
+
+    assert adapter.events == ["agent", "compaction", "agent", "agent"]
+    _, after_compaction, next_run = (sent(request) for request in adapter.requests)
+    # The Tail keeps its native reasoning in the stored checkpoint, so the next
+    # Run resends the compacting Run's post-Compaction request unchanged.
+    assert ("assistant", None, "TAIL_PLAN", {"encrypted_content": "opaque-tail"}) in [
+        entry[:4] for entry in after_compaction
+    ]
+    assert next_run[: len(after_compaction)] == after_compaction

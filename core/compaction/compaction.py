@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from core.chat import (
     compaction_projection_without_active_skills,
-    compaction_projection_without_provider_state,
     effective_compaction_messages,
     latest_compaction_checkpoint,
 )
@@ -783,9 +782,7 @@ def _plan_working_tail(
         boundary_id=messages[selected.start_index].id,
         boundary_index=selected.start_index,
         request_start=selected.request_start,
-        projected_suffix=tuple(
-            compaction_projection_without_provider_state(messages[selected.start_index :])
-        ),
+        projected_suffix=tuple(messages[selected.start_index :]),
     )
 
 

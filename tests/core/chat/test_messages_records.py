@@ -766,7 +766,7 @@ def test_checkpoint_stamps_add_context_tokens_and_duration_without_mutating() ->
             checkpoint.with_compaction_duration_ms(duration_ms=invalid)  # type: ignore[arg-type]
 
 
-def test_textual_checkpoint_projection_ends_provider_reasoning_state_but_keeps_phase() -> None:
+def test_checkpoint_projection_keeps_the_tail_assistant_turn_unchanged() -> None:
     assistant = ChatMessage.assistant(
         model="openai/gpt-5.6-sol",
         content="Prior answer",
@@ -775,7 +775,6 @@ def test_textual_checkpoint_projection_ends_provider_reasoning_state_but_keeps_p
             "response_output": [{"type": "reasoning", "id": "rs_1", "encrypted_content": "opaque"}]
         },
         reasoning_scope="openai/gpt-5.6-sol::api-key",
-        reasoning_timing={"first_delta_ms": 120, "last_delta_ms": 900},
         phase="final_answer",
     )
 
@@ -785,8 +784,5 @@ def test_textual_checkpoint_projection_ends_provider_reasoning_state_but_keeps_p
 
     assert checkpoint.projection is not None
     projected = ChatMessage.from_dict(checkpoint.projection[1])
-    assert projected.reasoning is None
-    assert projected.reasoning_meta is None
-    assert projected.reasoning_scope is None
-    assert projected.reasoning_timing is None
-    assert projected.phase == "final_answer"
+    # Later Runs resend the Tail exactly as the compacting Run did.
+    assert projected == assistant

@@ -16,37 +16,6 @@ from core.sessions import (
 )
 
 
-def compaction_projection_without_provider_state(
-    projection: Sequence[_records.ChatMessage],
-) -> list[_records.ChatMessage]:
-    """Make a provider-neutral checkpoint projection.
-
-    vBot Compaction is a textual Summary+Tail projection, not a Provider-native
-    opaque-state compaction token. Reasoning artifacts therefore end at this
-    boundary. Active-Run rebuilds restore their live reasoning fields separately;
-    later Runs cannot accidentally treat a textual checkpoint as continuous
-    Provider reasoning state.
-    """
-
-    projected: list[_records.ChatMessage] = []
-    for message in projection:
-        if message.role != "assistant":
-            projected.append(message)
-            continue
-        sanitized = replace(
-            message,
-            reasoning=None,
-            reasoning_meta=None,
-            reasoning_scope=None,
-            reasoning_timing=None,
-            reasoning_summary=None,
-        )
-        if sanitized.content is None and not sanitized.tool_calls:
-            continue
-        projected.append(sanitized)
-    return projected
-
-
 def compaction_projection_without_active_skills(
     projection: Sequence[_records.ChatMessage],
     *,
