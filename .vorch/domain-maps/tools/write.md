@@ -1,18 +1,48 @@
-# Archived Write Tool
+# Write Tool
 
-The built-in `write` Tool is retired. Use `apply_patch` with `*** Add File: path`
-and `+` content lines to create or fully replace a file. An existing file must
-have been read in the current Session and remain unchanged since that read;
-identical content is a verified no-op. Write-shaped calls (`file_path` plus
-`content`) run as the same full replacement. See `apply_patch.md` and `file_state.md`.
+Creates a file or replaces all of its content. `write` is the whole-file Tool of
+the replacement dialect; `edit` (`edit.md`) owns activation, the dialect selection
+and the shared ownership notes for both Tools, which live in `core/tools/edit.py`.
+History: the retired `write` Tool is preserved in `archive/write.zip`; the current
+Tool shares only its name.
 
-`archive/write.zip` preserves the implementation, focused tests, prior domain map,
-and original shared integration/probe files at their repository paths. Its
-manifest records the source commit and SHA-256 hashes. The archive is outside
-runtime discovery and excluded from source distributions. Restore only in a
-worktree and reconcile shared files with current source.
+## Contract
 
-Runtime inventory and Provider-definition tests verify that startup exposes
-`apply_patch` and excludes `write`. Restart the server to remove an already
-loaded Tool. Existing Session history is not rewritten, and the application
-never maps a persisted `write` grant to `apply_patch`.
+- Registered by `register_edit_tools` with `edit`: `files` family, follows
+  `apply_patch`, hidden from `tool.list`.
+- **Schema:** `path` and `content`, both required; unknown root parameters fail at
+  dispatch (`write was not run: ... write parameters: path (required), content
+  (required).`).
+- **Argument repair** (`normalize_write_arguments`, refusals end `No file was
+  changed.`): `file_path`/`filename` -> `path`; `text`/`contents`/`file_text` ->
+  `content`, any case or separator spelling. `old_string`, `new_string`,
+  `replace_all` or `edits` without `content` refuse naming `edit`; a missing path
+  or content refuses naming the field (`""` empties the file).
+- **Semantics** are `apply_patch`'s Add File (`_patch_requests.content_operation`,
+  one step of the shared pipeline): parent folders are created; replacing existing
+  content that is not empty or whitespace-only needs a current Session read stamp
+  (`file_not_read`/`file_modified_since_read`; a small text file is shown whole and
+  stamped, so the same call succeeds when sent again; `file_state.md`); identical
+  content is a verified no-op without a read; a new file keeps the content's line
+  endings, a replaced file keeps its own line-ending style, BOM and permission
+  bits; content whose every line carries a consecutive `read` gutter loses the
+  gutters with a note, as in Add File; NUL text fails `binary_file`. Results:
+  `Created X (N lines).`,
+  `Replaced the content of X (N lines).`, `X already has this content. No file was
+  changed.` A file changed on disk while the call ran fails `file_changed`:
+  `X changed on disk while this write ran. Read it before writing it again.`
+- Coverage: `tests/core/tools/test_edit_tools.py`
+  (`test_write_creates_replaces_after_a_read_and_keeps_identical_content`, the
+  failure and refusal inventories, the race test).
+
+## Agent-facing text
+
+Minimal by user decision (2026-10-04); about 66 tokens (`scripts.tool_lab
+definitions` estimate).
+
+| Text | Reason |
+|---|---|
+| `Create a file or replace all of its content.` | Names both effects; replacing part of a file belongs to `edit`, whose name says so. |
+| `path`: `File to write, relative to the working directory or absolute.` | States both accepted path forms. |
+| `content`: `Complete file content.` | Says the value is the whole file, so an Agent does not send a fragment or a diff. |
+| `write replaces the whole file and has no old_string. To replace text inside a file, call edit with path and edits.` | Edit-shaped calls sent to `write` name the Tool that takes them instead of failing on unknown parameters. |

@@ -1,9 +1,17 @@
 # Apply Patch Tool
 
-Applies ordered V4A file operations. It replaces the archived `edit` and `write` Tools (see `edit.md` and `write.md`)
-and also runs calls shaped for other harnesses' edit/write Tools.
+Applies ordered V4A file operations. It is the patch dialect of the file edit Tools
+and the one the user configures: `edit` and `write` (`edit.md`, `write.md`) follow it
+and are offered instead of it to Models outside the GPT families, one dialect per
+prompt epoch (`edit.md` -> Dialect helpers). It also runs calls shaped for other
+harnesses' edit/write Tools.
 Add File creation-or-replacement is a vBot extension to the V4A-style interface.
-`core/tools/apply_patch.py` owns the in-memory plan, filesystem execution, and display metadata. Its internal `_patch_requests.py` turns other harnesses' argument shapes into canonical fields and parsed operations; `_patch_syntax.py` owns V4A parsing and parsed operation values; `_edit_engine.py` owns locating and splicing one file's hunks and `old_string` replacements in current text (a fixed sequence of matching steps per kind of change); `_patch_entries.py` owns entry snapshots, Delete/Move entry resolution, and entry renames; `_patch_report.py` owns the Model-facing result text; `_change_preview.py` owns bounded preview regions.
+`core/tools/apply_patch.py` owns the Tool's definition, request failures, display and registration. Its internal `_patch_requests.py` turns other harnesses' argument shapes into canonical fields and parsed operations; `_patch_syntax.py` owns V4A parsing and parsed operation values; `_file_changes.py` owns the change pipeline all three file edit Tools share (resolving and locking paths, planning steps in memory, the read guard, atomic commits, rechecks, read stamps, change statistics and file reports; this map's Contract and Mutation invariants describe it); `_edit_engine.py` owns locating and splicing one file's hunks and `old_string` replacements in current text (a fixed sequence of matching steps per kind of change); `_patch_entries.py` owns entry snapshots, Delete/Move entry resolution, and entry renames; `_patch_report.py` owns the Model-facing result text; `_change_preview.py` owns bounded preview regions.
+A step is the pipeline's unit that succeeds or fails as a whole: `apply_patch` runs each
+hunk, Add, Delete and Move as its own step (partial success below), `edit` runs its
+whole call as one step (`run_operations(..., atomic=True)`), `write` one Add.
+Shared failure messages are worded per Tool through `ChangeBatch.templates`
+(`change_batch(context, templates)`) over `apply_patch`'s defaults (`_patch_syntax._MESSAGES`).
 
 ## Contract
 
@@ -489,7 +497,7 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
 | `patch`: `Text after @@ is optional and names an earlier line, such as the enclosing function.` | Optional, so an Agent does not invent a hint; the example shows what a hint names. |
 | `patch`: `Start another @@ block for another place in the same file.` | Avoids repeated Update headers and long context spanning distant places (F6). |
 | `patch`: `A block of only + lines goes after the @@ line, or at the end of the file after a bare @@.` | Without it, where pure insertions land is a guess (F3). |
-| `patch`: `Add File creates a file or replaces all of its content.` | Add File replacement is a vBot extension that replaces the former write Tool; without it, Agents delete and re-add or write through the shell (F1). |
+| `patch`: `Add File creates a file or replaces all of its content.` | Add File replacement is a vBot extension; on the patch route it is the only whole-file write (`write` is offered only with `edit`), and without it Agents delete and re-add or write through the shell (F1). |
 | `patch`: `Paths are relative to the working directory or absolute.` | States both accepted forms; the System Prompt names the working directory. |
 
 ## Verification
@@ -518,6 +526,8 @@ Add File creation-or-replacement is a vBot extension to the V4A-style interface.
   not just injected exceptions.
 - `test_copy_match.py` covers shared prose/identifier distinctions and target
   IDs in substring recovery.
+- `test_edit_tools.py` covers `edit` and `write` on the same pipeline
+  (`edit.md` -> Verification).
 - Existing fuzzy-match, file-state, Runtime and Provider-schema
   tests cover the shared boundaries.
   `tests/core/providers/test_ollama_cloud.py` verifies intact patch arguments through
