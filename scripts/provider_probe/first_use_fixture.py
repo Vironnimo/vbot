@@ -222,7 +222,7 @@ class FirstUseFixture:
         name, arguments = call["name"], call["arguments"]
         if name == "search_files":
             query = interpret_search_call(arguments)
-            if any(not self.inside(path) for path in query["paths"] or [str(self.cwd)]):
+            if any(not self.inside(path) for path in query.roots or [str(self.cwd)]):
                 raise FixtureBoundaryError(
                     "Search selected roots outside the disposable repository"
                 )
