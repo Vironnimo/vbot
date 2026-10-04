@@ -491,6 +491,8 @@ async def test_image_within_catalog_limits_is_sent_with_the_vision_header() -> N
     )
 
     assert exchange.request.headers["Copilot-Vision-Request"] == "true"
+    # Chat keeps every request within the catalog's image count.
+    assert adapter.request_image_limit("gpt-5.4") == 1
 
 
 @pytest.mark.parametrize(

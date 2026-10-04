@@ -78,8 +78,17 @@ def _flatten_thinking(value: Any) -> str:
     return ""
 
 
+# Mistral's vision FAQ documents at most 8 images per request.
+MISTRAL_MAX_IMAGES = 8
+
+
 class MistralAdapter(OpenAICompatibleAdapter):
     """OpenAI-compatible adapter with Mistral-specific catalog and reasoning behavior."""
+
+    @override
+    def request_image_limit(self, model_id: str) -> int | None:
+        del model_id
+        return MISTRAL_MAX_IMAGES
 
     @classmethod
     @override

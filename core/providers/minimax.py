@@ -143,6 +143,9 @@ MINIMAX_MODEL_FACTS: dict[str, dict[str, Any]] = {
 }
 
 
+MINIMAX_MAX_REQUEST_BODY_BYTES = 64_000_000
+
+
 class _MiniMaxMessagesAdapter(AnthropicCompatibleAdapter):
     """MiniMax's Anthropic-compatible M2.x wire."""
 
@@ -234,6 +237,12 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
     async def aclose(self) -> None:
         await self._messages.aclose()
         await super().aclose()
+
+    @override
+    def request_body_limit(self, model_id: str) -> int | None:
+        # Documented for both MiniMax wires; larger requests get HTTP 413.
+        del model_id
+        return MINIMAX_MAX_REQUEST_BODY_BYTES
 
     @override
     def wire_media_support(self, model_id: str) -> frozenset[str]:

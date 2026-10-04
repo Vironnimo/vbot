@@ -61,6 +61,7 @@ from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
     ProviderError,
+    ProviderRequestTooLargeError,
 )
 from core.providers.openai import OPENAI_RESPONSES_PROTOCOL, OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
@@ -339,6 +340,14 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             if minimum is not None:
                 policy["minimum_reasoning_effort"] = minimum
         return policy
+
+    @override
+    def request_image_limit(self, model_id: str) -> int | None:
+        try:
+            protocol = self._model_protocol(model_id)
+        except ProviderError:
+            return None
+        return _ZEN_MAX_IMAGES_PER_REQUEST if protocol == PROTOCOL_GEMINI else None
 
     def _model_protocol(self, model_id: str) -> str:
         upstream_id = model_id.split("::", 1)[0]
@@ -645,10 +654,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
 
         encoded_size = len(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
         if encoded_size > _ZEN_INLINE_REQUEST_MAX_BYTES:
-            raise ProviderError(
-                "OpenCode Zen Gemini inline request exceeds the documented 20 MB limit",
-                retryable=False,
-            )
+            raise ProviderRequestTooLargeError(encoded_size, _ZEN_INLINE_REQUEST_MAX_BYTES)
         return payload
 
 

@@ -31,6 +31,10 @@ MODELS_DISCOVERY_PAGE_SIZE = "1000"
 ANTHROPIC_METADATA_KEY = "anthropic"
 SUPPORTS_TEMPERATURE_METADATA_FIELD = "supports_temperature"
 ANTHROPIC_EFFORT_LEVEL_ORDER = ("low", "medium", "high", "xhigh", "max")
+ANTHROPIC_MAX_REQUEST_BODY_BYTES = 32_000_000
+ANTHROPIC_MAX_IMAGES = 600
+ANTHROPIC_SMALL_CONTEXT_MAX_IMAGES = 100
+ANTHROPIC_SMALL_CONTEXT_WINDOW = 200_000
 
 
 class AnthropicAdapter(AnthropicCompatibleAdapter):
@@ -62,6 +66,20 @@ class AnthropicAdapter(AnthropicCompatibleAdapter):
             prompt_caching=True,
             extra_retryable_statuses=frozenset({ANTHROPIC_OVERLOADED_STATUS}),
         )
+
+    @override
+    def request_body_limit(self, model_id: str) -> int | None:
+        # Documented Messages API request size limit; larger requests get HTTP 413.
+        del model_id
+        return ANTHROPIC_MAX_REQUEST_BODY_BYTES
+
+    @override
+    def request_image_limit(self, model_id: str) -> int | None:
+        # Documented: 600 images per request, 100 for Models with a 200k context.
+        context_window = self._model_context_window(model_id)
+        if context_window is not None and context_window <= ANTHROPIC_SMALL_CONTEXT_WINDOW:
+            return ANTHROPIC_SMALL_CONTEXT_MAX_IMAGES
+        return ANTHROPIC_MAX_IMAGES
 
     @classmethod
     def discovery_headers(

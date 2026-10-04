@@ -12,7 +12,7 @@ import respx
 from core.providers import AnthropicCompatibleAdapter
 from core.providers._http_shared import PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, TOOL_RESULT_CONTENT_BLOCKS_FIELD
-from core.providers.errors import ProviderError
+from core.providers.errors import ProviderError, ProviderRequestTooLargeError
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 
 from .anthropic_test_support import (
@@ -64,6 +64,30 @@ async def test_send_posts_to_configured_messages_endpoint_with_native_headers() 
     assert request.headers["x-custom-header"] == "custom-value"
     assert json.loads(request.content)["model"] == MODEL_ID
     assert request.extensions["timeout"]["read"] == PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["send", "stream"])
+@pytest.mark.asyncio
+async def test_documented_limits_bound_requests_and_oversized_bodies_fail_before_io(
+    monkeypatch: pytest.MonkeyPatch, streaming: bool
+) -> None:
+    small = make_adapter(model=claude_model(context_window=200_000))
+    large = make_adapter(model=claude_model(context_window=1_000_000))
+    assert [adapter.request_image_limit(MODEL_ID) for adapter in (small, large)] == [100, 600]
+    assert small.request_body_limit(MODEL_ID) == 32_000_000
+    monkeypatch.setattr(small, "request_body_limit", lambda model_id: 10)
+
+    with respx.mock:
+        route = respx.post(ANTHROPIC_URL).mock(return_value=httpx.Response(200))
+        with pytest.raises(ProviderRequestTooLargeError) as failure:
+            if streaming:
+                async for _ in small.stream(SAMPLE_MESSAGES, model_id=MODEL_ID):
+                    pass
+            else:
+                await small.send(SAMPLE_MESSAGES, model_id=MODEL_ID)
+
+    assert route.call_count == 0
+    assert failure.value.max_bytes == 10
 
 
 @pytest.mark.asyncio
