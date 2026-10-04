@@ -584,9 +584,7 @@ class ChatMessage:
                 "compaction checkpoints require both context token counts or neither"
             )
         summary_note = f"{COMPACTION_SUMMARY_NOTE_PREFIX}{summary}"
-        projected = _message_history.compaction_projection_without_provider_state(
-            _message_history.compaction_projection_without_active_skills(projection)
-        )
+        projected = _message_history.compaction_projection_without_active_skills(projection)
         leading_summary = (
             projected[0].content
             if projected and projected[0].role == "note" and isinstance(projected[0].content, str)

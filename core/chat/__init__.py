@@ -9,7 +9,6 @@ if TYPE_CHECKING:
     from core.chat._message_history import (
         checkpoint_ordinal,
         compaction_projection_without_active_skills,
-        compaction_projection_without_provider_state,
         effective_compaction_messages,
         has_unconsumed_skill_activation,
         latest_compaction_checkpoint,
@@ -78,7 +77,6 @@ if TYPE_CHECKING:
 _EXPORT_MODULES = {
     "RequestState": "core.chat._run_state",
     "compaction_projection_without_active_skills": "core.chat._message_history",
-    "compaction_projection_without_provider_state": "core.chat._message_history",
     "effective_compaction_messages": "core.chat._message_history",
     "latest_compaction_checkpoint": "core.chat._message_history",
     "checkpoint_ordinal": "core.chat._message_history",
@@ -127,7 +125,6 @@ _EXPORT_MODULES = {
 __all__ = [
     "RequestState",
     "compaction_projection_without_active_skills",
-    "compaction_projection_without_provider_state",
     "effective_compaction_messages",
     "latest_compaction_checkpoint",
     "checkpoint_ordinal",
