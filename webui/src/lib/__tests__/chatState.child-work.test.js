@@ -512,63 +512,28 @@ describe('Review changes', () => {
   });
 });
 
-describe('background Bash processes', () => {
-  it('merges background Bash status events into the bounded process map', () => {
+describe('handed-off command statuses', () => {
+  it('applies live command statuses without letting a stale running undo an end', () => {
     const { chatState, controller } = setupController();
 
-    controller.applyBackgroundBashStatusEvents([
-      {
-        type: 'bash_process_status_changed',
-        payload: {
-          process_id: 'process-one',
-          status: 'completed',
-          exit_code: 0,
-          cancelled_by_user: false,
-          started_at: '2026-09-04T12:00:00Z',
-          finished_at: '2026-09-04T12:04:12Z',
-          output: 'build finished',
-          truncated: false,
-          log_file: 'C:/logs/bash/process-one.log',
-        },
-      },
-    ]);
-    controller.applyBackgroundBashStatusEvents([
-      {
-        type: 'bash_process_status_changed',
-        payload: { process_id: 'process-two', status: 'failed', exit_code: 1 },
-      },
-    ]);
-    // Re-applying the same event is idempotent; an event without a
-    // process id and an empty batch change nothing.
-    controller.applyBackgroundBashStatusEvents([
-      {
-        type: 'bash_process_status_changed',
-        payload: { process_id: 'process-two', status: 'failed', exit_code: 1 },
-      },
-      { type: 'bash_process_status_changed', payload: { status: 'completed' } },
-    ]);
-    controller.applyBackgroundBashStatusEvents([]);
+    controller.applyCommandStatuses({ term_one: 'running' });
+    controller.applyCommandStatuses({
+      term_one: 'running',
+      term_two: 'running',
+    });
+    controller.applyCommandStatuses({
+      term_one: 'completed',
+      term_two: 'running',
+    });
+    // A map that still holds an older `running` changes nothing known to end.
+    controller.applyCommandStatuses({
+      term_one: 'running',
+      term_two: 'failed',
+    });
 
-    expect(chatState.backgroundBashProcesses['process-one']).toEqual({
-      status: 'completed',
-      exitCode: 0,
-      cancelledByUser: false,
-      startedAt: '2026-09-04T12:00:00Z',
-      finishedAt: '2026-09-04T12:04:12Z',
-      output: 'build finished',
-      truncated: false,
-      logFile: 'C:/logs/bash/process-one.log',
+    expect(chatState.commandStatuses).toEqual({
+      term_one: 'completed',
+      term_two: 'failed',
     });
-    expect(chatState.backgroundBashProcesses['process-two']).toEqual({
-      status: 'failed',
-      exitCode: 1,
-      cancelledByUser: false,
-      startedAt: '',
-      finishedAt: '',
-      output: '',
-      truncated: false,
-      logFile: '',
-    });
-    expect(Object.keys(chatState.backgroundBashProcesses)).toHaveLength(2);
   });
 });

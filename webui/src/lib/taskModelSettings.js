@@ -16,7 +16,7 @@ export const JSON_OPTION_TYPE = 'json';
 // when ``error`` is non-empty, ``value`` is ``undefined`` and the binding
 // must not be updated with the typed text.
 export function parseJsonFieldValue(text) {
-  if (typeof text !== 'string' || text.length === 0) {
+  if (typeof text !== 'string' || text.trim().length === 0) {
     return { value: undefined, error: '' };
   }
   try {
@@ -28,10 +28,11 @@ export function parseJsonFieldValue(text) {
 }
 
 // Render a stored JSON value (object/array/primitive) for display in a
-// textarea. ``undefined``/``null`` fall back to an empty string so the
-// control starts blank; non-JSON values are stringified verbatim.
+// textarea. ``undefined``/``null`` and an empty object or array fall back to
+// an empty string, so the control starts blank and shows its placeholder;
+// non-JSON values are stringified verbatim.
 export function stringifyJsonFieldValue(value) {
-  if (value === undefined || value === null) {
+  if (value === undefined || value === null || isEmptyStructure(value)) {
     return '';
   }
   if (typeof value === 'string') {
@@ -270,6 +271,62 @@ function normalizeBinding(binding) {
         ? { ...source.options }
         : {},
   };
+}
+
+// The options of a previous target that a new target's fields accept as
+// they are: the same name with a value the field can hold (an offered choice,
+// a number in range, a switch, text, JSON). A select whose carried value the
+// other carried options hide is dropped, so no hidden value is kept.
+export function compatibleOptions(fields, options) {
+  const byName = new Map((fields ?? []).map((field) => [field.name, field]));
+  const kept = {};
+  for (const [name, value] of Object.entries(options ?? {})) {
+    const field = byName.get(name);
+    if (field && value !== undefined && value !== null && value !== '') {
+      if (optionValueFits(field, value)) {
+        kept[name] = value;
+      }
+    }
+  }
+  for (const field of fields ?? []) {
+    if (
+      field.type === 'select' &&
+      Object.hasOwn(kept, field.name) &&
+      !visibleFieldOptions(field, fields, kept).some(
+        (choice) => choice.value === kept[field.name],
+      )
+    ) {
+      delete kept[field.name];
+    }
+  }
+  return kept;
+}
+
+function optionValueFits(field, value) {
+  switch (field.type) {
+    case 'select':
+      return field.options.some((choice) => choice.value === value);
+    case 'number':
+      return (
+        typeof value === 'number' &&
+        Number.isFinite(value) &&
+        (field.min === null || value >= field.min) &&
+        (field.max === null || value <= field.max)
+      );
+    case 'boolean':
+      return typeof value === 'boolean';
+    case JSON_OPTION_TYPE:
+      return true;
+    default:
+      return typeof value === 'string';
+  }
+}
+
+function isEmptyStructure(value) {
+  return (
+    typeof value === 'object' &&
+    (Array.isArray(value) ? value : Object.keys(value)).length === 0
+  );
 }
 
 function normalizeOptionsForPayload(options) {

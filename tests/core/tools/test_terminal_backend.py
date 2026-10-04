@@ -344,6 +344,10 @@ def test_adapter_read_is_bounded_and_preserves_split_unicode(platform_name, monk
         assert adapter.read(4096) == "😀"
     finally:
         close()
+    # A kill closes the terminal while its reader thread still reads: that read
+    # ends the output like any end of output.
+    with pytest.raises(EOFError):
+        adapter.read(4096)
 
 
 def test_posix_write_preserves_partial_unicode_input_until_closed(monkeypatch):

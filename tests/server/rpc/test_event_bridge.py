@@ -26,8 +26,7 @@ from core.runs import (
     RUN_INTERRUPTED_EVENT,
     RUN_STARTED_EVENT,
     STREAM_ATTEMPT_RESTARTED_EVENT,
-    TOOL_CALL_STDERR_EVENT,
-    TOOL_CALL_STDOUT_EVENT,
+    TOOL_CALL_OUTPUT_EVENT,
     Run,
     RunEvent,
     RunKind,
@@ -372,7 +371,7 @@ async def test_run_timeline_bridges_lifecycle_events_and_invalidates_its_exact_s
     event_bus = ServerEventBus()
     run = Run(run_id="run-one", agent_id="agent-1", session_id="session-1", **run_fields)
     run.emit(RUN_STARTED_EVENT, {"status": "running"})
-    run.emit(TOOL_CALL_STDOUT_EVENT, {"tool_call_id": "call-1", "text": "streamed"})
+    run.emit(TOOL_CALL_OUTPUT_EVENT, {"tool_call_id": "call-1", "text": "streamed"})
     run.emit(terminal_type, {"status": terminal_type.removeprefix("run_")})
 
     await _publish_run_events(event_bus, run)
@@ -404,8 +403,7 @@ def test_streaming_deltas_are_sse_only_and_subagent_lifecycle_reaches_websocket(
     """Deltas, including process output and stream restarts, stream over SSE only;
     subagent lifecycle events bridge to WebSocket as run output."""
     assert {
-        TOOL_CALL_STDOUT_EVENT,
-        TOOL_CALL_STDERR_EVENT,
+        TOOL_CALL_OUTPUT_EVENT,
         STREAM_ATTEMPT_RESTARTED_EVENT,
     } <= RUN_DELTA_EVENT_TYPES
     assert RUN_DELTA_EVENT_TYPES.isdisjoint(RUN_OUTPUT_EVENT_TYPES)

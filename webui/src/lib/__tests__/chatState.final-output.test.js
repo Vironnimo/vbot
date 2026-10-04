@@ -476,10 +476,14 @@ describe('final assistant output', () => {
       },
     });
     appendRunEvent(sessionState, {
-      type: 'tool_call_stdout',
+      type: 'tool_call_output',
       run_id: 'run-one',
       sequence: 2,
-      payload: { tool_call_id: 'call-one', data: 'hello\n' },
+      payload: {
+        tool_call_id: 'call-one',
+        terminal_id: 'term_one',
+        screen: 'hello',
+      },
     });
     appendRunEvent(sessionState, {
       type: 'run_completed',
@@ -491,7 +495,7 @@ describe('final assistant output', () => {
     const [assistantRun] = visibleTimelineItemsForRender(sessionState);
     expect(assistantRun.status).toBe('completed');
     expect(assistantRun.tools[0]).toEqual(
-      expect.objectContaining({ toolCallId: 'call-one', stdout: 'hello\n' }),
+      expect.objectContaining({ toolCallId: 'call-one', output: 'hello' }),
     );
   });
 });

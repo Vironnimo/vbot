@@ -17,7 +17,7 @@ from typing import Any
 
 from core.chat.messages import ChatMessage
 from core.database import required_journal_mode
-from core.tools._bash_results import BACKGROUND_STATUS_NOTE_MARKER, BACKGROUND_STATUS_TOOL_NAMES
+from core.tools.shell import COMMAND_STATUS_NOTE_MARKER, COMMAND_STATUS_TOOL_NAMES
 from scripts.perf_bench_suite.fixtures import (
     AGENT_ID,
     AGENT_MODEL,
@@ -85,8 +85,8 @@ def _history_page_arguments(before: str | None) -> dict[str, Any]:
         "before": before,
         "excluded_roles": ("note", "history_edit"),
         "complete_run_segment": True,
-        "background_tool_names": BACKGROUND_STATUS_TOOL_NAMES if before is None else (),
-        "background_note_marker": BACKGROUND_STATUS_NOTE_MARKER if before is None else None,
+        "background_tool_names": COMMAND_STATUS_TOOL_NAMES if before is None else (),
+        "background_note_marker": COMMAND_STATUS_NOTE_MARKER if before is None else None,
         "skip_unchanged": True,
     }
 

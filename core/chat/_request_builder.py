@@ -86,7 +86,7 @@ from core.tools import (
     edit_dialect,
     known_edit_dialect,
     offer_edit_dialect,
-    project_bash_tool_definitions,
+    project_shell_tool_definitions,
     tool_is_ready,
 )
 from core.utils.errors import ConfigError, ProviderError, VBotError
@@ -874,7 +874,7 @@ class RequestBuilder:
         """
 
         tools = offer_edit_dialect(tools, edit_dialect)
-        tools = project_bash_tool_definitions(tools, nesting_depth=self.nesting_depth)
+        tools = project_shell_tool_definitions(tools, nesting_depth=self.nesting_depth)
         if not any(definition.get("name") == ANALYZE_IMAGE_TOOL_NAME for definition in tools):
             return tools
         route_can_view_images = "image" in input_modalities and any(

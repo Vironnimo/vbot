@@ -20,32 +20,12 @@ from typing import Any
 import psutil  # type: ignore[import-untyped]
 import pytest
 
-from core.tools.process_manager import ProcessManager
 from core.utils import processes as process_utils
 from core.utils.processes import (
     GuardedProcessLaunch,
     guarded_process_launch,
     subprocess_creation_flags,
 )
-from tests.core.tools.process_manager_test_support import AGENT_A, spawn
-from tests.core.tools.process_manager_test_support import (
-    manager as manager,
-)
-
-
-def terminate_pid_forcibly(pid: int) -> None:
-    """Really kill a test child so its wait task can settle after a fake kill."""
-    if sys.platform == "win32":
-        subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(pid)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-            check=False,
-        )
-        return
-    with contextlib.suppress(ProcessLookupError, OSError):
-        os.killpg(pid, signal.SIGKILL)
 
 
 def wait_until_gone(pid: int) -> None:
@@ -586,50 +566,20 @@ def test_windows_failed_tree_kill_retains_orphan_for_retry(monkeypatch, caplog, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(sys.platform != "win32", reason="taskkill fallback path is Windows-only")
-async def test_kill_terminates_the_tree_directly_without_a_warning_when_taskkill_fails(
-    manager: ProcessManager, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    process_id = await spawn(manager)
-
-    def failing_taskkill(*args: Any, **kwargs: Any) -> Any:
-        raise OSError("taskkill missing")
-
-    monkeypatch.setattr(subprocess, "run", failing_taskkill)
-
-    with caplog.at_level(logging.DEBUG, logger="vbot.processes"):
-        await manager.kill(process_id, AGENT_A)
-
-    assert manager.get_process(process_id, AGENT_A).status == "killed"
-    assert [level for level, _message in process_log_lines(caplog)] == [logging.DEBUG]
-
-
-@pytest.mark.asyncio
-async def test_kill_process_keeps_event_loop_responsive_during_windows_taskkill(
-    manager: ProcessManager,
+async def test_async_tree_kill_keeps_the_event_loop_responsive_during_windows_taskkill(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The Windows tree-kill must run off the loop, never freeze it.
-
-    A stuck ``taskkill`` (up to its 5s timeout) previously blocked the whole
-    event loop - every concurrent Run stalled behind one process kill.
-    """
-    process_id = await spawn(manager)
-
-    # Simulate the Windows branch on any host: spawn has already used the real
-    # platform semantics, so only the kill path is faked.
-    monkeypatch.setattr(os, "name", "nt")
+    """A stuck ``taskkill`` (up to its 5 s timeout) must not freeze every Run."""
+    monkeypatch.setattr(process_utils, "os", SimpleNamespace(name="nt"))
     entered_taskkill = threading.Event()
     release_taskkill = threading.Event()
 
-    def slow_taskkill(pid: int, **kwargs) -> bool:
+    def slow_taskkill(pid: int, **kwargs: Any) -> bool:
         entered_taskkill.set()
         release_taskkill.wait(timeout=5)
-        terminate_pid_forcibly(pid)
         return True
 
     monkeypatch.setattr(process_utils, "windows_taskkill_tree", slow_taskkill)
-
     heartbeat_ticks = 0
     heartbeat_done = asyncio.Event()
 
@@ -640,21 +590,17 @@ async def test_kill_process_keeps_event_loop_responsive_during_windows_taskkill(
             heartbeat_ticks += 1
 
     heartbeat_task = asyncio.create_task(heartbeat())
-    kill_task = asyncio.create_task(manager.kill(process_id, AGENT_A))
+    kill_task = asyncio.create_task(
+        process_utils.kill_process_tree_async(SimpleNamespace(pid=12345))
+    )
     try:
-        # Wait until the kill primitive is actually blocked in its worker -
-        # via a worker thread too, or this wait would freeze the loop itself.
+        # Wait in a worker thread too, or this wait would freeze the loop itself.
         assert await asyncio.to_thread(entered_taskkill.wait, 5), "taskkill was never reached"
-
         ticks_while_blocked = heartbeat_ticks
         await asyncio.sleep(0.05)
-        assert heartbeat_ticks > ticks_while_blocked, (
-            "event loop froze while the process tree-kill was pending"
-        )
+        assert heartbeat_ticks > ticks_while_blocked, "the event loop froze during the kill"
     finally:
         release_taskkill.set()
         await kill_task
         heartbeat_done.set()
         await heartbeat_task
-
-    assert manager.get_process(process_id, AGENT_A).status == "killed"

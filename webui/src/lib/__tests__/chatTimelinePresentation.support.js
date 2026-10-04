@@ -64,20 +64,22 @@ function queuedSubAgentTool(overrides = {}) {
   };
 }
 
-function backgroundBashTool(overrides = {}) {
+// A `bash` call whose command went on running in terminal `term_one`.
+function backgroundCommandTool(overrides = {}) {
   return {
     type: 'tool_call',
     id: 'bash-background',
     name: 'bash',
     status: 'success',
     resultEvent: { type: 'tool_call_result' },
-    arguments: { command: 'npm run dev', mode: 'background' },
+    arguments: { command: 'npm run dev' },
     result: {
       ok: true,
       data: {
-        process_id: 'process-one',
         status: 'running',
-        delivery: 'automatic',
+        terminal_id: 'term_one',
+        output: 'listening',
+        next: 'The result arrives as a new message.',
       },
       artifacts: [],
     },
@@ -85,4 +87,4 @@ function backgroundBashTool(overrides = {}) {
   };
 }
 
-export { runningSubAgentTool, queuedSubAgentTool, backgroundBashTool };
+export { runningSubAgentTool, queuedSubAgentTool, backgroundCommandTool };

@@ -1,4 +1,5 @@
 import { formatAgentAddress } from './agentAddress.js';
+import { mergeBoundedEntries } from './clientCaches.js';
 import { noteInvalidation } from './clientMetrics.js';
 import {
   CONNECTION_REPLAY_STATUS_EPOCH_CHANGED,
@@ -30,9 +31,9 @@ import {
 import { appendSessionInvalidation } from './sessionInvalidation.js';
 
 const MAX_RUN_SERVER_EVENTS = 500;
-// One bounded list feeds ChatView's merge; re-applying the whole list is
-// idempotent, so no per-event dedup bookkeeping is needed.
-const MAX_BACKGROUND_BASH_STATUS_EVENTS = 50;
+// The live statuses of handed-off shell commands, oldest evicted first.
+// ChatView re-applies the whole map, so no per-event bookkeeping is needed.
+const MAX_COMMAND_STATUSES = 200;
 const CONNECTION_READY_EVENT_TYPE = 'connection_ready';
 const SERVER_UNAVAILABLE_NOTICE_DELAY_MS = 1000;
 const SERVER_RESTORED_NOTICE_DURATION_MS = 1400;
@@ -136,7 +137,9 @@ export function createAppControllerState() {
     // The server's background activity list: loaded on every connection,
     // then replaced by each `activity_status` push.
     backgroundActivity: [],
-    backgroundBashStatusEvents: [],
+    // Handed-off shell command status by terminal id, from
+    // `command_status_changed` (bounded, newest last).
+    commandStatuses: {},
     runServerEvents: [],
     serverNoticeState: '',
     serverRecoveryGeneration: 0,
@@ -312,11 +315,21 @@ export function createAppController({
       state.activeRuns = nextActiveRuns(state.activeRuns, event);
       return;
     }
-    if (event.type === 'bash_process_status_changed') {
-      state.backgroundBashStatusEvents = [
-        ...state.backgroundBashStatusEvents,
-        event,
-      ].slice(-MAX_BACKGROUND_BASH_STATUS_EVENTS);
+    if (event.type === 'command_status_changed') {
+      const terminalId = event.payload?.terminal_id;
+      const status = event.payload?.status;
+      if (
+        typeof terminalId === 'string' &&
+        terminalId &&
+        typeof status === 'string' &&
+        status
+      ) {
+        state.commandStatuses = mergeBoundedEntries(
+          state.commandStatuses,
+          { [terminalId]: status },
+          MAX_COMMAND_STATUSES,
+        ).entries;
+      }
       return;
     }
     if (event.type === 'recall_index_status') {

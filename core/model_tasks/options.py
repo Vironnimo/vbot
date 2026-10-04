@@ -82,6 +82,7 @@ from core.model_tasks.constants import (
     TASK_TEXT_TO_SPEECH,
     TASK_VIDEO_GENERATION,
 )
+from core.model_tasks.image_profile import ImageWire, build_image_profile, image_wire
 from core.models import Model
 
 __all__ = [
@@ -226,6 +227,7 @@ def option_schema_for(
     model: Model | None = None,
     models: ModelCatalog | None = None,
     connection_id: str = "",
+    wire: ImageWire | None = None,
 ) -> TaskModelOptionSchema:
     """Return a model-aware option schema for *task_type* and *provider_id*.
 
@@ -237,7 +239,8 @@ def option_schema_for(
 
     *models* is the Model registry and *connection_id* the target's local
     Connection id; live voice needs both to offer backend Model choices and
-    offers none without the registry.
+    offers none without the registry. *wire* is the image wire serving the
+    target's Connection; without it, the Provider's default wire applies.
     """
 
     if task_type == TASK_LIVE_VOICE:
@@ -253,7 +256,10 @@ def option_schema_for(
     elif task_type == TASK_TEXT_TO_SPEECH:
         fields = _text_to_speech_fields(provider_id, model)
     elif task_type == TASK_IMAGE_GENERATION:
-        fields = _image_generation_fields(provider_id, model)
+        profile = build_image_profile(
+            model, wire if wire is not None else image_wire(provider_id, provider_id, None)
+        )
+        fields = _image_generation_fields(profile, model)
     elif task_type == TASK_VIDEO_GENERATION:
         fields = _video_generation_fields(provider_id, model)
     elif task_type == TASK_MUSIC_GENERATION:

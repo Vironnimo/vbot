@@ -118,12 +118,15 @@ export function loadHistory(sessionState, messages, options = {}) {
   }
   // An incremental response reports the statuses its appended records
   // changed (none when absent); any other response reports them all.
-  const backgroundBashStatuses = isRecord(options.backgroundBashStatuses)
-    ? options.backgroundBashStatuses
+  const backgroundCommandStatuses = isRecord(options.backgroundCommandStatuses)
+    ? options.backgroundCommandStatuses
     : {};
-  sessionState.backgroundBashStatuses = incremental
-    ? { ...sessionState.backgroundBashStatuses, ...backgroundBashStatuses }
-    : { ...backgroundBashStatuses };
+  sessionState.backgroundCommandStatuses = incremental
+    ? {
+        ...sessionState.backgroundCommandStatuses,
+        ...backgroundCommandStatuses,
+      }
+    : { ...backgroundCommandStatuses };
   return sessionState;
 }
 
@@ -183,9 +186,9 @@ export function prependHistory(sessionState, messages, options = {}) {
     options.hasMore === true && typeof options.nextBefore === 'string'
       ? options.nextBefore
       : '';
-  if (isRecord(options.backgroundBashStatuses)) {
-    sessionState.backgroundBashStatuses = {
-      ...options.backgroundBashStatuses,
+  if (isRecord(options.backgroundCommandStatuses)) {
+    sessionState.backgroundCommandStatuses = {
+      ...options.backgroundCommandStatuses,
     };
   }
   return sessionState;

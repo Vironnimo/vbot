@@ -18,16 +18,6 @@ from core.tools.availability import (
     normalize_tool_access,
     resolve_tool_access,
 )
-from core.tools.bash import (
-    BASH_SUBAGENT_TOOL_DESCRIPTION,
-    BASH_SUBAGENT_TOOL_PARAMETERS,
-    BASH_TOOL_DESCRIPTION,
-    BASH_TOOL_NAME,
-    BASH_TOOL_PARAMETERS,
-    UpdateHandoffs,
-    project_bash_tool_definitions,
-    register_bash_tool,
-)
 from core.tools.change_tracker import ChangeTracker
 from core.tools.contracts import (
     ToolContract,
@@ -70,12 +60,11 @@ from core.tools.memory import (
     MEMORY_TOOL_PARAMETERS,
     register_memory_tool,
 )
-from core.tools.model_names import called_tool_name, model_tool_name, registry_tool_name
-from core.tools.process import (
-    PROCESS_TOOL_DESCRIPTION,
-    PROCESS_TOOL_NAME,
-    PROCESS_TOOL_PARAMETERS,
-    register_process_tool,
+from core.tools.model_names import (
+    BASH_TOOL_NAME,
+    called_tool_name,
+    model_tool_name,
+    registry_tool_name,
 )
 from core.tools.project import (
     PROJECT_PROMPT_BLOCK_HEADER,
@@ -101,6 +90,13 @@ from core.tools.session_search import (
     SESSION_SEARCH_TOOL_NAME,
     SESSION_SEARCH_TOOL_PARAMETERS,
     register_session_search_tool,
+)
+from core.tools.shell import (
+    SHELL_TOOL_DESCRIPTION,
+    SHELL_TOOL_NAME,
+    SHELL_TOOL_PARAMETERS,
+    project_shell_tool_definitions,
+    register_shell_tool,
 )
 from core.tools.skill import (
     SKILL_TOOL_DESCRIPTION,
@@ -167,6 +163,7 @@ from core.tools.tools import (
     tool_is_ready,
     tool_success,
 )
+from core.tools.update_handoff import UpdateHandoffs
 from core.tools.web_fetch import (
     WEB_FETCH_TOOL_DESCRIPTION,
     WEB_FETCH_TOOL_NAME,
@@ -205,11 +202,7 @@ __all__ = [
     "edit_tool_siblings",
     "known_edit_dialect",
     "offer_edit_dialect",
-    "BASH_SUBAGENT_TOOL_DESCRIPTION",
-    "BASH_SUBAGENT_TOOL_PARAMETERS",
-    "BASH_TOOL_DESCRIPTION",
     "BASH_TOOL_NAME",
-    "BASH_TOOL_PARAMETERS",
     "ANALYZE_IMAGE_TOOL_DESCRIPTION",
     "ANALYZE_IMAGE_TOOL_NAME",
     "ANALYZE_IMAGE_TOOL_PARAMETERS",
@@ -227,9 +220,6 @@ __all__ = [
     "MEMORY_TOOL_DESCRIPTION",
     "MEMORY_TOOL_NAME",
     "MEMORY_TOOL_PARAMETERS",
-    "PROCESS_TOOL_DESCRIPTION",
-    "PROCESS_TOOL_NAME",
-    "PROCESS_TOOL_PARAMETERS",
     "PROJECT_PROMPT_BLOCK_HEADER",
     "PROJECT_TOOL_DESCRIPTION",
     "PROJECT_TOOL_NAME",
@@ -303,17 +293,20 @@ __all__ = [
     "WEB_SEARCH_TOOL_NAME",
     "WEB_SEARCH_TOOL_PARAMETERS",
     "UpdateHandoffs",
+    "SHELL_TOOL_DESCRIPTION",
+    "SHELL_TOOL_NAME",
+    "SHELL_TOOL_PARAMETERS",
+    "project_shell_tool_definitions",
+    "register_shell_tool",
     "READ_MEDIA_ARTIFACT_KIND",
     "is_tool_result_envelope",
     "read_media_artifact",
     "result_count_fact_builder",
     "register_analyze_image_tool",
-    "register_bash_tool",
     "register_cron_tool",
     "register_generate_music_tool",
     "register_generate_video_tool",
     "register_memory_tool",
-    "register_process_tool",
     "register_project_tool",
     "register_read_tool",
     "register_session_search_tool",
@@ -325,7 +318,6 @@ __all__ = [
     "register_image_generation_tool",
     "register_web_fetch_tool",
     "register_web_search_tool",
-    "project_bash_tool_definitions",
     "tool_failure",
     "tool_failure_for_exception",
     "tool_is_ready",

@@ -201,11 +201,7 @@ function mergeRun(messages, liveRun) {
           : saved.type === 'tool_call' &&
               saved.resultEvent &&
               !child.resultEvent
-            ? {
-                ...saved,
-                stdout: child.stdout || saved.stdout,
-                stderr: child.stderr || saved.stderr,
-              }
+            ? { ...saved, output: child.output || saved.output }
             : { ...saved, ...child };
       insertionIndex = index;
     }

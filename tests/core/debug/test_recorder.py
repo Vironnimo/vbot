@@ -100,6 +100,21 @@ class TestFullCycle:
 
         assert _latest_trace(store)["response"]["body"] == "upstream failed"
 
+    def test_body_limit_keeps_the_start_of_each_body_and_counts_the_rest(self, store):
+        recorder = ProviderDebugRecorder(store, body_limit=4)
+        capture = recorder.begin_capture(
+            method="POST", url="https://api.example.com/v1/images", headers={}, body=b"prompt"
+        )
+        capture.record_response_head(200, {"Content-Encoding": "gzip"})
+        capture.feed_body(b"abc")
+        capture.feed_body(b"defgh")
+        capture.finalize()
+
+        trace = _latest_trace(store)
+        # A cut body is kept as received; decoding it would fail.
+        assert trace["request"]["body"] == "prom\n[2 more bytes not recorded]"
+        assert trace["response"]["body"] == "abcd\n[4 more bytes not recorded]"
+
 
 class TestRedaction:
     def test_headers_and_url_are_redacted_but_bodies_are_stored_raw(self, recorder, store):

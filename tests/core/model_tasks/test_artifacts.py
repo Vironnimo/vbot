@@ -171,7 +171,6 @@ def test_generated_media_ids_never_overwrite_colliding_files(
         output_dir=tmp_path,
         extension="mp4",
         media_type=media_type,
-        error=_StubConfigurationError,
     )
     assert result.id == f"{prefix}_000000000002"
     assert original.read_bytes() == b"keep"

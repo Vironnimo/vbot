@@ -687,8 +687,12 @@ describe('ExtensionPage Run streams', () => {
     const events = [
       ['assistant_output_delta', { content_delta: 'live-sentinel' }],
       [
-        'tool_call_stdout',
-        { chunk: 'tool-output-sentinel', tool_call_id: 'tool-a' },
+        'tool_call_output',
+        {
+          tool_call_id: 'tool-a',
+          terminal_id: 'term_a',
+          screen: 'tool-output-sentinel',
+        },
       ],
       [
         'model_step_usage',

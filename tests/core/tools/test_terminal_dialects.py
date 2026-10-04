@@ -18,7 +18,6 @@ from core.tools.tools import JsonObject, ToolContext, tool_failure
 from tests.core.tools.terminal_helpers import call, details, make_context
 from tests.core.tools.terminal_helpers import manager as manager
 from tests.core.tools.terminal_manager_helpers import AdapterFactory, eventually
-from tests.core.tools.terminal_manager_helpers import shell_environment as shell_environment
 
 OWNER = TerminalOwner("project-a", "agent-a", "session-a")
 
@@ -595,12 +594,6 @@ async def test_unknown_terminal_id_lists_attached_terminals(
     assert _error(unattached)["message"] == (
         'No terminal has the id term_missing. No terminal is attached to this Session; {"action": '
         '"list"} shows every terminal, and attach makes one usable here.'
-    )
-
-    process = await terminal({"action": "status", "terminal_id": "proc_abc123"})
-    assert _error(process)["message"] == (
-        "proc_abc123 is a background command, not a terminal. Use the process Tool with this "
-        "process_id."
     )
 
 

@@ -24,10 +24,9 @@ from core.statistics import StatisticsIndex
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
-from core.tools._bash_update_handoff import UpdateHandoffs
-from core.tools.process_manager import ProcessManager
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolNotFoundError, ToolRegistry
+from core.tools.update_handoff import UpdateHandoffs
 from core.utils.version import detect_vbot_version
 
 CANONICAL_BUILTIN_TOOLS = [
@@ -42,7 +41,6 @@ CANONICAL_BUILTIN_TOOLS = [
     "generate_video",
     "image_generation",
     "memory",
-    "process",
     "project",
     "read",
     "search_files",
@@ -142,7 +140,6 @@ def test_runtime_wires_its_services_to_the_data_directory(shared_runtime: Runtim
         ("models", ModelRegistry),
         ("provider_credentials", ProviderCredentialResolver),
         ("tools", ToolRegistry),
-        ("process_manager", ProcessManager),
         ("update_handoffs", UpdateHandoffs),
         ("terminal_manager", TerminalManager),
         ("skills", SkillRegistry),

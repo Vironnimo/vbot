@@ -7,14 +7,20 @@ from pathlib import Path
 from typing import Any
 
 from core.model_tasks import (
+    MusicConfigurationError,
     MusicError,
     MusicExecutionError,
     MusicOutcomeUnknownError,
+    MusicRefusedError,
     TaskUsageContext,
+    VideoConfigurationError,
     VideoError,
     VideoExecutionError,
     VideoOutcomeUnknownError,
+    VideoRefusedError,
 )
+from core.model_tasks.artifacts import OutputDirectoryError, OutputWriteError
+from core.model_tasks.video import VideoProfile
 from core.tools._image_inputs import (
     UnusableImageError,
     normalize_generate_music_arguments,
@@ -22,7 +28,14 @@ from core.tools._image_inputs import (
     resolve_local_image,
     resolve_local_images,
 )
-from core.tools._media_failures import outcome_unknown_message, provider_failure_message
+from core.tools._media_failures import (
+    outcome_unknown_message,
+    output_failure_message,
+    provider_failure_message,
+    refusal_message,
+    unavailable_message,
+    unfinished_job_message,
+)
 from core.tools.arguments import optional_bool, optional_int, optional_string
 from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
@@ -43,19 +56,23 @@ GENERATE_MUSIC_TOOL_NAME = "generate_music"
 _VIDEO_DIRECTORY_NAME = "video-gen"
 _MUSIC_DIRECTORY_NAME = "music-gen"
 
+_VIDEO_BILLING = (
+    " Each call is billed by the provider and waits, often several minutes, until the video "
+    "is saved."
+)
 GENERATE_VIDEO_TEXT_ONLY_DESCRIPTION = (
-    "Generate a video from a text prompt using the configured model. Returns the "
-    "generated video file's local path."
+    "Generate a video from a text prompt with the configured model and save it as a local file."
+    + _VIDEO_BILLING
 )
 GENERATE_VIDEO_FIRST_FRAME_DESCRIPTION = (
-    "Generate a video from a text prompt, optionally starting from a local first-frame "
-    "image. The local image is uploaded to the configured external provider. Returns "
-    "the generated video file's local path."
+    "Generate a video from a text prompt with the configured model and save it as a local "
+    "file, optionally starting from a local first-frame image, which is uploaded to the "
+    "provider." + _VIDEO_BILLING
 )
 GENERATE_VIDEO_FRAME_RANGE_DESCRIPTION = (
-    "Generate a video from a text prompt, optionally using local first- and last-frame "
-    "images. Local images are uploaded to the configured external provider. Returns the "
-    "generated video file's local path."
+    "Generate a video from a text prompt with the configured model and save it as a local "
+    "file, optionally using local first- and last-frame images, which are uploaded to the "
+    "provider." + _VIDEO_BILLING
 )
 GENERATE_VIDEO_PARAMETERS: JsonObject = {
     "type": "object",
@@ -63,37 +80,31 @@ GENERATE_VIDEO_PARAMETERS: JsonObject = {
         "prompt": {
             "type": "string",
             "minLength": 1,
-            "description": "Describe the video to generate.",
+            "description": (
+                "Describe the video: subject, action, setting, camera movement, and style."
+            ),
         },
         "duration": {
             "type": "integer",
             "minimum": 1,
-            "description": (
-                "Requested video duration in seconds. Must be supported by the configured model."
-            ),
-        },
-        "resolution": {
-            "type": "string",
-            "pattern": r".*\S.*",
-            "description": (
-                "Requested output resolution. Must be supported by the configured model."
-            ),
+            "description": "Length in seconds. Omit to use the configured default.",
         },
         "aspect_ratio": {
             "type": "string",
             "pattern": r".*\S.*",
-            "description": (
-                "Requested output aspect ratio. Must be supported by the configured model."
-            ),
+            "description": "Aspect ratio, width:height. Omit to use the configured default.",
         },
-        "size": {
+        "resolution": {
             "type": "string",
             "pattern": r".*\S.*",
-            "description": "Requested output size. Must be supported by the configured model.",
+            "description": "Output resolution. Omit to use the configured default.",
         },
         "generate_audio": {
             "type": "boolean",
-            "description": "Whether the generated video should include audio.",
+            "description": (
+                "true to generate a soundtrack with the video, false for a silent video. Omit "
+                "to use the configured default."
+            ),
         },
         "first_frame": {
             "type": "string",
@@ -122,14 +133,17 @@ GENERATE_VIDEO_PARAMETERS: JsonObject = {
     "required": ["prompt"],
 }
 
+_MUSIC_BILLING = (
+    " Each call is billed by the provider and waits, up to a few minutes, until the track is saved."
+)
 GENERATE_MUSIC_DESCRIPTION = (
-    "Generate music from a text prompt or local reference images using the configured model. "
-    "Local images are uploaded to the configured external provider. Returns the generated "
-    "audio file's local path."
+    "Generate a music track from a text prompt, optionally guided by local reference images "
+    "that are uploaded to the provider, with the configured model and save it as a local "
+    "file." + _MUSIC_BILLING
 )
 GENERATE_MUSIC_TEXT_ONLY_DESCRIPTION = (
-    "Generate music from a text prompt using the configured model. Returns the generated audio "
-    "file's local path."
+    "Generate a music track from a text prompt with the configured model and save it as a "
+    "local file." + _MUSIC_BILLING
 )
 GENERATE_MUSIC_PARAMETERS: JsonObject = {
     "type": "object",
@@ -190,41 +204,70 @@ def _invalid(message: str) -> JsonObject:
 def _media_failure(
     error: VideoError | MusicError, task: str, setting: str, product: str
 ) -> JsonObject:
-    """Project an expected media failure; provider refusals say what to do next."""
+    """Project an expected media failure with wording the Agent can act on."""
     message = str(error)
-    if isinstance(error, (VideoOutcomeUnknownError, MusicOutcomeUnknownError)):
+    if isinstance(error, (VideoRefusedError, MusicRefusedError)):
+        message = refusal_message(error.reason, task=task)
+    elif isinstance(error, VideoOutcomeUnknownError) and error.job_id is not None:
+        message = unfinished_job_message(
+            task=task, product=product, job_id=error.job_id, reason=str(error)
+        )
+    elif isinstance(error, (VideoOutcomeUnknownError, MusicOutcomeUnknownError)):
         message = outcome_unknown_message(task=task, product=product)
     elif isinstance(error, (VideoExecutionError, MusicExecutionError)):
         message = provider_failure_message(error, task=task, setting=setting)
+    elif isinstance(error, (VideoConfigurationError, MusicConfigurationError)):
+        message = unavailable_message(error, setting=setting)
     return tool_failure(error.code, message, retryable=bool(getattr(error, "retryable", False)))
+
+
+def _output_failure(error: OutputDirectoryError | OutputWriteError, product: str) -> JsonObject:
+    return tool_failure(error.code, output_failure_message(error, product=product), retryable=False)
+
+
+def generate_video_parameters(profile: VideoProfile) -> JsonObject:
+    """Return the video Tool schema for what the configured Model offers."""
+
+    parameters = copy.deepcopy(GENERATE_VIDEO_PARAMETERS)
+    properties = parameters["properties"]
+    for name in ("duration", "aspect_ratio", "resolution"):
+        choices = profile.call_choices.get(name)
+        if not choices:
+            properties.pop(name)
+        elif name == "duration":
+            seconds = [int(value) for value in choices]
+            properties[name].pop("minimum")
+            if seconds == list(range(seconds[0], seconds[-1] + 1)):
+                properties[name].update(minimum=seconds[0], maximum=seconds[-1])
+            else:
+                properties[name]["enum"] = seconds
+        else:
+            properties[name].pop("pattern")
+            properties[name]["enum"] = list(choices)
+    if not profile.generate_audio:
+        properties.pop("generate_audio")
+    for frame in ("first_frame", "last_frame"):
+        if frame not in profile.frame_images:
+            properties.pop(frame)
+    return parameters
 
 
 def _video_profile_resolver(video_service: Any):
     def resolve(_context: ToolDefinitionProfileContext) -> ToolDefinitionProfile:
-        capabilities = set(video_service.generation_capabilities())
-        parameters = copy.deepcopy(GENERATE_VIDEO_PARAMETERS)
-        properties = parameters["properties"]
-        for name in (
-            "duration",
-            "resolution",
-            "aspect_ratio",
-            "size",
-            "generate_audio",
-            "first_frame",
-            "last_frame",
-        ):
-            if name not in capabilities:
-                properties.pop(name, None)
-        if "last_frame" in capabilities:
+        profile = video_service.generation_profile()
+        if "last_frame" in profile.frame_images:
             description = GENERATE_VIDEO_FRAME_RANGE_DESCRIPTION
-        elif "first_frame" in capabilities:
+        elif "first_frame" in profile.frame_images:
             description = GENERATE_VIDEO_FIRST_FRAME_DESCRIPTION
         else:
             description = GENERATE_VIDEO_TEXT_ONLY_DESCRIPTION
+        choices = ";".join(
+            f"{name}={','.join(values)}" for name, values in sorted(profile.call_choices.items())
+        )
         return ToolDefinitionProfile(
-            key="-".join(sorted(capabilities)) or "text-only",
+            key=f"frames={','.join(profile.frame_images)};audio={profile.generate_audio};{choices}",
             description=description,
-            parameters=parameters,
+            parameters=generate_video_parameters(profile),
         )
 
     return resolve
@@ -292,6 +335,8 @@ def make_generate_video_handler(video_service: Any):
             )
         except VideoError as exc:
             return _media_failure(exc, "video-generation", "Video generation", "video")
+        except (OutputDirectoryError, OutputWriteError) as exc:
+            return _output_failure(exc, "video")
         context.add_display_media(artifact.file_path, artifact.media_type)
         return tool_success({"video": _artifact_payload(artifact)})
 
@@ -343,8 +388,15 @@ def make_generate_music_handler(music_service: Any):
             )
         except MusicError as exc:
             return _media_failure(exc, "music-generation", "Music generation", "music track")
+        except (OutputDirectoryError, OutputWriteError) as exc:
+            return _output_failure(exc, "music track")
         context.add_display_media(artifact.file_path, artifact.media_type)
-        return tool_success({"music": _artifact_payload(artifact)})
+        music = _artifact_payload(artifact)
+        for name in ("transcript", "text"):
+            value = getattr(artifact, name, "")
+            if value:
+                music[name] = value
+        return tool_success({"music": music})
 
     return handler
 
@@ -354,7 +406,7 @@ def _video_call_options(arguments: JsonObject) -> JsonObject:
     duration = optional_int(arguments.get("duration"), field_name="duration", minimum=1)
     if duration is not None:
         options["duration"] = duration
-    for name in ("resolution", "aspect_ratio", "size"):
+    for name in ("resolution", "aspect_ratio"):
         value = optional_string(arguments.get(name), field_name=name)
         if value == "":
             raise ValueError(f"{name} must be a non-empty string when provided")
@@ -454,6 +506,8 @@ def register_generate_music_tool(registry: ToolRegistry, music_service: Any) -> 
                         "path": {"type": "string", "minLength": 1},
                         "media_type": {"type": "string", "minLength": 1},
                         "size_bytes": {"type": "integer", "minimum": 1},
+                        "transcript": {"type": "string", "minLength": 1},
+                        "text": {"type": "string", "minLength": 1},
                     },
                     "required": ["path", "media_type", "size_bytes"],
                     "additionalProperties": False,

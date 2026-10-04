@@ -64,7 +64,7 @@ _OPENCODE_TARGET_ACTIONS = frozenset({_OPENCODE_ALLOW, _OPENCODE_DENY, "ask"})
 # ``skill``) are absent here and therefore ignored.
 _PERMISSION_DENY_MAP: dict[str, frozenset[str]] = {
     "edit": frozenset({"apply_patch"}),
-    "bash": frozenset({"bash", "process"}),
+    "bash": frozenset({"bash"}),
     "read": frozenset({"read"}),
     "grep": frozenset({"search_files"}),
     "glob": frozenset({"search_files"}),
@@ -82,7 +82,7 @@ _PERMISSION_DENY_MAP: dict[str, frozenset[str]] = {
 _TOOLS_DENY_MAP: dict[str, frozenset[str]] = {
     "edit": frozenset({"apply_patch"}),
     "write": frozenset({"apply_patch"}),
-    "bash": frozenset({"bash", "process"}),
+    "bash": frozenset({"bash"}),
     "read": frozenset({"read"}),
     "grep": frozenset({"search_files"}),
     "glob": frozenset({"search_files"}),

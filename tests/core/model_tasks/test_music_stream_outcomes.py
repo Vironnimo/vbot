@@ -12,7 +12,11 @@ import pytest
 import respx
 
 from core.model_tasks.music_providers import ProviderMusicClient
-from core.providers.errors import NetworkError, ProviderError, ProviderTimeoutError
+from core.providers.errors import (
+    ProviderError,
+    ProviderOutcomeUnknownError,
+    ProviderTimeoutError,
+)
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 
@@ -117,7 +121,8 @@ async def test_stop_without_done_cannot_return_audio(client: ProviderMusicClient
     stream = _Stream(_event({"delta": {"audio": {"data": "YWJj"}}, "finish_reason": "stop"}))
     route = respx.post("https://openrouter.ai/api/v1/chat/completions").respond(200, stream=stream)
 
-    with pytest.raises(NetworkError):
+    # The accepted request may have produced a billed track.
+    with pytest.raises(ProviderOutcomeUnknownError):
         await client.generate("Music", options={})
 
     assert stream.closed
@@ -159,7 +164,9 @@ async def test_failed_or_cancelled_body_read_closes_response(
         status, stream=stream
     )
 
-    with pytest.raises(asyncio.CancelledError if cancel else ProviderTimeoutError):
+    # A broken accepted stream may have produced a billed track; a broken error body not.
+    accepted_failure = ProviderOutcomeUnknownError if status == 200 else ProviderTimeoutError
+    with pytest.raises(asyncio.CancelledError if cancel else accepted_failure):
         await client.generate("Music", options={})
 
     assert stream.closed

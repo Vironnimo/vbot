@@ -1,22 +1,32 @@
-"""Bounded, cancellable native execution for the file-search owner."""
+"""Bounded, cancellable ripgrep runs for the file-search owner.
+
+ripgrep selects the files (ignore rules, hidden files, globs, types, binary
+detection) and matches them. A search runs in phases: a parallel counting or
+listing pass over the requested roots, then, for line results, a ``--json`` pass
+over only the files of the requested page.
+"""
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import json
 import os
 import queue
+import re
 import subprocess
 import threading
 import time
 import unicodedata
-from collections.abc import Generator, Iterator
+from collections.abc import Generator
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import psutil  # type: ignore[import-untyped]
 
-from core.tools._search_options import SearchOptions
+from core.tools._search_query import SearchQuery
+from core.tools.file_state import os_error_reason
 from core.tools.search import SearchBudget
 from core.tools.tools import ToolContext
 from core.utils.processes import subprocess_creation_flags
@@ -26,6 +36,31 @@ MAX_PROTOCOL_LINE = 8 * 1024 * 1024
 MAX_COMMAND_LINE_BYTES = 28000
 # Polling interval for the child memory bound; each poll is a process query.
 MEMORY_POLL_SECONDS = 0.05
+# Bound on the entries one search collects before ordering them.
+MAX_ENTRIES = 500_000
+# Bound on the bytes one counting or listing pass may print.
+MAX_SCAN_BYTES = 256 * 1024 * 1024
+
+# A --debug line naming a path ripgrep's walker skipped. File type filters skip
+# files only and report every file, so their lines are left out.
+_SKIPPED = re.compile(
+    rb"^rg: DEBUG\|ignore::walk\|.*?: ignoring (.*?): Ignore\((?!IgnoreMatch\(Types\()"
+)
+
+# Defaults that differ from ripgrep's own; later args items override them.
+DEFAULT_ARGUMENTS = ("--no-config", "--hidden", "--no-require-git", "--glob-case-insensitive")
+ALWAYS_EXCLUDED = "!.git"
+
+
+@dataclass
+class NativeOutcome:
+    """How one native run ended, for callers that judge its diagnostics themselves."""
+
+    returncode: int | None = None
+    diagnostics: str = ""
+    interrupted: bool = False
+    # Paths ripgrep's walker skipped, as --debug reports them, in its own spelling.
+    skipped: list[bytes] = field(default_factory=list)
 
 
 def native_lines(
@@ -33,8 +68,15 @@ def native_lines(
     arguments: list[str],
     context: ToolContext,
     budget: SearchBudget,
+    *,
+    cwd: Path | None = None,
+    outcome: NativeOutcome | None = None,
 ) -> Generator[bytes]:
-    """Drain both pipes with bounded storage and interrupt even a silent process."""
+    """Drain both pipes with bounded storage and interrupt even a silent process.
+
+    With ``outcome``, the exit code and diagnostics are recorded there for the
+    caller to judge. Without it, a failed run raises ``RuntimeError``.
+    """
     cancelled = threading.Event()
     # The Run retains this callback until dispatch finishes on the Event Loop.
     # Retaining Popen here would defer its Windows handle destructor to that
@@ -45,6 +87,8 @@ def native_lines(
         return budget.keep_going() and not cancelled.is_set()
 
     if not keep_going():
+        if outcome is not None:
+            outcome.interrupted = True
         return
     # Shut down when this generator stops, which also releases an output thread blocked in put.
     messages: queue.Queue[tuple[str, bytes]] = queue.Queue(maxsize=8)
@@ -88,9 +132,14 @@ def native_lines(
 
     def errors() -> None:
         assert stderr is not None
-        while chunk := stderr.read(4096):
+        while line := stderr.readline(65536):
+            if line.startswith(b"rg: DEBUG|"):
+                skipped = _SKIPPED.match(line)
+                if skipped and outcome is not None and len(outcome.skipped) < MAX_ENTRIES:
+                    outcome.skipped.append(skipped[1])
+                continue
             if len(diagnostics) < 8192:
-                diagnostics.extend(chunk[: 8192 - len(diagnostics)])
+                diagnostics.extend(line[: 8192 - len(diagnostics)])
 
     threads = [
         threading.Thread(target=output, daemon=True),
@@ -101,7 +150,7 @@ def native_lines(
     output_finished = False
     process = subprocess.Popen(
         [str(binary), "--no-config", *arguments],
-        cwd=context.effective_cwd,
+        cwd=cwd or context.effective_cwd,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -140,20 +189,26 @@ def native_lines(
         while keep_going() and process.poll() is None:
             with contextlib.suppress(subprocess.TimeoutExpired):
                 process.wait(timeout=0.05)
-        if output_finished and budget.timed_out:
-            raise RuntimeError("Search timed out; narrow paths or filters and retry.")
         interrupted = budget.stopped or cancelled.is_set()
         if interrupted:
             kill(process)
         threads[1].join(timeout=1)
+        text = diagnostics.decode("utf-8", errors="backslashreplace").strip()
+        if outcome is not None:
+            outcome.returncode = process.poll()
+            outcome.diagnostics = text
+            outcome.interrupted = interrupted
+            return
+        if output_finished and budget.timed_out:
+            raise RuntimeError("Search timed out; narrow paths or filters and retry.")
         if process.returncode not in (0, 1) and not interrupted:
             raise RuntimeError(
-                diagnostics.decode("utf-8", errors="backslashreplace").strip()
+                text
                 or "search_files could not complete the search: the search engine exited "
                 f"with code {process.returncode}. Retry the call."
             )
-        if diagnostics and not interrupted:
-            raise RuntimeError(diagnostics.decode("utf-8", errors="backslashreplace").strip())
+        if text and not interrupted:
+            raise RuntimeError(text)
     finally:
         try:
             messages.shutdown(immediate=True)
@@ -172,65 +227,390 @@ def native_lines(
             del process
 
 
-def file_types(
-    binary: Path, options: SearchOptions, context: ToolContext, budget: SearchBudget
-) -> dict[str, list[str]]:
-    args = ["--type-list"]
-    for option, value in options.entries:
-        if option.key in {"type_add", "type_clear"}:
-            args.extend([option.names[0], value])
-    result = {}
-    for line in native_lines(binary, args, context, budget):
-        name, _, patterns = line.decode("utf-8").strip().partition(": ")
-        result[name] = patterns.split(", ") if patterns else []
+@dataclass
+class Scope:
+    """One ripgrep invocation: its working directory and the roots it searches.
+
+    Roots inside the Agent's working directory share one scope there, so
+    ripgrep anchors globs that contain a slash at that directory, as in a
+    shell. A root outside it gets its own scope at that root.
+    """
+
+    cwd: Path
+    paths: list[str]
+    prefixes: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ScanResult:
+    """What one counting or listing pass found, in ripgrep's own path spelling."""
+
+    entries: list[tuple[bytes, int]] = field(default_factory=list)
+    files_searched: int | None = None
+    warnings: list[str] = field(default_factory=list)
+    truncated: bool = False
+    interrupted: bool = False
+    skipped: list[Path] = field(default_factory=list)
+
+
+class SearchRefusedError(RuntimeError):
+    """ripgrep refused the query; the message says how to correct it."""
+
+
+def rg_globs(globs: list[str], prefixes: list[str]) -> list[str]:
+    """Return ripgrep glob arguments for one scope.
+
+    A glob with a slash is tried relative to the scope's directory and relative
+    to each searched root below it, so ``tests/*.py`` and ``*.py`` under the
+    root ``tests`` both select ``tests/a.py``. ``./`` anchors like a leading
+    ``/``. ``.git`` is always excluded, after every other glob.
+    """
+    arguments: list[str] = []
+    for glob in globs:
+        negated = glob.startswith("!")
+        body = glob[1:] if negated else glob
+        if os.name == "nt":
+            body = re.sub(r"\\(?![*?\[\]{}!\\])", "/", body)
+        if body.startswith("./"):
+            body = "/" + body[2:].lstrip("/")
+        variants = [body]
+        if "/" in body.rstrip("/"):
+            for prefix in prefixes:
+                variants.append(f"/{prefix}{body}" if body.startswith("/") else f"{prefix}/{body}")
+        arguments.extend(f"--glob={'!' if negated else ''}{variant}" for variant in variants)
+    arguments.append(f"--glob={ALWAYS_EXCLUDED}")
+    return arguments
+
+
+def _base_arguments(query: SearchQuery, scope: Scope, *, globs: bool = True) -> list[str]:
+    return [
+        *DEFAULT_ARGUMENTS,
+        *query.rg_args,
+        *(rg_globs(query.globs, scope.prefixes) if globs else []),
+    ]
+
+
+def _pattern_arguments(patterns: list[str]) -> list[str]:
+    return [token for pattern in patterns for token in ("-e", pattern)]
+
+
+def _collect(
+    binary: Path,
+    arguments: list[str],
+    scope: Scope,
+    context: ToolContext,
+    budget: SearchBudget,
+) -> tuple[bytes, NativeOutcome, bool]:
+    outcome = NativeOutcome()
+    chunks: list[bytes] = []
+    size = 0
+    truncated = False
+    lines = native_lines(binary, arguments, context, budget, cwd=scope.cwd, outcome=outcome)
+    with contextlib.closing(lines):
+        for line in lines:
+            chunks.append(line)
+            size += len(line)
+            if size > MAX_SCAN_BYTES:
+                truncated = True
+                break
+    return b"".join(chunks), outcome, truncated
+
+
+def count_scan(
+    binary: Path,
+    query: SearchQuery,
+    patterns: list[str],
+    scope: Scope,
+    context: ToolContext,
+    budget: SearchBudget,
+    cwd: Path,
+) -> ScanResult:
+    """Count matching lines (or matches) per file in one parallel pass."""
+    if query.mode == "files_without_match":
+        selector = ["--files-without-match", "--null"]
+    else:
+        selector = [
+            # With -U ripgrep's line count merges matches unpredictably; count matches.
+            "--count-matches" if query.count_matches or query.multiline else "--count",
+            *(["--include-zero"] if query.include_zero and query.mode == "count" else []),
+            "--with-filename",
+            "--null",
+            "--stats",
+        ]
+    arguments = [
+        *_base_arguments(query, scope),
+        *selector,
+        *_pattern_arguments(patterns),
+        "--",
+        *scope.paths,
+    ]
+    data, outcome, truncated = _collect(binary, arguments, scope, context, budget)
+    result = _judge(outcome, scope, cwd)
+    result.truncated = truncated
+    if query.mode == "files_without_match":
+        result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
+    else:
+        result.entries, result.files_searched = _parse_counts(data)
+    _bound(result)
     return result
 
 
-def validate_patterns(
+def list_scan(
     binary: Path,
-    patterns: list[str],
-    options: SearchOptions,
+    query: SearchQuery,
+    scope: Scope,
     context: ToolContext,
     budget: SearchBudget,
-    empty_file: Path,
-) -> None:
-    args = ["--json", *options.native_arguments()]
-    for pattern in patterns:
-        args.extend(["-e", pattern])
-    args.extend(["--", str(empty_file)])
-    with _explained_pattern_errors():
-        for _ in native_lines(binary, args, context, budget):
-            pass
+    cwd: Path,
+    *,
+    directories: bool = False,
+) -> ScanResult:
+    """List the files ripgrep would search, in one parallel pass.
+
+    For ``directories``, only the excluding globs apply, since the others select
+    directory names, and the result also names the paths ripgrep skipped.
+    """
+    if directories:
+        excluding = [glob for glob in query.globs if glob.startswith("!")]
+        selection = [
+            *DEFAULT_ARGUMENTS,
+            *query.rg_args,
+            *rg_globs(excluding, scope.prefixes),
+            "--debug",
+        ]
+    else:
+        selection = _base_arguments(query, scope)
+    arguments = [*selection, "--files", "--null", "--", *scope.paths]
+    data, outcome, truncated = _collect(binary, arguments, scope, context, budget)
+    result = _judge(outcome, scope, cwd)
+    result.truncated = truncated
+    result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
+    result.skipped = [
+        Path(os.path.normpath(scope.cwd / os.fsdecode(path))) for path in outcome.skipped
+    ]
+    _bound(result)
+    return result
 
 
-@contextlib.contextmanager
-def _explained_pattern_errors() -> Iterator[None]:
-    """Add the literal-text correction to native pattern compilation errors."""
+def _bound(result: ScanResult) -> None:
+    if len(result.entries) > MAX_ENTRIES:
+        del result.entries[MAX_ENTRIES:]
+        result.truncated = True
+
+
+def _parse_counts(data: bytes) -> tuple[list[tuple[bytes, int]], int | None]:
+    entries: list[tuple[bytes, int]] = []
+    position = 0
+    while position < len(data):
+        if data[position : position + 1] == b"\n":
+            break
+        separator = data.find(b"\0", position)
+        if separator < 0:
+            break
+        end = data.find(b"\n", separator)
+        if end < 0:
+            break
+        with contextlib.suppress(ValueError):
+            entries.append((data[position:separator], int(data[separator + 1 : end])))
+        position = end + 1
+    stats = data[position:].decode("utf-8", errors="replace")
+    searched = re.search(r"^(\d+) files searched$", stats, re.MULTILINE)
+    return entries, int(searched[1]) if searched else None
+
+
+def line_events(
+    binary: Path,
+    query: SearchQuery,
+    patterns: list[str],
+    scope: Scope,
+    paths: list[bytes],
+    max_count: int,
+    context: ToolContext,
+    budget: SearchBudget,
+    cwd: Path,
+) -> tuple[dict[bytes, list[dict[str, Any]]], list[str]]:
+    """Return ripgrep's match and context events for explicit files of one scope."""
+    base = [
+        *DEFAULT_ARGUMENTS,
+        *query.rg_args,
+        "--json",
+        "--max-count",
+        str(max_count),
+        *(["--before-context", str(query.before)] if query.before else []),
+        *(["--after-context", str(query.after)] if query.after else []),
+        *_pattern_arguments(patterns),
+        "--",
+    ]
+    length = sum(len(argument) + 3 for argument in base) + len(str(binary))
+    events: dict[bytes, list[dict[str, Any]]] = {}
+    warnings: list[str] = []
+    batch: list[str] = []
+    size = length
+
+    def execute() -> None:
+        outcome = NativeOutcome()
+        current: list[dict[str, Any]] | None = None
+        lines = native_lines(
+            binary, [*base, *batch], context, budget, cwd=scope.cwd, outcome=outcome
+        )
+        with contextlib.closing(lines):
+            for line in lines:
+                event = json.loads(line)
+                kind = event["type"]
+                if kind == "begin":
+                    current = events.setdefault(_event_path(event["data"]["path"]), [])
+                elif kind in {"match", "context"} and current is not None:
+                    current.append(event)
+                elif kind == "end":
+                    current = None
+        judged = _judge(outcome, scope, cwd)
+        warnings.extend(judged.warnings)
+
+    for path in paths:
+        argument = os.fsdecode(path)
+        argument_size = len(argument.encode("utf-8", errors="surrogateescape")) + 3
+        if batch and size + argument_size > MAX_COMMAND_LINE_BYTES:
+            execute()
+            batch.clear()
+            size = length
+        batch.append(argument)
+        size += argument_size
+    if batch:
+        execute()
+    return events, warnings
+
+
+def _event_path(value: dict[str, str]) -> bytes:
+    if "text" in value:
+        return os.fsencode(value["text"])
+    return base64.b64decode(value["bytes"])
+
+
+def decode_event_text(value: dict[str, str]) -> bytes:
+    return value["text"].encode("utf-8") if "text" in value else base64.b64decode(value["bytes"])
+
+
+_IO_ERROR = re.compile(
+    r"^rg: (?P<path>.+?): (?:IO error for operation on .+?: )?(?P<message>.*?)"
+    r" \(os error (?P<code>\d+)\)$"
+)
+_PATTERN_ERRORS = ("regex parse error", "PCRE2: error compiling pattern")
+
+
+def _judge(outcome: NativeOutcome, scope: Scope, cwd: Path) -> ScanResult:
+    """Turn ripgrep's exit status and diagnostics into a failure or warnings.
+
+    Files ripgrep could not read become warnings in English; any other
+    diagnostic means ripgrep refused the query.
+    """
+    result = ScanResult(interrupted=outcome.interrupted)
+    if outcome.interrupted:
+        return result
+    messages: list[str] = []
+    for line in outcome.diagnostics.splitlines():
+        if line.startswith("rg: ") or not messages:
+            messages.append(line)
+        else:
+            messages[-1] += "\n" + line
+    refused = []
+    for message in messages:
+        text = message.removeprefix("rg: ")
+        match = _IO_ERROR.match(message)
+        if match is not None:
+            code = int(match["code"])
+            error = OSError(None, None, None, code) if os.name == "nt" else OSError(code, "")
+            label = _label(match["path"], scope, cwd)
+            result.warnings.append(f"Could not read {label}: {os_error_reason(error)}.")
+            continue
+        if text.startswith("File system loop found: "):
+            result.warnings.append(f"Skipped a link loop: {text.split(': ', 1)[1]}.")
+            continue
+        # Other problems with one path, such as an invalid line in an ignore file,
+        # name that path first; a refused query names none.
+        path, separator, problem = text.partition(": ")
+        if separator and path and os.path.lexists(scope.cwd / path):
+            reason = problem.splitlines()[0].rstrip(".") if problem else "unknown problem"
+            result.warnings.append(f"ripgrep reported for {_label(path, scope, cwd)}: {reason}.")
+            continue
+        refused.append(text)
+    if refused:
+        raise SearchRefusedError("\n".join(refused))
+    if outcome.returncode not in (0, 1, None) and not result.warnings:
+        raise SearchRefusedError(
+            "search_files could not complete the search: the search engine exited with "
+            f"code {outcome.returncode}. Retry the call."
+        )
+    return result
+
+
+def _label(path: str, scope: Scope, cwd: Path) -> str:
+    absolute = Path(os.path.normpath(scope.cwd / path))
     try:
-        yield
-    except RuntimeError as error:
-        if "regex parse error" in str(error) or "PCRE2: error compiling pattern" in str(error):
-            raise RuntimeError(
-                f"{error}\nIf you meant literal text, add -F to args. "
-                "Otherwise correct the regular expression."
-            ) from error
-        raise
+        return absolute.relative_to(cwd).as_posix()
+    except ValueError:
+        return absolute.as_posix()
+
+
+def reference_text(
+    binary: Path, arguments: list[str], context: ToolContext, budget: SearchBudget
+) -> str:
+    """Return ripgrep's own reference output, such as its file type list."""
+    outcome = NativeOutcome()
+    lines = native_lines(binary, arguments, context, budget, outcome=outcome)
+    with contextlib.closing(lines):
+        text = b"".join(lines).decode("utf-8", errors="replace").strip()
+    if outcome.returncode not in (0, None):
+        raise SearchRefusedError(outcome.diagnostics.removeprefix("rg: ") or text)
+    return text
+
+
+def explain_failure(message: str) -> str:
+    """Say what ripgrep refused and how to correct the call. Nothing was searched."""
+    if any(marker in message for marker in _PATTERN_ERRORS):
+        return (
+            "The pattern is not a valid regular expression (ripgrep syntax). Nothing was "
+            f"searched.\n{message}\n"
+            'To search literal text, add "-F" to args; otherwise correct the regular expression.'
+        )
+    if match := re.match(r"unrecognized flag (\S+)", message):
+        return (
+            f'ripgrep has no flag "{match[1]}". Nothing was searched. Remove or correct that '
+            'args item; {"args": ["--help"]} lists the accepted flags.'
+        )
+    if match := re.match(r"error parsing flag (\S+): (.*)", message, re.DOTALL):
+        return (
+            f'The value of the args item "{match[1]}" is invalid: {match[2]}. Nothing was '
+            "searched. Correct the value."
+        )
+    if match := re.match(r"error parsing glob '(.*)': (.*)", message, re.DOTALL):
+        return (
+            f'The glob "{match[1]}" is invalid: {match[2]}. Nothing was searched. Correct the glob.'
+        )
+    if match := re.match(r"unrecognized file type: (.*)", message):
+        return (
+            f'"{match[1]}" is not a file type name. Nothing was searched. {{"args": '
+            '["--type-list"]} lists the names; or select files by name with glob, such as '
+            '"*.ext".'
+        )
+    return f"{message}\nNothing was searched."
 
 
 def pattern_retry(
-    error: str, patterns: list[str], options: SearchOptions
+    error: str, patterns: list[str], query: SearchQuery
 ) -> tuple[list[str], bool, str] | None:
     """Return the evident reading of patterns the regex engine rejected, if any.
 
     Returns the patterns to search, whether PCRE2 is needed, and a note for the
     Agent. A pattern that uses look-around or backreferences needs PCRE2. An
-    unmatched parenthesis or a repetition operator with nothing to repeat cannot
-    be regex syntax, so those characters match literally; everything else in the
-    pattern keeps its regex meaning. Literal (-F) searches never reach here.
+    unmatched parenthesis, a brace that starts no repetition, or a repetition
+    operator with nothing to repeat cannot be regex syntax, so those characters
+    match literally; everything else keeps its regex meaning. Literal (-F)
+    searches never reach here.
     """
-    if "regex parse error" not in error and "PCRE2: error compiling pattern" not in error:
+    if not any(marker in error for marker in _PATTERN_ERRORS):
         return None
-    if "--pcre2" in error and options.get("engine") != "pcre2":
+    pcre2 = any(arg in {"--pcre2", "-P", "--engine=pcre2"} for arg in query.rg_args)
+    if "--pcre2" in error and not pcre2:
         return (
             patterns,
             True,
@@ -252,7 +632,7 @@ def pattern_retry(
     return (
         repaired,
         False,
-        explanation + f"searched {described}. Add -F to args to search plain text.",
+        explanation + f'searched {described}. Add "-F" to args to search plain text.',
     )
 
 
@@ -273,6 +653,9 @@ def _unescape_unicode_punctuation(pattern: str) -> str:
         else:
             out.append(char)
     return "".join(out)
+
+
+_REPETITION = re.compile(r"\d+(?:,\d*)?\}")
 
 
 def _escape_unbalanced(pattern: str) -> str:
@@ -308,9 +691,10 @@ def _escape_unbalanced(pattern: str) -> str:
             if open_groups:
                 open_groups.pop()
             previous = "atom"
-        elif (
-            char in "*+?{" and previous in {"", "(", "|"} and not (char == "?" and previous == "(")
-        ):
+        elif char == "{" and (previous in {"", "(", "|"} or not _REPETITION.match(pattern, index)):
+            out.append("\\{")
+            previous = "atom"
+        elif char in "*+?" and previous in {"", "(", "|"} and not (char == "?" and previous == "("):
             out.append("\\" + char)
             previous = "atom"
         else:
@@ -319,101 +703,3 @@ def _escape_unbalanced(pattern: str) -> str:
     for position in open_groups:
         out[position] = "\\("
     return "".join(out)
-
-
-def content_events(
-    binary: Path,
-    paths: Iterator[tuple[Path, bool]],
-    patterns: list[str],
-    options: SearchOptions,
-    context: ToolContext,
-    budget: SearchBudget,
-    window: int,
-) -> Generator[dict[str, Any]]:
-    mode = "files" if options.enabled("quiet") else options.get("output")
-    base = [
-        "--threads",
-        "1",
-        "--no-mmap",
-        "--no-ignore",
-        "--hidden",
-        *options.native_arguments(),
-    ]
-    if mode:
-        selectors = {
-            "files": "-l",
-            "without": "--files-without-match",
-            "lines": "-c",
-            "counts": "--count-matches",
-        }
-        base.extend(["--null", "--with-filename", "--color=never", selectors[mode]])
-        if options.enabled("zero"):
-            base.append("--include-zero")
-        if options.enabled("only"):
-            base.append("--only-matching")
-    else:
-        base.append("--json")
-    if not options.get("output") and not options.enabled("quiet") and not options.get("max_count"):
-        base.extend(["--max-count", str(window + 1)])
-    for pattern in patterns:
-        base.extend(["-e", pattern])
-    length = sum(len(p) + 3 for p in base) + len(str(binary))
-    if length > 20000:
-        raise ValueError(
-            "Search patterns/options exceed the process argument budget; split"
-            " the pattern collection."
-        )
-    batch: list[str] = []
-    size = length
-    cwd = Path(os.path.abspath(context.effective_cwd.expanduser()))
-
-    def execute() -> Generator[dict[str, Any]]:
-        buffer = b""
-        with (
-            _explained_pattern_errors(),
-            contextlib.closing(
-                native_lines(binary, [*base, "--", *batch], context, budget)
-            ) as lines,
-        ):
-            for line in lines:
-                if not mode:
-                    yield json.loads(line)
-                    continue
-                buffer += line
-                while b"\0" in buffer:
-                    path_bytes, _, remainder = buffer.partition(b"\0")
-                    count = None
-                    if mode in {"lines", "counts"}:
-                        if b"\n" not in remainder:
-                            break
-                        number, _, remainder = remainder.partition(b"\n")
-                        count = int(number)
-                    yield {
-                        "type": "row",
-                        "data": {"path": path_bytes.decode("utf-8"), "count": count},
-                    }
-                    buffer = remainder
-            if buffer and not budget.stopped:
-                raise RuntimeError(
-                    "search_files could not complete the search: the search engine returned "
-                    "an incomplete result. Retry the call."
-                )
-
-    for path, _ in paths:
-        if not budget.keep_going():
-            return
-        try:
-            argument = str(path.relative_to(cwd))
-        except ValueError:
-            argument = str(path)
-        argument_size = len(argument.encode("utf-8")) + 3
-        if argument_size + length > MAX_COMMAND_LINE_BYTES:
-            raise ValueError(f"Search path exceeds the native argument budget: {argument}")
-        if batch and size + argument_size > MAX_COMMAND_LINE_BYTES:
-            yield from execute()
-            batch.clear()
-            size = length
-        batch.append(argument)
-        size += argument_size
-    if batch:
-        yield from execute()

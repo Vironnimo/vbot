@@ -228,7 +228,7 @@ describe('live Run events of the displayed Session', () => {
       vi.useRealTimers();
     });
 
-    it('renders streamed Tool stdout with the next streaming flush', async () => {
+    it('renders live Tool output with the next streaming flush', async () => {
       vi.useFakeTimers();
       const harness = makeStreamHarness();
       const runId = 'run-chunks';
@@ -255,25 +255,29 @@ describe('live Run events of the displayed Session', () => {
           },
         },
         {
-          type: 'tool_call_stdout',
+          type: 'tool_call_output',
           run_id: runId,
           sequence: 3,
-          payload: { tool_call_id: 'call-one', data: 'chunk-one' },
+          payload: {
+            tool_call_id: 'call-one',
+            terminal_id: 'term_one',
+            screen: 'screen-one',
+          },
         },
       );
       const sessionState = harness.displayedSession();
       const tool = () =>
         visibleTimelineItemsForRender(sessionState)[0].tools[0];
 
-      // Tool starts render at once; stdout chunks ride the ~33 ms flush.
+      // Tool starts render at once; output events ride the ~33 ms flush.
       expect(tool()).toMatchObject({ toolCallId: 'call-one' });
-      expect(tool().stdout).toBeFalsy();
+      expect(tool().output).toBeFalsy();
 
       await vi.advanceTimersByTimeAsync(50);
 
       expect(tool()).toMatchObject({
         toolCallId: 'call-one',
-        stdout: 'chunk-one',
+        output: 'screen-one',
       });
     });
 

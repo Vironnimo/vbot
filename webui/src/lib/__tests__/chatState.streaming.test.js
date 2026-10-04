@@ -171,18 +171,22 @@ describe('streamed drafts', () => {
     ]);
   });
 
-  it('merges interleaved Tool stdout and stderr chunks into the matching Tool rows', () => {
+  it('shows the latest output screen of each Tool row and retains only that event', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
       'session-tool-output',
     );
-    const chunk = (sequence, type, toolCallId, data) =>
+    const screen = (sequence, toolCallId, text) =>
       appendRunEvent(sessionState, {
-        type,
+        type: 'tool_call_output',
         run_id: 'run-one',
         sequence,
-        payload: { tool_call_id: toolCallId, data },
+        payload: {
+          tool_call_id: toolCallId,
+          terminal_id: `term_${toolCallId}`,
+          screen: text,
+        },
       });
     const tools = () => visibleTimelineItemsForRender(sessionState)[0].tools;
 
@@ -199,21 +203,26 @@ describe('streamed drafts', () => {
         },
       },
     });
-    chunk(2, 'tool_call_stdout', 'call-one', 'hel');
+    screen(2, 'call-one', 'hel');
     const earlyKey = assistantRunChildProgressKey(tools()[0]);
-    chunk(3, 'tool_call_stderr', 'call-one', 'warn');
-    chunk(4, 'tool_call_stdout', 'call-one', 'lo\n');
-    chunk(5, 'tool_call_stdout', 'call-two', 'other\n');
+    screen(4, 'call-one', 'hello\nwarn');
+    screen(5, 'call-two', 'other');
+    // A replayed older screen does not replace a newer one.
+    screen(3, 'call-one', 'hell');
 
     expect(tools()).toEqual([
       expect.objectContaining({
         toolCallId: 'call-one',
-        stdout: 'hello\n',
-        stderr: 'warn',
+        output: 'hello\nwarn',
       }),
-      expect.objectContaining({ toolCallId: 'call-two', stdout: 'other\n' }),
+      expect.objectContaining({ toolCallId: 'call-two', output: 'other' }),
     ]);
-    // A growing output re-renders its row.
+    expect(
+      sessionState.streamingRunEvents.filter(
+        (event) => event.type === 'tool_call_output',
+      ),
+    ).toHaveLength(2);
+    // A changed screen re-renders its row.
     expect(assistantRunChildProgressKey(tools()[0])).not.toBe(earlyKey);
   });
 
@@ -243,10 +252,14 @@ describe('streamed drafts', () => {
 
   it.each([
     {
-      type: 'tool_call_stdout',
-      payload: { tool_call_id: 'call-one', data: 'hello\n' },
-      rendered: (run) => run.tools[0].stdout,
-      expected: 'hello\n',
+      type: 'tool_call_output',
+      payload: {
+        tool_call_id: 'call-one',
+        terminal_id: 'term_one',
+        screen: 'hello',
+      },
+      rendered: (run) => run.tools[0].output,
+      expected: 'hello',
     },
     {
       type: 'assistant_output_delta',
@@ -573,7 +586,7 @@ describe('replay cursor', () => {
     expect(highestContiguousRunEventSequence(sessionState)).toBe(5);
   });
 
-  it('advances the replay cursor across interleaved tool output streams', () => {
+  it('advances the replay cursor across interleaved Tool output events', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -592,27 +605,19 @@ describe('replay cursor', () => {
         },
       ],
     });
-    appendRunEvent(sessionState, {
-      type: 'tool_call_stdout',
-      run_id: 'run-one',
-      sequence: 2,
-      payload: { tool_call_id: 'call-one', data: 'a' },
-    });
-    appendRunEvent(sessionState, {
-      type: 'tool_call_stderr',
-      run_id: 'run-one',
-      sequence: 3,
-      payload: { tool_call_id: 'call-one', data: 'b' },
-    });
-    appendRunEvent(sessionState, {
-      type: 'tool_call_stdout',
-      run_id: 'run-one',
-      sequence: 4,
-      payload: { tool_call_id: 'call-one', data: 'c' },
-    });
+    const output = (sequence, toolCallId, screen) =>
+      appendRunEvent(sessionState, {
+        type: 'tool_call_output',
+        run_id: 'run-one',
+        sequence,
+        payload: { tool_call_id: toolCallId, terminal_id: 'term_one', screen },
+      });
+    output(2, 'call-one', 'a');
+    output(3, 'call-two', 'b');
+    output(4, 'call-one', 'c');
 
-    // The compressed stdout event spans sequences 2 and 4, so only the raw
-    // per-chunk keys keep the cursor contiguous across the interleaved stream.
+    // The retained call-one event spans sequences 2 and 4, so only the raw
+    // per-event keys keep the cursor contiguous across the interleaved calls.
     expect(highestContiguousRunEventSequence(sessionState)).toBe(4);
   });
 

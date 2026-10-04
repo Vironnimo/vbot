@@ -16,4 +16,6 @@ class MusicGenerationResult:
     media_type: str
     model: str
     transcript: str = ""
+    # Text the Model returned beside the audio, such as lyrics or a description.
+    text: str = ""
     raw: JsonObject | None = None

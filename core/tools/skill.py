@@ -27,10 +27,10 @@ from core.skills.skills import (
 )
 from core.tools._read_text import ReadPosition, render_text_window
 from core.tools.arguments import optional_int
-from core.tools.bash import format_bash_env_usage
 from core.tools.call_syntax import normalize_call_arguments
 from core.tools.contracts import compile_tool_contract
 from core.tools.model_names import SHELL_MODEL_NAME
+from core.tools.shell import format_shell_env_usage
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -654,7 +654,7 @@ def load_skill_content(
     presented_resources = [_present_resource_path(resource, directory) for resource in resources]
     environment_access = ""
     if env_keys:
-        environment_access = format_bash_env_usage(
+        environment_access = format_shell_env_usage(
             env_keys,
             intro=(
                 "Loading this Skill makes these additional environment credentials "

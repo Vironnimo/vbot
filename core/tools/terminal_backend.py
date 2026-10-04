@@ -131,12 +131,19 @@ class _WindowsTerminalAdapter:
     def read(self, size: int) -> str:
         # Read pywinpty's socket directly: its read() waits indefinitely for
         # both output and the remainder of a split UTF-8 character.
-        if not select.select([self._process.fileobj], [], [], TERMINAL_READ_TIMEOUT_SECONDS)[0]:
-            raise TimeoutError
+        connection = self._process.fileobj
         try:
-            data = self._process.fileobj.recv(size)
+            ready = select.select([connection], [], [], TERMINAL_READ_TIMEOUT_SECONDS)[0]
+            data = connection.recv(size) if ready else None
         except BlockingIOError:
             raise TimeoutError from None
+        except ValueError, OSError:
+            # close() released the socket while this read waited: the output has ended.
+            if connection.fileno() == -1:
+                raise EOFError from None
+            raise
+        if data is None:
+            raise TimeoutError
         if not data:
             raise EOFError
         if data == b"0011Ignore":

@@ -12,11 +12,11 @@ from core.projects import ProjectStore
 from core.prompts.blocks import BlockDefinition, LayoutEntry
 from core.subagents import SubAgentPromptTarget
 from core.tools import ToolRegistry, model_names, tool_success
-from core.tools.bash import register_bash_tool
 from core.tools.file_state import FileReadState
-from core.tools.process_manager import ProcessManager
 from core.tools.project import register_project_tool
+from core.tools.shell import register_shell_tool
 from core.tools.subagent import register_subagent_tools
+from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolPromptBlockRegistry
 from core.utils.paths import model_path
 from tests.core.prompts.prompts_test_support import (
@@ -63,14 +63,13 @@ def test_tool_definitions_follow_the_agent_allowlist_profile_and_memory_mode(
     assert set(tools.prompt_profile_agent_ids) == {"coder"}
 
 
-def test_bash_env_block_renders_only_for_permanent_agent_grants(
+def test_shell_env_block_renders_only_for_permanent_agent_grants(
     workspace: Path,
     tmp_path: Path,
 ) -> None:
     tools = ToolRegistry()
     prompt_blocks = ToolPromptBlockRegistry()
-    process_manager = ProcessManager(sweep_interval_seconds=3600)
-    register_bash_tool(tools, process_manager, prompt_blocks=prompt_blocks)
+    register_shell_tool(tools, TerminalManager(), prompt_blocks=prompt_blocks)
     manager = _manager(
         tmp_path,
         tools=tools,

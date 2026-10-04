@@ -23,7 +23,7 @@ def _age(path: Path, *, seconds: float) -> None:
 @pytest.mark.parametrize(
     ("category", "suffix", "directory"),
     [
-        ("bash", ".log", "bash_temporary"),
+        ("commands", ".log", "command_temporary"),
         ("subagents", ".md", "subagent_temporary"),
         ("terminals", ".events.jsonl", "terminal_temporary"),
     ],
@@ -48,8 +48,8 @@ def test_create_allocates_unique_files_in_the_category_directory(
     [
         ("unknown", ".log"),
         ("atomic", ".tmp"),
-        ("bash", "log"),
-        ("bash", "../escape"),
+        ("commands", "log"),
+        ("commands", "../escape"),
     ],
 )
 def test_create_rejects_unknown_categories_and_unsafe_suffixes(
@@ -72,22 +72,22 @@ def test_sweep_applies_category_retention_and_spares_active_files(tmp_path: Path
     manager = TemporaryFileManager(tmp_path)
     active = manager.create("subagents", ".md")
     expired_subagent = manager.create("subagents", ".md")
-    retained_bash = manager.create("bash", ".log")
-    expired_bash = manager.create("bash", ".log")
+    retained_command = manager.create("commands", ".log")
+    expired_command = manager.create("commands", ".log")
     expired_subagent.finish()
-    retained_bash.finish()
-    expired_bash.finish()
+    retained_command.finish()
+    expired_command.finish()
     _age(active.path, seconds=96 * 60 * 60)
     _age(expired_subagent.path, seconds=25 * 60 * 60)
-    _age(retained_bash.path, seconds=25 * 60 * 60)
-    _age(expired_bash.path, seconds=73 * 60 * 60)
+    _age(retained_command.path, seconds=25 * 60 * 60)
+    _age(expired_command.path, seconds=73 * 60 * 60)
 
     manager.sweep()
 
     assert active.path.exists()
     assert not expired_subagent.path.exists()
-    assert retained_bash.path.exists()
-    assert not expired_bash.path.exists()
+    assert retained_command.path.exists()
+    assert not expired_command.path.exists()
 
 
 def test_finish_is_idempotent_and_restarts_retention_clock(tmp_path: Path) -> None:
@@ -274,9 +274,9 @@ def test_short_temp_paths_retry_collisions_without_truncating_logs(tmp_path, mon
     manager = TemporaryFileManager(tmp_path)
     values = iter((1, 1, 2))
     monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
-    first = manager.create("bash", ".log")
+    first = manager.create("commands", ".log")
     first.path.write_text("keep", encoding="utf-8")
-    second = manager.create("bash", ".log")
+    second = manager.create("commands", ".log")
     assert first.path.name == "tmp_000000000001.log"
     assert second.path.name == "tmp_000000000002.log"
     assert first.path.read_text(encoding="utf-8") == "keep"

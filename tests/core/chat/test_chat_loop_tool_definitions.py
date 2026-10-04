@@ -13,11 +13,9 @@ from core.extensions.operations import ExtensionOperations
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.tools import (
     ANALYZE_IMAGE_TOOL_NAME,
-    BASH_SUBAGENT_TOOL_DESCRIPTION,
-    BASH_SUBAGENT_TOOL_PARAMETERS,
-    BASH_TOOL_DESCRIPTION,
-    BASH_TOOL_NAME,
-    BASH_TOOL_PARAMETERS,
+    SHELL_TOOL_DESCRIPTION,
+    SHELL_TOOL_NAME,
+    SHELL_TOOL_PARAMETERS,
     FileReadState,
     ToolAccess,
     ToolContext,
@@ -143,43 +141,37 @@ async def test_ambiguous_tool_spelling_never_dispatches_a_harness_alias(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_nested_run_receives_non_handoff_bash_definition(tmp_path: Path) -> None:
+async def test_shell_definition_fits_the_run_depth_and_offered_tools(tmp_path: Path) -> None:
     tools = ToolRegistry()
     tools.register(
-        BASH_TOOL_NAME,
-        BASH_TOOL_DESCRIPTION,
-        BASH_TOOL_PARAMETERS,
-        lambda _context, _arguments: tool_success({"status": "completed"}),
+        SHELL_TOOL_NAME,
+        SHELL_TOOL_DESCRIPTION,
+        SHELL_TOOL_PARAMETERS,
+        lambda _context, _arguments: tool_success({"status": "exited"}),
         open_input_schema=True,
     )
     runtime = tool_runtime(
         tmp_path,
         tools,
         [final("top-level done"), final("nested done")],
-        allowed_tools=[BASH_TOOL_NAME],
+        allowed_tools=[SHELL_TOOL_NAME],
     )
     parent = build_chat_loop(runtime)
 
     await parent.send("coder", "Top-level", session_id="top-level")
     await parent.child_loop(nesting_depth=1).send("coder", "Nested", session_id="nested")
 
-    top_level_definition = runtime.adapter.requests[0]["kwargs"]["tools"][0]
-    nested_definition = runtime.adapter.requests[1]["kwargs"]["tools"][0]
-    # The Provider request carries the name the Model knows on this host, and the
-    # description names no dedicated file Tool, since this Agent is offered none.
-    usual_pointer = (
-        "For reading, searching and editing files use read, search_files and apply_patch. "
-    )
-    assert top_level_definition == {
-        "name": model_tool_name(BASH_TOOL_NAME),
-        "description": BASH_TOOL_DESCRIPTION.replace(usual_pointer, ""),
-        "parameters": BASH_TOOL_PARAMETERS,
-    }
-    assert nested_definition == {
-        "name": model_tool_name(BASH_TOOL_NAME),
-        "description": BASH_SUBAGENT_TOOL_DESCRIPTION.replace(usual_pointer, ""),
-        "parameters": BASH_SUBAGENT_TOOL_PARAMETERS,
-    }
+    top_level, nested = (request["kwargs"]["tools"][0] for request in runtime.adapter.requests)
+    # The Provider request carries the name the Model knows on this host; this
+    # Agent is offered neither file Tools nor the terminal Tool.
+    assert top_level["name"] == nested["name"] == model_tool_name(SHELL_TOOL_NAME)
+    for definition in (top_level, nested):
+        assert "read" not in definition["description"]
+        assert "terminal;" not in definition["description"]
+    assert "continues in the background" in top_level["description"]
+    assert "mode" in top_level["parameters"]["properties"]
+    assert "continues" not in nested["description"]
+    assert "mode" not in nested["parameters"]["properties"]
 
 
 def _tools_sent(runtime: Any) -> list[list[JsonObject]]:

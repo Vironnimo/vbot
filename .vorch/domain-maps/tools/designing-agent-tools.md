@@ -66,7 +66,7 @@ Where it lives: shared representation repair (types, encodings, scalar-to-array)
 
 Every result answers: what happened, what is known now, and what the next useful call is.
 
-- Return identifiers and continuation values in the exact argument shape the next call needs (`offset=2001`, `process_id`, a page `ref`).
+- Return identifiers and continuation values in the exact argument shape the next call needs (`offset=2001`, `terminal_id`, a page `ref`).
 - Name the observed state together with valid next actions. `status: "running"` alone invites polling; "the result arrives automatically; continue other work or end the Run" does not.
 - Distinguish an exhausted search from a partial page, and a truncated output from a complete one; give the path or call that retrieves the rest.
 - Content reaches the Model as readable text, not escaped inside a JSON string: escaping costs 9-27% extra tokens on file content and makes exact copying error-prone.
@@ -91,7 +91,7 @@ An error states the lifecycle state (nothing applied, partially applied, already
 Tools that hand data to each other form a family and are reviewed and changed together, including their System Prompt guidance blocks, notifications and consumers.
 
 - Files: `read` -> `apply_patch` or `edit`/`write` (one dialect per route); `search_files` -> `read`.
-- Shell: `bash` -> `process` and the automatic completion notification; `terminal` for interactive programs.
+- Shell: `bash` runs commands in terminals; a long or input-waiting command continues as a `terminal` (wait, input, kill) and its result arrives as an automatic completion notification.
 - Delegation: `subagent` plus its System Prompt block and completion delivery; `status`.
 - Web: `web_search` -> `web_fetch`.
 - Knowledge: `memory`, `skill`/`skill_manage` plus the Skills prompt section, `session_search`.

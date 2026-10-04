@@ -163,16 +163,6 @@ class _ProbePromptManager:
         return ""
 
 
-class _NoopProcessManager:
-    """Run-scope hooks ChatLoop calls; the probe starts no managed processes."""
-
-    async def cancel_scope_async(self, _scope_key: str) -> None:
-        return None
-
-    def release_scope(self, _scope_key: str) -> None:
-        return None
-
-
 class _SyntheticFirstStepAdapter:
     """Inject one deterministic Tool Call, then delegate to the real Adapter."""
 
@@ -293,7 +283,6 @@ def _start_probe_runtime(runtime: Runtime) -> None:
         return None
 
     for hook_name in (
-        "_start_process_manager",
         "_start_channel_service",
         "_start_cron_service",
         "_start_provider_usage_service",
@@ -443,7 +432,6 @@ async def _run_case(
         sessions=sessions,
         run_manager=run_manager,
         tools=tools,
-        process_manager=cast(Any, _NoopProcessManager()),
         file_read_state=FileReadState(),
         change_tracker=ChangeTracker(),
         storage=source_runtime.storage,
@@ -455,6 +443,7 @@ async def _run_case(
         get_local_context_windows=source_runtime.local_context_windows,
         image_understanding_available=image_understanding_available,
         deliver_background_completions=deliver_background_completions,
+        get_terminal_manager=lambda: None,
     )
     chat_loop = ChatLoop(dependencies, streaming=streaming)
     trigger_service = TriggerService(

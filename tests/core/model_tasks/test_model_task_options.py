@@ -147,7 +147,7 @@ def test_provider_target_schema_uses_the_registry_model_or_the_provider_fallback
             {"voice": "nova", "response_format": "mp3", "speed": 1.0, "extra_options": {}},
             id="binding-values-win",
         ),
-        # A forced enum default survives; "Provider default" selects stay empty.
+        # "Provider default" selects stay empty.
         pytest.param(
             [
                 _model(
@@ -170,11 +170,14 @@ def test_provider_target_schema_uses_the_registry_model_or_the_provider_fallback
                     },
                 )
             ],
+            # A stored option the schema no longer offers never reaches a request.
             TaskModelBinding(
-                task_type=TASK_IMAGE_GENERATION, target="openai/dall-e-3::api-key", options={}
+                task_type=TASK_IMAGE_GENERATION,
+                target="openai/dall-e-3::api-key",
+                options={"response_format": "url"},
             ),
-            {"size": "", "response_format": "b64_json", "extra_options": {}},
-            id="forced-and-empty-defaults",
+            {"size": "", "extra_options": {}},
+            id="empty-defaults-and-inert-stale-option",
         ),
     ],
 )

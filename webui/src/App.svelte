@@ -240,9 +240,7 @@
 
   let providerAuthEvent = $derived(appControllerState.providerAuthEvent);
   let runServerEvents = $derived(appControllerState.runServerEvents);
-  let backgroundBashStatusEvents = $derived(
-    appControllerState.backgroundBashStatusEvents,
-  );
+  let commandStatuses = $derived(appControllerState.commandStatuses);
   let connectionSnapshot = $derived(appControllerState.connectionSnapshot);
   let activeRuns = $derived(appControllerState.activeRuns);
 
@@ -930,7 +928,7 @@
         {pendingSessionNavigation}
         onSessionNavigation={handleChatSessionNavigation}
         {runServerEvents}
-        {backgroundBashStatusEvents}
+        {commandStatuses}
         {connectionSnapshot}
         {activeRuns}
         {sessionsRefreshToken}

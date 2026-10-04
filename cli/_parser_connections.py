@@ -619,7 +619,7 @@ def _add_task_model_parsers(
         action="append",
         default=[],
         metavar=("<name>", "<value>"),
-        help="Set one option without JSON quoting; repeat for multiple options",
+        help="Set one option, read as the type its field declares; repeat for multiple options",
     )
     option_group.add_argument(
         "--options-stdin",

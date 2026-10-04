@@ -13,9 +13,12 @@ import pytest
 from core.model_tasks import (
     ImageConfigurationError,
     ImageExecutionError,
+    ImageOptionError,
     ImageOutcomeUnknownError,
     ImageRefusedError,
 )
+from core.model_tasks.artifacts import OutputDirectoryError, OutputWriteError
+from core.model_tasks.image_profile import ImageProfile
 from core.tools.image import (
     IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION,
     IMAGE_GENERATION_TOOL_DESCRIPTION,
@@ -25,6 +28,7 @@ from core.tools.tools import ToolDefinitionProfileContext, ToolRegistry
 from core.utils.errors import ProviderError
 from core.utils.paths import model_path
 from tests.core.tools.image_test_support import (
+    TEXT_ONLY_PROFILE,
     ImageService,
     contract_refusal,
     failure,
@@ -50,21 +54,40 @@ def _definition(registry: ToolRegistry) -> dict[str, Any]:
     return definition
 
 
-def test_profile_offers_source_images_only_to_a_model_that_edits() -> None:
-    text_only_registry = image_registry(ImageService(supports_source_images=False))
-    text_only = _definition(text_only_registry)
-    editing = _definition(image_registry(ImageService(supports_source_images=True)))
+@pytest.mark.parametrize(
+    ("profile", "description", "offered"),
+    [
+        pytest.param(TEXT_ONLY_PROFILE, IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION, {}, id="text"),
+        pytest.param(
+            ImageProfile(
+                wire="openai_images",
+                call_choices={"aspect_ratio": ("1:1", "16:9"), "background": ("transparent",)},
+                max_source_images=16,
+            ),
+            IMAGE_GENERATION_TOOL_DESCRIPTION,
+            {
+                "source_images": {"maxItems": 16},
+                "aspect_ratio": {"enum": ["1:1", "16:9"]},
+                "background": {"enum": ["transparent"]},
+            },
+            id="editing-with-choices",
+        ),
+    ],
+)
+def test_profile_offers_what_the_configured_model_takes(
+    profile: ImageProfile, description: str, offered: dict[str, dict[str, Any]]
+) -> None:
+    registry = image_registry(ImageService(profile=profile))
+    definition = _definition(registry)
+    parameters = definition["parameters"]
 
-    assert text_only == _definition(text_only_registry)
-    assert text_only["description"] == IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION
-    assert editing["description"] == IMAGE_GENERATION_TOOL_DESCRIPTION
-    fields = {"prompt", "aspect_ratio", "resolution", "output_dir"}
-    assert set(text_only["parameters"]["properties"]) == fields
-    assert set(editing["parameters"]["properties"]) == fields | {"source_images"}
-    for parameters in (text_only["parameters"], editing["parameters"]):
-        assert "additionalProperties" not in parameters
-        assert parameters["required"] == ["prompt"]
-        assert parameters["properties"]["output_dir"]["description"]
+    assert definition == _definition(registry)
+    assert definition["description"] == description
+    assert set(parameters["properties"]) == {"prompt", "output_dir", *offered}
+    for name, facts in offered.items():
+        assert facts.items() <= parameters["properties"][name].items()
+    assert "additionalProperties" not in parameters
+    assert parameters["required"] == ["prompt"]
 
 
 @pytest.mark.asyncio
@@ -84,6 +107,8 @@ async def test_generated_images_are_returned_as_local_file_facts(
         "path": model_path(tmp_path / "artifact-1.png"),
         "media_type": "image/png",
         "size_bytes": 5,
+        "width": 1024,
+        "height": 576,
     }
     if revised_prompt is not None:
         image["revised_prompt"] = revised_prompt
@@ -130,8 +155,13 @@ async def test_images_go_to_the_callers_directory(
     ("arguments", "call_options", "sources"),
     [
         pytest.param(
-            {"aspect_ratio": "16:9", "resolution": "4K", "source_images": ["photo.png"]},
-            {"aspect_ratio": "16:9", "resolution": "4K"},
+            {
+                "aspect_ratio": "16:9",
+                "resolution": "4K",
+                "background": "transparent",
+                "source_images": ["photo.png"],
+            },
+            {"aspect_ratio": "16:9", "resolution": "4K", "background": "transparent"},
             ("photo.png",),
             id="canonical",
         ),
@@ -184,7 +214,7 @@ async def test_the_call_reaches_the_image_model(
                 "image_generation was not run:\n"
                 '- "unexpected" is not a parameter.\n'
                 "image_generation parameters: prompt (required), source_images, aspect_ratio, "
-                "resolution, output_dir."
+                "resolution, background, output_dir."
             ),
             id="unknown-argument",
         ),
@@ -275,7 +305,7 @@ async def test_unusable_calls_are_refused_before_generating(
 
 @pytest.mark.asyncio
 async def test_a_text_only_model_refuses_source_images(tmp_path: Path) -> None:
-    service = ImageService(supports_source_images=False)
+    service = ImageService(profile=TEXT_ONLY_PROFILE)
     registry = image_registry(service)
     contract = registry.contracts_for_provider_definitions([_definition(registry)])[
         IMAGE_GENERATION_TOOL_NAME
@@ -292,7 +322,7 @@ async def test_a_text_only_model_refuses_source_images(tmp_path: Path) -> None:
     assert offered["error"] == contract_refusal(
         "image_generation was not run:\n"
         '- "source_images" is not a parameter.\n'
-        "image_generation parameters: prompt (required), aspect_ratio, resolution, output_dir."
+        "image_generation parameters: prompt (required), output_dir."
     )
     assert unoffered["error"] == failure("invalid_arguments", _TEXT_ONLY_REFUSAL)
     assert service.output_dirs == []
@@ -375,6 +405,38 @@ def _provider_failure(cause: Exception, status: int) -> ImageExecutionError:
                 "another Image generation model in Settings → Tools → Images, video & music.",
             ),
             id="provider-rejection",
+        ),
+        pytest.param(
+            ImageOptionError(
+                "aspect_ratio '5:4' is not offered by the configured image model; choose one "
+                "of: 1:1, 16:9."
+            ),
+            failure(
+                "invalid_arguments",
+                "aspect_ratio '5:4' is not offered by the configured image model; choose one "
+                "of: 1:1, 16:9.",
+            ),
+            id="option-not-offered",
+        ),
+        pytest.param(
+            OutputDirectoryError(Path("notes.txt"), "a file with that name exists"),
+            failure(
+                "output_dir_unusable",
+                "Cannot use notes.txt as the output folder: a file with that name exists. "
+                "Nothing was generated. Pass another output_dir, or omit output_dir to use the "
+                "default folder.",
+            ),
+            id="unusable-folder",
+        ),
+        pytest.param(
+            OutputWriteError(Path("full-disk"), "No space left on device"),
+            failure(
+                "output_write_failed",
+                "Generation succeeded, but the images could not be saved in full-disk: No "
+                "space left on device. The provider charged for this request. Tell the user; "
+                "repeating the call generates and charges again.",
+            ),
+            id="save-failed",
         ),
     ],
 )

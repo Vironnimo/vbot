@@ -172,22 +172,9 @@ describe('ChatView Runs', () => {
     subAgentRow().querySelector('[data-cancel="subagent"]').click();
 
   describe('run stream', () => {
-    it('settles a Background Bash completion without a reactive update loop', async () => {
+    it('applies a live command status without a reactive update loop', async () => {
       rpcMock.mockImplementation(createChatRpcMock());
-      await chat.mountChat({
-        backgroundBashStatusEvents: [
-          {
-            payload: {
-              process_id: 'proc-test',
-              status: 'completed',
-              started_at: '2026-09-08T12:00:00Z',
-              finished_at: '2026-09-08T12:00:10Z',
-              output: 'finished',
-              exit_code: 0,
-            },
-          },
-        ],
-      });
+      await chat.mountChat({ commandStatuses: { term_test: 'completed' } });
 
       const input = document.querySelector('textarea');
       setInputValue(input, 'Continue after completion');

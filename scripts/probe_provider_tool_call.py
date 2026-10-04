@@ -12,7 +12,7 @@ comparison live in scripts/provider_probe/learning_eval.py.
 Credentials are never included in reports.
 
 Examples:
-    python scripts/probe_provider_tool_call.py --model glm-5.2 --mode stream
+    python scripts/probe_provider_tool_call.py --model glm-5.3-flash --mode stream
     python scripts/probe_provider_tool_call.py --wire openai --profile explicit_non_strict \
         --scenario nested_operation --mode nonstream
     python scripts/probe_provider_tool_call.py --provider openai \
@@ -51,7 +51,6 @@ from scripts.provider_probe.choices import (  # noqa: E402
     CALENDAR_CASES,
     CHANNEL_SEND_CASES,
     CRON_CASES,
-    DEFAULT_CONNECTION,
     DEFAULT_IDLE_TIMEOUT_SECONDS,
     DEFAULT_LINES,
     DEFAULT_MODEL,
@@ -66,7 +65,6 @@ from scripts.provider_probe.choices import (  # noqa: E402
     MEMORY_CASES,
     OPTIONAL_BOOLEAN_CASES,
     PROBE_SCENARIOS,
-    PROCESS_CASES,
     READ_CASES,
     SESSION_SEARCH_CASES,
     SKILL_CASES,
@@ -112,7 +110,7 @@ from scripts.provider_probe.workflow_tolerance import _probe_tool_tolerance  # n
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--provider", default=DEFAULT_PROVIDER)
-    parser.add_argument("--connection", default=DEFAULT_CONNECTION)
+    parser.add_argument("--connection", help="Defaults to <provider>:api-key.")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--mode", choices=("stream", "nonstream"), default="stream")
     parser.add_argument("--wire", choices=("auto", "openai", "anthropic"), default="auto")
@@ -256,12 +254,6 @@ def _parser() -> argparse.ArgumentParser:
         choices=HA_CALL_SERVICE_CASES,
         default="base",
         help="Exact ha_call_service argument shape requested by the scenario.",
-    )
-    parser.add_argument(
-        "--process-case",
-        choices=PROCESS_CASES,
-        default="status_list",
-        help="Exact process argument shape requested by the process scenario.",
     )
     parser.add_argument(
         "--read-case",
@@ -533,7 +525,6 @@ async def _run(args: argparse.Namespace) -> int:
                 args.image_generation_case if scenario.name == "image_generation" else None
             ),
             "memory_case": args.memory_case if scenario.name == "memory" else None,
-            "process_case": args.process_case if scenario.name == "process" else None,
             "read_case": args.read_case if scenario.name == "read" else None,
             "session_search_case": (
                 args.session_search_case if scenario.name == "session_search" else None
@@ -566,7 +557,9 @@ async def _run(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    return asyncio.run(_run(_parser().parse_args()))
+    args = _parser().parse_args()
+    args.connection = args.connection or f"{args.provider}:api-key"
+    return asyncio.run(_run(args))
 
 
 if __name__ == "__main__":

@@ -20,15 +20,15 @@ from core.recall import (
     SemanticIndexer,
 )
 from core.skills import SkillRegistry
-from core.tools.bash import register_bash_tool
 from core.tools.contracts import ToolContractError
-from core.tools.process_manager import ProcessManager
 from core.tools.session_search import (
     _normalize_search_arguments,
     _parse_period,
     register_session_search_tool,
 )
+from core.tools.shell import register_shell_tool
 from core.tools.skill import register_skill_tool
+from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolContext, ToolRegistry, tool_failure
 from scripts.provider_probe.common import PROJECT_ROOT
 from scripts.provider_probe.recall_cases import (
@@ -46,7 +46,7 @@ async def _evaluate_case(
         root = Path(temporary)
         data_root = root / "data"
         sessions = await seed_sessions(data_root)
-        manager = ProcessManager()
+        manager = TerminalManager()
         registry = ToolRegistry()
         skills = SkillRegistry.load(PROJECT_ROOT / "resources/skills")
         embeddings = FixtureEmbeddings() if case.get("embeddings") else None
@@ -70,7 +70,7 @@ async def _evaluate_case(
         if "exact_arguments" not in case:
             register_skill_tool(registry, lambda *_: skills, lambda: None)
         if case.get("bash", True) and "exact_arguments" not in case:
-            register_bash_tool(registry, manager)
+            register_shell_tool(registry, manager)
         context = ToolContext(
             agent_id="coder",
             session_id="current-session",

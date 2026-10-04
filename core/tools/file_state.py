@@ -10,7 +10,7 @@ failure. Modeled on OpenCode's (since-removed) ``FileTimeService`` for the
 session-scoped ``(mtime, size)`` stamps, with no content hashing.
 
 The registry is a single runtime-owned instance injected into ``read`` and the file
-edit tools (constructor injection, like ``ProcessManager`` for ``bash``) — not a module
+edit tools (constructor injection, like ``TerminalManager`` for ``bash``) — not a module
 singleton.
 """
 

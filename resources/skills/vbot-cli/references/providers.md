@@ -85,7 +85,7 @@ vbot model refresh [<provider-id>]
 
 ## Task models
 
-Bind a specialized task to a model target. Task types: `image_generation`, `image_understanding`, `speech_to_text`, `text_embedding`, `text_to_speech`, `video_generation`.
+Bind a specialized task to a model target. Task types: `image_generation`, `image_understanding`, `music_generation`, `speech_to_text`, `text_embedding`, `text_to_speech`, `video_generation`.
 
 ```bash
 vbot task-model list
@@ -101,7 +101,7 @@ vbot task-model clear <task-type>
 
 - Read target ids from `target list` (`<provider>/<model>::<connection>` or `local/<id>`) instead of constructing them by hand. `target list` lists connection-level ids — append a trailing `:<account-id>` yourself to pin a credential account.
 - Run `option list <task-type> <target-id>` before the first binding. After a binding exists, omit the target to inspect its `fields`, `configured_options`, and default-merged `effective_options`.
-- Prefer repeated `--option <name> <value>` over `--options` for ordinary setup; scalar values are parsed as JSON types when possible. Use `--options` only when replacing the complete option object is intentional. On shells that alter JSON quoting, pipe the object to `--options-stdin` instead.
+- Prefer repeated `--option <name> <value>` over `--options` for ordinary setup. Each value is read as the type its field declares in `option list`: choice and text fields keep the text as written (`--option duration 8` stores the choice `"8"`), number fields take a number, and switches take `true` or `false`. Use `--options` only when replacing the complete option object is intentional. On shells that alter JSON quoting, pipe the object to `--options-stdin` instead.
 - Use `option set` and `option unset` for later changes. They preserve every sibling option and reject unknown names, invalid select values, wrong types, and out-of-range numbers before persistence. For object-valued options such as `extra_options`, pipe JSON to `option set ... --stdin` so shell quoting cannot corrupt it.
 - A Model's `supported_voices` and the `voice` choices returned by `task-model option list` are exact ids. Never shorten them, invent a friendly name, or reuse a voice from a different Model.
 - `set` changes only the given task type; other bindings stay untouched. Changing its target without options starts from the new target's defaults and never carries options from the old Model.
@@ -115,4 +115,21 @@ vbot task-model option set text_to_speech speed 1.1
 vbot task-model option list text_to_speech
 vbot task-model set text_embedding openai/text-embedding-3-small::api-key
 # PowerShell: '{"some_provider_field":true}' | vbot task-model option set text_to_speech extra_options --stdin
+```
+
+### Image, video, and music settings
+
+The fields depend on the bound Model and Connection: `option list` returns only the settings that this Model accepts on this Connection, with their exact names and choices. Field names follow the Model's own parameters, so read them from `option list` instead of assuming them.
+
+- Image generation: typical fields are the image count (`n`), `quality`, and `size` or `aspect_ratio` and `resolution`. Agents can choose some of them per call, such as aspect ratio, resolution, or background; the stored value is the default when an Agent's call leaves that choice out. Image count and quality are set only here.
+- Video generation: `duration` (seconds, stored as the text of a choice), `aspect_ratio`, `resolution` or `size`, `generate_audio`, and `seed`, as the Model offers them. Agents can override duration, aspect ratio, resolution, and audio per call.
+- Music generation: `temperature`, `top_p`, and `seed`. Unset fields use the Provider's default.
+
+```bash
+vbot task-model option list image_generation
+vbot task-model option set image_generation quality high
+vbot task-model option set image_generation n 2
+vbot task-model option set video_generation duration 8
+vbot task-model option set video_generation generate_audio false
+vbot task-model option unset video_generation resolution
 ```

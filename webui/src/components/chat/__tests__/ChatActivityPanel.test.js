@@ -41,21 +41,23 @@ function subAgentTask({
   };
 }
 
-function backgroundBashTask({ id, command, ...fields }) {
+// A `bash` call whose command went on running in terminal `term_<id>`.
+function backgroundCommandTask({ id, command, ...fields }) {
   return {
     type: 'tool_call',
     id,
     name: 'bash',
     status: 'success',
     resultEvent: { type: 'tool_call_result' },
-    arguments: { command, mode: 'background' },
+    arguments: { command },
     result: {
       ok: true,
       error: null,
       data: {
-        process_id: `process-${id}`,
         status: 'running',
-        delivery: 'automatic',
+        terminal_id: `term_${id}`,
+        output: '',
+        next: 'The result arrives as a new message.',
       },
       artifacts: [],
     },
@@ -175,7 +177,7 @@ describe('ChatActivityPanel', () => {
   }
 
   // Sub-Agent Runs in every state (the running one listed last), a foreground
-  // Sub-Agent, and two Bash processes (one failed through its tracked status).
+  // Sub-Agent, and two background commands (one failed through its tracked status).
   function sessionTasks() {
     const tasks = {
       completed: subAgentTask({
@@ -206,11 +208,11 @@ describe('ChatActivityPanel', () => {
         content: 'Implement the sidebar',
         status: 'running',
       }),
-      failedBash: backgroundBashTask({
+      failedBash: backgroundCommandTask({
         id: 'bash-failed',
         command: 'npm test',
       }),
-      runningBash: backgroundBashTask({
+      runningBash: backgroundCommandTask({
         id: 'bash-running',
         command: 'npm run dev',
       }),
@@ -219,7 +221,10 @@ describe('ChatActivityPanel', () => {
       tasks,
       props: {
         timelineItems: [runItem(Object.values(tasks))],
-        backgroundBashStatuses: { 'process-bash-failed': 'failed' },
+        backgroundCommandStatuses: {
+          'term_bash-failed': 'failed',
+          'term_bash-running': 'running',
+        },
       },
     };
   }
@@ -238,18 +243,20 @@ describe('ChatActivityPanel', () => {
     const subagents = document.querySelector(
       '.chat-activity__group--subagents',
     );
-    const bash = document.querySelector('.chat-activity__group--bash');
+    const commands = document.querySelector('.chat-activity__group--commands');
     expect([...document.querySelectorAll('.chat-activity__group')]).toEqual([
       subagents,
-      bash,
+      commands,
     ]);
     expect(subagents.querySelector('[data-status]').dataset.status).toBe(
       'running',
     );
-    expect(bash.open).toBe(false);
-    expect(bash.querySelector('.chat-activity__running-count')).not.toBeNull();
-    bash.querySelector('summary').click();
-    expect(bash.open).toBe(true);
+    expect(commands.open).toBe(false);
+    expect(
+      commands.querySelector('.chat-activity__running-count'),
+    ).not.toBeNull();
+    commands.querySelector('summary').click();
+    expect(commands.open).toBe(true);
 
     // Foreground Sub-Agents stay in the timeline only.
     expect(document.body.textContent).not.toContain('Run foreground checks');
@@ -314,7 +321,7 @@ describe('ChatActivityPanel', () => {
       expect(row.tagName).toBe('DIV');
       expect(row.textContent.replace(/\s+/g, ' ').trim()).toBe(command);
       expect(row.getAttribute('aria-label')).toBe(
-        t('chat.activity.bashTaskAria', {
+        t('chat.activity.commandTaskAria', {
           command,
           status: status(statusKey),
         }),
@@ -331,18 +338,18 @@ describe('ChatActivityPanel', () => {
     const { tasks, props } = sessionTasks();
     const onNavigateToSubAgent = vi.fn();
     const onCancelSubAgent = vi.fn();
-    const onCancelBackgroundProcess = vi.fn();
+    const onCancelBackgroundCommand = vi.fn();
     openPanel({
       ...props,
       onNavigateToSubAgent,
       onCancelSubAgent,
-      onCancelBackgroundProcess,
+      onCancelBackgroundCommand,
     });
 
     const subAgentCancel = document.querySelector(
       '[data-cancel-kind="subagent"]',
     );
-    const bashCancel = document.querySelector('[data-cancel-kind="bash"]');
+    const bashCancel = document.querySelector('[data-cancel-kind="command"]');
     expect(document.querySelectorAll('.chat-activity__cancel')).toHaveLength(2);
     expect(subAgentCancel.closest('.chat-activity__task-row')).toBe(
       rowContaining('builder'),
@@ -351,7 +358,7 @@ describe('ChatActivityPanel', () => {
       t('chat.activity.cancelSubAgentAria', { agent: 'builder' }),
     );
     expect(bashCancel.getAttribute('aria-label')).toBe(
-      t('chat.activity.cancelBashAria', { command: 'npm run dev' }),
+      t('chat.activity.cancelCommandAria', { command: 'npm run dev' }),
     );
 
     rowContaining('npm run dev').click();
@@ -366,8 +373,8 @@ describe('ChatActivityPanel', () => {
     bashCancel.click();
     await Promise.resolve();
     expect(onCancelSubAgent).toHaveBeenCalledWith({ tool: tasks.running });
-    expect(onCancelBackgroundProcess).toHaveBeenCalledWith({
-      processId: 'process-bash-running',
+    expect(onCancelBackgroundCommand).toHaveBeenCalledWith({
+      terminalId: 'term_bash-running',
     });
     expect(onNavigateToSubAgent).toHaveBeenCalledTimes(1);
   });
@@ -378,18 +385,19 @@ describe('ChatActivityPanel', () => {
       timelineItems: [
         runItem([
           subAgentTask({ id: 'a', agentId: 'alba', status: 'running' }),
-          backgroundBashTask({ id: 'b', command: 'npm run dev' }),
+          backgroundCommandTask({ id: 'b', command: 'npm run dev' }),
         ]),
       ],
+      commandStatuses: { term_b: 'running' },
     });
 
-    const bash = document.querySelector('details');
-    expect(bash.open).toBe(false);
+    const commands = document.querySelector('details');
+    expect(commands.open).toBe(false);
     for (const open of [true, false]) {
-      bash.querySelector('summary').click();
+      commands.querySelector('summary').click();
       await vi.advanceTimersByTimeAsync(1100);
       flushSync();
-      expect(bash.open).toBe(open);
+      expect(commands.open).toBe(open);
     }
   });
 
@@ -440,8 +448,8 @@ describe('ChatActivityPanel', () => {
     ['completed', 'success'],
   ])(
     'lists overlapping History and live background work once in %s state',
-    (processStatus, dot) => {
-      const bash = backgroundBashTask({
+    (commandStatus, dot) => {
+      const bash = backgroundCommandTask({
         id: 'overlap',
         command: 'npm run build',
       });
@@ -450,14 +458,14 @@ describe('ChatActivityPanel', () => {
           runItem([bash], 'history-run'),
           runItem([{ ...bash, id: 'live-tool' }], 'live-run'),
         ],
-        backgroundBashStatuses: { 'process-overlap': processStatus },
+        backgroundCommandStatuses: { term_overlap: commandStatus },
       });
 
       expect(taskRows()).toHaveLength(1);
       expect(document.querySelector(`[data-status="${dot}"]`)).not.toBeNull();
       expect(
-        document.querySelectorAll('[data-cancel-kind="bash"]'),
-      ).toHaveLength(processStatus === 'running' ? 1 : 0);
+        document.querySelectorAll('[data-cancel-kind="command"]'),
+      ).toHaveLength(commandStatus === 'running' ? 1 : 0);
       rail().click();
       flushSync();
       expect(document.querySelector('.chat-activity__panel')).toBeNull();
@@ -727,7 +735,7 @@ describe('ChatActivityPanel', () => {
     );
   });
 
-  it('shows Bash background runtimes from terminal data on panel rows', () => {
+  it('shows live command statuses and times on panel rows', () => {
     const timing = {
       started_at: '2026-09-04T12:00:00+00:00',
       completed_at: '2026-09-04T12:00:01+00:00',
@@ -736,30 +744,34 @@ describe('ChatActivityPanel', () => {
     openPanel({
       timelineItems: [
         runItem([
-          backgroundBashTask({ id: 'done', command: 'npm run build', timing }),
-          backgroundBashTask({ id: 'ticking', command: 'npm run dev', timing }),
+          backgroundCommandTask({
+            id: 'stopped',
+            command: 'npm run build',
+            timing,
+          }),
+          backgroundCommandTask({
+            id: 'ticking',
+            command: 'npm run dev',
+            timing,
+          }),
         ]),
       ],
-      backgroundBashProcesses: {
-        'process-done': {
-          status: 'completed',
-          exitCode: 0,
-          cancelledByUser: false,
-          startedAt: '2026-09-04T12:00:00+00:00',
-          finishedAt: '2026-09-04T12:04:12+00:00',
-          output: 'built',
-          truncated: false,
-          logFile: '',
-        },
+      // The live status wins over the durable one recorded in History.
+      backgroundCommandStatuses: {
+        term_stopped: 'running',
+        term_ticking: 'running',
       },
+      commandStatuses: { term_stopped: 'stopped' },
       reflectionTasks: [],
     });
 
-    const finishedRow = rowContaining('npm run build');
-    expect(finishedRow.querySelector('[data-status="success"]')).not.toBeNull();
+    const stoppedRow = rowContaining('npm run build');
     expect(
-      finishedRow.querySelector('.chat-activity__task-time').textContent,
-    ).toContain('4m 12s');
+      stoppedRow.querySelector('[data-status="cancelled"]'),
+    ).not.toBeNull();
+    expect(
+      stoppedRow.querySelector('.chat-activity__task-time').textContent,
+    ).toContain(t('chat.toolCancelled'));
     // The running row ticks from the panel's own clock, so only its presence
     // is asserted.
     const runningRow = rowContaining('npm run dev');

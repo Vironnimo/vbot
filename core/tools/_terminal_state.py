@@ -26,6 +26,10 @@ TERMINAL_STATUS_DEFAULT_LINES = 30
 TERMINAL_STATUS_MAX_LINES = 100
 TERMINAL_MAX_LIVE_PER_SESSION = 4
 TERMINAL_MAX_LIVE_GLOBAL = 32
+# Shell commands are Terminal Sessions with their own capacity and size.
+TERMINAL_MAX_LIVE_COMMANDS = 64
+TERMINAL_COMMAND_COLUMNS = 200
+TERMINAL_COMMAND_ROWS = 50
 TERMINAL_SWEEP_INTERVAL_SECONDS = 60.0
 TERMINAL_FINISHED_TTL = timedelta(minutes=30)
 TERMINAL_NOTICE_MESSAGE_CAP_CHARS = 16_000
@@ -84,6 +88,7 @@ TerminalState = Literal[
     "error",
 ]
 AttentionKind = Literal["output_settled", "exited", "error"]
+TerminalKind = Literal["terminal", "command"]
 TerminalStreamEvent = dict[str, Any]
 TerminalChangedCallback = Callable[[str], None]
 
@@ -212,6 +217,10 @@ class TerminalInfo:
     attention_revision: int
     acknowledged_attention_revision: int
     log_path: Path | None
+    # ``command``: a shell command run by the shell Tool.
+    kind: TerminalKind = "terminal"
+    # A command still running in the foreground of its Tool call is not listed.
+    hidden: bool = False
 
     @property
     def finished(self) -> bool:

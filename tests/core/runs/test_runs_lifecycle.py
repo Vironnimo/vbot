@@ -18,9 +18,9 @@ from core.runs import (
     RUN_AGENT_ACTIVITY_FIELD,
     RUN_KIND_FIELD,
     TOOL_CALL_DELTA_EVENT,
+    TOOL_CALL_OUTPUT_EVENT,
     TOOL_CALL_RESULT_EVENT,
     TOOL_CALL_STARTED_EVENT,
-    TOOL_CALL_STDOUT_EVENT,
     ChatRunManager,
     Run,
     RunAdmission,
@@ -102,7 +102,7 @@ async def _collect(events: Any) -> list[Any]:
         (
             [
                 TOOL_CALL_STARTED_EVENT,
-                TOOL_CALL_STDOUT_EVENT,
+                TOOL_CALL_OUTPUT_EVENT,
                 TOOL_CALL_RESULT_EVENT,
                 ASSISTANT_OUTPUT_DELTA_EVENT,
                 ASSISTANT_OUTPUT_EVENT,

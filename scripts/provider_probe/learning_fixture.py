@@ -165,11 +165,11 @@ class EvalWorker:
         return self.runtime.agent_resolver.resolve_agent(None, EVAL_AGENT_ID)
 
     def _route_definitions(self, agent: Any) -> list[dict[str, Any]]:
-        from core.tools.bash import project_bash_tool_definitions
         from core.tools.image import ANALYZE_IMAGE_TOOL_NAME
+        from core.tools.shell import project_shell_tool_definitions
 
         definitions = self.runtime.system_prompts.provider_tool_definitions(agent)
-        definitions = project_bash_tool_definitions(definitions, nesting_depth=0)
+        definitions = project_shell_tool_definitions(definitions, nesting_depth=0)
         return [
             dict(definition)
             for definition in definitions

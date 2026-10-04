@@ -10,6 +10,7 @@ from core.model_tasks import (
     TASK_IMAGE_GENERATION,
     TASK_IMAGE_UNDERSTANDING,
     TASK_LIVE_VOICE,
+    TASK_MUSIC_GENERATION,
     TASK_SPEECH_TO_TEXT,
     TASK_TEXT_EMBEDDING,
     TASK_TEXT_TO_SPEECH,
@@ -51,7 +52,13 @@ from tests.core.model_tasks.model_tasks_test_support import (
             ],
             id="image-generation",
         ),
-        pytest.param(TASK_VIDEO_GENERATION, [], id="no-matching-model"),
+        # Video Models without a duration choice edit or upscale videos.
+        pytest.param(
+            TASK_VIDEO_GENERATION,
+            [("openrouter/text-to-video::api-key", "Text to Video")],
+            id="video-generation",
+        ),
+        pytest.param(TASK_LIVE_VOICE, [], id="no-matching-model"),
     ],
 )
 def test_list_targets_offers_only_models_tagged_for_the_task(
@@ -63,6 +70,19 @@ def test_list_targets_offers_only_models_tagged_for_the_task(
             _model("openai/gpt-4o-mini-tts", (TASK_TEXT_TO_SPEECH,)),
             _model("dall-e-3", (TASK_IMAGE_GENERATION,), name="DALL-E 3"),
             _model("gpt-image-1", (TASK_IMAGE_GENERATION,), name="GPT Image 1"),
+            # A router picks another Model per request.
+            _model("openrouter/auto", (TASK_IMAGE_GENERATION,), name="Auto Router"),
+            _model(
+                "text-to-video",
+                (TASK_VIDEO_GENERATION,),
+                name="Text to Video",
+                task_options={
+                    TASK_VIDEO_GENERATION: {
+                        "parameters": {"duration": {"type": "enum", "values": ["5"]}}
+                    }
+                },
+            ),
+            _model("video-upscale", (TASK_VIDEO_GENERATION,), name="Video Upscale"),
         ]
     )
     service = TaskModelService(_Providers(), models, _Credentials(), _Storage())
@@ -101,6 +121,16 @@ def test_list_targets_for_image_understanding_filters_by_capability() -> None:
                 name="Text Model",
                 provider_id="opencode-go",
                 connections=("api-key",),
+            ),
+            # Music Models read images but answer with a track.
+            _model(
+                "music-model",
+                ("chat", "text_output", TASK_MUSIC_GENERATION),
+                name="Music Model",
+                provider_id="opencode-go",
+                connections=("api-key",),
+                input_modalities=("text", "image"),
+                output_modalities=("text", "audio"),
             ),
         ]
     )
@@ -226,8 +256,8 @@ _TRANSCRIBE = "openrouter/openai/gpt-4o-transcribe"
             [_OPENROUTER_TWO_CONNECTIONS],
             {"openrouter:api-key"},
             [_model("openai/gpt-4o-transcribe", (TASK_SPEECH_TO_TEXT,))],
-            [(f"{_TRANSCRIBE}::api-key", "OpenRouter / OpenAI GPT-4o Transcribe")],
-            id="single-usable-connection-has-a-bare-label",
+            [(f"{_TRANSCRIBE}::api-key", "OpenRouter / OpenAI GPT-4o Transcribe (API Key)")],
+            id="single-usable-connection-is-still-named",
         ),
         # A per-model allowlist yields no cross product.
         pytest.param(

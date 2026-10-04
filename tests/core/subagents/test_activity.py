@@ -18,9 +18,9 @@ from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     ASSISTANT_OUTPUT_EVENT,
     REASONING_EVENT,
+    TOOL_CALL_OUTPUT_EVENT,
     TOOL_CALL_RESULT_EVENT,
     TOOL_CALL_STARTED_EVENT,
-    TOOL_CALL_STDOUT_EVENT,
     USER_MESSAGE_EVENT,
     Run,
     RunInterruptedError,
@@ -103,7 +103,7 @@ async def test_activity_streams_assistant_and_safe_tool_summary_without_duplicat
             "display": {"summary": "notes.md", "hidden_argument_keys": ["path"]},
         },
     )
-    run.emit(TOOL_CALL_STDOUT_EVENT, {"content_delta": "secret tool stdout"})
+    run.emit(TOOL_CALL_OUTPUT_EVENT, {"content_delta": "secret tool stdout"})
     run.emit(
         TOOL_CALL_RESULT_EVENT,
         {

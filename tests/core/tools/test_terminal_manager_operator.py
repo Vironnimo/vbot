@@ -34,7 +34,6 @@ from tests.core.tools.terminal_manager_helpers import (
 )
 from tests.core.tools.terminal_manager_helpers import clocked_manager as clocked_manager
 from tests.core.tools.terminal_manager_helpers import default_shell as default_shell
-from tests.core.tools.terminal_manager_helpers import shell_environment as shell_environment
 from tests.core.tools.terminal_manager_helpers import terminal_manager as terminal_manager
 
 Clocked = tuple[TerminalManager, AdapterFactory, PendingTriggerService, FakeClock]

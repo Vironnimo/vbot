@@ -19,12 +19,12 @@ from core.storage import TemporaryFileManager
 from core.subagents import SubAgentCoordinator
 from core.tools._shell_arguments import normalize_shell_arguments
 from core.tools.apply_patch import patch_targets, register_apply_patch_tool
-from core.tools.bash import register_bash_tool
 from core.tools.file_state import FileReadState
-from core.tools.process_manager import ProcessManager
 from core.tools.read import register_read_tool
 from core.tools.search_files import interpret_search_call, register_search_files_tool
+from core.tools.shell import register_shell_tool
 from core.tools.subagent import _render_subagent_prompt_block, register_subagent_tools
+from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolContext, ToolRegistry
 from scripts.provider_probe.common import PROJECT_ROOT
 
@@ -45,7 +45,7 @@ class FirstUseFixture:
         self.sessions = ChatSessionManager(self.data)
         self.runs = ChatRunManager(persistence=self.sessions)
         self.temporary = TemporaryFileManager(self.data)
-        self.processes = ProcessManager(temporary_files=self.temporary)
+        self.terminals = TerminalManager(temporary_files=self.temporary)
         self.received: list[dict[str, Any]] = []
         self.started_events: list[asyncio.Event] = []
         self.notices: list[dict[str, Any]] = []
@@ -83,7 +83,7 @@ class FirstUseFixture:
         self.registry = ToolRegistry()
         register_search_files_tool(self.registry)
         register_subagent_tools(self.registry, self.coordinator)
-        register_bash_tool(self.registry, self.processes)
+        register_shell_tool(self.registry, self.terminals)
         file_state = FileReadState()
         register_apply_patch_tool(self.registry, file_state=file_state)
         register_read_tool(
@@ -211,7 +211,7 @@ class FirstUseFixture:
                 f"Working directory: {self.cwd.as_posix()}\n"
                 f"Operating system: {'Windows' if sys.platform == 'win32' else 'Linux'}",
                 (PROJECT_ROOT / "resources/prompts/tools.md").read_text(encoding="utf-8"),
-                block,
+                block.text if block is not None else "",
             ]
         )
 
@@ -222,7 +222,7 @@ class FirstUseFixture:
         name, arguments = call["name"], call["arguments"]
         if name == "search_files":
             query = interpret_search_call(arguments)
-            if any(not self.inside(path) for path in query["paths"] or [str(self.cwd)]):
+            if any(not self.inside(path) for path in query.roots or [str(self.cwd)]):
                 raise FixtureBoundaryError(
                     "Search selected roots outside the disposable repository"
                 )
@@ -277,5 +277,5 @@ class FirstUseFixture:
         await asyncio.sleep(0)
         for future in self.deliveries:
             future.cancel()
-        self.processes.stop()
+        await self.terminals.aclose()
         self.sessions.close()

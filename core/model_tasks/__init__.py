@@ -35,6 +35,7 @@ if TYPE_CHECKING:
         ImageExecutionError,
         ImageInputError,
         ImageNotFoundError,
+        ImageOptionError,
         ImageOutcomeUnknownError,
         ImageReadError,
         ImageRefusedError,
@@ -70,10 +71,12 @@ if TYPE_CHECKING:
         validate_task_type,
     )
     from core.model_tasks.music import (
+        MusicArtifact,
         MusicConfigurationError,
         MusicError,
         MusicExecutionError,
         MusicOutcomeUnknownError,
+        MusicRefusedError,
         MusicService,
     )
     from core.model_tasks.music_providers import ProviderMusicClient
@@ -103,7 +106,10 @@ if TYPE_CHECKING:
         VideoConfigurationError,
         VideoError,
         VideoExecutionError,
+        VideoOptionError,
         VideoOutcomeUnknownError,
+        VideoProfile,
+        VideoRefusedError,
         VideoService,
     )
     from core.model_tasks.video_providers import ProviderVideoClient
@@ -111,6 +117,12 @@ if TYPE_CHECKING:
 
 
 _EXPORT_MODULES = {
+    "MusicArtifact": "core.model_tasks.music",
+    "MusicRefusedError": "core.model_tasks.music",
+    "VideoProfile": "core.model_tasks.video",
+    "VideoRefusedError": "core.model_tasks.video",
+    "VideoOptionError": "core.model_tasks.video",
+    "ImageOptionError": "core.model_tasks.image",
     "TaskUsageContext": "core.model_tasks.task_execution",
     "SPEECH_TASK_TYPES": "core.model_tasks.constants",
     "SUPPORTED_TASK_TYPES": "core.model_tasks.constants",
@@ -213,6 +225,12 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = [
+    "MusicArtifact",
+    "MusicRefusedError",
+    "VideoProfile",
+    "VideoRefusedError",
+    "VideoOptionError",
+    "ImageOptionError",
     "DEFAULT_LOCAL_TASK_TARGET_REGISTRY",
     "EmbeddingConfigurationError",
     "EmbeddingError",

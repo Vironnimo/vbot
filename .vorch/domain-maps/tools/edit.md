@@ -36,8 +36,10 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   allowlist adds them, so a call to a sibling the route did not offer runs under its
   own registered contract when policy allows it (`chat/request-building.md` ->
   Dispatch). `offered_edit_tool(context)` names the edit Tool a result may point to
-  (`apply_patch`, then `edit`, through `ToolContext.offers`; `read` and the shell
-  Tool use it).
+  (`apply_patch`, then `edit`, through `ToolContext.offers`; `read`'s change-command
+  refusal and `search_files`' `--replace` note use it). The shell description's
+  file-Tool sentence names the first offered of `apply_patch` and `edit` from the
+  request's definitions (`project_shell_tool_definitions`, `shell.md`).
 - **Schema:** `path` plus `edits` (at least one item of `old_string`, `new_string`,
   optional `replace_all`), open model-facing schema; unknown root parameters fail
   at dispatch (`edit was not run: ... edit parameters: path (required), edits
@@ -107,7 +109,8 @@ against about 315 for `apply_patch`.
   refusal inventories, unknown parameters, a race during the call.
 - `tests/core/chat/test_chat_loop_tool_definitions.py` (offered dialect per family,
   epoch pin across a Model change), `test_tool_dispatch.py` (one permission),
-  `test_model_names.py` (harness names), `test_read_fields.py` and `test_bash.py`
-  (texts naming the offered edit Tool).
+  `test_model_names.py` (harness names), `test_read_fields.py`,
+  `test_search_files_arguments.py` and `test_shell.py` (texts naming the offered
+  edit Tool).
 - `scripts/tool_lab/cases/files.json` holds edit and write cases for
   `python -m scripts.tool_lab probe`.

@@ -5,263 +5,363 @@ search permission consolidation, or result continuation.
 
 ## Ownership and Interface
 
-`core/tools/search_files.py` owns the single `search_files` Tool, registration,
-normalization, orchestration, and display. Its private `_search_*` modules own
-argument/option parsing, native execution, ignore rules, candidate selection, and
-results; these are implementation units of the existing Tools owner, not public services.
-The async handler offloads the complete operation through `run_tool_worker`.
+`search_files` is the only file and content search Tool. The definition sends
+file and content discovery here instead of shell rg/grep/find/ls. ripgrep owns
+traversal, ignore rules, hidden-file and binary handling, globs, types and matching.
+vBot owns call interpretation, roots, ordering, paging, rendering and diagnostics.
+Its private modules are implementation units of the Tools owner, not public
+services:
 
-The definition directs file/content discovery to this Tool instead of shell
-rg/grep/find/ls. No field is required. Named fields cover the common calls:
-`pattern` (one regex), `path` and `glob` (a string or a list), `output`
-(`content`, `files`, `count`) and `context`; `limit` and `offset` page. `args`
-adds ripgrep arguments, without an executable name, shell quoting, or shell
-expansion, and alone remains a complete ripgrep argument vector.
-`interpret_search_call` in `search_files.py` combines both into one query (the
-provider probes use it too): `pattern` acts like `-e`, `path` entries are trailing
-roots, `glob` entries are leading `-g` filters, and `output`/`context` become
-`-l`/`-c`/`-C` for content searches. `_search_arguments.py` separates patterns,
-options, and literal roots in `args`: without a named pattern or `-e`, the first
-operand is the regex and later operands are roots; `-F` selects literal matching.
-Repeated `-e`/`--regexp` patterns are ORed and make every operand a root. Options
-may precede or follow operands; `--` ends option parsing. Option values remain
-literal even when they resemble other flags.
+- `core/tools/search_files.py`: registration, the owner normalizer
+  (`normalize_search_arguments`), `interpret_search_call` (the provider probes use
+  it too), root resolution, scopes, orchestration (`_search`), the handler, the
+  display, the help text and the definition.
+- `core/tools/_search_query.py`: `interpret` turns the named fields and `args`
+  into one `SearchQuery`, with mode, patterns, roots, globs, the rg arguments,
+  context, page and notes.
+- `core/tools/_search_execution.py`: bounded, cancellable ripgrep children
+  (`native_lines`), the counting and listing passes, the JSON line pass,
+  diagnostic judgment (`_judge`), failure texts (`explain_failure`) and the regex
+  retry (`pattern_retry`).
+- `core/tools/_search_results.py`: ordering, pages and rendering (`entry_page`,
+  `content_window`, `content_page`) and the `summary`.
 
-A call without any pattern or operand lists files (`{}` lists the working
-directory; `glob`/`path` narrow it). `--files`, `--dirs`, and `--entries` select
-file, directory, and combined discovery explicitly; they are mutually exclusive,
-all operands are roots, and `-g` filters names. A `pattern` or `-e` beside one of
-them rejects, naming the field that was sent and pointing to `glob` for names or
-to dropping the selector for contents. `output: "count"` and `context`
-without a pattern reject with the correction. Directory discovery includes empty
-directories. No roots means `effective_cwd`; explicit empty roots and stdin reject.
-Relative roots use that cwd, absolute roots are allowed, and symlink spelling stays
-usable. `--help` and `--type-list` provide on-demand references.
+Two shared modules help. `core/tools/search.py` provides `SearchBudget`,
+`MAX_OUTPUT_BYTES` and path display; its old walker remains only for Chat file
+mentions, which have their own UI discovery contract. `core/tools/_path_suggestions.py`
+(shared with `read`) suggests similar paths. The async handler runs the whole
+operation through `run_tool_worker`.
 
-Missing explicit roots produce partial results from the remaining requested roots,
-with `missing_paths`, `searched_paths`, warnings and `complete=false`. If every root
-is missing, the call fails with `path_not_found`, naming the root relative to the
-working directory when it lies inside it. Each missing root names up to five
-existing suggestions from `core/tools/_path_suggestions.py` (shared with `read`):
-a relative path that repeats the end of the working directory, per-component
-spelling repair, for a name missing from an existing folder the same name in
-other folders below the working directory, and similar sibling names. Suggestions are never applied, and roots
-are never reinterpreted as patterns or replaced by the working directory. When the
-pattern came from the first `args` operand, the diagnostic shows how to search the
-missing operand as another pattern (`pattern "a|b"`, or repeated `-e` with `-F`).
+## Call Interpretation
 
-The option catalog in `_search_options.py` owns aliases, arity, repeat/order
-semantics, native forwarding, applicability, validation, and on-demand help.
-This is a bounded search interface, never a shell command or unrestricted native
-passthrough. The old `action`/`patterns`/`paths`/`options`/`kind` fields are no longer
-part of the advertised interface (`options`, `patterns`, and `paths` are accepted
-as aliases of `args`, `pattern`, and `path`);
-historical persisted rows remain readable.
-Supported families cover case/literal/word/line matching, PCRE2 and multiline,
-contexts, file/count/absence/quiet output, globs and types, ignores, hidden paths,
-symlinks, depth/size/filesystem limits, ordering, encoding, CRLF/NUL, binary
-handling, and diagnostics. Unknown flags, missing operands, or incompatible
-effects reject with a correction. Plain source coordinates and
-formatting are fixed; formatting flags already satisfied by output are accepted.
-Context combined with count or file-list output (`output` `count` or `files`, `-c`,
-`--count-matches`, `-l`, `--files-without-match`) is dropped with an interpretation
-note, after resolving option precedence: Agents twice sent `output: "files"` with
-`context: 3` and got a rejection (Sessions, 2026-09). Context beside `-q` or `-o`
-still rejects, naming that flag to remove or `context` and `-A`/`-B`/`-C` to omit.
+No field is required. The named fields cover the common calls: `pattern` (one
+regex), `path` and `glob` (a string or a list), `output` (`content`, `files`,
+`count`) and `context`. `limit` and `offset` page through results. `args` adds
+ripgrep arguments, one per item, without an executable name, shell quoting or
+shell expansion. On its own, `args` is a complete ripgrep argument list. `pattern`
+acts like `-e`, `path` entries are roots and `glob` entries are `-g` filters.
 
-Common scalar/container encodings and known call wrappers use shared repair.
-The owner normalizer also accepts field names from other search Tools and
-command-line habits when their meaning is exact (`search_files.py` ->
-`_FIELD_ALIASES`, `_translate_flag_fields`): renames such as `query`/`include`/
-`output_mode`/`head_limit`/`argv`, flag fields such as `-i`, `ignore_case`,
-`literal`, `-C`, `-A`, `type`, `exclude`, `recursive: false` and Hermes-style
-`target: "files"`, which become `args` tokens or named fields. Single-letter keys
-keep ripgrep's case (`-c` counts, `-C` is context). A `pattern` list becomes
-repeated `-e`. Unclear values (for example `ignore_case: "maybe"`), conflicting
-aliases, and unknown fields reject. Inside `args`, grep spellings keep their
-meaning: `-r`/`-R`/`-I` are accepted defaults, the display flags
-`--no-filename`, `-N` and `--no-line-number` run the search with a `note` that
-results always name each match's file and line (Sessions, 2026-09), `--include`/`--exclude`/
-`--exclude-dir` become `-g` filters, and `-E` followed by a non-encoding is grep's
-extended-regex flag rather than ripgrep's encoding option. Arguments such as
-`true`, `false`, `rg`, literal quotes, and shell syntax remain search payloads,
-never executable prefixes or flag booleans. Complete content/listing examples in
-the definition teach the canonical first call.
+Rules for `args`:
 
-A glob-shaped pattern (no whitespace or `()|^$+\`, and a leading `*`, a `**`, or
-`/*.`) with no `-F`, glob filter, context, count, or other content-only option lists
-files matching it with a `note`; ripgrep rejects a leading `*` as a regex anyway.
+- Without `pattern`, `-e` or `-f`, the first operand is the pattern and later
+  operands are roots. Options can come before or after operands, and `--` ends
+  option parsing.
+- Short clusters split. A valued short flag accepts `-m5`, `-m 5` and `-m=5`.
+  A value attached to a valueless flag (`-F=true`) is rejected with a correction.
+- Most flags pass through to ripgrep unchanged, so ripgrep's own semantics and
+  later-flag-wins precedence hold.
+- `_search_query.py` owns these flags:
+  - **Output-shape flags** (`-l`, `-c`, `--count-matches`, `--files-without-match`,
+    `-q`) select the mode.
+  - **`--files` and `--dirs`** select listings; they exclude each other.
+  - **`-o`, context, sort, `--limit` and `--offset`** are handled by vBot.
+  - **Silent display flags** (`-n`, `--heading`, `--color`, `--json`, ...) are
+    dropped because the fixed output already satisfies them.
+  - **`-N`, `-I`/`--no-filename`, `--passthru` and `--replace`** are ignored
+    with a `note`; the `--replace` note names the offered file edit Tool
+    (`offered_edit_tool`: `apply_patch` or `edit`, `tools/edit.md`), or none
+    when neither is offered. grep's `-h` is also ignored with a note when the
+    call has something to search; on its own, `-h` shows help.
+  - **grep spellings**: `--include`, `--exclude` and `--exclude-dir` become globs.
+    `-r` and `-R` are grep's recursive switch. `-E` followed by something that is
+    not an encoding is grep's extended-regex flag.
+  - **Blocked flags** (`--pre`, `--pre-glob`, `--hostname-bin`, `--generate`) would
+    run other programs; they are rejected.
+  - **`--help`, `--type-list`, `--version` and `--pcre2-version`** return
+    references instead of searching.
+- ripgrep rejects unknown flags itself. `explain_failure` rewrites that rejection
+  as a correction.
 
-Before shared scalar-array conversion, the owning `args` normalizer recognizes
-double-quoted encoded lists. It preserves regex backslashes omitted from their
-JSON escaping, such as field text `["-e","findMe\("]`. Broken list syntax or malformed
-lists with ambiguous JSON control/unicode escapes require correction. Valid encoded JSON and
-members of actual arrays retain their existing semantics, including literal quotes
-and character classes. A scalar `args` string that starts with an option and has
-no backslash splits like a command line, with quotes grouping words
-(`"-F computeDamage( src"`); backslashes would be shell escapes there but regex
-escapes here, so such a string stays one item and the parser asks for one argument
-per item with the split list as example. Other scalar strings stay one pattern,
-and quotes are never stripped from a scalar search pattern. A `path` or `glob`
-string that is valid JSON for a nonempty list of strings (`'["docs", "src"]'`) is
-that list; any other string stays one path or glob.
+Modes:
 
-## Selection Contract
+- With no pattern, the call lists files. `{}` lists the working directory, and
+  `glob` or `path` narrow it.
+- A pattern beside `--files` or `--dirs` is rejected with the field that was
+  sent.
+- `output: "count"` or context without a pattern is rejected.
+- Context with count or file-list output is dropped with a note (Sessions,
+  2026-09: Agents sent `output: "files"` with `context: 3`).
+- Output flags beside a listing are ignored with a note.
+- A glob-shaped pattern lists files matching it, with a `note`, when no
+  conflicting option is set. This applies only to content or files output with a
+  single, non-literal pattern. Glob-shaped means: no whitespace or `()|^$+\`,
+  plus a leading `*`, `**` or `/*.`. A pattern that matches every name (`*`,
+  `**/*`, ...) lists all files.
 
-Content and path searches share traversal, union/deduplication, filters, and ignores.
-Hidden paths are included by default. `.git` files and directories are always excluded.
-Explicit ignored roots opt their subtree into searching. Other ignore sources,
-from lower to higher precedence: global Git excludes and repository info/exclude,
-applicable `.gitignore` files, `.ignore`, `.rgignore`, then extra ignore files.
-Nearest repository boundaries include worktree pointer files and common excludes.
-Controls can disable sources individually; unreadable rules never silently widen
-the scope. Positive vBot filters narrow selection and cannot override ignores.
-Compiled ignore files and Git `core.excludesFile` lookups are shared across calls
-while the file's stat stamp (mtime, size, inode) is unchanged; files modified in the
-last 3 seconds are always reread, so edits apply to the next call.
+The owner normalizer repairs common encodings and wrappers. It also accepts field
+names from other search Tools and command-line habits when their meaning is exact
+(`_FIELD_ALIASES`, `_translate_flag_fields`):
 
-Name globs are case-insensitive unless explicitly changed. Bare `-g '*.py'` filters
-basenames at any depth; globs containing `/` are root-relative, so `-g './*.py'`
-selects top-level files. `-i`/`-s` control content case in content searches and glob
-case in path discovery; explicit glob-case options also remain available.
-Brace alternatives and character classes are supported. Ordered positive and
-negative `-g`/`--iglob` filters apply to roots independently; negatives can exclude
-directory descendants. File type/size filters on path searches require `--files`.
-Overlapping roots deduplicate lexical paths; following symlinks remains opt-in
-except an explicit root, preserves its spelling, and detects ancestor loops.
-Windows junctions count as links, like ripgrep's own walker
-(`test_junctions_are_followed_only_on_request_or_as_explicit_roots`).
-Selection prunes subtrees only when no positive root-relative glob can match a
-descendant; basename globs cannot prune, and final ordered filters and ignores
-remain authoritative. Traversal reuses `DirEntry` metadata, but Windows directory
-identities and `--one-file-system` checks require full stat results because
-`DirEntry.stat()` omits device/inode identities there.
+- **Renamed fields:** `query`, `include`, `output_mode`, `head_limit`, `argv`, and
+  the old `options`, `patterns` and `paths`.
+- **Flag fields:** `-i`, `ignore_case`, `literal`, `-C`, `type`, `exclude`,
+  `recursive: false` (becomes `-d 1`), Hermes-style `target: "files"`, and others.
 
-Default content ordering is path ascending; path discovery uses newest modification
-first, with path tie-breaks. Explicit sorts cover path, modified, accessed, created,
-and unsorted discovery; unsupported creation timestamps reject. A call-scoped
-SQLite spool keeps union, deduplication, and sorting off unbounded Python lists;
-it is discarded with the call, so it runs without fsync or an on-disk journal.
-`FileSelection.close` closes every reader it handed out before the connection: a
-suspended reader (or a traceback retaining one) would keep the spool file open, and on
-Windows the failed scratch-directory cleanup would replace the error that ended the
-search, for example a regex the engine rejects while candidates for further native
-batches remain (`test_native_validation_with_and_without_candidates`).
+Other rules:
 
-## Results and Resource Bounds
+- Single-letter keys keep ripgrep's case: `-c` counts, `-C` is context.
+- A `pattern` list becomes repeated `-e`.
+- Unclear values, conflicting aliases and unknown fields are rejected.
+- The old `action` and `kind` fields are unknown fields.
+- A double-quoted encoded list in `args` keeps regex backslashes that are missing
+  from its JSON escaping.
+- A scalar `args` string that starts with an option and contains no backslash
+  splits like a command line. One with backslashes asks for one argument per item
+  and shows the split list as an example.
+- A `path` or `glob` string that is a JSON list of strings is that list.
 
-Success returns `data.content` and `complete`. The display's detail builder (`_display_details`) shows the user a `results` text block read from `data.content`, an info notice naming the next page's first result when `next_offset` is set, and each warning as a warning notice; page controls, roots and the continuation stay in the raw result (`test_search_files.py::test_the_user_sees_the_results_further_pages_and_warnings`). Paths are relative to effective cwd
-when possible, absolute otherwise; directory rows end in `/`. Content includes
-source line numbers, and occurrence output adds byte columns. Line numbers equal
-`read`'s (both ignore form feed, U+2028 and similar separators) except in files
-with lone-CR line endings, which ripgrep does not count. No matches is success.
-Quiet returns `matched=true/false`, or null when an incomplete scan proves neither.
-`complete` is true only when the scan completed and no further result page remains.
-A paginated result has `complete=false` and `next_offset`; an interrupted scan also
-has `complete=false` with diagnostic warnings. When no result
-was observed, `searched_paths` contains absolute resolved roots with forward slashes
-and `patterns` contains the actual interpreted patterns, including literal quotes.
-When investigating false negatives, check the effective cwd, literal quote or
-escape characters in patterns, and subsequent narrowed searches before attributing
-the outcome to the native engine.
+Roots (`_resolve_roots`):
 
-`limit` defaults to 100 (maximum 10,000); `offset` defaults to zero (maximum
-1,000,000). The equivalent `--limit`/`--offset` args options are accepted too;
-duplicate field/flag values must agree, and option-value or post-`--` payloads
-retain their literal meaning. These page controls never reach the native engine.
-Logical matches or path/count rows define pages; context does not
-consume match slots. Trailing context stops before a match that falls on the
-next page, so a page never shows context around a hidden match. `next_offset` and a continuation instruction appear when
-another result was observed. Continuation repeats a live query; filesystem edits
-can change page boundaries. Long lines contain marked excerpts around the match;
-context omission is explicit and never prevents continuation progress.
+- Without roots, the call searches the effective cwd. An empty path or `-` is
+  rejected.
+- Relative roots start at the cwd; absolute roots are allowed.
+- If a missing root is a brace or comma list whose parts all exist, each part is
+  searched, with a note.
+- If a missing root contains glob characters and no other glob is set, the call
+  searches the root's fixed directory with the rest as an anchored glob, with a
+  note.
+- Any other missing root is reported, never replaced. Each one gets up to five
+  suggestions, and the remaining roots are still searched; the result carries
+  warnings and `searched_paths`. When every root is missing, the call fails with
+  `path_not_found`.
+- When the pattern came from the first `args` operand, the warning shows how to
+  search missing words as further patterns. Words are missing operands without a
+  path separator. The suggestion takes the form `pattern "a|b|c"`, or repeated
+  `-e` with `-F`.
+- When `--files` was given operands, the warning points to `-l` for listing files
+  by contents.
+- Real calls showed this shape (Sessions, 2026-09 and 2026-10): several search
+  words passed as operands, and a pattern passed beside `--files`.
 
-The shared 30-second SearchBudget polls traversal and native output, including
-silent children. User cancellation kills the child and returns cancelled_by_user;
-timeouts, Run cancellation, and unreadable entries make results incomplete with
-bounded warnings. After a timed-out directory search, `narrow_call` lists its
-immediate subdirectories so the Agent can repeat the search under a narrower path;
-the note explains that lowering `limit` does not reduce traversal.
-An operating-system error that ends the search (scratch spool, engine launch) fails
-with `search_error`, or becomes a warning of an incomplete result once results were
-observed, as `search_files could not use a file the search needs: <reason>. Retry
-the call.` with the shared English reason from `file_state.os_error_reason` (whose
-`it` then means that file) and no path: an
-Agent received Windows' German text naming the scratch `selection.sqlite`
-(Sessions, 2026-09). An unreadable ignore source names only its file name; an engine
-that exits with an error and no diagnostics names its exit code.
-Regex errors fail even when selection is empty: the native content
-run reports pattern and option errors itself, and a separate native check against an
-empty file runs only when no candidate file was selected. Native exit 1
-means no match; native diagnostics cannot become a successful empty search.
-A rejected regex is retried once, only when nothing was observed and the intent is
-evident (`_search_execution.py` -> `pattern_retry`): look-around or backreferences
-rerun with PCRE2, and an unmatched parenthesis or a repetition operator with nothing
-to repeat is escaped while the rest keeps its regex meaning. Unnecessary escapes
-before non-ASCII Unicode punctuation are removed; valid escaped backslashes and
-literal searches retain their meaning. The result's `note`
-names the change and `-F`. Anything else, such as an unclosed character class,
-fails with the native diagnostic plus the `-F` correction. A child that exits before
-process monitoring attaches still has its output, diagnostics and exit code drained
-through the original process handle; memory monitoring remains active when available
-and polls the child every 50 ms rather than per output record.
+## Engine Contract
 
-Native subprocess creation, termination and final resource release stay in the
-search worker. The Run's cancel callback retains only an event signal, never the
-`Popen` object: dropping the callback on the Event Loop must not trigger a blocking
-Windows process-handle destructor. Cancellation is checked before launch, while
-draining output and while waiting after stdout EOF; a late signal is harmless.
-Regression coverage in `test_search_files_lifecycle.py` uses real subprocesses to
-verify worker-thread finalization with retained callbacks, generators and errors,
-plus cancellation before/during launch and for silent or stdout-closed children.
+Every ripgrep run gets `DEFAULT_ARGUMENTS`
+(`--no-config --hidden --no-require-git --glob-case-insensitive`), then the
+query's rg arguments, so later `args` override them (`--no-hidden`,
+`--no-glob-case-insensitive`). `--glob=!.git` always comes last. This gives the
+following selection:
 
-Independent bounds cover 50 KiB content output, 8 MiB native protocol records,
-bounded pipe queues/stderr, 512 MiB child RSS, candidate storage (128 MiB), one
-million observed entries, glob expansion, and process arguments. Failures and
-exhausted bounds report actionable scope reductions. No persistent search handle
-or candidate database survives the call. UI display shows the named fields and the
-argument vector with a result-count fact; detail views retain warnings and
-continuation metadata.
+- hidden files are included;
+- `.gitignore`, `.ignore`, `.rgignore`, `.git/info/exclude` and the global Git
+  excludes apply, also outside Git repositories;
+- binary files are skipped;
+- `.git` is never searched.
+
+A positive glob overrides ignore rules, as in ripgrep. Globs without `/` match
+names at any depth. A glob with `/` is anchored at the cwd scope and also at each
+searched directory root (`rg_globs`), and `./` anchors like `/`.
+
+Scopes (`_scopes`): roots inside the cwd share one run at the cwd, and each
+outside root gets its own run, so labels stay cwd-relative or absolute.
+
+A content search runs in two phases:
+
+1. A counting pass runs over all roots:
+   - normally `--count --with-filename --null --stats`;
+   - `--count-matches` with `-U`, `-o` or `--count-matches`;
+   - `--files-without-match --null` for that mode.
+2. For line output, a `--json --max-count N` pass runs over only the page's files,
+   given as explicit paths in batches of at most 28,000 command-line bytes.
+
+Listings use `--files --null`. ripgrep lists no directories, so `--dirs` runs
+`--files --debug` with only the excluding globs and collects the paths ripgrep's
+walker reports as skipped (`ignoring <path>: Ignore(...)`, captured by
+`native_lines`; file type lines are dropped because types skip files only). The
+owner then walks the directories without those paths (`_walk_directories`), so
+empty directories are listed and ignore rules, hidden paths and excluding globs
+stay ripgrep's decisions. Links and junctions are entered only with `--follow`.
+`--max-depth` and the selecting globs apply to the directories themselves
+(`_directory_selected`, with `PurePath.full_match`). With `-t` or `-T`, only
+directories holding a selected file are listed. The `--debug` line format is
+ripgrep 15.1.0's; `test_directory_lists_include_empty_directories_ripgrep_enters`
+fails if an upgrade changes it.
+
+Result units:
+
+- Without `-U`, one result is one matching line, which is consistent with `-c`.
+- With `-U`, one result is one match. Rendering splits ripgrep's merged JSON
+  events by submatch line spans; a line shared by several matches appears once
+  per page.
+- With `-o`, one result is one match.
+
+Documented deviations from plain `rg`, all deliberate:
+
+- Content is ordered by path, comparing casefolded components, across all
+  roots. Listings are ordered newest first.
+- `-uuu` shows binary matching lines instead of the "binary file matches"
+  message.
+- With `-U`, results and counts count matches.
+- `--dirs` exists; it lists every directory ripgrep's walker enters, empty ones
+  included.
+- `-q` returns the file list.
+- `-o` shows no column.
+
+Diagnostics (`_judge`):
+
+- IO errors (`(os error N)`) become English warnings that name the path, with
+  the reason from `file_state.os_error_reason`.
+- Link loops become warnings ("Skipped a link loop").
+- Any other diagnostic that starts with an existing path becomes a warning, for
+  example an invalid ignore file.
+- Anything else means ripgrep refused the query, and the call fails with
+  `search_error` and a correction. Exit 1 means no match.
+- If ripgrep rejects a regex and the call is not literal, `pattern_retry` runs
+  once:
+  - look-around or backreferences rerun with PCRE2;
+  - unbalanced parentheses, braces and dangling repetition operators are escaped;
+  - unnecessary escapes before Unicode punctuation are removed;
+  - the `note` names the change and `-F`.
+
+  When nothing applies, the call fails with the native message and the `-F`
+  correction.
+- Windows junctions count as links, as in ripgrep's walker
+  (`test_junctions_are_followed_only_on_request_or_as_explicit_roots`).
+
+## Results and Paging
+
+A successful result has these fields:
+
+- `data.summary`: totals, the shown range and how to continue.
+- `content`: the result lines.
+- `next_offset`: set when more results exist.
+- `note`: present when interpretation changed the call.
+- `warnings`: at most 20.
+- `searched_paths`: present when a root is missing or nothing was found.
+- `patterns`: present when nothing was found; it lists the actual patterns.
+
+Content lines:
+
+- Matching lines are `path:line:text` and context lines are `path-line-text`.
+  Gaps between non-adjacent lines are marked with `--` when context is shown.
+- Paths are relative to the cwd when possible and absolute otherwise.
+  Directory entries end in `/`.
+- Names with control characters are JSON-quoted so they can be passed back.
+- Line numbers equal `read`'s, except in files with lone-CR line endings, which
+  ripgrep does not count.
+- Lines longer than 1000 characters become excerpts around the match, with
+  `[N characters omitted]` markers.
+
+Paging:
+
+- `limit` defaults to 100 (maximum 10,000); `offset` defaults to 0 (maximum
+  1,000,000). `--limit` and `--offset` in `args` work too, and conflicting values
+  are rejected.
+- Results define pages; context does not use result slots.
+- A page ends at `limit`, or at the 50 KiB output budget minus reserved room,
+  never inside a result.
+- A page's first result always appears, if necessary without its context or
+  trimmed.
+- Context never shows a match that the page leaves out.
+- Continuation repeats a live query, so file edits between pages or between the
+  two phases can shift page boundaries.
+- No matches is a success; its summary says how many files were searched.
+
+The display (`_display_details`) shows the user the `results` text, an info
+notice about the next page and each warning
+(`test_the_user_sees_the_results_further_pages_and_warnings`).
+
+## Bounds, Cancellation and Errors
+
+- **Budget:** the shared 30-second `SearchBudget` covers all phases. A timeout or
+  a Run cancellation returns partial results with a warning. A user cancellation
+  kills the child and returns `cancelled_by_user`.
+- **Child process:** each child's RSS is bounded at 512 MiB, polled every 50 ms.
+  One protocol record is bounded at 8 MiB, the output queue and stderr are
+  bounded, and one counting or listing pass is bounded at 256 MiB of output.
+- **Entries:** at most 500,000 entries are collected; more makes the result
+  incomplete, with a warning.
+- **Process ownership:** native subprocess creation, termination and release stay
+  in the worker thread. The cancel callback keeps only an event, never the
+  `Popen`: dropping it on the Event Loop must not run a blocking Windows handle
+  destructor (`test_search_files_lifecycle.py`).
+- **OS errors:** an OS error that prevents the search fails with
+  `search_error`, as `search_files could not run the search: <reason>. Retry the
+  call.`, with an English reason and no scratch path. Sessions in 2026-09 showed
+  Windows' German text naming a scratch file.
 
 ## Native Dependency and Permissions
 
-`resources/ripgrep.lock.json` pins ripgrep 15.1.0 with PCRE2, per-platform archive
-and executable SHA-256 digests. `core/utils/search_binary.py` resolves only private assets
-under `resources/native/ripgrep/`; no PATH search or Python regex fallback exists.
-`cli/search_runtime.py` provisions at install/update/build time with bounded
-download/extraction, integrity checks, executable validation, and atomic replace.
-Provisioning uses only the Python standard library so clean package builders can
-download missing assets without installing application dependencies. The shared
-locator lives in `core/utils/` to avoid importing the Tool registry in builders.
-A verified existing asset works offline. Missing/corrupt assets make the Tool
-not ready with an installation-repair hint; Tool invocation never provisions it.
-Server packaging includes the executable and notices; desktop-client excludes it.
+`resources/ripgrep.lock.json` pins ripgrep 15.1.0 with PCRE2. It holds a
+SHA-256 digest for each platform's archive and executable.
 
-Only `search_files` is registered. New Project ceilings include it; startup never
-migrates persisted selections, and a `grep`/`glob` name left in a policy is an
-ordinary unknown Tool name without special meaning.
-Claude/OpenCode scanner denials for either capability map to search_files.
-Historical grep/glob chat rows remain readable.
+- **Locating the binary:** `core/utils/search_binary.py` resolves only private
+  assets under `resources/native/ripgrep/`. There is no PATH search and no Python
+  regex fallback.
+- **Provisioning:** `cli/search_runtime.py` provisions at install, update and
+  build time. Downloads and extraction are bounded, and each asset is checked for
+  integrity, validated as an executable and replaced atomically. Provisioning
+  uses only the Python standard library.
+- **Missing or corrupt assets:** the Tool is not ready and shows a repair hint. A
+  verified existing asset works offline, and invoking the Tool never provisions.
+- **Packaging:** server packaging includes the executable and its notices; the
+  desktop client excludes them.
+
+Only `search_files` is registered. New Project ceilings include it. A `grep` or
+`glob` name left in a policy is an ordinary unknown Tool name. Claude/OpenCode
+scanner denials for either capability map to `search_files`. Historical chat rows
+remain readable.
+
+## Agent-facing text
+
+| Text | Reason |
+|---|---|
+| `Search file contents with a regular expression, or list files.` | Names both jobs of the single Tool so Agents pick it for name and content discovery (F1). |
+| `Use this instead of grep, rg, find, or ls in the shell.` | Agents otherwise fall back to the shell for search (F1). |
+| `Find text: {...}. List files: {...}.` | Complete canonical first calls; weak Models copy examples (F2). |
+| `Matches come back as path:line:text; file lists are newest first.` | Agents need the output shape and order to read results without rereading files (F4). |
+| `Hidden files are included, .gitignore rules apply, and .git is skipped.` | Explains why ignored files are absent, so a missing hit is not read as absence (F4). |
+| `Results come in pages; continue with next_offset.` | Prevents reading page 1 as everything (F4). |
+| pattern: `Regular expression (ripgrep syntax) ... Omit it to list files.` | Pins the regex flavor and the listing default (F2, F3). |
+| pattern: `To match text containing ( [ . * literally, add "-F" to args.` | Code searches such as `foo(` were the most common regex failure (Sessions, 2026-09); the retry repairs unbalanced cases, but `.` and `*` still match as regex. |
+| path: `File or directory ..., or a list of them. Relative paths start at the working directory. Omit to search the working directory.` | Weak Models filled `path` with guesses; states the base of relative paths (F2, F3). |
+| glob: `File name filter such as *.py ...; a leading ! excludes. Without a / it matches names at any depth. Case-insensitive. A list applies each.` | Glob anchoring and case differ between harnesses (F3). |
+| output: `content (default) ...; files ...; count ...` | Names the three shapes in Agent terms (F2). |
+| output: `..., or every match with "--count-matches" in args.` | Agents asked for occurrences per file knew `count` counts lines but did not find `--count-matches`; they read files or tried `rg -o` in the shell (first-use probe, 2026-10). |
+| context: `Lines to show before and after each match.` | Unit and meaning (F2). |
+| args: `More ripgrep arguments, one per item: -i ..., --dirs list directories.` | One item per argument prevents command-line strings; the flag list covers the common needs without opening help (F2, F6). |
+| args: `A plain ripgrep argument list also works: the first operand is the pattern, later ones are paths.` | Agents write rg argument lists from habit (862 calls used args, Sessions 2026-09). |
+| args: `["--help"] lists every option.` | Route to the full flag reference instead of guessing (F5). |
+| limit: `Maximum results per page. Omit for 100.` | Plannable number (F6). |
+| offset: `Results to skip; pass next_offset to get the next page.` | Continuation uses the returned value, never a computed one (F4). |
+
+The help text (`help_text`, `HELP_EXAMPLES`) and result and error texts are
+covered by `test_search_files_arguments.py` (the help examples run against a
+fixture) and the error parametrizations there.
 
 ## Verification
 
-Primary tests: `tests/core/tools/test_search_files*.py` (modes, scope, ignores,
-links, encodings, paging, and deterministic traversal-pruning, timeout-recovery and
-system-error checks in `test_search_files.py`; named fields, other interfaces'
-spellings, grep habits, command-line strings, path suggestions, and encoded-list,
-literal-payload, conflict, regex-repair, and empty-scope regressions in
-`test_search_files_arguments.py`; native children in `test_search_files_lifecycle.py`),
-`tests/cli/test_search_runtime.py`,
-the retained probe cases in `tests/scripts/test_provider_probe.py`, plus runtime, scanner, Chat, packaging,
-and Tool row integration tests. Tests execute the private native engine.
+Tests live in `tests/core/tools/test_search_files*.py`:
 
-`scripts/probe_provider_tool_call.py --scenario tool_first_use --first-use-tool search_files`
-evaluates natural user tasks with production definitions/prompts, competing Tools,
-real disposable files and dispatch through the final answer. It checks discovery,
-matching, counts, completeness, working-directory scope and appropriate read/shell
-choices. `--repetitions` repeats fresh trials; `--first-use-report` retains every
-attempt and response. `--scenario search_files` remains guided single-Tool
-conformance, including options, repairs and rejection; it cannot establish Tool
-choice or independent first-use reliability. Its `--search-case` selects case ids.
-The old shared walker in `core/tools/search.py` remains for Chat file mentions;
-its UI discovery contract is separate from search_files.
+- **`test_search_files.py`** checks ripgrep equivalence and engine behavior:
+  - content output and paging are compared with `rg --sort=path` over a fixture
+    with every ignore source;
+  - file lists are compared with `rg --files`;
+  - a git differential (`git ls-files --others --exclude-standard`) checks ignore
+    selection;
+  - other tests cover totals, ordering, context at page edges, the byte limit,
+    multiline paging, outside roots, `.git`, excerpts, encodings, link loops,
+    junctions, unusual names, timeout and cancel, English OS errors, the missing
+    engine, and the display.
+- **`test_search_files_arguments.py`** checks interpretation and tolerance:
+  named fields, aliases, grep habits, command-line strings, path globs and lists,
+  missing paths and their hints, flags owned by vBot, conflicts, regex repair, and
+  the help examples.
+- **`test_search_files_lifecycle.py`** checks native child lifecycle, memory
+  polling and cancellation with real subprocesses.
+
+Other tests: `tests/cli/test_search_runtime.py` covers provisioning. The probe
+cases in `scripts/provider_probe/workflow_search_files.py` run through
+`tests/scripts/test_provider_probe.py`. Runtime, scanner, Chat, packaging and Tool
+row integration tests also cover the Tool. Tests execute the private native
+engine.
+
+Live probes cost money; ask before running them:
+
+- `scripts/probe_provider_tool_call.py --scenario tool_first_use --first-use-tool search_files`
+  evaluates natural user tasks with production definitions, competing Tools and
+  real files.
+- `--scenario search_files` (with `--search-case`) is guided single-Tool
+  conformance; it cannot establish Tool choice.
+
+To check real call shapes, use `python -m scripts.tool_lab sessions <data-root>
+--tool search_files`. It reads a copy of `sessions.db`.

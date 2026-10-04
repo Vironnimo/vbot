@@ -226,8 +226,8 @@ def test_terminal_probe_case_reaches_the_production_terminal_tool(case_id: str) 
     "case_id", ["unrestricted", "ignore_controls", "early_stop", "diagnostics"]
 )
 def test_search_probe_case_reaches_the_production_search_tool(case_id: str) -> None:
-    # Holds core/tools/search_files.py, _search_options.py and _search_ignores.py: `-uuu`,
-    # disabled parent/dot/file ignore sources, early-stop notes, `--stats` and `--debug`.
+    # Holds core/tools/search_files.py and its ripgrep flag handling: `-uuu`, disabled
+    # ignore sources, early-stop flags, and the silent `--stats` and `--debug`.
     from scripts.provider_probe.workflow_search_files import _case, search_cases
 
     case = next(case for case in search_cases() if case["id"] == case_id)
@@ -238,9 +238,9 @@ def test_search_probe_case_reaches_the_production_search_tool(case_id: str) -> N
     assert result["passed"], result
 
 
-def test_bash_probe_reports_the_violated_env_keys_keyword() -> None:
+def test_shell_probe_reports_the_violated_env_keys_keyword() -> None:
     # Holds the uniqueItems message in core/tools/contracts.py.
-    from core.tools import bash
+    from core.tools.shell import SHELL_TOOL_NAME
     from scripts.provider_probe.measurements import (
         _compile_probe_contracts,
         _validation_measurements,
@@ -255,7 +255,7 @@ def test_bash_probe_reports_the_violated_env_keys_keyword() -> None:
         _validation_measurements(
             [
                 {
-                    "name": bash.BASH_TOOL_NAME,
+                    "name": SHELL_TOOL_NAME,
                     "arguments": {"mode": "foreground", "command": "ls", "env_keys": keys},
                 }
             ],
