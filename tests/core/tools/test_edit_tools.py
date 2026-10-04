@@ -37,33 +37,32 @@ def test_edit_and_write_are_available_exactly_when_apply_patch_is() -> None:
 
 
 def test_edit_and_write_have_minimal_definitions() -> None:
-    assert EDIT_TOOL_DESCRIPTION == "Replace text in a file. The result shows the changed lines."
+    assert EDIT_TOOL_DESCRIPTION == "Replace text in a file."
     assert EDIT_TOOL_PARAMETERS == {
         "type": "object",
         "properties": {
             "path": {
                 "type": "string",
-                "description": "File to change, relative to the working directory or absolute.",
+                "description": "File to change.",
             },
             "edits": {
                 "type": "array",
-                "description": "All changes to this file, applied in order.",
+                "description": "All changes to this file.",
                 "items": {
                     "type": "object",
                     "properties": {
                         "old_string": {
                             "type": "string",
-                            "description": "Text to replace, copied exactly from the file. "
-                            "Without replace_all, it must occur exactly once.",
+                            "description": "Text to replace. Without replace_all, it must "
+                            "occur exactly once.",
                         },
                         "new_string": {
                             "type": "string",
-                            "description": 'Replacement for old_string; "" deletes it.',
+                            "description": "Replacement text.",
                         },
                         "replace_all": {
                             "type": "boolean",
-                            "description": "Replace every occurrence of old_string. Omit to "
-                            "replace exactly one.",
+                            "description": "Replace every occurrence. Omit to replace one.",
                         },
                     },
                     "required": ["old_string", "new_string"],
@@ -78,7 +77,7 @@ def test_edit_and_write_have_minimal_definitions() -> None:
         "properties": {
             "path": {
                 "type": "string",
-                "description": "File to write, relative to the working directory or absolute.",
+                "description": "File to write.",
             },
             "content": {"type": "string", "description": "Complete file content."},
         },

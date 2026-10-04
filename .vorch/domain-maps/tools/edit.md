@@ -92,20 +92,22 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
 ## Agent-facing text
 
 Texts are minimal by user decision (2026-10-04): the boundary between `edit` and
-`write` comes from the names, details belong in results and errors. About 169
-tokens (`python -m scripts.tool_lab definitions` estimate); `write` adds about 66,
-against about 315 for `apply_patch`. Every parameter has a description (role, then
-format, then the omit rule; `tool-review` section 4).
+`write` comes from the names, details belong in results and errors. About 133
+tokens (`python -m scripts.tool_lab definitions` estimate, mostly schema); `write`
+adds about 58, against about 315 for `apply_patch`. A sentence stays only when a
+fresh Agent would often make a failing call without it; occasional extra
+verification calls do not justify text every request pays for (user decision
+2026-10-04). Parameter descriptions name the role; format sentences are left out
+where every form a Model sends is accepted (relative and absolute paths).
 
 | Text | Reason |
 |---|---|
 | `Replace text in a file.` | Names the effect; what to do with a whole file comes from `write`'s name and the `content` refusal. |
-| `The result shows the changed lines.` | Says what the Agent gets, so it does not reread or search the file to verify: 3 of 24 eval runs did after a successful edit (agent-eval 2026-10-04). Hypothesis until an eval confirms fewer rereads. |
-| `path`: `File to change, relative to the working directory or absolute.` | Role, then both accepted path forms, worded like `read`. |
-| `edits`: `All changes to this file, applied in order.` | Puts every change to the file into one call, which saves round trips; "applied in order" says each edit sees the text the edits before it left. Several files in one response come from the System Prompt's parallel-call rule; an item naming another file is refused with that instruction. |
-| `edits[].old_string`: `Text to replace, copied exactly from the file. Without replace_all, it must occur exactly once.` | Uniqueness prevents ambiguous edits: a repeated `old_string` fails with its lines and the fix instead of changing a guessed occurrence. The `replace_all` condition keeps a literal reader from padding an `old_string` it means to replace everywhere. |
-| `edits[].new_string`: `Replacement for old_string; "" deletes it.` | Role, and the empty value's own meaning (`tool-review`: say when an empty value has a meaning). |
-| `edits[].replace_all`: `Replace every occurrence of old_string. Omit to replace exactly one.` | The one opt-in exception to uniqueness, with its omit rule. |
+| `path`: `File to change.` | Role; both path forms are accepted, so no format text is needed. |
+| `edits`: `All changes to this file.` | Puts every change to the file into one call instead of one call per change. Later edits that build on earlier ones and items naming another file fail with the fix. |
+| `edits[].old_string`: `Text to replace. Without replace_all, it must occur exactly once.` | A repeated `old_string` is the common failing edit; the rule prevents it before the first call. The `replace_all` condition keeps a literal reader from padding an `old_string` it means to replace everywhere. |
+| `edits[].new_string`: `Replacement text.` | Role; `""` deleting is trained behavior. |
+| `edits[].replace_all`: `Replace every occurrence. Omit to replace one.` | Weak Models fill every field; a filled `replace_all: true` changes text the Agent did not mean (F3). |
 | `ambiguous_replacement`: `old_string matches N places (lines ...). Include more of the surrounding text so it matches once, or set replace_all to true to change every match.` | "matches" holds also when only whitespace-tolerant matching found the places; "occurs" was false there (review 2026-10-04). |
 | `write`'s `file_not_read` closing: `... send the same call again to replace it, or call edit to change only part of it.` | Names the Tool for the other valid intent (`partial_change` template). |
 | `file_exists`: `...old_string is empty, which creates a file, but the file already has content. Put the current text to replace in old_string, or call write to replace the whole file.` | An empty `old_string` is the creation form; on an existing file both valid intents are named. |

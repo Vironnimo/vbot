@@ -37,7 +37,7 @@ Tool shares only its name.
 
 ## Agent-facing text
 
-Minimal by user decision (2026-10-04); about 66 tokens (`scripts.tool_lab
+Minimal by user decision (2026-10-04); about 58 tokens (`scripts.tool_lab
 definitions` estimate). No read-first sentence: `To replace an existing file, read
 it first.` made 2 of 4 eval runs read a file they were about to create, then list
 folders (1-4 extra calls; agent-eval 2026-10-04), while a blind replacement costs
@@ -47,6 +47,6 @@ counts it as read.
 | Text | Reason |
 |---|---|
 | `Create a file or replace all of its content.` | Names both effects; replacing part of a file belongs to `edit`, whose name says so. |
-| `path`: `File to write, relative to the working directory or absolute.` | Role, then both accepted path forms. |
+| `path`: `File to write.` | Role; both path forms are accepted, so no format text is needed. |
 | `content`: `Complete file content.` | Says the value is the whole file, so an Agent does not send a fragment or a diff. |
 | `write replaces the whole file and has no old_string. To replace text inside a file, call edit with path and edits.` | Edit-shaped calls sent to `write` name the Tool that takes them instead of failing on unknown parameters. |
