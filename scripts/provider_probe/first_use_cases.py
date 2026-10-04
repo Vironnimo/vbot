@@ -21,6 +21,134 @@ BASE_FILES = {
 }
 
 
+_INVENTORY = (
+    "def calc_total(items):\n"
+    "    total = 0\n"
+    "    for item in items:\n"
+    "        total += item.price * item.quantity\n"
+    "    return total\n"
+    "\n"
+    "\n"
+    "def report(items):\n"
+    '    print("Total:", calc_total(items))\n'
+    "\n"
+    "\n"
+    "def invoice(items, tax):\n"
+    "    net = calc_total(items)\n"
+    "    return net + net * tax\n"
+)
+_HANDLER = (
+    "class Handler:\n"
+    "    def handle(self, request):\n"
+    '        if request.method == "GET":\n'
+    "            return self.get(request)\n"
+    "        return self.reject(request)\n"
+)
+_STYLE = (
+    "# Style guide\n\n"
+    "Pick one accent colour per page.\n"
+    "Body text keeps the default colour.\n\n"
+    "## Links\n"
+    "Links use the accent colour; visited links use a muted colour.\n"
+)
+
+
+def _file_edit_cases() -> list[dict[str, Any]]:
+    """Natural file-edit tasks; any offered file-edit Tool can solve them."""
+
+    def case(case_id: str, task: str, files: dict, expected: dict, **extra: Any) -> dict:
+        return {
+            "id": case_id,
+            "tool": "search_files",
+            "expected_tool": "file_edit",
+            "task": task + " Tell me when it is done.",
+            "files": files,
+            "expected_files": expected,
+            **extra,
+        }
+
+    return [
+        case(
+            "edit_rename_function",
+            "In src/inventory.py, rename calc_total to order_total everywhere in that file, "
+            "and change the last line of invoice to `return round(net + net * tax, 2)`. "
+            "Keep everything else unchanged.",
+            {"src/inventory.py": _INVENTORY},
+            {
+                "src/inventory.py": _INVENTORY.replace("calc_total", "order_total").replace(
+                    "return net + net * tax", "return round(net + net * tax, 2)"
+                )
+            },
+        ),
+        case(
+            "edit_version_bump",
+            "Bump the version from 1.4.2 to 1.5.0 in pyproject.toml and src/pkg/__init__.py. "
+            "In CHANGELOG.md, add a section '## 1.5.0' with the line '- Add CSV export.' "
+            "above the 1.4.2 section, separated from it by a blank line.",
+            {
+                "pyproject.toml": '[project]\nname = "pkg"\nversion = "1.4.2"\n',
+                "src/pkg/__init__.py": '"""Package."""\n\n__version__ = "1.4.2"\n',
+                "CHANGELOG.md": "# Changelog\n\n## 1.4.2\n- Fix login timeout.\n",
+            },
+            {
+                "pyproject.toml": '[project]\nname = "pkg"\nversion = "1.5.0"\n',
+                "src/pkg/__init__.py": '"""Package."""\n\n__version__ = "1.5.0"\n',
+                "CHANGELOG.md": "# Changelog\n\n## 1.5.0\n- Add CSV export.\n\n"
+                "## 1.4.2\n- Fix login timeout.\n",
+            },
+        ),
+        case(
+            "edit_second_section",
+            "In config.ini, change the replica's port to 5433. Leave the primary unchanged.",
+            {
+                "config.ini": "[primary]\nhost = localhost\nport = 5432\n\n"
+                "[replica]\nhost = localhost\nport = 5432\n"
+            },
+            {
+                "config.ini": "[primary]\nhost = localhost\nport = 5432\n\n"
+                "[replica]\nhost = localhost\nport = 5433\n"
+            },
+        ),
+        case(
+            "edit_indented_insert",
+            "In src/handlers.py, make handle route POST requests to self.post(request): "
+            'directly after the GET branch, add `if request.method == "POST":` returning '
+            "self.post(request), in the same style as the GET branch.",
+            {"src/handlers.py": _HANDLER},
+            {
+                "src/handlers.py": _HANDLER.replace(
+                    "        return self.reject",
+                    '        if request.method == "POST":\n'
+                    "            return self.post(request)\n"
+                    "        return self.reject",
+                )
+            },
+        ),
+        case(
+            "edit_every_occurrence",
+            "In docs/style.md, use American spelling: replace every 'colour' with 'color'.",
+            {"docs/style.md": _STYLE},
+            {"docs/style.md": _STYLE.replace("colour", "color")},
+        ),
+        case(
+            "create_module",
+            "Create src/pkg/constants.py with exactly two lines: `MAX_RETRIES = 3` and "
+            "`TIMEOUT_SECONDS = 30`.",
+            {},
+            {"src/pkg/constants.py": "MAX_RETRIES = 3\nTIMEOUT_SECONDS = 30\n"},
+            loose_final_newline=["src/pkg/constants.py"],
+        ),
+        case(
+            "rewrite_file",
+            "Replace the entire content of todo.md with three list items, one per line: "
+            "'- buy milk', '- call Sam', '- book flights'.",
+            {"todo.md": "# Todo\n\n- renew passport\n- water plants\n"},
+            {"todo.md": "- buy milk\n- call Sam\n- book flights\n"},
+            loose_final_newline=["todo.md"],
+        ),
+    ]
+
+
 def first_use_cases() -> list[dict[str, Any]]:
     return [
         {
@@ -128,7 +256,7 @@ def first_use_cases() -> list[dict[str, Any]]:
         {
             "id": "edit_control",
             "tool": "search_files",
-            "expected_tool": "apply_patch",
+            "expected_tool": "file_edit",
             "task": (
                 "In notes.md, move the 'Validation' section below 'Release', keeping the "
                 "section text and everything else unchanged. Tell me when it is done."
@@ -142,6 +270,7 @@ def first_use_cases() -> list[dict[str, Any]]:
                 "## Validation\nRun the smoke check.\n"
             },
         },
+        *_file_edit_cases(),
         {
             "id": "shell_control",
             "tool": "search_files",
@@ -250,7 +379,10 @@ def assess(
     details: dict[str, Any] = {}
     if case["tool"] == "search_files":
         expected_tool = case.get("expected_tool", "search_files")
-        selected = [c for c in successful if c["name"] == expected_tool]
+        expected_names = (
+            {"apply_patch", "edit", "write"} if expected_tool == "file_edit" else {expected_tool}
+        )
+        selected = [c for c in successful if c["name"] in expected_names]
         if "rows" in case:
             actual = set()
             raw_lines = []
@@ -376,6 +508,9 @@ def assess(
             for path in fixture.repo.rglob("*")
             if path.is_file()
         }
+        for name in case.get("loose_final_newline", []):
+            if name in actual_files:
+                actual_files[name] = actual_files[name].rstrip("\n") + "\n"
         differences = sorted(
             name
             for name in expected_files.keys() | actual_files.keys()
