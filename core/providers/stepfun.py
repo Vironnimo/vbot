@@ -17,6 +17,7 @@ from core.providers.providers import ConnectionConfig
 STEPFUN_DIRECT_MODE = "direct_api"
 STEPFUN_PLAN_MODE = "step_plan"
 STEPFUN_CONTEXT_WINDOW = 256_000
+STEPFUN_MAX_IMAGES = 60
 STEPFUN_ROUTER_MAX_OUTPUT_TOKENS = 250_000
 STEPFUN_DEFAULT_TEMPERATURE = 0.5
 
@@ -154,6 +155,13 @@ class StepFunAdapter(OpenAICompatibleAdapter):
 
         del model_id
         return IMAGE_WIRE_MEDIA_TYPES
+
+    @override
+    def request_image_limit(self, model_id: str) -> int | None:
+        """StepFun documents at most 60 images per request for its vision Models."""
+
+        del model_id
+        return STEPFUN_MAX_IMAGES
 
     @override
     def _supported_reasoning_efforts(self, model_id: str) -> tuple[str, ...]:

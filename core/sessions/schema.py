@@ -314,12 +314,14 @@ CREATE TABLE tool_calls (
 -- Tool calls by public call id (Tool result correlation, persisted-result checks).
 CREATE INDEX tool_calls_by_call_id ON tool_calls (call_id);
 
+-- media_json: stored-attachment references of the images a Tool Result carries.
 CREATE TABLE tool_call_payloads (
   call_key INTEGER PRIMARY KEY REFERENCES tool_calls (call_key) ON DELETE CASCADE,
   arguments_json TEXT NOT NULL CHECK (json_valid(arguments_json) AND json_type(arguments_json) = 'object'),
   rejection_message TEXT,
   display_json TEXT CHECK (display_json IS NULL OR (json_valid(display_json) AND json_type(display_json) = 'object')),
-  timing_extra_json TEXT CHECK (timing_extra_json IS NULL OR (json_valid(timing_extra_json) AND json_type(timing_extra_json) = 'object'))
+  timing_extra_json TEXT CHECK (timing_extra_json IS NULL OR (json_valid(timing_extra_json) AND json_type(timing_extra_json) = 'object')),
+  media_json TEXT CHECK (media_json IS NULL OR (json_valid(media_json) AND json_type(media_json) = 'array'))
 ) STRICT;
 
 -- Result payloads an Extension attached to one Tool call, loaded by payload id

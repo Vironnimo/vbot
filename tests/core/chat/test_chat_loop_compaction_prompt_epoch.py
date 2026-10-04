@@ -13,6 +13,7 @@ from core.agents.temporary import TemporaryAgentConfig, TemporaryAgentRegistry
 from core.chat import ChatMessage
 from core.chat._run_state import RequestBuildInputs, _RunRequest
 from core.chat._tool_epoch import ToolEpochPin
+from core.chat.wire_shaping import PINNED_IMAGE_RETIREMENT_SLOT
 from core.extensions import ExtensionAPI, ExtensionRecord, ExtensionRegistry
 from core.extensions.extensions import ExtensionDeclarations
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
@@ -152,6 +153,10 @@ async def test_compaction_pins_the_current_tools_for_the_new_epoch(
         loop, Run(run_id="run-1", agent_id="coder", session_id=session.id), session
     )
     old_epoch = context.request_state.tool_epoch.pin.epoch
+    retired = {"images": [["tool", "call-1", 0]]}
+    runtime.chat_sessions.ensure_prompt_pin(
+        session.address, PINNED_IMAGE_RETIREMENT_SLOT, retired, lambda current: current == retired
+    )
     tools.unregister("dropped")
     # Keys in the author's order, which is not alphabetical at any level.
     ordered = {
@@ -180,6 +185,8 @@ async def test_compaction_pins_the_current_tools_for_the_new_epoch(
     )
     assert persisted_roles(session.load())[-1] == "compaction_checkpoint"
     assert pin is not None and pin.epoch != old_epoch
+    # Compacted history keeps every remaining image until a limit retires it anew.
+    assert runtime.chat_sessions.prompt_pin(session.address, PINNED_IMAGE_RETIREMENT_SLOT) is None
     assert pin.names == ("get_weather", "added", ANALYZE_IMAGE_TOOL_NAME, "kept")
     assert rebuilt.tool_epoch.pin == pin
     # The new epoch's first request already sends the bytes a restarted runtime's next

@@ -27,6 +27,7 @@ from core.providers._http_shared import (
     classify_http_status,
     connect_streaming_with_retry,
     decode_response_json,
+    enforce_request_body_limit,
     execute_with_sampling_fallback,
     iter_sse_data,
     parse_sse_json_data,
@@ -671,6 +672,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         # rejected parameter from the exact payload — provider ``defaults`` would
         # otherwise refill the key on a rebuild.
         payload = self._build_payload(messages, model_id, **kwargs)
+        await enforce_request_body_limit(payload, self.request_body_limit(model_id))
 
         auth_recovery = OAuthRequestRecovery(self._token_getter, self._auth_config)
 
@@ -750,6 +752,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         request_headers = self._request_headers_from_kwargs(kwargs)
         payload = self._build_payload(messages, model_id, **kwargs)
         payload["stream"] = True
+        await enforce_request_body_limit(payload, self.request_body_limit(model_id))
         auth_recovery = OAuthRequestRecovery(self._token_getter, self._auth_config)
 
         async def _build_headers() -> dict[str, str]:

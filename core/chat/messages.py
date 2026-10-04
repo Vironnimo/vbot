@@ -374,6 +374,8 @@ class ChatMessage:
     usage: JsonObject | None = None
     timing: JsonObject | None = None
     tool_display: JsonObject | None = None
+    # Stored copies of the images a Tool returned, sent with its Result in later requests.
+    tool_media: list[JsonObject] | None = None
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
     name: str | None = None
@@ -520,6 +522,7 @@ class ChatMessage:
         content: str,
         timing: JsonObject | None = None,
         tool_display: JsonObject | None = None,
+        tool_media: list[JsonObject] | None = None,
         timestamp: datetime | None = None,
     ) -> ChatMessage:
         """Create a tool result message."""
@@ -532,6 +535,7 @@ class ChatMessage:
             name=name,
             timing=dict(timing) if timing is not None else None,
             tool_display=dict(tool_display) if tool_display is not None else None,
+            tool_media=[dict(item) for item in tool_media] if tool_media else None,
         )
 
     @classmethod
@@ -725,6 +729,8 @@ class ChatMessage:
         _add_if_not_none(message, "usage", self.usage)
         _add_if_not_none(message, "timing", self.timing)
         _add_if_not_none(message, "tool_display", self.tool_display)
+        if self.tool_media is not None:
+            message["tool_media"] = [dict(item) for item in self.tool_media]
         if self.tool_calls is not None:
             message["tool_calls"] = [tool_call.to_dict() for tool_call in self.tool_calls]
         _add_if_not_none(message, "tool_call_id", self.tool_call_id)
@@ -772,6 +778,12 @@ class ChatMessage:
         tool_display = data.get("tool_display")
         if tool_display is not None and not isinstance(tool_display, dict):
             raise ChatMessageValidationError("tool_display must be an object")
+        tool_media = data.get("tool_media")
+        if tool_media is not None and (
+            not isinstance(tool_media, list)
+            or not all(isinstance(item, dict) for item in tool_media)
+        ):
+            raise ChatMessageValidationError("tool_media must be an array of objects")
         sender_data = data.get("sender")
         if sender_data is not None and not isinstance(sender_data, dict):
             raise ChatMessageValidationError("sender must be an object")
@@ -832,6 +844,7 @@ class ChatMessage:
             usage=dict(usage) if usage is not None else None,
             timing=dict(timing) if timing is not None else None,
             tool_display=dict(tool_display) if tool_display is not None else None,
+            tool_media=[dict(item) for item in tool_media] if tool_media is not None else None,
             tool_calls=tool_calls,
             tool_call_id=_message_validation._optional_string(data, "tool_call_id"),
             name=_message_validation._optional_string(data, "name"),

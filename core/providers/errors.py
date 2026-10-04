@@ -35,19 +35,33 @@ class ProviderAuthError(ProviderError):
 
 
 class ProviderRequestTooLargeError(ProviderError):
-    """A locally measured request exceeds a verified wire limit; no I/O occurred."""
+    """The request exceeds the Provider's body limit.
+
+    Raised before any I/O when a wire measures its body against a verified
+    limit (both sizes known), or when the Provider answers HTTP 413 (sizes
+    unknown). Chat retires already delivered images and retries smaller.
+    """
 
     code = "provider_request_too_large"
 
-    def __init__(self, size_bytes: int, max_bytes: int) -> None:
+    def __init__(
+        self, size_bytes: int | None = None, max_bytes: int | None = None, *, detail: str = ""
+    ) -> None:
         self.size_bytes = size_bytes
         self.max_bytes = max_bytes
-        super().__init__(
-            f"The request body is {size_bytes} bytes; this Provider allows at most "
-            f"{max_bytes} bytes. Reduce the request size, for example by sending fewer "
-            "or smaller images. Nothing was sent.",
-            retryable=False,
-        )
+        if size_bytes is not None and max_bytes is not None:
+            message = (
+                f"The request body is {size_bytes} bytes; this Provider allows at most "
+                f"{max_bytes} bytes. Reduce the request size, for example by sending fewer "
+                "or smaller images. Nothing was sent."
+            )
+        else:
+            message = (
+                "The Provider rejected the request as too large"
+                + (f" ({detail})" if detail else "")
+                + ". Reduce the request size, for example by sending fewer or smaller images."
+            )
+        super().__init__(message, retryable=False)
 
 
 class ProviderStreamingUnsupportedError(ProviderError):

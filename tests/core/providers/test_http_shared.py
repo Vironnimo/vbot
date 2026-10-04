@@ -42,6 +42,7 @@ from core.providers.errors import (
     ProviderAuthError,
     ProviderError,
     ProviderRateLimitError,
+    ProviderRequestTooLargeError,
     ProviderTimeoutError,
 )
 from core.providers.openai_compatible import OpenAICompatibleAdapter
@@ -147,6 +148,8 @@ def test_unusable_provider_json_is_a_fatal_error_naming_the_provider(
         (500, True, None, "", ProviderError, True, None),
         (400, False, {"Retry-After": "9"}, "400 bad request", ProviderError, False, None),
         (401, False, {"Retry-After": "9"}, "401 bad key", ProviderAuthError, False, None),
+        # Chat retires delivered images and retries smaller after a body-size rejection.
+        (413, False, None, "413 body too large", ProviderRequestTooLargeError, False, None),
     ],
     ids=[
         "rate-limit-retry-after",
@@ -156,6 +159,7 @@ def test_unusable_provider_json_is_a_fatal_error_naming_the_provider(
         "server-error-replay-safe",
         "fatal-ignores-hint",
         "auth-ignores-hint",
+        "request-too-large",
     ],
 )
 def test_error_status_raises_the_classified_error_with_status_detail_and_hint(

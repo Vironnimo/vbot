@@ -342,6 +342,7 @@ class AgenticProgression:
                 limit_request_images,
                 messages_for_request,
                 budget=context.image_budget,
+                image_limit=target.max_request_images,
                 remember=True,
             )
 
@@ -440,12 +441,14 @@ class AgenticProgression:
                             provider_id=target.provider_id,
                             recovery=context.recovery,
                         )
-                except ProviderRequestTooLargeError:
+                except ProviderRequestTooLargeError as exc:
                     smaller = await _CHAT_TRANSFORM_WORKERS.run(
-                        context.image_budget.project,
-                        messages_for_request,
-                        remember=True,
-                        force=True,
+                        partial(
+                            context.image_budget.shrink,
+                            messages_for_request,
+                            max_bytes=exc.max_bytes,
+                            image_limit=target.max_request_images,
+                        )
                     )
                     if smaller == messages_for_request:
                         raise
@@ -504,6 +507,9 @@ class AgenticProgression:
                 ):
                     await _CHAT_TRANSFORM_WORKERS.run(
                         context.image_budget.record_delivered, messages_for_request
+                    )
+                    await self._requests.persist_image_retirement(
+                        context.session, context.image_budget
                     )
                 assistant_message = _with_offered_tool_names(
                     assistant_message,
@@ -780,6 +786,9 @@ class AgenticProgression:
                             message=failure_message,
                         )
                         media_outputs = []
+                    tool_messages, media_outputs = await self._requests.store_tool_media(
+                        tool_messages, media_outputs
+                    )
                     tool_request_messages: list[JsonObject] = []
                     for tool_message in tool_messages:
                         assert tool_message.tool_call_id is not None
@@ -979,12 +988,17 @@ class AgenticProgression:
             # Bound the live request view as well, before Compaction estimates or
             # another Tool cycle. Canonical artifacts remain available to reopen.
             messages[:] = await _CHAT_TRANSFORM_WORKERS.run(
-                limit_request_images, messages, budget=context.image_budget, remember=True
+                limit_request_images,
+                messages,
+                budget=context.image_budget,
+                image_limit=target.max_request_images,
+                remember=True,
             )
             continuation_request_messages = await _CHAT_TRANSFORM_WORKERS.run(
                 limit_request_images,
                 [*messages_for_request, assistant_request_message, *tool_request_messages],
                 budget=context.image_budget,
+                image_limit=target.max_request_images,
                 remember=True,
             )
             tool_context_usage = await _CHAT_TRANSFORM_WORKERS.run(

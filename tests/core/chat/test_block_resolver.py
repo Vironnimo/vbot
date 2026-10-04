@@ -1,4 +1,4 @@
-"""ContentBlockResolver: current-turn native delivery, earlier-turn notes, text and Tool images."""
+"""ContentBlockResolver: native delivery with path notes on every turn, text and Tool images."""
 
 from __future__ import annotations
 
@@ -51,59 +51,42 @@ PDF_NOTE = "[File: report.pdf (application/pdf) — Path: {path}]"
 
 
 @pytest.mark.parametrize(
-    ("filename", "payload", "block_type", "message_id", "modalities", "wire", "native", "note"),
+    ("filename", "payload", "block_type", "modalities", "wire", "native", "note"),
     [
-        ("photo.png", PNG_BYTES, "media", CURRENT, TEXT_IMAGE, IMAGE_WIRE, True, IMAGE_NOTE),
-        (
-            "photo.png",
-            PNG_BYTES,
-            "media",
-            EARLIER,
-            TEXT_IMAGE,
-            IMAGE_WIRE,
-            False,
-            "[Image from an earlier turn: photo.png (image/png) — Path: {path}]",
-        ),
+        ("photo.png", PNG_BYTES, "media", TEXT_IMAGE, IMAGE_WIRE, True, IMAGE_NOTE),
         # A model without vision must not abort the Run: the image degrades to its path.
         (
             "photo.png",
             PNG_BYTES,
             "media",
-            CURRENT,
             TEXT_ONLY,
             IMAGE_WIRE,
             False,
             "[Image: photo.png (image/png) — this model has no vision capability, so the "
             "image itself cannot be shown; only the stored file path is provided — Path: {path}]",
         ),
-        ("clip.mp4", MP4_BYTES, "media", CURRENT, TEXT_VIDEO, {"video/mp4"}, True, VIDEO_NOTE),
-        ("clip.mp4", MP4_BYTES, "media", CURRENT, TEXT_IMAGE_AUDIO, IMAGE_WIRE, False, VIDEO_NOTE),
-        ("clip.mp4", MP4_BYTES, "media", EARLIER, TEXT_VIDEO, {"video/mp4"}, False, VIDEO_NOTE),
-        ("report.pdf", PDF_BYTES, "file", CURRENT, TEXT_IMAGE_PDF, IMAGE_PDF_WIRE, True, PDF_NOTE),
-        ("report.pdf", PDF_BYTES, "file", CURRENT, TEXT_IMAGE, IMAGE_PDF_WIRE, False, PDF_NOTE),
+        ("clip.mp4", MP4_BYTES, "media", TEXT_VIDEO, {"video/mp4"}, True, VIDEO_NOTE),
+        ("clip.mp4", MP4_BYTES, "media", TEXT_IMAGE_AUDIO, IMAGE_WIRE, False, VIDEO_NOTE),
+        ("report.pdf", PDF_BYTES, "file", TEXT_IMAGE_PDF, IMAGE_PDF_WIRE, True, PDF_NOTE),
+        ("report.pdf", PDF_BYTES, "file", TEXT_IMAGE, IMAGE_PDF_WIRE, False, PDF_NOTE),
         # An unverified OpenAI-compatible wire cannot carry the PDF the model accepts.
-        ("report.pdf", PDF_BYTES, "file", CURRENT, TEXT_IMAGE_PDF, IMAGE_WIRE, False, PDF_NOTE),
-        ("report.pdf", PDF_BYTES, "file", EARLIER, TEXT_IMAGE_PDF, IMAGE_PDF_WIRE, False, PDF_NOTE),
+        ("report.pdf", PDF_BYTES, "file", TEXT_IMAGE_PDF, IMAGE_WIRE, False, PDF_NOTE),
     ],
     ids=[
-        "image-current",
-        "image-earlier",
+        "image",
         "image-without-vision",
-        "video-current",
+        "video",
         "video-without-video-modality",
-        "video-earlier",
-        "pdf-current",
+        "pdf",
         "pdf-without-pdf-modality",
         "pdf-on-a-wire-without-pdf",
-        "pdf-earlier",
     ],
 )
-def test_attachment_goes_native_only_for_the_current_turn_on_model_and_wire_support(
+def test_attachment_goes_native_on_model_and_wire_support_in_every_turn(
     tmp_path: Path,
     filename: str,
     payload: bytes,
     block_type: str,
-    message_id: str,
     modalities: frozenset[str],
     wire: frozenset[str],
     native: bool,
@@ -111,7 +94,12 @@ def test_attachment_goes_native_only_for_the_current_turn_on_model_and_wire_supp
 ) -> None:
     store = AttachmentStore(tmp_path)
     record = store.store(filename, payload)
-    messages = [attachment_message(record, block_type=block_type, message_id=message_id)]
+    # An earlier turn renders exactly like the current one, so the request prefix
+    # stays byte-identical from Run to Run.
+    messages = [
+        attachment_message(record, block_type=block_type, message_id=message_id)
+        for message_id in (EARLIER, CURRENT)
+    ]
     persisted = deepcopy(messages)
 
     resolved = resolve(
@@ -133,60 +121,68 @@ def test_attachment_goes_native_only_for_the_current_turn_on_model_and_wire_supp
         }
     )
     # A native block always rides with its path note, so the Agent keeps a file handle.
-    assert resolved[0]["content"] == [
-        *([native_block] if native else []),
-        path_note(record, note),
-    ]
+    expected = [*([native_block] if native else []), path_note(record, note)]
+    assert [message["content"] for message in resolved] == [expected, expected]
     assert messages == persisted
 
 
-@pytest.mark.parametrize(
-    ("message_id", "label"),
-    [(CURRENT, "Image 2"), (EARLIER, "Image 2 from an earlier turn")],
-)
-def test_image_reference_numbers_the_image_label(
-    tmp_path: Path, message_id: str, label: str
-) -> None:
+def test_image_reference_numbers_the_image_label(tmp_path: Path) -> None:
     store = AttachmentStore(tmp_path)
     record = store.store("photo.png", PNG_BYTES)
-    message = attachment_message(record, message_id=message_id, image_reference=2)
+    message = attachment_message(record, image_reference=2)
 
     resolved = resolve(ContentBlockResolver(store), [message], input_modalities=TEXT_IMAGE)
 
     assert resolved[0]["content"][-1] == path_note(
-        record, f"[{label}: photo.png (image/png) — Path: {{path}}]"
+        record, "[Image 2: photo.png (image/png) — Path: {path}]"
     )
 
 
 @pytest.mark.parametrize(
-    ("filename", "payload", "message_id", "note"),
+    ("filename", "payload", "block_type", "modalities", "note"),
     [
         (
             "gone.png",
             PNG_BYTES,
-            EARLIER,
-            "[Image from an earlier turn: gone.png (image/png) — file no longer available]",
+            "media",
+            TEXT_IMAGE,
+            "[Image: gone.png (image/png) — file no longer available]",
         ),
         (
             "gone.mp4",
             MP4_BYTES,
-            CURRENT,
+            "media",
+            TEXT_VIDEO,
             "[Video: gone.mp4 (video/mp4) — file no longer available]",
         ),
+        (
+            "gone.pdf",
+            PDF_BYTES,
+            "file",
+            TEXT_IMAGE_PDF,
+            "[File: gone.pdf (application/pdf) — file no longer available]",
+        ),
     ],
-    ids=["image-earlier", "video-current"],
+    ids=["image", "video", "pdf"],
 )
 def test_deleted_attachment_degrades_to_an_unavailable_note(
-    tmp_path: Path, filename: str, payload: bytes, message_id: str, note: str
+    tmp_path: Path,
+    filename: str,
+    payload: bytes,
+    block_type: str,
+    modalities: frozenset[str],
+    note: str,
 ) -> None:
+    # Turns stay in every later request, so a removed blob must not fail the Run.
     store = AttachmentStore(tmp_path)
     record = store.store(filename, payload)
     store.delete(record.id)
 
     resolved = resolve(
         ContentBlockResolver(store),
-        [attachment_message(record, message_id=message_id)],
-        input_modalities=TEXT_IMAGE_AUDIO,
+        [attachment_message(record, block_type=block_type)],
+        input_modalities=modalities,
+        wire_media_types=IMAGE_PDF_WIRE | {"video/mp4"},
     )
 
     assert resolved[0]["content"] == [{"type": "text", "text": note}]
