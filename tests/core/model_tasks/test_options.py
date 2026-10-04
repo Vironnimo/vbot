@@ -386,28 +386,6 @@ def test_image_enum_parameter_renders_select_with_provider_default_choice() -> N
     assert [choice.value for choice in resolution.options[1:]] == ["512", "1K", "2K", "4K"]
 
 
-def test_image_forced_default_enum_has_no_provider_default_choice() -> None:
-    """``response_format`` must default to ``b64_json`` because the wire
-    layer only decodes inline Base64 — the provider default (url) would
-    break parsing, so there is no empty choice."""
-
-    model = _make_model(
-        "dall-e-3",
-        task_options={
-            "image_generation": {
-                "parameters": {
-                    "response_format": {"type": "enum", "values": ["b64_json", "url"]},
-                }
-            }
-        },
-    )
-
-    schema = _image_schema(model, provider_id="openai")
-    response_format = next(field for field in schema.fields if field.name == "response_format")
-    assert response_format.default == "b64_json"
-    assert all(choice.value for choice in response_format.options)
-
-
 def test_image_range_parameter_renders_bounded_number() -> None:
     """A ``range`` parameter renders as a number field with min/max; a
     collapsed range (min == max) offers no choice and is skipped."""
@@ -456,29 +434,29 @@ def test_image_boolean_seed_renders_number_field() -> None:
     assert seed.default is None
 
 
-def test_image_string_parameter_renders_text_field_with_spec_description() -> None:
-    """A hand-authored ``string`` spec (open value space, e.g. gpt-image-2
-    arbitrary sizes) renders as a free-text field; a per-spec description
-    wins over the generic per-name hint."""
+def test_image_open_string_parameters_render_by_wire() -> None:
+    """An open ``string`` spec renders as free text with its own description,
+    except an OpenAI-wire ``size``, which offers whole-pixel presets."""
 
     model = _make_model(
         "gpt-image-2",
         task_options={
             "image_generation": {
                 "parameters": {
-                    "size": {
-                        "type": "string",
-                        "description": "auto or WIDTHxHEIGHT divisible by 16.",
-                    },
+                    "size": {"type": "string", "description": "WIDTHxHEIGHT."},
+                    "style": {"type": "string", "description": "A named style."},
                 }
             }
         },
     )
 
-    schema = _image_schema(model, provider_id="openai")
-    size = next(field for field in schema.fields if field.name == "size")
-    assert size.type == "text"
-    assert size.description == "auto or WIDTHxHEIGHT divisible by 16."
+    fields = {field.name: field for field in _image_schema(model, provider_id="openai").fields}
+    assert fields["style"].type == "text"
+    assert fields["style"].description == "A named style."
+    assert fields["size"].type == "select"
+    assert {"auto", "1024x1024", "2048x2048", "3840x2160"} <= {
+        choice.value for choice in fields["size"].options
+    }
 
 
 def test_image_size_shorthand_skipped_when_resolution_or_aspect_present() -> None:
@@ -611,22 +589,6 @@ def test_image_passthrough_renders_provider_options_json_field() -> None:
     assert "recraft: controls, style, text_layout" in provider_options.description
 
 
-def test_image_openrouter_fallback_without_task_options() -> None:
-    """A model without task-options data (unrefreshed catalog) falls back
-    to the conservative aspect-ratio/resolution selects; ``seed`` appears
-    only when the chat catalog advertises it."""
-
-    with_seed = _make_model("black-forest-labs/flux.2-pro", supported_parameters=("seed",))
-    without_seed = _make_model("recraft/recraft-v3")
-
-    with_seed_names = {field.name for field in _image_schema(with_seed).fields}
-    without_seed_names = {field.name for field in _image_schema(without_seed).fields}
-
-    assert {"aspect_ratio", "resolution"} <= with_seed_names
-    assert "seed" in with_seed_names
-    assert "seed" not in without_seed_names
-
-
 def test_image_openai_fallback_without_model_exposes_union_of_fields() -> None:
     """When the registry has no model yet (e.g. before the first catalog
     refresh) the OpenAI image fallback exposes the union of supported
@@ -647,8 +609,8 @@ def test_image_openai_fallback_without_model_exposes_union_of_fields() -> None:
         "n",
         "output_format",
         "style",
-        "response_format",
     } <= field_names
+    assert "response_format" not in field_names
 
 
 def test_image_openai_fallback_gated_by_supported_parameters() -> None:
@@ -667,15 +629,28 @@ def test_image_openai_fallback_gated_by_supported_parameters() -> None:
     assert "response_format" not in field_names
 
 
-def test_image_unknown_provider_gets_only_escape_hatch() -> None:
-    """Image schemas for providers without an execution profile stay empty
-    apart from the escape hatch — the UI must not invent inputs."""
+@pytest.mark.parametrize(
+    ("provider_id", "model"),
+    [
+        pytest.param("some-other-provider", None, id="provider-without-image-wire"),
+        # A Model without published facts gets no invented aspect ratios.
+        pytest.param(
+            "openrouter",
+            _make_model("black-forest-labs/flux.2-pro", supported_parameters=("seed",)),
+            id="openrouter-model-without-facts",
+        ),
+    ],
+)
+def test_image_schema_without_facts_offers_only_escape_hatch(
+    provider_id: str, model: Model | None
+) -> None:
+    """The UI must not invent inputs the Model may reject."""
 
     schema = option_schema_for(
         TASK_IMAGE_GENERATION,
-        "some-other-provider",
-        "some-other-provider/gpt-image-1::api-key",
-        model=None,
+        provider_id,
+        f"{provider_id}/gpt-image-1::api-key",
+        model=model,
     )
 
     assert [field.name for field in schema.fields] == ["extra_options"]
@@ -683,8 +658,8 @@ def test_image_unknown_provider_gets_only_escape_hatch() -> None:
 
 def test_image_openai_task_options_profile_drives_fields() -> None:
     """The override-authored OpenAI profiles render from data: dall-e-3
-    exposes size/quality/style/response_format (n collapses), gpt-image-1
-    exposes the GPT set — no prefix matching anywhere."""
+    exposes size/quality/style (n collapses; vBot always asks the wire for
+    Base64, so response_format is no Setting) — no prefix matching anywhere."""
 
     dall_e_3 = _make_model(
         "dall-e-3",
@@ -707,7 +682,6 @@ def test_image_openai_task_options_profile_drives_fields() -> None:
         "size",
         "quality",
         "style",
-        "response_format",
         "extra_options",
     ]
 

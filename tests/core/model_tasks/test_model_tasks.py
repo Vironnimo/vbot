@@ -283,6 +283,20 @@ def test_patch_options_can_remove_a_stale_option_no_longer_in_schema() -> None:
     saved = service.patch_options(TASK_TEXT_TO_SPEECH, unset_names=("retired_option",))
 
     assert saved[TASK_TEXT_TO_SPEECH]["options"] == {"voice": "de-de-klaus:mai-voice-2"}
+    # Setting a sibling also drops it, so it never blocks an edit.
+    storage.update_model_task_settings(
+        {
+            TASK_TEXT_TO_SPEECH: {
+                "target": target,
+                "options": {"voice": "de-de-klaus:mai-voice-2", "retired_option": True},
+            }
+        }
+    )
+    saved = service.patch_options(TASK_TEXT_TO_SPEECH, set_values={"speed": 1.1})
+    assert saved[TASK_TEXT_TO_SPEECH]["options"] == {
+        "voice": "de-de-klaus:mai-voice-2",
+        "speed": 1.1,
+    }
 
 
 def test_update_rejects_unknown_option_name() -> None:
@@ -313,8 +327,18 @@ def test_update_rejects_unknown_option_name() -> None:
         )
 
 
-@pytest.mark.parametrize("stale_options", [{"retired_option": True}, {"voice": "removed"}])
-def test_unchanged_stale_binding_does_not_block_other_updates(stale_options: dict) -> None:
+@pytest.mark.parametrize(
+    ("stale_options", "saved_after_edit"),
+    [
+        # An option the schema no longer offers is dropped with the next edit.
+        ({"retired_option": True}, {"voice": "available", "speed": 1.1}),
+        # A value the schema no longer accepts still needs a repair.
+        ({"voice": "removed"}, None),
+    ],
+)
+def test_unchanged_stale_binding_does_not_block_other_updates(
+    stale_options: dict, saved_after_edit: dict | None
+) -> None:
     stale = {"target": "openrouter/voice::api-key", "options": stale_options}
     storage = _Storage({TASK_TEXT_TO_SPEECH: stale})
     service = TaskModelService(
@@ -338,8 +362,15 @@ def test_unchanged_stale_binding_does_not_block_other_updates(stale_options: dic
     assert saved[TASK_SPEECH_TO_TEXT] == update[TASK_SPEECH_TO_TEXT]
     with pytest.raises(TaskModelValidationError):
         service.validate_binding(TASK_TEXT_TO_SPEECH, stale)
-    with pytest.raises(TaskModelValidationError):
-        service.update({TASK_TEXT_TO_SPEECH: {"options": {**stale_options, "speed": 1.1}}})
+    sibling_edit = {
+        TASK_TEXT_TO_SPEECH: {"options": {"voice": "available", **stale_options, "speed": 1.1}}
+    }
+    if saved_after_edit is not None:
+        saved = service.update(sibling_edit)
+        assert saved[TASK_TEXT_TO_SPEECH]["options"] == saved_after_edit
+    else:
+        with pytest.raises(TaskModelValidationError):
+            service.update(sibling_edit)
     repaired = service.update({TASK_TEXT_TO_SPEECH: {"options": {"voice": "available"}}})
     assert repaired[TASK_TEXT_TO_SPEECH]["target"] == stale["target"]
     assert service.binding_is_usable(TASK_TEXT_TO_SPEECH)

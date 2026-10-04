@@ -19,6 +19,7 @@ from core.model_tasks.decisions import DecisionService
 from core.model_tasks.embeddings import EmbeddingService
 from core.model_tasks.embeddings_providers import EmbeddingUsage
 from core.model_tasks.image import ImageService
+from core.model_tasks.image_profile import build_image_profile
 from core.model_tasks.model_tasks import TaskModelService, parse_task_model_target_id
 from core.model_tasks.music import MusicService
 from core.model_tasks.speech import SpeechService
@@ -69,6 +70,7 @@ def _runtime() -> Any:
     return SimpleNamespace(
         providers=SimpleNamespace(get=lambda _identifier: provider),
         get_connection_token_getter=lambda _connection: StaticTokenGetter("test-token"),
+        provider_debug_recorder=lambda **_: None,
     )
 
 
@@ -91,10 +93,17 @@ class _Bindings:
         return SimpleNamespace(
             capabilities=SimpleNamespace(
                 task_types=TASKS,
-                task_options={},
+                task_options={
+                    "video_generation": {
+                        "parameters": {"duration": {"type": "enum", "values": ["5"]}}
+                    }
+                },
                 input_modalities=("text",),
             )
         )
+
+    def image_profile(self, target: Any) -> Any:
+        return build_image_profile(self.model_for_target(target), "openrouter")
 
 
 def _audio() -> bytes:

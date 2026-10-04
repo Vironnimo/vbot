@@ -13,8 +13,13 @@ import respx
 
 from core.model_tasks.image_types import ImageInput
 from core.model_tasks.music_providers import MUSIC_REQUEST_TIMEOUT_SECONDS, ProviderMusicClient
-from core.model_tasks.video_providers import ProviderVideoClient
-from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
+from core.model_tasks.video_providers import ProviderVideoClient, VideoJobUnfinishedError
+from core.providers.errors import (
+    NetworkError,
+    ProviderContentRefusedError,
+    ProviderError,
+    ProviderOutcomeUnknownError,
+)
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 
@@ -102,11 +107,11 @@ async def test_extra_options_cannot_redirect_the_model(medium: str) -> None:
         pytest.param({"id": None, "status": "pending"}, None, True, id="missing-job-id"),
         pytest.param({"id": "", "status": "pending"}, None, True, id="empty-job-id"),
         pytest.param({"id": "job-1", "status": 123}, None, True, id="malformed-created-status"),
-        # A known job fails without being submitted again.
+        # A known job whose state is unreadable may still finish and be billed.
         pytest.param(
             {"id": "job-1", "status": "pending"},
             {"id": "job-1", "status": []},
-            False,
+            True,
             id="malformed-polled-status",
         ),
     ],
@@ -125,6 +130,66 @@ async def test_malformed_video_job_fails_without_resubmission(
     assert isinstance(caught.value, ProviderOutcomeUnknownError) is outcome_unknown
     assert caught.value.retryable is False
     assert (create.call_count, poll.call_count) == (1, 0 if polled is None else 1)
+
+
+@pytest.mark.asyncio
+async def test_video_job_survives_transient_poll_failures_and_reports_refusals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _openrouter_video_client()
+    monkeypatch.setattr(client, "post_and_parse", AsyncMock(return_value=("job-1", {})))
+    poll = AsyncMock(
+        side_effect=[
+            NetworkError("offline"),
+            ProviderError("503 Service Unavailable", retryable=True),
+            {
+                "status": "failed",
+                "error": {"message": "Your request was rejected by the safety system"},
+            },
+        ]
+    )
+    monkeypatch.setattr(client, "get_and_parse", poll)
+
+    with pytest.raises(ProviderContentRefusedError) as caught:
+        await client.generate("A river", options={}, poll_interval=0)
+
+    assert caught.value.reason == "Your request was rejected by the safety system"
+    assert poll.await_count == 3
+
+
+@pytest.mark.parametrize(
+    ("poll", "reason"),
+    [
+        pytest.param(
+            AsyncMock(return_value={"status": "pending"}),
+            "it had not finished after 1 minutes",
+            id="deadline",
+        ),
+        pytest.param(
+            AsyncMock(side_effect=ProviderError("404 Not Found", retryable=False)),
+            "checking its status failed",
+            id="job-lost",
+        ),
+        pytest.param(
+            AsyncMock(side_effect=[{"status": "completed"}, ProviderError("500", retryable=True)]),
+            "the finished video could not be downloaded",
+            id="download-failed",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_video_job_whose_result_is_not_collected_names_the_job(
+    monkeypatch: pytest.MonkeyPatch, poll: AsyncMock, reason: str
+) -> None:
+    client = _openrouter_video_client()
+    monkeypatch.setattr(client, "post_and_parse", AsyncMock(return_value=("job-1", {})))
+    monkeypatch.setattr(client, "get_and_parse", poll)
+
+    with pytest.raises(VideoJobUnfinishedError) as caught:
+        await client.generate("A river", options={}, poll_timeout=0.05, poll_interval=0.01)
+
+    assert caught.value.job_id == "job-1"
+    assert caught.value.reason.startswith(reason)
 
 
 @pytest.mark.asyncio
@@ -231,6 +296,48 @@ async def test_music_client_rejects_error_after_partial_audio(error: object) -> 
         await _openrouter_music_client().generate("Dreamy synthwave", options={})
 
     assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "events", "reason"),
+    [
+        pytest.param(
+            200,
+            [{"choices": [{"delta": {"content": "I can't create songs about real people."}}]}],
+            "I can't create songs about real people.",
+            id="text-instead-of-audio",
+        ),
+        pytest.param(
+            200,
+            [{"choices": [{"delta": {"content": "Blocked."}, "finish_reason": "content_filter"}]}],
+            "Blocked.",
+            id="content-filter",
+        ),
+        pytest.param(
+            400,
+            {"error": {"code": "content_policy_violation", "message": "Not allowed"}},
+            "Not allowed",
+            id="refused-request",
+        ),
+    ],
+)
+@respx.mock
+async def test_music_refusals_carry_the_models_reason(
+    status: int, events: object, reason: str
+) -> None:
+    if status == 200:
+        assert isinstance(events, list)
+        body = "".join(_sse(event) for event in events) + "data: [DONE]\n\n"
+        response = httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+    else:
+        response = httpx.Response(status, json=events)
+    respx.post("https://openrouter.ai/api/v1/chat/completions").mock(return_value=response)
+
+    with pytest.raises(ProviderContentRefusedError) as caught:
+        await _openrouter_music_client().generate("A song", options={"seed": ""})
+
+    assert caught.value.reason == reason
 
 
 def _sse(payload: dict) -> str:

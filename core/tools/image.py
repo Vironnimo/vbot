@@ -17,7 +17,9 @@ from core.model_tasks import (
     ImageUnsupportedTargetError,
     TaskUsageContext,
 )
+from core.model_tasks.artifacts import OutputDirectoryError, OutputWriteError
 from core.model_tasks.image import DEFAULT_IMAGE_ANALYSIS_MAX_IMAGES
+from core.model_tasks.image_profile import ImageProfile
 from core.tools._image_inputs import (
     UnusableImageError,
     normalize_analyze_image_arguments,
@@ -27,6 +29,7 @@ from core.tools._image_inputs import (
 )
 from core.tools._media_failures import (
     outcome_unknown_message,
+    output_failure_message,
     provider_failure_message,
     refusal_message,
     unavailable_message,
@@ -95,6 +98,17 @@ IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION = (
     "Generate new images from text using the configured model. Returns local paths for "
     "generated image artifacts."
 )
+# Per-call choices; a profile keeps those the configured Model offers, as enums.
+_CALL_OPTION_PROPERTIES: dict[str, str] = {
+    "aspect_ratio": "Aspect ratio, width:height. Omit to use the configured default.",
+    "resolution": "Output resolution. Omit to use the configured default.",
+    "background": (
+        "transparent for a cutout with an alpha channel, opaque for a filled background. "
+        "Omit to use the configured default."
+    ),
+}
+
+
 IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
@@ -120,21 +134,9 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
                 "generation."
             ),
         },
-        "aspect_ratio": {
-            "type": "string",
-            "pattern": r".*\S.*",
-            "description": (
-                "Desired aspect ratio, such as 1:1 or 16:9. Omit to use Settings; "
-                "unsupported values become best-effort prompt hints."
-            ),
-        },
-        "resolution": {
-            "type": "string",
-            "pattern": r".*\S.*",
-            "description": (
-                "Desired output resolution, such as 1K, 2K, or 4K. Omit to use Settings; "
-                "unsupported values become best-effort prompt hints."
-            ),
+        **{
+            name: {"type": "string", "pattern": r".*\S.*", "description": description}
+            for name, description in _CALL_OPTION_PROPERTIES.items()
         },
         "output_dir": {
             "type": "string",
@@ -149,13 +151,31 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
 }
 
 
-def _image_generation_text_only_parameters() -> JsonObject:
+def image_generation_parameters(profile: ImageProfile) -> JsonObject:
+    """Return the image Tool schema for what the configured Model offers."""
+
     parameters = copy.deepcopy(IMAGE_GENERATION_TOOL_PARAMETERS)
-    parameters["properties"].pop("source_images", None)
+    properties = parameters["properties"]
+    if not profile.accepts_source_images:
+        properties.pop("source_images")
+    elif profile.max_source_images is not None:
+        properties["source_images"]["maxItems"] = profile.max_source_images
+    for name, description in _CALL_OPTION_PROPERTIES.items():
+        choices = profile.call_choices.get(name)
+        if choices:
+            properties[name] = {"type": "string", "enum": list(choices), "description": description}
+        else:
+            properties.pop(name)
     return parameters
 
 
-IMAGE_GENERATION_TEXT_ONLY_TOOL_PARAMETERS = _image_generation_text_only_parameters()
+def _profile_key(profile: ImageProfile) -> str:
+    sources = "text" if not profile.accepts_source_images else str(profile.max_source_images or "")
+    choices = ";".join(
+        f"{name}={','.join(values)}" for name, values in sorted(profile.call_choices.items())
+    )
+    return f"sources={sources};{choices}"
+
 
 _ANALYZE_IMAGE_CONTRACT = compile_tool_contract(
     name=ANALYZE_IMAGE_TOOL_NAME,
@@ -215,41 +235,29 @@ def _image_failure(error: ImageError, labels: tuple[str, str]) -> JsonObject:
     )
 
 
-def _generation_supports_source_images(image_service: Any) -> bool:
-    capability = getattr(image_service, "generation_supports_source_images", None)
-    return bool(capability()) if callable(capability) else False
-
-
 def _image_generation_profile_resolver(image_service: Any):
     def resolve(
         _context: ToolDefinitionProfileContext,
     ) -> ToolDefinitionProfile:
-        if _generation_supports_source_images(image_service):
-            return ToolDefinitionProfile(
-                key="generation-and-editing",
-                description=IMAGE_GENERATION_TOOL_DESCRIPTION,
-                parameters=IMAGE_GENERATION_TOOL_PARAMETERS,
-            )
+        profile = image_service.generation_profile()
         return ToolDefinitionProfile(
-            key="text-generation-only",
-            description=IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION,
-            parameters=IMAGE_GENERATION_TEXT_ONLY_TOOL_PARAMETERS,
+            key=_profile_key(profile),
+            description=IMAGE_GENERATION_TOOL_DESCRIPTION
+            if profile.accepts_source_images
+            else IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION,
+            parameters=image_generation_parameters(profile),
         )
 
     return resolve
 
 
 def _collect_call_options(arguments: JsonObject) -> JsonObject:
-    """Gather the supplied per-call intent knobs into a routing dict.
-
-    Only the two curated knobs are read. Absent values are left out so the
-    execution layer's no-options path runs unchanged.
-    """
+    """Gather the supplied per-call choices; the service checks them against the Model."""
 
     call_options: JsonObject = {}
-    for name in ("aspect_ratio", "resolution"):
+    for name in _CALL_OPTION_PROPERTIES:
         value = optional_string(arguments.get(name), field_name=name)
-        if value is not None:
+        if value:
             call_options[name] = value
     return call_options
 
@@ -347,7 +355,10 @@ def make_image_generation_handler(image_service: Any):
                 'Describe the image as prompt, for example {"prompt": "A red bicycle against '
                 'a white wall, studio photograph"}.'
             )
-        if "source_images" in arguments and not _generation_supports_source_images(image_service):
+        if (
+            "source_images" in arguments
+            and not image_service.generation_profile().accepts_source_images
+        ):
             return _invalid(
                 "The configured image model only generates from text, so it cannot use "
                 "source_images. Remove source_images, or ask the user to choose an Image "
@@ -388,6 +399,10 @@ def make_image_generation_handler(image_service: Any):
             )
         except ImageError as exc:
             return _image_failure(exc, _GENERATION)
+        except (OutputDirectoryError, OutputWriteError) as exc:
+            return tool_failure(
+                exc.code, output_failure_message(exc, product="images"), retryable=False
+            )
 
         image_payloads: list[JsonObject] = []
         for artifact in artifacts:
@@ -397,6 +412,9 @@ def make_image_generation_handler(image_service: Any):
                 "media_type": artifact.media_type,
                 "size_bytes": artifact.size_bytes,
             }
+            if artifact.width is not None and artifact.height is not None:
+                payload["width"] = artifact.width
+                payload["height"] = artifact.height
             if artifact.revised_prompt:
                 # The provider rendered its own rewrite of the prompt, which can
                 # change the subject; the Agent needs it to describe the image.
@@ -435,6 +453,7 @@ def register_image_generation_tool(registry: ToolRegistry, image_service: Any) -
             secondary_fields=(
                 ToolDisplayField("aspect_ratio"),
                 ToolDisplayField("resolution"),
+                ToolDisplayField("background"),
             ),
             fact_builder=result_count_fact_builder("images"),
             details=True,

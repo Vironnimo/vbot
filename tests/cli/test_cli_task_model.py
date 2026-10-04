@@ -120,14 +120,31 @@ def test_task_model_options_prints_the_option_schema(
     assert json.loads(out) == schema
 
 
+# The declared field types decide how ``--option`` text is read: a choice of digits stays text.
+_OPTION_SCHEMA = {
+    "schema": {
+        "fields": [
+            {"name": "voice", "type": "select"},
+            {"name": "speed", "type": "number"},
+            {"name": "style", "type": "select"},
+            {"name": "normalize", "type": "boolean"},
+        ]
+    }
+}
+
+
 @pytest.mark.parametrize(
     ("options", "stdin", "saved_options"),
     [
         pytest.param(("--options", '{"dimensions": 512}'), None, {"dimensions": 512}, id="json"),
         pytest.param(
-            ("--option", "voice", "Harper", "--option", "speed", "1.25"),
+            (
+                *("--option", "voice", "Harper", "--option", "speed", "1.25"),
+                *("--option", "style", "2", "--option", "normalize", "off"),
+                *("--option", "unlisted", "3"),
+            ),
             None,
-            {"voice": "Harper", "speed": 1.25},
+            {"voice": "Harper", "speed": 1.25, "style": "2", "normalize": False, "unlisted": 3},
             id="typed-pairs",
         ),
         pytest.param(("--options-stdin",), '{"voice":"Harper"}\n', {"voice": "Harper"}, id="stdin"),
@@ -143,16 +160,19 @@ def test_task_model_set_replaces_the_binding_with_the_given_options(
 ) -> None:
     if stdin is not None:
         monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    rpc.reply("task_model.options", _OPTION_SCHEMA)
     rpc.reply("task_model.update", _saved("text_to_speech", TTS_TARGET, saved_options))
 
     code, out, _err = run_cli("task-model", "set", "text_to_speech", TTS_TARGET, *options)
 
     assert code == 0
+    schema_calls = [("task_model.options", {"task_type": "text_to_speech", "target": TTS_TARGET})]
     assert rpc.calls == [
+        *(schema_calls if "--option" in options else []),
         (
             "task_model.update",
             {"model_tasks": {"text_to_speech": {"target": TTS_TARGET, "options": saved_options}}},
-        )
+        ),
     ]
     assert out.splitlines() == [
         f"text_to_speech: target={TTS_TARGET} options={json.dumps(saved_options, sort_keys=True)}"
@@ -195,6 +215,13 @@ def test_task_model_clear_saves_an_empty_target(rpc: FakeRpc, run_cli: RunCli) -
             id="set-typed-value",
         ),
         pytest.param(
+            ("set-option", "text_to_speech", "style", "2"),
+            None,
+            {"set": {"style": "2"}},
+            {"style": "2"},
+            id="set-digit-choice",
+        ),
+        pytest.param(
             ("set-option", "text_to_speech", "extra_options", "--stdin"),
             '{"style":"friendly"}\n',
             {"set": {"extra_options": {"style": "friendly"}}},
@@ -221,10 +248,15 @@ def test_task_model_option_commands_patch_one_option_and_print_the_saved_binding
 ) -> None:
     if stdin is not None:
         monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    rpc.reply("task_model.options", _OPTION_SCHEMA)
     rpc.reply("task_model.patch_options", _saved("text_to_speech", TTS_TARGET, saved_options))
 
     code, out, _err = run_cli("task-model", *argv)
 
     assert code == 0
-    assert rpc.calls == [("task_model.patch_options", {"task_type": "text_to_speech", **patch})]
+    schema_calls = [("task_model.options", {"task_type": "text_to_speech"})]
+    assert rpc.calls == [
+        *(schema_calls if argv[0] == "set-option" else []),
+        ("task_model.patch_options", {"task_type": "text_to_speech", **patch}),
+    ]
     assert out.rstrip().endswith(f"options={json.dumps(saved_options, sort_keys=True)}")

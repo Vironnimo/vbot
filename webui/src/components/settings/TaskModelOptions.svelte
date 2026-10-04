@@ -25,6 +25,11 @@
     visibleFields.filter((field) => field.type === JSON_OPTION_TYPE),
   );
   let canReset = $derived(editor.canReset(taskType));
+  const booleanChoices = [
+    { value: '', label: t('settings.specializedModels.providerDefault') },
+    { value: 'true', label: t('settings.specializedModels.booleanOn') },
+    { value: 'false', label: t('settings.specializedModels.booleanOff') },
+  ];
 </script>
 
 {#snippet optionField(field)}
@@ -88,7 +93,8 @@
           autocorrect="off"
           ariaLabel={field.label}
           aria-describedby={formField.describedBy}
-          placeholder={t('settings.specializedModels.jsonPlaceholder')}
+          placeholder={field.placeholder ||
+            t('settings.specializedModels.jsonPlaceholder')}
           value={editor.optionValue(taskType, field)}
           onInput={(_value, event) =>
             editor.handleOptionInput(taskType, field, event)}
@@ -106,6 +112,19 @@
           value={editor.optionValue(taskType, field)}
           onInput={(_next, event) =>
             editor.handleOptionInput(taskType, field, event)}
+        />
+      {:else if field.type === 'boolean' && !editor.hasBooleanDefault(field)}
+        <Dropdown
+          id={formField.controlId}
+          ariaLabelledby={formField.labelId}
+          value={editor.booleanChoice(taskType, field)}
+          options={booleanChoices}
+          ariaLabel={field.label}
+          ariaDescribedby={formField.describedBy}
+          triggerClass="settings-view__dropdown"
+          listClass="settings-view__thinking-list"
+          onValueChange={(value) =>
+            editor.setBooleanChoice(taskType, field, value)}
         />
       {:else if field.type === 'boolean'}
         <Toggle

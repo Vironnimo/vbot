@@ -7,8 +7,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.model_tasks import MusicExecutionError, VideoConfigurationError, VideoExecutionError
-from core.providers.errors import ProviderContentRefusedError, ProviderRateLimitError
+from core.model_tasks import (
+    MusicExecutionError,
+    VideoConfigurationError,
+    VideoExecutionError,
+    VideoOptionError,
+    VideoOutcomeUnknownError,
+    VideoRefusedError,
+)
+from core.model_tasks.video import VideoProfile
+from core.providers.errors import ProviderRateLimitError
 from core.tools.media_generation import (
     GENERATE_MUSIC_TOOL_NAME,
     GENERATE_VIDEO_TOOL_NAME,
@@ -20,32 +28,70 @@ from core.utils.paths import model_path
 from tests.core.tools.image_test_support import make_context, write_image
 
 
-def test_video_profile_only_exposes_configured_model_capabilities(tmp_path: Path) -> None:
-    registry = ToolRegistry()
-    register_generate_video_tool(
-        registry,
-        _VideoService(tmp_path / "video.mp4", {"duration", "resolution", "first_frame"}),
+def _profile(*offered: str) -> VideoProfile:
+    """A video Model offering the named per-call options and frame positions."""
+    choices = {
+        "duration": ("4", "6", "8"),
+        "aspect_ratio": ("16:9", "9:16"),
+        "resolution": ("720p", "1080p"),
+    }
+    return VideoProfile(
+        call_choices={name: values for name, values in choices.items() if name in offered},
+        generate_audio="generate_audio" in offered,
+        frame_images=tuple(name for name in ("first_frame", "last_frame") if name in offered),
     )
+
+
+@pytest.mark.parametrize(
+    ("profile", "offered"),
+    [
+        pytest.param(
+            _profile("duration", "resolution", "first_frame"),
+            {
+                "duration": {"type": "integer", "enum": [4, 6, 8]},
+                "resolution": {"type": "string", "enum": ["720p", "1080p"]},
+                "first_frame": {"type": "string"},
+            },
+            id="choices-and-first-frame",
+        ),
+        pytest.param(
+            VideoProfile(
+                call_choices={"duration": ("4", "5", "6")},
+                generate_audio=True,
+                frame_images=("first_frame", "last_frame"),
+            ),
+            {
+                "duration": {"type": "integer", "minimum": 4, "maximum": 6},
+                "generate_audio": {"type": "boolean"},
+                "first_frame": {"type": "string"},
+                "last_frame": {"type": "string"},
+            },
+            id="duration-range-audio-and-frames",
+        ),
+        pytest.param(VideoProfile(), {}, id="nothing-offered"),
+    ],
+)
+def test_video_profile_only_exposes_configured_model_capabilities(
+    tmp_path: Path, profile: VideoProfile, offered: dict[str, dict[str, object]]
+) -> None:
+    registry = ToolRegistry()
+    register_generate_video_tool(registry, _VideoService(tmp_path / "video.mp4", profile))
 
     definition = registry.provider_definitions(
         [GENERATE_VIDEO_TOOL_NAME],
         profile_context=ToolDefinitionProfileContext(agent_id="agent"),
     )[0]
 
-    assert set(definition["parameters"]["properties"]) == {
-        "prompt",
-        "duration",
-        "resolution",
-        "first_frame",
-        "output_dir",
-    }
-    assert isinstance(definition["description"], str)
-    assert definition["description"]
+    properties = definition["parameters"]["properties"]
+    assert set(properties) == {"prompt", "output_dir", *offered}
+    for name, facts in offered.items():
+        assert facts.items() <= properties[name].items()
+    assert "billed" in definition["description"]
 
 
 @pytest.mark.asyncio
 async def test_video_tool_resolves_frames_and_caller_owned_default(tmp_path: Path) -> None:
-    service = _VideoService(tmp_path / "video.mp4", {"duration", "first_frame"})
+    service = _VideoService(tmp_path / "video.mp4", _profile("duration", "first_frame"))
     registry = ToolRegistry()
     register_generate_video_tool(registry, service)
     context = make_context(tmp_path, GENERATE_VIDEO_TOOL_NAME)
@@ -105,6 +151,7 @@ async def test_music_tool_returns_local_artifact_facts(tmp_path: Path) -> None:
         "path": model_path(tmp_path / "music.mp3"),
         "media_type": "audio/mpeg",
         "size_bytes": 5,
+        "text": "A calm piano piece",
     }
     assert service.source_paths == ((tmp_path / "cover.png").resolve(),)
     assert service.output_dir == tmp_path / "music-gen"
@@ -126,7 +173,9 @@ async def test_music_tool_returns_local_artifact_facts(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_video_tool_accepts_other_spellings_and_empty_options(tmp_path: Path) -> None:
-    service = _VideoService(tmp_path / "video.mp4", {"first_frame", "last_frame", "resolution"})
+    service = _VideoService(
+        tmp_path / "video.mp4", _profile("first_frame", "last_frame", "resolution")
+    )
     registry = ToolRegistry()
     register_generate_video_tool(registry, service)
     start = write_image(tmp_path / "start.png")
@@ -151,7 +200,7 @@ async def test_video_tool_accepts_other_spellings_and_empty_options(tmp_path: Pa
 
 @pytest.mark.asyncio
 async def test_missing_frame_names_the_similar_file_as_a_single_path(tmp_path: Path) -> None:
-    service = _VideoService(tmp_path / "video.mp4", {"first_frame"})
+    service = _VideoService(tmp_path / "video.mp4", _profile("first_frame"))
     registry = ToolRegistry()
     register_generate_video_tool(registry, service)
     write_image(tmp_path / "start.png")
@@ -202,54 +251,82 @@ async def test_music_source_alias_and_provider_wording(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_video_failures_keep_request_fixes_and_reword_provider_refusals(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("error", "code", "message"),
+    [
+        pytest.param(
+            VideoOptionError(
+                "duration '7' is not offered by the configured video model; choose one of: 5, 10."
+            ),
+            "invalid_arguments",
+            "duration '7' is not offered by the configured video model; choose one of: 5, 10.",
+            id="choice-not-offered",
+        ),
+        pytest.param(
+            VideoConfigurationError("The configured provider does not support Video generation."),
+            "video_error",
+            "Video generation is not available (The configured provider does not support "
+            "Video generation.). Tell the user to choose a working Video generation model in "
+            "Settings → Tools → Images, video & music.",
+            id="not-available",
+        ),
+        pytest.param(
+            VideoExecutionError("Provider error: 400 prompt rejected by safety filter"),
+            "provider_error",
+            "The video-generation provider rejected the request (HTTP 400: prompt rejected by "
+            "safety filter). If the reason concerns the request, change it; otherwise "
+            "tell the user, who may need to choose another Video generation model in Settings "
+            "→ Tools → Images, video & music.",
+            id="provider-rejection",
+        ),
+        pytest.param(
+            VideoRefusedError("Your request was rejected by the safety system."),
+            "generation_refused",
+            "The video-generation provider refused the request and created nothing. Its "
+            "reason: Your request was rejected by the safety system. Repeating the unchanged "
+            "request gets the same refusal. Change what the prompt asks for, for example an "
+            "original design instead of a named character, brand or real person, or tell the "
+            "user.",
+            id="refused",
+        ),
+        pytest.param(
+            VideoOutcomeUnknownError(
+                "it had not finished after 20 minutes", operation_key="job-1", job_id="job-1"
+            ),
+            "provider_outcome_unknown",
+            "The video-generation provider accepted the request as job job-1, but it had not "
+            "finished after 20 minutes. The job can still finish and be charged; nothing was "
+            "saved. Do not request the same video again. Tell the user, including the job id.",
+            id="job-unfinished",
+        ),
+    ],
+)
+async def test_video_failures_say_what_happened_and_what_to_do(
+    tmp_path: Path, error: Exception, code: str, message: str
 ) -> None:
-    service = _VideoService(tmp_path / "video.mp4", {"duration"})
+    service = _VideoService(tmp_path / "video.mp4", _profile("duration"))
+    service.error = error
     registry = ToolRegistry()
     register_generate_video_tool(registry, service)
-    context = make_context(tmp_path, GENERATE_VIDEO_TOOL_NAME)
 
-    service.error = VideoConfigurationError(
-        "duration must be one of the values supported by the configured model: 5, 10."
-    )
-    result = await registry.dispatch(context, {"prompt": "A river", "duration": 7})
-    assert result["error"]["message"] == (
-        "duration must be one of the values supported by the configured model: 5, 10."
+    result = await registry.dispatch(
+        make_context(tmp_path, GENERATE_VIDEO_TOOL_NAME), {"prompt": "A river", "duration": 7}
     )
 
-    service.error = VideoExecutionError("Provider error: 400 prompt rejected by safety filter")
-    result = await registry.dispatch(context, {"prompt": "A river"})
-    assert result["error"]["message"] == (
-        "The video-generation provider rejected the request (HTTP 400: prompt rejected by "
-        "safety filter). If the reason concerns the request, change it; otherwise "
-        "tell the user, who may need to choose another Video generation model in Settings "
-        "→ Tools → Images, video & music."
-    )
-
-    refusal = ProviderContentRefusedError("Your request was rejected by the safety system.")
-    service.error = VideoExecutionError(str(refusal))
-    service.error.__cause__ = refusal
-    result = await registry.dispatch(context, {"prompt": "A river"})
-    assert result["error"]["message"] == (
-        "The video-generation provider refused the request and created nothing. Its reason: "
-        "Your request was rejected by the safety system. Repeating the unchanged request gets "
-        "the same refusal. Change what the prompt asks for, for example an original design "
-        "instead of a named character, brand or real person, or tell the user."
-    )
+    assert result["error"] == {"code": code, "message": message, "retryable": False}
 
 
 class _VideoService:
-    def __init__(self, file_path: Path, capabilities: set[str]) -> None:
+    def __init__(self, file_path: Path, profile: VideoProfile) -> None:
         self.file_path = file_path
-        self.capabilities = capabilities
+        self.profile = profile
         self.call_options: dict[str, object] | None = None
         self.frame_paths: dict[str, Path] | None = None
         self.output_dir: Path | None = None
         self.error: Exception | None = None
 
-    def generation_capabilities(self) -> frozenset[str]:
-        return frozenset(self.capabilities)
+    def generation_profile(self) -> VideoProfile:
+        return self.profile
 
     async def generate_artifact(
         self,
@@ -301,4 +378,6 @@ class _MusicService:
             file_path=self.file_path,
             media_type="audio/mpeg",
             size_bytes=5,
+            transcript="",
+            text="A calm piano piece",
         )

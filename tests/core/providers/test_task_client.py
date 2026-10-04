@@ -3,6 +3,7 @@ response classification."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -10,6 +11,8 @@ import httpx
 import pytest
 import respx
 
+from core.debug import DebugContext, DebugTraceStore, ProviderDebugRecorder
+from core.debug.store import drain_debug_traces
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import (
     NetworkError,
@@ -87,8 +90,16 @@ def _json(response: httpx.Response) -> Any:
 class _StubRuntime:
     """Minimal ``TaskClientRuntime`` stand-in for target resolution."""
 
-    def __init__(self, provider: ProviderConfig) -> None:
+    def __init__(self, provider: ProviderConfig, traces: DebugTraceStore | None = None) -> None:
         self.providers = SimpleNamespace(get=lambda provider_id: provider)
+        self._traces = traces
+
+    def provider_debug_recorder(
+        self, *, body_limit: int | None = None
+    ) -> ProviderDebugRecorder | None:
+        if self._traces is None:
+            return None
+        return ProviderDebugRecorder(self._traces, body_limit=body_limit)
 
     def get_connection_token_getter(self, connection: ConnectionRef):  # type: ignore[no-untyped-def]
         async def _get_token() -> str:
@@ -147,6 +158,46 @@ async def test_from_runtime_binds_the_resolved_connection_credential_and_base_ur
         "Bearer sk-test",
         "vBot",
     )
+
+
+@pytest.mark.parametrize("for_run", [True, False], ids=["run-request", "request-outside-a-run"])
+@respx.mock
+@pytest.mark.asyncio
+async def test_debug_mode_traces_only_requests_made_for_a_run(
+    tmp_path: Path, for_run: bool
+) -> None:
+    respx.post(_THINGS_URL).mock(return_value=httpx.Response(200, json=_OK))
+    traces = DebugTraceStore(tmp_path, trace_limit=10)
+    context = DebugContext(
+        run_id="run-1",
+        agent_id="agent-1",
+        session_id="session-1",
+        provider_id="example",
+        connection_id="example:api-key",
+        model_id="example/some-model",
+        streaming=False,
+        iteration_number=0,
+    )
+    client = ProviderTaskClient.from_runtime(
+        _StubRuntime(_make_provider(None), traces),
+        SimpleNamespace(
+            provider_id="example",
+            model_id="example/some-model",
+            connection_id="example:api-key",
+            local_connection_id="api-key",
+        ),
+        debug_context=context if for_run else None,
+    )
+
+    await client.post_and_parse("/things", timeout=5.0, parse=_json, json={"model": "m"})
+    await drain_debug_traces()
+
+    recorded = traces.get_traces()
+    if not for_run:
+        assert recorded == []
+        return
+    trace = traces.get_trace(recorded[0]["trace_id"])
+    assert (trace["context"]["run_id"], trace["response"]["body"]) == ("run-1", '{"ok":true}')
 
 
 @respx.mock

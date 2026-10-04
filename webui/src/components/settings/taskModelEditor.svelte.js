@@ -19,6 +19,7 @@ import { createSettingsDraft } from '$lib/settingsSave.js';
 import {
   JSON_OPTION_TYPE,
   TASK_MODEL_ROWS,
+  compatibleOptions,
   createTaskModelUpdatePayload,
   isOptionFieldHidden,
   normalizeOptionSchema,
@@ -107,6 +108,9 @@ export function createTaskModelEditor({
   // binding is never updated with an invalid value; this map only drives the
   // inline error message under the textarea.
   let jsonErrors = $state({});
+  // The text the user typed into each JSON field, under the same keys, so the
+  // textarea keeps it while the parsed value (or a cleared one) is stored.
+  let jsonTexts = $state({});
   let autoSaveArmed = $state(false);
   // A queued target reload waits here while the user is actively editing,
   // since a reload replaces the available option controls.
@@ -236,7 +240,7 @@ export function createTaskModelEditor({
         return false;
       }
       schemasByType = { ...schemasByType, [taskType]: [] };
-      clearJsonErrors(taskType);
+      clearJsonEdits(taskType);
       return true;
     }
 
@@ -256,7 +260,7 @@ export function createTaskModelEditor({
       ...schemasByType,
       [taskType]: normalizeOptionSchema(result),
     };
-    clearJsonErrors(taskType);
+    clearJsonEdits(taskType);
     return true;
   }
 
@@ -302,13 +306,18 @@ export function createTaskModelEditor({
     autoSaveArmed = true;
   }
 
+  // The new target starts from its defaults plus the previous options it
+  // accepts unchanged, so switching between similar Models keeps the choices.
   async function setTarget(taskType, target) {
     onError('');
     markEdit();
+    const previousOptions = binding(taskType).options;
     bindings = { ...bindings, [taskType]: { target, options: {} } };
 
     try {
-      await loadSchema(taskType, target);
+      if (await loadSchema(taskType, target)) {
+        carryOptions(taskType, target, previousOptions);
+      }
     } catch (error) {
       onError(
         `${t('settings.specializedModels.optionsLoadError')} ${error.message}`,
@@ -316,11 +325,30 @@ export function createTaskModelEditor({
     }
   }
 
+  function carryOptions(taskType, target, previousOptions) {
+    const current = bindings[taskType] ?? EMPTY_BINDING;
+    // An option set while the schema loaded wins over the carried ones.
+    if (current.target !== target || Object.keys(current.options).length > 0) {
+      return;
+    }
+    const options = compatibleOptions(
+      schemasByType[taskType] ?? [],
+      previousOptions,
+    );
+    if (Object.keys(options).length > 0) {
+      bindings = { ...bindings, [taskType]: { ...current, options } };
+    }
+  }
+
+  // An emptied JSON field clears its stored value; invalid text is kept only
+  // in the textarea, with its error.
   function handleOptionInput(taskType, field, event) {
     if (field.type === JSON_OPTION_TYPE) {
-      const { value, error } = parseJsonFieldValue(event.currentTarget.value);
+      const text = event.currentTarget.value;
+      jsonTexts = { ...jsonTexts, [jsonKey(taskType, field)]: text };
+      const { value, error } = parseJsonFieldValue(text);
       setJsonError(taskType, field, error);
-      if (error === '' && value !== undefined) {
+      if (error === '') {
         setOption(taskType, field, value);
       }
       return;
@@ -328,12 +356,19 @@ export function createTaskModelEditor({
     setOption(taskType, field, valueFromOptionField(field, event));
   }
 
+  // `undefined` removes the option, so the target's default applies.
   function setOption(taskType, field, value) {
     const currentBinding = bindings[taskType] ?? EMPTY_BINDING;
+    const nextOptions = { ...(currentBinding.options ?? {}) };
+    if (value === undefined) {
+      delete nextOptions[field.name];
+    } else {
+      nextOptions[field.name] = value;
+    }
     // A select whose choices depend on this field never keeps a hidden value.
     const options = reconcileDependentOptions(
       schemasByType[taskType] ?? [],
-      { ...(currentBinding.options ?? {}), [field.name]: value },
+      nextOptions,
       field.name,
     );
     bindings = { ...bindings, [taskType]: { ...currentBinding, options } };
@@ -346,7 +381,7 @@ export function createTaskModelEditor({
       ...bindings,
       [taskType]: { ...bindings[taskType], options: {} },
     };
-    clearJsonErrors(taskType);
+    clearJsonEdits(taskType);
     onError('');
     markEdit();
   }
@@ -451,6 +486,10 @@ export function createTaskModelEditor({
   }
 
   function optionValue(taskType, field) {
+    const text = jsonTexts[jsonKey(taskType, field)];
+    if (field.type === JSON_OPTION_TYPE && text !== undefined) {
+      return text;
+    }
     const value = binding(taskType).options[field.name];
     if (value === undefined || value === null) {
       if (field.type === JSON_OPTION_TYPE) {
@@ -464,12 +503,31 @@ export function createTaskModelEditor({
     return value;
   }
 
+  // A switch whose target sets no default offers "Provider default" besides
+  // on and off; its value is '', 'true' or 'false'.
+  function hasBooleanDefault(field) {
+    return typeof field.default === 'boolean';
+  }
+
+  function booleanChoice(taskType, field) {
+    const value = binding(taskType).options[field.name];
+    return typeof value === 'boolean' ? String(value) : '';
+  }
+
+  function setBooleanChoice(taskType, field, choice) {
+    setOption(taskType, field, choice === '' ? undefined : choice === 'true');
+  }
+
+  function jsonKey(taskType, field) {
+    return `${taskType}::${field.name}`;
+  }
+
   function jsonError(taskType, field) {
-    return jsonErrors[`${taskType}::${field.name}`] ?? '';
+    return jsonErrors[jsonKey(taskType, field)] ?? '';
   }
 
   function setJsonError(taskType, field, message) {
-    const key = `${taskType}::${field.name}`;
+    const key = jsonKey(taskType, field);
     const nextErrors = { ...jsonErrors };
     if (message) {
       nextErrors[key] = message;
@@ -479,11 +537,11 @@ export function createTaskModelEditor({
     jsonErrors = nextErrors;
   }
 
-  function clearJsonErrors(taskType) {
+  function clearJsonEdits(taskType) {
     const prefix = `${taskType}::`;
-    jsonErrors = Object.fromEntries(
-      Object.entries(jsonErrors).filter(([key]) => !key.startsWith(prefix)),
-    );
+    const keep = ([key]) => !key.startsWith(prefix);
+    jsonErrors = Object.fromEntries(Object.entries(jsonErrors).filter(keep));
+    jsonTexts = Object.fromEntries(Object.entries(jsonTexts).filter(keep));
   }
 
   return {
@@ -511,6 +569,9 @@ export function createTaskModelEditor({
     canReset,
     fieldChoices,
     optionValue,
+    hasBooleanDefault,
+    booleanChoice,
+    setBooleanChoice,
     jsonError,
     setTarget,
     setOption,

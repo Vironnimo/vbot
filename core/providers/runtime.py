@@ -214,7 +214,7 @@ class ProviderRuntime:
             base_url,
             connection_config.auth,
             model_lookup=self._model_lookup(provider_id),
-            debug_recorder=self._debug_recorder(),
+            debug_recorder=self.debug_recorder(),
             connection_mode=connection_config.mode,
             **extra_kwargs,
         )
@@ -456,13 +456,18 @@ class ProviderRuntime:
                 targets.append((provider_id, provider, connection))
         return targets
 
-    def _debug_recorder(self) -> ProviderDebugRecorder | None:
+    def debug_recorder(self, *, body_limit: int | None = None) -> ProviderDebugRecorder | None:
+        """Return a new trace recorder while debug mode is on, else None.
+
+        *body_limit* caps the bytes kept of each request and response body.
+        """
         debug_settings = self._storage.load_debug_settings()
         if not debug_settings.get("enabled", False):
             return None
         trace_limit = debug_settings.get("trace_limit", 50)
         return ProviderDebugRecorder(
-            store=DebugTraceStore(self._storage.data_dir, trace_limit=trace_limit)
+            store=DebugTraceStore(self._storage.data_dir, trace_limit=trace_limit),
+            body_limit=body_limit,
         )
 
     @staticmethod

@@ -103,6 +103,7 @@ def task_model_set(
         binding["options"] = options
     elif option_pairs:
         options = {}
+        field_types = _option_field_types(instance, task_type, target)
         for pair in option_pairs:
             name, raw_value = pair
             if name in options:
@@ -111,7 +112,7 @@ def task_model_set(
                     message=f"--option was provided more than once for {name!r}",
                     instance=instance,
                 )
-            options[name] = coerce_config_value(raw_value)
+            options[name] = _option_value(field_types.get(name), raw_value)
         binding["options"] = options
 
     payload = _rpc_call(instance, "task_model.update", {"model_tasks": {task_type: binding}})
@@ -128,10 +129,11 @@ def task_model_set_option(
 ) -> CommandResult:
     """Set one option on the current binding without replacing sibling options."""
 
+    field_types = _option_field_types(instance, task_type, None)
     return _patch_task_model_options(
         instance,
         task_type,
-        set_values={name: coerce_config_value(raw_value)},
+        set_values={name: _option_value(field_types.get(name), raw_value)},
     )
 
 
@@ -143,6 +145,58 @@ def task_model_unset_option(
     """Remove one option from the current binding without replacing sibling options."""
 
     return _patch_task_model_options(instance, task_type, unset_names=[name])
+
+
+_BOOLEAN_WORDS = {
+    "true": True,
+    "yes": True,
+    "on": True,
+    "1": True,
+    "false": False,
+    "no": False,
+    "off": False,
+    "0": False,
+}
+
+
+def _option_field_types(
+    instance: ServerInstance, task_type: str, target: str | None
+) -> dict[str, str]:
+    """Return each option's declared field type for *target* (default: the bound one).
+
+    An unavailable schema yields no types; values then keep their JSON reading.
+    """
+
+    params = {"task_type": task_type}
+    if target is not None:
+        params["target"] = target
+    payload = _rpc_call(instance, "task_model.options", params)
+    schema = payload.data.get("schema") if payload.ok else None
+    fields = schema.get("fields") if isinstance(schema, Mapping) else None
+    if not isinstance(fields, list):
+        return {}
+    return {
+        field["name"]: field["type"]
+        for field in fields
+        if isinstance(field, Mapping)
+        and isinstance(field.get("name"), str)
+        and isinstance(field.get("type"), str)
+    }
+
+
+def _option_value(field_type: str | None, raw_value: str) -> Any:
+    """Read a CLI option value as the type its Settings field declares.
+
+    Choice and text fields keep the text as written, so a duration choice
+    ``"8"`` stays text; numbers, switches and JSON fields are parsed. A value
+    that does not parse is sent as written, and the server names the problem.
+    """
+
+    if field_type in {"text", "textarea", "select"}:
+        return raw_value
+    if field_type == "boolean":
+        return _BOOLEAN_WORDS.get(raw_value.strip().lower(), raw_value)
+    return coerce_config_value(raw_value)
 
 
 def _patch_task_model_options(

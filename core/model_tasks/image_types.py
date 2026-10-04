@@ -86,3 +86,6 @@ class ImageArtifact:
     file_path: Path
     index: int = 0
     revised_prompt: str | None = None
+    # Pixel dimensions read from the written file; ``None`` for vector images.
+    width: int | None = None
+    height: int | None = None
