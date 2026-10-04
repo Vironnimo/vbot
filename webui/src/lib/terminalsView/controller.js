@@ -6,24 +6,17 @@ import {
   listTerminals,
   prepareSpeechTranscription,
   renameTerminalGroup,
-  resizeTerminal,
-  sendTerminalInput,
   setTerminalGroupOrder,
   startTerminal,
   subscribeTerminalEvents,
   transcribeSpeech,
 } from '../api.js';
 import { createAudioRecorder } from '../audioRecorder.js';
-import { reconnectBackoffDelay } from '../backoff.js';
-import { createPtyFrameSanitizer } from './protocol.js';
+import { createTerminalConnection } from './connection.js';
 import {
   TERMINAL_STREAM_IDLE,
-  TERMINAL_STREAM_CONNECTING,
   TERMINAL_STREAM_CONNECTED,
-  TERMINAL_STREAM_RECONNECTING,
-  TERMINAL_STREAM_ERROR,
   TERMINAL_STREAM_SNAPSHOT,
-  clampTerminalGrid,
   visibleTerminals,
   terminalIsFinished,
   reconcileTerminalList,
@@ -37,26 +30,6 @@ import {
 } from './closeTracking.js';
 import { createTerminalSpeech } from './speech.js';
 import { createTerminalManagement } from './management.js';
-
-const RECONNECT_INITIAL_DELAY_MS = 500;
-
-const RECONNECT_MAX_DELAY_MS = 8_000;
-
-const RESIZE_DEBOUNCE_MS = 100;
-
-const INPUT_FLUSH_DELAY_MS = 24;
-
-const INPUT_CHUNK_CHARS = 32_768;
-
-// A socket that still sits in WS_CONNECTING past this budget is treated as
-// wedged (half-open after a sleep/radio/network handoff) and force-closed so
-// the ordinary close path schedules a reconnect; such sockets never fire
-// open or close on their own.
-const CONNECT_TIMEOUT_MS = 8_000;
-
-const WS_CONNECTING = 0;
-
-const WS_OPEN = 1;
 
 export function createTerminalsController({
   state,
@@ -76,8 +49,6 @@ export function createTerminalsController({
     killTerminal,
     listTerminals,
     renameTerminalGroup,
-    resizeTerminal,
-    sendTerminalInput,
     setTerminalGroupOrder,
     startTerminal,
     subscribeTerminalEvents,
@@ -88,7 +59,8 @@ export function createTerminalsController({
   let destroyed = false;
   let serverUnavailable = false;
   let listRequestId = 0;
-  const streamRecords = new Map();
+  // One live connection per visible Terminal Session.
+  const connections = new Map();
   const { cancelSpeech, toggleSpeech } = createTerminalSpeech({
     state,
     onTranscript,
@@ -221,9 +193,9 @@ export function createTerminalsController({
     const listedIds = new Set(
       visibleTerminals(state).map((terminal) => terminal.terminal_id),
     );
-    for (const stream of [...streamRecords.values()]) {
-      if (!listedIds.has(stream.terminalId)) {
-        closeStream(stream);
+    for (const connection of [...connections.values()]) {
+      if (!listedIds.has(connection.terminalId)) {
+        closeStream(connection);
       }
     }
     if (serverUnavailable) {
@@ -231,7 +203,7 @@ export function createTerminalsController({
     }
     for (const terminal of visibleTerminals(state)) {
       if (terminalIsFinished(terminal)) cancelSpeech(terminal.terminal_id);
-      if (!streamRecords.has(terminal.terminal_id)) {
+      if (!connections.has(terminal.terminal_id)) {
         connectStream(terminal.terminal_id);
       }
     }
@@ -241,223 +213,92 @@ export function createTerminalsController({
     if (destroyed || serverUnavailable) {
       return;
     }
-    let stream = streamRecords.get(terminalId);
-    if (!stream) {
-      stream = {
-        terminalId,
-        connection: null,
-        shouldReconnect: true,
-        terminalEnded: false,
-        lastSequence: 0,
-        reconnectTimer: null,
-        reconnectAttempt: 0,
-        connectTimer: null,
-        sanitizer: createPtyFrameSanitizer(),
-        inputTimer: null,
-        inputBuffer: '',
-        inputChain: Promise.resolve(),
-        resizeTimer: null,
-        pendingResize: null,
-        resizeInFlight: null,
-      };
-      streamRecords.set(terminalId, stream);
-    }
-    clearReconnectTimer(stream);
-    setStreamView(terminalId, {
-      status:
-        stream.reconnectAttempt > 0
-          ? TERMINAL_STREAM_RECONNECTING
-          : TERMINAL_STREAM_CONNECTING,
-      error: '',
-      errorCode: '',
+    const connection = createTerminalConnection({
+      terminalId,
+      subscribe: api.subscribeTerminalEvents,
+      canConnect: () => !destroyed && !serverUnavailable,
+      setTimeoutFn,
+      clearTimeoutFn,
+      onStatus: (status, error = null, errorCode = '') =>
+        setStreamView(terminalId, {
+          status,
+          error: error ? errorMessage(error) : '',
+          errorCode,
+        }),
+      onReady: (ansi, summary) => {
+        const terminal = mergeTerminalSummary(state, summary);
+        const finished = terminalIsFinished(terminal);
+        setStreamView(terminalId, {
+          status: finished
+            ? TERMINAL_STREAM_SNAPSHOT
+            : TERMINAL_STREAM_CONNECTED,
+          error: '',
+          errorCode: '',
+        });
+        onSnapshot(terminalId, ansi, terminal);
+        if (finished) {
+          markStreamFinished(connection);
+          void loadTerminals({ silent: true });
+        }
+      },
+      onOutput: (data) => onOutput(terminalId, data),
+      onSnapshot: (ansi, summary) =>
+        onSnapshot(terminalId, ansi, mergeTerminalSummary(state, summary)),
+      onState: (summary) => {
+        const terminal = mergeTerminalSummary(state, summary);
+        if (terminalIsFinished(terminal)) {
+          markStreamFinished(connection);
+          void loadTerminals({ silent: true });
+        } else if (terminal) {
+          onGeometry(terminalId, terminal);
+        }
+      },
+      onInputFailed: (message) => reportError(terminalId, message),
+      onResized: (summary) => {
+        // The reply carries the authoritative summary of the resized PTY.
+        const index = state.terminals.findIndex(
+          (item) => item.terminal_id === terminalId,
+        );
+        if (index >= 0 && summary) {
+          state.terminals[index] = {
+            ...state.terminals[index],
+            columns: summary.columns,
+            rows: summary.rows,
+          };
+        }
+        if (state.selectedTerminalId === terminalId) {
+          state.actionError = '';
+        }
+      },
+      onResizeFailed: (message) => reportError(terminalId, message),
+      onResizeSettled: () => {
+        const item = state.terminals.find(
+          (terminal) => terminal.terminal_id === terminalId,
+        );
+        if (item && !destroyed) {
+          onGeometry(terminalId, item);
+        }
+      },
     });
-    try {
-      stream.connection = api.subscribeTerminalEvents(terminalId, {
-        onEvent: (event) => handleStreamEvent(stream, event),
-        onError: (error) => {
-          if (streamRecords.get(terminalId) !== stream) {
-            return;
-          }
-          setStreamView(terminalId, {
-            error: errorMessage(error),
-            errorCode: '',
-            status: TERMINAL_STREAM_ERROR,
-          });
-        },
-        onClose: () => handleStreamClose(stream),
-      });
-      const socket = stream.connection?.socket;
-      if (socket && socket.readyState === WS_CONNECTING) {
-        stream.connectTimer = setTimeoutFn(() => {
-          stream.connectTimer = null;
-          if (streamRecords.get(terminalId) !== stream) {
-            return;
-          }
-          const current = stream.connection?.socket;
-          if (
-            !current ||
-            current.readyState === WS_OPEN ||
-            stream.terminalEnded
-          ) {
-            return;
-          }
-          // Still connecting past the budget: treat as wedged. Forcing the
-          // close runs the ordinary reconnect path (which this handler's
-          // onClose feeds); the socket never opened, so nothing is lost.
-          stream.connection?.close();
-          stream.connection = null;
-          scheduleReconnect(terminalId, 0);
-        }, CONNECT_TIMEOUT_MS);
-      }
-    } catch (error) {
-      setStreamView(terminalId, {
-        error: errorMessage(error),
-        errorCode: '',
-        status: TERMINAL_STREAM_ERROR,
-      });
-      scheduleReconnect(terminalId);
+    connections.set(terminalId, connection);
+    connection.connect();
+  }
+
+  function reportError(terminalId, message) {
+    if (!destroyed && state.selectedTerminalId === terminalId) {
+      state.actionError = message;
     }
   }
 
-  function handleStreamEvent(stream, event) {
-    if (streamRecords.get(stream.terminalId) !== stream) {
-      return;
-    }
-    if (!event || typeof event !== 'object') {
-      return;
-    }
-    const sequence = Number.isInteger(event.sequence) ? event.sequence : null;
-    if (event.type === 'terminal_ready') {
-      if (sequence === null || typeof event.ansi !== 'string') {
-        reconnectForGap(stream);
-        return;
-      }
-      // Fresh stream: any partially-held frame tail from the previous socket
-      // is dead and must not bleed into the rebuilt buffer.
-      stream.sanitizer = createPtyFrameSanitizer();
-      clearConnectTimer(stream);
-      stream.lastSequence = sequence;
-      stream.reconnectAttempt = 0;
-      const terminal = mergeTerminalSummary(state, event.terminal);
-      const finished = terminalIsFinished(terminal);
-      setStreamView(stream.terminalId, {
-        status: finished ? TERMINAL_STREAM_SNAPSHOT : TERMINAL_STREAM_CONNECTED,
-        error: '',
-        errorCode: '',
-      });
-      onSnapshot(stream.terminalId, event.ansi, terminal);
-      if (finished) {
-        markStreamFinished(stream);
-        void loadTerminals({ silent: true });
-      }
-      return;
-    }
-    if (sequence === null || sequence <= stream.lastSequence) {
-      return;
-    }
-    if (sequence !== stream.lastSequence + 1) {
-      reconnectForGap(stream);
-      return;
-    }
-    stream.lastSequence = sequence;
-    if (event.type === 'terminal_output' && typeof event.data === 'string') {
-      const sanitized = stream.sanitizer.next(event.data);
-      if (sanitized) {
-        onOutput(stream.terminalId, sanitized);
-      }
-      return;
-    }
-    if (event.type === 'terminal_snapshot' && typeof event.ansi === 'string') {
-      const terminal = mergeTerminalSummary(state, event.terminal);
-      onSnapshot(stream.terminalId, event.ansi, terminal);
-      return;
-    }
-    if (event.type === 'terminal_state') {
-      const terminal = mergeTerminalSummary(state, event.terminal);
-      if (terminalIsFinished(terminal)) {
-        markStreamFinished(stream);
-        void loadTerminals({ silent: true });
-      } else if (terminal) {
-        onGeometry(stream.terminalId, terminal);
-      }
-    }
-  }
-
-  function markStreamFinished(stream) {
-    cancelSpeech(stream.terminalId);
-    stream.terminalEnded = true;
-    stream.shouldReconnect = false;
-    clearPendingInput(stream);
-    clearPendingResize(stream);
-    setStreamView(stream.terminalId, {
+  function markStreamFinished(connection) {
+    cancelSpeech(connection.terminalId);
+    connection.finish();
+    setStreamView(connection.terminalId, {
       status: TERMINAL_STREAM_SNAPSHOT,
     });
-    if (state.selectedTerminalId === stream.terminalId) {
+    if (state.selectedTerminalId === connection.terminalId) {
       state.actionError = '';
     }
-  }
-
-  function reconnectForGap(stream) {
-    if (streamRecords.get(stream.terminalId) !== stream) {
-      return;
-    }
-    setStreamView(stream.terminalId, {
-      status: TERMINAL_STREAM_RECONNECTING,
-      error: '',
-      errorCode: 'gap',
-    });
-    const terminalId = stream.terminalId;
-    stream.connection?.close(1000, 'terminals-view-gap');
-    stream.connection = null;
-    scheduleReconnect(terminalId, 0);
-  }
-
-  function handleStreamClose(stream) {
-    if (streamRecords.get(stream.terminalId) !== stream) {
-      return;
-    }
-    stream.connection = null;
-    if (
-      destroyed ||
-      serverUnavailable ||
-      stream.terminalEnded ||
-      !stream.shouldReconnect
-    ) {
-      return;
-    }
-    if (stream.reconnectTimer !== null) {
-      return;
-    }
-    setStreamView(stream.terminalId, {
-      status: TERMINAL_STREAM_RECONNECTING,
-      error: '',
-      errorCode: '',
-    });
-    scheduleReconnect(stream.terminalId);
-  }
-
-  function scheduleReconnect(terminalId, explicitDelay) {
-    if (destroyed || serverUnavailable) {
-      return;
-    }
-    const stream = streamRecords.get(terminalId);
-    if (!stream || stream.terminalEnded || !stream.shouldReconnect) {
-      return;
-    }
-    clearReconnectTimer(stream);
-    const delay =
-      explicitDelay ??
-      reconnectBackoffDelay(stream.reconnectAttempt, {
-        initialDelayMs: RECONNECT_INITIAL_DELAY_MS,
-        maxDelayMs: RECONNECT_MAX_DELAY_MS,
-      });
-    stream.reconnectAttempt += 1;
-    stream.reconnectTimer = setTimeoutFn(() => {
-      stream.reconnectTimer = null;
-      if (!destroyed && !serverUnavailable && streamRecords.has(terminalId)) {
-        connectStream(terminalId);
-      }
-    }, delay);
   }
 
   function queueInput(
@@ -467,68 +308,10 @@ export function createTerminalsController({
     const item = state.terminals.find(
       (terminal) => terminal.terminal_id === terminalId,
     );
-    if (
-      typeof data !== 'string' ||
-      !data ||
-      !terminalId ||
-      !item ||
-      terminalIsFinished(item) ||
-      serverUnavailable
-    ) {
+    if (!item || terminalIsFinished(item) || serverUnavailable) {
       return;
     }
-    const stream = streamRecords.get(terminalId);
-    if (!stream || stream.terminalEnded) {
-      return;
-    }
-    stream.inputBuffer += data;
-    if (immediate || stream.inputBuffer.length >= INPUT_CHUNK_CHARS) {
-      flushInput(stream);
-      return;
-    }
-    if (stream.inputTimer === null) {
-      stream.inputTimer = setTimeoutFn(
-        () => flushInput(stream),
-        INPUT_FLUSH_DELAY_MS,
-      );
-    }
-  }
-
-  function flushInput(stream) {
-    if (stream.inputTimer !== null) {
-      clearTimeoutFn(stream.inputTimer);
-      stream.inputTimer = null;
-    }
-    if (!stream.inputBuffer) {
-      return;
-    }
-    const terminalId = stream.terminalId;
-    const data = stream.inputBuffer.slice(0, INPUT_CHUNK_CHARS);
-    stream.inputBuffer = stream.inputBuffer.slice(data.length);
-    stream.inputChain = stream.inputChain
-      .catch(() => undefined)
-      .then(async () => {
-        if (stream.terminalEnded) {
-          return;
-        }
-        try {
-          await api.sendTerminalInput(terminalId, data);
-          if (!destroyed && state.selectedTerminalId === terminalId) {
-            state.actionError = '';
-          }
-        } catch (error) {
-          if (
-            !destroyed &&
-            !stream.terminalEnded &&
-            state.selectedTerminalId === terminalId
-          ) {
-            state.actionError = errorMessage(error);
-          }
-        }
-      });
-    if (stream.inputBuffer) {
-      stream.inputTimer = setTimeoutFn(() => flushInput(stream), 0);
-    }
+    connections.get(terminalId)?.queueInput(data, { immediate });
   }
 
   function resize(
@@ -540,150 +323,17 @@ export function createTerminalsController({
     const item = state.terminals.find(
       (terminal) => terminal.terminal_id === terminalId,
     );
-    if (
-      !Number.isInteger(columns) ||
-      !Number.isInteger(rows) ||
-      !terminalId ||
-      !item ||
-      terminalIsFinished(item) ||
-      serverUnavailable
-    ) {
+    if (!item || terminalIsFinished(item) || serverUnavailable) {
       return;
     }
-    const stream = streamRecords.get(terminalId);
-    if (!stream || stream.terminalEnded) {
-      return;
-    }
-    // The server bounds are enforced here, at the single place every fitted
-    // grid passes through; the viewer can never emit a rejected size.
-    const fitted = clampTerminalGrid(columns, rows);
-    columns = fitted.columns;
-    rows = fitted.rows;
-    // Skip resizes that only repeat the terminal's authoritative dimensions.
-    // Without this, every tab revisit re-sends the same size on its fresh
-    // stream and makes the foreground program repaint for nothing.
-    if (
-      !stream.resizeInFlight &&
-      item.columns === columns &&
-      item.rows === rows
-    ) {
-      clearPendingResize(stream);
-      return;
-    }
-    stream.pendingResize = { terminalId, columns, rows };
-    if (
-      stream.resizeInFlight?.columns === columns &&
-      stream.resizeInFlight.rows === rows
-    ) {
-      // The latest intent now matches the active request, replacing any
-      // intermediate size that was waiting behind it.
-      clearPendingResize(stream);
-      return;
-    }
-    if (stream.resizeTimer !== null) {
-      clearTimeoutFn(stream.resizeTimer);
-      stream.resizeTimer = null;
-    }
-    if (stream.resizeInFlight) {
-      return;
-    }
-    if (immediate) {
-      flushResize(stream);
-      return;
-    }
-    // The debounce absorbs remount transients: a tab revisit measures its
-    // settling layout several times within this window, and only the final
-    // size reaches the PTY. A genuine one-shot layout change re-fires the
-    // fit path afterwards with the corrected geometry.
-    stream.resizeTimer = setTimeoutFn(
-      () => flushResize(stream),
-      RESIZE_DEBOUNCE_MS,
-    );
-  }
-
-  async function flushResize(stream) {
-    stream.resizeTimer = null;
-    const request = stream.pendingResize;
-    stream.pendingResize = null;
-    if (
-      !request ||
-      streamRecords.get(request.terminalId) !== stream ||
-      stream.terminalEnded
-    ) {
-      return;
-    }
-    stream.resizeInFlight = request;
-    try {
-      const result = await api.resizeTerminal(
-        request.terminalId,
-        request.columns,
-        request.rows,
-      );
-      if (
-        !destroyed &&
-        streamRecords.get(request.terminalId) === stream &&
-        !stream.terminalEnded
-      ) {
-        // The RPC returns the authoritative summary inside `terminal`.
-        const index = state.terminals.findIndex(
-          (item) => item.terminal_id === request.terminalId,
-        );
-        if (index >= 0) {
-          state.terminals[index] = {
-            ...state.terminals[index],
-            columns: result.terminal.columns,
-            rows: result.terminal.rows,
-          };
-        }
-        if (state.selectedTerminalId === request.terminalId) {
-          state.actionError = '';
-        }
-      }
-    } catch (error) {
-      if (
-        !destroyed &&
-        streamRecords.get(request.terminalId) === stream &&
-        !stream.terminalEnded &&
-        state.selectedTerminalId === request.terminalId
-      ) {
-        state.actionError = errorMessage(error);
-      }
-    } finally {
-      stream.resizeInFlight = null;
-      if (streamRecords.get(request.terminalId) === stream) {
-        if (stream.pendingResize) {
-          void flushResize(stream);
-        } else if (!destroyed && !stream.terminalEnded) {
-          // Report the settled grid: a rejected request leaves the PTY at
-          // its old size, which the viewer must mirror again.
-          const item = state.terminals.find(
-            (terminal) => terminal.terminal_id === request.terminalId,
-          );
-          if (item && !resizeSettling(request.terminalId)) {
-            onGeometry(request.terminalId, item);
-          }
-        }
-      }
-    }
+    connections
+      .get(terminalId)
+      ?.resize(columns, rows, { current: item, immediate });
   }
 
   // True while this viewer's own resize has not reached the PTY yet.
   function resizeSettling(terminalId) {
-    const stream = streamRecords.get(terminalId);
-    return Boolean(
-      stream &&
-      (stream.resizeTimer !== null ||
-        stream.pendingResize !== null ||
-        stream.resizeInFlight !== null),
-    );
-  }
-
-  function clearPendingResize(stream) {
-    if (stream.resizeTimer !== null) {
-      clearTimeoutFn(stream.resizeTimer);
-      stream.resizeTimer = null;
-    }
-    stream.pendingResize = null;
+    return connections.get(terminalId)?.resizeSettling() ?? false;
   }
 
   // Strip closing Terminal Sessions out of a fresh server list and adjust
@@ -729,9 +379,9 @@ export function createTerminalsController({
     if (!item) {
       return null;
     }
-    const stream = streamRecords.get(terminalId);
-    if (stream) {
-      closeStream(stream);
+    const connection = connections.get(terminalId);
+    if (connection) {
+      closeStream(connection);
     }
     state.terminals = state.terminals.filter(
       (terminal) => terminal.terminal_id !== terminalId,
@@ -814,46 +464,17 @@ export function createTerminalsController({
     void loadTerminals({ silent: true });
   }
 
-  function clearPendingInput(stream) {
-    if (stream.inputTimer !== null) {
-      clearTimeoutFn(stream.inputTimer);
-      stream.inputTimer = null;
-    }
-    stream.inputBuffer = '';
-  }
-
-  function clearReconnectTimer(stream) {
-    if (stream.reconnectTimer !== null) {
-      clearTimeoutFn(stream.reconnectTimer);
-      stream.reconnectTimer = null;
-    }
-    clearConnectTimer(stream);
-  }
-
-  function clearConnectTimer(stream) {
-    if (stream.connectTimer !== null) {
-      clearTimeoutFn(stream.connectTimer);
-      stream.connectTimer = null;
-    }
-  }
-
-  function closeStream(stream) {
-    cancelSpeech(stream.terminalId);
-    streamRecords.delete(stream.terminalId);
-    removeStreamView(stream.terminalId);
-    clearReconnectTimer(stream);
-    clearPendingInput(stream);
-    clearPendingResize(stream);
-    stream.shouldReconnect = false;
-    const connection = stream.connection;
-    stream.connection = null;
-    connection?.close(1000, 'terminals-view-close');
-    onClear(stream.terminalId);
+  function closeStream(connection) {
+    cancelSpeech(connection.terminalId);
+    connections.delete(connection.terminalId);
+    removeStreamView(connection.terminalId);
+    connection.close();
+    onClear(connection.terminalId);
   }
 
   function closeAllStreams() {
-    for (const stream of [...streamRecords.values()]) {
-      closeStream(stream);
+    for (const connection of [...connections.values()]) {
+      closeStream(connection);
     }
   }
 

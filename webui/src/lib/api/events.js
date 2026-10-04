@@ -306,8 +306,20 @@ export function subscribeTerminalEvents(
     socket.close(code, reason);
   };
 
-  return { close, socket };
+  // Operator requests (`input`, `resize`) travel over the same socket, in
+  // order. Returns false when the socket is not open; nothing was sent.
+  const send = (message) => {
+    if (closed || socket.readyState !== WEBSOCKET_OPEN) {
+      return false;
+    }
+    socket.send(JSON.stringify(message));
+    return true;
+  };
+
+  return { close, send, socket };
 }
+
+const WEBSOCKET_OPEN = 1;
 
 function parseJsonEventData(data, code, message) {
   try {

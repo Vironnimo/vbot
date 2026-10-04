@@ -509,16 +509,6 @@ describe('RPC wrappers', () => {
       { command: 'codex', args: ['--profile'] },
     ],
     [
-      'terminal.input',
-      (o) => api.sendTerminalInput('term/one', 'hello\r', o),
-      { terminal_id: 'term/one', data: 'hello\r' },
-    ],
-    [
-      'terminal.resize',
-      (o) => api.resizeTerminal('term/one', 100, 30, o),
-      { terminal_id: 'term/one', columns: 100, rows: 30 },
-    ],
-    [
       'terminal.kill',
       (o) => api.killTerminal('term/one', o),
       { terminal_id: 'term/one' },

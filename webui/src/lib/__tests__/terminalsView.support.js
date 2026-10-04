@@ -32,10 +32,6 @@ function fakeApi({
       groups: groupList.map((item) => ({ ...item })),
       terminals: terminals.map((item) => ({ ...item })),
     }),
-    sendTerminalInput: vi.fn().mockResolvedValue({}),
-    resizeTerminal: vi.fn(async (_id, columns, rows) => ({
-      terminal: { columns, rows },
-    })),
     startTerminal: vi.fn().mockResolvedValue({}),
     killTerminal: vi.fn().mockResolvedValue({}),
     forgetTerminal: vi.fn().mockResolvedValue({}),
@@ -44,12 +40,20 @@ function fakeApi({
     deleteTerminalGroup: vi.fn().mockResolvedValue({}),
     setTerminalGroupOrder: vi.fn().mockResolvedValue({}),
     subscribeTerminalEvents: vi.fn((_terminalId, handlers) => {
+      // The requests sent over this socket, in order.
+      const sent = [];
       const connection = {
         close: vi.fn(),
+        send: vi.fn((message) => {
+          if (connection.socket.readyState !== 1) return false;
+          sent.push(message);
+          return true;
+        }),
         socket: { readyState: socketReadyState },
       };
       streams.push({
         connection,
+        sent,
         emit: (event) => handlers.onEvent(event),
         close: () => handlers.onClose(),
       });

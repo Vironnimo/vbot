@@ -460,11 +460,13 @@ describe('terminal streams', () => {
 });
 
 describe('terminal input', () => {
-  it('batches input per exact terminal and keeps the previous buffer on focus switch', async () => {
+  it('batches input per exact terminal over its socket and keeps the previous buffer on focus switch', async () => {
     vi.useFakeTimers();
-    const { api, controller } = await startTerminals({
+    const { streams, controller } = await startTerminals({
       terminals: [terminal('term-1'), terminal('term-2')],
     });
+    streams[0].emit(readyEvent('term-1', 1));
+    streams[1].emit(readyEvent('term-2', 1));
 
     controller.queueInput('hel');
     controller.queueInput('lo');
@@ -473,44 +475,92 @@ describe('terminal input', () => {
     controller.queueInput('\r', { terminalId: 'term-2', immediate: true });
     await vi.runAllTimersAsync();
 
-    expect(api.sendTerminalInput.mock.calls).toEqual([
-      ['term-2', 'hi\r'],
-      ['term-1', 'hello'],
-    ]);
+    expect(streams[1].sent).toEqual([{ type: 'input', data: 'hi\r' }]);
+    expect(streams[0].sent).toEqual([{ type: 'input', data: 'hello' }]);
   });
 
-  it('drops pending input when the terminal ends and hides the terminal-closed error of an in-flight request', async () => {
+  it('sends input typed while reconnecting once the new stream is ready, in order', async () => {
     vi.useFakeTimers();
-    const { state, streams, api, controller } = await startTerminals();
-    const [input, , failInput] = deferred();
-    api.sendTerminalInput.mockReturnValueOnce(input);
+    const { streams, controller } = await startTerminals();
+    streams[0].emit(readyEvent('term-1', 1));
+    streams[0].close();
+
+    controller.queueInput('ab', { immediate: true });
+    controller.queueInput('c', { immediate: true });
+    await vi.runAllTimersAsync();
+    expect(streams).toHaveLength(2);
+    expect(streams[1].sent).toEqual([]);
+
+    streams[1].emit(readyEvent('term-1', 7));
+    expect(streams[1].sent).toEqual([{ type: 'input', data: 'abc' }]);
+  });
+
+  it('shows a failed input of the selected terminal and drops input once the terminal ends', async () => {
+    vi.useFakeTimers();
+    const { state, streams, controller } = await startTerminals();
     streams[0].emit(readyEvent('term-1', 1));
 
-    controller.queueInput('hi', { immediate: true });
-    await vi.advanceTimersByTimeAsync(0);
+    streams[0].emit({ type: 'input_failed', message: 'input refused' });
+    expect(state.actionError).toBe('input refused');
+
     controller.queueInput('buffered');
     streams[0].emit({
       type: 'terminal_state',
       sequence: 2,
       terminal: terminal('term-1', { state: 'exited' }),
     });
-    failInput(new Error('Terminal Session is no longer running'));
+    streams[0].emit({
+      type: 'input_failed',
+      message: 'Terminal Session is no longer running',
+    });
     controller.queueInput('after end', { immediate: true });
     await vi.runAllTimersAsync();
 
-    expect(api.sendTerminalInput.mock.calls).toEqual([['term-1', 'hi']]);
+    expect(streams[0].sent).toEqual([]);
     expect(state.actionError).toBe('');
     expect(state.streams['term-1'].status).toBe('snapshot');
   });
 });
 
 describe('terminal resize', () => {
+  // The resize requests one terminal socket sent, as [columns, rows].
+  function resizes(stream) {
+    return stream.sent
+      .filter((message) => message.type === 'resize')
+      .map(({ columns, rows }) => [columns, rows]);
+  }
+
+  // Answer the newest resize request as the server would.
+  function answer(stream, { columns, rows } = {}, error = '') {
+    const request = stream.sent.findLast(
+      (message) => message.type === 'resize',
+    );
+    stream.emit(
+      error
+        ? { type: 'resize_failed', request: request.request, message: error }
+        : {
+            type: 'resize_done',
+            request: request.request,
+            terminal: terminal('term-1', {
+              columns: columns ?? request.columns,
+              rows: rows ?? request.rows,
+            }),
+          },
+    );
+  }
+
+  async function connected(options) {
+    const harness = await startTerminals(options);
+    harness.streams[0].emit(readyEvent('term-1', 1));
+    return harness;
+  }
+
   it.each([
     ['a debounced burst', false],
     ['an immediate request', true],
   ])('drops %s ending at the known dimensions', async (_kind, immediate) => {
     vi.useFakeTimers();
-    const { api, controller } = await startTerminals();
+    const { streams, controller } = await connected();
 
     // The terminal runs at 120x32: a burst ending there never reaches the
     // server, not even with an intermediate size in between.
@@ -520,57 +570,53 @@ describe('terminal resize', () => {
     controller.resize(120, 32, 'term-1', immediate);
     await vi.runAllTimersAsync();
 
-    expect(api.resizeTerminal).not.toHaveBeenCalled();
+    expect(resizes(streams[0])).toEqual([]);
   });
 
   it('collapses a burst into one debounced request with the final size and adopts the confirmed grid', async () => {
     vi.useFakeTimers();
-    const { state, api, controller } = await startTerminals();
-    api.resizeTerminal.mockResolvedValue({
-      terminal: { columns: 112, rows: 33 },
-    });
+    const { state, streams, controller } = await connected();
 
     controller.resize(100, 30, 'term-1');
     controller.resize(110, 31, 'term-1');
     controller.resize(110, 31, 'term-1');
     await vi.advanceTimersByTimeAsync(50);
-    expect(api.resizeTerminal).not.toHaveBeenCalled();
+    expect(resizes(streams[0])).toEqual([]);
     await vi.runAllTimersAsync();
 
-    expect(api.resizeTerminal.mock.calls).toEqual([['term-1', 110, 31]]);
+    expect(resizes(streams[0])).toEqual([[110, 31]]);
+    answer(streams[0], { columns: 112, rows: 33 });
     expect(state.terminals[0]).toMatchObject({ columns: 112, rows: 33 });
 
     // A fit at the confirmed size is a no-op.
     controller.resize(112, 33, 'term-1');
     await vi.runAllTimersAsync();
-    expect(api.resizeTerminal).toHaveBeenCalledTimes(1);
+    expect(resizes(streams[0])).toHaveLength(1);
   });
 
   it('sends an immediate resize at once, clamped into the server bounds', async () => {
-    const { state, api, controller } = await startTerminals();
+    const { state, streams, controller } = await connected();
 
     // Maximize sends its measurement without the debounce; a tiny tile fits
     // below the 40x10 minimum and requests the legal grid.
     controller.resize(22, 6, 'term-1', true);
-    expect(api.resizeTerminal).toHaveBeenCalledWith('term-1', 40, 10);
-    await vi.waitFor(() =>
-      expect(state.terminals[0]).toMatchObject({ columns: 40, rows: 10 }),
-    );
+    expect(resizes(streams[0])).toEqual([[40, 10]]);
+    answer(streams[0]);
+    expect(state.terminals[0]).toMatchObject({ columns: 40, rows: 10 });
   });
 
   it('reports the unchanged grid to the viewer after a rejected resize', async () => {
     vi.useFakeTimers();
     const onGeometry = vi.fn();
-    const { state, api, controller } = await startTerminals({
+    const { state, streams, controller } = await connected({
       controller: { onGeometry },
     });
-    api.resizeTerminal.mockRejectedValue(new Error('resize rejected'));
 
     controller.resize(100, 30, 'term-1');
     expect(controller.resizeSettling('term-1')).toBe(true);
     await vi.runAllTimersAsync();
+    answer(streams[0], {}, 'resize rejected');
 
-    expect(api.resizeTerminal).toHaveBeenCalledTimes(1);
     expect(controller.resizeSettling('term-1')).toBe(false);
     expect(onGeometry).toHaveBeenCalledWith(
       'term-1',
@@ -600,44 +646,45 @@ describe('terminal resize', () => {
   ])(
     'queues %s behind an in-flight resize',
     async (_case, later, followUps) => {
-      const { state, api, controller } = await startTerminals();
-      const requests = [];
-      api.resizeTerminal.mockImplementation((_id, columns, rows) => {
-        const [promise, resolve] = deferred();
-        requests.push(() => resolve({ terminal: { columns, rows } }));
-        return promise;
-      });
+      const { state, streams, controller } = await connected();
 
       controller.resize(90, 24, 'term-1', true);
       for (const [columns, rows] of later) {
         controller.resize(columns, rows, 'term-1', true);
       }
-      expect(api.resizeTerminal).toHaveBeenCalledTimes(1);
+      expect(resizes(streams[0])).toEqual([[90, 24]]);
 
-      requests[0]();
-      await vi.waitFor(() =>
-        expect(api.resizeTerminal).toHaveBeenCalledTimes(1 + followUps.length),
-      );
+      answer(streams[0]);
+      expect(resizes(streams[0])).toEqual([[90, 24], ...followUps]);
       if (followUps.length) {
-        requests[1]();
+        answer(streams[0]);
       }
       const [columns, rows] = followUps.at(-1) ?? [90, 24];
-      await vi.waitFor(() =>
-        expect(state.terminals[0]).toMatchObject({ columns, rows }),
-      );
-      expect(api.resizeTerminal.mock.calls.slice(1)).toEqual(
-        followUps.map((size) => ['term-1', ...size]),
-      );
+      expect(state.terminals[0]).toMatchObject({ columns, rows });
     },
   );
 
+  it('requests an unanswered size again on the next stream', async () => {
+    vi.useFakeTimers();
+    const { streams, controller } = await connected();
+
+    controller.resize(100, 30, 'term-1', true);
+    streams[0].close();
+    await vi.runAllTimersAsync();
+    expect(controller.resizeSettling('term-1')).toBe(true);
+
+    streams[1].emit(readyEvent('term-1', 9));
+    expect(resizes(streams[1])).toEqual([[100, 30]]);
+  });
+
   it('does not resize a finished terminal', async () => {
-    const { api, controller } = await startTerminals({
+    const { streams, controller } = await startTerminals({
       terminals: [terminal('term-1', { state: 'exited' })],
     });
+    streams[0].emit(readyEvent('term-1', 1, '', { state: 'exited' }));
 
     controller.resize(100, 30, 'term-1', true);
 
-    expect(api.resizeTerminal).not.toHaveBeenCalled();
+    expect(resizes(streams[0])).toEqual([]);
   });
 });

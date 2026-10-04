@@ -99,6 +99,7 @@ from server._streams import (
     _stream_websocket_events,
     _unregister_ws_client,
 )
+from server._terminal_socket import serve_terminal_socket
 from server.file_delivery import PREVIEW_URL_PREFIX
 from server.live.owner import LIVE_SOCKET_CLOSE_UNKNOWN_CALL
 from server.rpc.errors import RPC_ERROR_INTERNAL, RPC_ERROR_INVALID_REQUEST, RpcError
@@ -826,9 +827,7 @@ def create_app(
         await websocket.accept()
         manager = websocket.app.state.runtime.terminal_manager
         try:
-            stream = manager.watch_for_operator(terminal_id)
-            async with aclosing(stream) as events:
-                await _stream_websocket_events(websocket, events)
+            await serve_terminal_socket(websocket, manager, terminal_id)
         except TerminalNotFoundError as exc:
             await websocket.close(code=1008, reason=str(exc))
         except WebSocketDisconnect:
