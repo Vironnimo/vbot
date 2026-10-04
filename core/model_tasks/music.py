@@ -18,7 +18,12 @@ from core.model_tasks.image import load_image_inputs
 from core.model_tasks.model_tasks import TaskModelTargetRef, model_supports_task
 from core.model_tasks.music_providers import ProviderMusicClient
 from core.model_tasks.music_types import MusicGenerationResult
-from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage, TaskUsageContext
+from core.model_tasks.task_execution import (
+    TaskBindingResolver,
+    TaskUsage,
+    TaskUsageContext,
+    task_debug_context,
+)
 from core.providers.errors import ProviderContentRefusedError, ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
 from core.usage import UsageRecorder
@@ -130,6 +135,7 @@ class MusicService:
             usage_observer=TaskUsage(
                 self._usage_recorder, TASK_MUSIC_GENERATION, target_ref, context=usage_context
             ),
+            debug_context=task_debug_context(usage_context, target_ref, streaming=True),
         )
         try:
             return await client.generate(

@@ -15,6 +15,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from core.debug import DebugContext
 from core.model_tasks.embeddings_providers import EmbeddingUsage
 from core.model_tasks.model_tasks import (
     TaskModelBinding,
@@ -38,6 +39,28 @@ class TaskUsageContext:
     run_id: str | None = None
     owner_name: str | None = None
     group_id: str | None = None
+
+
+def task_debug_context(
+    context: TaskUsageContext | None,
+    target: TaskModelTargetRef,
+    *,
+    streaming: bool = False,
+) -> DebugContext | None:
+    """Return the debug-trace context for a task request made for a Run, else None."""
+
+    if context is None or not context.run_id:
+        return None
+    return DebugContext(
+        run_id=context.run_id,
+        agent_id=context.agent_id or "",
+        session_id=context.session_id or "",
+        provider_id=target.provider_id,
+        connection_id=target.connection_id,
+        model_id=target.model_id,
+        streaming=streaming,
+        iteration_number=0,
+    )
 
 
 class TaskUsage:

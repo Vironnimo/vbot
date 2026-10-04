@@ -17,7 +17,12 @@ from core.model_tasks.constants import TASK_VIDEO_GENERATION
 from core.model_tasks.image import load_image_inputs
 from core.model_tasks.image_profile import match_choice
 from core.model_tasks.model_tasks import TaskModelTargetRef, model_supports_task
-from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage, TaskUsageContext
+from core.model_tasks.task_execution import (
+    TaskBindingResolver,
+    TaskUsage,
+    TaskUsageContext,
+    task_debug_context,
+)
 from core.model_tasks.video_providers import ProviderVideoClient, VideoJobUnfinishedError
 from core.model_tasks.video_types import VideoGenerationResult
 from core.providers.errors import ProviderContentRefusedError, ProviderOutcomeUnknownError
@@ -228,6 +233,7 @@ class VideoService:
             usage_observer=TaskUsage(
                 self._usage_recorder, TASK_VIDEO_GENERATION, target_ref, context=usage_context
             ),
+            debug_context=task_debug_context(usage_context, target_ref),
         )
         try:
             return await client.generate(

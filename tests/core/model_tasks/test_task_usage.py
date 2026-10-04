@@ -70,6 +70,7 @@ def _runtime() -> Any:
     return SimpleNamespace(
         providers=SimpleNamespace(get=lambda _identifier: provider),
         get_connection_token_getter=lambda _connection: StaticTokenGetter("test-token"),
+        provider_debug_recorder=lambda **_: None,
     )
 
 

@@ -29,7 +29,12 @@ from core.model_tasks.image_types import (
     JsonObject,
 )
 from core.model_tasks.model_tasks import TaskModelTargetRef, model_supports_task
-from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage, TaskUsageContext
+from core.model_tasks.task_execution import (
+    TaskBindingResolver,
+    TaskUsage,
+    TaskUsageContext,
+    task_debug_context,
+)
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderContentRefusedError, ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
@@ -287,6 +292,7 @@ class ImageService:
             usage_observer=TaskUsage(
                 self._usage_recorder, TASK_IMAGE_GENERATION, target_ref, context=usage_context
             ),
+            debug_context=task_debug_context(usage_context, target_ref),
         )
         try:
             result = await provider_client.generate(

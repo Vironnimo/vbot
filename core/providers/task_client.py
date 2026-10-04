@@ -22,7 +22,12 @@ from uuid import uuid4
 
 import httpx
 
-from core.providers._http_shared import classify_http_status, wrap_network_error
+from core.debug import DebugContext, ProviderDebugRecorder
+from core.providers._http_shared import (
+    build_async_client,
+    classify_http_status,
+    wrap_network_error,
+)
 from core.providers.accounts import ConnectionRef
 from core.providers.adapter_types import openai_compatible_base_url
 from core.providers.errors import (
@@ -33,7 +38,6 @@ from core.providers.errors import (
 )
 from core.providers.token_getter import OAuthRequestRecovery, StaticTokenGetter, TokenGetter
 from core.utils.retry import retry_async
-from core.utils.tls import shared_ssl_context
 
 JsonObject = dict[str, Any]
 HeaderBuilder = Callable[[], Awaitable[dict[str, str]]]
@@ -43,6 +47,11 @@ HeaderBuilder = Callable[[], Awaitable[dict[str, str]]]
 # the task wire client, so an option vBot does not surface stays usable without
 # a code change. Owned here because all task wire clients share the semantics.
 EXTRA_OPTIONS_KEY = "extra_options"
+
+# Bytes kept of each task request and response body in a debug trace: enough
+# for errors, refusals and JSON metadata, while image, audio and video data
+# would fill the trace store.
+TASK_TRACE_BODY_LIMIT = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -135,6 +144,12 @@ class TaskClientRuntime(Protocol):
         """Return a refresh-capable token getter for one provider connection."""
         ...
 
+    def provider_debug_recorder(
+        self, *, body_limit: int | None = None
+    ) -> ProviderDebugRecorder | None:
+        """Return a new trace recorder while debug mode is on, else None."""
+        ...
+
 
 class TaskTargetRef(Protocol):
     """Structural shape of a parsed provider task-model target.
@@ -190,6 +205,7 @@ class ProviderTaskClient:
         credential: str | None = None,
         token_getter: TokenGetter | None = None,
         usage_observer: TaskRequestObserver | None = None,
+        debug_recorder: ProviderDebugRecorder | None = None,
     ) -> None:
         if token_getter is None:
             if credential is None:
@@ -206,6 +222,7 @@ class ProviderTaskClient:
             connection.base_url or provider.base_url,
         )
         self._usage_observer = usage_observer
+        self._debug_recorder = debug_recorder
 
     @classmethod
     def from_runtime(
@@ -214,8 +231,14 @@ class ProviderTaskClient:
         target_ref: TaskTargetRef,
         *,
         usage_observer: TaskRequestObserver | None = None,
+        debug_context: DebugContext | None = None,
     ) -> Self:
-        """Create a client from runtime provider configuration and credentials."""
+        """Create a client from runtime provider configuration and credentials.
+
+        With a *debug_context*, the client's requests are recorded as debug
+        traces of that Run while debug mode is on. Requests outside a Run,
+        such as indexing, stay untraced so they cannot crowd out the Run traces.
+        """
 
         provider = runtime.providers.get(target_ref.provider_id)
         connection = provider.get_connection(target_ref.local_connection_id)
@@ -231,6 +254,16 @@ class ProviderTaskClient:
             model_id=target_ref.model_id,
             token_getter=token_getter,
             usage_observer=usage_observer,
+            debug_recorder=_task_debug_recorder(runtime, debug_context),
+        )
+
+    def http_client(self, timeout: float) -> httpx.AsyncClient:
+        """Return a new HTTP client for this target, traced while debug mode is on."""
+
+        return build_async_client(
+            base_url=self._base_url,
+            timeout=httpx.Timeout(timeout),
+            debug_recorder=self._debug_recorder,
         )
 
     async def post_and_parse[ParsedResultT](
@@ -262,13 +295,7 @@ class ProviderTaskClient:
 
         async def _do_request() -> ParsedResultT:
             context = (
-                nullcontext(http_client)
-                if http_client is not None
-                else httpx.AsyncClient(
-                    base_url=self._base_url,
-                    timeout=timeout,
-                    verify=shared_ssl_context(),
-                )
+                nullcontext(http_client) if http_client is not None else self.http_client(timeout)
             )
             async with context as client:
                 request_headers = dict(await (headers or self._headers)())
@@ -346,11 +373,7 @@ class ProviderTaskClient:
         auth_recovery = OAuthRequestRecovery(self._token_getter, self._connection.auth)
 
         async def _do_request() -> ParsedResultT:
-            async with httpx.AsyncClient(
-                base_url=self._base_url,
-                timeout=timeout,
-                verify=shared_ssl_context(),
-            ) as client:
+            async with self.http_client(timeout) as client:
                 request_headers = await self._headers()
                 try:
                     response = await client.get(endpoint, headers=request_headers)
@@ -530,3 +553,14 @@ def classify_task_response(
         detail=f"{response.status_code} {detail}".strip() if detail else str(response.status_code),
         response_headers=response.headers,
     )
+
+
+def _task_debug_recorder(
+    runtime: TaskClientRuntime, context: DebugContext | None
+) -> ProviderDebugRecorder | None:
+    if context is None:
+        return None
+    recorder = runtime.provider_debug_recorder(body_limit=TASK_TRACE_BODY_LIMIT)
+    if recorder is not None:
+        recorder.set_context(context)
+    return recorder

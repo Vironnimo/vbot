@@ -33,6 +33,7 @@ from core.chat import ChatLoop, CommandDispatcher
 from core.chat.errors import ChatError
 from core.chat.status_report import StatusWireProfile
 from core.database import Database, SnapshotBarrier, UnregisteredDatabase
+from core.debug import ProviderDebugRecorder
 from core.extensions import (
     ExtensionRegistry,
     InteractionEvent,
@@ -1310,6 +1311,12 @@ class Runtime:
     def get_connection_token_getter(self, connection: ConnectionRef) -> TokenGetter:
         """Return the refresh-capable token getter for one Provider Connection."""
         return self._provider_operations().get_connection_token_getter(connection)
+
+    def provider_debug_recorder(
+        self, *, body_limit: int | None = None
+    ) -> ProviderDebugRecorder | None:
+        """Return a new Provider trace recorder while debug mode is on, else None."""
+        return self._provider_operations().debug_recorder(body_limit=body_limit)
 
     def get_connection_token_extra(self, connection: ConnectionRef) -> Mapping[str, str]:
         """Return persisted OAuth metadata for one Provider Connection."""

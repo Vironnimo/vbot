@@ -62,9 +62,11 @@ class ProviderDebugRecorder:
         store: Destination for finalized traces.
     """
 
-    def __init__(self, store: DebugTraceStore) -> None:
+    def __init__(self, store: DebugTraceStore, *, body_limit: int | None = None) -> None:
         self._store = store
         self._context: DebugContext | None = None
+        # Bytes kept of each request and response body; None keeps them whole.
+        self._body_limit = body_limit
 
     def set_context(self, ctx: DebugContext) -> None:
         """Set the context used for the next captured request(s)."""
@@ -92,6 +94,7 @@ class ProviderDebugRecorder:
             url=redact_url(url),
             headers=redact_headers(headers),
             request_body=body,
+            body_limit=self._body_limit,
         )
 
 
@@ -117,8 +120,11 @@ class _TraceCapture:
         url: str,
         headers: dict[str, str],
         request_body: bytes | None,
+        body_limit: int | None = None,
     ) -> None:
         self._store = store
+        self._body_limit = body_limit
+        self._body_bytes = 0
         self._context = context
         self._start = time.monotonic()
         self._trace_id = uuid4().hex
@@ -144,8 +150,13 @@ class _TraceCapture:
         self._content_encoding = httpx.Headers(headers).get("content-encoding")
 
     def feed_body(self, chunk: bytes) -> None:
-        """Accumulate one raw response body chunk as it is read."""
-        self._body_chunks.append(chunk)
+        """Accumulate one raw response body chunk as it is read, up to the body limit."""
+        kept = self._body_bytes
+        self._body_bytes += len(chunk)
+        if self._body_limit is None:
+            self._body_chunks.append(chunk)
+        elif kept < self._body_limit:
+            self._body_chunks.append(chunk[: self._body_limit - kept])
 
     def record_error(self, error: BaseException) -> None:
         """Record a transport-level failure (connect/timeout/etc.)."""
@@ -171,6 +182,7 @@ class _TraceCapture:
                 response=self._response,
                 error=self._error,
                 body_chunks=tuple(self._body_chunks),
+                body_bytes=self._body_bytes,
                 content_encoding=self._content_encoding,
             )
             if not self._store.save_trace_in_background(self._trace_id, build_trace):
@@ -190,13 +202,21 @@ class _TraceCapture:
         response: dict[str, Any] | None,
         error: dict[str, str] | None,
         body_chunks: tuple[bytes, ...],
+        body_bytes: int,
         content_encoding: str | None,
     ) -> dict[str, Any]:
+        received = b"".join(body_chunks)
         body_text = (
-            _decode_body(_decode_content(b"".join(body_chunks), content_encoding))
+            _decode_body(
+                _decode_content(received, content_encoding)
+                if len(received) == body_bytes
+                else received
+            )
             if body_chunks
             else None
         )
+        if body_text is not None:
+            body_text += _omitted_note(body_bytes - len(received))
 
         # The complete aggregate body — including every byte of an SSE
         # stream — lives in response.body. We never split it into per-frame
@@ -214,7 +234,7 @@ class _TraceCapture:
             "context": self._context_dict(),
             "provider_id": self._context.provider_id if self._context else "",
             "model_id": self._context.model_id if self._context else "",
-            "request": {**self._request, "body": _decode_body(self._request_body)},
+            "request": {**self._request, "body": self._request_body_text()},
             "response": trace_response,
         }
 
@@ -222,6 +242,13 @@ class _TraceCapture:
             trace["error"] = error
 
         return trace
+
+    def _request_body_text(self) -> str | None:
+        body = self._request_body
+        if not body or self._body_limit is None or len(body) <= self._body_limit:
+            return _decode_body(body)
+        text = _decode_body(body[: self._body_limit]) or ""
+        return text + _omitted_note(len(body) - self._body_limit)
 
     def _context_dict(self) -> dict[str, Any] | None:
         if self._context is None:
@@ -251,6 +278,10 @@ def _decode_content(body: bytes, content_encoding: str | None) -> bytes:
         ).content
     except httpx.DecodingError:
         return body
+
+
+def _omitted_note(omitted: int) -> str:
+    return f"\n[{omitted} more bytes not recorded]" if omitted > 0 else ""
 
 
 def _decode_body(body: bytes | None) -> str | None:
