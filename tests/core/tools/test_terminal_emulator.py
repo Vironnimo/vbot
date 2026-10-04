@@ -168,6 +168,29 @@ def test_only_scrolling_from_the_top_row_of_the_primary_screen_keeps_history() -
     assert history(emulator) == "one"
 
 
+def test_transcript_yields_final_logical_lines_once() -> None:
+    emulator = TerminalEmulator(10, 3, scrollback_lines=10, transcript=True)
+    lines: list[str] = []
+
+    # An auto-wrapped line comes back whole; a line exactly as wide as the
+    # screen followed by a line feed stays one line; redraws leave their end.
+    lines += emulator.feed("0123456789abcde\r\n").transcript
+    lines += emulator.feed("0123456789\r\nnext\r\n").transcript
+    lines += emulator.feed("50%\r100%\r\n").transcript
+    # Erasing a wrapped row's end makes it end there.
+    lines += emulator.feed("0123456789ab\x1b[A\x1b[5G\x1b[K\r\n\r\n").transcript
+    lines += emulator.commit_transcript()
+    assert lines == ["0123456789abcde", "0123456789", "next", "100%", "0123", "ab"]
+
+    # Committed rows are not emitted again when they scroll off; a cleared
+    # screen holds new content. The alternate screen is not output.
+    emulator.feed("\x1b[2J\x1b[Hfresh\r\n")
+    emulator.feed("\x1b[?1049hframe\r\n\x1b[?1049l")
+    later = list(emulator.feed("one\r\ntwo\r\nthree\r\nfour").transcript)
+    later += emulator.commit_transcript()
+    assert later == ["fresh", "one", "two", "three", "four"]
+
+
 def test_shrinking_moves_rows_above_the_cursor_into_history() -> None:
     emulator = TerminalEmulator(20, 5, scrollback_lines=10)
     emulator.feed("1\r\n2\r\n3\r\n4\r\n5")
@@ -333,6 +356,9 @@ async def test_render_host_renders_on_a_worker_until_it_is_closed() -> None:
         assert (update.title, update.responses) == ("hosted", "\x1b[2;4R")
         assert await screen.screen_text() == "one\ntwo"
         assert (await screen.page(start_line=0, limit=5))["text"] == "one\ntwo"
+        transcript = host.open_screen(40, 10, scrollback_lines=10, transcript=True)
+        await transcript.feed("first\r\nsecond")
+        assert await transcript.commit_transcript() == ("first", "second")
     finally:
         host.close()
 

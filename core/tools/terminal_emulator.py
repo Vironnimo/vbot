@@ -106,6 +106,8 @@ class EmulatorUpdate(NamedTuple):
     alternate_screen: bool
     # The chunk left the alternate screen (the primary screen came back).
     alternate_exited: bool
+    # Transcript lines that became final in this chunk (transcript screens only).
+    transcript: tuple[str, ...] = ()
 
 
 class ScreenObservation(NamedTuple):
@@ -125,14 +127,24 @@ class _EmulatorStream(pyte.Stream):
 
 
 class _EmulatorScreen(pyte.Screen):
-    def __init__(self, columns: int, lines: int, on_scroll: Callable[[str], None]) -> None:
+    """pyte's screen plus history, alternate screen, dim and soft-wrap tracking.
+
+    A row the cursor left by auto-wrap carries ``wrapped = True``: its text
+    continues on the next row. Explicit line feeds and erasing the row's end
+    clear the mark, so it names exactly the rows a long line was folded into.
+    """
+
+    def __init__(self, columns: int, lines: int, on_scroll: Callable[[Any], None]) -> None:
         self._on_scroll = on_scroll
         self._primary_state: dict[str, Any] | None = None
         self._alternate_modes: set[int] = set()
         self._private_modes: set[int] = set()
         self._last_graphic = ""
+        self._drawing = False
         self.alternate_exit_revision = 0
         self.bracketed_paste_enabled = False
+        # Top rows of the primary screen already emitted to the transcript.
+        self.committed_rows = 0
         super().__init__(columns, lines)
 
     @property
@@ -158,9 +170,45 @@ class _EmulatorScreen(pyte.Screen):
 
     @override
     def draw(self, data: str) -> None:
-        super().draw(data)
+        # pyte auto-wraps inside draw by a carriage return and a line feed.
+        self._drawing = True
+        try:
+            super().draw(data)
+        finally:
+            self._drawing = False
         if data:
             self._last_graphic = data[-1]
+
+    @override
+    def linefeed(self) -> None:
+        line: Any = self.buffer[self.cursor.y]
+        if self._drawing:
+            line.wrapped = True
+        elif getattr(line, "wrapped", False):
+            line.wrapped = False
+        super().linefeed()
+
+    @override
+    def erase_in_line(self, how: int = 0, private: bool = False) -> None:
+        if how == 2 or (how == 0 and self.cursor.x < self.columns):
+            line: Any = self.buffer[self.cursor.y]
+            if getattr(line, "wrapped", False):
+                line.wrapped = False
+        super().erase_in_line(how, private)
+
+    @override
+    def erase_in_display(self, how: int = 0, *args: Any, **kwargs: Any) -> None:
+        if how in (0, 2, 3):
+            first = self.cursor.y + 1 if how == 0 else 0
+            for y in range(first, self.lines):
+                line: Any = self.buffer.get(y)
+                if line is not None and getattr(line, "wrapped", False):
+                    line.wrapped = False
+            if self._primary_state is None:
+                # Erased rows the transcript already holds are gone; what is
+                # drawn there next is new content.
+                self.committed_rows = min(self.committed_rows, self.cursor.y if how == 0 else 0)
+        super().erase_in_display(how, *args, **kwargs)
 
     @override
     def index(self) -> None:
@@ -168,7 +216,7 @@ class _EmulatorScreen(pyte.Screen):
         # Like xterm, only a region that starts at the top row scrolls lines
         # into history; a region lower on the screen discards them.
         if self.cursor.y == bottom and top == 0 and self._primary_state is None:
-            self._on_scroll(_render_buffer_line(self.buffer[top], self.columns))
+            self._on_scroll(self.buffer[top])
         super().index()
 
     def scroll_up(self, *params: int) -> None:
@@ -296,7 +344,7 @@ class _EmulatorScreen(pyte.Screen):
             dropped = max(0, self.cursor.y - (lines - 1))
             for y in range(dropped):
                 if keep_history:
-                    self._on_scroll(_render_buffer_line(self.buffer[y], self.columns))
+                    self._on_scroll(self.buffer[y])
             if dropped:
                 rows = {y - dropped: self.buffer[y] for y in range(dropped, self.lines)}
                 self.buffer.clear()
@@ -336,9 +384,17 @@ class TerminalEmulator:
     at 0, so a number keeps naming the same line while new output arrives;
     the current screen starts right after the newest history line. Only the
     oldest lines beyond the retention bound disappear.
+
+    With *transcript*, the emulator also yields the complete rendered output
+    as logical lines: a line becomes final when it scrolls off the primary
+    screen, rows a long line was auto-wrapped into are joined again, and
+    ``commit_transcript`` emits the rows still on screen. Redraws (progress
+    bars, carriage returns, cursor movement) leave only their final text.
     """
 
-    def __init__(self, columns: int, rows: int, *, scrollback_lines: int) -> None:
+    def __init__(
+        self, columns: int, rows: int, *, scrollback_lines: int, transcript: bool = False
+    ) -> None:
         self.columns = columns
         self.rows = rows
         self._next_line = 0
@@ -347,6 +403,10 @@ class TerminalEmulator:
         self._stream = _EmulatorStream(self._screen)
         self._held = ""
         self._responses: list[str] = []
+        self._transcript = transcript
+        self._transcript_lines: list[str] = []
+        # Row texts of a logical line whose last row has not become final yet.
+        self._transcript_partial: list[str] = []
 
     def feed(self, text: str) -> EmulatorUpdate:
         """Render program output and report what it changed."""
@@ -367,13 +427,43 @@ class TerminalEmulator:
             self._stream.feed(text[offset:])
         responses = "".join(self._responses)
         self._responses.clear()
+        transcript = tuple(self._transcript_lines)
+        self._transcript_lines.clear()
         return EmulatorUpdate(
             responses=responses,
             title=self.title,
             bracketed_paste=self._screen.bracketed_paste_enabled,
             alternate_screen=self._screen.alternate_active,
             alternate_exited=self._screen.alternate_exit_revision != alternate_exits,
+            transcript=transcript,
         )
+
+    def commit_transcript(self) -> tuple[str, ...]:
+        """Emit the transcript through the last non-blank row of the primary screen.
+
+        Emitted rows are not emitted again when they later scroll off. On the
+        alternate screen nothing is emitted: a full-screen program's frames
+        are not output.
+        """
+        if not self._transcript:
+            return ()
+        screen = self._screen
+        if screen.alternate_active:
+            return ()
+        last = -1
+        for y in range(screen.lines - 1, screen.committed_rows - 1, -1):
+            if _render_buffer_line(screen.buffer[y], screen.columns):
+                last = y
+                break
+        for y in range(screen.committed_rows, last + 1):
+            self._transcribe_row(screen.buffer[y])
+        if self._transcript_partial:
+            self._transcript_lines.append("".join(self._transcript_partial).rstrip())
+            self._transcript_partial.clear()
+        screen.committed_rows = max(screen.committed_rows, last + 1)
+        lines = tuple(self._transcript_lines)
+        self._transcript_lines.clear()
+        return lines
 
     def resize(self, columns: int, rows: int) -> None:
         self._screen.resize(lines=rows, columns=columns)
@@ -499,9 +589,26 @@ class TerminalEmulator:
             lines.pop()
         return lines
 
-    def _remember_line(self, text: str) -> None:
-        self._history.append(_HistoryLine(self._next_line, text))
+    def _remember_line(self, line: Any) -> None:
+        self._history.append(
+            _HistoryLine(self._next_line, _render_buffer_line(line, self._screen.columns))
+        )
         self._next_line += 1
+        if not self._transcript:
+            return
+        if self._screen.committed_rows:
+            self._screen.committed_rows -= 1
+            return
+        self._transcribe_row(line)
+
+    def _transcribe_row(self, line: Any) -> None:
+        self._transcript_partial.append(
+            "".join(line[column].data for column in range(self._screen.columns))
+        )
+        if getattr(line, "wrapped", False):
+            return
+        self._transcript_lines.append("".join(self._transcript_partial).rstrip())
+        self._transcript_partial.clear()
 
     def _respond_to_query(
         self, prefix: str, parameters: str, intermediate: str, final: str
@@ -637,8 +744,12 @@ def _ansi_color(value: Any, *, background: bool) -> list[int]:
 _HOSTED: dict[int, TerminalEmulator] = {}
 
 
-def hosted_create(key: int, columns: int, rows: int, scrollback_lines: int) -> None:
-    _HOSTED[key] = TerminalEmulator(columns, rows, scrollback_lines=scrollback_lines)
+def hosted_create(
+    key: int, columns: int, rows: int, scrollback_lines: int, transcript: bool = False
+) -> None:
+    _HOSTED[key] = TerminalEmulator(
+        columns, rows, scrollback_lines=scrollback_lines, transcript=transcript
+    )
 
 
 def hosted_call(key: int, method: str, arguments: tuple[Any, ...], options: dict[str, Any]) -> Any:
