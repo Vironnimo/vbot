@@ -18,6 +18,7 @@ from tests.resources.extensions.computer_use.computer_use_test_support import (
 
 pytestmark = pytest.mark.asyncio
 
+# A per-action summary is dropped without a note.
 CLICK = {"action": "left_click", "coordinate": [200, 150], "action_summary": "Focuses the field"}
 
 
@@ -48,7 +49,7 @@ async def test_batch_runs_in_order_and_returns_images_in_order(computer: Harness
     )
     assert "\n4. key enter\n5. Zoom of [100, 100, 300, 200]" in text
     assert computer.registry.get("computer_batch").display.summary({"actions": actions}) == (
-        "5 actions: Focuses the field; type; screenshot; key; zoom"
+        "5 actions: left_click; type; screenshot; key; zoom"
     )
 
 

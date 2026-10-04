@@ -162,13 +162,6 @@ _ACTION_PROPERTIES: dict[str, Any] = {
             "click in it, pass that screenshot_id with positions in the zoom image."
         ),
     },
-    "action_summary": {
-        "type": "string",
-        "description": (
-            'A few words saying what the action does, shown to the user, such as "Opens '
-            'the File menu". Set it on every input action; never include secrets.'
-        ),
-    },
 }
 
 _DISPLAY_PROPERTY = {
@@ -202,9 +195,8 @@ COMPUTER_BATCH_PARAMETERS: dict[str, Any] = {
             "maxItems": MAX_BATCH_ACTIONS,
             "description": (
                 f"The actions to run, 1-{MAX_BATCH_ACTIONS}. Example: "
-                '[{"action":"left_click","coordinate":[420,310],"action_summary":"Focuses '
-                'the search box"},{"action":"type","text":"invoice"},{"action":"key",'
-                '"text":"enter"}]'
+                '[{"action":"left_click","coordinate":[420,310]},{"action":"type",'
+                '"text":"invoice"},{"action":"key","text":"enter"}]'
             ),
         },
     },
@@ -286,7 +278,6 @@ _FIELD_ALIASES = SpellingAliases(
         "scroll_amount": ("amount", "ticks", "scroll_ticks", "wheel_ticks", "notches"),
         "duration": ("seconds", "secs", "duration_s", "duration_seconds"),
         "repeat": ("times", "presses", "repeat_count", "repetitions"),
-        "action_summary": ("summary", "action_description"),
         "display": ("monitor", "screen", "display_name", "display_id", "display_number"),
         "screenshot_id": ("image_id", "screenshotId"),
     }
@@ -350,8 +341,9 @@ _OPTIONAL = (
     "display",
     "view",
     "screenshot_id",
-    "action_summary",
 )
+# Per-action summaries from other harnesses or older calls; they change nothing.
+_SUMMARY_FIELDS = ("action_summary", "summary", "action_description")
 
 
 def _spelled(value: str) -> str:
@@ -493,6 +485,8 @@ def _normalized_action(contract: ToolContract, arguments: Any, tool: str) -> Any
     arguments = dict(arguments)
     # Images always come at full detail; a scale from other harnesses changes nothing.
     arguments.pop("scale", None)
+    while _pop(arguments, _SUMMARY_FIELDS) is not None:
+        pass
     _lift_action_type(arguments, tool)
     raw_action = next(
         (value for key, value in arguments.items() if _spelled(key) == "action"), None

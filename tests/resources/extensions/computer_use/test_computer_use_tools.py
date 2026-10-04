@@ -40,9 +40,6 @@ async def test_tools_register_as_one_opt_in_family_with_stop_control(computer: H
         assert tool.requires_opt_in and not tool.parallel_safe
         assert tool.open_input_schema and "additionalProperties" not in tool.parameters
         assert tool.family == "computer_use" and tool.extension == "computer_use"
-    assert computer.registry.get("computer").display.summary(
-        {"action": "left_click", "action_summary": "Opens the File menu"}
-    ) == ("left_click · Opens the File menu")
     status = await computer.api.operations.invoke("control", {"action": "status"})
     assert status == {
         "available": True,

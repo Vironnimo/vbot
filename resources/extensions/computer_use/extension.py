@@ -124,11 +124,7 @@ def _summary(arguments: dict[str, Any]) -> str | None:
     actions = arguments.get("actions")
     if not isinstance(actions, list):
         return None
-    words = [
-        str(item.get("action_summary") or item.get("action") or "?")
-        for item in actions
-        if isinstance(item, dict)
-    ]
+    words = [str(item.get("action") or "?") for item in actions if isinstance(item, dict)]
     return f"{len(actions)} actions: " + "; ".join(words)
 
 
@@ -974,7 +970,7 @@ def register(api: ExtensionAPI) -> None:
         COMPUTER_DESCRIPTION,
         COMPUTER_PARAMETERS,
         service.computer,
-        display=ToolDisplay(summary_fields=("action", "action_summary")),
+        display=ToolDisplay(summary_fields=("action",)),
         argument_normalizer=normalize_computer,
         **shared,
     )

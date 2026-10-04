@@ -119,7 +119,7 @@ def parse_action(arguments: Mapping[str, Any]) -> Action:
     if name not in ACTIONS:
         raise ActionError(f"Unknown action {name!r}. Use one of: {', '.join(ACTIONS)}.")
     fields = _FIELDS[name]
-    unused = [key for key in arguments if key not in {"action", "action_summary", *fields}]
+    unused = [key for key in arguments if key not in {"action", *fields}]
     _refuse_misplaced(name, unused)
     values: dict[str, Any] = {"name": name}
     notes = []

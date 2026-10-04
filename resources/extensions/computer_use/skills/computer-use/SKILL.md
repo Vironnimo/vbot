@@ -28,7 +28,6 @@ computer moves the user's real mouse and keyboard on the desktop of the computer
 - For an exact drag whose ends do not fit into one zoom, zoom around each end, then send left_mouse_down with the first zoom's screenshot_id and left_mouse_up with the second's, in one computer_batch if you have it.
 - Read positions and colors from the images. Do not analyse screenshot files with scripts.
 - Gray boxes are apps the user has not approved, when the user requires approval per app. Request the app if you need it; input into a gray area is refused.
-- Set action_summary on input actions; the user sees it.
 
 ## Keys and text
 
