@@ -41,6 +41,12 @@ MAX_ENTRIES = 500_000
 # Bound on the bytes one counting or listing pass may print.
 MAX_SCAN_BYTES = 256 * 1024 * 1024
 
+# A --debug line naming a path ripgrep's walker skipped. File type filters skip
+# files only and report every file, so their lines are left out.
+_SKIPPED = re.compile(
+    rb"^rg: DEBUG\|ignore::walk\|.*?: ignoring (.*?): Ignore\((?!IgnoreMatch\(Types\()"
+)
+
 # Defaults that differ from ripgrep's own; later args items override them.
 DEFAULT_ARGUMENTS = ("--no-config", "--hidden", "--no-require-git", "--glob-case-insensitive")
 ALWAYS_EXCLUDED = "!.git"
@@ -53,6 +59,8 @@ class NativeOutcome:
     returncode: int | None = None
     diagnostics: str = ""
     interrupted: bool = False
+    # Paths ripgrep's walker skipped, as --debug reports them, in its own spelling.
+    skipped: list[bytes] = field(default_factory=list)
 
 
 def native_lines(
@@ -124,9 +132,14 @@ def native_lines(
 
     def errors() -> None:
         assert stderr is not None
-        while chunk := stderr.read(4096):
+        while line := stderr.readline(65536):
+            if line.startswith(b"rg: DEBUG|"):
+                skipped = _SKIPPED.match(line)
+                if skipped and outcome is not None and len(outcome.skipped) < MAX_ENTRIES:
+                    outcome.skipped.append(skipped[1])
+                continue
             if len(diagnostics) < 8192:
-                diagnostics.extend(chunk[: 8192 - len(diagnostics)])
+                diagnostics.extend(line[: 8192 - len(diagnostics)])
 
     threads = [
         threading.Thread(target=output, daemon=True),
@@ -237,6 +250,7 @@ class ScanResult:
     warnings: list[str] = field(default_factory=list)
     truncated: bool = False
     interrupted: bool = False
+    skipped: list[Path] = field(default_factory=list)
 
 
 class SearchRefusedError(RuntimeError):
@@ -349,22 +363,31 @@ def list_scan(
     budget: SearchBudget,
     cwd: Path,
     *,
-    globs: bool = True,
+    directories: bool = False,
 ) -> ScanResult:
     """List the files ripgrep would search, in one parallel pass.
 
-    Without ``globs``, the query's own globs are left out; ``.git`` stays excluded.
+    For ``directories``, only the excluding globs apply, since the others select
+    directory names, and the result also names the paths ripgrep skipped.
     """
-    selection = (
-        _base_arguments(query, scope)
-        if globs
-        else [*DEFAULT_ARGUMENTS, *query.rg_args, f"--glob={ALWAYS_EXCLUDED}"]
-    )
+    if directories:
+        excluding = [glob for glob in query.globs if glob.startswith("!")]
+        selection = [
+            *DEFAULT_ARGUMENTS,
+            *query.rg_args,
+            *rg_globs(excluding, scope.prefixes),
+            "--debug",
+        ]
+    else:
+        selection = _base_arguments(query, scope)
     arguments = [*selection, "--files", "--null", "--", *scope.paths]
     data, outcome, truncated = _collect(binary, arguments, scope, context, budget)
     result = _judge(outcome, scope, cwd)
     result.truncated = truncated
     result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
+    result.skipped = [
+        Path(os.path.normpath(scope.cwd / os.fsdecode(path))) for path in outcome.skipped
+    ]
     _bound(result)
     return result
 

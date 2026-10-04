@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shlex
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
@@ -18,6 +19,7 @@ from typing import Any
 
 from core.tools._path_suggestions import corrected_paths
 from core.tools._search_execution import (
+    MAX_ENTRIES,
     ScanResult,
     Scope,
     SearchRefusedError,
@@ -607,10 +609,12 @@ def _list_directories(
     budget: SearchBudget,
     found: _Found,
 ) -> None:
-    """List the directories below the roots that hold files ripgrep would search.
+    """List the directories below the roots that ripgrep's walker enters, empty ones too.
 
-    ripgrep lists files only, so the directories come from the listed files;
-    --max-depth and the globs then apply to the directories themselves.
+    ripgrep lists files only. Its walk reports the paths it skips (ignore rules,
+    hidden paths, excluding globs), and the directories are walked here without
+    them. With -t or -T, only directories holding a selected file are listed.
+    --max-depth and the selecting globs apply to the directories themselves.
     """
     depth = None
     selection = []
@@ -622,34 +626,93 @@ def _list_directories(
             selection.append(argument)
     query.rg_args = selection
     files = _Found()
+    skipped: set[str] = set()
     for index, scope in enumerate(_scopes(roots, cwd)):
-        files.take(
-            index, scope, list_scan(binary, query, scope, context, budget, cwd, globs=False), cwd
-        )
+        result = list_scan(binary, query, scope, context, budget, cwd, directories=True)
+        files.take(index, scope, result, cwd)
+        skipped.update(os.path.normcase(path) for path in result.skipped)
     found.warnings, found.complete = files.warnings, files.complete
-    directories: dict[str, Path] = {}
-    bases = [root for root in roots if root.is_dir()]
-    for entry in files.entries:
-        root = next((base for base in bases if entry.path.is_relative_to(base)), None)
-        if root is None:
-            continue
-        parent = entry.path.parent
-        while parent != root:
-            key = os.path.normcase(parent)
-            if key in directories:
-                break
-            if depth is None or len(parent.relative_to(root).parts) <= depth:
-                directories[key] = parent
-            parent = parent.parent
+    holding: set[str] | None = None
+    if any(argument.startswith(("--type=", "--type-not=")) for argument in query.rg_args):
+        holding = set()
+        for entry in files.entries:
+            for parent in entry.path.parents:
+                key = os.path.normcase(parent)
+                if key in holding:
+                    break
+                holding.add(key)
+    follow = False
     case_sensitive = False
     for argument in query.rg_args:
-        if argument in {"--glob-case-insensitive", "--no-glob-case-insensitive"}:
+        if argument in {"--follow", "--no-follow"}:
+            follow = argument == "--follow"
+        elif argument in {"--glob-case-insensitive", "--no-glob-case-insensitive"}:
             case_sensitive = argument.startswith("--no-")
+    bases = [root for root in roots if root.is_dir()]
+    directories: dict[str, Path] = {}
+    for root in bases:
+        for path in _walk_directories(root, skipped, depth, follow, budget):
+            key = os.path.normcase(path)
+            if holding is None or key in holding:
+                directories.setdefault(key, path)
+            if len(directories) >= MAX_ENTRIES:
+                found.warnings.append(
+                    f"The search stopped after {MAX_ENTRIES} directories; narrow path or glob "
+                    "to see the rest."
+                )
+                found.complete = False
+                break
+    if budget.stopped:
+        found.complete = False
     found.entries = [
         Entry(path, path_label(path, cwd), directory=True)
         for path in directories.values()
         if _directory_selected(path, bases, query.globs, cwd, case_sensitive)
     ]
+
+
+def _walk_directories(
+    root: Path, skipped: set[str], depth: int | None, follow: bool, budget: SearchBudget
+) -> Iterator[Path]:
+    """Yield the directories below root that ripgrep's walker enters.
+
+    Links, Windows junctions included, are entered only with --follow, as by
+    ripgrep; a link back to a directory being walked is not entered again.
+    Unreadable directories are left out, since ripgrep already warned about them.
+    """
+    pending = [(root, 0, frozenset({_identity(root)}))]
+    while pending and budget.keep_going():
+        directory, level, ancestors = pending.pop()
+        if depth is not None and level >= depth:
+            continue
+        try:
+            with os.scandir(directory) as entries:
+                children = sorted(entries, key=lambda entry: entry.name, reverse=True)
+        except OSError:
+            continue
+        for child in children:
+            path = Path(child.path)
+            try:
+                linked = child.is_symlink() or child.is_junction()
+                if child.name == ".git" or not child.is_dir() or (linked and not follow):
+                    continue
+            except OSError:
+                continue
+            if os.path.normcase(path) in skipped:
+                continue
+            identity = _identity(path)
+            if identity in ancestors:
+                continue
+            yield path
+            pending.append((path, level + 1, ancestors | {identity}))
+
+
+def _identity(path: Path) -> tuple[int, int] | str:
+    try:
+        status = os.stat(path)
+    except OSError:
+        return os.path.normcase(path)
+    return (status.st_dev, status.st_ino)
 
 
 def _directory_selected(
@@ -934,7 +997,7 @@ args items, one flag or value per item. Other ripgrep flags work as well:
   -d N                  descend at most N directory levels
   --max-filesize SIZE   skip larger files, such as 1M
   -E ENCODING / -a      read files in an encoding / search binary files as text
-  --files / --dirs      list files / list directories that hold files (without a
+  --files / --dirs      list files / list directories, empty ones included (without a
                         pattern, files are listed)
   --sort KEY / --sortr KEY
                         order ascending / descending by path, modified, accessed or created
@@ -982,7 +1045,8 @@ SEARCH_FILES_TOOL_PARAMETERS: JsonObject = {
             "enum": ["content", "files", "count"],
             "description": (
                 "content (default) shows matching lines; files lists only the matching "
-                "files; count gives matching lines per file."
+                'files; count gives matching lines per file, or every match with "--count-matches" '
+                "in args."
             ),
         },
         "context": {
