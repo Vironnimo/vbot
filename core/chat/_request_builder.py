@@ -42,6 +42,8 @@ from core.chat.messages import (
 from core.chat.model_resolution import (
     _first_usable_connection_id,
     _model_connection_allowlist,
+    _model_family,
+    _model_family_for_target,
     _model_input_modalities,
     _model_input_modalities_for_target,
     _resolve_agent_connection,
@@ -75,11 +77,15 @@ from core.sessions import (
 )
 from core.tools import (
     ANALYZE_IMAGE_TOOL_NAME,
+    EditDialect,
     Tool,
     ToolAccess,
     ToolContract,
     ToolDefinitionChangeNote,
     ToolNotFoundError,
+    edit_dialect,
+    known_edit_dialect,
+    offer_edit_dialect,
     project_shell_tool_definitions,
     tool_is_ready,
 )
@@ -244,6 +250,7 @@ class RequestBuilder:
             max_image_bytes=self._image_size_limit(adapter, model_id),
             max_request_images=_resolve_request_image_limit(adapter, model_id),
             unlisted_tool_calls=not adapter.list_announced_tools(model_id),
+            model_family=_model_family_for_target(self._dependencies, provider_id, model_id),
         )
 
     def _image_size_limit(self, adapter: Any, model_id: str) -> int | None:
@@ -447,6 +454,12 @@ class RequestBuilder:
                     if inputs.tool_route_wire_media_types is None
                     else inputs.tool_route_wire_media_types
                 ),
+                model_family=(
+                    _model_family(self._dependencies, agent)
+                    if inputs.tool_route_model_family is None
+                    else inputs.tool_route_model_family
+                ),
+                told=pin.names if pin is not None else (),
             )
         if pin is None:
             assert catalog is not None
@@ -657,11 +670,14 @@ class RequestBuilder:
         context: _RunExecutionContext,
         *,
         known: Collection[str] = (),
+        told: Collection[str] = (),
     ) -> LiveToolCatalog:
         """Measure the Tools the Run's Agent may use now, on the Run's primary route.
 
         *known* names the Tools the Model may call now; only for these does a
-        withdrawn image-understanding backend count as a removal.
+        withdrawn image-understanding backend count as a removal. *told* names
+        every Tool the Model was told about in this prompt epoch; its file edit
+        Tools keep their dialect after a Model change.
         """
         capability = None
         extension_registry = self._dependencies.get_extension_registry()
@@ -675,7 +691,9 @@ class RequestBuilder:
             session_tool_grants=_live_session_tool_grants(capability),
             input_modalities=target.input_modalities,
             wire_media_types=target.wire_media_types,
+            model_family=target.model_family,
             known=known,
+            told=told,
         )
 
     async def announce_tool_changes(
@@ -743,7 +761,9 @@ class RequestBuilder:
         session_tool_grants: Sequence[str],
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
+        model_family: str,
         known: Collection[str] = (),
+        told: Collection[str] = (),
     ) -> LiveToolCatalog:
         definitions = await self._dependencies.get_system_prompts().provider_tool_definitions_async(
             agent,
@@ -758,6 +778,8 @@ class RequestBuilder:
             tool_access=agent.tool_access,
             input_modalities=input_modalities,
             wire_media_types=wire_media_types,
+            # A prompt epoch keeps the file edit dialect its Model was told about.
+            edit_dialect=known_edit_dialect(told) or edit_dialect(model_family),
         )
         usable = {str(definition["name"]) for definition in definitions}
         if (
@@ -844,9 +866,14 @@ class RequestBuilder:
         tool_access: ToolAccess,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
+        edit_dialect: EditDialect,
     ) -> list[JsonObject]:
-        """Apply effective Model-route gates to route-dependent Tools."""
+        """Apply effective Model-route gates to route-dependent Tools.
 
+        Of the file edit Tools, only those of *edit_dialect* are offered.
+        """
+
+        tools = offer_edit_dialect(tools, edit_dialect)
         tools = project_shell_tool_definitions(tools, nesting_depth=self.nesting_depth)
         if not any(definition.get("name") == ANALYZE_IMAGE_TOOL_NAME for definition in tools):
             return tools
@@ -872,12 +899,14 @@ class RequestBuilder:
             agent,
             session_tool_grants=session_tool_grants,
         )
+        dialect = edit_dialect(_model_family(self._dependencies, agent))
         if not any(tool.get("name") == ANALYZE_IMAGE_TOOL_NAME for tool in tools):
             return await self._route_tool_definitions(
                 tools,
                 tool_access=agent.tool_access,
                 input_modalities=frozenset(),
                 wire_media_types=frozenset(),
+                edit_dialect=dialect,
             )
         provider_id, connection_id = _resolve_agent_connection(self._dependencies, agent)
         _, model_id = _split_agent_model(agent.model)
@@ -890,6 +919,7 @@ class RequestBuilder:
                 tool_access=agent.tool_access,
                 input_modalities=target.input_modalities,
                 wire_media_types=target.wire_media_types,
+                edit_dialect=dialect,
             )
         finally:
             await _close_adapter(target.adapter)

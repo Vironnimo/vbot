@@ -90,7 +90,7 @@ An error states the lifecycle state (nothing applied, partially applied, already
 
 Tools that hand data to each other form a family and are reviewed and changed together, including their System Prompt guidance blocks, notifications and consumers.
 
-- Files: `read` -> `apply_patch`; `search_files` -> `read`.
+- Files: `read` -> `apply_patch` or `edit`/`write` (one dialect per route); `search_files` -> `read`.
 - Shell: `bash` runs commands in terminals; a long or input-waiting command continues as a `terminal` (wait, input, kill) and its result arrives as an automatic completion notification.
 - Delegation: `subagent` plus its System Prompt block and completion delivery; `status`.
 - Web: `web_search` -> `web_fetch`.

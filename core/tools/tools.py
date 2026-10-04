@@ -628,6 +628,7 @@ class ToolRegistry:
             if not tool.deferred
             and (not tool.session_scoped or tool.name in context.session_tool_grants)
             and (not tool.requires_opt_in or tool.name in (allowed_tools or ()))
+            and context.offers(tool.name)
         ]
         if not available:
             return f"Unknown Tool: {context.tool_name}. No Tools are available in this Run."
@@ -959,6 +960,7 @@ class ToolExecutor:
                 session_tool_grants=config.session_tool_grants,
                 nesting_depth=config.nesting_depth,
                 input_contract=config.input_contracts.get(tool_call.name),
+                offered_tools=frozenset(config.input_contracts) or None,
                 change_tracker=config.change_tracker,
             )
             return await self._dispatch_with_envelope(context, tool_call, config.allowed_tools)

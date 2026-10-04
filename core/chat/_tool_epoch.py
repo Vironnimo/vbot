@@ -362,6 +362,12 @@ class ToolEpochView:
         return known
 
     @cached_property
+    def known_names(self) -> tuple[str, ...]:
+        """Tools the Model was told about in this epoch, also those announced as removed."""
+
+        return tuple(self._known)
+
+    @cached_property
     def allowed_names(self) -> tuple[str, ...]:
         """Tools the Model may call: pinned and announced Tools not announced as removed."""
 

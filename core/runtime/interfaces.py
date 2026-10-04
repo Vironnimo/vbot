@@ -225,7 +225,7 @@ class RuntimeServices(Protocol):
 
     @property
     def file_read_state(self) -> FileReadState:
-        """Shared per-session read-before-write guard (read/apply_patch Tools)."""
+        """Shared per-session read-before-write guard (read and the file edit Tools)."""
         ...
 
     @property

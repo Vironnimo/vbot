@@ -32,9 +32,10 @@ _SEPARATORS = re.compile(r"[\s_.:/-]+")
 _TYPO_MIN_LENGTH = 5
 
 # Names other agent harnesses give the same capability, keyed by their spelling
-# without case and separators. A name maps only to a Tool offered in the Model
-# request; the target's own argument handling then decides whether the call runs.
-_HARNESS_NAMES = {
+# without case and separators, with the Tools that provide it in order of
+# preference. A name maps only to the first of them offered in the Model request;
+# the target's own argument handling then decides whether the call runs.
+_HARNESS_NAMES: dict[str, tuple[str, ...]] = {
     **dict.fromkeys(
         (
             "shell",
@@ -56,11 +57,11 @@ _HARNESS_NAMES = {
             "localshell",
             "containerexec",
         ),
-        BASH_TOOL_NAME,
+        (BASH_TOOL_NAME,),
     ),
     **dict.fromkeys(
         ("readfile", "viewfile", "view", "cat", "openfile", "fileread", "readtextfile"),
-        "read",
+        ("read",),
     ),
     **dict.fromkeys(
         (
@@ -73,20 +74,18 @@ _HARNESS_NAMES = {
             "replaceinfile",
             "searchreplace",
             "searchandreplace",
-            "write",
-            "writefile",
-            "filewrite",
-            "createfile",
-            "writetofile",
-            "patch",
-            "applydiff",
             "strreplaceeditor",
             "strreplacebasededittool",
             "texteditor",
             "replacefilecontent",
         ),
-        "apply_patch",
+        ("edit", "apply_patch"),
     ),
+    **dict.fromkeys(
+        ("write", "writefile", "filewrite", "createfile", "writetofile"),
+        ("write", "apply_patch"),
+    ),
+    **dict.fromkeys(("patch", "applydiff"), ("apply_patch",)),
     **dict.fromkeys(
         (
             "grep",
@@ -103,7 +102,7 @@ _HARNESS_NAMES = {
             "listdirectory",
             "ls",
         ),
-        "search_files",
+        ("search_files",),
     ),
     **dict.fromkeys(
         (
@@ -118,7 +117,7 @@ _HARNESS_NAMES = {
             "webextract",
             "tavilyextract",
         ),
-        "web_fetch",
+        ("web_fetch",),
     ),
     **dict.fromkeys(
         (
@@ -131,7 +130,7 @@ _HARNESS_NAMES = {
             "tavilysearch",
             "websearchexa",
         ),
-        "web_search",
+        ("web_search",),
     ),
     **dict.fromkeys(
         (
@@ -143,7 +142,7 @@ _HARNESS_NAMES = {
             "spawnsubagent",
             "sessionsspawn",
         ),
-        "subagent",
+        ("subagent",),
     ),
     **dict.fromkeys(
         (
@@ -155,7 +154,7 @@ _HARNESS_NAMES = {
             "skillslist",
             "listskills",
         ),
-        "skill",
+        ("skill",),
     ),
     **dict.fromkeys(
         (
@@ -166,10 +165,10 @@ _HARNESS_NAMES = {
             "vision",
             "visionanalyze",
         ),
-        "analyze_image",
+        ("analyze_image",),
     ),
-    **dict.fromkeys(("generateimage", "createimage", "imagegen"), "image_generation"),
-    **dict.fromkeys(("tts", "speak"), "text_to_speech"),
+    **dict.fromkeys(("generateimage", "createimage", "imagegen"), ("image_generation",)),
+    **dict.fromkeys(("tts", "speak"), ("text_to_speech",)),
 }
 
 
@@ -218,9 +217,9 @@ def called_tool_name(
     }
     if same_spelling:
         return same_spelling.pop() if len(same_spelling) == 1 else name
-    target = _HARNESS_NAMES.get(key)
-    if target is not None:
-        return target if target in offered else name
+    targets = _HARNESS_NAMES.get(key)
+    if targets is not None:
+        return next((target for target in targets if target in offered), name)
     misspelled = {
         tool
         for tool in offered

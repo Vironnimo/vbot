@@ -25,7 +25,7 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 DATABASE_NAME = "sessions.db"
 _BACKUP_PAGES_PER_STEP = 4000
@@ -63,6 +63,17 @@ ORDER BY e.session_key, e.seq, c.ordinal
 
 class SessionsSourceError(ValueError):
     """The source cannot be read as a vBot sessions database."""
+
+
+class Scoped(Protocol):
+    """A recorded call as far as ``Filters`` looks at it."""
+
+    @property
+    def created_at(self) -> str: ...
+    @property
+    def model(self) -> str | None: ...
+    @property
+    def agent_id(self) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,7 +119,7 @@ class Filters:
     model: str | None = None
     agent: str | None = None
 
-    def admit(self, record: CallRecord) -> bool:
+    def admit(self, record: Scoped) -> bool:
         if self.since and record.created_at < self.since:
             return False
         if self.until and record.created_at >= self.until:

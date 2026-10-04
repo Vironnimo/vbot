@@ -380,6 +380,31 @@ async def test_display_flags_run_the_search_with_a_note(tmp_path, flag):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("offered", "advice"),
+    [
+        (None, "; use apply_patch to change files"),
+        (("search_files", "edit", "write"), "; use edit to change files"),
+        (("search_files",), ""),
+    ],
+)
+async def test_replace_shows_the_original_lines_and_names_the_offered_edit_tool(
+    tmp_path, offered, advice
+):
+    (tmp_path / "a.txt").write_text("old\n")
+
+    result = await dispatch(
+        tmp_path, {"pattern": "old", "args": ["--replace", "new"]}, offered_tools=offered
+    )
+
+    assert result["ok"], result
+    assert result["data"]["content"] == "a.txt:1:old"
+    assert result["data"]["note"] == (
+        f"--replace was ignored: results show the original lines{advice}."
+    )
+
+
+@pytest.mark.asyncio
 async def test_look_around_runs_with_pcre2_and_says_so(tmp_path):
     (tmp_path / "code.py").write_text("price = 1\nprice_total = 2\n")
 

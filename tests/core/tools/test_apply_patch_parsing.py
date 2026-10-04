@@ -164,17 +164,27 @@ def test_add_refuses_minus_lines_where_it_replaces_a_file(tmp_path):
     assert path.read_bytes() == b"keep\nold\n"
 
 
-def test_unified_diff_file_operations(tmp_path):
-    (tmp_path / "gone.txt").write_bytes(b"bye\n")
-    (tmp_path / "a.txt").write_bytes(b"one\n")
-    patch = (
-        "diff --git a/a.txt b/b.txt\nsimilarity index 100%\nrename from a.txt\nrename to b.txt\n"
-        "--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,2 @@\n+x\n+y\n"
-        "--- a/gone.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye\n"
-    )
+@pytest.mark.parametrize(
+    ("patch", "first"),
+    [
+        ("--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new", "--- a/file.txt"),
+        ("<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE", "<<<<<<< SEARCH"),
+    ],
+)
+def test_other_patch_dialects_fail_naming_the_patch_form(tmp_path, patch, first):
+    (tmp_path / "file.txt").write_bytes(b"old\n")
+
     result = apply(tmp_path, patch)
-    assert text(result) == "Moved a.txt to b.txt.\nCreated new.txt (2 lines).\nDeleted gone.txt."
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["b.txt", "new.txt"]
+
+    assert result["error"]["code"] == "invalid_patch"
+    assert text(result) == (
+        f"Patch line 1 comes before any file header: {first}\n"
+        "A patch names each file in a header before its changes, like this:\n"
+        "*** Begin Patch\n*** Update File: <path>\n@@\n-old line\n+new line\n*** End Patch\n"
+        "The file headers are *** Update File: <path>, *** Add File: <path>, "
+        "*** Delete File: <path> or *** Move File: <from> -> <to>.\nNo file was changed."
+    )
+    assert (tmp_path / "file.txt").read_bytes() == b"old\n"
 
 
 @pytest.mark.parametrize("positions", [(1,), (2,), (0, 2)])

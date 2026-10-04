@@ -1,7 +1,6 @@
-"""The retired edit capability remains recoverable outside the runtime package."""
+"""The retired edit Tool's sources stay recoverable in an archive outside the build."""
 
 import hashlib
-import importlib.util
 import json
 import tomllib
 import zipfile
@@ -10,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_edit_archive_preserves_sources_and_is_not_a_runtime_module():
+def test_edit_archive_preserves_sources_outside_the_build():
     with zipfile.ZipFile(ROOT / "archive/edit.zip") as archive:
         manifest = json.loads(archive.read("MANIFEST.json"))
         assert {
@@ -26,6 +25,5 @@ def test_edit_archive_preserves_sources_and_is_not_a_runtime_module():
         } <= manifest["sha256"].keys()
         for path, digest in manifest["sha256"].items():
             assert hashlib.sha256(archive.read(path)).hexdigest() == digest, path
-    assert importlib.util.find_spec("core.tools.edit") is None
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert "/archive" in project["tool"]["hatch"]["build"]["targets"]["sdist"]["exclude"]

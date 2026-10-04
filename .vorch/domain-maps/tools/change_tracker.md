@@ -7,7 +7,8 @@ tracker behind the WebUI's git-style change statistics (`N files changed,
 ## What it counts
 
 A Run's statistics cover only the lines the Run itself changed through
-`apply_patch`, the only file-editing Tool. Shell commands (`bash`, `terminal`), `skill_manage`, Memory and media Tools are not counted: with
+the file edit Tools (`apply_patch`, `edit`, `write`). Shell commands (`bash`, `terminal`),
+`skill_manage`, Memory and media Tools are not counted: with
 several Sessions working in one directory, a change seen on disk cannot be
 attributed to the Run that caused it.
 
@@ -15,7 +16,7 @@ attributed to the Run that caused it.
   counts once, as the minimal line diff from the content before its first write
   to the content after its last (repeated edits of one line count once, a
   reverted edit counts zero, like `git diff --numstat` of a working tree).
-- **Attribution.** `apply_patch` reports each committed write with the file's
+- **Attribution.** The file edit Tools report each committed write with the file's
   actual content right before and after it, captured inside its mutation lock
   before the atomic write (reading afterwards would record the new content as
   its own baseline). When a write's `before` differs from the Run's last
@@ -42,7 +43,7 @@ attributed to the Run that caused it.
 ## Interface
 
 - `record_write((session_address, run_id), resolved, before, after)` - from
-  `apply_patch._commit` for each committed text write (a new file records
+  `_file_changes._commit` for each committed text write (a new file records
   `before=""`, a deletion `after=""`). Validation-only plans and verified no-ops
   record nothing; a partial write records only completed paths.
 - `peek_run_stats(run_key)` - current statistics without consuming them.
@@ -65,7 +66,7 @@ attributed to the Run that caused it.
 
 ## Data flow
 
-1. `apply_patch` -> `record_write` (Tool worker thread).
+1. The file edit Tools (`_file_changes._commit`) -> `record_write` (Tool worker thread).
 2. Chat loop after each dispatched Tool round
    (`core/chat/_agentic_progression.py`) -> `peek_run_stats` on a Chat worker
    -> when the value changed, first stored on the running Run

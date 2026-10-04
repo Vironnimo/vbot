@@ -150,6 +150,16 @@ async def test_handler_context_without_run_hooks_uses_the_workspace_and_ignores_
         ),
         pytest.param(
             "missing_tool",
+            ["read_file", "denied"],
+            None,
+            tool_failure(
+                "tool_not_found",
+                "Unknown Tool: missing_tool. Call one of the available Tools instead: read_file.",
+            ),
+            id="unknown-names-only-tools-the-request-listed",
+        ),
+        pytest.param(
+            "missing_tool",
             [],
             None,
             tool_failure(
@@ -189,7 +199,13 @@ async def test_unknown_or_disallowed_tool_becomes_a_failed_result(
     )
     registry.register("denied", "Not allowed.", {"type": "object"}, lambda _c, _a: {})
 
-    result = await _run_one(registry, name, {"path": "SOUL.md"}, allowed_tools=allowed_tools)
+    # A request that lists Tools (its input contracts) names only those; "denied" is
+    # allowed but was not listed in the request.
+    listed = {"input_contracts": {"read_file": registry.get("read_file").contract}}
+    config = listed if "denied" in allowed_tools else {}
+    result = await _run_one(
+        registry, name, {"path": "SOUL.md"}, allowed_tools=allowed_tools, **config
+    )
 
     assert result == expected
 

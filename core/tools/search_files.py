@@ -55,6 +55,7 @@ from core.tools.call_syntax import SpellingAliases as _SpellingAliases
 from core.tools.call_syntax import normalize_call_arguments
 from core.tools.call_syntax import spelling as _spelling
 from core.tools.contracts import ToolContractError, _load_json_value, compile_tool_contract
+from core.tools.edit import offered_edit_tool
 from core.tools.file_state import os_error_reason
 from core.tools.search import SearchBudget, _expand_brace_alternations
 from core.tools.tools import (
@@ -389,8 +390,11 @@ def _strings(arguments: JsonObject, name: str) -> list[str]:
     return value
 
 
-def interpret_search_call(arguments: Any) -> SearchQuery:
-    """Interpret one call's named fields and args as a single ripgrep query."""
+def interpret_search_call(arguments: Any, *, edit_tool: str | None = None) -> SearchQuery:
+    """Interpret one call's named fields and args as a single ripgrep query.
+
+    *edit_tool* is the file edit Tool the Agent is offered, which notes may name.
+    """
     arguments = normalize_search_arguments(arguments)
     if not isinstance(arguments, dict):
         raise SearchArgumentError("Provide one search argument object.")
@@ -411,6 +415,7 @@ def interpret_search_call(arguments: Any) -> SearchQuery:
         offset=optional_int(
             arguments.get("offset"), field_name="offset", minimum=0, maximum=MAX_OFFSET
         ),
+        edit_tool=edit_tool,
     )
 
 
@@ -854,7 +859,7 @@ def _search(
 
 def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     try:
-        query = interpret_search_call(arguments)
+        query = interpret_search_call(arguments, edit_tool=offered_edit_tool(context))
         binary = require_binary()
         if query.mode == "help":
             return tool_success({"content": help_text()})

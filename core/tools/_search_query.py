@@ -178,7 +178,8 @@ _IGNORED_WITH_NOTE = {
     "no-line-number": "results always name each match's file and line",
     "no-filename": "results always name each match's file and line",
     "passthru": "results show matching lines and the context you request",
-    "replace": "results show the original lines; use apply_patch to change files",
+    # interpret adds the offered file edit Tool.
+    "replace": "results show the original lines",
 }
 _BLOCKED = {
     "pre": "runs another program on every file",
@@ -397,8 +398,13 @@ def interpret(
     args: list[str],
     limit: int | None,
     offset: int | None,
+    edit_tool: str | None = None,
 ) -> SearchQuery:
-    """Combine the named fields and args into one query."""
+    """Combine the named fields and args into one query.
+
+    *edit_tool* is the file edit Tool the Agent is offered, for the note that
+    replaces ripgrep's --replace.
+    """
     query = SearchQuery(roots=list(roots), globs=list(globs))
     parsed = _parse_args(args)
     explicit_patterns = [pattern] if pattern is not None else []
@@ -482,7 +488,10 @@ def interpret(
         elif name in _IGNORED_WITH_NOTE:
             if written not in noted:
                 noted.add(written)
-                query.notes.append(f"{written} was ignored: {_IGNORED_WITH_NOTE[name]}.")
+                reason = _IGNORED_WITH_NOTE[name]
+                if name == "replace" and edit_tool is not None:
+                    reason += f"; use {edit_tool} to change files"
+                query.notes.append(f"{written} was ignored: {reason}.")
         elif name == "encoding":
             query.rg_args.append(f"--encoding={value}")
         elif value is not None:

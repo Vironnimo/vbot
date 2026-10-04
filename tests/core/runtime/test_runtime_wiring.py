@@ -35,6 +35,7 @@ CANONICAL_BUILTIN_TOOLS = [
     "bash",
     "calendar",
     "cron",
+    "edit",
     "evaluate",
     "generate_music",
     "generate_video",
@@ -52,6 +53,7 @@ CANONICAL_BUILTIN_TOOLS = [
     "text_to_speech",
     "web_fetch",
     "web_search",
+    "write",
 ]
 
 # The four Home Assistant Tools ship as a bundled Extension and are always

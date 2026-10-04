@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from core.sessions import SessionAddress
-from core.tools import apply_patch as apply_patch_module
+from core.tools import _file_changes as file_changes_module
 from core.tools import file_state as file_state_module
 from core.tools.change_tracker import ChangeTracker
 from core.tools.file_state import FileReadState
@@ -527,14 +527,14 @@ async def test_cancelled_call_finishes_its_write_before_cancelling(tmp_path, mon
     state = FileReadState()
     tool = registry(state).get("apply_patch")
     entered, release = threading.Event(), threading.Event()
-    original = apply_patch_module.atomic_write_bytes
+    original = file_changes_module.atomic_write_bytes
 
     def slow_write(*args, **kwargs):
         entered.set()
         assert release.wait(5)
         original(*args, **kwargs)
 
-    monkeypatch.setattr(apply_patch_module, "atomic_write_bytes", slow_write)
+    monkeypatch.setattr(file_changes_module, "atomic_write_bytes", slow_write)
     task = asyncio.create_task(
         tool.handler(context(tmp_path), {"patch": "*** Add File: new.txt\n+done"})
     )
@@ -585,14 +585,14 @@ def test_overlapping_paths_do_not_block_independent_file(tmp_path):
 
 @pytest.mark.parametrize(("failing", "written"), [("a.txt", "b.txt"), ("b.txt", "a.txt")])
 def test_write_failure_reports_actual_partial_changes(tmp_path, monkeypatch, failing, written):
-    original = apply_patch_module.atomic_write_bytes
+    original = file_changes_module.atomic_write_bytes
 
     def fail_one(path, payload, **kwargs):
         if path.name == failing:
             raise OSError("fixture failure")
         original(path, payload, **kwargs)
 
-    monkeypatch.setattr(apply_patch_module, "atomic_write_bytes", fail_one)
+    monkeypatch.setattr(file_changes_module, "atomic_write_bytes", fail_one)
     result = apply(tmp_path, "*** Add File: a.txt\n+first\n*** Add File: b.txt\n+second")
     assert result["ok"] and result["data"]["status"] == "partial"
     assert text(result).startswith("1 of 2 changes applied; 1 did not.")
@@ -612,7 +612,7 @@ def test_failed_move_keeps_source(tmp_path, monkeypatch):
     def fail(*args, **kwargs):
         raise OSError("fixture failure")
 
-    monkeypatch.setattr(apply_patch_module, "atomic_write_bytes", fail)
+    monkeypatch.setattr(file_changes_module, "atomic_write_bytes", fail)
     result = apply(tmp_path, "*** Move File: file.txt -> new.txt")
     assert not result["ok"]
     assert source.read_bytes() == b"original"
@@ -737,12 +737,12 @@ def test_update_of_read_only_file_fails_clearly_without_retry_or_leftovers(tmp_p
         path.chmod(stat.S_IREAD | stat.S_IWRITE)
 
 
-# External changes while a patch runs. They are injected at apply_patch's private
-# planning, commit and observation steps, which no public seam reaches.
+# External changes while a patch runs. They are injected at the private planning, commit
+# and observation steps of core.tools._file_changes, which no public seam reaches.
 
 
 def test_external_change_during_planning_is_detected(tmp_path, monkeypatch):
-    original = apply_patch_module._plan
+    original = file_changes_module._plan
     path = tmp_path / "file.txt"
     path.write_bytes(b"old\n")
 
@@ -751,14 +751,14 @@ def test_external_change_during_planning_is_detected(tmp_path, monkeypatch):
         path.write_bytes(b"external\n")
         return plan
 
-    monkeypatch.setattr(apply_patch_module, "_plan", racing_plan)
+    monkeypatch.setattr(file_changes_module, "_plan", racing_plan)
     result = apply(tmp_path, update("@@\n-old\n+new"))
     assert result["error"]["code"] == "file_changed"
     assert path.read_bytes() == b"external\n"
 
 
 def test_external_change_between_hunks_is_not_overwritten(tmp_path, monkeypatch):
-    original = apply_patch_module._commit
+    original = file_changes_module._commit
     path = tmp_path / "file.txt"
     path.write_bytes(b"one=old\ntwo=old\n")
 
@@ -767,7 +767,7 @@ def test_external_change_between_hunks_is_not_overwritten(tmp_path, monkeypatch)
         path.write_bytes(b"external\ntwo=old\n")
         return result
 
-    monkeypatch.setattr(apply_patch_module, "_commit", racing_commit)
+    monkeypatch.setattr(file_changes_module, "_commit", racing_commit)
     result = apply(tmp_path, update("@@\n-one=old\n+one=new\n@@\n-two=old\n+two=new"))
     assert result["data"]["status"] == "partial"
     assert text(result).endswith(
@@ -782,8 +782,8 @@ def test_post_write_verification_failure_retains_effect_and_continues_siblings(
     tmp_path, monkeypatch, observation_error
 ):
     original_write, original_snapshot = (
-        apply_patch_module.atomic_write_bytes,
-        apply_patch_module._snapshot,
+        file_changes_module.atomic_write_bytes,
+        file_changes_module._snapshot,
     )
     written = False
     path = tmp_path / "a.txt"
@@ -801,8 +801,8 @@ def test_post_write_verification_failure_retains_effect_and_continues_siblings(
             raise PermissionError("fixture observation unavailable")
         return original_snapshot(target)
 
-    monkeypatch.setattr(apply_patch_module, "atomic_write_bytes", write_then_interfere)
-    monkeypatch.setattr(apply_patch_module, "_snapshot", snapshot)
+    monkeypatch.setattr(file_changes_module, "atomic_write_bytes", write_then_interfere)
+    monkeypatch.setattr(file_changes_module, "_snapshot", snapshot)
     result = apply(tmp_path, "*** Add File: a.txt\n+requested\n*** Add File: b.txt\n+done")
     assert result["ok"] and result["data"]["status"] == "partial"
     reason = (
@@ -822,7 +822,7 @@ def test_post_write_verification_failure_retains_effect_and_continues_siblings(
 
 
 def test_move_rechecks_destination_before_deleting_source(tmp_path, monkeypatch):
-    original = apply_patch_module._snapshot
+    original = file_changes_module._snapshot
     source, destination = tmp_path / "source.txt", tmp_path / "destination.txt"
     source.write_bytes(b"source bytes\n")
     observed_written_destination = False
@@ -835,7 +835,7 @@ def test_move_rechecks_destination_before_deleting_source(tmp_path, monkeypatch)
             destination.write_bytes(b"external bytes\n")
         return result
 
-    monkeypatch.setattr(apply_patch_module, "_snapshot", snapshot)
+    monkeypatch.setattr(file_changes_module, "_snapshot", snapshot)
     result = apply(tmp_path, "*** Move File: source.txt -> destination.txt")
     assert result["data"]["status"] == "partial"
     assert text(result).endswith(

@@ -22,15 +22,23 @@ DEFAULT_AGENT_ID = "main"
 
 
 @asynccontextmanager
-async def lab_runtime() -> AsyncIterator[tuple[Runtime, Path]]:
-    """Start a Runtime on a fresh data directory; yield it with the scratch root."""
+async def lab_runtime(*, extensions: bool = True) -> AsyncIterator[tuple[Runtime, Path]]:
+    """Start a Runtime on a fresh data directory; yield it with the scratch root.
+
+    ``extensions=False`` starts it without extensions, their Tools and the
+    background services (the Runtime's safe verification mode), which is
+    enough for the built-in file Tools and starts much faster.
+    """
     with tempfile.TemporaryDirectory(prefix="vbot-tool-lab-", ignore_cleanup_errors=True) as tmp:
         root = Path(tmp)
         # Startup chatter would bury the output; warnings and errors still show.
         env = root / "lab.env"
         env.write_text("LOG_LEVEL=WARNING\n", encoding="utf-8")
         with _lab_instance(root / "data"):
-            runtime = Runtime(Config(data_dir=root / "data", env_path=env))
+            runtime = Runtime(
+                Config(data_dir=root / "data", env_path=env),
+                safe_startup_mode=None if extensions else "verification",
+            )
             runtime.start()
             try:
                 yield runtime, root

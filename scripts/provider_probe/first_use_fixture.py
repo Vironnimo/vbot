@@ -19,10 +19,17 @@ from core.storage import TemporaryFileManager
 from core.subagents import SubAgentCoordinator
 from core.tools._shell_arguments import normalize_shell_arguments
 from core.tools.apply_patch import patch_targets, register_apply_patch_tool
+from core.tools.edit import (
+    EditDialect,
+    normalize_edit_arguments,
+    normalize_write_arguments,
+    offer_edit_dialect,
+    register_edit_tools,
+)
 from core.tools.file_state import FileReadState
 from core.tools.read import register_read_tool
 from core.tools.search_files import interpret_search_call, register_search_files_tool
-from core.tools.shell import register_shell_tool
+from core.tools.shell import project_shell_tool_definitions, register_shell_tool
 from core.tools.subagent import _render_subagent_prompt_block, register_subagent_tools
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolContext, ToolRegistry
@@ -86,6 +93,7 @@ class FirstUseFixture:
         register_shell_tool(self.registry, self.terminals)
         file_state = FileReadState()
         register_apply_patch_tool(self.registry, file_state=file_state)
+        register_edit_tools(self.registry, file_state=file_state)
         register_read_tool(
             self.registry,
             attachment_store=None,
@@ -215,6 +223,18 @@ class FirstUseFixture:
             ]
         )
 
+    def offered_definitions(self, dialect: EditDialect) -> list[dict[str, Any]]:
+        """Return the definitions a Model of ``dialect`` is offered, as Chat routes them."""
+        definitions = offer_edit_dialect(self.registry.provider_definitions(), dialect)
+        definitions = project_shell_tool_definitions(
+            definitions, nesting_depth=self.context.nesting_depth
+        )
+        self.context = replace(
+            self.context,
+            offered_tools=frozenset(str(definition["name"]) for definition in definitions),
+        )
+        return definitions
+
     def inside(self, value: str) -> bool:
         return (self.cwd / value).resolve().is_relative_to(self.root)
 
@@ -231,6 +251,16 @@ class FirstUseFixture:
                 raise FixtureBoundaryError("Read selected a path outside the disposable repository")
         elif name == "apply_patch":
             if any(not self.inside(path) for path in patch_targets(arguments)):
+                raise FixtureBoundaryError("Edit selected a path outside the disposable repository")
+        elif name in ("edit", "write"):
+            normalize = normalize_edit_arguments if name == "edit" else normalize_write_arguments
+            normalized = normalize(arguments)
+            paths = [normalized.get("path")] if isinstance(normalized, dict) else []
+            if isinstance(normalized, dict) and isinstance(normalized.get("edits"), list):
+                paths += [
+                    item.get("path") for item in normalized["edits"] if isinstance(item, dict)
+                ]
+            if any(isinstance(path, str) and not self.inside(path) for path in paths):
                 raise FixtureBoundaryError("Edit selected a path outside the disposable repository")
         elif name == "bash":
             shell_arguments = normalize_shell_arguments(arguments)

@@ -105,17 +105,35 @@ BACKGROUND_AT_DEPTH_FAILURE_CODE = "background_unavailable_in_subagent"
 # Definition
 
 
-_FILE_TOOL_USES = (("read", "read"), ("search", "search_files"), ("edit", "apply_patch"))
+# The file Tools the description points to, by use; each use names the first of
+# its Tools that is offered. A route offers one file edit dialect: apply_patch,
+# or edit with write. Registry names, literal to avoid importing the file Tools.
+_FILE_TOOL_USES = (
+    ("read", ("read",)),
+    ("search", ("search_files",)),
+    ("edit", ("apply_patch", "edit")),
+)
 
 
 def _joined(words: Sequence[str]) -> str:
     return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
 
 
+def _file_tool_uses(offered: frozenset[str] | None) -> list[tuple[str, str]]:
+    """Each use with the offered Tool that serves it; None offers each use's first Tool."""
+    uses: list[tuple[str, str]] = []
+    for use, names in _FILE_TOOL_USES:
+        name = next((name for name in names if offered is None or name in offered), None)
+        if name is not None:
+            uses.append((use, name))
+    return uses
+
+
 def _shell_description(offered: frozenset[str] | None, *, nesting_depth: int) -> str:
     """The description for the Tools offered with the shell, at this Session depth.
 
-    *offered* None stands for the usual set: the file Tools and the terminal Tool.
+    *offered* None stands for the usual set: the file Tools of the apply_patch
+    dialect and the terminal Tool.
     """
     if sys.platform == "win32":
         opening = (
@@ -127,7 +145,7 @@ def _shell_description(offered: frozenset[str] | None, *, nesting_depth: int) ->
             "Run a bash command in a new terminal and return its output and exit code. "
             "Use bash syntax."
         )
-    uses = [(use, name) for use, name in _FILE_TOOL_USES if offered is None or name in offered]
+    uses = _file_tool_uses(offered)
     output = "Output is rendered terminal text"
     if uses:
         output += (

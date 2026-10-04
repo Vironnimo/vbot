@@ -44,6 +44,7 @@ if sys.path[:1] != [str(_project_root)]:
 from core.providers.accounts import ConnectionRef  # noqa: E402
 from core.providers.tool_schema import render_tool_definitions  # noqa: E402
 from core.runtime.runtime import Runtime  # noqa: E402
+from core.tools.edit import edit_dialect  # noqa: E402
 from core.utils.config import Config  # noqa: E402
 from scripts.provider_probe.choices import (  # noqa: E402
     ANALYZE_IMAGE_CASES,
@@ -120,6 +121,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--first-use-case", default="all")
     parser.add_argument("--first-use-report", type=Path)
+    parser.add_argument(
+        "--edit-dialect",
+        choices=("auto", "patch", "replace"),
+        default="auto",
+        help="File edit Tools offered in first-use trials; auto follows the Model family.",
+    )
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--terminal-case", default="all")
     parser.add_argument(
@@ -385,6 +392,12 @@ async def _run(args: argparse.Namespace) -> int:
     }:
         runtime = Runtime(Config(data_dir=args.data_dir))
         _start_probe_runtime(runtime)
+        if getattr(args, "edit_dialect", "auto") == "auto":
+            try:
+                family = runtime.models.get(args.provider, args.model).family or ""
+            except Exception:
+                family = ""
+            args.edit_dialect = edit_dialect(family)
         try:
             adapter = runtime.get_adapter(ConnectionRef(args.provider, args.connection))
             try:

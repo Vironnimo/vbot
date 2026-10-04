@@ -465,6 +465,26 @@ def test_definition_fits_the_session_depth_and_offered_tools(
     assert ("mode" in projected["parameters"]["properties"]) is has_mode
 
 
+@pytest.mark.parametrize(
+    ("edit_tools", "named"),
+    [({"apply_patch"}, "apply_patch"), ({"edit", "write"}, "edit")],
+)
+def test_definition_names_the_offered_file_edit_tool(edit_tools: set[str], named: str) -> None:
+    definitions: list[JsonObject] = [
+        {
+            "name": SHELL_TOOL_NAME,
+            "description": SHELL_TOOL_DESCRIPTION,
+            "parameters": SHELL_TOOL_PARAMETERS,
+        },
+        *({"name": name} for name in sorted({"read", "search_files", "terminal", *edit_tools})),
+    ]
+
+    description = project_shell_tool_definitions(definitions, nesting_depth=0)[0]["description"]
+
+    assert f"use read, search_files and {named} to read, search and edit files" in description
+    assert ("apply_patch" in description) is (named == "apply_patch")
+
+
 @pytest.mark.skipif(
     shutil.which("pwsh" if sys.platform == "win32" else "bash") is None,
     reason="the host shell is not installed",

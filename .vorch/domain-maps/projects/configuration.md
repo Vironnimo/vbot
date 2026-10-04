@@ -15,7 +15,8 @@ Read this reference when changing the persisted Project shape, Project Anchor li
 - Skill ceiling: `skills_bundled_enabled`, `skills_global_enabled`, and `skills_project_disabled`.
 - Per-Agent overrides: an `overrides` object keyed by Project Agent id. Supported override fields are exactly `model`, `temperature`, `top_p`, `thinking_effort`, `compaction_policy`, and `tool_access`. Tool access uses the same strict policy shape as Identity Agents; an override's `allowed` and explicit `granted` names must be subsets of the Project Tool Whitelist.
 
-The default Tool ceiling uses `apply_patch` instead of the archived `edit`, and
+The default Tool ceiling uses `apply_patch` as the file edit capability (its
+followers `edit` and `write` are not configurable, `tools/edit.md`), and
 `search_files` as its search capability. The application never rewrites explicit
 persisted ceilings; an unavailable retired entry remains removable and grants
 nothing.

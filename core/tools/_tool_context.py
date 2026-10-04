@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -168,6 +168,9 @@ class ToolContext:
     result_contract: ToolContract | None = field(
         default=None, init=False, repr=False, compare=False
     )
+    # Registry names of the Tools the Model was shown for this Provider cycle,
+    # for ``offers``; ``None`` when the call comes without a Model request.
+    offered_tools: Collection[str] | None = field(default=None, repr=False, compare=False)
     # The Tool allowlist canonical dispatch checked this call against (``None``
     # allows every Tool), retained for ``can_call``.
     dispatch_allowed_tools: Sequence[str] | None = field(
@@ -247,6 +250,16 @@ class ToolContext:
             return False
         denial = self.tool_denial_resolver
         return denial is None or denial(tool_name) is None
+
+    def offers(self, tool_name: str) -> bool:
+        """Return whether the Agent was shown the Tool named *tool_name* and may call it.
+
+        Text that points the Agent at another Tool names one the Model knows, also
+        where several Tools are callable for the same purpose. Without a Model
+        request (``offered_tools`` is ``None``) every callable Tool counts as shown.
+        """
+        shown = self.offered_tools
+        return (shown is None or tool_name in shown) and self.can_call(tool_name)
 
     def add_display_count(self, value: int, unit: str, *, at_least: bool = False) -> None:
         """Record one presentation-only count without changing the Tool result."""
@@ -527,6 +540,8 @@ class ToolExecutionConfig:
     tool_settings: Mapping[str, Any] | None = None
     session_tool_grants: Sequence[str] = field(default_factory=tuple)
     nesting_depth: int = 0
+    # Model-facing contracts of the Tools in this cycle's Model request, by registry
+    # name; empty when the group runs without a Model request.
     input_contracts: Mapping[str, ToolContract] = field(default_factory=dict)
     # Session-scoped file-content tracker for git-style change statistics.
     # ``None`` keeps direct/legacy execution groups without change tracking.

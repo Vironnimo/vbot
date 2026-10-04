@@ -58,8 +58,10 @@ Rules for `args`:
   - **Silent display flags** (`-n`, `--heading`, `--color`, `--json`, ...) are
     dropped because the fixed output already satisfies them.
   - **`-N`, `-I`/`--no-filename`, `--passthru` and `--replace`** are ignored
-    with a `note`. grep's `-h` is also ignored with a note when the call has
-    something to search; on its own, `-h` shows help.
+    with a `note`; the `--replace` note names the offered file edit Tool
+    (`offered_edit_tool`: `apply_patch` or `edit`, `tools/edit.md`), or none
+    when neither is offered. grep's `-h` is also ignored with a note when the
+    call has something to search; on its own, `-h` shows help.
   - **grep spellings**: `--include`, `--exclude` and `--exclude-dir` become globs.
     `-r` and `-R` are grep's recursive switch. `-E` followed by something that is
     not an encoding is grep's extended-regex flag.

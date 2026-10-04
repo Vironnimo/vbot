@@ -30,6 +30,7 @@ from core.tools import (
     ToolNotFoundError,
     ToolRegistry,
     ToolResultPersistedCallback,
+    edit_tool_siblings,
     is_tool_result_envelope,
     model_tool_name,
     tool_failure,
@@ -1027,32 +1028,48 @@ def _dispatch_allowed_tools(
 ) -> Sequence[str] | None:
     """Return the dispatch allowlist, narrowed by an optional per-run restriction.
 
-    Without a restriction this is exactly ``_runtime_allowed_tools`` (today's
-    behavior, byte-identical). With one, the run may dispatch only tools present
-    in **both** the effective allowlist and the restriction — an intersection, so
-    a tool named in the restriction but not effectively allowed stays denied. A
-    ``None``/``["*"]`` effective allowlist is expanded to every registered normal
-    tool name (exactly how ``ToolRegistry.list_tools`` reads it) before the
-    intersection, so the restriction narrows a wildcard agent too.
+    Without a restriction this is ``base_allowed_tools``, the Tools the Model was
+    told about, else ``_runtime_allowed_tools``. With one, the run may dispatch
+    only tools present in **both** the effective allowlist and the restriction —
+    an intersection, so a tool named in the restriction but not effectively
+    allowed stays denied. A ``None``/``["*"]`` effective allowlist is expanded to
+    every registered normal tool name (exactly how ``ToolRegistry.list_tools``
+    reads it) before the intersection, so the restriction narrows a wildcard
+    agent too.
 
     This is enforcement-only: it feeds ``ToolExecutionConfig.allowed_tools`` (the
     dispatch gate) and never the provider tool definitions or the system prompt,
     so a restricted run keeps a byte-identical prompt prefix (the prompt-cache
     invariant). A restricted-out call fails through the existing
     ``ToolNotAllowedError`` → ``tool_not_allowed`` path — no new denial code.
+
+    The file edit Tools (``apply_patch``, ``edit``, ``write``) count as one: a
+    route offers one dialect of them, and a call to a sibling it did not offer
+    runs as that Tool when the Agent's Tool policy allows it. A restriction that
+    names one of them admits all three.
     """
-    effective = (
-        list(base_allowed_tools)
-        if base_allowed_tools is not None
-        else _runtime_allowed_tools(
-            agent,
-            tool_registry,
-            session_tool_grants=session_tool_grants,
+    if base_allowed_tools is None:
+        effective = list(
+            _runtime_allowed_tools(
+                agent,
+                tool_registry,
+                session_tool_grants=session_tool_grants,
+            )
         )
-    )
+    else:
+        effective = list(base_allowed_tools)
+        if siblings := edit_tool_siblings(effective):
+            permitted = set(
+                _runtime_allowed_tools(
+                    agent,
+                    tool_registry,
+                    session_tool_grants=session_tool_grants,
+                )
+            )
+            effective.extend(name for name in siblings if name in permitted)
     if tool_restriction is None:
         return effective
-    restriction = set(tool_restriction)
+    restriction = {*tool_restriction, *edit_tool_siblings(tool_restriction)}
     return [tool.name for tool in tool_registry.list_tools(effective) if tool.name in restriction]
 
 

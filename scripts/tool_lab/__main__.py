@@ -7,8 +7,9 @@ import asyncio
 import sys
 from pathlib import Path
 
-from scripts.tool_lab import definitions, probe, sessions
+from scripts.tool_lab import definitions, probe, replay, sessions
 from scripts.tool_lab._lab_runtime import DEFAULT_AGENT_ID, lab_runtime, utf8_console
+from scripts.tool_lab._replay_history import ReplayError, SessionStats
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -64,12 +65,55 @@ def main(argv: list[str] | None = None) -> int:
     mined.add_argument("--examples", type=int, default=3, help="example calls per failure shape")
     mined.add_argument("--export", type=Path, metavar="FILE", help="write the calls as JSON lines")
 
+    replayed = commands.add_parser(
+        "replay", help="replay real file-edit calls from Sessions through the current Tools"
+    )
+    steps = replayed.add_subparsers(dest="step", required=True)
+    exported = steps.add_parser(
+        "export", help="reconstruct the files of apply_patch calls; write WORK/corpus.jsonl"
+    )
+    exported.add_argument("source", type=Path, help="a sessions.db or a vBot data directory")
+    exported.add_argument(
+        "--work", type=Path, required=True, help="private output directory outside the repository"
+    )
+    exported.add_argument("--copy", type=Path, help="keep the prepared database copy here")
+    exported.add_argument("--since", help="only calls at or after this ISO date become cases")
+    exported.add_argument("--until", help="only calls before this ISO date become cases")
+    exported.add_argument("--model", help="only calls whose Model contains this text")
+    exported.add_argument("--agent", help="only calls of this Agent id")
+    exported.add_argument(
+        "--jobs", type=int, default=replay.DEFAULT_JOBS, help="Sessions simulated at once"
+    )
+    ran = steps.add_parser("run", help="dispatch the cases of a corpus and classify the results")
+    ran.add_argument("corpus", type=Path, help="corpus.jsonl written by replay export")
+    ran.add_argument(
+        "--work", type=Path, required=True, help="private output directory outside the repository"
+    )
+    ran.add_argument(
+        "--tool", default="apply_patch", help="Tool to dispatch each case to (default: apply_patch)"
+    )
+    ran.add_argument(
+        "--filter",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="only matching cases; keys: model, code, status, target, flag, verified, since, "
+        "until, session, case (repeatable, all must match)",
+    )
+    ran.add_argument("--name", help="output folder below --work (default: run-TOOL)")
+    ran.add_argument("--limit", type=int, default=0, help="replay at most this many cases")
+    ran.add_argument(
+        "--jobs", type=int, default=replay.DEFAULT_JOBS, help="cases dispatched at once"
+    )
+
     args = parser.parse_args(argv)
     utf8_console()
     if args.command == "definitions":
         return _definitions(args)
     if args.command == "probe":
         return _probe(args)
+    if args.command == "replay":
+        return _replay(args)
     return _sessions(args)
 
 
@@ -123,6 +167,46 @@ def _sessions(args: argparse.Namespace) -> int:
     else:
         print(sessions.overview(records))
     return 0
+
+
+def _replay(args: argparse.Namespace) -> int:
+    try:
+        work = replay.work_directory(args.work)
+        if args.step == "export":
+            return _replay_export(args, work)
+        select = replay.case_filter(args.filter)
+        out = work / (args.name or f"run-{args.tool}")
+        summary = asyncio.run(
+            replay.run_and_write(
+                args.corpus, out, tool=args.tool, select=select, limit=args.limit, jobs=args.jobs
+            )
+        )
+    except (ReplayError, sessions.SessionsSourceError) as error:
+        print(f"Cannot replay: {error}", file=sys.stderr)
+        return 2
+    print(summary)
+    print(f"\nDetails in {out}")
+    return 0
+
+
+def _replay_export(args: argparse.Namespace, work: Path) -> int:
+    copy = replay.work_directory(args.copy) if args.copy is not None else None
+    admit = sessions.Filters(since=args.since, until=args.until, model=args.model, agent=args.agent)
+    corpus = work / replay.CORPUS_NAME
+    with sessions.prepared_database(args.source, work=copy) as database:
+        stats, count = asyncio.run(_export(database, corpus, admit, args.jobs))
+    print(replay.export_summary(stats, count))
+    print(f"\nWrote {corpus}")
+    return 0
+
+
+async def _export(
+    database: Path, corpus: Path, admit: sessions.Filters, jobs: int
+) -> tuple[SessionStats, int]:
+    async with replay.replay_dispatcher() as dispatch:
+        return await replay.export_corpus(
+            database, corpus, dispatch=dispatch, admit=admit, jobs=jobs
+        )
 
 
 async def _schema_keys(tool: str) -> frozenset[str] | None:
