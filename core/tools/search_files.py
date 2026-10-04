@@ -27,6 +27,7 @@ from core.tools._search_execution import (
     explain_failure,
     line_events,
     list_scan,
+    match_names,
     pattern_retry,
     reference_text,
     widen_type_case,
@@ -670,42 +671,41 @@ def _list_directories(
                 break
     if budget.stopped:
         found.complete = False
-    names = _name_matcher(query)
-    found.entries = [
-        Entry(path, path_label(path, cwd), directory=True)
+    selected = [
+        path
         for path in directories.values()
         if _directory_selected(path, bases, query.globs, cwd, case_sensitive)
-        and (names is None or names.search(path.name))
     ]
+    if query.name_patterns:
+        names = _matching_names(context, query, [path.name for path in selected], binary, budget)
+        selected = [path for path in selected if path.name in names]
+    found.entries = [Entry(path, path_label(path, cwd), directory=True) for path in selected]
 
 
-def _name_matcher(query: SearchQuery) -> re.Pattern[str] | None:
-    """Compile the patterns a --dirs listing matches against directory names.
-
-    Letter case follows ripgrep's content flags: -i ignores it, -S ignores it
-    for patterns without capitals, and matching is case-sensitive otherwise.
-    """
-    if not query.name_patterns:
-        return None
-    mode = "--case-sensitive"
-    for argument in query.rg_args:
-        if argument in {"--case-sensitive", "--ignore-case", "--smart-case"}:
-            mode = argument
-    patterns = query.name_patterns
-    if query.literal:
-        patterns = [re.escape(text) for text in patterns]
-    ignore_case = mode == "--ignore-case" or (
-        mode == "--smart-case" and not any(text != text.lower() for text in query.name_patterns)
-    )
+def _matching_names(
+    context: ToolContext,
+    query: SearchQuery,
+    names: list[str],
+    binary: Path,
+    budget: SearchBudget,
+) -> set[str]:
+    """Match directory names as a content search matches lines, with the same pattern repairs."""
+    unique = list(dict.fromkeys(names))
     try:
-        return re.compile(
-            "|".join(f"(?:{text})" for text in patterns), re.IGNORECASE if ignore_case else 0
-        )
-    except re.error as error:
-        raise SearchArgumentError(
-            f"The pattern for directory names is not a valid regular expression: {error}. "
-            'Correct it, add "-F" to args to match plain text, or select names with glob.'
-        ) from None
+        return match_names(binary, query, query.name_patterns, unique, context, budget)
+    except SearchRefusedError as error:
+        retry = None if query.literal else pattern_retry(str(error), query.name_patterns, query)
+        if retry is None:
+            raise
+        patterns, pcre2, note = retry
+        if pcre2:
+            query.rg_args.append("--pcre2")
+        try:
+            matched = match_names(binary, query, patterns, unique, context, budget)
+        except SearchRefusedError:
+            raise error from None
+        query.notes.append(note)
+        return matched
 
 
 def _walk_directories(

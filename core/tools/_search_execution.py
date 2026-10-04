@@ -15,6 +15,7 @@ import os
 import queue
 import re
 import subprocess
+import tempfile
 import threading
 import time
 import unicodedata
@@ -390,6 +391,52 @@ def list_scan(
     ]
     _bound(result)
     return result
+
+
+# Flags that change how a pattern matches text, as opposed to which files are searched.
+_MATCHING_FLAGS = re.compile(
+    r"--(?:(?:no-)?(?:fixed-strings|invert-match|pcre2|unicode|pcre2-unicode)|case-sensitive|"
+    r"ignore-case|smart-case|word-regexp|line-regexp|auto-hybrid-regex|engine=.*|"
+    r"(?:regex|dfa)-size-limit=.*)"
+)
+
+
+def match_names(
+    binary: Path,
+    query: SearchQuery,
+    patterns: list[str],
+    names: list[str],
+    context: ToolContext,
+    budget: SearchBudget,
+) -> set[str]:
+    """Return the names the patterns match, by ripgrep and with the query's matching flags.
+
+    Each name is matched as one whole text, so ``-x`` compares the entire name.
+    A rejected pattern raises ``SearchRefusedError`` like a content search, even
+    without names to match.
+    """
+    flags = [argument for argument in query.rg_args if _MATCHING_FLAGS.fullmatch(argument)]
+    with tempfile.TemporaryDirectory(prefix="vbot-names-") as directory:
+        source = Path(directory) / "names"
+        source.write_bytes(b"".join(os.fsencode(name) + b"\0" for name in names))
+        arguments = [
+            "--no-config",
+            *flags,
+            "--null-data",
+            "--no-filename",
+            "--no-line-number",
+            "--color=never",
+            *_pattern_arguments(patterns),
+            "--",
+            str(source),
+        ]
+        outcome = NativeOutcome()
+        lines = native_lines(binary, arguments, context, budget, outcome=outcome)
+        with contextlib.closing(lines):
+            data = b"".join(lines)
+    if outcome.returncode not in (0, 1, None):
+        raise SearchRefusedError(outcome.diagnostics.strip().removeprefix("rg: "))
+    return {os.fsdecode(name) for name in data.split(b"\0") if name}
 
 
 def _bound(result: ScanResult) -> None:
