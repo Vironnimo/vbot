@@ -464,6 +464,9 @@ function responseText(model, prompt, messages = []) {
   if (prompt.includes("E2E_STREAM")) {
     return "Fake provider streaming response.";
   }
+  if (prompt.includes("E2E_COMPACTION_SEED")) {
+    return "Archived obsidian record 8642.";
+  }
   if (prompt.includes("E2E_SUBAGENT_CHILD")) {
     return "Fake sub-agent result.";
   }
