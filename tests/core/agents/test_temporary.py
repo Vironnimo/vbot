@@ -720,7 +720,7 @@ async def test_group_close_cancels_exact_descendant_and_queued_work(tmp_path, se
     assert groups.has_descendants("group", "peer", "parent", handle.epoch)
     report = await groups.close_group("group")
     assert active.id in report["run_ids"]
-    # Resources close only after the group's Runs settled; ProcessManager relies
+    # Resources close only after the group's Runs settled; TerminalManager relies
     # on this to release its admission marker at the end of its group close.
     assert probe.statuses_at_close == ["cancelled"]
     assert queued.future.cancelled()
