@@ -33,11 +33,9 @@ export function createTerminalRenderer({
 
   const pendingOutputs = new SvelteMap();
 
-  // The grid each tile is currently fitted to, kept as reactive state so the
-  // per-tile diagnostics hint can compare it against the server dimensions.
-  let fittedGrids = $state({});
-
   const TERMINAL_BASE_FONT_SIZE = 12;
+
+  const TERMINAL_MIN_FONT_SIZE = 4;
 
   function mountTile(node, terminalId) {
     tileHosts.set(terminalId, node);
@@ -89,10 +87,8 @@ export function createTerminalRenderer({
       return;
     }
     tileRegistry.delete(terminalId);
-    fittedGrids = Object.fromEntries(
-      Object.entries(fittedGrids).filter(([id]) => id !== terminalId),
-    );
     tile.resizeObserver?.disconnect();
+    tile.host.removeEventListener('pointerdown', tile.claimOnPointer, true);
     tile.inputDisposable?.dispose();
     tile.scrollDisposable?.dispose();
     for (const disposable of tile.protocolDisposables) {
@@ -179,6 +175,7 @@ export function createTerminalRenderer({
         return;
       }
       if (!terminalIsFinished(findTerminal(terminalId))) {
+        claim(terminalId);
         getController().queueInput(data, { terminalId });
       }
     });
@@ -189,21 +186,39 @@ export function createTerminalRenderer({
     });
     let resizeObserverInstance = null;
     if (typeof globalThis.ResizeObserver === 'function') {
-      resizeObserverInstance = new ResizeObserver(() =>
-        scheduleFit(terminalId),
-      );
+      resizeObserverInstance = new ResizeObserver(() => {
+        // Only a real change of this tile's box is a layout change here;
+        // adopting another viewer's grid never resizes the host.
+        const tile = tileRegistry.get(terminalId);
+        if (
+          tile &&
+          (tile.hostWidth !== host.clientWidth ||
+            tile.hostHeight !== host.clientHeight)
+        ) {
+          tile.hostWidth = host.clientWidth;
+          tile.hostHeight = host.clientHeight;
+          claim(terminalId, { refit: true });
+        }
+      });
       resizeObserverInstance.observe(host);
     }
+    const claimOnPointer = () => claim(terminalId);
+    host.addEventListener('pointerdown', claimOnPointer, true);
     tileRegistry.set(terminalId, {
       xterm: xtermInstance,
       fitAddon: fitAddonInstance,
+      host,
       resizeObserver: resizeObserverInstance,
+      claimOnPointer,
       inputDisposable,
       scrollDisposable,
       protocolDisposables,
-      lastFitCols: null,
-      lastFitRows: null,
-      fitFollowUpScheduled: false,
+      // A claimed tile sizes the shared PTY to its own box; an unclaimed one
+      // mirrors the grid another viewer set. Opening a tile claims it.
+      claimed: true,
+      fittedGrid: null,
+      hostWidth: host.clientWidth,
+      hostHeight: host.clientHeight,
       writeInFlight: false,
       snapshotGeneration: 0,
     });
@@ -245,10 +260,11 @@ export function createTerminalRenderer({
     tile.writeInFlight = true;
     tile.snapshotGeneration += 1;
     const generation = tile.snapshotGeneration;
-    tile.xterm.reset();
     scrolledBackByTerminal[terminalId] = false;
     try {
-      tile.xterm.write(ansi, () => {
+      // The in-band reset (RIS) takes effect after output that is still
+      // queued in xterm, so no older bytes land on top of the snapshot.
+      tile.xterm.write(`\u001bc${ansi}`, () => {
         if (
           tileRegistry.get(terminalId) !== tile ||
           tile.snapshotGeneration !== generation
@@ -268,26 +284,18 @@ export function createTerminalRenderer({
     queueMicrotask(() => fitTerminal(terminalId));
   }
 
-  // A one-shot layout change (tab remount, maximize) measures a transient
-  // geometry; re-fitting once on the next animation frame gives the grid a
-  // chance to settle and lets the getController()'s stability pass see the
-  // confirmed size as a genuinely separated second measurement.
-  function scheduleFitFollowUp(terminalId) {
+  // Interaction with a tile (typing, pointer, a change of its box) makes it
+  // the viewer the shared PTY follows; other viewers mirror its grid.
+  function claim(terminalId, { refit = false } = {}) {
     const tile = tileRegistry.get(terminalId);
-    if (!tile || tile.fitFollowUpScheduled) {
+    if (!tile || (tile.claimed && !refit)) {
       return;
     }
-    tile.fitFollowUpScheduled = true;
-    requestAnimationFrame(() => {
-      const current = tileRegistry.get(terminalId);
-      if (current) {
-        current.fitFollowUpScheduled = false;
-      }
-      fitTerminal(terminalId, { fromFollowUp: true });
-    });
+    tile.claimed = true;
+    scheduleFit(terminalId);
   }
 
-  function fitTerminal(terminalId, { fromFollowUp = false } = {}) {
+  function fitTerminal(terminalId) {
     const tile = tileRegistry.get(terminalId);
     const host = tileHosts.get(terminalId);
     if (
@@ -298,56 +306,108 @@ export function createTerminalRenderer({
       host.clientWidth <= 0 ||
       host.clientHeight <= 0
     ) {
+      // A hidden tile keeps the PTY at its current size.
       return;
     }
     try {
-      tile.fitAddon.fit();
-      // Increase the font size until the grid fits within the PTY dimension
-      // limits. Font metrics are not perfectly proportional, so this may
-      // need more than one pass.
-      let attempts = 0;
-      while (
-        (tile.xterm.cols > TERMINAL_MAX_COLUMNS ||
-          tile.xterm.rows > TERMINAL_MAX_ROWS) &&
-        attempts < 5
-      ) {
-        const colScale = tile.xterm.cols / TERMINAL_MAX_COLUMNS;
-        const rowScale = tile.xterm.rows / TERMINAL_MAX_ROWS;
-        tile.xterm.options.fontSize = Math.ceil(
-          tile.xterm.options.fontSize * Math.max(colScale, rowScale),
-        );
-        tile.fitAddon.fit();
-        attempts += 1;
-      }
-      // Final safety net: clamp into the server's accepted bounds so a tiny
-      // host produces a legal minimum grid instead of a rejected resize.
-      const fitted = clampTerminalGrid(tile.xterm.cols, tile.xterm.rows);
-      if (
-        fitted.columns !== tile.xterm.cols ||
-        fitted.rows !== tile.xterm.rows
-      ) {
-        tile.xterm.resize(fitted.columns, fitted.rows);
-      }
-      fittedGrids = {
-        ...fittedGrids,
-        [terminalId]: { columns: fitted.columns, rows: fitted.rows },
-      };
-      getController().resize(
-        fitted.columns,
-        fitted.rows,
-        terminalId,
-        getMaximizedTerminalId() === terminalId,
-      );
-      const geometryChanged =
-        tile.lastFitCols !== fitted.columns || tile.lastFitRows !== fitted.rows;
-      tile.lastFitCols = fitted.columns;
-      tile.lastFitRows = fitted.rows;
-      if (geometryChanged && !fromFollowUp) {
-        scheduleFitFollowUp(terminalId);
+      if (tile.claimed) {
+        fitToTile(terminalId, tile);
+      } else {
+        adoptServerGrid(terminalId, tile);
       }
     } catch {
       // The host may be between layout states while the view is mounting.
     }
+  }
+
+  function fitToTile(terminalId, tile) {
+    if (tile.xterm.options.fontSize !== TERMINAL_BASE_FONT_SIZE) {
+      tile.xterm.options.fontSize = TERMINAL_BASE_FONT_SIZE;
+    }
+    tile.fitAddon.fit();
+    // Only a tile too large for the PTY limits grows the font. Font metrics
+    // are not perfectly proportional, so this may need more than one pass.
+    let attempts = 0;
+    while (
+      (tile.xterm.cols > TERMINAL_MAX_COLUMNS ||
+        tile.xterm.rows > TERMINAL_MAX_ROWS) &&
+      attempts < 5
+    ) {
+      const colScale = tile.xterm.cols / TERMINAL_MAX_COLUMNS;
+      const rowScale = tile.xterm.rows / TERMINAL_MAX_ROWS;
+      tile.xterm.options.fontSize = Math.ceil(
+        tile.xterm.options.fontSize * Math.max(colScale, rowScale),
+      );
+      tile.fitAddon.fit();
+      attempts += 1;
+    }
+    // Clamp into the server's accepted bounds so a tiny host produces a
+    // legal minimum grid instead of a rejected resize.
+    const fitted = clampTerminalGrid(tile.xterm.cols, tile.xterm.rows);
+    if (fitted.columns !== tile.xterm.cols || fitted.rows !== tile.xterm.rows) {
+      tile.xterm.resize(fitted.columns, fitted.rows);
+    }
+    tile.fittedGrid = fitted;
+    getController().resize(
+      fitted.columns,
+      fitted.rows,
+      terminalId,
+      getMaximizedTerminalId() === terminalId,
+    );
+  }
+
+  // Output is laid out for the PTY grid, so a viewer that does not own the
+  // size renders exactly that grid rather than its own fit. A grid larger
+  // than the tile shrinks the font instead of being clipped.
+  function adoptServerGrid(terminalId, tile) {
+    const item = findTerminal(terminalId);
+    if (!Number.isInteger(item?.columns) || !Number.isInteger(item?.rows)) {
+      return;
+    }
+    let fontSize = TERMINAL_BASE_FONT_SIZE;
+    for (let attempts = 0; attempts < 5; attempts += 1) {
+      if (tile.xterm.options.fontSize !== fontSize) {
+        tile.xterm.options.fontSize = fontSize;
+      }
+      const room = tile.fitAddon.proposeDimensions?.();
+      if (
+        !room ||
+        (room.cols >= item.columns && room.rows >= item.rows) ||
+        fontSize <= TERMINAL_MIN_FONT_SIZE
+      ) {
+        break;
+      }
+      // Font metrics are not perfectly proportional; step down at least
+      // half a point per pass.
+      const scale = Math.min(room.cols / item.columns, room.rows / item.rows);
+      fontSize = Math.max(
+        TERMINAL_MIN_FONT_SIZE,
+        Math.min(fontSize - 0.5, Math.floor(fontSize * scale * 2) / 2),
+      );
+    }
+    if (tile.xterm.cols !== item.columns || tile.xterm.rows !== item.rows) {
+      tile.xterm.resize(item.columns, item.rows);
+    }
+  }
+
+  // The PTY grid changed. Unless this viewer's own resize explains it, a
+  // different grid means another viewer or the Agent took over the size.
+  function onGeometry(terminalId, terminal) {
+    const tile = tileRegistry.get(terminalId);
+    if (
+      !tile?.xterm ||
+      !Number.isInteger(terminal?.columns) ||
+      !Number.isInteger(terminal?.rows) ||
+      (tile.xterm.cols === terminal.columns &&
+        tile.xterm.rows === terminal.rows) ||
+      getController().resizeSettling(terminalId)
+    ) {
+      return;
+    }
+    tile.claimed =
+      tile.fittedGrid?.columns === terminal.columns &&
+      tile.fittedGrid.rows === terminal.rows;
+    scheduleFit(terminalId);
   }
 
   function scrollToLatest(terminalId) {
@@ -394,30 +454,6 @@ export function createTerminalRenderer({
       brightCyan: '#8DE1D2',
       brightWhite: '#FFF9F0',
     };
-  }
-
-  // Diagnostics: a tile whose settled grid differs from the server's
-  // authoritative dimensions renders TUI content at the wrong cell count —
-  // stretched or wrapped borders. While a resize correction is still inside
-  // the pipeline (stability pass, debounce, in-flight request) the mismatch
-  // is expected and stays quiet; a lit hint means the pipeline closed
-  // without reconciling the two sizes.
-  function gridMismatchHint(terminalId) {
-    const fitted = fittedGrids[terminalId];
-    const item = findTerminal(terminalId);
-    if (!fitted || !item || terminalIsFinished(item) || isUnavailable()) {
-      return '';
-    }
-    if (viewState.streams[terminalId]?.gridPending) {
-      return '';
-    }
-    if (fitted.columns === item.columns && fitted.rows === item.rows) {
-      return '';
-    }
-    return t('terminals.gridMismatch', {
-      fitted: `${fitted.columns}×${fitted.rows}`,
-      server: `${item.columns}×${item.rows}`,
-    });
   }
 
   function onSnapshot(terminalId, ansi, snapshotTerminal) {
@@ -480,9 +516,9 @@ export function createTerminalRenderer({
   return {
     mountTile,
     scrollToLatest,
-    gridMismatchHint,
     onSnapshot,
     onOutput,
+    onGeometry,
     onClear,
     onTranscript,
     fitAll,

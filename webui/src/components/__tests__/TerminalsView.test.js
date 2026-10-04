@@ -551,8 +551,9 @@ describe('TerminalsView rendering and input', () => {
     expect([terminalInstances[0].cols, terminalInstances[0].rows]).toEqual([
       100, 32,
     ]);
+    // The snapshot carries its own in-band reset (RIS).
     expect(terminalInstances[0].write).toHaveBeenCalledWith(
-      '\u001b[2JDemo TUI ready',
+      '\u001bc\u001b[2JDemo TUI ready',
       expect.any(Function),
     );
 
@@ -588,11 +589,11 @@ describe('TerminalsView rendering and input', () => {
     flushSync();
 
     expect(terminalInstances[2].write).toHaveBeenCalledWith(
-      snapshots[0],
+      `\u001bc${snapshots[0]}`,
       expect.any(Function),
     );
     expect(terminalInstances[3].write).toHaveBeenCalledWith(
-      snapshots[1],
+      `\u001bc${snapshots[1]}`,
       expect.any(Function),
     );
   });
@@ -694,22 +695,28 @@ describe('TerminalsView rendering and input', () => {
     expect(terminalInstances).toHaveLength(2);
   });
 
-  it('follows a one-shot tile shrink with a second fit so the PTY resizes', async () => {
+  it('fits a resized tile at the base font and debounces it into the PTY', async () => {
     await view.mountWith([terminal()]);
     await wait(150);
-    expect(resizeObservers).toHaveLength(1);
+    const xterm = terminalInstances[0];
     resizeTerminalMock.mockClear();
 
+    // 300 columns at the base font exceed the PTY limit: the font grows.
+    fixtureState.mockHostWidth = 2400;
+    resizeObservers[0].fire();
+    await wait(120);
+    expect(xterm.options.fontSize).toBeGreaterThan(12);
+    expect(resizeTerminalMock).toHaveBeenLastCalledWith('term-1', 240, 25);
+
+    // Shrinking again returns to the base font instead of keeping it large.
     fixtureState.mockHostWidth = 400;
     resizeObservers[0].fire();
     await Promise.resolve();
     flushSync();
-    expect(resizeTerminalMock).not.toHaveBeenCalled();
-
-    await flushAnimationFrames(1);
-    // A settled size is still debounced before it reaches the PTY.
+    expect(xterm.options.fontSize).toBe(12);
+    expect(resizeTerminalMock).toHaveBeenCalledTimes(1);
     await wait(120);
-    expect(resizeTerminalMock).toHaveBeenCalledWith('term-1', 50, 32);
+    expect(resizeTerminalMock).toHaveBeenLastCalledWith('term-1', 50, 32);
   });
 
   it('re-fits the first tile when a second terminal joins the canvas', async () => {
@@ -730,28 +737,56 @@ describe('TerminalsView rendering and input', () => {
     expect(fitAddons[0].fit.mock.calls.length).toBeGreaterThan(fitsBefore);
   });
 
-  it('shows a diagnostics hint when a tile keeps rendering at a size the session never confirmed', async () => {
+  it('mirrors a grid another viewer set until this tile is used again', async () => {
     await view.mountWith([terminal()]);
-    // The tile fits 100x32 while the session still runs at its start size:
-    // while the correction is in flight the hint stays quiet.
-    await flushAnimationFrames(2);
-    expect(document.querySelector('.terminals-view__grid-mismatch')).toBeNull();
-
-    // The server confirms a different size than the fitted tile: the
-    // pipeline closed without reconciling the two grids.
-    resizeTerminalMock.mockResolvedValue({
-      terminal: { columns: 120, rows: 40 },
-    });
-    fixtureState.mockHostHeight = 660;
-    resizeObservers[0].fire();
-    await flushAnimationFrames(2);
     await wait(150);
-    await waitFor(() =>
-      Boolean(document.querySelector('.terminals-view__grid-mismatch')),
+    const xterm = terminalInstances[0];
+    expect(resizeTerminalMock).toHaveBeenCalledWith('term-1', 100, 32);
+    resizeTerminalMock.mockClear();
+
+    // Output is laid out for the PTY grid, so the tile renders that grid.
+    streams[0].handlers.onEvent({
+      type: 'terminal_state',
+      sequence: 1,
+      terminal: terminal({ columns: 90, rows: 30 }),
+    });
+    await wait(120);
+    expect([xterm.cols, xterm.rows]).toEqual([90, 30]);
+    expect(xterm.options.fontSize).toBe(12);
+    expect(resizeTerminalMock).not.toHaveBeenCalled();
+
+    // A grid larger than the tile shrinks the font instead of clipping.
+    streams[0].handlers.onEvent({
+      type: 'terminal_state',
+      sequence: 2,
+      terminal: terminal({ columns: 200, rows: 40 }),
+    });
+    await wait(120);
+    expect([xterm.cols, xterm.rows]).toEqual([200, 40]);
+    expect(xterm.options.fontSize).toBeLessThanOrEqual(6);
+    expect(xterm.options.fontSize).toBeGreaterThanOrEqual(4);
+    expect(resizeTerminalMock).not.toHaveBeenCalled();
+
+    // Typing makes this tile the one the PTY follows again.
+    xterm.onDataCallback('x');
+    await wait(120);
+    expect([xterm.cols, xterm.rows]).toEqual([100, 32]);
+    expect(xterm.options.fontSize).toBe(12);
+    expect(resizeTerminalMock).toHaveBeenCalledWith('term-1', 100, 32);
+  });
+
+  it('keeps the live tiles while a list refresh fails', async () => {
+    const component = await view.mountWith([terminal()]);
+    listTerminalsMock.mockRejectedValue(new Error('offline'));
+
+    await expect(component.applyVoiceAction('refresh')).rejects.toThrow(
+      'terminal_refresh_failed',
     );
-    expect(
-      document.querySelector('.terminals-view__grid-mismatch').textContent,
-    ).toContain('Session');
+    flushSync();
+
+    expect(document.body.textContent).toContain(t('terminals.listError'));
+    expect(document.querySelectorAll('.terminals-view__tile')).toHaveLength(1);
+    expect(terminalInstances[0].dispose).not.toHaveBeenCalled();
   });
 });
 

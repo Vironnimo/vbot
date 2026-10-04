@@ -62,6 +62,7 @@ export function createTerminalsController({
   state,
   onSnapshot = () => {},
   onOutput = () => {},
+  onGeometry = () => {},
   onClear = () => {},
   onTranscript = () => {},
   onSpeechError = () => {},
@@ -121,7 +122,6 @@ export function createTerminalsController({
         status: TERMINAL_STREAM_IDLE,
         error: '',
         errorCode: '',
-        gridPending: false,
       }
     );
   }
@@ -258,7 +258,6 @@ export function createTerminalsController({
         inputChain: Promise.resolve(),
         resizeTimer: null,
         pendingResize: null,
-        lastResize: null,
         resizeInFlight: null,
       };
       streamRecords.set(terminalId, stream);
@@ -378,6 +377,8 @@ export function createTerminalsController({
       if (terminalIsFinished(terminal)) {
         markStreamFinished(stream);
         void loadTerminals({ silent: true });
+      } else if (terminal) {
+        onGeometry(stream.terminalId, terminal);
       }
     }
   }
@@ -567,18 +568,6 @@ export function createTerminalsController({
       item.rows === rows
     ) {
       clearPendingResize(stream);
-      setStreamView(terminalId, { gridPending: false });
-      return;
-    }
-    if (
-      !stream.resizeInFlight &&
-      stream.lastResize?.columns === columns &&
-      stream.lastResize.rows === rows
-    ) {
-      // A completed request may have confirmed a different grid. Keep the
-      // mismatch visible instead of starting a reactive resize loop.
-      clearPendingResize(stream);
-      setStreamView(terminalId, { gridPending: false });
       return;
     }
     stream.pendingResize = { terminalId, columns, rows };
@@ -591,9 +580,6 @@ export function createTerminalsController({
       clearPendingResize(stream);
       return;
     }
-    // From here a real correction enters the pipeline; until its response
-    // lands, the divergence is expected and the diagnostics stay quiet.
-    setStreamView(terminalId, { gridPending: true });
     if (stream.resizeTimer !== null) {
       clearTimeoutFn(stream.resizeTimer);
       stream.resizeTimer = null;
@@ -638,7 +624,6 @@ export function createTerminalsController({
         streamRecords.get(request.terminalId) === stream &&
         !stream.terminalEnded
       ) {
-        stream.lastResize = request;
         // The RPC returns the authoritative summary inside `terminal`.
         const index = state.terminals.findIndex(
           (item) => item.terminal_id === request.terminalId,
@@ -650,16 +635,11 @@ export function createTerminalsController({
             rows: result.terminal.rows,
           };
         }
-        setStreamView(request.terminalId, {
-          gridPending: stream.pendingResize !== null,
-        });
         if (state.selectedTerminalId === request.terminalId) {
           state.actionError = '';
         }
       }
     } catch (error) {
-      stream.lastResize = null;
-      // A failed correction remains visible and can be retried by a later fit.
       if (
         !destroyed &&
         streamRecords.get(request.terminalId) === stream &&
@@ -670,13 +650,32 @@ export function createTerminalsController({
       }
     } finally {
       stream.resizeInFlight = null;
-      if (
-        streamRecords.get(request.terminalId) === stream &&
-        stream.pendingResize
-      ) {
-        void flushResize(stream);
+      if (streamRecords.get(request.terminalId) === stream) {
+        if (stream.pendingResize) {
+          void flushResize(stream);
+        } else if (!destroyed && !stream.terminalEnded) {
+          // Report the settled grid: a rejected request leaves the PTY at
+          // its old size, which the viewer must mirror again.
+          const item = state.terminals.find(
+            (terminal) => terminal.terminal_id === request.terminalId,
+          );
+          if (item && !resizeSettling(request.terminalId)) {
+            onGeometry(request.terminalId, item);
+          }
+        }
       }
     }
+  }
+
+  // True while this viewer's own resize has not reached the PTY yet.
+  function resizeSettling(terminalId) {
+    const stream = streamRecords.get(terminalId);
+    return Boolean(
+      stream &&
+      (stream.resizeTimer !== null ||
+        stream.pendingResize !== null ||
+        stream.resizeInFlight !== null),
+    );
   }
 
   function clearPendingResize(stream) {
@@ -877,6 +876,7 @@ export function createTerminalsController({
     renameGroup,
     reorderGroup,
     resize,
+    resizeSettling,
     selectGroup,
     selectTerminal,
     setServerUnavailable,
