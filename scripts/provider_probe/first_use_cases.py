@@ -51,6 +51,36 @@ _STYLE = (
     "## Links\n"
     "Links use the accent colour; visited links use a muted colour.\n"
 )
+_SETTINGS_NAMES = ("cache", "queue", "upload", "search", "billing", "email", "export", "audit")
+
+
+def _settings_module(changes: dict[str, dict[str, str]]) -> str:
+    """A long module whose functions differ only in names and values."""
+    blocks = []
+    for index, name in enumerate(_SETTINGS_NAMES, 1):
+        values = {"enabled": "True", "timeout": str(index * 10), "retries": "3"}
+        values.update(changes.get(name, {}))
+        blocks.append(
+            f"def {name}_settings():\n"
+            f'    """Return the {name} settings."""\n'
+            "    return {\n"
+            f'        "enabled": {values["enabled"]},\n'
+            f'        "timeout": {values["timeout"]},\n'
+            f'        "retries": {values["retries"]},\n'
+            f'        "label": "{name}",\n'
+            "    }\n"
+        )
+    return "# Generated defaults; edit by hand.\n\n\n" + "\n\n".join(blocks)
+
+
+_MAKEFILE = ".PHONY: test lint\r\n\r\ntest:\r\n\tpytest -q\r\n\r\nlint:\r\n\truff check .\r\n"
+_ROUTES = "\n\n".join(
+    f"def list_{name}(request):\n"
+    "    check_auth(request)\n"
+    f'    rows = db.fetch("{name}")\n'
+    "    return render(rows)\n"
+    for name in ("users", "teams", "roles")
+)
 
 
 def _file_edit_cases() -> list[dict[str, Any]]:
@@ -145,6 +175,41 @@ def _file_edit_cases() -> list[dict[str, Any]]:
             {"todo.md": "# Todo\n\n- renew passport\n- water plants\n"},
             {"todo.md": "- buy milk\n- call Sam\n- book flights\n"},
             loose_final_newline=["todo.md"],
+        ),
+        case(
+            "edit_scattered_long",
+            "In src/settings.py, set retries to 5 in queue_settings and email_settings, "
+            "set timeout to 90 in export_settings, and set enabled to False in "
+            "audit_settings. Keep everything else unchanged.",
+            {"src/settings.py": _settings_module({})},
+            {
+                "src/settings.py": _settings_module(
+                    {
+                        "queue": {"retries": "5"},
+                        "email": {"retries": "5"},
+                        "export": {"timeout": "90"},
+                        "audit": {"enabled": "False"},
+                    }
+                )
+            },
+        ),
+        case(
+            "edit_tabs_crlf",
+            "In Makefile, change the test target's command from `pytest -q` to `pytest -q -x`.",
+            {"Makefile": _MAKEFILE},
+            {"Makefile": _MAKEFILE.replace("pytest -q", "pytest -q -x")},
+        ),
+        case(
+            "edit_similar_blocks",
+            "In src/routes.py, make list_teams return render(rows, page_size=50) instead of "
+            "render(rows). Leave the other functions unchanged.",
+            {"src/routes.py": _ROUTES},
+            {
+                "src/routes.py": _ROUTES.replace(
+                    'db.fetch("teams")\n    return render(rows)',
+                    'db.fetch("teams")\n    return render(rows, page_size=50)',
+                )
+            },
         ),
     ]
 
@@ -504,7 +569,8 @@ def assess(
         before = {**BASE_FILES, **case.get("files", {})}
         expected_files = {**before, **case.get("expected_files", {})}
         actual_files = {
-            path.relative_to(fixture.repo).as_posix(): path.read_text(encoding="utf-8")
+            # Exact bytes: an edit that changes line endings does not pass.
+            path.relative_to(fixture.repo).as_posix(): path.read_bytes().decode("utf-8")
             for path in fixture.repo.rglob("*")
             if path.is_file()
         }
