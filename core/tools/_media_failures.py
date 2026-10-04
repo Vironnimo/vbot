@@ -89,6 +89,17 @@ def settings_place(setting: str) -> str:
     return f"Settings → {_SETTINGS_PLACES.get(setting, _MEDIA_MODELS_PLACE)}"
 
 
+def _next_after_failure(error: BaseException) -> str:
+    """The next step after a transient failure, given the attempts already made."""
+    attempts = getattr(error, "attempts_made", None)
+    if isinstance(attempts, int) and not isinstance(attempts, bool) and attempts > 1:
+        return (
+            f" The request was tried {attempts} times. Tell the user instead of repeating "
+            "the call right away."
+        )
+    return " Repeat the call once; if it fails again, tell the user."
+
+
 def provider_failure_message(error: BaseException, *, task: str, setting: str) -> str:
     """Say what a failed media-model request means and what the Agent can do next.
 
@@ -107,16 +118,16 @@ def provider_failure_message(error: BaseException, *, task: str, setting: str) -
     if _cause(error, (ProviderRateLimitError,)) is not None:
         return (
             f"The {task} provider is limiting requests or its usage limit is reached "
-            f"({detail}). Wait before trying again, and tell the user if it keeps happening."
+            f"({detail}). Tell the user instead of repeating the call right away."
         )
     if _cause(error, (ProviderTimeoutError, NetworkError)) is not None:
-        return f"The {task} provider did not answer ({detail}). Try again later."
+        return f"The {task} provider did not answer ({detail}).{_next_after_failure(error)}"
     if getattr(error, "retryable", False):
-        return f"The {task} provider failed ({detail}). Try again later."
+        return f"The {task} provider failed ({detail}).{_next_after_failure(error)}"
     return (
-        f"The {task} provider rejected the request ({detail}). If the reason concerns the "
-        "request, change it; otherwise tell the user, who may need to choose another "
-        f"{setting} model in {settings_place(setting)}."
+        f"The {task} provider rejected the request ({detail}). If the reason names "
+        "something in the call, change it and repeat the call; otherwise tell the user, who "
+        f"can choose another {setting} model in {settings_place(setting)}."
     )
 
 
@@ -147,10 +158,10 @@ def refusal_message(reason: str | None, *, task: str) -> str:
 def outcome_unknown_message(*, task: str, product: str) -> str:
     """Say that a billed request ended without a readable answer and what that means."""
     return (
-        f"The request to the {task} provider ended without a usable answer, so it is unknown "
-        f"whether it created the {product}. Nothing was saved. Repeating the request can "
-        f"create and charge a second {product}. If you still need it, repeat the call once, "
-        "and tell the user if that fails too."
+        f"Nothing was saved. The request to the {task} provider ended without a usable "
+        f"answer, so it is unknown whether the provider created the {product}. Repeating the "
+        f"call can create a second {product} at new cost. If you still need it, repeat the "
+        "call once; if that fails too, tell the user."
     )
 
 

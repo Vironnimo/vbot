@@ -55,7 +55,7 @@ def test_profile_offers_real_choices_in_order() -> None:
         pytest.param(
             {"duration": 5},
             "Nothing was generated. The configured video model does not offer duration 5. "
-            "Pass one of 4, 6, 10, or omit duration to use the configured default.",
+            "Pass one of 4, 6, 10, or omit duration to use the default.",
             id="value-not-offered",
         ),
         pytest.param(

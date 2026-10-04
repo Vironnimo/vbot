@@ -89,22 +89,20 @@ ANALYZE_IMAGE_TOOL_PARAMETERS: JsonObject = {
     },
     "required": ["prompt", "images"],
 }
-IMAGE_GENERATION_TOOL_DESCRIPTION = (
-    "Generate new images or edit local source images using the configured model. Source "
-    "files are uploaded to the configured external provider. Returns local paths for "
-    "generated image artifacts."
-)
 IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION = (
-    "Generate new images from text using the configured model. Returns local paths for "
-    "generated image artifacts."
+    "Generate images from a text prompt with the configured model and save them as local files."
+)
+IMAGE_GENERATION_TOOL_DESCRIPTION = (
+    "Generate images from a text prompt, or edit local images, with the configured model and "
+    "save them as local files. Images passed as source_images are uploaded to the provider."
 )
 # Per-call choices; a profile keeps those the configured Model offers, as enums.
 _CALL_OPTION_PROPERTIES: dict[str, str] = {
-    "aspect_ratio": "Aspect ratio, width:height. Omit to use the configured default.",
-    "resolution": "Output resolution. Omit to use the configured default.",
+    "aspect_ratio": "Aspect ratio, width:height. Omit to use the default.",
+    "resolution": "Output resolution. Omit to use the default.",
     "background": (
         "transparent for a cutout with an alpha channel, opaque for a filled background. "
-        "Omit to use the configured default."
+        "Omit to use the default."
     ),
 }
 
@@ -116,12 +114,9 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "The text prompt for the image. Be specific and concrete: name the "
-                "subject and its key attributes, the setting, composition, lighting, "
-                "mood, color palette, and the visual medium or style (for example "
-                "photograph, oil painting, 3D render, anime, flat vector). For edits, state "
-                "both the changes and what must remain unchanged. Detailed prompts produce "
-                "markedly better images than short vague ones."
+                "Describe the image: the subject and its key attributes, the setting, "
+                "composition, lighting, mood, color palette, and the medium or style, for "
+                "example photograph, oil painting, 3D render, anime or flat vector."
             ),
         },
         "source_images": {
@@ -129,9 +124,9 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
             "items": {"type": "string", "minLength": 1},
             "minItems": 1,
             "description": (
-                "Local images to edit or use as references, in order. Use absolute paths "
-                "or paths relative to the current working directory. Omit for text-only "
-                "generation."
+                "Local images to edit or to use as references. Relative paths start at the "
+                "working directory. When you edit, state in prompt what to change and what "
+                "must stay unchanged. Omit to generate from the prompt alone."
             ),
         },
         **{
@@ -142,8 +137,7 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "description": (
                 "Folder for the generated images, created if missing; relative paths start at "
-                "the working directory. Omit to use the default image-gen folder; the result "
-                "lists each saved file's path."
+                "the working directory. Omit to use the default image-gen folder."
             ),
         },
     },
@@ -360,10 +354,8 @@ def make_image_generation_handler(image_service: Any):
             and not image_service.generation_profile().accepts_source_images
         ):
             return _invalid(
-                "The configured image model only generates from text, so it cannot use "
-                "source_images. Remove source_images, or ask the user to choose an Image "
-                "generation model that accepts images in Settings → Tools → Images, video & "
-                "music."
+                "Nothing was generated. The configured image model does not accept "
+                "source_images. Repeat the call without source_images."
             )
 
         try:

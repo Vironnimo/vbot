@@ -3,6 +3,7 @@ they go, source images, and what refused or failed calls say."""
 
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -40,9 +41,8 @@ from tests.core.tools.image_test_support import (
 from tests.core.tools.tools_test_support import dispatch_as_executor
 
 _TEXT_ONLY_REFUSAL = (
-    "The configured image model only generates from text, so it cannot use source_images. "
-    "Remove source_images, or ask the user to choose an Image generation model that accepts "
-    "images in Settings → Tools → Images, video & music."
+    "Nothing was generated. The configured image model does not accept source_images. "
+    "Repeat the call without source_images."
 )
 
 
@@ -88,6 +88,9 @@ def test_profile_offers_what_the_configured_model_takes(
         assert facts.items() <= parameters["properties"][name].items()
     assert "additionalProperties" not in parameters
     assert parameters["required"] == ["prompt"]
+    # No text mentions a field this Model does not offer.
+    absent = {"source_images", "aspect_ratio", "resolution", "background"} - set(offered)
+    assert [name for name in absent if name in json.dumps(definition)] == []
 
 
 @pytest.mark.asyncio
@@ -338,7 +341,7 @@ def _provider_failure(cause: Exception, status: int) -> ImageExecutionError:
 
 _UNOFFERED_ASPECT_RATIO = (
     "Nothing was generated. The configured image model does not offer aspect_ratio '5:4'. "
-    "Pass one of 1:1, 16:9, or omit aspect_ratio to use the configured default."
+    "Pass one of 1:1, 16:9, or omit aspect_ratio to use the default."
 )
 
 
@@ -353,10 +356,10 @@ _UNOFFERED_ASPECT_RATIO = (
             ),
             failure(
                 "provider_outcome_unknown",
-                "The request to the image-generation provider ended without a usable answer, "
-                "so it is unknown whether it created the image. Nothing was saved. Repeating "
-                "the request can create and charge a second image. If you still need it, "
-                "repeat the call once, and tell the user if that fails too.",
+                "Nothing was saved. The request to the image-generation provider ended "
+                "without a usable answer, so it is unknown whether the provider created the "
+                "image. Repeating the call can create a second image at new cost. If you "
+                "still need it, repeat the call once; if that fails too, tell the user.",
             ),
             id="outcome-unknown",
         ),
@@ -406,9 +409,10 @@ _UNOFFERED_ASPECT_RATIO = (
             failure(
                 "provider_error",
                 "The image-generation provider rejected the request (HTTP 400: Invalid "
-                'background_hex_color "": expected a #RRGGBB value). If the reason concerns '
-                "the request, change it; otherwise tell the user, who may need to choose "
-                "another Image generation model in Settings → Tools → Images, video & music.",
+                'background_hex_color "": expected a #RRGGBB value). If the reason names '
+                "something in the call, change it and repeat the call; otherwise tell the user, "
+                "who can choose another Image generation model in Settings → Tools → Images, "
+                "video & music.",
             ),
             id="provider-rejection",
         ),

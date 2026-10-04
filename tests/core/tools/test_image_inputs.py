@@ -283,7 +283,8 @@ def _provider_failure(
             ImageExecutionError("rate limited", retryable=True, attempts_made=4),
             failure(
                 "provider_error",
-                "The image-understanding provider failed (rate limited). Try again later.",
+                "The image-understanding provider failed (rate limited). The request was "
+                "tried 4 times. Tell the user instead of repeating the call right away.",
                 retryable=True,
                 attempts_made=4,
             ),
@@ -317,8 +318,8 @@ def _provider_failure(
             failure(
                 "provider_error",
                 "The image-understanding provider is limiting requests or its usage limit is "
-                "reached (HTTP 429: The usage limit has been reached). Wait before trying "
-                "again, and tell the user if it keeps happening.",
+                "reached (HTTP 429: The usage limit has been reached). Tell the user instead "
+                "of repeating the call right away.",
                 retryable=True,
             ),
             id="rate-limit",
@@ -328,7 +329,7 @@ def _provider_failure(
             failure(
                 "provider_error",
                 "The image-understanding provider did not answer (Connection reset by peer). "
-                "Try again later.",
+                "Repeat the call once; if it fails again, tell the user.",
                 retryable=True,
             ),
             id="no-answer",
@@ -345,9 +346,9 @@ def _provider_failure(
             failure(
                 "provider_error",
                 "The image-understanding provider rejected the request (HTTP 400: Bad "
-                "Request). If the reason concerns the request, change it; otherwise tell the "
-                "user, who may need to choose another Image understanding model in Settings "
-                "→ Tools → Images, video & music.",
+                "Request). If the reason names something in the call, change it and repeat the "
+                "call; otherwise tell the user, who can choose another Image understanding model "
+                "in Settings → Tools → Images, video & music.",
             ),
             id="request-rejected",
         ),

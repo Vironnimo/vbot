@@ -82,39 +82,39 @@ GENERATE_VIDEO_PARAMETERS: JsonObject = {
         "duration": {
             "type": "integer",
             "minimum": 1,
-            "description": "Length in seconds. Omit to use the configured default.",
+            "description": "Length in seconds. Omit to use the default.",
         },
         "aspect_ratio": {
             "type": "string",
             "pattern": r".*\S.*",
-            "description": "Aspect ratio, width:height. Omit to use the configured default.",
+            "description": "Aspect ratio, width:height. Omit to use the default.",
         },
         "resolution": {
             "type": "string",
             "pattern": r".*\S.*",
-            "description": "Output resolution. Omit to use the configured default.",
+            "description": "Output resolution. Omit to use the default.",
         },
         "generate_audio": {
             "type": "boolean",
             "description": (
-                "true to generate a soundtrack with the video, false for a silent video. Omit "
-                "to use the configured default."
+                "true to generate audio with the video, false for a silent video. Omit to "
+                "use the default."
             ),
         },
         "first_frame": {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Local image path for the video's first frame. Relative paths start at the "
-                "working directory."
+                "Local image to start the video with. Relative paths start at the working "
+                "directory. Omit to start from the prompt alone."
             ),
         },
         "last_frame": {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Local image path for the video's last frame. Relative paths start at the "
-                "working directory."
+                "Local image to end the video with. Relative paths start at the working "
+                "directory. Omit to let the model choose the ending."
             ),
         },
         "output_dir": {
@@ -143,8 +143,7 @@ GENERATE_MUSIC_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Describe the music to generate, including any desired lyrics, style, mood, "
-                "instrumentation, or structure."
+                "Describe the music: style, mood, instrumentation, structure, and any lyrics."
             ),
         },
         "source_images": {

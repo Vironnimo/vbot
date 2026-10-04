@@ -191,7 +191,7 @@ def test_call_choices_become_wire_options(
         pytest.param(
             {"aspect_ratio": "5:4"},
             "Nothing was generated. The configured image model does not offer aspect_ratio "
-            "'5:4'. Pass one of 1:1, 16:9, or omit aspect_ratio to use the configured default.",
+            "'5:4'. Pass one of 1:1, 16:9, or omit aspect_ratio to use the default.",
             id="value",
         ),
         pytest.param(
