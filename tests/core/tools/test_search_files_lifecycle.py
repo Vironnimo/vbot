@@ -27,7 +27,8 @@ from tests.core.tools.search_files_test_support import context, dispatch
         # A content search counts in one pass and reads the page's lines in another.
         ({"pattern": "needle"}, True, 2),
         ({"pattern": "needle", "limit": 1}, True, 2),
-        ({"pattern": "needle", "args": ["-t", "py"]}, True, 2),
+        # A file type first reads the type list to match its globs in any case.
+        ({"pattern": "needle", "args": ["-t", "py"]}, True, 3),
         ({"pattern": "needle", "output": "files"}, True, 1),
         ({"pattern": "["}, False, 1),
     ],

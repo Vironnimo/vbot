@@ -568,15 +568,14 @@ _PATHS = "path must name a file or directory"
         (
             {"args": ["--files", "-e", "needle"]},
             "invalid_arguments",
-            "--files lists entries by name and does not search file contents, so it cannot be "
-            'combined with -e. To select names, pass glob (such as "tmp*"); to search '
+            "--files lists files by name and does not search their contents, so it cannot be "
+            'combined with -e. To select names, pass glob (such as "*.py"); to search '
             "contents, remove --files.",
         ),
         (
-            {"pattern": "^tmp", "args": ["--dirs"]},
+            {"pattern": "(", "args": ["--dirs"]},
             "invalid_arguments",
-            "--dirs lists entries by name and does not search file contents, so it cannot "
-            "be combined with pattern.",
+            "The pattern for directory names is not a valid regular expression",
         ),
         ({"args": ["--help", "missing"]}, "invalid_arguments", "--help shows a reference"),
         # Incomplete or unavailable options, and roots that are not paths.

@@ -191,7 +191,11 @@ def test_file_lists_equal_ripgreps(
         (["--dirs", "--no-hidden"], {"src/", "src/empty/", "src/lib/", "vendor/", "vendor/deep/"}),
         (["--dirs", "-g", "!vendor"], {"src/", "src/empty/", "src/lib/", ".cache/"}),
         (["--dirs", "-g", "empty"], {"src/empty/"}),
-        (["--dirs", "-t", "py"], {"src/", "src/lib/"}),
+        (["--dirs", "-t", "py"], {"src/", "src/lib/", "vendor/", "vendor/deep/"}),
+        (["--dirs", "--no-glob-case-insensitive", "-t", "py"], {"src/", "src/lib/"}),
+        (["--dirs", "-e", "^emp"], {"src/empty/"}),
+        (["--dirs", "-e", "^EMP"], set()),
+        (["--dirs", "-i", "-e", "^EMP", "-e", "^li"], {"src/empty/", "src/lib/"}),
         (["--dirs", "-d", "1"], {"src/", ".cache/", "vendor/"}),
         (
             ["--dirs", "-u"],
@@ -219,6 +223,7 @@ def test_directory_lists_include_empty_directories_ripgrep_enters(
             "src/lib/a.py": "x\n",
             ".cache/state": "x\n",
             "vendor/deep/notes.txt": "x\n",
+            "vendor/deep/B.PY": "x\n",
         },
     )
     for name in ("src/empty", "build/out", "src/lib/ignored", ".git/objects"):

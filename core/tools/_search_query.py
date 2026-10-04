@@ -230,6 +230,8 @@ class SearchQuery:
     offset: int = 0
     pattern_operand: bool = False
     operand_roots: list[str] = field(default_factory=list)
+    # Regular expressions a --dirs listing matches against directory names.
+    name_patterns: list[str] = field(default_factory=list)
     reference_args: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
@@ -522,12 +524,20 @@ def interpret(
     query.offset = _single(offsets, "offset", 0)
 
     if listing is not None:
-        if query.patterns:
+        if query.patterns and listing == "list_dirs":
+            # Directories have no contents to search, so a pattern can only mean names.
+            query.name_patterns, query.patterns = query.patterns, []
+            shown = " or ".join(f'"{text}"' for text in query.name_patterns)
+            query.notes.append(
+                f"--dirs lists directories without searching contents, so the pattern {shown} "
+                "was matched against directory names."
+            )
+        elif query.patterns:
             sent = "pattern" if pattern is not None else "-e"
             raise SearchArgumentError(
-                f"--{listing.removeprefix('list_')} lists entries by name and does not search file "
-                f"contents, so it cannot be combined with {sent}. To select names, pass glob "
-                f'(such as "tmp*"); to search contents, remove --{listing.removeprefix("list_")}.'
+                "--files lists files by name and does not search their contents, so it cannot "
+                f'be combined with {sent}. To select names, pass glob (such as "*.py"); to '
+                "search contents, remove --files."
             )
         listed = "files" if listing == "list_files" else "directories"
         for written in [*output_flags, *([f'output "{output}"'] if output else [])]:
