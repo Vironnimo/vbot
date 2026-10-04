@@ -127,12 +127,6 @@ class CommandState:
             if os.name != "nt":
                 path.chmod(0o600)
             self._file = path.open("a", encoding="utf-8", newline="\n")
-        # Idle tracking: the output count the quiet period belongs to, and the
-        # time, tree CPU and started processes when its baseline was taken.
-        self.quiet_output_count = -1
-        self.quiet_since: float | None = None
-        self.quiet_cpu_seconds = 0.0
-        self.quiet_started_processes = 0
 
     @property
     def shell_exited(self) -> bool:

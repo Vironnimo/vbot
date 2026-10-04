@@ -48,9 +48,12 @@ _FIELD_ALIASES = SpellingAliases(
         "timeout": ("timeout_seconds", "timeout_secs", "timeout_sec", "timeout_s", "seconds"),
         "expected_screen_revision": ("screen_revision", "expected_revision"),
         "after_revision": ("attention_revision", "since_revision"),
+        "pattern": ("regex", "regexp", "until", "wait_for", "expect", "match"),
     }
 )
 _SUBMIT = "submit"
+# The terminal's size follows the user's view of it; no call resizes it.
+_RESIZE = "resize"
 _ACTION_VALUES = {
     **dict.fromkeys(("start", "launch", "spawn", "create", "new"), "start"),
     **dict.fromkeys(("list", "ls", "listterminals", "terminals"), "list"),
@@ -99,7 +102,7 @@ _ACTION_VALUES = {
         "input",
     ),
     **dict.fromkeys(("submit", "sendline", "writeline"), _SUBMIT),
-    **dict.fromkeys(("resize", "setsize", "size"), "resize"),
+    **dict.fromkeys(("resize", "setsize", "size"), _RESIZE),
     **dict.fromkeys(
         ("kill", "stop", "close", "terminate", "end", "destroy", "killsession"), "kill"
     ),
@@ -135,6 +138,7 @@ _OBSERVATION_FIELDS = (
     "after_revision",
     "timeout_ms",
     "timeout",
+    "pattern",
     "expected_screen_revision",
 )
 # Labels and start settings that change nothing on an existing terminal.
@@ -147,11 +151,20 @@ _ACCEPTED_FIELDS = {
     "attach": frozenset({"terminal_id"}),
     "detach": frozenset({"terminal_id"}),
     "status": frozenset({"terminal_id", "lines", "start_line"}),
-    "wait": frozenset({"terminal_id", "after_revision", "timeout_ms", "timeout"}),
+    "wait": frozenset({"terminal_id", "after_revision", "timeout_ms", "timeout", "pattern"}),
+    # A timeout makes input wait for the reply, as wait does.
     "input": frozenset(
-        {"terminal_id", "text", "data", "key", "expected_screen_revision", "timeout_ms", "timeout"}
+        {
+            "terminal_id",
+            "text",
+            "data",
+            "key",
+            "expected_screen_revision",
+            "timeout_ms",
+            "timeout",
+            "pattern",
+        }
     ),
-    "resize": frozenset({"terminal_id", "columns", "rows"}),
     "kill": frozenset({"terminal_id"}),
 }
 # Zero requests nothing for these fields; elsewhere zero is a real value.
@@ -197,6 +210,14 @@ def normalize_terminal_arguments(arguments: Any) -> Any:
         press_enter = True
     _drop_placeholders(normalized)
     action = normalized.get("action")
+    if action == _RESIZE:
+        status = _call("status", normalized)
+        raise ValueError(
+            _not_run(
+                "the terminal's size follows the user's view of it, so no call resizes it; "
+                f"nothing was changed. To read the screen at its current size, call {status}."
+            )
+        )
     if not isinstance(action, str) or action not in _ACCEPTED_FIELDS:
         return normalized
     if action == "start":
@@ -222,11 +243,10 @@ def normalize_terminal_arguments(arguments: Any) -> Any:
         if key in {"command", "args"}:
             raise ValueError(_not_run(_command_elsewhere_problem(action, normalized)))
         if key in {"columns", "rows"}:
-            size = {name: normalized[name] for name in ("columns", "rows") if name in normalized}
             raise ValueError(
                 _not_run(
-                    f"{action} does not change the size; resize with "
-                    f"{_call('resize', normalized, **size)}."
+                    f"{action} does not change the size: the terminal's size follows the user's "
+                    "view of it. Repeat the call without columns and rows."
                 )
             )
     return normalized

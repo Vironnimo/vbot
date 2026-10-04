@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -72,6 +73,7 @@ from ._terminal_state import (
     TERMINAL_MIN_COLUMNS,
     TERMINAL_MIN_ROWS,
     TERMINAL_SCROLLBACK_LINES,
+    TERMINAL_START_WAIT_SECONDS,
     TERMINAL_STATUS_DEFAULT_LINES,
     TERMINAL_STATUS_MAX_LINES,
     TERMINAL_SWEEP_INTERVAL_SECONDS,
@@ -82,6 +84,7 @@ from ._terminal_state import (
     TerminalChangedCallback,
     TerminalClosedError,
     TerminalInfo,
+    TerminalIsCommandError,
     TerminalKind,
     TerminalLaunchError,
     TerminalManagerError,
@@ -93,6 +96,7 @@ from ._terminal_state import (
     TerminalStaleScreenError,
     TerminalState,
     TerminalStreamEvent,
+    WaitEnded,
     _utc_now,
     _validate_dimensions,
     _validate_owner,
@@ -769,9 +773,19 @@ class TerminalManager:
         origin_run_id: str,
         execution_owner: RunExecutionOwner | None = None,
     ) -> tuple[TerminalInfo, bool]:
-        """Attach one live Terminal Session without changing its process or lifecycle."""
+        """Attach one live Terminal Session without changing its process or lifecycle.
+
+        A shell command stays attached to the Session that ran it, so its result
+        reaches that Session: attaching it elsewhere raises ``TerminalIsCommandError``.
+        """
         _validate_owner(attachment)
         session = self._get(terminal_id)
+        if session.command is not None:
+            if session.attachment != attachment:
+                raise TerminalIsCommandError(
+                    f"Terminal {terminal_id} runs a command of another Session"
+                )
+            return session.info(), False
         changed = session.attach(
             attachment, origin_run_id=origin_run_id, execution_owner=execution_owner
         )
@@ -786,8 +800,10 @@ class TerminalManager:
         return session.info(), changed
 
     def detach(self, terminal_id: str, attachment: TerminalOwner) -> TerminalInfo:
-        """Remove only one exact vBot Session attachment."""
+        """Remove only one exact vBot Session attachment; a command stays attached."""
         session = self._get(terminal_id)
+        if session.command is not None:
+            raise TerminalIsCommandError(f"Terminal {terminal_id} runs a command")
         if session.attachment != attachment:
             raise TerminalNotAttachedError("Terminal Session is not attached to this vBot Session.")
         session.detach()
@@ -900,20 +916,69 @@ class TerminalManager:
         session = self._attached(terminal_id, owner)
         return await session.snapshot(lines=lines, start_line=start_line, include_name=include_name)
 
-    async def wait_for_attention(
+    async def read(
+        self,
+        terminal_id: str,
+        *,
+        lines: int = TERMINAL_STATUS_DEFAULT_LINES,
+        start_line: int | None = None,
+    ) -> dict[str, Any]:
+        """Return the screen and one history page of any terminal, attached or not.
+
+        Reading attaches nothing and acknowledges nothing: no Agent's
+        deliveries change.
+        """
+        if not 1 <= lines <= TERMINAL_STATUS_MAX_LINES:
+            raise ValueError(f"lines must be between 1 and {TERMINAL_STATUS_MAX_LINES}")
+        if start_line is not None and start_line < 0:
+            raise ValueError("start_line must be a non-negative integer")
+        return await self._get(terminal_id).snapshot(
+            lines=lines, start_line=start_line, include_name=True
+        )
+
+    async def wait(
         self,
         terminal_id: str,
         owner: TerminalOwner,
         *,
-        after_revision: int,
-        timeout_ms: int,
-    ) -> tuple[dict[str, Any], bool]:
-        """Wait for a newer attention revision without owning the child lifetime."""
+        seconds: float,
+        pattern: re.Pattern[str] | None = None,
+        after_revision: int | None = None,
+    ) -> WaitEnded:
+        """Wait up to *seconds* until the program exits, prints a match, or goes quiet.
+
+        A command exits when its shell exits and is quiet once it printed
+        output during the wait and then nothing, with no CPU, for the command
+        idle period. An interactive program is quiet once its output settled
+        after activity in an attention revision above *after_revision*
+        (default: the last one a durable result acknowledged); with *pattern*
+        that does not end its wait. Output printed before the call counts
+        for *pattern*.
+        """
         session = self._attached(terminal_id, owner)
-        timed_out = await session.wait_for_attention(
-            after_revision=after_revision, timeout_ms=timeout_ms
+        if after_revision is None:
+            after_revision = session.info().acknowledged_attention_revision
+        return await session.wait_for_program(
+            deadline=self._services.monotonic() + seconds,
+            pattern=pattern,
+            after_revision=after_revision,
         )
-        return await self.snapshot(terminal_id, owner, include_name=False), timed_out
+
+    async def wait_for_startup(
+        self, terminal_id: str, *, seconds: float = TERMINAL_START_WAIT_SECONDS
+    ) -> None:
+        """Wait until a started program shows its first screen, at most *seconds*.
+
+        Returns once start-up output paused for the activity quiet period,
+        start's text was typed, or the program ended.
+        """
+        await self._get(terminal_id).wait_started(deadline=self._services.monotonic() + seconds)
+
+    def acknowledge_exit(self, terminal_id: str, owner: TerminalOwner) -> None:
+        """A durable result showed the program's end: do not deliver its exit."""
+        session = self._sessions.get(terminal_id)
+        if session is not None and session.attachment == owner:
+            session.acknowledge_exit()
 
     async def send_input(
         self,
@@ -937,22 +1002,14 @@ class TerminalManager:
             execution_owner=execution_owner,
         )
 
-    async def resize(
-        self,
-        terminal_id: str,
-        owner: TerminalOwner,
-        *,
-        columns: int,
-        rows: int,
-    ) -> dict[str, Any]:
-        """Resize both the host PTY/ConPTY and rendered screen."""
-        return await self._attached(terminal_id, owner).resize(columns, rows)
+    async def kill(self, terminal_id: str, owner: TerminalOwner) -> TerminalInfo:
+        """Explicitly terminate one Terminal Session without an automatic exit wakeup.
 
-    async def kill(self, terminal_id: str, owner: TerminalOwner) -> dict[str, Any]:
-        """Explicitly terminate one Terminal Session without an automatic exit wakeup."""
+        A program that already ended stays as it ended.
+        """
         session = self._attached(terminal_id, owner)
         await session.terminate(suppress_attention=True)
-        return await self.snapshot(terminal_id, owner, include_name=False)
+        return session.info()
 
     def acknowledge_screen(
         self, terminal_id: str, owner: TerminalOwner, observation: TerminalObservation
@@ -1109,19 +1166,33 @@ class TerminalManager:
         if kind == "command":
             if len(live) + len(pending) >= TERMINAL_MAX_LIVE_COMMANDS:
                 raise TerminalCapacityError(
-                    f"Running command limit reached ({TERMINAL_MAX_LIVE_COMMANDS})"
+                    f"Running command limit reached ({TERMINAL_MAX_LIVE_COMMANDS})",
+                    scope="commands",
+                    limit=TERMINAL_MAX_LIVE_COMMANDS,
                 )
             return
+        # The live terminals the caller started: the ones it can stop.
+        mine = tuple(
+            session.info()
+            for session in sorted(live, key=lambda item: item.started_at)
+            if owner is not None and session.lifecycle_owner == owner
+        )
         if len(live) + len(pending) >= TERMINAL_MAX_LIVE_GLOBAL:
             raise TerminalCapacityError(
-                f"Live Terminal Session limit reached ({TERMINAL_MAX_LIVE_GLOBAL})"
+                f"Live Terminal Session limit reached ({TERMINAL_MAX_LIVE_GLOBAL})",
+                scope="global",
+                limit=TERMINAL_MAX_LIVE_GLOBAL,
+                terminals=mine,
             )
-        owned = sum(1 for session in live if owner is not None and session.lifecycle_owner == owner)
+        owned = len(mine)
         owned += sum(1 for pending_owner in pending if owner is not None and pending_owner == owner)
         if owner is not None and owned >= TERMINAL_MAX_LIVE_PER_SESSION:
             raise TerminalCapacityError(
                 "Live Terminal Session limit reached for this vBot Session "
-                f"({TERMINAL_MAX_LIVE_PER_SESSION})"
+                f"({TERMINAL_MAX_LIVE_PER_SESSION})",
+                scope="session",
+                limit=TERMINAL_MAX_LIVE_PER_SESSION,
+                terminals=mine,
             )
 
     def _open_raw_log(
@@ -1158,6 +1229,7 @@ __all__ = [
     "TERMINAL_MAX_ROWS",
     "TERMINAL_MIN_COLUMNS",
     "TERMINAL_MIN_ROWS",
+    "TERMINAL_START_WAIT_SECONDS",
     "TERMINAL_STATUS_DEFAULT_LINES",
     "TERMINAL_STATUS_MAX_LINES",
     "TERMINAL_TEMPORARY_CATEGORY",
@@ -1167,6 +1239,7 @@ __all__ = [
     "TerminalClosedError",
     "TerminalGroup",
     "TerminalInfo",
+    "TerminalIsCommandError",
     "TerminalLaunchError",
     "TerminalLaunchHistoryEntry",
     "TerminalManager",
@@ -1179,5 +1252,6 @@ __all__ = [
     "TerminalRenderHost",
     "TerminalStaleScreenError",
     "TerminalState",
+    "WaitEnded",
     "agent_group_id",
 ]

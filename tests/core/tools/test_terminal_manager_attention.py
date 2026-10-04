@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +19,7 @@ from core.tools.terminal_manager import (
     TerminalOwner,
     TerminalStaleScreenError,
 )
+from tests.core.tools.terminal_helpers import call, make_context
 from tests.core.tools.terminal_manager_helpers import (
     TEST_ACTIVITY_QUIET_SECONDS,
     AdapterFactory,
@@ -80,19 +80,17 @@ async def test_wait_exit_and_explicit_kill_have_distinct_attention(
 ) -> None:
     manager, factory = terminal_manager
     natural = await spawn(manager, tmp_path)
+    factory.adapters[0].emit("goodbye\r\n")
     factory.adapters[0].finish(7)
-    await eventually(lambda: terminal_info(manager, natural.terminal_id).state == "exited")
-    snapshot, timed_out = await manager.wait_for_attention(
-        natural.terminal_id, owner(), after_revision=0, timeout_ms=10
-    )
-    assert not timed_out
+    assert await manager.wait(natural.terminal_id, owner(), seconds=10) == "exited"
+    snapshot = await manager.snapshot(natural.terminal_id, owner())
     assert snapshot["attention"]["kind"] == "exited"
-    assert snapshot["exit_code"] == 7
+    assert (snapshot["exit_code"], snapshot["stopped"]) == (7, False)
+    assert snapshot["screen"] == "goodbye"
 
     killed = await spawn(manager, tmp_path)
     result = await manager.kill(killed.terminal_id, owner())
-    assert result["state"] == "exited"
-    assert result["attention"] is None
+    assert (result.state, result.stopped, result.attention) == ("exited", True, None)
 
 
 @pytest.mark.asyncio
@@ -109,10 +107,14 @@ async def test_attention_auto_delivers_and_manual_ack_cancels_exactly_once(
     assert args == ("agent-a", "session-a")
     assert kwargs["origin_run_id"] == "run-b"
     assert kwargs["project_id"] == "project-a"
-    assert isinstance(kwargs["body"], str)
-    assert started.terminal_id in kwargs["body"]
-    assert "```" in kwargs["body"]
-    assert "working..." in kwargs["body"]
+    terminal_id = started.terminal_id
+    assert kwargs["body"] == (
+        f"The output of terminal {terminal_id} (fake-tui) settled after activity; this does not "
+        "mean the program finished. Screen:\n```text\nworking...\nREADY>\n```\nTo type into "
+        f'it, call terminal with action "input", terminal_id "{terminal_id}", your text as text '
+        'and key "enter". When its output settles again, the new screen arrives as another '
+        "message."
+    )
     attention = terminal_info(manager, started.terminal_id).attention
     assert attention is not None
     assert attention.kind == "output_settled"
@@ -209,7 +211,7 @@ async def test_session_move_reroutes_pending_attention_to_new_owner(
 async def test_notification_revision_authorizes_only_the_delivered_screen(
     clocked_manager: Clocked, tmp_path: Path
 ) -> None:
-    """The screen revision a notification names guards input against a changed
+    """The screen revision of a delivered screen guards input against a changed
     screen. An operator resize and the program's redraw for the new size keep
     it valid; input and new program output invalidate it."""
     manager, factory, trigger, clock = clocked_manager
@@ -218,12 +220,8 @@ async def test_notification_revision_authorizes_only_the_delivered_screen(
     )
     terminal_id = delivered.terminal_id
     adapter = factory.adapters[0]
-    body = trigger.submissions[0][1]["body"]
-    match = re.search(r"^screen_revision: (\d+)$", body, re.MULTILINE)
-    assert match is not None
-    revision = int(match[1])
-    assert revision == delivered.screen_revision
-    assert "MENU>" in body
+    assert "MENU>" in trigger.submissions[0][1]["body"]
+    revision = delivered.screen_revision
 
     await manager.resize_for_operator(terminal_id, columns=100, rows=30)
     adapter.emit("\x1b[2J\x1b[HMENU> ")
@@ -261,6 +259,8 @@ async def test_closed_pty_write_marks_terminal_exited_and_delivers_attention(
     manager, factory, trigger = delivering_manager
     started = await spawn(manager, tmp_path)
     manager.attach(started.terminal_id, owner(), origin_run_id="attach-run")
+    factory.adapters[0].emit("last words\r\n")
+    await eventually(lambda: terminal_info(manager, started.terminal_id).screen_revision > 0)
     factory.adapters[0].write_error = EOFError("Pty is closed")
 
     with pytest.raises(TerminalClosedError):
@@ -272,6 +272,11 @@ async def test_closed_pty_write_marks_terminal_exited_and_delivers_attention(
     assert closed.attention is not None
     assert closed.attention.kind == "exited"
     assert trigger.submissions[0][1]["origin_run_id"] == "attach-run"
+    # The exit message carries the last screen lines.
+    assert trigger.submissions[0][1]["body"] == (
+        f"The program in terminal {started.terminal_id} (fake-tui) exited with code 0. Last "
+        "screen lines:\n```text\nlast words\n```"
+    )
 
 
 @pytest.mark.asyncio
@@ -361,13 +366,11 @@ async def test_resize_to_current_dimensions_is_a_no_op(
     manager, factory = terminal_manager
     started = await spawn(manager, tmp_path)
 
-    result = await manager.resize(started.terminal_id, owner(), columns=120, rows=32)
-    operator_result = await manager.resize_for_operator(started.terminal_id, columns=120, rows=32)
+    result = await manager.resize_for_operator(started.terminal_id, columns=120, rows=32)
 
     assert factory.adapters[0].resizes == []
     assert (result["columns"], result["rows"]) == (120, 32)
     assert result["screen_revision"] == started.screen_revision
-    assert operator_result["screen_revision"] == started.screen_revision
     unchanged = terminal_info(manager, started.terminal_id)
     assert unchanged.attention is None
     assert unchanged.state != "working"
@@ -442,13 +445,13 @@ async def test_activity_around_a_resize_wakes_agent(
     delivered = await _baseline(clocked_manager, tmp_path)
     terminal_id = delivered.terminal_id
     if order == "output-after-window":
-        await manager.resize(terminal_id, owner(), columns=100, rows=24)
+        await manager.resize_for_operator(terminal_id, columns=100, rows=24)
         await clock.advance(terminal_state.TERMINAL_REPAINT_WINDOW_SECONDS + 0.1)
     elif order == "input-then-resize":
         await _agent_input(manager, delivered, data="answer\r", origin_run_id="run-c")
-        await manager.resize(terminal_id, owner(), columns=100, rows=24)
+        await manager.resize_for_operator(terminal_id, columns=100, rows=24)
     else:
-        await manager.resize(terminal_id, owner(), columns=100, rows=24)
+        await manager.resize_for_operator(terminal_id, columns=100, rows=24)
         await _agent_input(manager, delivered, data="answer\r", origin_run_id="run-c")
 
     await _settle(clocked_manager, terminal_id, "\r\nTask completed.")
@@ -503,3 +506,31 @@ async def test_textless_agent_start_suppresses_the_startup_settle(
     attention = terminal_info(manager, terminal_id).attention
     assert attention is not None
     assert attention.kind == "output_settled"
+
+
+@pytest.mark.asyncio
+async def test_terminal_failure_delivers_the_error_and_the_last_screen(
+    delivering_manager: Delivering, tmp_path: Path
+) -> None:
+    manager, factory, trigger = delivering_manager
+    started = await spawn(manager, tmp_path)
+    adapter = factory.adapters[0]
+    adapter.emit("partial output\r\n")
+    await eventually(lambda: terminal_info(manager, started.terminal_id).screen_revision > 0)
+
+    def broken(_size: int) -> str:
+        raise RuntimeError("renderer broke")
+
+    # The read in progress returns the next output; the one after it fails.
+    adapter.read = broken  # type: ignore[method-assign]
+    adapter.emit("done")
+    await eventually(lambda: len(trigger.submissions) == 1)
+
+    assert trigger.submissions[0][1]["body"] == (
+        f"Terminal {started.terminal_id} (fake-tui) failed and its program no longer runs: "
+        "renderer broke. Last screen lines:\n```text\npartial output\ndone\n```"
+    )
+    status = await call(
+        manager, make_context(tmp_path), {"action": "status", "terminal_id": started.terminal_id}
+    )
+    assert status["data"]["state"] == "failed"

@@ -13,6 +13,7 @@ import pytest
 from core.providers._tool_result_text import render_tool_result_envelope
 from core.tools import terminal as terminal_module
 from core.tools._terminal_arguments import normalize_terminal_arguments, terminal_key_name
+from core.tools.model_names import BASH_TOOL_NAME, model_tool_name
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
 from core.tools.tools import JsonObject, ToolContext, tool_failure
 from tests.core.tools.terminal_helpers import call, details, make_context
@@ -82,8 +83,8 @@ async def test_start_ignores_placeholders_that_request_nothing(
     assert "note" not in result["data"]
     assert manager[1].calls[0][0] == ["fake-tui"]
     assert manager[1].calls[0][3:] == (24, 80)
-    # No start input is queued (it would keep the terminal starting), so nothing is typed.
-    assert result["data"]["state"] == "ready"
+    # No start input is queued, so nothing is typed.
+    assert result["data"]["state"] == "running"
     assert manager[1].adapters[0].writes == []
 
 
@@ -94,7 +95,6 @@ async def test_start_applies_a_requested_size(
     result = await terminal({"action": "start", "command": "fake-tui", "cols": 120, "rows": 32})
 
     assert result["ok"] is True
-    assert (result["data"]["columns"], result["data"]["rows"]) == (120, 32)
     assert manager[1].calls[0][3:] == (32, 120)
     too_narrow = await terminal({"action": "start", "command": "fake-tui", "columns": 30})
     assert "columns" in _error(too_narrow)["message"]
@@ -156,11 +156,9 @@ async def test_start_with_a_terminal_id_opens_a_new_terminal_or_refuses_an_exist
     assert fresh["data"]["note"] == f"start assigns the terminal_id: use {fresh_id}, not unused."
 
     existing = await terminal({"action": "start", "command": "fake-tui", "terminal_id": fresh_id})
-    message = _error(existing)["message"]
-    assert message.startswith("start opens a new terminal and was not run.")
-    assert (
-        json.dumps({"action": "input", "terminal_id": fresh_id, "text": "...", "key": "enter"})
-        in message
+    assert _error(existing)["message"] == (
+        f"terminal was not run: start opens a new terminal. To type into {fresh_id}, call input "
+        f'with terminal_id "{fresh_id}"; to start another terminal, omit terminal_id.'
     )
     assert len(manager[1].calls) == 1
 
@@ -207,14 +205,22 @@ async def test_input_types_text_keys_and_exact_data_against_the_current_screen(
     stale = await send(text="answer", expected_screen_revision=0)
     assert stale == tool_failure(
         "stale_screen",
-        "Terminal screen changed; inspect status before sending this input",
+        f"The screen of {terminal_id} changed after the revision you passed, so the input was "
+        "not sent. Read the current screen with terminal "
+        + json.dumps({"action": "status", "terminal_id": terminal_id})
+        + ", then send the input again if it still fits.",
         retryable=True,
     )
     typed = await send(text="answer", expected_screen_revision=revision())
-    assert (typed["data"]["key"], typed["data"]["delivery"]) == (
-        None,
-        "automatic_terminal_activity",
-    )
+    assert typed["data"] == {
+        "terminal_id": terminal_id,
+        "characters_sent": 6,
+        "state": "running",
+        "next": "Its screen arrives as a new message when its output settles; continue other "
+        "work or end your turn. To wait for it now instead, call terminal "
+        + json.dumps({"action": "wait", "terminal_id": terminal_id})
+        + ".",
+    }
     submitted = await send(text="submit", key="enter")
     assert submitted["data"]["key"] == "enter"
     await send(key="f12")
@@ -234,6 +240,16 @@ async def test_input_types_text_keys_and_exact_data_against_the_current_screen(
         [{"type": "text", "label": "input", "text": "\\x1b[200~more\\r\n\\x1b[201~"}],
     ]
     assert adapter.writes == ["answer", "submit", "\r", "\x1b[24~", raw]
+    # A Sub-Agent's Run sees the reply only by waiting for it.
+    nested = await terminal(
+        {"action": "input", "terminal_id": terminal_id, "text": "more"},
+        make_context(terminal.tmp_path, nesting_depth=1),
+    )
+    assert nested["data"]["next"] == (
+        "To see its reply, call terminal "
+        + json.dumps({"action": "wait", "terminal_id": terminal_id})
+        + "."
+    )
 
     multiline = "first\n  second"
     await render("\x1b[?2004h")
@@ -265,7 +281,7 @@ async def test_empty_optional_input_fields_are_ignored(
     assert result["ok"] is True
     assert result["data"]["characters_sent"] == len("".join(writes))
     # Input that sends nothing starts no activity to deliver.
-    assert ("delivery" in result["data"]) is bool(writes)
+    assert ("next" in result["data"]) is bool(writes)
     assert manager[1].adapters[0].writes == writes
 
 
@@ -313,8 +329,9 @@ async def test_input_accepts_key_spellings_and_explains_unknown_keys(
 
     unknown = await terminal({"action": "input", "terminal_id": terminal_id, "key": "space"})
     assert _error(unknown)["message"] == (
-        'key "space" is not a named key. Named keys: enter, escape, tab, shift_tab, backspace, '
-        "insert, delete, home, end, page_up, page_down, up, down, left, right, f1-f12, "
+        'terminal was not run: key "space" is not a named key. Named keys: enter, escape, tab, '
+        "shift_tab, backspace, insert, delete, home, end, page_up, page_down, up, down, left, "
+        "right, f1-f12, "
         "ctrl_a-ctrl_z. Type other characters as text, or send exact sequences as data."
     )
     assert adapter.writes == ["\x03"]
@@ -407,13 +424,19 @@ async def test_close_stops_the_terminal(
     result = await terminal(arguments)
 
     assert result["ok"] is True
-    assert result["data"]["state"] == "exited"
+    assert result["data"]["state"] == "stopped"
     assert manager[1].adapters[0].alive is False
     assert terminal.details(arguments, result)[-1] == {
         "type": "notice",
         "level": "info",
-        "text": "The terminal was stopped.",
+        "text": "The program was stopped.",
     }
+    # Killing again stops nothing and says so.
+    again = await terminal(arguments)
+    assert (again["data"]["state"], again["data"]["note"]) == (
+        "stopped",
+        "The program had already ended; nothing was stopped.",
+    )
 
 
 @pytest.mark.asyncio
@@ -430,8 +453,16 @@ async def test_fields_another_action_owns_fail_with_the_call_that_uses_them(
     )
     sized = await terminal({"action": "status", "terminal_id": terminal_id, "columns": 120})
     assert _error(sized)["message"] == (
-        "terminal was not run: status does not change the size; resize with "
-        + json.dumps({"action": "resize", "terminal_id": terminal_id, "columns": 120})
+        "terminal was not run: status does not change the size: the terminal's size follows "
+        "the user's view of it. Repeat the call without columns and rows."
+    )
+    resized = await terminal(
+        {"action": "resize", "terminal_id": terminal_id, "columns": 120, "rows": 40}
+    )
+    assert _error(resized)["message"] == (
+        "terminal was not run: the terminal's size follows the user's view of it, so no call "
+        "resizes it; nothing was changed. To read the screen at its current size, call "
+        + json.dumps({"action": "status", "terminal_id": terminal_id})
         + "."
     )
     commanded = await terminal({"action": "input", "terminal_id": terminal_id, "command": "ls -la"})
@@ -472,25 +503,31 @@ async def test_fields_that_only_shape_a_result_are_dropped_where_unused(
 async def test_wait_caps_a_long_timeout_and_says_so(
     terminal: Terminal, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(terminal_module, "TERMINAL_MAX_WAIT_MS", 50)
+    monkeypatch.setattr(terminal_module, "TERMINAL_WAIT_MAX_SECONDS", 0.01)
     terminal_id = await terminal.start()
-
-    result = await terminal({"action": "wait", "terminal_id": terminal_id, "timeout_ms": 90000})
-
-    assert result["ok"] is True
-    assert result["data"]["timed_out"] is True
-    assert result["data"]["note"] == (
-        "A wait lasts at most 50 ms; wait again if the program is still busy."
+    note = (
+        "A wait lasts at most 0.01 seconds, so this one ended after 0.01 at the latest; wait "
+        "again to keep following the program."
     )
+
+    waited = await terminal({"action": "wait", "terminal_id": terminal_id, "timeout": 90})
+    # An unadvertised wait after input is capped the same way.
+    typed = await terminal(
+        {"action": "input", "terminal_id": terminal_id, "text": "x", "yield_time_ms": 60000}
+    )
+
+    for result in (waited, typed):
+        assert (result["data"]["wait_ended"], result["data"]["note"]) == ("timeout", note)
 
 
 @pytest.mark.asyncio
 async def test_wait_reads_seconds_and_refuses_disagreeing_timeouts(terminal: Terminal) -> None:
     terminal_id = await terminal.start()
 
-    seconds = await terminal({"action": "wait", "terminal_id": terminal_id, "timeout": 0.05})
-    assert seconds["data"]["timed_out"] is True
-    assert "note" not in seconds["data"]
+    for timeout in ({"timeout": 0.05}, {"timeout_ms": 50}):
+        waited = await terminal({"action": "wait", "terminal_id": terminal_id, **timeout})
+        assert waited["data"]["wait_ended"] == "timeout"
+        assert "note" not in waited["data"]
 
     conflict = await terminal(
         {"action": "wait", "terminal_id": terminal_id, "timeout": 2, "timeout_ms": 50}
@@ -498,6 +535,74 @@ async def test_wait_reads_seconds_and_refuses_disagreeing_timeouts(terminal: Ter
     assert _error(conflict)["message"] == (
         "terminal was not run: timeout (2 s) and timeout_ms (50 ms) disagree; send one of them."
     )
+
+
+@pytest.mark.parametrize("ending", ["matched", "quiet", "exited"])
+@pytest.mark.asyncio
+async def test_wait_ends_at_the_exit_a_matching_line_or_quiet_output(
+    terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory], ending: str
+) -> None:
+    terminal_id = await terminal.start()
+    adapter = manager[1].adapters[0]
+    arguments: JsonObject = {"action": "wait", "terminal_id": terminal_id}
+    if ending == "matched":
+        # Output printed before the call counts, matched case-insensitively.
+        adapter.emit("Server LISTENING on :8080\r\n")
+        await eventually(lambda: terminal.manager.terminal(terminal_id, OWNER).screen_revision > 0)
+        arguments["pattern"] = r"listening on :\d+"
+    elif ending == "quiet":
+        await terminal(
+            {"action": "input", "terminal_id": terminal_id, "text": "go", "key": "enter"}
+        )
+        adapter.emit("done\r\n> ")
+    else:
+        adapter.emit("bye\r\n")
+        adapter.finish(4)
+
+    result = await terminal(arguments)
+
+    data = result["data"]
+    assert data["wait_ended"] == ending
+    if ending == "exited":
+        assert (data["state"], data["exit_code"], data["screen"]) == ("exited", 4, "bye")
+        assert terminal.details(arguments, result)[-1] == {
+            "type": "notice",
+            "level": "warning",
+            "text": "The program exited with code 4.",
+        }
+    else:
+        assert data["state"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_pattern_waits_through_quiet_output_and_reads_invalid_syntax_as_text(
+    terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory]
+) -> None:
+    terminal_id = await terminal.start()
+    adapter = manager[1].adapters[0]
+    await terminal({"action": "input", "terminal_id": terminal_id, "text": "make", "key": "enter"})
+    adapter.emit("[error] disk full\r\n")
+
+    # The output settles during the wait, which waits on for its pattern.
+    arguments: JsonObject = {
+        "action": "wait",
+        "terminal_id": terminal_id,
+        "pattern": "build finished",
+        "timeout": 0.3,
+    }
+    waited = await terminal(arguments)
+    assert waited["data"]["wait_ended"] == "timeout"
+    assert terminal.details(arguments, waited)[-1] == {
+        "type": "notice",
+        "level": "info",
+        "text": "The program was still running when the wait ended.",
+    }
+
+    literal = await terminal({"action": "wait", "terminal_id": terminal_id, "pattern": "[ERROR"})
+    assert literal["data"]["wait_ended"] == "matched"
+    note = literal["data"]["note"]
+    assert note.startswith("pattern is not a valid regular expression (")
+    assert note.endswith("), so it was matched as literal text.")
 
 
 @pytest.mark.asyncio
@@ -524,18 +629,16 @@ async def test_input_with_a_timeout_returns_the_settled_reply(
     await responder
 
     data = result["data"]
-    assert data["timed_out"] is False
+    assert data["wait_ended"] == "quiet"
     assert data["characters_sent"] == 11
     assert data["screen"].splitlines() == [">>> print(6*7)", "42", ">>>"]
-    assert "delivery" not in data
     assert list(data) == [
         "terminal_id",
-        "state",
         "characters_sent",
         "key",
-        "screen_revision",
+        "state",
         "screen",
-        "timed_out",
+        "wait_ended",
     ]
 
 
@@ -550,50 +653,43 @@ async def test_input_without_a_positive_timeout_returns_at_once(
     )
 
     assert "screen" not in result["data"]
-    assert result["data"]["delivery"] == "automatic_terminal_activity"
-
-
-@pytest.mark.asyncio
-async def test_input_wait_that_times_out_keeps_automatic_delivery(
-    terminal: Terminal, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Shorter than the fixture's quiet period, so the reply cannot settle in time.
-    monkeypatch.setattr(terminal_module, "TERMINAL_MAX_WAIT_MS", 1)
-    terminal_id = await terminal.start()
-
-    result = await terminal(
-        {"action": "input", "terminal_id": terminal_id, "text": "x", "yield_time_ms": 60000}
-    )
-
-    data = result["data"]
-    assert data["timed_out"] is True
-    assert data["delivery"] == "automatic_terminal_activity"
-    assert data["note"] == "A wait lasts at most 1 ms; wait again if the program is still busy."
+    assert result["data"]["state"] == "running"
+    assert "wait" in result["data"]["next"]
 
 
 @pytest.mark.asyncio
 async def test_unknown_terminal_id_lists_attached_terminals(
     terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
-    missing = await terminal({"action": "status", "terminal_id": "term_missing"})
-    assert _error(missing)["message"] == (
-        "No terminal has the id term_missing. You have no terminals; start one."
+    removed = (
+        "No terminal with the id term_missing is open for this Session; a terminal is removed "
+        "30 minutes after its program ends."
     )
+    missing = await terminal({"action": "status", "terminal_id": "term_missing"})
+    assert _error(missing)["message"] == f"{removed} No terminal is open."
 
     first = await terminal.start(name="build")
     second = await terminal.start()
     await terminal({"action": "kill", "terminal_id": first})
-    listed = await terminal({"action": "wait", "terminal_id": "term_missing", "timeout_ms": 0})
+    listed = await terminal({"action": "wait", "terminal_id": "term_missing", "timeout": 0})
     assert _error(listed)["message"] == (
-        "No terminal has the id term_missing. Terminals attached to this Session: "
-        f"{second} (ready: fake-tui); {first} (exited: build)."
+        f"{removed} Terminals attached to this Session: {second} (running: fake-tui); {first} "
+        "(stopped: build). Repeat the call with one of them as terminal_id."
+    )
+
+    # Where the shell is offered, a command's output is one shell call away.
+    shell = model_tool_name(BASH_TOOL_NAME)
+    with_shell = make_context(tmp_path, offered_tools={"terminal", BASH_TOOL_NAME})
+    rerun = await terminal({"action": "status", "terminal_id": "term_missing"}, with_shell)
+    assert _error(rerun)["message"].startswith(
+        f"{removed} To get a command's output again, run the command again with {shell}. "
     )
 
     other = make_context(tmp_path, session_id="session-b")
     unattached = await terminal({"action": "status", "terminal_id": "term_missing"}, other)
     assert _error(unattached)["message"] == (
-        'No terminal has the id term_missing. No terminal is attached to this Session; {"action": '
-        '"list"} shows every terminal, and attach makes one usable here.'
+        f"{removed} No terminal is attached to this Session; to see every terminal, call terminal "
+        '{"action": "list"}.'
     )
 
 
@@ -604,32 +700,8 @@ async def test_missing_terminal_id_names_the_attached_terminals(terminal: Termin
     result = await terminal({"action": "status", "name": "build"})
 
     assert _error(result)["message"] == (
-        f"status needs terminal_id. Terminals attached to this Session: {terminal_id} "
-        "(ready: fake-tui)."
-    )
-
-
-@pytest.mark.asyncio
-async def test_unattached_terminal_names_the_attach_call(
-    terminal: Terminal, tmp_path: Path
-) -> None:
-    terminal_id = await terminal.start()
-    await terminal({"action": "detach", "terminal_id": terminal_id})
-
-    detached = await terminal({"action": "status", "terminal_id": terminal_id})
-    assert _error(detached)["code"] == "terminal_not_owned"
-    assert _error(detached)["message"] == (
-        f"{terminal_id} is not attached to this Session. Attach it first with "
-        + json.dumps({"action": "attach", "terminal_id": terminal_id})
-        + "."
-    )
-
-    other = make_context(tmp_path, session_id="session-b")
-    await terminal({"action": "attach", "terminal_id": terminal_id}, other)
-    taken = await terminal({"action": "status", "terminal_id": terminal_id})
-    assert _error(taken)["message"] == (
-        f"{terminal_id} is attached to another Session, so this Session cannot use it until "
-        "that Session detaches it."
+        f"terminal was not run: status needs terminal_id. The terminal attached to this Session "
+        f'is {terminal_id} (running: fake-tui); repeat the call with terminal_id "{terminal_id}".'
     )
 
 
@@ -638,32 +710,20 @@ async def test_follow_up_results_show_the_screen_without_repeating_launch_facts(
     terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory]
 ) -> None:
     started = await terminal({"action": "start", "command": "fake-tui", "args": ["-q"]})
-    assert list(started["data"]) == [
-        "terminal_id",
-        "state",
-        "command",
-        "arguments",
-        "workdir",
-        "columns",
-        "rows",
-        "screen_revision",
-        "screen",
-        "delivery",
-    ]
+    assert list(started["data"]) == ["terminal_id", "state", "screen"]
     terminal_id = started["data"]["terminal_id"]
     manager[1].adapters[0].emit("".join(f"line-{index}\r\n" for index in range(30)) + "ready> ")
     await eventually(lambda: terminal.manager.terminal(terminal_id, OWNER).screen_revision > 0)
 
-    wait: JsonObject = {"action": "wait", "terminal_id": terminal_id, "timeout_ms": 2000}
+    wait: JsonObject = {"action": "wait", "terminal_id": terminal_id, "pattern": "ready>"}
     waited = await terminal(wait)
     assert list(waited["data"]) == [
         "terminal_id",
         "state",
-        "screen_revision",
         "history",
         "screen",
         "scrollback",
-        "timed_out",
+        "wait_ended",
     ]
     # The user sees the lines above the screen and the screen, read from the result.
     assert terminal.details(wait, waited) == [
@@ -677,5 +737,7 @@ async def test_follow_up_results_show_the_screen_without_repeating_launch_facts(
     assert "attention" not in text
 
     status = await terminal({"action": "status", "terminal_id": terminal_id})
-    assert {"command", "arguments", "workdir", "columns", "rows"} <= set(status["data"])
-    assert not {"attention", "attention_revision", "started_at"} & set(status["data"])
+    assert {"program", "workdir"} <= set(status["data"])
+    assert status["data"]["program"] == "fake-tui -q"
+    hidden = {"attention", "attention_revision", "screen_revision", "started_at", "columns"}
+    assert not hidden & set(status["data"])
