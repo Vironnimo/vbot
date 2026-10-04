@@ -112,23 +112,26 @@ def test_repeated_or_overlapping_occurrences_are_ambiguous_not_first_match(tmp_p
     assert path.read_bytes() == before
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "hunk",
+    "arguments",
     [
         # Complete read gutters, spaced and compact.
-        "@@\n 1| alpha\n-2| old\n+3| new\n 3| omega",
-        "@@\n 1|alpha\n-2|old\n+3|new\n 3|omega",
+        {"patch": update("@@\n 1| alpha\n-2| old\n+3| new\n 3| omega")},
+        {"patch": update("@@\n 1|alpha\n-2|old\n+3|new\n 3|omega")},
         # Single, mixed and stale gutters, located by the unique current line.
-        "@@\n 1| alpha\n-7| old\n+new\n 9| omega",
-        "@@\n alpha\n-2| old\n+new\n omega",
-        "@@\n-2| old\n+2| new",
-        "@@\n-2|old\n+new",
+        {"patch": update("@@\n 1| alpha\n-7| old\n+new\n 9| omega")},
+        {"patch": update("@@\n alpha\n-2| old\n+new\n omega")},
+        {"patch": update("@@\n-2| old\n+2| new")},
+        {"patch": update("@@\n-2|old\n+new")},
+        # old_string copied from read output covers whole lines.
+        {"path": "file.txt", "old_string": "1| alpha\n2| old", "new_string": "1| alpha\n2| new"},
     ],
 )
-def test_read_gutters_are_removed_without_corrupting_added_lines(tmp_path, hunk):
+async def test_read_gutters_are_removed_without_corrupting_added_lines(tmp_path, arguments):
     path = tmp_path / "file.txt"
     path.write_bytes(b"alpha\nold\nomega\n")
-    result = apply(tmp_path, update(hunk))
+    result = await call(tmp_path, arguments)
     assert result["ok"], result
     assert path.read_bytes() == b"alpha\nnew\nomega\n"
     assert GUTTER_NOTE in text(result)
@@ -194,29 +197,6 @@ async def test_actual_read_output_can_be_used_directly_in_a_patch(tmp_path):
 
     assert result["ok"], result
     assert path.read_bytes() == b"\xef\xbb\xbf  anchor\r\n    new\r\n\r\n  tail\r\n"
-
-
-@pytest.mark.parametrize(
-    ("before", "body", "expected"),
-    [
-        ("alpha\n\told\nomega\n", "@@\n alpha\n-\\told\n+\\tnew\n omega", "alpha\n\tnew\nomega\n"),
-        ("\told\n", '@@\n-\\told\n+\\tvalue = "\\n"', '\tvalue = "\\n"\n'),
-        ("\told\n", '@@\n-\\told\n+\\tvalue = "\\t"', '\tvalue = "\\t"\n'),
-        ("alpha\nold\n", '@@\n-alpha\\nold\n+value = "\\n"', 'value = "\\n"\n'),
-        ('say("old")\n', '@@\n-say(\\"old\\")\n+say(\\"new\\")', 'say("new")\n'),
-        ("say('old')\n", "@@\n-say(\\'old\\')\n+say(\\'new\\')", "say('new')\n"),
-    ],
-)
-def test_escaped_patch_text_is_recovered_only_with_matching_evidence(
-    tmp_path, before, body, expected
-):
-    path = tmp_path / "file.txt"
-    path.write_bytes(before.encode())
-    result = apply(tmp_path, update(body))
-    assert result["ok"], result
-    # Escapes in the replacement stay literal where the file's text holds them.
-    assert path.read_bytes() == expected.encode()
-    assert "Note: Normalized escaped patch text" in text(result)
 
 
 @pytest.mark.parametrize(
@@ -489,26 +469,23 @@ def test_normalized_changed_lines_preserve_only_unchanged_typography(
 
 
 @pytest.mark.parametrize(
-    ("marker", "code"),
-    [("*** End of File", "text_not_found"), ("\\ No newline at end of file", "invalid_patch")],
+    ("body", "code"),
+    [
+        ("@@ section\n+inserted\n*** End of File", "text_not_found"),
+        ("@@ section\n+inserted\n\\ No newline at end of file", "invalid_patch"),
+        ("@@\n-section\n+new\n*** End of File", "text_not_found"),
+    ],
 )
-def test_hinted_additions_cannot_ignore_end_of_file_anchors(tmp_path, marker, code):
+def test_end_of_file_anchors_are_never_ignored(tmp_path, body, code):
     path = tmp_path / "file.txt"
     path.write_bytes(b"section\ntail\n")
-    result = apply(tmp_path, update(f"@@ section\n+inserted\n{marker}"))
+    result = apply(tmp_path, update(body))
     assert result["error"]["code"] == code
+    if code == "text_not_found":
+        assert text(result).startswith(
+            "file.txt: the file does not end with the lines before *** End of File."
+        )
     assert path.read_bytes() == b"section\ntail\n"
-
-
-def test_end_of_file_marker_on_lines_elsewhere_is_ignored_and_named(tmp_path):
-    path = tmp_path / "file.txt"
-    path.write_bytes(b"first\nold\ntail\n")
-
-    result = apply(tmp_path, update("@@\n first\n-old\n+new\n*** End of File"))
-
-    assert result["ok"], result
-    assert path.read_bytes() == b"first\nnew\ntail\n"
-    assert "The lines before *** End of File are not at the end of the file" in text(result)
 
 
 def test_hint_may_be_repeated_in_context_and_insert_retry_is_anchored(tmp_path):
@@ -522,28 +499,6 @@ def test_hint_may_be_repeated_in_context_and_insert_retry_is_anchored(tmp_path):
     assert retried["data"]["status"] == "unchanged"
     assert "file.txt already contains this change" in text(retried)
     assert path.read_bytes() == before == b"section\ninserted\nnew\ntail\n"
-
-
-@pytest.mark.parametrize(
-    ("added", "noted"),
-    [
-        # Session shape: a rewritten table row was inserted below the row it rewrote.
-        ("timeout_seconds = 60", True),
-        ("retry_delay = 5", False),
-    ],
-)
-def test_insertion_that_resembles_its_at_at_line_is_named(tmp_path, added, noted):
-    path = tmp_path / "file.txt"
-    path.write_bytes(b"timeout_seconds = 30\nretries = 2\n")
-    result = apply(tmp_path, update(f"@@ timeout_seconds = 30\n+{added}"))
-    assert result["data"]["status"] == "applied", result
-    assert path.read_bytes() == f"timeout_seconds = 30\n{added}\nretries = 2\n".encode()
-    note = (
-        "Note: The + lines were inserted below the @@ line 'timeout_seconds = 30', which stays "
-        "in the file, and the first of them resembles it. If that line was meant to be "
-        "replaced, remove it with a - line."
-    )
-    assert text(result).endswith(note) is noted
 
 
 @pytest.mark.parametrize("anchor", [" second", " second\n   details"])
@@ -611,34 +566,37 @@ def test_repeated_context_line_places_lines_that_occur_once_after_it(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("body", "note"),
+    ("body", "code", "message"),
     [
         # Session shape: the @@ line paraphrases a line the file lacks.
         (
             "@@ missing\n-value=1\n+value=2",
-            "The @@ line 'missing' was not found, but the lines to replace occur once in the "
-            "file; they were changed there, at line 2.",
+            "context_not_found",
+            'file.txt: the @@ line "missing" was not found.',
         ),
         # Session shape: the @@ line names a line below the lines to replace.
         (
             "@@ second\n-value=1\n+value=2",
-            "The lines to replace are not after the @@ line 'second', but they occur once in "
-            "the file; they were changed there, at line 2.",
+            "text_not_found",
+            'file.txt: the lines to replace are not after the @@ line "second"; they are at '
+            "line 2, above it. After @@, put a line above them, such as the first line of the "
+            "enclosing function, or leave @@ empty.\nThe closest text in the file, line 2:\n"
+            "2| value=1\nNo file was changed.",
         ),
         (
             "@@\n first\n secnd\n@@\n-value=1\n+value=2",
-            "The lines of the @@ block above the lines to replace were not found together, but "
-            "the lines to replace occur once in the file; they were changed there, at line 2.",
+            "context_not_found",
+            "file.txt: the lines of the @@ block above the lines to replace were not found",
         ),
     ],
 )
-def test_lines_that_occur_once_are_changed_where_the_at_at_line_misses_them(tmp_path, body, note):
+def test_at_at_lines_that_do_not_place_the_lines_refuse_the_hunk(tmp_path, body, code, message):
     path = tmp_path / "file.txt"
     path.write_bytes(b"first\nvalue=1\nsecond\nend\n")
     result = apply(tmp_path, update(body))
-    assert result["data"]["status"] == "applied", result
-    assert path.read_bytes() == b"first\nvalue=2\nsecond\nend\n"
-    assert text(result).endswith(f"Note: {note}")
+    assert result["error"]["code"] == code
+    assert text(result).startswith(message)
+    assert path.read_bytes() == b"first\nvalue=1\nsecond\nend\n"
 
 
 @pytest.mark.parametrize(
@@ -698,30 +656,6 @@ def test_previous_change_orders_only_later_occurrences_of_the_same_update(tmp_pa
     assert path.read_bytes().count(b"x=0") == 2
 
 
-@pytest.mark.parametrize(
-    ("before", "after"),
-    [
-        # Session shape: as many identical hunks as the file holds their lines.
-        (b"x=0\nmid\nx=0\n", b"x=1\nmid\nx=2\n"),
-        # With more occurrences than hunks, which ones are meant stays open.
-        (b"x=0\nmid\nx=0\nx=0\n", None),
-    ],
-)
-def test_identical_hunks_change_as_many_occurrences_in_order(tmp_path, before, after):
-    path = tmp_path / "file.txt"
-    path.write_bytes(before)
-    result = apply(tmp_path, update("@@\n-x=0\n+x=1\n@@\n-x=0\n+x=2"))
-    if after is None:
-        assert "the lines to replace occur 3 times (lines 1, 3, 4)" in text(result)
-        assert path.read_bytes() == before
-    else:
-        assert path.read_bytes() == after
-        assert text(result).endswith(
-            "Note: The lines to replace occur 2 times, as many times as hunks of this patch "
-            "name them; the hunks change them in order, so the first, at line 1, was changed."
-        )
-
-
 def test_context_anchor_does_not_leak_to_next_file_or_edit(tmp_path):
     (tmp_path / "file.txt").write_bytes(b"before=1\nsection\nafter=1\n")
     (tmp_path / "other.txt").write_bytes(b"old\n")
@@ -740,31 +674,15 @@ def test_context_anchor_does_not_leak_to_next_file_or_edit(tmp_path):
 LONG_LINE = "The quick brown fox jumps over the lazy dog, and then keeps running home."
 
 
-def test_one_removed_line_inside_a_longer_line_is_replaced_within_it(tmp_path):
-    path = tmp_path / "file.txt"
-    path.write_bytes(f"# Title\n{LONG_LINE}\n".encode())
-
-    result = apply(tmp_path, update("@@\n-quick brown fox\n+quick red fox"))
-
-    assert result["ok"], result
-    assert path.read_bytes() == f"# Title\n{LONG_LINE.replace('brown', 'red')}\n".encode()
-    assert "Note: The - line is part of line 2; only that part of the line was replaced." in (
-        text(result)
-    )
-
-
 @pytest.mark.parametrize(
     ("before", "body"),
     [
-        # Unchanged lines around the part keep whole-line semantics.
+        (f"# Title\n{LONG_LINE}\n", "@@\n-quick brown fox\n+quick red fox"),
         (f"# Title\n{LONG_LINE}\n", "@@\n # Title\n-quick brown fox\n+quick red fox"),
-        # Removing a part of a line could also mean removing the whole line.
         (f"# Title\n{LONG_LINE}\n", "@@\n-quick brown fox"),
-        # "aa" occurs twice in "aaa": the place to change is unclear.
-        ("aaa\n", "@@\n-aa\n+b"),
     ],
 )
-def test_part_of_a_line_is_not_replaced_when_the_place_or_meaning_is_open(tmp_path, before, body):
+def test_patch_lines_match_whole_lines_only(tmp_path, before, body):
     path = tmp_path / "file.txt"
     path.write_bytes(before.encode())
 
@@ -772,196 +690,6 @@ def test_part_of_a_line_is_not_replaced_when_the_place_or_meaning_is_open(tmp_pa
 
     assert result["error"]["code"] == "text_not_found"
     assert path.read_bytes() == before.encode()
-
-
-@pytest.mark.parametrize(
-    ("body", "added", "example"),
-    [
-        # Session shape: the + on a statement's continuation lines was left off.
-        (
-            "@@ def f(rows):\n         check(row)\n+        if row in seen:\n"
-            '+            raise ValueError(\n                f"duplicate {row}"\n'
-            "+            )\n\n+        seen.add(row)\n     return rows",
-            b"        if row in seen:\n            raise ValueError(\n"
-            b'                f"duplicate {row}"\n            )\n\n        seen.add(row)\n',
-            'f"duplicate {row}"',
-        ),
-        # Session shape: statements written with the space prefix of unchanged
-        # lines, one space deeper than the + lines around them.
-        (
-            "@@\n         check(row)\n+        if row in seen:\n+            seen.discard(row)\n"
-            "             log(row)\n             count(row)\n+        seen.add(row)\n"
-            "     return rows",
-            b"        if row in seen:\n            seen.discard(row)\n            log(row)\n"
-            b"            count(row)\n        seen.add(row)\n",
-            "log(row)",
-        ),
-        # Session shape: one line written with the space prefix, the next without it.
-        (
-            "@@\n         check(row)\n+        if row in seen:\n             seen.discard(row)\n"
-            "            log(row)\n+        seen.add(row)\n     return rows",
-            b"        if row in seen:\n            seen.discard(row)\n            log(row)\n"
-            b"        seen.add(row)\n",
-            "seen.discard(row)",
-        ),
-        # Session shapes: continuation lines aligned to an odd column after an open
-        # bracket, or to the start of the last item inside it, stay aligned.
-        (
-            "@@\n         check(row)\n+        res = call(ky,\n                   alpha,\n"
-            "                   beta)\n+        done(res)\n     return rows",
-            b"        res = call(ky,\n                   alpha,\n                   beta)\n"
-            b"        done(res)\n",
-            "alpha,",
-        ),
-        (
-            "@@\n         check(row)\n+        res = call(ky, alpha +\n"
-            "                       beta +\n                       gamma)\n"
-            "+        done(res)\n     return rows",
-            b"        res = call(ky, alpha +\n                       beta +\n"
-            b"                       gamma)\n        done(res)\n",
-            "beta +",
-        ),
-    ],
-)
-def test_unprefixed_lines_between_additions_are_added_as_written(tmp_path, body, added, example):
-    path = tmp_path / "file.py"
-    path.write_bytes(b"def f(rows):\n    for row in rows:\n        check(row)\n    return rows\n")
-    result = apply(tmp_path, update(body, "file.py"))
-    assert result["ok"], text(result)
-    assert path.read_bytes() == (
-        b"def f(rows):\n    for row in rows:\n        check(row)\n" + added + b"    return rows\n"
-    )
-    assert text(result).endswith(
-        "Note: 2 patch lines next to + lines have no + prefix, but the file does not have "
-        f"them there, so they were added as + lines; for example {example!r}. Nothing more is "
-        "needed for those lines; in later patches, start every added line with +."
-    )
-
-
-@pytest.mark.parametrize(
-    ("before", "body", "after", "note"),
-    [
-        (
-            b"start\nkeep\nend\n",
-            "@@\n start\n+one\nkeep\n+two\n    three\n+four\n end",
-            b"start\none\nkeep\ntwo\n    three\nfour\nend\n",
-            "The patch line 'three' next to + lines has no + prefix, but the file does not "
-            "have it there, so it was added as a + line. Nothing more is needed for that line;",
-        ),
-        # Session shape: the line after a replaced one stays unchanged while
-        # blank lines without + follow in the added block.
-        (
-            b'__all__ = [\n    "a",\n]\n',
-            '@@\n __all__ = [\n-    "a",\n+    "a", "b",\n ]\n+\n+\n+def b():\n+    x = 1\n\n'
-            "+    y = 2\n\n+    return x",
-            b'__all__ = [\n    "a", "b",\n]\n\n\n'
-            b"def b():\n    x = 1\n\n    y = 2\n\n    return x\n",
-            "2 blank patch lines next to + lines have no + prefix, but the file does not "
-            "have them there, so they were added as + lines. Nothing more is needed for those "
-            "lines;",
-        ),
-        # Session shape: a blank line without + after the last unchanged line is
-        # added too, so the file's own blank line after that line stays.
-        (
-            b"def f():\n    start()\n\ndef g():\n    pass\n",
-            "@@\n     start()\n+    if x:\n        new()\n+    done()\n\n+    more()",
-            b"def f():\n    start()\n    if x:\n        new()\n    done()\n\n    more()\n\n"
-            b"def g():\n    pass\n",
-            "2 patch lines next to + lines have no + prefix, but the file does not have them "
-            "there, so they were added as + lines; for example 'new()'. Nothing more is needed "
-            "for those lines;",
-        ),
-        # After the last unchanged line, unprefixed lines new there are added too.
-        (
-            b"def f(seed):\n    produced = gen(seed)\n    return produced\n",
-            "@@\n     produced = gen(seed)\n+    if not produced:\n        raise ValueError(\n"
-            "            seed)\n+    log(seed)",
-            b"def f(seed):\n    produced = gen(seed)\n    if not produced:\n"
-            b"        raise ValueError(\n            seed)\n    log(seed)\n    return produced\n",
-            None,
-        ),
-        # Session shape: after the last + line, a continuation line without +
-        # before an unchanged line the file has is added; that line stays.
-        (
-            b"def f(seed):\n    produced = gen(seed)\n    return produced\n",
-            "@@\n-    produced = gen(seed)\n+    produced = gen(seed,\n"
-            "                   strict=True)\n     return produced",
-            b"def f(seed):\n    produced = gen(seed,\n                   strict=True)\n"
-            b"    return produced\n",
-            "The patch line 'strict=True)' next to + lines has no + prefix, but the file does "
-            "not have it there, so it was added as a + line. Nothing more is needed for that "
-            "line;",
-        ),
-        # The hunk's last lines, written without +, are added when the file lacks them.
-        (
-            b"start\nkeep this line\nend\n",
-            "@@\n start\n+one\n missing",
-            b"start\none\nmissing\nkeep this line\nend\n",
-            "The patch line 'missing' next to + lines has no + prefix, but the file does not "
-            "have it there, so it was added as a + line. Nothing more is needed for that line;",
-        ),
-    ],
-)
-def test_unprefixed_lines_the_file_lacks_there_are_added(tmp_path, before, body, after, note):
-    path = tmp_path / "file.py"
-    path.write_bytes(before)
-    result = apply(tmp_path, update(body, "file.py"))
-    assert result["ok"], text(result)
-    assert path.read_bytes() == after
-    if note is not None:
-        assert f"\nNote: {note} in later patches, start every added line with +." in text(result)
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        # A misspelled copy of the line the file has there is not a new line.
-        "@@\n start\n+one\n keep this lien\n+two\n end",
-        # Without an unchanged line, nothing places the lines.
-        "@@\n+one\n missing\n+two",
-        # Lines before a block's first + line are never read as added.
-        "@@\n missing\n+one\n start",
-        # Session shape: a blank line, then a less indented line the file lacks,
-        # is the Model's view of the text below its block, such as a heading.
-        "@@\n start\n+    one\n+    two\n \n missing section",
-    ],
-)
-def test_unprefixed_lines_are_added_only_where_unchanged_lines_place_them(tmp_path, body):
-    path = tmp_path / "file.txt"
-    path.write_bytes(b"start\nkeep this line\nend\n")
-    result = apply(tmp_path, update(body))
-    assert "added as a" not in text(result)
-    assert b"lien" not in path.read_bytes() and b"missing" not in path.read_bytes()
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        # Session shape: after the last unchanged line the file holds, unchanged
-        # lines differ from the file in one line. Added, they would repeat the
-        # loop body one space deeper.
-        "@@\n     total = 0\n+    unordered = []\n     for seed in SEEDS:\n"
-        "         produced = gen(seed)\n+        unordered.extend(produced)\n"
-        "         for entry in produced:\n             skipped = False\n"
-        "             record(entry)\n+    assert unordered",
-        # The same before the first unchanged line.
-        "@@\n+import os\n import sys\n SEED = 4\n+import json\n \n \n def check():",
-    ],
-)
-def test_unprefixed_lines_are_not_added_where_the_file_has_them(tmp_path, body):
-    path = tmp_path / "file.py"
-    before = (
-        b"import sys\nimport time\n\n\ndef check():\n    total = 0\n    for seed in SEEDS:\n"
-        b"        produced = gen(seed)\n        for entry in produced:\n"
-        b"            total += entry.size\n            record(entry)\n    return total\n"
-    )
-    path.write_bytes(before)
-    result = apply(tmp_path, update(body, "file.py"))
-    assert result["error"]["code"] == "text_not_found"
-    assert "That patch line has no + prefix, so it must already be in the file there" in (
-        text(result)
-    )
-    assert path.read_bytes() == before
 
 
 @pytest.mark.parametrize(

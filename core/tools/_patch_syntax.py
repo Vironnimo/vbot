@@ -3,7 +3,7 @@
 ``_parse`` reads the advertised V4A form, tolerating its common framing
 mistakes, into ordered operations. Other patch dialects (unified diffs,
 SEARCH/REPLACE blocks) fail as text before a file header. Parsing reads no
-files; matching happens in ``_patch_hunks.py``.
+files; matching happens in ``_edit_engine.py``.
 """
 
 from __future__ import annotations
@@ -111,13 +111,14 @@ _MESSAGES = {
         "places ({lines}). Copy the current text of the one to change into old_string, with "
         "enough surrounding text to tell it apart."
     ),
-    "replacement_count": (
-        "{where}: old_string occurs {occurrences} times ({lines}), but expected_replacements "
-        "is {expected}. Nothing was replaced."
-    ),
     "text_not_found": "{where}: the lines to replace were not found.",
     "old_text_not_found": "{where}: old_string was not found.",
     "eof_not_found": "{where}: the file does not end with the lines before *** End of File.",
+    "not_after_hint": (
+        '{where}: the lines to replace are not after the @@ line "{hint}"; they are at '
+        "{lines}, above it. After @@, put a line above them, such as the first line of the "
+        "enclosing function, or leave @@ empty."
+    ),
     "line_numbered_content": (
         "{where}: the lines carry line-number prefixes (such as 12| ) from read output "
         "that do not fit the file. Send the file's lines without the prefixes."
@@ -135,7 +136,6 @@ _MESSAGES = {
         '{where}: the @@ line "{hint}" occurs {occurrences} times ({lines}). Put a line '
         "after @@ that occurs once, or add a second @@ line below it to narrow the place."
     ),
-    "insert_past_end": "{where}: insert_line {line} is past the end of the file ({count} lines).",
     "file_exists": (
         "{where}: the text to replace is empty, which creates a file, but the file already "
         "has content. Send the current text to replace, or Add File to replace the whole file."
@@ -190,12 +190,11 @@ class _PatchError(Exception):
 
 @dataclass
 class _Replacement:
-    """Replace exact text (``old_string``) wherever it occurs within lines."""
+    """Replace text (``old_string``) where it occurs, also within lines."""
 
     old: str
     new: str
     replace_all: bool = False
-    expected: int | None = None
 
 
 @dataclass
@@ -206,16 +205,7 @@ class _Hunk:
     no_newline: bool = False
     precise_only: bool = False
     replacement: _Replacement | None = None
-    insert_line: int | None = None
     label: str = ""
-    # V4A Update lines as the patch wrote them, one per ``lines`` entry of the
-    # parsed hunk: an unprefixed line and a space-prefixed one parse alike, but
-    # read as added text they differ by that space. Empty for other forms.
-    written: list[str] = field(default_factory=list, compare=False, repr=False)
-    # How many hunks of the Update, this one included, name the same lines to
-    # change without an @@ line. As in Codex, where each hunk searches after the
-    # previous one, that many occurrences are changed in order.
-    twins: int = field(default=1, compare=False, repr=False)
 
     def changes_text(self) -> bool:
         if self.replacement is not None:
@@ -226,8 +216,6 @@ class _Hunk:
         """Whether applying the hunk leaves the text it locates as it is."""
         if self.replacement is not None:
             return self.replacement.old == self.replacement.new
-        if self.insert_line is not None:
-            return not self.lines
         old = [text for prefix, text in self.lines if prefix in " -"]
         return old == [text for prefix, text in self.lines if prefix in " +"]
 
@@ -328,22 +316,7 @@ def _parse(patch: str, default_path: str | None = None) -> list[_Operation]:
                     other=operation.path,
                 )
     _check_operations(operations, len(lines))
-    for operation in operations:
-        _count_twins(operation.hunks)
     return operations
-
-
-def _count_twins(hunks: list[_Hunk]) -> None:
-    """Count, for each hunk without an @@ line, the hunks that name the same lines."""
-    keys = [
-        tuple(text for prefix, text in hunk.lines if prefix in " -")
-        if not hunk.hints and hunk.replacement is None and hunk.insert_line is None
-        else ()
-        for hunk in hunks
-    ]
-    for hunk, key in zip(hunks, keys, strict=True):
-        if key:
-            hunk.twins = keys.count(key)
 
 
 def _check_operations(operations: list[_Operation], line_count: int) -> None:
@@ -469,7 +442,6 @@ def _parse_v4a(lines: list[str], default_path: str | None) -> list[_Operation]:
                 if anchor.strip():
                     hunk.hints.append(anchor)
                 hunk.lines = []
-                hunk.written = []
             if hunk is None or hunk.lines:
                 hunk = _Hunk()
                 current.hunks.append(hunk)
@@ -524,6 +496,5 @@ def _parse_v4a(lines: list[str], default_path: str | None) -> list[_Operation]:
             prefix, text = "+", line[1:] if line.startswith("+") else line
         else:
             prefix, text = (line[0], line[1:]) if line and line[0] in " +-" else (" ", line)
-            hunk.written.append(line)
         hunk.lines.append((prefix, text))
     return operations

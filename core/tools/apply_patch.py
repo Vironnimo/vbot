@@ -1,7 +1,7 @@
 """apply_patch: plan requested file changes against current content and apply them.
 
 ``_patch_requests.py`` turns a call in any accepted shape into ordered
-operations, ``_patch_hunks.py`` applies one hunk to current text, and
+operations, ``_edit_engine.py`` applies one file's changes to its text, and
 ``_patch_report.py`` renders the result. This module owns the plan, the
 coordinated filesystem mutation, and the Tool registration.
 """
@@ -14,6 +14,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from core.sessions import SessionAddress
+from core.tools._edit_engine import apply_hunks, clean_additions, file_excerpt, line_ending
 from core.tools._patch_entries import (
     _ABSENT,
     _entry_path,
@@ -24,7 +25,6 @@ from core.tools._patch_entries import (
     _Snapshot,
     _snapshot,
 )
-from core.tools._patch_hunks import _apply_hunks, _clean_additions, _ending, _excerpt
 from core.tools._patch_report import _excerpts, _FileReport, file_report, patch_result
 from core.tools._patch_requests import (
     APPLY_PATCH_TOOL_NAME,
@@ -162,7 +162,7 @@ def _plan(
 ) -> tuple[dict[Path, _Snapshot], dict[Path, list[str]]]:
     """Plan the operations' effects; each Update's change end goes into ``change_ends``.
 
-    See ``_apply_hunks`` for what a change end orders.
+    See ``apply_hunks`` for what a change end orders.
     """
     pending = before.copy()
     warnings: dict[Path, list[str]] = {}
@@ -180,13 +180,15 @@ def _plan(
                     "invalid_patch", template="add_minus_line", path=path, line=line, text=text
                 )
             for index, hunk in enumerate(operation.hunks):
-                operation.hunks[index], notes = _clean_additions(hunk, path)
+                operation.hunks[index], notes = clean_additions(hunk, path)
                 warnings.setdefault(path, []).extend(notes)
             content = "\n".join(t for h in operation.hunks for _, t in h.lines)
             if operation.hunks and not operation.hunks[-1].no_newline:
                 content += "\n"
             if source.payload is not None:
-                content = content.replace("\n", _ending(source.payload.decode("utf-8", "replace")))
+                content = content.replace(
+                    "\n", line_ending(source.payload.decode("utf-8", "replace"))
+                )
                 if source.payload.startswith(_BOM):
                     content = "﻿" + content.removeprefix("﻿")
             elif operation.newline != "\n":
@@ -209,7 +211,7 @@ def _plan(
             raise _PatchError("file_changed", path=path)
         if operation.action == "update":
             content = _decode(payload, path)
-            content, notes, change_ends[path] = _apply_hunks(
+            content, notes, change_ends[path] = apply_hunks(
                 content, operation.hunks, path, change_ends.get(path)
             )
             warnings.setdefault(path, []).extend(notes)
@@ -671,7 +673,7 @@ def _locate_context(context: ToolContext, batch: _Batch, name: str, lines: list[
     ]
     around = _CONTEXT_EXCERPT_LINES
     excerpts = [
-        _excerpt(file_lines, max(1, first - around), min(len(file_lines), last + around))
+        file_excerpt(file_lines, max(1, first - around), min(len(file_lines), last + around))
         for first, last in spans[:3]
     ]
     label = batch.shown(path)
