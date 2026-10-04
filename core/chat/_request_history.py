@@ -150,6 +150,7 @@ async def _restore_in_run_tool_result_content(
     input_modalities: frozenset[str] | None = None,
     wire_media_types: frozenset[str] | None = None,
     image_budget: RequestImageBudget | None = None,
+    image_limit: int | None = None,
     image_converter: ImageConverter | None = None,
     max_image_bytes: int | None = None,
 ) -> list[JsonObject]:
@@ -189,7 +190,7 @@ async def _restore_in_run_tool_result_content(
             )
         content[index : index + 1] = replacement
     return await _CHAT_TRANSFORM_WORKERS.run(
-        limit_request_images, rebuilt_messages, budget=image_budget
+        limit_request_images, rebuilt_messages, budget=image_budget, image_limit=image_limit
     )
 
 

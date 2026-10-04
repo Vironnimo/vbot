@@ -10,6 +10,7 @@ from core.agents import skill_subject_id
 from core.chat._request_builder import (
     RequestBuilder,
     _finalize_compaction_checkpoint,
+    _resolve_request_image_limit,
     _resolved_model_reference,
 )
 from core.chat._run_state import (
@@ -31,6 +32,7 @@ from core.chat.model_resolution import (
     _split_agent_model,
     resolve_request_temperature,
 )
+from core.chat.wire_shaping import PINNED_IMAGE_RETIREMENT_SLOT, RequestImageBudget
 from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.projects import resolve_prompt_project, resolve_skill_scope, runtime_agent_body
 from core.prompts import ProjectPromptContext
@@ -239,6 +241,7 @@ class ChatCompactionHost:
                 ),
                 wire_media_types=adapter.wire_media_support(model_id),
                 max_image_bytes=self._requests._image_size_limit(adapter, model_id),
+                max_request_images=_resolve_request_image_limit(adapter, model_id),
                 agent_body=runtime_agent_body(agent),
                 project_context=prompt_context,
                 working_project_context=working_project_context,
@@ -480,6 +483,7 @@ class ChatCompactionHost:
         if affinity_id is None:
             return False
         context.prompt_cache_affinity_id = affinity_id
+        context.image_budget = RequestImageBudget()
         if refresh is not None:
             await self._stamp_prompt_files_read(session.id, refresh)
             self.apply_prompt_refresh(context, refresh)
@@ -621,7 +625,9 @@ def _prompt_epoch(
     tool_pin = {
         PINNED_TOOL_DEFINITIONS_SLOT: (
             tool_epoch.pin.to_payload() if tool_epoch is not None else None
-        )
+        ),
+        # Compacted history keeps every remaining image until a limit retires it anew.
+        PINNED_IMAGE_RETIREMENT_SLOT: None,
     }
     if refresh is None:
         return PromptEpoch(pins=tool_pin)

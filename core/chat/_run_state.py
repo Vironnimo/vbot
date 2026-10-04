@@ -208,6 +208,8 @@ class _ModelTarget:
     wire_media_types: frozenset[str]
     chunk_timeout_seconds: float | None
     max_image_bytes: int | None = None
+    # Documented image-count limit of one request on this route, if known.
+    max_request_images: int | None = None
     # Whether the route returns calls to Tools outside the request's Tool list
     # (Model capability ``unlisted_tool_calls``).
     unlisted_tool_calls: bool = True
@@ -452,6 +454,7 @@ class RequestBuildInputs:
     input_modalities: frozenset[str] | None = None
     wire_media_types: frozenset[str] = frozenset()
     max_image_bytes: int | None = None
+    max_request_images: int | None = None
     # The Run's primary route, whose gates decide the Tools a new Tool pin
     # offers, also while a fallback target serves this request. ``None`` uses
     # this request's own route.
@@ -494,6 +497,7 @@ class RequestBuildInputs:
             input_modalities=target.input_modalities,
             wire_media_types=target.wire_media_types,
             max_image_bytes=target.max_image_bytes,
+            max_request_images=target.max_request_images,
             tool_route_input_modalities=context.primary_target.input_modalities,
             tool_route_wire_media_types=context.primary_target.wire_media_types,
             agent_body=context.agent_body,

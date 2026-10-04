@@ -136,6 +136,12 @@ async def test_fresh_images_are_delivered_together_or_fail_explicitly(
     start_runtime: StartRuntime, source: str, groups: list[int]
 ) -> None:
     count = sum(groups)
+
+    class LimitedAdapter(FakeAdapter):
+        @override
+        def request_image_limit(self, model_id: str) -> int | None:
+            return 50
+
     responses: list[JsonObject] = [{"content": "done", "tool_calls": None}]
     if source == "tool":
         responses.insert(
@@ -148,7 +154,7 @@ async def test_fresh_images_are_delivered_together_or_fail_explicitly(
                 ],
             },
         )
-    adapter = FakeAdapter(responses)
+    adapter = LimitedAdapter(responses)
     with start_runtime(adapter) as runtime:
         runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
         record = runtime.attachment_store.store("fixture.png", _PNG_BYTES)
@@ -473,29 +479,22 @@ async def test_rereading_overwritten_image_delivers_each_calls_own_pixels(
 # after a Provider rejection does not depend on the transport; that a streaming rejection
 # reaches it is covered by the streaming body-overflow case above.
 @pytest.mark.asyncio
-@pytest.mark.parametrize("budget_kind", ["harness", "provider"])
+@pytest.mark.parametrize("budget_kind", ["count", "body"])
 async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
     resources_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
     start_runtime: StartRuntime,
     budget_kind: str,
 ) -> None:
-    tight_budget = budget_kind == "harness"
-    provider_pressure = budget_kind == "provider"
+    count_limit = budget_kind == "count"
+    provider_pressure = budget_kind == "body"
     # Isolate byte pressure from token Compaction with a realistic large Context.
     model_file = resources_dir / "models" / "fake-provider.json"
     catalog = json.loads(model_file.read_text(encoding="utf-8"))
     catalog["models"]["fake-model-vision"]["context_window"] = 1_000_000
     model_file.write_text(json.dumps(catalog), encoding="utf-8")
-    rejected_sizes: list[int] = []
+    rejected_sizes: list[int | None] = []
     frames = [_PNG_BYTES + bytes([index]) * 140_000 for index in range(14)]
-    encoded = len(base64.b64encode(frames[0]))
-    # Image pressure retains the newest two frames, as the 4 MiB target does for
-    # multi-megabyte captures; scaled down, sixteen iterations stay fast.
-    monkeypatch.setattr(wire_shaping, "REQUEST_IMAGE_BYTES_TARGET", encoded * 5 // 2)
-    if tight_budget:
-        # Exercise repeated eviction/reopening without a 150 MiB fixture per request.
-        monkeypatch.setattr(wire_shaping, "REQUEST_IMAGE_BYTES_LIMIT", encoded * 4)
     responses: list[JsonObject] = [
         {
             "content": f"inspection-{index}",
@@ -530,6 +529,11 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
     live_budgets: list[wire_shaping.RequestImageBudget] = []
 
     class RebuildingAdapter(FakeAdapter):
+        @override
+        def request_image_limit(self, model_id: str) -> int | None:
+            # Each retirement goes down to half the limit: the newest two frames.
+            return 4 if count_limit else None
+
         @override
         async def send(self, messages: list[dict], *, model_id: str, **kwargs: Any) -> dict:
             if provider_pressure:
@@ -632,10 +636,8 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
                 assert [base64.b64decode(part["base64"]) for part in images] == [
                     frames[index] for index in expected_indices
                 ]
-                assert (
-                    sum(len(part["base64"]) for part in images)
-                    <= wire_shaping.REQUEST_IMAGE_BYTES_LIMIT
-                )
+                if count_limit:
+                    assert len(images) <= 4
                 pressure_steps = {6, 10, 14} if provider_pressure else {5, 8, 11, 14}
                 if iteration and iteration not in pressure_steps:
                     previous_images = [
@@ -668,6 +670,14 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
             assert runtime.chat_runs is not None
             assert "base64" not in json.dumps([message.to_dict() for message in persisted])
             assert len([message for message in persisted if message.role == "tool"]) == 15
+            # The next Run sends the images the last request ended with: retirements
+            # persist with the Session, so the cached request prefix stays valid.
+            assert isinstance(adapter.response, list)
+            adapter.response.append({"content": "again", "tool_calls": None})
+            await loop.send("coder", "Anything else?", session_id="session-one")
+            assert _tool_result_content_parts(
+                adapter.requests[-1].messages
+            ) == _tool_result_content_parts(adapter.requests[15].messages)
             for message in persisted:
                 if message.role == "tool":
                     assert isinstance(message.content, str)

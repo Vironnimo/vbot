@@ -121,12 +121,9 @@ UNTRUSTED_CHANNEL_MESSAGES_HEADER = (
     "Answer any separately addressed user message normally."
 )
 
-# Harness policy, not a claim about any Provider's transport limit. Count encoded
-# image payloads, independently of visual token estimates and text compaction.
-REQUEST_IMAGE_BYTES_LIMIT = 150 * 1024 * 1024
-REQUEST_IMAGE_COUNT_LIMIT = 50
-REQUEST_IMAGE_BYTES_TARGET = 4 * 1024 * 1024
-REQUEST_IMAGE_COUNT_TARGET = 4
+# Session prompt pin holding the image addresses this prompt epoch retired.
+# Compaction starts a new epoch without it.
+PINNED_IMAGE_RETIREMENT_SLOT = "pinned_image_retirement"
 _IMAGE_BUDGET_NOTE = (
     "[This image was supplied in an earlier Model request and has now been omitted "
     "to make room for more images. Its file path remains available. "
@@ -134,13 +131,24 @@ _IMAGE_BUDGET_NOTE = (
 )
 
 
+# (role, message identity, block index): where an image sits in every request.
+_ImageAddress = tuple[str, str, int]
+# The address plus a payload digest: which exact pixels a response acknowledged.
 _ImageKey = tuple[str, str, int, str]
 
 
-def _request_images(
-    messages: list[JsonObject],
-) -> list[tuple[int, str, int, _ImageKey | None, int]]:
-    candidates: list[tuple[int, str, int, _ImageKey | None, int]] = []
+@dataclass(frozen=True)
+class _RequestImage:
+    message_index: int
+    field: str
+    block_index: int
+    address: _ImageAddress | None
+    key: _ImageKey | None
+    size: int
+
+
+def _request_images(messages: list[JsonObject]) -> list[_RequestImage]:
+    images: list[_RequestImage] = []
     for message_index, message in enumerate(messages):
         role = message.get("role")
         if role not in {"user", "tool"}:
@@ -157,87 +165,168 @@ def _request_images(
                 and isinstance(block.get("base64"), str)
             ):
                 identity = message.get("id") or message.get("tool_call_id")
-                key = None
+                address: _ImageAddress | None = None
+                key: _ImageKey | None = None
                 if isinstance(identity, str) and identity:
+                    address = (str(role), identity, block_index)
                     # Hashes retain no pixels. Changed hook content or format conversion
                     # at the same address must be delivered before it becomes eligible.
                     digest = hashlib.sha256(block["media_type"].encode())
                     digest.update(block["base64"].encode())
-                    key = (str(role), identity, block_index, digest.hexdigest())
-                candidates.append((message_index, field, block_index, key, len(block["base64"])))
-    return candidates
+                    key = (*address, digest.hexdigest())
+                images.append(
+                    _RequestImage(
+                        message_index, field, block_index, address, key, len(block["base64"])
+                    )
+                )
+    return images
+
+
+def _retirement_addresses(pin: JsonObject | None) -> set[_ImageAddress]:
+    entries = pin.get("images") if isinstance(pin, dict) else None
+    if not isinstance(entries, list):
+        return set()
+    return {
+        (entry[0], entry[1], entry[2])
+        for entry in entries
+        if isinstance(entry, list)
+        and len(entry) == 3
+        and isinstance(entry[0], str)
+        and isinstance(entry[1], str)
+        and isinstance(entry[2], int)
+    }
 
 
 @dataclass
 class RequestImageBudget:
-    """Run-local image delivery and retirement, shared by rebuilds and fallback.
+    """Which images a Session's requests still carry, shared by rebuilds and fallback.
+
+    Every image stays in every request until a Provider limit forces room: a
+    documented image count (``image_limit``) or a rejected body size. Then the
+    oldest delivered images are retired until the request holds at most half
+    that limit, so retirements stay rare and the request prefix before the
+    oldest retired image stays cached. Retired images render as a fixed note.
+
+    The retired addresses persist in the Session's prompt epoch
+    (``PINNED_IMAGE_RETIREMENT_SLOT``), so later Runs render the same notes,
+    and Compaction starts over. Images from before the Run count as
+    delivered; a fresh image is never retired before a successful response
+    acknowledged it (``record_delivered``).
 
     Projection is pure unless remember=True is used on the live request view.
-    Successful Model responses explicitly acknowledge their exact image payloads;
-    failed/partial attempts never make fresh images eligible for eviction.
     """
 
     _delivered: set[_ImageKey] = field(default_factory=set)
-    _omitted: set[_ImageKey] = field(default_factory=set)
+    _retired: set[_ImageAddress] = field(default_factory=set)
+    _restored: bool = False
+    _unsaved: bool = False
+
+    @property
+    def restored(self) -> bool:
+        return self._restored
+
+    def restore(
+        self,
+        pin: JsonObject | None,
+        messages: list[JsonObject],
+        *,
+        current_user_message_id: str | None,
+    ) -> None:
+        """Start from the Session's retirements; earlier images count as delivered."""
+        self._restored = True
+        self._retired |= _retirement_addresses(pin)
+        self._delivered.update(
+            image.key
+            for image in _request_images(messages)
+            if image.key is not None
+            and messages[image.message_index].get("id") != current_user_message_id
+        )
+
+    def take_unsaved_pin(self) -> JsonObject | None:
+        """Return the pin value once new retirements need persisting, else ``None``."""
+        if not self._unsaved:
+            return None
+        self._unsaved = False
+        return {"images": [list(address) for address in sorted(self._retired)]}
 
     def record_delivered(self, messages: list[JsonObject]) -> None:
-        self._delivered.update(key for _, _, _, key, _ in _request_images(messages) if key)
+        self._delivered.update(image.key for image in _request_images(messages) if image.key)
 
     def project(
         self,
         messages: list[JsonObject],
         *,
+        image_limit: int | None = None,
         remember: bool = False,
-        force: bool = False,
     ) -> list[JsonObject]:
-        candidates = _request_images(messages)
-        active = [item for item in candidates if item[3] not in self._omitted]
-        fresh = [item for item in active if item[3] not in self._delivered]
-        fresh_bytes = sum(item[4] for item in fresh)
-        if len(fresh) > REQUEST_IMAGE_COUNT_LIMIT or fresh_bytes > REQUEST_IMAGE_BYTES_LIMIT:
-            raise ImageBudgetExceededError(
-                len(fresh), fresh_bytes, REQUEST_IMAGE_COUNT_LIMIT, REQUEST_IMAGE_BYTES_LIMIT
+        """Apply retirements and keep the request within *image_limit* images."""
+        return self._project(messages, image_limit=image_limit, remember=remember)
+
+    def shrink(
+        self,
+        messages: list[JsonObject],
+        *,
+        max_bytes: int | None,
+        image_limit: int | None = None,
+    ) -> list[JsonObject]:
+        """Retire images after a body-size rejection; unchanged when none can go.
+
+        Retires the oldest delivered images until the image data takes at most
+        half of *max_bytes*, or half of its current size when the limit is
+        unknown, and always at least one.
+        """
+        return self._project(
+            messages, image_limit=image_limit, remember=True, shrink=True, max_bytes=max_bytes
+        )
+
+    def _project(
+        self,
+        messages: list[JsonObject],
+        *,
+        image_limit: int | None,
+        remember: bool,
+        shrink: bool = False,
+        max_bytes: int | None = None,
+    ) -> list[JsonObject]:
+        images = _request_images(messages)
+        active = [image for image in images if image.address not in self._retired]
+        # Oldest first: retiring the oldest keeps the longest cached prefix intact.
+        delivered = [image for image in active if image.key in self._delivered]
+        retiring: list[_RequestImage] = []
+        if image_limit is not None and len(active) > image_limit:
+            fresh = len(active) - len(delivered)
+            if fresh > image_limit:
+                raise ImageBudgetExceededError(fresh, image_limit)
+            retiring = delivered[: len(active) - max(image_limit // 2, fresh)]
+        if shrink:
+            image_bytes = sum(image.size for image in active) - sum(
+                image.size for image in retiring
             )
-        retained = {(item[0], item[1], item[2]) for item in active}
-        if (
-            force
-            or len(active) > REQUEST_IMAGE_COUNT_LIMIT
-            or sum(item[4] for item in active) > REQUEST_IMAGE_BYTES_LIMIT
-        ):
-            retained = {(item[0], item[1], item[2]) for item in fresh}
-            used_bytes = fresh_bytes
-            # Fresh pixels must be delivered once. Fill remaining runway with
-            # the newest images regardless of origin, retaining at most 4 / 4 MiB.
-            older = [item for item in reversed(active) if item[3] in self._delivered]
-            count_target = min(REQUEST_IMAGE_COUNT_TARGET, REQUEST_IMAGE_COUNT_LIMIT)
-            bytes_target = min(REQUEST_IMAGE_BYTES_TARGET, REQUEST_IMAGE_BYTES_LIMIT)
-            for message_index, field_name, block_index, _, size in older:
-                if len(retained) < count_target and used_bytes + size <= bytes_target:
-                    retained.add((message_index, field_name, block_index))
-                    used_bytes += size
-            # Text/Tools/framing may leave less than the soft image target. Each
-            # subsequent local size rejection must retire another delivered image
-            # or make no change, which tells Chat to surface the size error.
-            if force and len(retained) == len(active) and older:
-                oldest = older[-1]
-                retained.discard((oldest[0], oldest[1], oldest[2]))
+            target = (max_bytes if max_bytes is not None else image_bytes) // 2
+            for count, image in enumerate(delivered[len(retiring) :]):
+                if count and image_bytes <= target:
+                    break
+                retiring.append(image)
+                image_bytes -= image.size
+        retired = self._retired | {image.address for image in retiring if image.address}
+        if remember and len(retired) > len(self._retired):
+            self._retired = retired
+            self._unsaved = True
         result = list(messages)
         copied: set[int] = set()
-        for message_index, field_name, block_index, key, _ in candidates:
-            if (message_index, field_name, block_index) in retained:
+        for image in images:
+            if image.address not in retired:
                 continue
-            if message_index not in copied:
-                result[message_index] = dict(messages[message_index])
-                result[message_index][field_name] = list(messages[message_index][field_name])
-                copied.add(message_index)
-            elif result[message_index][field_name] is messages[message_index][field_name]:
-                result[message_index][field_name] = list(messages[message_index][field_name])
-            result[message_index][field_name][block_index] = {
+            index, field_name = image.message_index, image.field
+            if index not in copied:
+                result[index] = dict(messages[index])
+                copied.add(index)
+            if result[index][field_name] is messages[index][field_name]:
+                result[index][field_name] = list(messages[index][field_name])
+            result[index][field_name][image.block_index] = {
                 "type": "text",
                 "text": _IMAGE_BUDGET_NOTE,
             }
-            if remember and key is not None:
-                self._omitted.add(key)
         return result
 
 
@@ -245,11 +334,12 @@ def limit_request_images(
     messages: list[JsonObject],
     *,
     budget: RequestImageBudget | None = None,
+    image_limit: int | None = None,
     remember: bool = False,
 ) -> list[JsonObject]:
-    """Bound individual native images while preserving fresh input and Tool correlation."""
+    """Apply the Session's image retirements and the route's image-count limit."""
     return (budget if budget is not None else RequestImageBudget()).project(
-        messages, remember=remember
+        messages, image_limit=image_limit, remember=remember
     )
 
 
