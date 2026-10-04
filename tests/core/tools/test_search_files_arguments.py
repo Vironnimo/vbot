@@ -9,9 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from core.tools._search_arguments import parse_search_args
 from core.tools.contracts import ToolContractError
-from core.tools.search_files import normalize_search_arguments
+from core.tools.search_files import interpret_search_call, normalize_search_arguments
 from tests.core.tools.search_files_test_support import dispatch
 
 
@@ -49,7 +48,7 @@ def project(tmp_path: Path) -> Path:
         ({"pattern": "o", "path": "src/app.py", "output": "count"}, "src/app.py:3"),
         (
             {"pattern": "def", "context": 1},
-            "src/app.py:1-import os\nsrc/app.py:2:def load():\nsrc/app.py:3-    return os.name",
+            "src/app.py-1-import os\nsrc/app.py:2:def load():\nsrc/app.py-3-    return os.name",
         ),
         (
             {"pattern": "LOAD", "args": ["-i"], "glob": "*.ts"},
@@ -110,6 +109,7 @@ async def test_content_only_fields_without_a_pattern_explain_the_fix(
         {"args": ["*.py"]},
         {"pattern": "*.py", "target": "files"},
         {"pattern": "*.py", "output": "files"},
+        {"pattern": "app*.py"},
     ],
 )
 async def test_a_file_name_glob_in_pattern_lists_matching_files(project: Path, arguments: dict):
@@ -143,11 +143,11 @@ async def test_a_glob_shaped_literal_search_stays_a_content_search(project: Path
         ({"pattern": "os", "output_mode": "count", "path": "src"}, "src/app.py:2"),
         (
             {"pattern": "def", "-C": 1, "path": "src/app.py"},
-            "src/app.py:1-import os\nsrc/app.py:2:def load():\nsrc/app.py:3-    return os.name",
+            "src/app.py-1-import os\nsrc/app.py:2:def load():\nsrc/app.py-3-    return os.name",
         ),
         (
             {"pattern": "def", "-A": 1, "type": "py"},
-            "src/app.py:2:def load():\nsrc/app.py:3-    return os.name",
+            "src/app.py:2:def load():\nsrc/app.py-3-    return os.name",
         ),
         # Hermes and opencode.
         ({"pattern": "*.ts", "target": "files", "path": "src"}, "src/view.ts"),
@@ -175,7 +175,7 @@ async def test_a_glob_shaped_literal_search_stays_a_content_search(project: Path
         ),
         ({"pattern": "o", "-c": True, "path": "src/app.py"}, "src/app.py:3"),
         ({"pattern": "load", "-l": True, "glob": "*.md"}, "docs/guide.md"),
-        ({"recursive": False, "args": ["--entries"]}, "src/\ndocs/"),
+        ({"recursive": False, "args": ["--dirs"]}, "src/\ndocs/"),
         # Lists sent as JSON text.
         (
             {"pattern": "load", "path": '["docs", "src/view.ts"]'},
@@ -211,12 +211,35 @@ async def test_other_search_interfaces_spellings_run_as_intended(
             "src/view.ts:1:export const load = 1;",
         ),
         (["-E", "utf-8", "def"], "src/app.py:2:def load():"),
+        (["-h", "def", "src"], "src/app.py:2:def load():"),
     ],
 )
 async def test_grep_habits_in_args_keep_their_meaning(project: Path, args: list[str], content: str):
     result = await dispatch(project, {"args": args})
     assert result["ok"], result
     assert result["data"]["content"] == content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({"pattern": "*.ts", "path": "src/*.py"}, ""),
+        ({"pattern": "def", "path": "src/*.py"}, 'so src was searched with glob "/src/*.py"'),
+        ({"pattern": "def", "path": "{src,docs}"}, "names several paths, so src, docs"),
+        ({"pattern": "def", "path": "src,docs"}, "names several paths, so src, docs"),
+    ],
+)
+async def test_a_path_written_as_a_glob_or_list_searches_what_it_names(
+    project: Path, arguments: dict, message: str
+) -> None:
+    result = await dispatch(project, arguments)
+    if not message:
+        # Another field already selects names, so the path stays a missing path.
+        assert result["error"]["code"] == "path_not_found"
+        return
+    assert result["data"]["content"] == "src/app.py:2:def load():"
+    assert message in result["data"]["note"]
 
 
 @pytest.mark.asyncio
@@ -270,8 +293,8 @@ async def test_a_command_line_string_with_backslashes_asks_for_one_argument_per_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", [[], ["--files"], ["-q"]])
-async def test_missing_explicit_roots_preserve_results_and_report_incomplete_scope(tmp_path, mode):
+@pytest.mark.parametrize("mode", [[], ["--files"], ["-l"]])
+async def test_missing_explicit_roots_preserve_results_and_name_the_missing_path(tmp_path, mode):
     (tmp_path / "src").mkdir()
     (tmp_path / "src/a.py").write_text("needle\n")
     (tmp_path / "outside.py").write_text("needle\n")
@@ -280,27 +303,18 @@ async def test_missing_explicit_roots_preserve_results_and_report_incomplete_sco
     result = await dispatch(tmp_path, {"args": args})
     assert result["ok"]
     data = result["data"]
-    assert data["complete"] is False and data["warnings"]
-    assert data["missing_paths"] == [(tmp_path / "missing").as_posix()]
+    assert data["warnings"][0] == "Path not found: missing."
     assert data["searched_paths"] == [(tmp_path / "src").as_posix()]
-    if "-q" in mode:
-        assert data["matched"] is True
-        (tmp_path / "src/a.py").write_text("unrelated\n")
-        result = await dispatch(tmp_path, {"args": args})
-        assert result["data"]["matched"] is None
-        assert result["data"]["complete"] is False
-    else:
-        assert data["content"] == ("src/a.py" if mode else "src/a.py:1:needle")
+    assert data["content"] == ("src/a.py" if mode else "src/a.py:1:needle")
 
 
 @pytest.mark.asyncio
 async def test_missing_path_is_not_reinterpreted_as_pattern(tmp_path):
     (tmp_path / "src").mkdir()
     (tmp_path / "src/code").write_text("Alpha\nBeta\ncall(\n")
-    partial = await dispatch(tmp_path, {"args": ["Alpha", "Beta", "src"]})
+    partial = await dispatch(tmp_path, {"args": ["Alpha", "Beta", "Gamma", "lib/a.py", "src"]})
     assert partial["data"]["content"] == "src/code:1:Alpha"
-    assert partial["data"]["complete"] is False
-    assert any('pattern "Alpha|Beta"' in warning for warning in partial["data"]["warnings"])
+    assert any('pattern "Alpha|Beta|Gamma".' in warning for warning in partial["data"]["warnings"])
     missing = await dispatch(tmp_path, {"args": ["Alpha", "Beta"]})
     assert missing["error"]["code"] == "path_not_found"
     literal_hint = await dispatch(tmp_path, {"args": ["-F", "Alpha", "Beta"]})
@@ -311,7 +325,7 @@ async def test_missing_path_is_not_reinterpreted_as_pattern(tmp_path):
     ):
         corrected = await dispatch(tmp_path, corrected_call)
         assert corrected["data"]["content"] == "src/code:1:Alpha\nsrc/code:2:Beta"
-        assert corrected["data"]["complete"] is True
+        assert "warnings" not in corrected["data"]
     literal = await dispatch(tmp_path, {"args": ["-F", "call(", "src"]})
     assert literal["data"]["content"] == "src/code:3:call("
 
@@ -331,6 +345,7 @@ async def test_missing_path_is_not_reinterpreted_as_pattern(tmp_path):
         ],
         # PCRE2 already reads a leading brace literally; the default engine rejects it.
         ([], "{Alpha|Beta", r"\{Alpha|Beta", "src/code:2:Beta"),
+        ([], "Beta{2", r"Beta\{2", ""),
     ],
 )
 async def test_unbalanced_regex_characters_match_literally_with_a_note(
@@ -391,7 +406,6 @@ async def test_escaped_unicode_punctuation_preserves_regex_meaning(tmp_path, pat
 
     assert result["ok"], result
     assert result["data"]["content"] == expected
-    assert result["data"]["complete"] is True
     assert "note" in result["data"]
     if pattern == r"Alpha|call(\·":
         assert "unbalanced regex characters" in result["data"]["note"]
@@ -418,6 +432,7 @@ async def test_unicode_escape_repair_does_not_hide_unrelated_invalid_regex(tmp_p
 
     assert result["ok"] is False
     assert result["error"]["code"] == "search_error"
+    assert "Nothing was searched." in result["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -431,6 +446,7 @@ async def test_unicode_escape_repair_does_not_hide_unrelated_invalid_regex(tmp_p
         ({"output": "count", "context": 2, "args": ["--count-matches"]}, "code:3", "count"),
         ({"output": "files", "context": 3}, "code", "file-list"),
         ({"args": ["-c", "-C", "2", "-l"]}, "code", "file-list"),
+        ({"args": ["-q", "-C", "2"]}, "code", "file-list"),
         ({"path": ".", "args": ["-A1", "--files-without-match"]}, "other", "file-list"),
     ],
 )
@@ -447,40 +463,49 @@ async def test_count_and_file_list_output_ignore_context_after_resolving_option_
     assert supplied == original
     assert result["ok"], result
     assert result["data"]["content"] == expected
-    assert result["data"]["complete"] is True
     assert f"Context was ignored because {output} output" in result["data"]["note"]
 
 
 @pytest.mark.parametrize(
-    "tokens,patterns,roots,options,kind",
+    ("tokens", "expected"),
     [
-        (["-n", "needle", "src"], ["needle"], ["src"], ["-n"], "files"),
-        (["needle", "src", "-iw"], ["needle"], ["src"], ["-i", "-w"], "files"),
-        (["-g", "-F", "needle"], ["needle"], [], ["-g", "-F"], "files"),
-        (["-e", "needle", "-eother", "src"], ["needle", "other"], ["src"], [], "files"),
-        (["src", "--regexp=needle"], ["needle"], ["src"], [], "files"),
-        (["--", "-needle", "-root"], ["-needle"], ["-root"], [], "files"),
-        (["--files", "-g", "*.py", "src"], [], ["src"], ["-g", "*.py"], "files"),
-        (["--dirs", "src"], [], ["src"], [], "directories"),
-        (["--entries"], [], [], [], "all"),
-        (["-F", "a b", r"C:\source files"], ["a b"], [r"C:\source files"], ["-F"], "files"),
-        (["rg"], ["rg"], [], [], "files"),
-        (["-g", "--help", "needle"], ["needle"], [], ["-g", "--help"], "files"),
-        (["-e", "--files"], ["--files"], [], [], "files"),
-        (["-e", "--offset"], ["--offset"], [], [], "files"),
-        (["-g", "--offset", "needle"], ["needle"], [], ["-g", "--offset"], "files"),
-        (["--", "--offset", "--limit"], ["--offset"], ["--limit"], [], "files"),
-        (["-e", ""], [""], [], [], "files"),
+        (["-n", "needle", "src"], {"patterns": ["needle"], "roots": ["src"]}),
+        (
+            ["needle", "src", "-iw"],
+            {
+                "patterns": ["needle"],
+                "roots": ["src"],
+                "rg_args": ["--ignore-case", "--word-regexp"],
+            },
+        ),
+        (["-g", "-F", "needle"], {"patterns": ["needle"], "globs": ["-F"]}),
+        (["-e", "needle", "-eother", "src"], {"patterns": ["needle", "other"], "roots": ["src"]}),
+        (["src", "--regexp=needle"], {"patterns": ["needle"], "roots": ["src"]}),
+        (["--", "-needle", "-root"], {"patterns": ["-needle"], "roots": ["-root"]}),
+        (
+            ["--files", "-g", "*.py", "src"],
+            {"mode": "list_files", "globs": ["*.py"], "roots": ["src"]},
+        ),
+        (["--dirs", "src"], {"mode": "list_dirs", "roots": ["src"]}),
+        (
+            ["-F", "a b", r"C:\source files"],
+            {"patterns": ["a b"], "roots": [r"C:\source files"], "rg_args": ["--fixed-strings"]},
+        ),
+        (["rg"], {"patterns": ["rg"]}),
+        (["-g", "--help", "needle"], {"patterns": ["needle"], "globs": ["--help"]}),
+        (["-e", "--files"], {"patterns": ["--files"]}),
+        (["-e", "--offset"], {"patterns": ["--offset"]}),
+        (["-g", "--offset", "needle"], {"patterns": ["needle"], "globs": ["--offset"]}),
+        (["--", "--offset", "--limit"], {"patterns": ["--offset"], "roots": ["--limit"]}),
+        (["-e", ""], {"patterns": [""]}),
+        (["-m=2", "-tpy", "x"], {"patterns": ["x"], "rg_args": ["--max-count=2", "--type=py"]}),
     ],
 )
-def test_argv_boundaries_have_independently_specified_meaning(
-    tokens, patterns, roots, options, kind
-):
-    parsed = parse_search_args(tokens)
-    assert parsed["patterns"] == patterns
-    assert parsed["paths"] == roots
-    assert parsed["options"] == options
-    assert parsed["kind"] == kind
+def test_argv_boundaries_have_independently_specified_meaning(tokens, expected):
+    query = interpret_search_call({"args": tokens})
+    defaults = {"mode": "content", "patterns": [], "roots": [], "globs": [], "rg_args": []}
+    for name, value in {**defaults, **expected}.items():
+        assert getattr(query, name) == value, name
 
 
 @pytest.mark.asyncio
@@ -523,60 +548,49 @@ async def test_first_call_finds_only_intended_content(tmp_path, supplied):
 )
 async def test_literal_payloads_are_never_shell_or_repair_syntax(tmp_path, pattern):
     (tmp_path / "text").write_text(pattern, newline="\n")
-    arguments = {"args": ["-F", "-q", "-U", "-e", pattern]}
+    arguments = {"args": ["-F", "-l", "-U", "-e", pattern]}
     result = await dispatch(tmp_path, arguments)
     assert result["ok"]
-    assert result["data"]["matched"] is True
+    assert result["data"]["content"] == "text"
     assert normalize_search_arguments(arguments)["args"][-1] == pattern
 
 
-_OPTION = "Unsupported search option"
-_ROOTS = "Search roots must be nonempty file or directory paths"
 _LIST = "args contains a malformed encoded list"
+_PATHS = "path must name a file or directory"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("arguments", "code", "message"),
     [
-        # Contradictory modes and filters.
-        ({"args": ["--files", "--dirs"]}, "invalid_arguments", "Choose one of --files, --dirs"),
+        # Contradictory modes.
+        ({"args": ["--files", "--dirs"]}, "invalid_arguments", "Choose one of --files or --dirs"),
         (
             {"args": ["--files", "-e", "needle"]},
             "invalid_arguments",
-            "--files lists files by name and does not search file contents, so it cannot be "
+            "--files lists entries by name and does not search file contents, so it cannot be "
             'combined with -e. To select names, pass glob (such as "tmp*"); to search '
             "contents, remove --files.",
         ),
         (
             {"pattern": "^tmp", "args": ["--dirs"]},
             "invalid_arguments",
-            "--dirs lists directories by name and does not search file contents, so it cannot "
+            "--dirs lists entries by name and does not search file contents, so it cannot "
             "be combined with pattern.",
         ),
-        ({"args": ["--files", "-c"]}, "invalid_arguments", "-c searches contents"),
-        ({"args": ["--dirs", "-tpy"]}, "invalid_arguments", "they cannot select directories"),
-        (
-            {"pattern": "needle", "path": "code", "output": "count", "context": 2, "args": ["-q"]},
-            "invalid_arguments",
-            "-q (--quiet) in args returns only whether a match exists, so it cannot show "
-            "context lines. Remove -q from args",
-        ),
-        (
-            {"args": ["needle", "-C", "2", "-o"]},
-            "invalid_arguments",
-            "-o (--only-matching) in args returns only the matched text, so it cannot show "
-            "context lines. Remove -o from args",
-        ),
-        ({"args": ["--help", "missing"]}, "invalid_arguments", "--help does not search"),
-        # Incomplete or unsupported options, and roots that are not paths.
-        ({"args": ["--files", "-g"]}, "invalid_arguments", "-g requires a value"),
-        ({"args": ["--regexp"]}, "invalid_arguments", "--regexp requires a value"),
-        ({"args": ["-F=true", "needle"]}, "invalid_arguments", _OPTION),
-        ({"args": ["--pre", "program", "needle"]}, "invalid_arguments", _OPTION),
-        ({"args": ["-F", "needle", ""]}, "invalid_arguments", _ROOTS),
-        ({"args": ["needle", "-"]}, "invalid_arguments", _ROOTS),
+        ({"args": ["--help", "missing"]}, "invalid_arguments", "--help shows a reference"),
+        # Incomplete or unavailable options, and roots that are not paths.
+        ({"args": ["--files", "-g"]}, "invalid_arguments", "-g in args needs a value"),
+        ({"args": ["--regexp"]}, "invalid_arguments", "--regexp in args needs a value"),
+        ({"args": ["-F=true", "needle"]}, "invalid_arguments", "-F takes no value"),
+        ({"args": ["--pre", "program", "needle"]}, "invalid_arguments", "not available"),
+        ({"args": ["--foo", "needle"]}, "search_error", 'ripgrep has no flag "--foo"'),
+        ({"args": ["-t", "nosuchtype", "needle"]}, "search_error", "--type-list"),
+        ({"args": ["-g", "{a", "needle"]}, "search_error", 'The glob "{a" is invalid'),
+        ({"args": ["-F", "needle", ""]}, "invalid_arguments", _PATHS),
+        ({"args": ["needle", "-"]}, "invalid_arguments", _PATHS),
         ({"args": ["--files", "missing"]}, "path_not_found", "Nothing was searched."),
+        ({"args": ["needle", "--files"]}, "path_not_found", "replace --files with -l"),
         # Paging flags never discard a conflicting or invalid page.
         (
             {"args": ["needle", "--offset=1"], "offset": 2},
@@ -593,13 +607,12 @@ _LIST = "args contains a malformed encoded list"
             "invalid_arguments",
             "Conflicting limit values",
         ),
-        ({"args": ["needle", "--offset=-1"]}, "invalid_arguments", "nonnegative integer"),
-        ({"args": ["needle", "--offset=1.5"]}, "invalid_arguments", "nonnegative integer"),
+        ({"args": ["needle", "--offset=-1"]}, "invalid_arguments", "between 0 and 1000000"),
+        ({"args": ["needle", "--offset=1.5"]}, "invalid_arguments", "between 0 and 1000000"),
         ({"args": ["needle", "--offset=1000001"]}, "invalid_arguments", "between 0 and 1000000"),
-        ({"args": ["needle", "--offset"]}, "invalid_arguments", "--offset requires a value"),
+        ({"args": ["needle", "--offset"]}, "invalid_arguments", "--offset in args needs a value"),
         ({"args": ["needle", "--limit=0"]}, "invalid_arguments", "between 1 and 10000"),
         ({"args": ["needle", "--limit=10001"]}, "invalid_arguments", "between 1 and 10000"),
-        ({"args": ["needle", "-q", "--offset=0"]}, "invalid_arguments", "do not paginate"),
         # Rejected before the search runs.
         ({"args": ["--files"], "limit": 0}, None, '"limit" must be at least 1'),
         ({"args": ["--files"], "offset": -1}, None, '"offset" must be at least 0'),
@@ -627,23 +640,43 @@ async def test_ambiguous_or_unsupported_requests_reject_without_substitution(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("args", "note"),
+    [
+        (["--files", "-c"], "-c was ignored because --files lists files"),
+        (["--dirs", "-l"], "-l was ignored because --dirs lists directories"),
+    ],
+)
+async def test_output_flags_in_a_listing_are_ignored_with_a_note(tmp_path, args, note):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/code").write_text("needle\n")
+    result = await dispatch(tmp_path, {"args": args})
+    assert result["data"]["content"] in {"src/code", "src/"}
+    assert note in result["data"]["note"]
+
+
+@pytest.mark.asyncio
 async def test_path_discovery_case_scope_and_pagination(tmp_path):
-    (tmp_path / "nested").mkdir()
-    (tmp_path / "nested/EMPTY").mkdir()
+    (tmp_path / "nested/EMPTY").mkdir(parents=True)
+    (tmp_path / "nested/EMPTY/keep").write_text("")
     (tmp_path / "nested/a.PY").write_text("irrelevant\n")
     (tmp_path / "b.py").write_text("irrelevant\n")
-    dirs = await dispatch(tmp_path, {"args": ["--dirs", "-i", "-g", "empty"]})
+    dirs = await dispatch(tmp_path, {"args": ["--dirs", "-g", "empty"]})
     assert dirs["data"]["content"] == "nested/EMPTY/"
-    sensitive = await dispatch(tmp_path, {"args": ["--dirs", "-s", "-g", "empty"]})
-    assert sensitive["data"]["content"] == "No results."
-    files = {"args": ["--files", "-i", "-g", "*.py", "--sort=path"], "limit": 1}
+    sensitive = await dispatch(
+        tmp_path, {"args": ["--dirs", "--no-glob-case-insensitive", "-g", "empty"]}
+    )
+    assert sensitive["data"]["content"] == ""
+    assert sensitive["data"]["summary"] == "No directories found."
+    shallow = await dispatch(tmp_path, {"args": ["--dirs", "-d", "1"]})
+    assert shallow["data"]["content"] == "nested/"
+    files = {"args": ["--files", "-g", "*.py", "--sort=path"], "limit": 1}
     first = await dispatch(tmp_path, files)
     assert first["data"]["content"] == "b.py"
-    assert first["data"]["complete"] is False
+    assert first["data"]["next_offset"] == 1
     second = await dispatch(tmp_path, {**files, "offset": first["data"]["next_offset"]})
     assert second["data"]["content"] == "nested/a.PY"
     assert "next_offset" not in second["data"]
-    assert second["data"]["complete"] is True
 
 
 @pytest.mark.asyncio
@@ -663,7 +696,6 @@ async def test_paging_flags_select_same_exact_results_as_fields(tmp_path, argume
     assert result["ok"], result
     assert result["data"]["content"] == "a.py:2:needle second"
     assert result["data"]["next_offset"] == 2
-    assert result["data"]["complete"] is False
 
 
 @pytest.mark.asyncio
@@ -684,27 +716,33 @@ async def test_empty_result_reports_actual_cwd_and_literal_quotes(tmp_path):
     result = await dispatch(workspace, {"args": ['"item:generated"']}, cwd=project)
     assert result["data"]["searched_paths"] == [project.as_posix()]
     assert result["data"]["patterns"] == ['"item:generated"']
+    assert result["data"]["summary"] == "No matches in 1 searched file."
     found = await dispatch(workspace, {"args": ["item:generated"]}, cwd=project)
     assert found["data"]["content"] == "events.ts:1:type Event = 'item:generated';"
 
 
 @pytest.mark.asyncio
 async def test_help_examples_execute_the_advertised_searches(tmp_path):
-    (tmp_path / "src/migrations").mkdir(parents=True)
+    (tmp_path / "src/db/migrations").mkdir(parents=True)
     (tmp_path / "tests").mkdir()
-    (tmp_path / "src/a.py").write_text("run\nrunner\n")
-    (tmp_path / "tests/b.py").write_text("run\n")
+    (tmp_path / ".gitignore").write_text("*.log\n")
+    (tmp_path / "src/a.py").write_text("x = 1\ndef load_config():\n    connect(x)\n# TODO\n")
+    (tmp_path / "src/db/migrations/001.sql").write_text("-- todo\n")
+    (tmp_path / "tests/b.py").write_text("def load_config():\n")
     (tmp_path / "errors.log").write_text("ERROR\n")
     help_result = await dispatch(tmp_path, {"args": ["--help"]})
     calls = [
         json.loads(line)
         for line in help_result["data"]["content"].splitlines()
-        if line.startswith("{")
+        if line.strip().startswith("{")
     ]
     results = [await dispatch(tmp_path, call) for call in calls]
-    assert all(result["ok"] for result in results)
+    assert all(result["ok"] for result in results), results
     assert [result["data"]["content"] for result in results] == [
-        "src/a.py:1:run\nsrc/a.py:2-runner\ntests/b.py:1:run",
-        "src/migrations/",
+        "src/a.py-1-x = 1\nsrc/a.py:2:def load_config():\nsrc/a.py-3-    connect(x)\n"
+        "src/a.py-4-# TODO\n--\ntests/b.py:1:def load_config():",
+        "src/a.py:1",
+        "src/a.py:3:    connect(x)",
         "errors.log",
+        "src/db/migrations/",
     ]

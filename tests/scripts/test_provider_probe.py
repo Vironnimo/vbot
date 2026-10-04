@@ -226,8 +226,8 @@ def test_terminal_probe_case_reaches_the_production_terminal_tool(case_id: str) 
     "case_id", ["unrestricted", "ignore_controls", "early_stop", "diagnostics"]
 )
 def test_search_probe_case_reaches_the_production_search_tool(case_id: str) -> None:
-    # Holds core/tools/search_files.py, _search_options.py and _search_ignores.py: `-uuu`,
-    # disabled parent/dot/file ignore sources, early-stop notes, `--stats` and `--debug`.
+    # Holds core/tools/search_files.py and its ripgrep flag handling: `-uuu`, disabled
+    # ignore sources, early-stop flags, and the silent `--stats` and `--debug`.
     from scripts.provider_probe.workflow_search_files import _case, search_cases
 
     case = next(case for case in search_cases() if case["id"] == case_id)
