@@ -266,6 +266,13 @@ async def test_missing_path_suggests_similar_existing_paths(project: Path) -> No
     assert "(similar: src/utils)" in misspelled["error"]["message"]
     assert "Nothing was searched." in misspelled["error"]["message"]
 
+    unknown = await dispatch(project, {"pattern": "load", "path": "nothing/like/this"})
+    assert unknown["error"]["message"] == (
+        "Path not found: nothing/like/this (relative to the working directory "
+        f"{project.as_posix()}). Nothing was searched. Correct path, or omit it to search "
+        "the working directory."
+    )
+
     repeated = await dispatch(project, {"pattern": "load", "path": f"{project.name}/src/utils"})
     assert "(similar: src/utils)" in repeated["error"]["message"]
 
@@ -303,7 +310,9 @@ async def test_missing_explicit_roots_preserve_results_and_name_the_missing_path
     result = await dispatch(tmp_path, {"args": args})
     assert result["ok"]
     data = result["data"]
-    assert data["warnings"][0] == "Path not found: missing."
+    assert data["warnings"][0] == (
+        f"Path not found: missing (relative to the working directory {tmp_path.as_posix()})."
+    )
     assert data["searched_paths"] == [(tmp_path / "src").as_posix()]
     assert data["content"] == ("src/a.py" if mode else "src/a.py:1:needle")
 
@@ -619,17 +628,17 @@ _PATHS = "path must name a file or directory"
         (
             {"args": ["needle", "--offset=1"], "offset": 2},
             "invalid_arguments",
-            "Conflicting offset values",
+            "offset was given different values",
         ),
         (
             {"args": ["needle", "--offset=1", "--offset=2"]},
             "invalid_arguments",
-            "Conflicting offset values",
+            "offset was given different values",
         ),
         (
             {"args": ["needle", "--limit=1"], "limit": 2},
             "invalid_arguments",
-            "Conflicting limit values",
+            "limit was given different values",
         ),
         ({"args": ["needle", "--offset=-1"]}, "invalid_arguments", "between 0 and 1000000"),
         ({"args": ["needle", "--offset=1.5"]}, "invalid_arguments", "between 0 and 1000000"),

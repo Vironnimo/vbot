@@ -125,6 +125,12 @@ _CONTENT_CASES = [
     ({"pattern": "needle", "args": ["-d", "2"]}, ["--max-depth=2"], ["needle"]),
     ({"pattern": "needle()", "args": ["-F"]}, ["-F"], ["needle()"]),
     ({"pattern": "needle(?=_)", "args": ["-P"]}, ["-P"], ["needle(?=_)"]),
+    # The fallback to PCRE2 writes a multi-line debug message, which is no failure.
+    (
+        {"pattern": "needle(?=_)", "args": ["--engine=auto"]},
+        ["--engine=auto"],
+        ["needle(?=_)"],
+    ),
     ({"pattern": "needle\\nspans", "args": ["-U"]}, ["-U"], ["needle\\nspans"]),
     ({"pattern": "needle", "context": 1}, ["-C1"], ["needle"]),
     (
@@ -234,6 +240,40 @@ def test_directory_lists_include_empty_directories_ripgrep_enters(
     for name in ("src/empty", "build/out", "src/lib/ignored", ".git/objects"):
         (tmp_path / name).mkdir(parents=True)
     assert set(_all_pages(tmp_path, {"args": args}, limit=2)) == expected
+
+
+@pytest.mark.parametrize(
+    ("arguments", "skipped"),
+    [
+        # No match and listings name what ignore files left out, shallowest first.
+        ({"pattern": "absent"}, "build/, src/cache/"),
+        ({"glob": "*.log"}, "build/, src/cache/"),
+        ({"args": ["--dirs"]}, "build/, src/cache/"),
+        # Matches answer the question; -u and an explicit exclusion leave nothing to name.
+        ({"pattern": "needle"}, None),
+        ({"pattern": "absent", "args": ["-u"]}, None),
+        ({"pattern": "absent", "glob": "!src/a.py", "path": "src/a.py"}, None),
+    ],
+)
+def test_results_name_paths_ignore_files_excluded(
+    tmp_path: Path, arguments: dict[str, Any], skipped: str | None
+) -> None:
+    _write(
+        tmp_path,
+        {
+            ".gitignore": "build/\ncache/\n",
+            "src/a.py": "needle\n",
+            "src/cache/c.log": "needle\n",
+            "build/out/b.log": "needle\n",
+        },
+    )
+    data = search(tmp_path, **arguments)
+    expected = None
+    if skipped is not None:
+        expected = (
+            f"Ignore rules such as .gitignore excluded {skipped}. Add -u to args to include them."
+        )
+    assert data.get("skipped") == expected
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
@@ -549,5 +589,10 @@ async def test_the_user_sees_the_results_further_pages_and_warnings(tmp_path: Pa
             "level": "info",
             "text": "More results follow; the next page starts at result 2.",
         },
-        {"type": "notice", "level": "warning", "text": "Path not found: missing."},
+        {
+            "type": "notice",
+            "level": "warning",
+            "text": f"Path not found: missing (relative to the working directory "
+            f"{tmp_path.as_posix()}).",
+        },
     ]

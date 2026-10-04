@@ -42,10 +42,11 @@ MAX_ENTRIES = 500_000
 # Bound on the bytes one counting or listing pass may print.
 MAX_SCAN_BYTES = 256 * 1024 * 1024
 
-# A --debug line naming a path ripgrep's walker skipped. File type filters skip
-# files only and report every file, so their lines are left out.
+# A --debug line naming a path ripgrep's walker skipped, and the kind of rule that
+# skipped it. File type filters skip files only and report every file, so their
+# lines are left out.
 _SKIPPED = re.compile(
-    rb"^rg: DEBUG\|ignore::walk\|.*?: ignoring (.*?): Ignore\((?!IgnoreMatch\(Types\()"
+    rb"^rg: DEBUG\|ignore::walk\|.*?: ignoring (.*?): Ignore\(IgnoreMatch\((?!Types\()(\w+)"
 )
 
 # Defaults that differ from ripgrep's own; later args items override them.
@@ -62,6 +63,8 @@ class NativeOutcome:
     interrupted: bool = False
     # Paths ripgrep's walker skipped, as --debug reports them, in its own spelling.
     skipped: list[bytes] = field(default_factory=list)
+    # The skipped paths that ignore files (.gitignore, .ignore, .rgignore) excluded.
+    ignored: list[bytes] = field(default_factory=list)
 
 
 def native_lines(
@@ -133,11 +136,18 @@ def native_lines(
 
     def errors() -> None:
         assert stderr is not None
+        debug = False
         while line := stderr.readline(65536):
-            if line.startswith(b"rg: DEBUG|"):
+            # A message starts with "rg: "; lines without it continue the previous one,
+            # such as the regex error inside a debug message about engine fallback.
+            if line.startswith(b"rg: "):
+                debug = line.startswith(b"rg: DEBUG|")
+            if debug:
                 skipped = _SKIPPED.match(line)
                 if skipped and outcome is not None and len(outcome.skipped) < MAX_ENTRIES:
                     outcome.skipped.append(skipped[1])
+                    if skipped[2] == b"Gitignore":
+                        outcome.ignored.append(skipped[1])
                 continue
             if len(diagnostics) < 8192:
                 diagnostics.extend(line[: 8192 - len(diagnostics)])
@@ -252,6 +262,7 @@ class ScanResult:
     truncated: bool = False
     interrupted: bool = False
     skipped: list[Path] = field(default_factory=list)
+    ignored: list[Path] = field(default_factory=list)
 
 
 class SearchRefusedError(RuntimeError):
@@ -341,6 +352,7 @@ def count_scan(
     arguments = [
         *_base_arguments(query, scope),
         *selector,
+        "--debug",
         *_pattern_arguments(patterns),
         "--",
         *scope.paths,
@@ -348,6 +360,7 @@ def count_scan(
     data, outcome, truncated = _collect(binary, arguments, scope, context, budget)
     result = _judge(outcome, scope, cwd)
     result.truncated = truncated
+    result.ignored = _walk_paths(outcome.ignored, scope)
     if query.mode == "files_without_match":
         result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
     else:
@@ -369,28 +382,27 @@ def list_scan(
     """List the files ripgrep would search, in one parallel pass.
 
     For ``directories``, only the excluding globs apply, since the others select
-    directory names, and the result also names the paths ripgrep skipped.
+    directory names, and the result also names every path ripgrep skipped.
     """
     if directories:
         excluding = [glob for glob in query.globs if glob.startswith("!")]
-        selection = [
-            *DEFAULT_ARGUMENTS,
-            *query.rg_args,
-            *rg_globs(excluding, scope.prefixes),
-            "--debug",
-        ]
+        selection = [*DEFAULT_ARGUMENTS, *query.rg_args, *rg_globs(excluding, scope.prefixes)]
     else:
         selection = _base_arguments(query, scope)
-    arguments = [*selection, "--files", "--null", "--", *scope.paths]
+    arguments = [*selection, "--debug", "--files", "--null", "--", *scope.paths]
     data, outcome, truncated = _collect(binary, arguments, scope, context, budget)
     result = _judge(outcome, scope, cwd)
     result.truncated = truncated
     result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
-    result.skipped = [
-        Path(os.path.normpath(scope.cwd / os.fsdecode(path))) for path in outcome.skipped
-    ]
+    result.skipped = _walk_paths(outcome.skipped, scope)
+    result.ignored = _walk_paths(outcome.ignored, scope)
     _bound(result)
     return result
+
+
+def _walk_paths(paths: list[bytes], scope: Scope) -> list[Path]:
+    """Return the absolute paths of ripgrep walk reports, which are relative to the scope."""
+    return [Path(os.path.normpath(scope.cwd / os.fsdecode(path))) for path in paths]
 
 
 # Flags that change how a pattern matches text, as opposed to which files are searched.

@@ -595,7 +595,11 @@ def interpret(
 
 def _single(values: list[int], name: str, default: int) -> int:
     if len(set(values)) > 1:
-        raise SearchArgumentError(f"Conflicting {name} values; provide one intended page.")
+        shown = ", ".join(str(value) for value in dict.fromkeys(values))
+        raise SearchArgumentError(
+            f"{name} was given different values ({shown}), in the {name} field and in args. "
+            f"Nothing was searched. Pass {name} once."
+        )
     return values[0] if values else default
 
 
