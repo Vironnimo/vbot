@@ -19,8 +19,9 @@ These eight channels describe canonical vBot Agent/Chat communication. A Live vo
 | Input-origin reminder | Request-time only, hidden | `chat/request-building.md` - added for `input_origin` `speech_transcription` or `live_voice` |
 | Skill announcement | Once per Prompt Epoch | `skills.md` - tail note when a Skill becomes available+allowed |
 | Tool-change announcement | Persisted note, once per change within a Prompt Epoch | `chat/request-building.md` -> Tool catalog per prompt epoch - `[tool-change]` note when a Tool is enabled, removed or changes its parameters while the Tool list stays pinned |
+| Prompt-block change announcement | Persisted note, at most one per Run within a Prompt Epoch | `chat/request-building.md` -> Dynamic prompt blocks per prompt epoch - `[prompt-block-change]` note at Run start when a pinned Tool or Extension dynamic block (Projects, Sub-Agent targets, ...) renders differently |
 | Continuation checkpoint reminder | Request-time only | `compaction.md` - ContinuationStrategy appends it to the active request |
-| System Prompt blocks | Rendered per request | `prompts.md`; Tool-owned dynamic blocks via `ToolPromptBlockRegistry` (`tools.md`) |
+| System Prompt blocks | Rendered per request; dynamic Tool and Extension block texts pinned per Prompt Epoch | `prompts.md`; Tool-owned dynamic blocks via `ToolPromptBlockRegistry` (`tools.md`) |
 | Tool definitions and results | Per call | `tools.md` - description plus structured result data |
 
 Deliberately **not** a reminder channel: Channel-observed group chatter persists as attributed `[channel-message]` text and renders as explicitly untrusted JSON-quoted background context (`channels.md`). Never route untrusted third-party content through reminder framing.
