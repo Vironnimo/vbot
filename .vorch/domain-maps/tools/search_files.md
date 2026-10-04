@@ -127,6 +127,10 @@ Roots (`_resolve_roots`):
 - If a missing root contains glob characters and no other glob is set, the call
   searches the root's fixed directory with the rest as an anchored glob, with a
   note.
+- A missing root that starts with `!`, such as `"!vendor/**"` in `args`, is
+  applied as an excluding glob, with a note; when no other root remains, the
+  working directory is searched. An existing path starting with `!` stays a
+  path. Agents passed exclusions as operands (first-use probe, 2026-10).
 - Any other missing root is reported, never replaced. Each one gets up to five
   suggestions, and the remaining roots are still searched; the result carries
   warnings and `searched_paths`. A relative root without suggestions names the

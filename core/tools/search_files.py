@@ -436,9 +436,11 @@ def _resolve_roots(query: SearchQuery, cwd: Path) -> _Roots:
 
     A missing path written with glob characters, braces or commas runs as what
     it evidently means when that names existing paths: ``src/**/*.py`` searches
-    ``src`` with that glob, ``{src,tests}`` and ``src,tests`` search both.
+    ``src`` with that glob, ``{src,tests}`` and ``src,tests`` search both. A
+    missing path written as ``!vendor/**`` is the excluding glob it reads as.
     """
     roots = _Roots()
+    excluded = False
     for raw in query.roots or [str(cwd)]:
         text = str(_path_argument(raw, windows=os.name == "nt"))
         if not text.strip() or text == "-":
@@ -457,11 +459,20 @@ def _resolve_roots(query: SearchQuery, cwd: Path) -> _Roots:
             shown = ", ".join(path_label(path, cwd) for path in alternatives)
             query.notes.append(f'path "{raw}" names several paths, so {shown} were searched.')
             continue
+        if text.startswith("!") and len(text) > 1:
+            query.globs.append(text)
+            query.notes.append(
+                f'path "{raw}" starts with !, so it was applied as an excluding glob.'
+            )
+            excluded = True
+            continue
         base = _glob_root(text, cwd, query)
         if base is not None:
             _add(roots.paths, base)
             continue
         roots.missing.append((raw, resolved))
+    if excluded and not roots.paths and not roots.missing:
+        roots.paths.append(cwd)
     return roots
 
 

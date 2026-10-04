@@ -228,6 +228,11 @@ async def test_grep_habits_in_args_keep_their_meaning(project: Path, args: list[
         ({"pattern": "def", "path": "src/*.py"}, 'so src was searched with glob "/src/*.py"'),
         ({"pattern": "def", "path": "{src,docs}"}, "names several paths, so src, docs"),
         ({"pattern": "def", "path": "src,docs"}, "names several paths, so src, docs"),
+        # A missing path starting with ! is an excluding glob; alone it searches the cwd.
+        (
+            {"args": ["load", "!docs/**", "!*.ts"]},
+            'path "!docs/**" starts with !, so it was applied as an excluding glob.',
+        ),
     ],
 )
 async def test_a_path_written_as_a_glob_or_list_searches_what_it_names(
