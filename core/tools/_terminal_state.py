@@ -44,9 +44,10 @@ TERMINAL_INITIAL_INPUT_QUIET_SECONDS = 0.5
 TERMINAL_INITIAL_INPUT_TIMEOUT_SECONDS = 15.0
 TERMINAL_OPERATOR_READY_TIMEOUT_SECONDS = 10.0
 TERMINAL_ACTIVITY_QUIET_SECONDS = 2.0
-# Repaint activity extends the resize grace up to its hard deadline.
-TERMINAL_RESIZE_GRACE_SECONDS = 4.0
-TERMINAL_RESIZE_GRACE_MAX_SECONDS = 15.0
+# Output this soon after resizing a quiet terminal is the program redrawing
+# its screen for the new size. Claude Code, Codex and OpenCode finish that
+# redraw within about 15-125 ms, in one burst.
+TERMINAL_REPAINT_WINDOW_SECONDS = 1.0
 TERMINAL_INPUT_KEY_DELAY_SECONDS = 0.1
 TERMINAL_STREAM_RETENTION_EVENTS = 4_096
 TERMINAL_STREAM_BYTE_LIMIT = 4 * 1024 * 1024
@@ -235,11 +236,10 @@ class TerminalSession:
     # operator, so its settle waves must not wake the session. Real work
     # after the suppression clears delivers normally.
     suppress_until_activity: bool = False
-    # Resize output is coalesced, never assumed to be disposable repaint.
-    # Quiet detection still exposes an acknowledgeable activity boundary;
-    # its delivery waits for this rolling window, bounded by the hard cap.
-    resize_grace_until: float = 0.0
-    resize_grace_deadline: float = 0.0
+    # Set when a quiet terminal is resized: output before this monotonic time
+    # redraws known content for the new size and is not activity. Later
+    # output, or input, ends the repaint and makes the cycle activity again.
+    repaint_until: float = 0.0
     # Visible-cell signature of the rendered screen at the moment the last
     # output_settled delivery happened (None until the first delivery).
     # A quiet boundary whose screen is unchanged (status refreshes, cursor

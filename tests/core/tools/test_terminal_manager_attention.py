@@ -1,4 +1,4 @@
-"""Terminal manager: attention delivery to the attached Agent Session, and resize grace."""
+"""Terminal manager: attention delivery to the attached Agent Session, and resize repaints."""
 
 from __future__ import annotations
 
@@ -362,39 +362,56 @@ async def _baseline(clocked: Clocked, tmp_path: Path) -> Any:
 
 
 @pytest.mark.asyncio
-async def test_operator_resize_burst_without_output_does_not_wake_agent(
+async def test_repaint_after_resizing_a_quiet_terminal_does_not_wake_agent(
     clocked_manager: Clocked, tmp_path: Path
 ) -> None:
-    manager, _factory, trigger, clock = clocked_manager
+    """A quiet program redraws its known content for each new size. The redraw
+    wakes nobody and becomes the baseline; only new content wakes the Agent."""
+    manager, _factory, trigger, _clock = clocked_manager
     session = await _baseline(clocked_manager, tmp_path)
     revision = session.attention_revision
 
     for columns, rows in [(70, 20), (160, 48), (100, 30)]:
         await manager.resize_for_operator(session.terminal_id, columns=columns, rows=rows)
-    await clock.advance(terminal_state.TERMINAL_RESIZE_GRACE_MAX_SECONDS + 1)
-
-    assert len(trigger.submissions) == 1
+        await _settle(clocked_manager, session, "\x1b[2J\x1b[HMENU> ")
     assert session.attention_revision == revision
     assert session.state == "ready"
+    # The same screen again, long after the resize, is still known content.
+    await _settle(clocked_manager, session, "\x1b[2J\x1b[HMENU> ")
+    assert len(trigger.submissions) == 1
+
+    await _settle(clocked_manager, session, "\r\nTask completed.")
+    await eventually(lambda: len(trigger.submissions) == 2)
 
 
 @pytest.mark.asyncio
-async def test_agent_input_clears_resize_grace_and_wakes_on_later_output(
-    clocked_manager: Clocked, tmp_path: Path
+@pytest.mark.parametrize(
+    "order",
+    ["output-after-window", "input-then-resize", "resize-then-input"],
+)
+async def test_activity_around_a_resize_wakes_agent(
+    clocked_manager: Clocked, tmp_path: Path, order: str
 ) -> None:
-    """Input after a resize is work, so it ends the grace: a settle following
-    it must deliver immediately instead of being treated as repaint noise."""
-    manager, _factory, trigger, _clock = clocked_manager
+    """Output after the repaint window, and anything following input, is
+    activity even when it arrives right after a resize."""
+    manager, factory, trigger, clock = clocked_manager
     session = await _baseline(clocked_manager, tmp_path)
-    await manager.resize(session.terminal_id, owner(), columns=100, rows=24)
-    await _agent_input(manager, session, data="answer\r", origin_run_id="run-c")
-    assert session.resize_grace_deadline == 0.0
+    if order == "output-after-window":
+        await manager.resize(session.terminal_id, owner(), columns=100, rows=24)
+        await clock.advance(terminal_state.TERMINAL_REPAINT_WINDOW_SECONDS + 0.1)
+    elif order == "input-then-resize":
+        await _agent_input(manager, session, data="answer\r", origin_run_id="run-c")
+        await manager.resize(session.terminal_id, owner(), columns=100, rows=24)
+    else:
+        await manager.resize(session.terminal_id, owner(), columns=100, rows=24)
+        await _agent_input(manager, session, data="answer\r", origin_run_id="run-c")
 
-    await _settle(clocked_manager, session, "output after agent input")
+    await _settle(clocked_manager, session, "\r\nTask completed.")
 
     await eventually(lambda: len(trigger.submissions) == 2)
     assert session.attention is not None
     assert session.attention.kind == "output_settled"
+    assert factory.adapters[0].resizes == [(24, 100)]
 
 
 @pytest.mark.asyncio
@@ -437,51 +454,3 @@ async def test_textless_agent_start_suppresses_the_startup_settle(
     await eventually(lambda: len(trigger.submissions) == 1)
     assert session.attention is not None
     assert session.attention.kind == "output_settled"
-
-
-@pytest.mark.asyncio
-async def test_resize_repaints_are_deferred_until_the_grace_cap_without_losing_final_content(
-    clocked_manager: Clocked, tmp_path: Path
-) -> None:
-    """Repaints after a resize wake nobody, yet the final screen is delivered at the
-    grace cap without another PTY event, and later work wakes the Agent again."""
-    manager, _factory, trigger, clock = clocked_manager
-    session = await _baseline(clocked_manager, tmp_path)
-    await manager.resize(session.terminal_id, owner(), columns=90, rows=24)
-
-    for output in ("\rMENU> ", "\rMENU> status", "\rMENU> status", "\rMENU> status"):
-        await _settle(clocked_manager, session, output)
-        assert len(trigger.submissions) == 1
-
-    await clock.advance(terminal_state.TERMINAL_RESIZE_GRACE_MAX_SECONDS)
-    await eventually(lambda: len(trigger.submissions) == 2)
-    await _settle(clocked_manager, session, "\rMENU> status\nnew work output line")
-    await eventually(lambda: len(trigger.submissions) == 3)
-    assert session.attention is not None
-    assert session.attention.kind == "output_settled"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("output", "acknowledge"),
-    [("\r\x1b[7mMENU> \x1b[0m", False), ("\r\x1b[2KTask completed. Please review result.", True)],
-    ids=["styled-change-delivered", "acknowledged-screen-stays-silent"],
-)
-async def test_resize_final_output_is_delivered_once_unless_acknowledged(
-    clocked_manager: Clocked, tmp_path: Path, output: str, acknowledge: bool
-) -> None:
-    manager, _factory, trigger, clock = clocked_manager
-    session = await _baseline(clocked_manager, tmp_path)
-    await manager.resize(session.terminal_id, owner(), columns=90, rows=24)
-    await _settle(clocked_manager, session, output)
-    assert len(trigger.submissions) == 1
-    if acknowledge:
-        manager.acknowledge_attention(session.terminal_id, owner(), session.attention_revision)
-
-    await clock.advance(terminal_state.TERMINAL_RESIZE_GRACE_MAX_SECONDS)
-    await eventually(lambda: session.settle_task is not None and session.settle_task.done())
-    expected = 1 if acknowledge else 2
-    await eventually(lambda: len(trigger.submissions) == expected)
-    # The same screen again is not new work.
-    await _settle(clocked_manager, session, output)
-    assert len(trigger.submissions) == expected
