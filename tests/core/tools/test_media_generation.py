@@ -91,6 +91,7 @@ def test_video_profile_only_exposes_configured_model_capabilities(
     optional = {"duration", "aspect_ratio", "resolution", "generate_audio", "first_frame"}
     absent = (optional | {"last_frame"}) - set(offered)
     assert [name for name in absent if name in json.dumps(definition)] == []
+    assert ("audio" in json.dumps(definition)) == ("generate_audio" in offered)
 
 
 @pytest.mark.asyncio

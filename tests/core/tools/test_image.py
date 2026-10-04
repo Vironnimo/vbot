@@ -91,6 +91,7 @@ def test_profile_offers_what_the_configured_model_takes(
     # No text mentions a field this Model does not offer.
     absent = {"source_images", "aspect_ratio", "resolution", "background"} - set(offered)
     assert [name for name in absent if name in json.dumps(definition)] == []
+    assert ("edit" in json.dumps(definition)) == ("source_images" in offered)
 
 
 @pytest.mark.asyncio

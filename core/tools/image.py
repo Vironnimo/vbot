@@ -96,6 +96,8 @@ IMAGE_GENERATION_TOOL_DESCRIPTION = (
     "Generate images from a text prompt, or edit local images, with the configured model and "
     "save them as local files. Images passed as source_images are uploaded to the provider."
 )
+# Only Models that accept source images can edit; the text-only profile drops this.
+_EDIT_PROMPT_SENTENCE = " For edits, state both the changes and what must remain unchanged."
 # Per-call choices; a profile keeps those the configured Model offers, as enums.
 _CALL_OPTION_PROPERTIES: dict[str, str] = {
     "aspect_ratio": "Aspect ratio, width:height. Omit to use the default.",
@@ -114,9 +116,12 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Describe the image: the subject and its key attributes, the setting, "
-                "composition, lighting, mood, color palette, and the medium or style, for "
-                "example photograph, oil painting, 3D render, anime or flat vector."
+                "The text prompt for the image. Be specific and concrete: name the "
+                "subject and its key attributes, the setting, composition, lighting, "
+                "mood, color palette, and the visual medium or style (for example "
+                "photograph, oil painting, 3D render, anime, flat vector)."
+                + _EDIT_PROMPT_SENTENCE
+                + " Detailed prompts produce markedly better images than short vague ones."
             ),
         },
         "source_images": {
@@ -125,8 +130,7 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
             "minItems": 1,
             "description": (
                 "Local images to edit or to use as references. Relative paths start at the "
-                "working directory. When you edit, state in prompt what to change and what "
-                "must stay unchanged. Omit to generate from the prompt alone."
+                "working directory. Omit to generate from the prompt alone."
             ),
         },
         **{
@@ -152,6 +156,8 @@ def image_generation_parameters(profile: ImageProfile) -> JsonObject:
     properties = parameters["properties"]
     if not profile.accepts_source_images:
         properties.pop("source_images")
+        prompt = properties["prompt"]
+        prompt["description"] = prompt["description"].replace(_EDIT_PROMPT_SENTENCE, "")
     elif profile.max_source_images is not None:
         properties["source_images"]["maxItems"] = profile.max_source_images
     for name, description in _CALL_OPTION_PROPERTIES.items():
