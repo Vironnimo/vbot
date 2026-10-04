@@ -7,6 +7,7 @@ import {
 } from './skillAccess.js';
 import {
   createSkill as createSkillRequest,
+  inspectSkill,
   updateSkill,
   setSkillDisabled,
   setSkillPinned,
@@ -18,12 +19,14 @@ import {
   setProject,
   deleteSkill as deleteSkillRequest,
 } from '$lib/api.js';
+import { writeClipboardText } from '$lib/clipboard.js';
 
 // Every write of the Skills manager. Each request is immediate, runs one at a
 // time (`busy`), reloads the inventory afterwards and reports failures as
 // toasts. Delete, revert and permanent delete ask first. `context` supplies
-// the projection agents, the inspected package, `onToast` and
-// `loadInventory`.
+// the projection agents, the inspected package (null when the caller shows
+// none), `onToast` and `loadInventory`. The Skills manager and the Agent
+// editor's Skills section both use it.
 export function createSkillActions(context) {
   const GLOBAL_SCOPE = 'global';
 
@@ -123,15 +126,32 @@ export function createSkillActions(context) {
     );
   }
 
-  function startEdit(entry) {
-    if (busy || !entry.editable_scope || context.inspected?.id !== entry.id)
-      return;
+  // Opens the editor with the package's SKILL.md: the inspected text when the
+  // caller shows this package, otherwise read from the server first.
+  async function startEdit(entry) {
+    if (busy || !entry.editable_scope) return;
+    let content =
+      context.inspected?.id === entry.id ? context.inspected.content : null;
+    if (content === null) {
+      busy = true;
+      try {
+        content = (await inspectSkill(entry.id)).content;
+      } catch (error) {
+        context.onToast({
+          title: `${t('skills.readError')} ${error.message}`,
+          variant: 'error',
+        });
+        return;
+      } finally {
+        busy = false;
+      }
+    }
     editing = {
       scope: entry.editable_scope,
       name: entry.name,
       shared: entry.shared,
     };
-    editContent = context.inspected.content;
+    editContent = content;
   }
 
   function closeEditModal() {
@@ -154,6 +174,18 @@ export function createSkillActions(context) {
       () => t('settings.skills.contentSaveError'),
       () => t('settings.skills.saved'),
     );
+  }
+
+  async function copyName(name) {
+    try {
+      await writeClipboardText(name);
+      context.onToast({
+        title: t('skills.menu.nameCopied', { name }),
+        variant: 'success',
+      });
+    } catch {
+      context.onToast({ title: t('skills.menu.copyFailed'), variant: 'error' });
+    }
   }
 
   // The global off switch for every package with this name.
@@ -395,6 +427,7 @@ export function createSkillActions(context) {
     startEdit,
     closeEditModal,
     saveEdit,
+    copyName,
     setDisabled,
     updateAgentAccess,
     setSharing,

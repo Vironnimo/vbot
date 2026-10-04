@@ -1,5 +1,6 @@
 <script>
-  // The Skills manager's dialogs: create a Skill, edit a package's SKILL.md,
+  // The Skill dialogs of the Skills manager and the Agent editor's Skills
+  // section: create a Skill, edit a package's SKILL.md,
   // confirm a delete (into the archive), a revert of history revisions and
   // the permanent delete of an archived package. State and requests live in
   // actions.svelte.js.
@@ -12,6 +13,7 @@
   import Modal from '../ui/Modal.svelte';
   import TextArea from '../ui/TextArea.svelte';
   import TextField from '../ui/TextField.svelte';
+  import './skills.css';
 
   let { actions } = $props();
 </script>

@@ -256,7 +256,7 @@ describe('contextMenu helpers', () => {
     expect(isContextMenuKey(new KeyboardEvent('keydown', init))).toBe(expected);
   });
 
-  it('anchors pointer events at the pointer and keyboard events below the target', () => {
+  it('anchors pointer events at the pointer and keyboard events and menu buttons below the target', () => {
     const row = document.createElement('button');
     document.body.append(row);
     row.focus();
@@ -279,6 +279,22 @@ describe('contextMenu helpers', () => {
       returnFocus: row,
     });
     expect(contextMenuAnchor(keyboard)).toEqual({
+      x: 12,
+      y: 64,
+      returnFocus: row,
+    });
+
+    // A menu button opens its menu below itself, also for a click on its icon.
+    row.setAttribute('aria-haspopup', 'menu');
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    row.append(icon);
+    const click = new MouseEvent('click', {
+      bubbles: true,
+      clientX: 120,
+      clientY: 80,
+    });
+    icon.dispatchEvent(click);
+    expect(contextMenuAnchor(click)).toEqual({
       x: 12,
       y: 64,
       returnFocus: row,

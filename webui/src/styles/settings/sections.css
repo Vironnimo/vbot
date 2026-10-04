@@ -479,6 +479,28 @@
   margin-right: 4px;
 }
 
+/* The row's "⋯" menu button: hidden until the row is hovered or a control
+   in it has focus, so quiet lists stay quiet; touch screens always show it. */
+.btn-tertiary.btn-icon.s-check-item__menu {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  margin-right: 4px;
+  opacity: 0;
+}
+
+.s-check-item:hover .s-check-item__menu,
+.s-check-item:focus-within .s-check-item__menu {
+  opacity: 1;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .btn-tertiary.btn-icon.s-check-item__menu {
+    opacity: 1;
+  }
+}
+
 .s-check-group .s-check-item__box {
   margin-left: 8px;
 }

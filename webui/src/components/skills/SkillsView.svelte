@@ -1,7 +1,6 @@
 <script>
   import { onMount, onDestroy, tick, untrack } from 'svelte';
   import { inspectSkill, skillInventory } from '$lib/api.js';
-  import { writeClipboardText } from '$lib/clipboard.js';
   import { t } from '$lib/i18n.js';
   import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
   import { isImeComposing } from '$lib/keyboard.js';
@@ -505,25 +504,13 @@
     showSkill(entry);
     await tick();
     await placeApplied;
-    if (selectedId === entry.id) actions.startEdit(entry);
-  }
-
-  async function copyName(name) {
-    try {
-      await writeClipboardText(name);
-      onToast({
-        title: t('skills.menu.nameCopied', { name }),
-        variant: 'success',
-      });
-    } catch {
-      onToast({ title: t('skills.menu.copyFailed'), variant: 'error' });
-    }
+    if (selectedId === entry.id) await actions.startEdit(entry);
   }
 
   const menuActions = {
     open: (entry) => showSkill(entry),
     edit: (entry) => void editSkill(entry),
-    copyName: (name) => void copyName(name),
+    copyName: (name) => void actions.copyName(name),
     setDisabled: (entry, disabled) => actions.setDisabled(entry, disabled),
     remove: (entry) => actions.requestDelete(entry),
     restore: (item) => void actions.restoreArchived(item),

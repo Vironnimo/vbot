@@ -756,8 +756,9 @@ describe('Skills manager', () => {
     click(button('Back to All skills'));
     await settle();
 
-    // An Agent row turns the Skill on or off for that Agent; a Project grant
-    // stays fixed and says where it is managed.
+    // An Agent row turns the Skill on or off for that Agent; the Agent's own
+    // Skills can also be edited and deleted there, also through their "⋯"
+    // button. A Project grant stays fixed and says where it is managed.
     collection('Main');
     rightClick(
       document
@@ -767,20 +768,52 @@ describe('Skills manager', () => {
     expect(menu()).toEqual([
       'Turn off for Main',
       'Open skill',
+      'Edit instructions',
       'Copy name',
       '|',
       'Turn off everywhere',
+      '|',
+      'Delete…',
     ]);
     pick('Turn off for Main');
     await settle();
     expect(calls('agent.update')).toEqual([
       { id: 'main', excluded_skills: ['deploy'] },
     ]);
+    expect(button('Actions for teach')).toBeUndefined();
+    click(button('Actions for deploy'));
+    pick('Delete…');
+    click(button('Delete', document.querySelector('[role="dialog"]')));
+    await settle();
+    expect(calls('skill.delete')).toEqual([
+      { scope: 'agent:main', name: 'deploy' },
+    ]);
+    rightClick(
+      document
+        .querySelector('[data-item-key="teach"]')
+        .closest('.s-check-item'),
+    );
+    expect(menu()).toEqual([
+      'Turn off for Main',
+      'Open skill',
+      'Copy name',
+      '|',
+      'Turn off everywhere',
+    ]);
+    key(document.querySelector('.context-menu'), 'Escape');
     collection('Reviewer');
     key(document.querySelector('[data-item-key="teach"]'), 'ContextMenu');
     expect(menu()[0]).toBe(
       'Turn off for Reviewer Managed in project Repo disabled',
     );
+    key(document.querySelector('.context-menu'), 'Escape');
+    // Shared with Reviewer, notes stays Main's: no Edit or Delete here.
+    rightClick(
+      document
+        .querySelector('[data-item-key="notes"]')
+        .closest('.s-check-item'),
+    );
+    expect(menu()).not.toContain('Delete…');
     key(document.querySelector('.context-menu'), 'Escape');
 
     collection('Repo');
