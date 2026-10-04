@@ -9,7 +9,7 @@ files; matching happens in ``_edit_engine.py``.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -178,14 +178,18 @@ class _PatchError(Exception):
         self._template = template or code
         super().__init__(self.text())
 
-    def text(self, shown: Callable[[Path], str] = model_path) -> str:
+    def text(
+        self, shown: Callable[[Path], str] = model_path, templates: Mapping[str, str] | None = None
+    ) -> str:
+        """Render the message; ``templates`` replaces the wording of some templates."""
         if self._message is not None:
             return self._message
         values = {k: shown(v) if isinstance(v, Path) else v for k, v in self.values.items()}
         if "path" in values:
             label = values.get("label")
             values.setdefault("where", f"{values['path']}, {label}" if label else values["path"])
-        return _MESSAGES[self._template].format(**values)
+        template = (templates or {}).get(self._template, _MESSAGES[self._template])
+        return template.format(**values)
 
 
 @dataclass
@@ -229,6 +233,8 @@ class _Operation:
     hunk_number: int = 1
     # Add only when the file is missing or empty (an empty old_string).
     only_if_empty: bool = False
+    # Names the change in a failure of the whole operation, such as "edit 2".
+    label: str = ""
     # Line ending for a file this Add creates; existing files keep their own.
     newline: str = "\n"
     # The first Add body line written with a leading - (patch line, text): content

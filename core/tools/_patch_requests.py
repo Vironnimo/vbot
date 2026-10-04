@@ -242,10 +242,12 @@ def patch_operations(arguments: JsonObject) -> list[_Operation]:
             "invalid_arguments",
             message='The patch is empty. Send patch="*** Begin Patch\\n...\\n*** End Patch".',
         )
-    return [_content_operation(path, arguments["content"])]
+    return [content_operation(path, arguments["content"])]
 
 
-def _content_operation(path: str, content: str, *, only_if_empty: bool = False) -> _Operation:
+def content_operation(
+    path: str, content: str, *, only_if_empty: bool = False, label: str = ""
+) -> _Operation:
     """Create or replace a file with exactly ``content``."""
     text = content.replace("\r\n", "\n").replace("\r", "\n")
     newline = "\r\n" if "\r\n" in content else "\r" if "\r" in content else "\n"
@@ -256,21 +258,26 @@ def _content_operation(path: str, content: str, *, only_if_empty: bool = False) 
         if not no_newline:
             lines.pop()
         hunks = [_Hunk(lines=[("+", line) for line in lines], no_newline=no_newline)]
-    return _Operation("add", path, hunks=hunks, only_if_empty=only_if_empty, newline=newline)
+    return _Operation(
+        "add", path, hunks=hunks, only_if_empty=only_if_empty, newline=newline, label=label
+    )
 
 
 def _edit_operations(path: str, edits: list[JsonObject]) -> list[_Operation]:
     operations: list[_Operation] = []
     for number, edit in enumerate(edits, 1):
         target = edit.get("path", path)
+        label = f"edit {number}" if len(edits) > 1 else ""
         if edit["old_string"] == "":
-            operations.append(_content_operation(target, edit["new_string"], only_if_empty=True))
+            operations.append(
+                content_operation(target, edit["new_string"], only_if_empty=True, label=label)
+            )
             continue
         hunk = _Hunk(
             replacement=_Replacement(
                 edit["old_string"], edit["new_string"], edit.get("replace_all", False)
             ),
-            label=f"edit {number}" if len(edits) > 1 else "",
+            label=label,
         )
         last = operations[-1] if operations else None
         if last is not None and last.action == "update" and last.path == target:
@@ -283,6 +290,7 @@ def _edit_operations(path: str, edits: list[JsonObject]) -> list[_Operation]:
 __all__ = [
     "APPLY_PATCH_TOOL_NAME",
     "PATCH_HIDDEN_PARAMETERS",
+    "content_operation",
     "normalize_patch_arguments",
     "patch_operations",
 ]
