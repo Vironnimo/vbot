@@ -1,8 +1,7 @@
 import {
   RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
   RUN_EVENT_REASONING_DELTA,
-  RUN_EVENT_TOOL_CALL_STDERR,
-  RUN_EVENT_TOOL_CALL_STDOUT,
+  RUN_EVENT_TOOL_CALL_OUTPUT,
 } from '../api.js';
 
 export const CHAT_STATUS_IDLE = 'idle';
@@ -40,8 +39,7 @@ export const TERMINAL_RUN_STATUSES = new Set([
 export const TERMINAL_VISIBLE_DRAFT_EVENT_TYPES = new Set([
   RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
   RUN_EVENT_REASONING_DELTA,
-  RUN_EVENT_TOOL_CALL_STDOUT,
-  RUN_EVENT_TOOL_CALL_STDERR,
+  RUN_EVENT_TOOL_CALL_OUTPUT,
 ]);
 
 export const isRecord = (value) =>
@@ -78,7 +76,9 @@ export function createChatState() {
     availableSkills: [],
     subAgentStatuses: {},
     subAgentResults: {},
-    backgroundBashProcesses: {},
+    // Live status of each handed-off shell command, by terminal id, from
+    // `command_status_changed` (bounded, newest last).
+    commandStatuses: {},
   };
 }
 
@@ -156,7 +156,9 @@ export function ensureSessionState(state, agentId, sessionId) {
       // The Session's effective Compaction Policy from `chat.history`; null
       // until History reports it.
       compactionPolicy: null,
-      backgroundBashStatuses: {},
+      // Durable status of each handed-off shell command, by terminal id, from
+      // `chat.history`'s `background_command_statuses`.
+      backgroundCommandStatuses: {},
       reflectionTasks: {},
       // Per review Run id: its loaded change list and undo state.
       reflectionDetails: {},

@@ -47,7 +47,6 @@ const TOOL_DISPLAY_ARGS = {
   subagent: ['action', 'id', 'agent_id', 'content'],
   web_fetch: ['url'],
   web_search: ['query'],
-  process: ['action', 'process_id'],
   cron: ['name', 'id', 'target', 'schedule'],
   channel_send: ['channel_id', 'message'],
   skill: ['name'],
@@ -405,21 +404,6 @@ function humanReadableToolLabel(toolName, argumentsValue) {
 
   if (SUBAGENT_TOOL_NAMES.has(toolName)) {
     return subAgentToolLabel(toolName, args) ?? '';
-  }
-
-  if (toolName === 'process') {
-    const action = trimmedString(args.action);
-    if (action) {
-      return [action, trimmedString(args.process_id)]
-        .filter(Boolean)
-        .join(' · ');
-    }
-    const legacyOperation = isPlainObject(args.request)
-      ? trimmedString(args.request.operation)
-      : '';
-    if (legacyOperation) {
-      return legacyOperation;
-    }
   }
 
   if (toolName === 'cron') {

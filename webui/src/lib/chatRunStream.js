@@ -39,8 +39,7 @@ const DELAYED_RUN_EVENT_TYPES = new Set([
   'assistant_output_delta',
   'reasoning_delta',
   'tool_call_delta',
-  'tool_call_stdout',
-  'tool_call_stderr',
+  'tool_call_output',
 ]);
 
 function defaultStreamDiagnostic(diagnostic) {

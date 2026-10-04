@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  backgroundBashDisplayResult,
-  backgroundBashRowState,
-  backgroundBashStatusDetails,
-  backgroundBashToolStatusLabel,
+  backgroundCommandRowState,
+  backgroundCommandStatusDetails,
+  backgroundCommandToolStatusLabel,
   backgroundTasks,
   changeStatsLabel,
   changeStatsParts,
@@ -26,7 +25,7 @@ import {
 } from '../chatTimelinePresentation.js';
 import { t } from '../i18n.js';
 import { formatAbsoluteTime, formatMoment } from '../timeText.js';
-import { backgroundBashTool } from './chatTimelinePresentation.support.js';
+import { backgroundCommandTool } from './chatTimelinePresentation.support.js';
 
 const status = (name) => t(`chat.runStatus.${name}`);
 const seconds = (value) => t('chat.durationSeconds', { seconds: value });
@@ -524,8 +523,7 @@ describe('Run children', () => {
             partialArgumentsText: '{"query": "ca',
             startedEvent: null,
             resultEvent: null,
-            stdout: '',
-            stderr: '',
+            output: '',
           },
         ],
       }),
@@ -595,95 +593,93 @@ describe('Run children', () => {
   });
 });
 
-describe('background Bash rows', () => {
+describe('background command rows', () => {
   const nowMs = Date.parse('2026-09-04T12:30:00Z');
   const timing = {
     started_at: '2026-09-04T12:00:00Z',
     completed_at: '2026-09-04T12:00:01Z',
   };
-  const terminalEntry = {
-    status: 'completed',
-    exitCode: 0,
-    cancelledByUser: false,
-    startedAt: '2026-09-04T12:00:00Z',
-    finishedAt: '2026-09-04T12:04:12Z',
-    output: 'build finished',
-    truncated: false,
-    logFile: 'C:/logs/bash/process-one.log',
-  };
-  const runtime = () => minutesSeconds(4, 12);
+  const terminal = (value) => ({
+    label: t('chat.details.terminal'),
+    value,
+    mono: true,
+  });
   const foregroundBash = () =>
-    backgroundBashTool({
+    backgroundCommandTool({
       id: 'bash-foreground',
-      arguments: { command: 'npm test', mode: 'foreground' },
+      arguments: { command: 'npm test' },
       result: {
         ok: true,
-        data: { status: 'completed', mode: 'foreground' },
+        data: { exit_code: 0, output: 'passed' },
         artifacts: [],
       },
     });
 
-  it('resolves the row dot from live, durable, then envelope status', () => {
-    const tool = backgroundBashTool();
-
-    expect(backgroundBashRowState(tool, {}, {})).toEqual(
-      expect.objectContaining({
-        processId: 'process-one',
-        dotStatus: 'running',
-        terminal: null,
-      }),
-    );
-    const settled = backgroundBashRowState(
-      tool,
-      {},
-      { 'process-one': terminalEntry },
-    );
-    expect(settled.dotStatus).toBe('success');
-    expect(settled.terminal).toEqual(terminalEntry);
+  it.each([
+    ['running', 'running'],
+    ['completed', 'success'],
+    ['failed', 'failed'],
+    ['stopped', 'cancelled'],
+  ])('shows a %s command with the %s dot', (status, dotStatus) => {
     expect(
-      backgroundBashRowState(tool, { 'process-one': 'failed' }, {}).dotStatus,
+      backgroundCommandRowState(
+        backgroundCommandTool(),
+        {},
+        { term_one: status },
+      ),
+    ).toEqual({
+      terminalId: 'term_one',
+      command: 'npm run dev',
+      fullCommand: 'npm run dev',
+      dotStatus,
+    });
+  });
+
+  it('prefers the live status, falls back to the durable one and needs one', () => {
+    const tool = backgroundCommandTool();
+
+    expect(
+      backgroundCommandRowState(
+        tool,
+        { term_one: 'running' },
+        { term_one: 'stopped' },
+      ).dotStatus,
+    ).toBe('cancelled');
+    expect(
+      backgroundCommandRowState(tool, { term_one: 'failed' }, {}).dotStatus,
     ).toBe('failed');
-    expect(backgroundBashRowState(foregroundBash(), {}, {})).toBeNull();
+    // A command vBot no longer runs stays a plain Tool row.
+    expect(backgroundCommandRowState(tool, {}, {})).toBeNull();
+    expect(
+      backgroundCommandRowState(foregroundBash(), {}, { term_one: 'running' }),
+    ).toBeNull();
   });
 
   it.each([
     [
-      'ticks from the Tool call start while the process runs',
-      {},
-      {},
+      'ticks from the Tool call start while the command runs',
+      'running',
       () => minutesSeconds(30, 0),
     ],
     [
-      'shows the real runtime once the process is terminal',
-      {},
-      { 'process-one': terminalEntry },
-      runtime,
+      'marks a stopped command as cancelled',
+      'stopped',
+      () => t('chat.toolCancelled'),
     ],
-    [
-      'shows no time for a terminal row without a known runtime',
-      { 'process-one': 'completed' },
-      {},
-      () => '',
-    ],
-    [
-      'marks a cancelled process with its runtime',
-      {},
-      { 'process-one': { ...terminalEntry, status: 'killed' } },
-      () => [t('chat.toolCancelled'), runtime()].join(' · '),
-    ],
-  ])('%s', (_label, liveStatuses, processes, expected) => {
-    const tool = backgroundBashTool({ timing });
-    const rowState = backgroundBashRowState(tool, liveStatuses, processes);
+    ['shows no time once the command ended', 'completed', () => ''],
+  ])('%s', (_label, status, expected) => {
+    const tool = backgroundCommandTool({ timing });
+    const rowState = backgroundCommandRowState(tool, {}, { term_one: status });
 
-    expect(backgroundBashToolStatusLabel(tool, rowState, nowMs)).toBe(
+    expect(backgroundCommandToolStatusLabel(tool, rowState, nowMs)).toBe(
       expected(),
     );
   });
 
   it.each([
     [
-      'a running process with its hand-off meaning',
-      {},
+      'a running command with its hand-off meaning',
+      'running',
       (moment) => ({
         title: t('chat.toolState.background'),
         text: t('chat.toolState.backgroundHint'),
@@ -693,111 +689,74 @@ describe('background Bash rows', () => {
             value: moment(timing.started_at),
           },
           { label: t('chat.details.runningFor'), value: minutesSeconds(30, 0) },
-          {
-            label: t('chat.details.process'),
-            value: 'process-one',
-            mono: true,
-          },
+          terminal('term_one'),
         ],
       }),
     ],
     [
-      'a failed process with its exit code',
-      { 'process-one': { ...terminalEntry, status: 'failed', exitCode: 2 } },
-      (moment) => ({
+      'a failed command',
+      'failed',
+      () => ({
         title: t('chat.toolState.failed'),
         text: '',
-        rows: [
-          {
-            label: t('chat.details.started'),
-            value: moment(terminalEntry.startedAt),
-          },
-          {
-            label: t('chat.details.finished'),
-            value: moment(terminalEntry.finishedAt),
-          },
-          { label: t('chat.details.duration'), value: runtime() },
-          { label: t('chat.details.exitCode'), value: '2', tone: 'danger' },
-          {
-            label: t('chat.details.process'),
-            value: 'process-one',
-            mono: true,
-          },
-        ],
+        rows: [terminal('term_one')],
       }),
     ],
-  ])('details %s', (_label, processes, expected) => {
-    const tool = backgroundBashTool({ timing });
-    const rowState = backgroundBashRowState(tool, {}, processes);
+  ])('details %s', (_label, status, expected) => {
+    const tool = backgroundCommandTool({ timing });
+    const rowState = backgroundCommandRowState(tool, {}, { term_one: status });
     const moment = (value) => formatMoment(value, { nowMs, seconds: true });
 
-    expect(backgroundBashStatusDetails(tool, rowState, nowMs)).toEqual(
+    expect(backgroundCommandStatusDetails(tool, rowState, nowMs)).toEqual(
       expected(moment),
     );
   });
 
-  it('replaces the handoff result with the actual completion result', () => {
-    const tool = backgroundBashTool();
-
-    expect(
-      backgroundBashDisplayResult(tool, backgroundBashRowState(tool, {}, {})),
-    ).toBe(tool.result);
-    const settledRow = backgroundBashRowState(
-      tool,
-      {},
-      { 'process-one': terminalEntry },
-    );
-    expect(JSON.parse(backgroundBashDisplayResult(tool, settledRow))).toEqual({
-      ok: true,
-      error: null,
-      data: {
-        status: 'completed',
-        exit_code: 0,
-        output: 'build finished',
-        truncated: false,
-        log_file: 'C:/logs/bash/process-one.log',
-      },
-    });
-  });
-
-  it('keeps the live clock running until the handed-off process is terminal', () => {
+  it('keeps the live clock running until the handed-off command ends', () => {
     const items = [
       {
         id: 'run-1',
         type: 'assistant_run',
-        items: [backgroundBashTool({ timing })],
+        items: [backgroundCommandTool({ timing })],
       },
     ];
 
-    expect(liveClockCadenceMs(items, {}, nowMs, {})).toBe(1000);
+    expect(liveClockCadenceMs(items, {}, nowMs, { term_one: 'running' })).toBe(
+      1000,
+    );
     expect(
-      liveClockCadenceMs(items, {}, nowMs, {
-        'process-one': { status: 'completed' },
-      }),
+      liveClockCadenceMs(
+        items,
+        {},
+        nowMs,
+        { term_one: 'running' },
+        { term_one: 'completed' },
+      ),
     ).toBe(0);
   });
 
-  it('surfaces the Bash time label on Activity panel tasks', () => {
+  it('lists handed-off commands as Activity panel tasks', () => {
     const tasks = backgroundTasks(
       [
         {
           id: 'run-1',
           type: 'assistant_run',
-          items: [backgroundBashTool(), foregroundBash()],
+          items: [backgroundCommandTool(), foregroundBash()],
         },
       ],
       {},
-      {},
-      { 'process-one': terminalEntry },
+      { term_one: 'running' },
+      { term_one: 'stopped' },
       nowMs,
     );
 
     expect(tasks).toEqual([
       expect.objectContaining({
-        kind: 'bash',
-        processId: 'process-one',
-        dotStatus: 'success',
-        timeLabel: runtime(),
+        id: 'command:term_one',
+        kind: 'command',
+        terminalId: 'term_one',
+        dotStatus: 'cancelled',
+        timeLabel: t('chat.toolCancelled'),
       }),
     ]);
   });

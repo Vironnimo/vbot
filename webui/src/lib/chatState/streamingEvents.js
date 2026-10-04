@@ -2,8 +2,7 @@ import {
   RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
   RUN_EVENT_REASONING_DELTA,
   RUN_EVENT_TOOL_CALL_DELTA,
-  RUN_EVENT_TOOL_CALL_STDERR,
-  RUN_EVENT_TOOL_CALL_STDOUT,
+  RUN_EVENT_TOOL_CALL_OUTPUT,
   RUN_EVENT_STREAM_ATTEMPT_RESTARTED,
 } from '../api.js';
 import { createToolArgumentPreviewScanner } from '../toolArgumentPreview.js';
@@ -134,8 +133,7 @@ export function isStreamingDeltaRunEvent(eventType) {
     RUN_EVENT_REASONING_DELTA,
     RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
     RUN_EVENT_TOOL_CALL_DELTA,
-    RUN_EVENT_TOOL_CALL_STDOUT,
-    RUN_EVENT_TOOL_CALL_STDERR,
+    RUN_EVENT_TOOL_CALL_OUTPUT,
   ].includes(eventType);
 }
 
@@ -144,11 +142,8 @@ export function appendCompressedStreamingRunEvent(sessionState, event) {
     appendCompressedToolCallDeltaEvent(sessionState, event);
     return;
   }
-  if (
-    event.type === RUN_EVENT_TOOL_CALL_STDOUT ||
-    event.type === RUN_EVENT_TOOL_CALL_STDERR
-  ) {
-    appendCompressedToolOutputDeltaEvent(sessionState, event);
+  if (event.type === RUN_EVENT_TOOL_CALL_OUTPUT) {
+    retainLatestToolOutputEvent(sessionState, event);
     return;
   }
 
@@ -262,17 +257,17 @@ function appendCompressedToolCallDeltaEvent(sessionState, event) {
   ];
 }
 
-// Tool stdout/stderr chunks are compressed into ONE retained event per
-// (run, tool call, stream). The live run projection replays every retained
-// event on each render, so per-chunk retention made the rebuild cost quadratic
-// in the streamed output size — a multi-MiB bash output froze the whole UI.
-// A tool call id is unique per run, so no phase scoping is needed: all chunks
-// of one call belong to the same stream regardless of phase boundaries.
-function appendCompressedToolOutputDeltaEvent(sessionState, event) {
+// Each Tool output event carries the command's whole current screen, which
+// replaces the previous one, so only ONE event per (run, tool call) is
+// retained: its payload is the latest screen, while its sequence span still
+// covers every event it absorbed for gap detection. The live run projection
+// replays every retained event on each render, so retaining each event would
+// make the rebuild cost grow with the command's runtime. A tool call id is
+// unique per run, so no phase scoping is needed.
+function retainLatestToolOutputEvent(sessionState, event) {
   const payload = event.payload ?? {};
   const toolCallId = payload.tool_call_id ?? payload.id;
-  const data = typeof payload.data === 'string' ? payload.data : '';
-  if (!toolCallId || !data) {
+  if (!toolCallId || typeof payload.screen !== 'string') {
     return;
   }
 
@@ -283,13 +278,24 @@ function appendCompressedToolOutputDeltaEvent(sessionState, event) {
       (candidate.payload?.tool_call_id ?? candidate.payload?.id) === toolCallId,
   );
   if (existingEvent) {
-    existingEvent.payload.data = `${existingEvent.payload?.data ?? ''}${data}`;
+    const latestSequence = streamEventLatestSequence(existingEvent);
+    // A replayed older screen never replaces a newer one.
+    if (
+      !Number.isFinite(event.sequence) ||
+      !Number.isFinite(latestSequence) ||
+      event.sequence >= latestSequence
+    ) {
+      existingEvent.payload = {
+        ...payload,
+        tool_call_id: toolCallId,
+      };
+      existingEvent._streamLatestSequence = streamEventLatestSequence(event);
+    }
     existingEvent.sequence = firstSeenSequence(
       existingEvent.sequence,
       event.sequence,
     );
     existingEvent._streamChunkCount = streamEventChunkCount(existingEvent) + 1;
-    existingEvent._streamLatestSequence = streamEventLatestSequence(event);
     existingEvent.timestamp ??= event.timestamp;
     return;
   }
@@ -301,7 +307,6 @@ function appendCompressedToolOutputDeltaEvent(sessionState, event) {
       payload: {
         ...payload,
         tool_call_id: toolCallId,
-        data,
       },
       _streamingPhase: sessionState.streamingPhase,
       _streamChunkCount: 1,

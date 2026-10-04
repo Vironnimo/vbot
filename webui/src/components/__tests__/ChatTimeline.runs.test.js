@@ -700,7 +700,7 @@ describe('ChatTimeline Runs', () => {
     },
   );
 
-  it('shows streamed output in place of an Output detail block', () => {
+  it('shows the live output screen in place of an Output detail block', () => {
     const sessionState = timelineSession();
     const display = {
       version: 1,
@@ -719,21 +719,30 @@ describe('ChatTimeline Runs', () => {
     appendEvents(sessionState, 'run-tool-output', [
       toolStarted('call-one', 'bash', { command: 'printf hello' }),
       {
-        type: 'tool_call_stdout',
-        payload: { tool_call_id: 'call-one', data: 'hello\n' },
+        type: 'tool_call_output',
+        payload: {
+          tool_call_id: 'call-one',
+          terminal_id: 'term_one',
+          screen: '$ printf hello\nhello',
+        },
       },
       toolResult(
         'call-one',
         'bash',
-        { ok: true, data: { status: 'completed', output: 'hello\n' } },
+        { ok: true, data: { exit_code: 0, output: 'hello' } },
         { display },
       ),
     ]);
     timeline.render(sessionState);
 
     expect(detailText('chat.toolDetailLabel.command')).toBe('printf hello');
-    expect(detailRow('chat.toolStdout').textContent).toContain('hello');
-    expect(detailRow('chat.toolDetailLabel.output')).toBeNull();
+    const outputRows = Array.from(document.querySelectorAll('.teb-row')).filter(
+      (row) =>
+        row.querySelector('.teb-label')?.textContent ===
+        t('chat.toolDetailLabel.output'),
+    );
+    expect(outputRows).toHaveLength(1);
+    expect(outputRows[0].textContent).toContain('$ printf hello');
   });
 
   it('keeps interrupted Assistant output without a recovery marker', () => {
@@ -749,35 +758,29 @@ describe('ChatTimeline Runs', () => {
     expect(document.body.textContent).toContain('The first half of the answer');
   });
 
-  it('renders streamed Tool stdout and stderr apart from the Result', () => {
+  it('renders live Tool output apart from the Result', () => {
     const sessionState = timelineSession();
     appendEvents(sessionState, 'run-tool-output', [
       toolStarted('call-one', 'bash', { command: 'printf hello' }),
       {
-        type: 'tool_call_stdout',
-        payload: { tool_call_id: 'call-one', data: 'hello\n' },
-      },
-      {
-        type: 'tool_call_stderr',
-        payload: { tool_call_id: 'call-one', data: 'warn\n' },
+        type: 'tool_call_output',
+        payload: {
+          tool_call_id: 'call-one',
+          terminal_id: 'term_one',
+          screen: 'hello\nwarn',
+        },
       },
       toolResult('call-one', 'bash', {
         ok: true,
-        data: {
-          status: 'completed',
-          exit_code: 0,
-          output: 'hello\nwarn\n',
-          truncated: false,
-        },
+        data: { exit_code: 0, output: 'hello\nwarn' },
       }),
     ]);
     timeline.render(sessionState);
 
-    expect(detailRow('chat.toolStdout').textContent).toContain('hello');
-    expect(detailRow('chat.toolStderr').textContent).toContain('warn');
-    const result = detailText('chat.toolResultLabel');
-    expect(result).toContain('status: completed');
-    expect(result).toContain('exit_code: 0');
+    expect(detailRow('chat.toolDetailLabel.output').textContent).toContain(
+      'hello',
+    );
+    expect(detailText('chat.toolResultLabel')).toContain('exit_code: 0');
     expect(
       detailRow('chat.toolResultLabel').querySelector('.teb-code').textContent,
     ).not.toMatch(/hello|warn/);
@@ -789,12 +792,7 @@ describe('ChatTimeline Runs', () => {
       toolStarted('call-one', 'bash', { command: 'printf hello' }),
       toolResult('call-one', 'bash', {
         ok: true,
-        data: {
-          status: 'completed',
-          exit_code: 0,
-          output: 'hello from history\n',
-          truncated: false,
-        },
+        data: { exit_code: 0, output: 'hello from history\n' },
       }),
     ]);
     timeline.render(sessionState);

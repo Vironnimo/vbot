@@ -204,16 +204,16 @@ describe('History projection', () => {
         { id: 'message-two', role: 'assistant', content: 'Hello' },
       ],
       {
-        backgroundBashStatuses: {
-          'process-running': 'running',
-          'process-finished': 'completed',
+        backgroundCommandStatuses: {
+          term_running: 'running',
+          term_finished: 'completed',
         },
       },
     );
 
-    expect(sessionState.backgroundBashStatuses).toEqual({
-      'process-running': 'running',
-      'process-finished': 'completed',
+    expect(sessionState.backgroundCommandStatuses).toEqual({
+      term_running: 'running',
+      term_finished: 'completed',
     });
     expect(sessionState.messages).toHaveLength(2);
   });

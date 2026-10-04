@@ -468,15 +468,6 @@ describe('RPC wrappers', () => {
       { run_id: 'run-1', tool_call_id: 'call-1' },
     ],
     [
-      'chat.cancel_process',
-      (o) =>
-        api.cancelProcess(
-          { agentId: 'builder@project-one', processId: 'process-1' },
-          o,
-        ),
-      { agent_id: 'builder@project-one', process_id: 'process-1' },
-    ],
-    [
       'task_model.list_targets',
       (o) => api.listTaskModelTargets('speech_to_text', o),
       { task_type: 'speech_to_text' },

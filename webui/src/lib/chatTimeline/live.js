@@ -5,8 +5,7 @@ import {
   RUN_EVENT_CHANGE_STATS,
   RUN_EVENT_PROVIDER_HEARTBEAT,
   RUN_EVENT_PROVIDER_REQUEST_STATUS,
-  RUN_EVENT_TOOL_CALL_STDERR,
-  RUN_EVENT_TOOL_CALL_STDOUT,
+  RUN_EVENT_TOOL_CALL_OUTPUT,
 } from '../api.js';
 import {
   historyMessageItem,
@@ -465,10 +464,7 @@ export function appendLiveRunEvent(assistantRun, event) {
     return;
   }
 
-  if (
-    event.type === RUN_EVENT_TOOL_CALL_STDOUT ||
-    event.type === RUN_EVENT_TOOL_CALL_STDERR
-  ) {
+  if (event.type === RUN_EVENT_TOOL_CALL_OUTPUT) {
     mergeToolOutput(assistantRun, event);
     return;
   }
@@ -495,8 +491,7 @@ function isAssistantRunEvent(event) {
     'reasoning',
     RUN_EVENT_TOOL_CALL_DELTA,
     'tool_call_started',
-    RUN_EVENT_TOOL_CALL_STDOUT,
-    RUN_EVENT_TOOL_CALL_STDERR,
+    RUN_EVENT_TOOL_CALL_OUTPUT,
     'tool_call_result',
     'subagent_session_started',
     'subagent_status_changed',

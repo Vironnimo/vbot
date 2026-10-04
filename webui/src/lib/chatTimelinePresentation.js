@@ -38,10 +38,9 @@ export {
   liveClockCadenceMs,
   isRowCancellable,
   backgroundTasks,
-  backgroundBashRowState,
-  backgroundBashToolStatusLabel,
-  backgroundBashStatusDetails,
-  backgroundBashDisplayResult,
+  backgroundCommandRowState,
+  backgroundCommandToolStatusLabel,
+  backgroundCommandStatusDetails,
 } from './chatTimelinePresentation/activity.js';
 export {
   isReflectionRunKind,

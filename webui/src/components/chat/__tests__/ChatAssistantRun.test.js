@@ -586,11 +586,11 @@ describe('ChatAssistantRun', () => {
     });
   });
 
-  describe('handed-off background bash rows', () => {
+  describe('handed-off background commands', () => {
     const handedOffBash = () =>
       toolChild(
         'bash',
-        { command: 'npm run dev', mode: 'background' },
+        { command: 'npm run dev' },
         {
           id: 'bash-bg',
           status: 'success',
@@ -604,12 +604,9 @@ describe('ChatAssistantRun', () => {
             error: null,
             data: {
               status: 'running',
-              process_id: 'process-one',
-              mode: 'background',
-              delivery: 'automatic',
+              terminal_id: 'term_one',
               output: 'VITE ready in 830ms',
-              handoff_note:
-                'The command is still running and has been handed off to vBot.',
+              next: 'The result arrives as a new message.',
             },
             artifacts: [],
           },
@@ -618,40 +615,33 @@ describe('ChatAssistantRun', () => {
 
     it.each([
       [
-        'keeps the row running and ticking while the process runs',
-        {},
+        'keeps the row running and ticking while the command runs',
+        { backgroundCommandStatuses: { term_one: 'running' } },
         ['running', 'done'],
-        '30m 0s',
-        { shows: [], hides: [] },
+        () => '30m 0s',
       ],
       [
-        'settles the row with the real runtime and actual result',
+        'follows the live status before the durable one',
         {
-          backgroundBashProcesses: {
-            'process-one': {
-              status: 'completed',
-              exitCode: 0,
-              cancelledByUser: false,
-              startedAt: '2026-09-04T12:00:00+00:00',
-              finishedAt: '2026-09-04T12:04:12+00:00',
-              output: 'build finished cleanly',
-              truncated: false,
-              logFile: 'C:/logs/bash/process-one.log',
-            },
-          },
+          backgroundCommandStatuses: { term_one: 'running' },
+          commandStatuses: { term_one: 'stopped' },
         },
-        ['done', 'running'],
-        '4m 12s',
-        { shows: ['build finished cleanly'], hides: ['handed off to vBot'] },
+        ['cancelled', 'running'],
+        () => t('chat.toolCancelled'),
       ],
       [
         'settles the dot from durable History without inventing a runtime',
-        { backgroundBashStatuses: { 'process-one': 'completed' } },
+        { backgroundCommandStatuses: { term_one: 'completed' } },
         ['done', 'running'],
-        '',
-        { shows: [], hides: [] },
+        () => '',
       ],
-    ])('%s', (_case, props, [dot, otherDot], time, result) => {
+      [
+        'shows a command vBot no longer runs as a plain Tool row',
+        {},
+        ['done', 'running'],
+        () => '1.0s',
+      ],
+    ])('%s', (_case, props, [dot, otherDot], time) => {
       run.mount({
         item: assistantRun({ items: [handedOffBash()] }),
         nowMs: Date.parse('2026-09-04T12:30:00Z'),
@@ -662,10 +652,12 @@ describe('ChatAssistantRun', () => {
       expect(toolDot().classList.contains(otherDot)).toBe(false);
       expect(
         document.querySelector('.tool-event-line .te-time')?.textContent ?? '',
-      ).toBe(time);
-      const resultText = detailRow('chat.toolResultLabel').textContent;
-      for (const text of result.shows) expect(resultText).toContain(text);
-      for (const text of result.hides) expect(resultText).not.toContain(text);
+      ).toBe(time());
+      // The row keeps showing its own result; the final one reaches the
+      // Agent as a new message.
+      expect(detailRow('chat.toolResultLabel').textContent).toContain(
+        'VITE ready in 830ms',
+      );
     });
   });
 });

@@ -72,7 +72,7 @@ describe('App controller', () => {
 
     expect(state.connectionSnapshot).toBe(hello);
     expect(state.runServerEvents).toHaveLength(1);
-    expect(state.backgroundBashStatusEvents).toHaveLength(0);
+    expect(state.commandStatuses).toEqual({});
     expect(state.queueInvalidation).toEqual({
       agentId: 'alpha',
       sessionId: 'session-one',
@@ -199,23 +199,26 @@ describe('App controller', () => {
     expect(state.activeRuns).toEqual([]);
   });
 
-  it('buffers background Bash status events as a bounded accessor list', async () => {
+  it('keeps the latest command status per terminal in a bounded map', async () => {
     const { controller, state } = setup();
-
-    for (let index = 0; index < 55; index += 1) {
-      await controller.handleServerEvent({
-        type: 'bash_process_status_changed',
-        payload: { process_id: `process-${index}`, status: 'completed' },
+    const statusChanged = (terminalId, status) =>
+      controller.handleServerEvent({
+        type: 'command_status_changed',
+        payload: { terminal_id: terminalId, status },
       });
-    }
 
-    expect(state.backgroundBashStatusEvents).toHaveLength(50);
-    expect(state.backgroundBashStatusEvents[0].payload.process_id).toBe(
-      'process-5',
-    );
-    expect(state.backgroundBashStatusEvents[49].payload.process_id).toBe(
-      'process-54',
-    );
+    await statusChanged('term_first', 'running');
+    for (let index = 0; index < 205; index += 1) {
+      await statusChanged(`term_${index}`, 'running');
+    }
+    await statusChanged('term_204', 'stopped');
+
+    const terminalIds = Object.keys(state.commandStatuses);
+    expect(terminalIds).toHaveLength(200);
+    expect(state.commandStatuses.term_first).toBeUndefined();
+    expect(terminalIds[0]).toBe('term_5');
+    expect(terminalIds.at(-1)).toBe('term_204');
+    expect(state.commandStatuses.term_204).toBe('stopped');
   });
 
   it('keeps the latest pushed Recall index status', async () => {

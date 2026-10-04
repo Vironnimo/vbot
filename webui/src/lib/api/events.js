@@ -30,9 +30,9 @@ export const RUN_EVENT_TOOL_CALL_DELTA = 'tool_call_delta';
 
 export const RUN_EVENT_STREAM_ATTEMPT_RESTARTED = 'stream_attempt_restarted';
 
-export const RUN_EVENT_TOOL_CALL_STDOUT = 'tool_call_stdout';
-
-export const RUN_EVENT_TOOL_CALL_STDERR = 'tool_call_stderr';
+// A command's current rendered terminal text (`screen`); each event replaces
+// the previous live output of its tool call.
+export const RUN_EVENT_TOOL_CALL_OUTPUT = 'tool_call_output';
 
 export const RUN_EVENT_PROVIDER_HEARTBEAT = 'provider_heartbeat';
 export const RUN_EVENT_PROVIDER_REQUEST_STATUS = 'provider_request_status';
@@ -55,8 +55,7 @@ export const RUN_EVENT_TYPES = [
   RUN_EVENT_STREAM_ATTEMPT_RESTARTED,
   RUN_EVENT_TOOL_CALL_DELTA,
   'tool_call_started',
-  RUN_EVENT_TOOL_CALL_STDOUT,
-  RUN_EVENT_TOOL_CALL_STDERR,
+  RUN_EVENT_TOOL_CALL_OUTPUT,
   'tool_call_result',
   'subagent_session_started',
   'subagent_status_changed',

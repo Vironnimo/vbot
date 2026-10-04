@@ -800,35 +800,23 @@ describe('Run controls and cancellation', () => {
     ]);
   });
 
-  it('cancels a background Process and settles its status projection', async () => {
-    const cancelProcess = vi.fn().mockResolvedValue({
-      process_id: 'process-one',
-      status: 'cancelled',
-    });
+  it('stops a handed-off command by killing its terminal and shows it stopped', async () => {
+    const killTerminal = vi.fn().mockResolvedValue({});
     const { chatState, controller } = setupController({
-      operationOverrides: { cancelProcess },
+      operationOverrides: { killTerminal },
     });
     const sessionState = ensureSessionState(
       chatState,
       'builder@project-one',
       'session-one',
     );
+    controller.applyCommandStatuses({ term_one: 'running' });
 
     await expect(
-      controller.cancelBackgroundProcess({
-        sessionState,
-        agentId: 'builder',
-        processId: 'process-one',
-        projectId: 'project-one',
-      }),
+      controller.cancelCommand({ sessionState, terminalId: 'term_one' }),
     ).resolves.toBe(true);
 
-    expect(cancelProcess).toHaveBeenCalledWith({
-      agentId: 'builder@project-one',
-      processId: 'process-one',
-    });
-    expect(sessionState.backgroundBashStatuses).toEqual({
-      'process-one': 'cancelled',
-    });
+    expect(killTerminal).toHaveBeenCalledWith('term_one');
+    expect(chatState.commandStatuses).toEqual({ term_one: 'stopped' });
   });
 });

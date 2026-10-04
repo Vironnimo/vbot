@@ -23,7 +23,7 @@ import {
 import { t } from '../i18n.js';
 import { formatMoment } from '../timeText.js';
 import {
-  backgroundBashTool,
+  backgroundCommandTool,
   queuedSubAgentTool,
   runningSubAgentTool,
 } from './chatTimelinePresentation.support.js';
@@ -204,13 +204,13 @@ describe('Sub-Agent spawn rows', () => {
         artifacts: [],
       },
     });
-    const backgroundBash = backgroundBashTool();
-    const foregroundBash = backgroundBashTool({
+    const backgroundBash = backgroundCommandTool();
+    const foregroundBash = backgroundCommandTool({
       id: 'bash-foreground',
-      arguments: { command: 'npm test', mode: 'foreground' },
+      arguments: { command: 'npm test' },
       result: {
         ok: true,
-        data: { status: 'completed', mode: 'foreground' },
+        data: { exit_code: 0, output: 'passed' },
         artifacts: [],
       },
     });
@@ -225,7 +225,7 @@ describe('Sub-Agent spawn rows', () => {
         },
       ],
       {},
-      { 'process-one': 'failed' },
+      { term_one: 'failed' },
     );
 
     expect(tasks.map((task) => [task.tool.id, task.dotStatus])).toEqual([
@@ -235,9 +235,9 @@ describe('Sub-Agent spawn rows', () => {
     ]);
     expect(tasks[1]).toEqual(
       expect.objectContaining({
-        kind: 'bash',
+        kind: 'command',
         command: 'npm run dev',
-        processId: 'process-one',
+        terminalId: 'term_one',
         target: null,
       }),
     );

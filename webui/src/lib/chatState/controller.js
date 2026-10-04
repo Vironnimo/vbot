@@ -1,5 +1,4 @@
 import {
-  cancelProcess as requestCancelProcess,
   cancelRun as requestCancelRun,
   cancelToolCall as requestCancelToolCall,
   controlRun as requestControlRun,
@@ -8,6 +7,7 @@ import {
   getSession as requestGetSession,
   getSessionChangeStats as requestGetSessionChangeStats,
   inspectSubAgentWork as requestInspectSubAgentWork,
+  killTerminal as requestKillTerminal,
   listAgents as requestListAgents,
   listChatCommands as requestListChatCommands,
   listFiles as requestListFiles,
@@ -77,7 +77,7 @@ function historyLoadOptions(history) {
       ? { contextUsage: history.context_usage }
       : {}),
     compactionPolicy: history?.compaction_policy,
-    backgroundBashStatuses: history?.background_bash_statuses,
+    backgroundCommandStatuses: history?.background_command_statuses,
   };
 }
 
@@ -91,13 +91,13 @@ function mergeBackgroundStatuses(earlier, later) {
 
 function defaultChatOperations() {
   return {
-    cancelProcess: (...args) => requestCancelProcess(...args),
     cancelRun: (...args) => requestCancelRun(...args),
     cancelToolCall: (...args) => requestCancelToolCall(...args),
     controlRun: (...args) => requestControlRun(...args),
     createSession: (...args) => requestCreateSession(...args),
     editChatMessage: (...args) => requestEditChatMessage(...args),
     inspectSubAgentWork: (...args) => requestInspectSubAgentWork(...args),
+    killTerminal: (...args) => requestKillTerminal(...args),
     listAgents: (...args) => requestListAgents(...args),
     listChatCommands: (...args) => requestListChatCommands(...args),
     listFiles: (...args) => requestListFiles(...args),
@@ -149,11 +149,11 @@ export function createChatController({
     errorMessage,
   });
   const {
+    applyCommandStatuses,
     applySubAgentStatusUpdates,
-    cancelBackgroundProcess,
+    cancelCommand,
     cancelSubAgent,
     reconcileSubAgentRows,
-    applyBackgroundBashStatusEvents,
   } = childTasks;
   const activity = createChatActivity({ chatState, operations, errorMessage });
   const reflections = createChatReflections({
@@ -295,9 +295,9 @@ export function createChatController({
           next_before: result.next_before,
           history_reset: result.history_reset,
           messages: [...(result.messages ?? []), ...(page.messages ?? [])],
-          background_bash_statuses: mergeBackgroundStatuses(
-            result.background_bash_statuses,
-            page.background_bash_statuses,
+          background_command_statuses: mergeBackgroundStatuses(
+            result.background_command_statuses,
+            page.background_command_statuses,
           ),
         };
       after = page.next_after;
@@ -480,7 +480,7 @@ export function createChatController({
       prependHistory(sessionState, history?.messages ?? [], {
         hasMore: history?.has_more === true,
         nextBefore: history?.next_before,
-        backgroundBashStatuses: history?.background_bash_statuses,
+        backgroundCommandStatuses: history?.background_command_statuses,
       });
       return true;
     } catch (error) {
@@ -909,14 +909,14 @@ export function createChatController({
   }
 
   return {
-    applyBackgroundBashStatusEvents,
+    applyCommandStatuses,
     applyConnectionSnapshot,
     applyQueueInvalidation,
     applySessionCompactionPolicy,
     applySessionInvalidations,
     applySubAgentStatusUpdates,
     cancelActiveRun,
-    cancelBackgroundProcess,
+    cancelCommand,
     cancelSubAgent,
     cancelTool,
     controlRun,

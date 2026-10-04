@@ -154,8 +154,12 @@ describe('History reconciliation', () => {
     appendRunEvent(session, {
       run_id: 'run-one',
       sequence: 3,
-      type: 'tool_call_stdout',
-      payload: { tool_call_id: 'call-one', data: 'Live stdout' },
+      type: 'tool_call_output',
+      payload: {
+        tool_call_id: 'call-one',
+        terminal_id: 'term_one',
+        screen: 'Live output',
+      },
     });
     appendRunEvent(session, {
       run_id: 'run-one',
@@ -169,7 +173,7 @@ describe('History reconciliation', () => {
     expect(run.tools).toHaveLength(1);
     expect(run.tools[0]).toMatchObject({
       result: result.content,
-      stdout: 'Live stdout',
+      output: 'Live output',
       status: 'success',
     });
     expect(run.reasoning[0].content).toBe('Next step');

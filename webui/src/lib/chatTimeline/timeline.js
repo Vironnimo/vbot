@@ -30,8 +30,7 @@ export function assistantRunChildProgressKey(child) {
     const streamedArgumentsLength = (child.partialArgumentsText ?? '').length;
     const finalizedArgumentsLength =
       typeof child.arguments === 'string' ? child.arguments.length : 0;
-    const outputLength =
-      (child.stdout ?? '').length + (child.stderr ?? '').length;
+    const outputLength = (child.output ?? '').length;
     return `${chunkCount}:${latestSequence ?? ''}:${toolNameLength}:${streamedArgumentsLength + finalizedArgumentsLength}:${outputLength}:${child.resultEvent ? 1 : 0}`;
   }
 

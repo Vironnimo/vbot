@@ -13,10 +13,9 @@
   import ToolPrimaryLine from './ToolPrimaryLine.svelte';
   import {
     avatarForItem,
-    backgroundBashDisplayResult,
-    backgroundBashRowState,
-    backgroundBashStatusDetails,
-    backgroundBashToolStatusLabel,
+    backgroundCommandRowState,
+    backgroundCommandStatusDetails,
+    backgroundCommandToolStatusLabel,
     changeStatsLabel,
     formatTime,
     isRowCancellable,
@@ -69,8 +68,8 @@
     onBackgroundToolCall = () => {},
     backgroundToolCallIds = [],
     onCancelSubAgent = () => {},
-    backgroundBashStatuses = {},
-    backgroundBashProcesses = {},
+    backgroundCommandStatuses = {},
+    commandStatuses = {},
     nowMs = Date.now(),
   } = $props();
 
@@ -405,8 +404,7 @@
               tool={child}
               toolName={toolNameForRunTool(child)}
               args={toolArguments(child)}
-              stdout={child.stdout}
-              stderr={child.stderr}
+              output={child.output}
               result={subAgentDisplayResult(child, subAgentResult)}
               resultFailed={toolStatus(child) === 'failed'}
               live={toolStatus(child) === 'running'}
@@ -422,18 +420,23 @@
           })}
           {@const preparing = isToolPreparing(child)}
           {@const rowPresentation = toolRowPresentation(child)}
-          {@const bashRowState = backgroundBashRowState(
+          {@const commandRowState = backgroundCommandRowState(
             child,
-            backgroundBashStatuses,
-            backgroundBashProcesses,
+            backgroundCommandStatuses,
+            commandStatuses,
           )}
-          {@const rowDotStatus = bashRowState?.dotStatus ?? toolStatus(child)}
-          {@const rowTimeLabel = bashRowState
-            ? backgroundBashToolStatusLabel(child, bashRowState, nowMs)
+          {@const rowDotStatus =
+            commandRowState?.dotStatus ?? toolStatus(child)}
+          {@const rowTimeLabel = commandRowState
+            ? backgroundCommandToolStatusLabel(child, commandRowState, nowMs)
             : toolStatusLabel(child, nowMs)}
           {@const rowStatusDetails = () =>
-            bashRowState
-              ? backgroundBashStatusDetails(child, bashRowState, Date.now())
+            commandRowState
+              ? backgroundCommandStatusDetails(
+                  child,
+                  commandRowState,
+                  Date.now(),
+                )
               : toolStatusDetails(child, Date.now())}
           <details
             class="tool-event run-tool-event"
@@ -520,11 +523,8 @@
               tool={child}
               toolName={toolNameForRunTool(child)}
               args={toolArguments(child)}
-              stdout={child.stdout}
-              stderr={child.stderr}
-              result={bashRowState
-                ? backgroundBashDisplayResult(child, bashRowState)
-                : child.result}
+              output={child.output}
+              result={child.result}
               resultFailed={rowDotStatus === 'failed'}
               live={toolStatus(child) === 'running'}
               viewKey={toolDisclosureKey(child)}

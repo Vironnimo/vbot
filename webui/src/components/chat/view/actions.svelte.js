@@ -264,15 +264,10 @@ export function createChatViewActions(context) {
     });
   };
 
-  const handleCancelBackgroundProcess = async ({ processId } = {}) => {
-    await context.chatController.cancelBackgroundProcess({
+  const handleCancelBackgroundCommand = async ({ terminalId } = {}) => {
+    await context.chatController.cancelCommand({
       sessionState: context.target.activeSessionState,
-      agentId:
-        context.target.activeSessionState?.agentId ??
-        context.target.activeAgent?.id ??
-        '',
-      processId,
-      projectId: context.target.displayedSessionProjectId(),
+      terminalId,
     });
   };
 
@@ -399,8 +394,8 @@ export function createChatViewActions(context) {
     get handleCancelSubAgent() {
       return handleCancelSubAgent;
     },
-    get handleCancelBackgroundProcess() {
-      return handleCancelBackgroundProcess;
+    get handleCancelBackgroundCommand() {
+      return handleCancelBackgroundCommand;
     },
     get handleSteerQueuedMessage() {
       return handleSteerQueuedMessage;
