@@ -24,8 +24,7 @@ from ._terminal_state import (
     TERMINAL_INITIAL_INPUT_TIMEOUT_SECONDS,
     TERMINAL_INPUT_KEY_DELAY_SECONDS,
     TERMINAL_OPERATOR_READY_TIMEOUT_SECONDS,
-    TERMINAL_RESIZE_GRACE_MAX_SECONDS,
-    TERMINAL_RESIZE_GRACE_SECONDS,
+    TERMINAL_REPAINT_WINDOW_SECONDS,
     AttentionKind,
     TerminalAttention,
     TerminalClosedError,
@@ -173,16 +172,18 @@ class TerminalSessionIO:
                         session.snapshot_on_settle = True
                     state_changed = False
                     if session.state != "starting":
-                        state_changed = session.state != "working"
-                        session.state = "working"
-                        notify = session.attachment is not None and session.settled_delivery_enabled
-                        now = self._monotonic()
-                        if now < session.resize_grace_until:
-                            session.resize_grace_until = min(
-                                now + TERMINAL_RESIZE_GRACE_SECONDS,
-                                session.resize_grace_deadline,
+                        if session.repaint_until > self._monotonic():
+                            # The program redraws known content for a new size;
+                            # the terminal stays quiet and nobody is woken.
+                            self._schedule_settle(session, notify=False, repaint=True)
+                        else:
+                            session.repaint_until = 0.0
+                            state_changed = session.state != "working"
+                            session.state = "working"
+                            notify = (
+                                session.attachment is not None and session.settled_delivery_enabled
                             )
-                        self._schedule_settle(session, notify=notify)
+                            self._schedule_settle(session, notify=notify)
                     if state_changed or title_changed:
                         self._events._publish_state(session)
                     session.output_event.set()
@@ -195,11 +196,18 @@ class TerminalSessionIO:
         finally:
             await self._mark_finished(session, error)
 
-    def _schedule_settle(self, session: TerminalSession, *, notify: bool) -> None:
-        """Restart the generic quiet timer after PTY input or output activity."""
+    def _schedule_settle(
+        self, session: TerminalSession, *, notify: bool, repaint: bool = False
+    ) -> None:
+        """Restart the generic quiet timer after PTY input, output or a repaint.
+
+        A repaint leaves a pending Agent delivery alone: it redraws what the
+        delivery already describes.
+        """
         attention = session.attention
         pending_agent_delivery = (
-            attention is not None
+            not repaint
+            and attention is not None
             and attention.kind == "output_settled"
             and not attention.delivered
             and session.notification_task is not None
@@ -239,14 +247,21 @@ class TerminalSessionIO:
                     or session.finished_at is not None
                 ):
                     return
-                deliver = session.notify_on_settle
-                session.notify_on_settle = False
-                session.settled_delivery_enabled = session.attachment is not None
-                session.state = "ready"
                 if session.snapshot_on_settle:
                     session.snapshot_on_settle = False
                     self._events._publish_snapshot(session)
                 signature = session.renderer.screen_signature()
+                if session.repaint_until:
+                    # Only a redraw for a new size happened. Its screen shows
+                    # the known content and becomes the baseline without
+                    # waking anyone or recording attention.
+                    session.repaint_until = 0.0
+                    session.settled_screen_signature = signature
+                    return
+                deliver = session.notify_on_settle
+                session.notify_on_settle = False
+                session.settled_delivery_enabled = session.attachment is not None
+                session.state = "ready"
                 if deliver and session.suppress_until_activity:
                     # A text-less Agent start is silent until the first
                     # explicit input or attach: the startup screen (banner,
@@ -265,8 +280,7 @@ class TerminalSessionIO:
                     # screen. That is not work, so do not wake the agent
                     # again; the screen is already known to it.
                     deliver = False
-                defer = deliver and self._monotonic() < session.resize_grace_until
-                if deliver and not defer:
+                if deliver:
                     session.settled_screen_signature = signature
                 self._set_attention(
                     session,
@@ -277,31 +291,8 @@ class TerminalSessionIO:
                         "requires input."
                     ),
                     details={"screen_revision": session.renderer.revision},
-                    deliver=deliver and not defer,
+                    deliver=deliver,
                 )
-                attention = session.attention
-            # Keep this task alive even when no further output arrives. New
-            # activity cancels it and starts a fresh quiet boundary; reads can
-            # acknowledge this exact boundary before its deferred delivery.
-            while defer:
-                remaining = session.resize_grace_until - self._monotonic()
-                if remaining > 0:
-                    await self._sleep(remaining)
-                async with session.lock:
-                    if (
-                        generation != session.activity_generation
-                        or attention is None
-                        or session.attention is not attention
-                        or attention.revision <= session.acknowledged_attention_revision
-                        or session.attachment is None
-                        or session.state in {"exited", "error"}
-                    ):
-                        return
-                    if self._monotonic() < session.resize_grace_until:
-                        continue
-                    session.settled_screen_signature = signature
-                    self._schedule_attention_delivery(session, attention)
-                    return
         except asyncio.CancelledError:
             return
 
@@ -560,11 +551,9 @@ class TerminalSessionIO:
             # Human input invalidates an Agent's observation even when the
             # application does not echo it (for example, a password prompt).
             session.renderer.revision += 1
-            # Operator input ends the post-resize grace and the resize
-            # settle gate, and counts as work against the startup
-            # suppression, for the same reason as agent input.
-            session.resize_grace_until = 0.0
-            session.resize_grace_deadline = 0.0
+            # Operator input ends a repaint and counts as work against the
+            # startup suppression, for the same reason as agent input.
+            session.repaint_until = 0.0
             session.suppress_until_activity = False
             state_changed = session.state != "working"
             session.state = "working"
@@ -628,8 +617,7 @@ class TerminalSessionIO:
                 }
             # Only real input ends suppression. An empty write must not
             # change activity, invalidate observations, or cancel queued input.
-            session.resize_grace_until = 0.0
-            session.resize_grace_deadline = 0.0
+            session.repaint_until = 0.0
             session.suppress_until_activity = False
             session.renderer.revision += 1
             if (
@@ -694,11 +682,10 @@ class TerminalSessionIO:
             await asyncio.to_thread(session.adapter.resize, rows, columns)
             session.renderer.resize(columns, rows)
             session.last_resize_screen_revision = session.renderer.revision
-            now = self._monotonic()
-            session.resize_grace_until = now + TERMINAL_RESIZE_GRACE_SECONDS
-            # A new explicit resize restarts the hard deadline; the rolling
-            # extension happens on repaint output inside the base window.
-            session.resize_grace_deadline = now + TERMINAL_RESIZE_GRACE_MAX_SECONDS
+            if session.state == "ready":
+                # A quiet program answers a new size by redrawing what it
+                # already showed. A working program's output stays activity.
+                session.repaint_until = self._monotonic() + TERMINAL_REPAINT_WINDOW_SECONDS
             self._events._publish_state(session)
             return {
                 "terminal_id": session.terminal_id,

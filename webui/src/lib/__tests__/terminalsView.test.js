@@ -539,7 +539,6 @@ describe('terminal resize', () => {
 
     expect(api.resizeTerminal.mock.calls).toEqual([['term-1', 110, 31]]);
     expect(state.terminals[0]).toMatchObject({ columns: 112, rows: 33 });
-    expect(state.streams['term-1'].gridPending).toBe(false);
 
     // A fit at the confirmed size is a no-op.
     controller.resize(112, 33, 'term-1');
@@ -559,16 +558,24 @@ describe('terminal resize', () => {
     );
   });
 
-  it('keeps the grid divergence visible while a resize correction failed', async () => {
+  it('reports the unchanged grid to the viewer after a rejected resize', async () => {
     vi.useFakeTimers();
-    const { state, api, controller } = await startTerminals();
+    const onGeometry = vi.fn();
+    const { state, api, controller } = await startTerminals({
+      controller: { onGeometry },
+    });
     api.resizeTerminal.mockRejectedValue(new Error('resize rejected'));
 
     controller.resize(100, 30, 'term-1');
+    expect(controller.resizeSettling('term-1')).toBe(true);
     await vi.runAllTimersAsync();
 
     expect(api.resizeTerminal).toHaveBeenCalledTimes(1);
-    expect(state.streams['term-1'].gridPending).toBe(true);
+    expect(controller.resizeSettling('term-1')).toBe(false);
+    expect(onGeometry).toHaveBeenCalledWith(
+      'term-1',
+      expect.objectContaining({ columns: 120, rows: 32 }),
+    );
     expect(state.actionError).toBe('resize rejected');
   });
 
@@ -612,7 +619,6 @@ describe('terminal resize', () => {
         expect(api.resizeTerminal).toHaveBeenCalledTimes(1 + followUps.length),
       );
       if (followUps.length) {
-        expect(state.streams['term-1'].gridPending).toBe(true);
         requests[1]();
       }
       const [columns, rows] = followUps.at(-1) ?? [90, 24];
@@ -622,7 +628,6 @@ describe('terminal resize', () => {
       expect(api.resizeTerminal.mock.calls.slice(1)).toEqual(
         followUps.map((size) => ['term-1', ...size]),
       );
-      expect(state.streams['term-1'].gridPending).toBe(false);
     },
   );
 

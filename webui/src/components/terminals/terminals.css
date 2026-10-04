@@ -371,18 +371,6 @@
   white-space: nowrap;
 }
 
-.terminals-view__grid-mismatch {
-  flex: 0 0 auto;
-  padding: 1px 6px;
-  border-radius: 999px;
-  color: var(--amber);
-  background: var(--amber-dim);
-  font-size: var(--fs-label-sm);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  cursor: help;
-}
-
 .terminals-view__tile-actions {
   display: flex;
   flex: 0 0 auto;

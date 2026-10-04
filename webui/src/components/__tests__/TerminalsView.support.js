@@ -140,16 +140,23 @@ vi.mock('@xterm/addon-fit', () => ({
   FitAddon: class MockFitAddon {
     constructor() {
       this.terminal = null;
-      this.fit = vi.fn(() => {
+      // Cells measure 8x16 px at the 12 px base font and scale with it.
+      this.proposeDimensions = vi.fn(() => {
         if (!this.terminal?.element?.parentElement) {
-          return;
+          return undefined;
         }
         const host = this.terminal.element.parentElement;
-        const cellWidth = 8;
-        const cellHeight = 16;
-        const cols = Math.max(1, Math.floor(host.clientWidth / cellWidth));
-        const rows = Math.max(1, Math.floor(host.clientHeight / cellHeight));
-        this.terminal.resize(cols, rows);
+        const scale = this.terminal.options.fontSize / 12;
+        return {
+          cols: Math.max(1, Math.floor(host.clientWidth / (8 * scale))),
+          rows: Math.max(1, Math.floor(host.clientHeight / (16 * scale))),
+        };
+      });
+      this.fit = vi.fn(() => {
+        const dimensions = this.proposeDimensions();
+        if (dimensions) {
+          this.terminal.resize(dimensions.cols, dimensions.rows);
+        }
       });
       fitAddons.push(this);
     }
@@ -160,10 +167,8 @@ vi.mock('@xterm/addon-fit', () => ({
   },
 }));
 
-// A real browser fires a ResizeObserver when the tile host is laid out,
-// which drives scheduleFit. Same-turn observe + scheduleFit must not
-// confirm the grid: the follow-up measurement happens on the next
-// animation frame.
+// A real browser fires a ResizeObserver when the tile host is laid out;
+// fire() reports a later layout change of the host.
 class MockResizeObserver {
   constructor(callback) {
     this.callback = callback;

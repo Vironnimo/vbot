@@ -94,11 +94,12 @@
     isUnavailable: () => serverUnavailable,
     getMaximizedTerminalId: () => maximizedTerminalId,
   });
-  const { mountTile, scrollToLatest, gridMismatchHint } = renderer;
+  const { mountTile, scrollToLatest } = renderer;
   const controller = createTerminalsController({
     state: viewState,
     onSnapshot: renderer.onSnapshot,
     onOutput: renderer.onOutput,
+    onGeometry: renderer.onGeometry,
     onClear: renderer.onClear,
     onTranscript: renderer.onTranscript,
     onSpeechError: (error, phase) => {
@@ -592,7 +593,8 @@
           {t('common.retry')}
         </Button>
       </Banner>
-    {:else if hasTerminals}
+    {/if}
+    {#if hasTerminals}
       {#if viewState.actionError && !serverUnavailable}
         <Banner variant="error" class="terminals-view__feedback">
           <span>{terminalError(viewState.actionError)}</span>
@@ -630,7 +632,6 @@
             : t('terminals.voice.start')}
           {@const isDragged = draggedTerminalId === item.terminal_id}
           {@const isDropTarget = dragOverTerminalId === item.terminal_id}
-          {@const gridMismatch = gridMismatchHint(item.terminal_id)}
           <div
             class="terminals-view__tile"
             class:terminals-view__tile--hidden={maximizedTerminalId &&
@@ -684,13 +685,6 @@
                     whenTruncated: true,
                   }}>{terminalTarget(item)}</span
                 >
-                {#if gridMismatch}
-                  <span
-                    class="terminals-view__grid-mismatch"
-                    use:tooltip={t('terminals.gridMismatchHelp')}
-                    >{gridMismatch}</span
-                  >
-                {/if}
                 {#if renderer.scrolledBack(item.terminal_id)}
                   <button
                     type="button"
@@ -869,7 +863,7 @@
           </Button>
         {/if}
       </div>
-    {:else}
+    {:else if !viewState.listError || serverUnavailable}
       <EmptyState
         fill
         title={selectedGroup
