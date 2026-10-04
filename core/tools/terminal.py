@@ -213,15 +213,15 @@ TERMINAL_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "description": (
                 f"Named key for input, pressed after text: {TERMINAL_KEY_SUMMARY}. Omit to "
-                "send text only."
+                "type text without submitting it."
             ),
         },
         "data": {
             "type": "string",
             "maxLength": TERMINAL_INPUT_MAX_CHARS,
             "description": (
-                "Exact characters for input, including control sequences, instead of text and "
-                "key. Omit unless text and key cannot express them."
+                "Exact characters for input, including control sequences, only for what text "
+                "and key cannot express."
             ),
         },
         "lines": {

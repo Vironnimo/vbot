@@ -411,9 +411,13 @@ async def test_terminal_reads_answers_and_waits_for_a_command_in_the_shell_resul
     }
 
     # Output printed before the wait counts for its pattern, matched line by line.
-    matched = await tools.terminal(
-        {"action": "wait", "terminal_id": terminal_id, "pattern": r"^server listening on :\d+$"}
+    matching = asyncio.ensure_future(
+        tools.terminal(
+            {"action": "wait", "terminal_id": terminal_id, "pattern": r"^server listening on :\d+$"}
+        )
     )
+    await tools.run_clock(matching, until=tools.clock.now + 5)
+    matched = matching.result()
     assert (matched["status"], matched["wait_ended"], matched["next"]) == (
         "running",
         "matched",
@@ -471,14 +475,23 @@ async def test_terminal_reads_answers_and_waits_for_a_command_in_the_shell_resul
     }
 
 
-@pytest.mark.parametrize("kept", [True, False], ids=["result-kept", "result-lost"])
+@pytest.mark.parametrize(
+    ("kept", "pattern"),
+    [(True, None), (False, None), (True, "COMPILED")],
+    ids=["result-kept", "result-lost", "exit-right-after-match"],
+)
 @pytest.mark.asyncio
 async def test_a_command_exit_a_kept_result_showed_is_not_delivered_again(
-    tools: Tools, kept: bool
+    tools: Tools, kept: bool, pattern: str | None
 ) -> None:
     terminal_id, adapter, tree = await tools.background("build")
     adapter.emit("compiled\r\n")
-    waiting = asyncio.ensure_future(tools.terminal({"action": "wait", "terminal_id": terminal_id}))
+    await eventually(lambda: shows(tools, terminal_id, "compiled"))
+    # A wait that matches a final line still reports the exit that follows it.
+    arguments: JsonObject = {"action": "wait", "terminal_id": terminal_id}
+    if pattern is not None:
+        arguments["pattern"] = pattern
+    waiting = asyncio.ensure_future(tools.terminal(arguments))
     await eventually(lambda: tools.clock.sleeping)
     tree.shell_exits(0)
 

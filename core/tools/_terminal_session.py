@@ -69,6 +69,9 @@ _COMMAND_PROGRESS_LINES = 40
 _COMMAND_IDLE_BASELINE_SECONDS = 1.0
 # While a wait finds no idle baseline yet, it checks for one this often.
 _COMMAND_QUIET_POLL_SECONDS = 0.5
+# After a match, a command's wait lingers this long for its exit: a final line
+# such as "BUILD OK" then reports the exit code instead of a running command.
+_COMMAND_MATCH_EXIT_SECONDS = 2.0
 # Labels in Agent notices are cut to this many characters.
 _NOTICE_LABEL_CHARS = 60
 
@@ -557,7 +560,9 @@ class TerminalSession:
         settles, or *deadline* (a ``monotonic`` time) passes.
 
         A command exits when its shell exits; its wait ends only then, at a
-        match, or at the deadline. Output printed before the call counts for
+        match, or at the deadline. After a match, a command's wait lingers
+        briefly and ends ``exited`` when the command ends within that time.
+        Output printed before the call counts for
         *pattern*, except output before the Agent's last input and that
         input's echo. An interactive program's new output settled when an
         ``output_settled`` attention above *after_revision* exists; with
@@ -573,7 +578,9 @@ class TerminalSession:
             if pattern is not None:
                 matched, match_from = await self._output_matches(pattern, match_from)
                 if matched:
-                    return "matched"
+                    if command is None:
+                        return "matched"
+                    return await self._linger_for_exit(command, deadline)
             attention = self._attention
             if (
                 command is None
@@ -592,6 +599,19 @@ class TerminalSession:
                 # idle baseline in time, so the result can tell an idle command.
                 pause = min(pause, _COMMAND_QUIET_POLL_SECONDS)
             await self._wait_or_sleep(change, pause)
+
+    async def _linger_for_exit(self, command: CommandState, deadline: float) -> WaitEnded:
+        """After a match, wait briefly for the command's exit; ``exited`` if it came."""
+        services = self._services
+        until = min(deadline, services.monotonic() + _COMMAND_MATCH_EXIT_SECONDS)
+        while True:
+            change = self._change
+            if self.finished or command.shell_exited:
+                return "exited"
+            now = services.monotonic()
+            if now >= until:
+                return "matched"
+            await self._wait_or_sleep(change, until - now)
 
     async def wait_for_reply(self, *, deadline: float, after_quiet: int) -> WaitEnded:
         """Wait until the output settles after input, the program exits, or *deadline* passes.
