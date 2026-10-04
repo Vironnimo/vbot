@@ -6,7 +6,7 @@ Request shaping (sampling parameters, reasoning, media, prompt caching) lives in
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, override
 
 import httpx
 
@@ -34,6 +34,8 @@ MODELS_DISCOVERY_PAGE_SIZE = "1000"
 ANTHROPIC_METADATA_KEY = "anthropic"
 SUPPORTS_TEMPERATURE_METADATA_FIELD = "supports_temperature"
 ANTHROPIC_EFFORT_LEVEL_ORDER = ("low", "medium", "high", "xhigh", "max")
+ANTHROPIC_SMALL_CONTEXT_MAX_IMAGES = 100
+ANTHROPIC_SMALL_CONTEXT_WINDOW = 200_000
 
 
 class AnthropicAdapter(AnthropicCompatibleAdapter):
@@ -63,6 +65,16 @@ class AnthropicAdapter(AnthropicCompatibleAdapter):
             api_version=ANTHROPIC_VERSION,
             extra_retryable_statuses=frozenset({ANTHROPIC_OVERLOADED_STATUS}),
         )
+
+    @override
+    def request_image_limit(self, model_id: str) -> int | None:
+        # The wire file declares the documented 600 images per request; Anthropic
+        # documents 100 for Models with a context window up to 200k.
+        limit = super().request_image_limit(model_id)
+        context_window = self._model_context_window(model_id)
+        if context_window is not None and context_window <= ANTHROPIC_SMALL_CONTEXT_WINDOW:
+            return min(limit, ANTHROPIC_SMALL_CONTEXT_MAX_IMAGES) if limit is not None else None
+        return limit
 
     @classmethod
     def discovery_headers(

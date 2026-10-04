@@ -743,8 +743,8 @@ def test_rebuilt_request_gives_each_tool_result_only_its_own_media(tmp_path: Pat
 
 
 def test_request_resolves_user_blocks_only_when_the_history_carries_them(tmp_path: Path) -> None:
-    # The latest user turn marks the current turn even when it is plain text, so an
-    # earlier attachment renders as an earlier-turn note; plain-text history skips resolution.
+    # The latest user turn marks the current turn even when it is plain text; an earlier
+    # attachment still renders like its own turn did. Plain-text history skips resolution.
     class RecordingResolver(ContentBlockResolver):
         def __init__(self, store: AttachmentStore) -> None:
             super().__init__(store)
@@ -790,7 +790,8 @@ def test_request_resolves_user_blocks_only_when_the_history_carries_them(tmp_pat
             {
                 "type": "text",
                 "text": (
-                    "[Image from an earlier turn: old-photo.png (image/png) "
+                    "[Image: old-photo.png (image/png) — this model has no vision capability, "
+                    "so the image itself cannot be shown; only the stored file path is provided "
                     f"— Path: {model_path(record.file_path)}]"
                 ),
             }

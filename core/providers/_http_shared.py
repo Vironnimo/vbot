@@ -22,6 +22,7 @@ from core.providers.errors import (
     ProviderAuthError,
     ProviderError,
     ProviderRateLimitError,
+    ProviderRequestTooLargeError,
     ProviderTimeoutError,
 )
 from core.utils.http_status import is_retryable_status, parse_retry_after
@@ -253,6 +254,11 @@ def classify_http_status(
         auth_error.status_code = status_code
         raise auth_error
 
+    if status_code == 413:
+        too_large = ProviderRequestTooLargeError(detail=detail)
+        too_large.status_code = status_code
+        raise too_large
+
     retry_after = parse_retry_after(response_headers) if response_headers is not None else None
 
     if status_code == 429:
@@ -314,6 +320,15 @@ def _encode_json_body(payload: dict[str, Any]) -> bytes:
 async def prepare_json_body(payload: dict[str, Any]) -> bytes:
     """Encode one stable payload off the Event Loop for size checks and retries."""
     return await _REQUEST_BODY_WORKERS.run(_encode_json_body, payload)
+
+
+async def enforce_request_body_limit(payload: dict[str, Any], limit: int | None) -> None:
+    """Raise ProviderRequestTooLargeError before I/O when *payload* exceeds *limit*."""
+    if limit is None:
+        return
+    size = len(await prepare_json_body(payload))
+    if size > limit:
+        raise ProviderRequestTooLargeError(size, limit)
 
 
 # Receives (status_code, error_body, response_headers) for every HTTP >= 400

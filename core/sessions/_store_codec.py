@@ -414,10 +414,12 @@ def link_tool_result(
         ),
     )
     connection.execute(
-        "UPDATE tool_call_payloads SET display_json = ?, timing_extra_json = ? WHERE call_key = ?",
+        "UPDATE tool_call_payloads SET display_json = ?, timing_extra_json = ?, media_json = ? "
+        "WHERE call_key = ?",
         (
             _store_values._optional_json(message.tool_display, "tool_display"),
             timing_extra,
+            _store_values._optional_json(message.tool_media, "tool_media"),
             call_key,
         ),
     )
@@ -598,6 +600,8 @@ class EntryBatch:
             data["timing"] = timing
         if call["display_json"] is not None:
             data["tool_display"] = json.loads(str(call["display_json"]))
+        if call["media_json"] is not None:
+            data["tool_media"] = json.loads(str(call["media_json"]))
 
     def _decode_checkpoint(self, key: int, data: JsonObject) -> None:
         checkpoint = self.checkpoints[key]
@@ -763,7 +767,7 @@ def select_batch(connection: sqlite3.Connection, rows: Sequence[sqlite3.Row]) ->
     batch.tool_results = _rows_by_key(
         connection,
         "SELECT c.result_entry_key, c.call_id, c.name, c.started_at, c.completed_at, "
-        "c.duration_ms, p.display_json, p.timing_extra_json FROM tool_calls AS c "
+        "c.duration_ms, p.display_json, p.timing_extra_json, p.media_json FROM tool_calls AS c "
         f"JOIN tool_call_payloads AS p ON p.call_key = c.call_key WHERE c.result_entry_key {_KEYS}",
         by_role.get("tool", []),
     )

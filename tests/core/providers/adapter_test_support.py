@@ -24,6 +24,10 @@ class AdapterHookDefaults:
         del model_id
         return None
 
+    def request_image_limit(self, model_id: str) -> int | None:
+        del model_id
+        return None
+
     def request_context_kwargs(self, **context: Any) -> dict[str, Any]:
         del context
         return {}

@@ -13,6 +13,7 @@ from typing import Any, cast
 
 import pytest
 import respx
+from websockets.datastructures import Headers
 
 from core.debug.recorder import DebugContext, ProviderDebugRecorder
 from core.debug.store import DebugTraceStore
@@ -508,7 +509,12 @@ async def test_codex_websocket_failure_after_event_propagates_and_next_attempt_u
 
 @pytest.mark.asyncio
 async def test_codex_websocket_exchange_keeps_canonical_debug_trace(tmp_path: Path) -> None:
-    connector = FakeCodexWebSocketConnector([FakeCodexWebSocket([_final_turn("resp_1")])])
+    websocket = FakeCodexWebSocket([_final_turn("resp_1")])
+    # chatgpt.com answers the upgrade with several Set-Cookie headers.
+    websocket.response.headers = Headers(
+        [("x-test-transport", "ws"), ("set-cookie", "a=1"), ("set-cookie", "b=2")]
+    )
+    connector = FakeCodexWebSocketConnector([websocket])
     debug_store = DebugTraceStore(tmp_path, trace_limit=10)
     adapter = codex_adapter(
         codex_websocket_connect=connector,
@@ -539,5 +545,8 @@ async def test_codex_websocket_exchange_keeps_canonical_debug_trace(tmp_path: Pa
     assert trace["request"]["headers"]["chatgpt-account-id"] == "[REDACTED]"
     assert ACCOUNT_ID not in json.dumps(trace["request"]["headers"])
     assert trace["response"]["status_code"] == 101
+    assert trace["response"]["headers"]["x-test-transport"] == "ws"
+    assert trace["response"]["headers"]["set-cookie"] == "[REDACTED]"
     assert json.loads(trace["response"]["body"])["type"] == "response.completed"
+    assert len(connector.calls) == 1
     await adapter.aclose()

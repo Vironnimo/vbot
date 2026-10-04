@@ -519,6 +519,7 @@ def _declarations(adapter: ProviderAdapter, model_id: str, masker: Masker) -> di
         "wire_media_support": adapter.wire_media_support,
         "image_size_limit": adapter.image_size_limit,
         "request_body_limit": adapter.request_body_limit,
+        "request_image_limit": adapter.request_image_limit,
         "list_announced_tools": adapter.list_announced_tools,
     }
     for name, probe in probes.items():

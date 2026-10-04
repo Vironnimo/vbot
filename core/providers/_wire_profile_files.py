@@ -256,6 +256,7 @@ PROFILE_SCHEMA: dict[str, Any] = {
         "types": _string_list(),
         "image_max_bytes": _positive_int(),
         "request_max_bytes": _positive_int(),
+        "request_max_images": _positive_int(),
     },
 }
 

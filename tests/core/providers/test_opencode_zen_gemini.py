@@ -225,7 +225,7 @@ async def test_gemini_enforces_the_inline_request_size_limit(
 
     assert caught.value.retryable is False
     assert caught.value.max_bytes == 100
-    assert caught.value.size_bytes > 100
+    assert (caught.value.size_bytes or 0) > 100
     assert not route.called
 
 

@@ -182,7 +182,7 @@ class LocalSpeechSetup(LocalSetup):
             "import torch, av, librosa; "
             "from transformers import AutoProcessor, AutoModelForMultimodalLM; "
             "from transformers import AutoModelForTDT, AutoModelForRNNT; "
-            "from core.model_tasks.speech_local import _dependencies_available; "
+            "from core.model_tasks.speech_setup import _dependencies_available; "
             "assert _dependencies_available(); "
         )
         if use_cuda:

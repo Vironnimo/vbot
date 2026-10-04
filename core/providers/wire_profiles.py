@@ -806,7 +806,9 @@ def _build_replay(values: Mapping[str, Any]) -> ReplayRules:
 
 def _build_media(values: Mapping[str, Any]) -> MediaRules:
     kwargs: dict[str, Any] = {
-        key: values[key] for key in ("image_max_bytes", "request_max_bytes") if key in values
+        key: values[key]
+        for key in ("image_max_bytes", "request_max_bytes", "request_max_images")
+        if key in values
     }
     if "types" in values:
         kwargs["types"] = frozenset(values["types"])

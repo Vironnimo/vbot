@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -46,7 +47,12 @@ from core.chat.model_resolution import (
     parse_model_with_connection,
 )
 from core.chat.usage import latest_session_context_usage
-from core.chat.wire_shaping import _restore_in_run_assistant_reasoning, limit_request_images
+from core.chat.wire_shaping import (
+    PINNED_IMAGE_RETIREMENT_SLOT,
+    RequestImageBudget,
+    _restore_in_run_assistant_reasoning,
+    limit_request_images,
+)
 from core.extensions import invoke_extension_handler
 from core.projects import ProjectError
 from core.prompts import BLOCK_KIND_DATA, BlockDefinition
@@ -114,6 +120,11 @@ def _resolved_model_reference(
 
 def _resolve_image_size_limit(adapter: Any, model_id: str) -> int | None:
     value = adapter.image_size_limit(model_id)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def _resolve_request_image_limit(adapter: Any, model_id: str) -> int | None:
+    value = adapter.request_image_limit(model_id)
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 
@@ -231,6 +242,7 @@ class RequestBuilder:
             wire_media_types=adapter.wire_media_support(model_id),
             chunk_timeout_seconds=self._wire_requests.resolve_chunk_timeout(connection),
             max_image_bytes=self._image_size_limit(adapter, model_id),
+            max_request_images=_resolve_request_image_limit(adapter, model_id),
             unlisted_tool_calls=not adapter.list_announced_tools(model_id),
         )
 
@@ -480,7 +492,6 @@ class RequestBuilder:
         current_user_message, read_media_outputs = await _CHAT_TRANSFORM_WORKERS.run(
             _request_content_resolution_inputs,
             effective_messages,
-            session_messages,
         )
         # Use the most recently appended user turn as the current-turn marker.
         # If that turn is plain text, all user content blocks resolve as historical.
@@ -500,9 +511,29 @@ class RequestBuilder:
             inputs.wire_media_types,
             max_image_bytes=inputs.max_image_bytes,
         )
+        image_budget = inputs.image_budget or RequestImageBudget()
+        if not image_budget.restored:
+            retirement_pin = await _CHAT_TRANSFORM_WORKERS.run(
+                self._dependencies.sessions.prompt_pin,
+                session.address,
+                PINNED_IMAGE_RETIREMENT_SLOT,
+            )
+            await _CHAT_TRANSFORM_WORKERS.run(
+                partial(
+                    image_budget.restore,
+                    retirement_pin,
+                    request_messages,
+                    current_user_message_id=(
+                        current_user_message.id if current_user_message is not None else None
+                    ),
+                )
+            )
         return _RequestState(
             await _CHAT_TRANSFORM_WORKERS.run(
-                limit_request_images, request_messages, budget=inputs.image_budget
+                limit_request_images,
+                request_messages,
+                budget=image_budget,
+                image_limit=inputs.max_request_images,
             ),
             tools,
             allowed_tool_names,
@@ -537,6 +568,7 @@ class RequestBuilder:
                 input_modalities=inputs.input_modalities,
                 wire_media_types=inputs.wire_media_types,
                 image_budget=inputs.image_budget,
+                image_limit=inputs.max_request_images,
                 image_converter=self._tool_image_converter,
                 max_image_bytes=inputs.max_image_bytes,
             )
@@ -716,6 +748,21 @@ class RequestBuilder:
         )
         return ToolEpochPin.from_payload(pinned) or pin
 
+    async def persist_image_retirement(
+        self, session: ChatSession, image_budget: RequestImageBudget
+    ) -> None:
+        """Keep newly retired images retired in later Runs of this prompt epoch."""
+        pin = image_budget.take_unsaved_pin()
+        if pin is None:
+            return
+        await _CHAT_TRANSFORM_WORKERS.run(
+            self._dependencies.sessions.ensure_prompt_pin,
+            session.address,
+            PINNED_IMAGE_RETIREMENT_SLOT,
+            pin,
+            lambda current: current == pin,
+        )
+
     async def _route_tool_definitions(
         self,
         tools: list[JsonObject],
@@ -772,6 +819,32 @@ class RequestBuilder:
             )
         finally:
             await _close_adapter(target.adapter)
+
+    async def store_tool_media(
+        self, tool_messages: list[ChatMessage], media_outputs: list[JsonObject]
+    ) -> tuple[list[ChatMessage], list[JsonObject]]:
+        """Store a Tool batch's loaded images and reference them from their Results.
+
+        Stored images reach every later request of the Session from their Tool
+        message, so a new Run sends the same bytes again and keeps the prompt cache.
+        """
+        if self._attachment_resolver is None or not any("base64" in m for m in media_outputs):
+            return tool_messages, media_outputs
+        loaded = ["base64" in media for media in media_outputs]
+        media_outputs = await self._attachment_resolver.store_tool_images(media_outputs)
+        stored: dict[str, list[JsonObject]] = {}
+        for was_loaded, media in zip(loaded, media_outputs, strict=True):
+            message_id = media.get("tool_message_id")
+            if was_loaded and "base64" not in media and isinstance(message_id, str):
+                stored.setdefault(message_id, []).append(
+                    {key: media[key] for key in ("attachment_id", "filename", "media_type")}
+                )
+        return [
+            replace(message, tool_media=[*(message.tool_media or []), *stored[message.id]])
+            if message.id in stored
+            else message
+            for message in tool_messages
+        ], media_outputs
 
     async def _attach_tool_result_content(
         self,

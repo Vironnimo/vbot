@@ -424,11 +424,23 @@ class ProviderAdapter(ABC):
         """Verified maximum serialized request bytes for this Model's wire, if known.
 
         Concrete wires enforce this before network I/O and raise
-        ProviderRequestTooLargeError with the actual byte count. Chat may then
-        retire already delivered images and submit a smaller request. Unknown
-        limits stay absent; this is independent of tokens and harness image caps.
+        ProviderRequestTooLargeError with the actual byte count; an HTTP 413
+        raises the same error without sizes. Chat then retires already
+        delivered images and submits a smaller request. Unknown limits stay
+        absent; this is independent of tokens. The default reads the wire
+        profile's ``media.request_max_bytes``.
         """
         return self.wire_profile(model_id).media.request_max_bytes
+
+    def request_image_limit(self, model_id: str) -> int | None:
+        """Documented maximum number of images in one request to this Model, if known.
+
+        Counts every image in the request, earlier turns and Tool Results
+        included. Chat keeps requests within it by retiring the oldest
+        delivered images; unknown limits stay absent. The default reads the
+        wire profile's ``media.request_max_images``.
+        """
+        return self.wire_profile(model_id).media.request_max_images
 
     def estimate_request_input_tokens(
         self,

@@ -428,24 +428,6 @@
   gap: 4px;
 }
 
-.session-row__changes {
-  display: inline-flex;
-  gap: 4px;
-  color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-label-sm);
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.session-row__changes-added {
-  color: var(--green);
-}
-
-.session-row__changes-removed {
-  color: var(--red);
-}
-
 .badge.session-row__badge--icon {
   width: 18px;
   height: 18px;

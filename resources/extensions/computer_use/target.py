@@ -87,7 +87,11 @@ class DesktopTarget(Protocol):
     def displays(self) -> list[Display]: ...
 
     def capture(self, display: Display) -> Image.Image:
-        """Physical RGB pixels of *display*."""
+        """Physical RGB pixels of *display* in the colours applications drew.
+
+        A colour filter that desktop composition applied (for example f.lux) is
+        removed only when the target proves it; otherwise pixels are as captured.
+        """
         ...
 
     def windows(self) -> list[WindowInfo]:

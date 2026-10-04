@@ -136,6 +136,8 @@ def _validate_core_fields(message: _records.ChatMessage) -> None:
         raise ChatMessageValidationError(f"{message.role} messages cannot include reasoning_scope")
     if message.role != "tool" and message.tool_display is not None:
         raise ChatMessageValidationError(f"{message.role} messages cannot include tool_display")
+    if message.role != "tool" and message.tool_media is not None:
+        raise ChatMessageValidationError(f"{message.role} messages cannot include tool_media")
     if message.role != "assistant" and message.output_files is not None:
         raise ChatMessageValidationError(f"{message.role} messages cannot include output_files")
     if message.role != "run_summary" and message.change_stats is not None:
@@ -378,6 +380,8 @@ def _validate_tool_message(message: _records.ChatMessage) -> None:
         raise ChatMessageValidationError("tool messages require name")
     if message.tool_display is not None and not isinstance(message.tool_display, dict):
         raise ChatMessageValidationError("tool_display must be an object")
+    if message.tool_media is not None:
+        _validate_tool_media(message.tool_media)
     _reject_fields(
         message,
         "model",
@@ -639,3 +643,19 @@ def _reject_fields(message: _records.ChatMessage, *fields: str) -> None:
     for field_name in fields:
         if getattr(message, field_name) is not None:
             raise ChatMessageValidationError(f"{message.role} messages cannot include {field_name}")
+
+
+_TOOL_MEDIA_FIELDS = ("attachment_id", "filename", "media_type")
+
+
+def _validate_tool_media(tool_media: Any) -> None:
+    """Require one stored-attachment reference per Tool image."""
+    if not isinstance(tool_media, list) or not tool_media:
+        raise ChatMessageValidationError("tool_media must be a non-empty array")
+    for item in tool_media:
+        if not isinstance(item, dict) or not all(
+            isinstance(item.get(key), str) and item[key] for key in _TOOL_MEDIA_FIELDS
+        ):
+            raise ChatMessageValidationError(
+                "tool_media entries need attachment_id, filename and media_type strings"
+            )

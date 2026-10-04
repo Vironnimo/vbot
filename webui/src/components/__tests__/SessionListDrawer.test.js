@@ -15,7 +15,6 @@ import {
   setupSessionListDrawerSuite,
   waitForCondition,
 } from './SessionListDrawer.support.js';
-import { changeStatsLabel } from '../../lib/chatTimelinePresentation.js';
 import { appendSessionInvalidation } from '../../lib/sessionInvalidation.js';
 import { t } from '../../lib/i18n.js';
 import { TOOLTIP_SHOW_DELAY_MS } from '../../lib/tooltip.js';
@@ -235,7 +234,6 @@ describe('SessionListDrawer list', () => {
         session('fork-copy', {
           title: 'Fork copy',
           fork_source: { agent_id: 'alpha', session_id: 'origin-session' },
-          change_stats: { files: 2, added: 12, removed: 3 },
         }),
         session('origin-session', { title: 'Release planning' }),
       ],
@@ -260,15 +258,6 @@ describe('SessionListDrawer list', () => {
     for (const label of [lastActive, sourceChannel, parent]) {
       expect(childButton.textContent).not.toContain(label);
     }
-    // The lines a Session changed show in its row; the files in its details.
-    const changes = t('sessions.details.changes');
-    const changesLabel = changeStatsLabel({ files: 2, added: 12, removed: 3 });
-    expect(childButton.querySelector('.session-row__changes')).toBeNull();
-    const forkChanges = forkButton.querySelector('.session-row__changes');
-    expect(forkChanges.getAttribute('aria-label')).toBe(changesLabel);
-    expect(
-      [...forkChanges.children].map((part) => part.textContent.trim()),
-    ).toEqual(['+12', '-3']);
 
     vi.useFakeTimers();
     async function detailsOf(button) {
@@ -312,8 +301,6 @@ describe('SessionListDrawer list', () => {
     );
     expect(fork.rows).not.toHaveProperty(originId);
     expect(fork.rows).not.toHaveProperty(created);
-    expect(fork.rows[changes]).toBe(changesLabel);
-    expect(child.rows).not.toHaveProperty(changes);
   });
 
   it('reveals labelled execution Sessions through the filters and selects them with their sub-agent flag', async () => {

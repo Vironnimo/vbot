@@ -1,4 +1,4 @@
-"""Request image budget: fresh images reach the Model; delivered ones retire under pressure."""
+"""Request image budget: images stay until a Provider limit retires the oldest delivered ones."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ from copy import deepcopy
 
 import pytest
 
-from core.chat import wire_shaping
 from core.chat.errors import ImageBudgetExceededError
 from core.chat.wire_shaping import RequestImageBudget, limit_request_images
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
@@ -41,8 +40,8 @@ def _native_image_calls(messages: list[dict]) -> list[str]:
     ]
 
 
-def test_under_the_limits_every_image_stays_and_the_request_prefix_is_stable() -> None:
-    source = [_resolved_image_result(index) for index in range(14)]
+def test_without_a_limit_every_image_stays_and_the_request_prefix_is_stable() -> None:
+    source = [_resolved_image_result(index, 1024 * 1024) for index in range(200)]
     source.insert(2, {"role": "assistant", "content": "inspection findings"})
     before = deepcopy(source)
 
@@ -50,7 +49,6 @@ def test_under_the_limits_every_image_stays_and_the_request_prefix_is_stable() -
 
     assert bounded == before
     assert source == before
-    assert limit_request_images(bounded) == bounded
     # A later text-only Tool step and a re-read append without rewriting the prefix.
     grown = limit_request_images(
         [
@@ -61,184 +59,116 @@ def test_under_the_limits_every_image_stays_and_the_request_prefix_is_stable() -
         ]
     )
     assert grown[: len(bounded)] == bounded
-    assert _native_image_calls(grown) == [*[f"call-{index}" for index in range(14)], "call-0"]
+    assert _native_image_calls(grown) == [*[f"call-{index}" for index in range(200)], "call-0"]
 
 
-@pytest.mark.parametrize("groups", [[1, 4], [1, 1, 1, 1], [20, 20, 10]])
-def test_fresh_image_groups_up_to_the_count_limit_are_all_retained(groups: list[int]) -> None:
-    messages = []
-    for index, count in enumerate(groups):
-        message = _resolved_image_result(index)
-        message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] *= count
-        messages.append(message)
-
-    assert limit_request_images(messages) == messages
-
-
-def test_fresh_user_images_are_all_sent_up_to_150_mib() -> None:
-    payload = "A" * (150 * 1024 * 1024 // 4)
-    content = [{"type": "media", "media_type": "image/png", "base64": payload} for _ in range(4)]
-    message = {"role": "user", "content": content}
-
-    assert limit_request_images([message])[0] == message
-    with pytest.raises(ImageBudgetExceededError):
-        limit_request_images([message, _resolved_image_result(0)])
-
-
-@pytest.mark.parametrize(("role", "groups"), [("user", [51]), ("tool", [17, 17, 17])])
-def test_fresh_image_overflow_counts_individual_images(role: str, groups: list[int]) -> None:
-    messages = []
-    for index, count in enumerate(groups):
-        message = _resolved_image_result(index)
-        message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] *= count
-        messages.append(_as_user_message(message) if role == "user" else message)
-    before = deepcopy(messages)
-
-    with pytest.raises(ImageBudgetExceededError) as failure:
-        limit_request_images(messages)
-
-    assert (failure.value.count, failure.value.max_count) == (51, 50)
-    assert messages == before
-
-
-def test_single_oversized_fresh_image_fails_without_dropping_other_media(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(wire_shaping, "REQUEST_IMAGE_BYTES_LIMIT", 16)
-    message = _resolved_image_result(0, 20)
-    message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] += [
-        {"type": "media", "media_type": "audio/wav", "base64": "audio-sentinel"},
-        {"type": "document", "media_type": "application/pdf", "base64": "pdf-sentinel"},
-    ]
-    before = deepcopy(message)
-
-    with pytest.raises(ImageBudgetExceededError) as failure:
-        limit_request_images([message])
-
-    assert (failure.value.count, failure.value.size_bytes, failure.value.max_bytes) == (1, 20, 16)
-    assert message == before
-
-
-def test_image_byte_budget_keeps_fresh_images_before_delivered_tool_images(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(wire_shaping, "REQUEST_IMAGE_BYTES_LIMIT", 16)
-    reference = {
-        "role": "user",
-        "content": [
-            {"type": "media", "media_type": "image/png", "base64": "A" * 4},
-            {"type": "text", "text": "reference-path"},
-        ],
-    }
-    messages = [reference, _resolved_image_result(0, 4), _resolved_image_result(1, 12)]
+def test_count_limit_retires_the_oldest_down_to_half_then_preserves_the_prefix() -> None:
     budget = RequestImageBudget()
-    budget.record_delivered([messages[1]])
-
-    bounded = limit_request_images(messages, budget=budget)
-
-    assert bounded[0] == reference
-    assert _native_image_calls(bounded) == ["call-1"]
-    assert bounded[1][TOOL_RESULT_CONTENT_BLOCKS_FIELD][0]["type"] == "text"
-
-
-def test_image_pressure_reclaims_a_batch_then_preserves_the_prefix() -> None:
-    budget = RequestImageBudget()
-    original = [_resolved_image_result(i) for i in range(50)]
+    original = [_resolved_image_result(i) for i in range(10)]
+    original[0] = _as_user_message({**original[0], "id": "reference"})
     budget.record_delivered(original)
-    expanded = [*original, _resolved_image_result(50)]
+    expanded = [*original, _resolved_image_result(10)]
 
-    bounded = budget.project(expanded, remember=True)
+    bounded = budget.project(expanded, image_limit=10, remember=True)
 
-    assert _native_image_calls(bounded) == [f"call-{i}" for i in range(47, 51)]
-    assert _native_image_calls(original) == [f"call-{i}" for i in range(50)]
+    # One image over the limit retires down to five, across user and Tool roles.
+    assert _native_image_calls(bounded) == [f"call-{i}" for i in range(6, 11)]
+    assert all(block["type"] != "media" for block in bounded[0]["content"])
+    assert _native_image_calls(original) == [f"call-{i}" for i in range(1, 10)]
     budget.record_delivered(bounded)
-    continued = budget.project([*bounded, _resolved_image_result(51)], remember=True)
+    continued = budget.project([*bounded, _resolved_image_result(11)], image_limit=10)
     assert continued[: len(bounded)] == bounded
-    assert _native_image_calls(continued) == [f"call-{i}" for i in range(47, 52)]
-    # Canonical attachment resolution may restore retired pixels. A same-Run
-    # rebuild must keep their placeholders even with no current budget pressure.
+    # Attachment resolution restores retired pixels in every rebuild; the budget
+    # keeps their notes even without pressure or a limit.
     assert budget.project(expanded) == bounded
-    assert _native_image_calls(budget.project([original[0]])) == []
+
+
+@pytest.mark.parametrize("role", ["user", "tool"])
+def test_fresh_images_reach_the_model_or_fail_explicitly(role: str) -> None:
+    delivered = [_resolved_image_result(i) for i in range(3)]
+    budget = RequestImageBudget()
+    budget.record_delivered(delivered)
+    fresh = _resolved_image_result(3)
+    fresh[TOOL_RESULT_CONTENT_BLOCKS_FIELD] *= 3
+    if role == "user":
+        fresh = _as_user_message({**fresh, "id": "user-current"})
+
+    # Delivered images give way, however far below half the limit that leaves.
+    bounded = budget.project([*delivered, fresh], image_limit=4)
+    assert _native_image_calls(bounded) == ([] if role == "user" else ["call-3"])
+    assert bounded[-1] == fresh
+
+    before = deepcopy(fresh)
+    with pytest.raises(ImageBudgetExceededError) as failure:
+        budget.project([*delivered, fresh], image_limit=2)
+    assert (failure.value.count, failure.value.max_count) == (3, 2)
+    assert fresh == before
 
 
 def test_projection_commits_nothing_until_asked() -> None:
     budget = RequestImageBudget()
-    original = [_resolved_image_result(i) for i in range(50)]
+    original = [_resolved_image_result(i) for i in range(4)]
     # Projecting a request does not acknowledge delivery: a failed request stays fresh.
-    assert budget.project(original, remember=True) == original
+    assert budget.project(original, image_limit=4, remember=True) == original
     with pytest.raises(ImageBudgetExceededError):
-        budget.project([*original, _resolved_image_result(50)])
+        budget.project([*original, _resolved_image_result(4)], image_limit=4)
     # A projection without remember (e.g. for Compaction) does not commit retirement.
     budget.record_delivered(original)
-    assert len(_native_image_calls(budget.project([*original, _resolved_image_result(50)]))) == 4
+    projected = budget.project([*original, _resolved_image_result(4)], image_limit=4)
+    assert _native_image_calls(projected) == ["call-3", "call-4"]
     assert budget.project(original) == original
+    assert budget.take_unsaved_pin() is None
 
 
-def test_provider_pressure_keeps_four_newest_images_across_user_and_tool_roles() -> None:
-    budget = RequestImageBudget()
-    messages = [_resolved_image_result(i) for i in range(8)]
-    messages[0]["id"] = "reference"
-    _as_user_message(messages[0])
-    before = deepcopy(messages)
-    budget.record_delivered(messages[:-1])
-
-    bounded = budget.project(messages, force=True, remember=True)
-
-    assert _native_image_calls(bounded) == [f"call-{i}" for i in range(4, 8)]
-    assert all(block["type"] != "media" for block in bounded[0]["content"])
-    assert messages == before
-    assert budget.project(messages) == bounded
-    # Another Provider/Compaction projection cannot reactivate retired pixels.
-    assert budget.project([messages[0]])[0] == bounded[0]
-
-
-def test_provider_pressure_obeys_four_mib_target_and_protects_fresh_images() -> None:
-    budget = RequestImageBudget()
-    messages = [_resolved_image_result(i, 2 * 1024 * 1024) for i in range(7)]
-    budget.record_delivered(messages[:-1])
-    assert _native_image_calls(budget.project(messages, force=True)) == ["call-5", "call-6"]
-    # A fresh image above the soft target must still reach the Model once.
-    fresh = _resolved_image_result(7, 5 * 1024 * 1024)
-    bounded = budget.project([*messages, fresh], force=True)
-    assert _native_image_calls(bounded) == ["call-6", "call-7"]
-    assert bounded[-1] == fresh
-
-
-def test_further_provider_pressure_retires_old_images_until_only_fresh_remain() -> None:
-    budget = RequestImageBudget()
-    messages = [_resolved_image_result(i) for i in range(3)]
-    budget.record_delivered(messages[:-1])
-    first = budget.project(messages, force=True, remember=True)
-    assert _native_image_calls(first) == ["call-1", "call-2"]
-    second = budget.project(first, force=True, remember=True)
-    assert _native_image_calls(second) == ["call-2"]
-    assert budget.project(second, force=True, remember=True) == second
-    assert budget.project(messages) == second
-
-
-def test_fresh_images_take_priority_over_delivered_user_references(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("max_bytes", "kept"),
+    [(40, ["call-7", "call-8"]), (None, ["call-5", "call-6", "call-7", "call-8"])],
+    ids=["known-limit", "unknown-limit"],
+)
+def test_body_rejection_retires_image_data_down_to_half(
+    max_bytes: int | None, kept: list[str]
 ) -> None:
-    monkeypatch.setattr(wire_shaping, "REQUEST_IMAGE_COUNT_LIMIT", 4)
-    user = {
-        "role": "user",
-        "id": "user-1",
-        "content": [
-            {"type": "media", "media_type": "image/png", "base64": "AAAA"} for _ in range(4)
-        ],
-    }
     budget = RequestImageBudget()
-    budget.record_delivered([user])
-    fresh = [_resolved_image_result(i) for i in range(2)]
+    messages = [_resolved_image_result(i, 10) for i in range(9)]
+    budget.record_delivered(messages[:-1])
 
-    bounded = budget.project([user, *fresh])
+    smaller = budget.shrink(messages, max_bytes=max_bytes)
 
-    assert _native_image_calls(bounded) == ["call-0", "call-1"]
-    assert sum(block["type"] == "media" for block in bounded[0]["content"]) == 2
+    assert _native_image_calls(smaller) == kept
+    # Every further rejection retires at least one more image until only fresh ones
+    # remain; then nothing changes, and Chat surfaces the error.
+    while _native_image_calls(smaller) != ["call-8"]:
+        fewer = budget.shrink(smaller, max_bytes=max_bytes)
+        assert len(_native_image_calls(fewer)) < len(_native_image_calls(smaller))
+        smaller = fewer
+    assert budget.shrink(smaller, max_bytes=max_bytes) == smaller
 
 
-def test_changed_image_at_the_same_address_is_fresh(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(wire_shaping, "REQUEST_IMAGE_COUNT_LIMIT", 1)
+def test_retirements_persist_and_earlier_images_count_as_delivered() -> None:
+    history = [_resolved_image_result(i) for i in range(6)]
+    current = _as_user_message({**_resolved_image_result(6), "id": "user-current"})
+    messages = [*history, current]
+    first_run = RequestImageBudget()
+    first_run.record_delivered(history)
+    retired = first_run.shrink(messages, max_bytes=None)
+    pin = first_run.take_unsaved_pin()
+    assert pin is not None
+    assert first_run.take_unsaved_pin() is None
+
+    next_run = RequestImageBudget()
+    next_run.restore(pin, messages, current_user_message_id="user-current")
+
+    # The next Run renders the same notes, so its request prefix stays cached.
+    assert next_run.project(messages) == retired
+    # Images from before the Run may retire; the new user turn's image is fresh.
+    with pytest.raises(ImageBudgetExceededError):
+        RequestImageBudget().project(messages, image_limit=1)
+    fresh_only = next_run.project(messages, image_limit=1)
+    assert _native_image_calls(fresh_only) == []
+    assert fresh_only[-1] == current
+
+
+def test_changed_image_at_the_same_address_is_fresh() -> None:
     original = _resolved_image_result(0)
     budget = RequestImageBudget()
     budget.record_delivered([original])
@@ -246,4 +176,4 @@ def test_changed_image_at_the_same_address_is_fresh(monkeypatch: pytest.MonkeyPa
     changed[TOOL_RESULT_CONTENT_BLOCKS_FIELD][0]["base64"] = "BBBB"
 
     with pytest.raises(ImageBudgetExceededError):
-        budget.project([changed, _resolved_image_result(1)])
+        budget.project([changed, _resolved_image_result(1)], image_limit=1)

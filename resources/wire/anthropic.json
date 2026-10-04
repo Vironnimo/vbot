@@ -1,13 +1,15 @@
 {
   "format_version": 1,
-  "_comment": "Native Anthropic Messages. Stable prefixes carry prompt-cache breakpoints, PDFs ride as document blocks, and sampling parameters are not sent while thinking is active (protocol default). Every catalog Model (Claude 4.5 and later) rejects temperature together with top_p, so only temperature is sent then (live 2026-10-03). Models without sampling drop it always; adaptive-only Models cannot disable thinking, so off sends nothing.",
+  "_comment": "Native Anthropic Messages. Stable prefixes carry prompt-cache breakpoints, PDFs ride as document blocks, and sampling parameters are not sent while thinking is active (protocol default). Every catalog Model (Claude 4.5 and later) rejects temperature together with top_p, so only temperature is sent then (live 2026-10-03). Models without sampling drop it always; adaptive-only Models cannot disable thinking, so off sends nothing. Documented request limits: 32 MB per body, 600 images (the Adapter caps Models with a context window up to 200k at 100).",
   "defaults": {
     "request": {
       "prompt_cache": "anthropic_breakpoints",
       "exclusive_parameters": [["temperature", "top_p"]]
     },
     "media": {
-      "types": ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"]
+      "types": ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"],
+      "request_max_bytes": 32000000,
+      "request_max_images": 600
     }
   },
   "rules": [

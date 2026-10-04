@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "_comment": "StepFun Chat Completions (direct API and Step Plan). Only documented parameters are accepted: undocumented OpenAI parameters and out-of-range values are refused before sending. Exactly one output limit goes out as max_tokens. Each Model has its own reasoning_effort ladder. Images are carried natively (vBot has no StepFun video encoder).",
+  "_comment": "StepFun Chat Completions (direct API and Step Plan). Only documented parameters are accepted: undocumented OpenAI parameters and out-of-range values are refused before sending. Exactly one output limit goes out as max_tokens. Each Model has its own reasoning_effort ladder. Images are carried natively (vBot has no StepFun video encoder), at most 60 per request (documented).",
   "defaults": {
     "request": {
       "output_limit_collapse": true,
@@ -20,7 +20,10 @@
         "reasoning_format": {"values": ["general", "deepseek-style"], "out_of_range": "reject"}
       }
     },
-    "media": {"types": ["image/jpeg", "image/png", "image/gif", "image/webp"]},
+    "media": {
+      "types": ["image/jpeg", "image/png", "image/gif", "image/webp"],
+      "request_max_images": 60
+    },
     "admission": {
       "state": "restricted",
       "message": "This StepFun Model is outside vBot's reviewed agentic Chat Models; choose a listed StepFun Model."

@@ -124,11 +124,7 @@ def _summary(arguments: dict[str, Any]) -> str | None:
     actions = arguments.get("actions")
     if not isinstance(actions, list):
         return None
-    words = [
-        str(item.get("action_summary") or item.get("action") or "?")
-        for item in actions
-        if isinstance(item, dict)
-    ]
+    words = [str(item.get("action") or "?") for item in actions if isinstance(item, dict)]
     return f"{len(actions)} actions: " + "; ".join(words)
 
 
@@ -587,11 +583,7 @@ class ComputerUseService:
         lines: list[str] = []
         try:
             if action.name == "screenshot":
-                lines.append(
-                    await self._on_worker(
-                        desktop.screenshot, action.scale, action.display, action.view
-                    )
-                )
+                lines.append(await self._on_worker(desktop.screenshot, action.display, action.view))
             elif action.name == "zoom":
                 lines.append(await self._on_worker(desktop.zoom, frame, action))
             elif action.name == "cursor_position":
@@ -679,7 +671,7 @@ class ComputerUseService:
         self, context: ToolContext, desktop: Desktop, action: Action, frame: Any
     ) -> str:
         if action.name == "screenshot":
-            return await self._on_worker(desktop.screenshot, action.scale, None, action.view)
+            return await self._on_worker(desktop.screenshot, None, action.view)
         if action.name == "zoom":
             return await self._on_worker(desktop.zoom, frame, action)
         if action.name == "cursor_position":
@@ -978,7 +970,7 @@ def register(api: ExtensionAPI) -> None:
         COMPUTER_DESCRIPTION,
         COMPUTER_PARAMETERS,
         service.computer,
-        display=ToolDisplay(summary_fields=("action", "action_summary")),
+        display=ToolDisplay(summary_fields=("action",)),
         argument_normalizer=normalize_computer,
         **shared,
     )

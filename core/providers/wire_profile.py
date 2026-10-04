@@ -596,6 +596,7 @@ class MediaRules:
     types: frozenset[str] = frozenset()
     image_max_bytes: int | None = None
     request_max_bytes: int | None = None
+    request_max_images: int | None = None
 
 
 @dataclass(frozen=True)

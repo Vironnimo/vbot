@@ -51,7 +51,8 @@
           "video/3gpp",
           "application/pdf"
         ],
-        "request_max_bytes": 20000000
+        "request_max_bytes": 20000000,
+        "request_max_images": 3600
       }
     }
   },

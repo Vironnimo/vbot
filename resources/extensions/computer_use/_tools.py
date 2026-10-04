@@ -41,23 +41,23 @@ ACTIONS = (
 )
 SCROLL_DIRECTIONS = ("up", "down", "left", "right")
 APPS_ACTIONS = ("list", "open", "request", "release")
-MAX_BATCH_ACTIONS = 30
+MAX_BATCH_ACTIONS = 60
 
 COMPUTER_DESCRIPTION = (
     "Operate the desktop of the computer the vBot server runs on (Windows) with "
     "screenshots, mouse and keyboard. Start with a screenshot; it shows the foreground "
     "window unless you choose a whole display with view. Coordinates are [x, y] pixels of "
-    "a returned image, a screenshot or a zoom, counted from its top-left corner: use the "
-    "position where you see the target in that image, and the Tool maps it to the screen. "
-    "Input actions return a new screenshot about half a second later. Results say when an "
-    "image is scaled down; zoom into a region to read small text or to hit exact screen "
-    "pixels. If you have computer_batch, use it for predictable steps. If you have "
-    "computer_apps, use it to bring apps to the front and to release the computer when you "
-    "are done. If the user requires approval per app, apps not approved yet appear as gray "
-    "boxes and input into them is refused. This is the user's real mouse and keyboard: a "
-    "frame around the screens shows that you control it until you release it, your reply "
-    "ends or 2 minutes pass without a call, and the user can stop you at any time with the "
-    "Stop button or by pressing Esc twice."
+    "the latest screenshot, counted from its top-left corner: use the position where you "
+    "see the target, and the Tool maps it to the screen. To click in an earlier screenshot "
+    "or in a zoom image, pass its screenshot_id. Input actions return a new screenshot "
+    "about half a second later. Zoom into a region to read small text or to place a click "
+    "exactly on a small target. If you have computer_batch, use it for predictable steps. "
+    "If you have computer_apps, use it to bring apps to the front and to release the "
+    "computer when you are done. If the user requires approval per app, apps not approved "
+    "yet appear as gray boxes and input into them is refused. This is the user's real "
+    "mouse and keyboard: a frame around the screens shows that you control it until you "
+    "release it, your reply ends or 2 minutes pass without a call, and the user can stop "
+    "you at any time with the Stop button or by pressing Esc twice."
 )
 
 COMPUTER_BATCH_DESCRIPTION = (
@@ -65,7 +65,7 @@ COMPUTER_BATCH_DESCRIPTION = (
     "clicking a field, typing and pressing enter. Actions run in order; the batch stops "
     "at the first one that fails, and the result says which steps ran. Each action takes "
     "the same fields as computer, except display. Coordinates refer to images you received "
-    "before this call: the latest one, or the one named by screenshot_id. Screenshot and "
+    "before this call: the latest screenshot, or the image named by screenshot_id. Screenshot and "
     "zoom actions return their images after the batch, in order, and a batch that sent "
     "input ends with a fresh screenshot."
 )
@@ -106,7 +106,8 @@ _ACTION_PROPERTIES: dict[str, Any] = {
         "type": "string",
         "description": (
             "The screenshot_id of the image that coordinate, start_coordinate or region "
-            "refer to, as a result gave it. Omit to use the latest image."
+            "refer to, as a result gave it. Omit to use the latest screenshot; a zoom image "
+            "is used only when named here."
         ),
     },
     "view": {
@@ -157,24 +158,8 @@ _ACTION_PROPERTIES: dict[str, Any] = {
         "maxItems": 4,
         "description": (
             "zoom: [x0, y0, x1, y1] in the selected image; x1 and y1 are excluded. The "
-            "zoom image shows the area fresh at up to full screen resolution, with its own "
-            "screenshot_id; use its pixels directly as coordinates."
-        ),
-    },
-    "scale": {
-        "type": "number",
-        "minimum": 0.1,
-        "maximum": 1,
-        "description": (
-            "screenshot and zoom: shrink the returned image to this fraction to save "
-            "context; coordinates then refer to the smaller image. Omit for full detail."
-        ),
-    },
-    "action_summary": {
-        "type": "string",
-        "description": (
-            'A few words saying what the action does, shown to the user, such as "Opens '
-            'the File menu". Set it on every input action; never include secrets.'
+            "zoom image shows the area fresh and enlarged, with its own screenshot_id; to "
+            "click in it, pass that screenshot_id with positions in the zoom image."
         ),
     },
 }
@@ -210,9 +195,8 @@ COMPUTER_BATCH_PARAMETERS: dict[str, Any] = {
             "maxItems": MAX_BATCH_ACTIONS,
             "description": (
                 f"The actions to run, 1-{MAX_BATCH_ACTIONS}. Example: "
-                '[{"action":"left_click","coordinate":[420,310],"action_summary":"Focuses '
-                'the search box"},{"action":"type","text":"invoice"},{"action":"key",'
-                '"text":"enter"}]'
+                '[{"action":"left_click","coordinate":[420,310]},{"action":"type",'
+                '"text":"invoice"},{"action":"key","text":"enter"}]'
             ),
         },
     },
@@ -294,7 +278,6 @@ _FIELD_ALIASES = SpellingAliases(
         "scroll_amount": ("amount", "ticks", "scroll_ticks", "wheel_ticks", "notches"),
         "duration": ("seconds", "secs", "duration_s", "duration_seconds"),
         "repeat": ("times", "presses", "repeat_count", "repetitions"),
-        "action_summary": ("summary", "action_description"),
         "display": ("monitor", "screen", "display_name", "display_id", "display_number"),
         "screenshot_id": ("image_id", "screenshotId"),
     }
@@ -355,12 +338,12 @@ _OPTIONAL = (
     "repeat",
     "duration",
     "region",
-    "scale",
     "display",
     "view",
     "screenshot_id",
-    "action_summary",
 )
+# Per-action summaries from other harnesses or older calls; they change nothing.
+_SUMMARY_FIELDS = ("action_summary", "summary", "action_description")
 
 
 def _spelled(value: str) -> str:
@@ -500,6 +483,10 @@ def _normalized_action(contract: ToolContract, arguments: Any, tool: str) -> Any
     if not isinstance(arguments, dict):
         return arguments
     arguments = dict(arguments)
+    # Images always come at full detail; a scale from other harnesses changes nothing.
+    arguments.pop("scale", None)
+    while _pop(arguments, _SUMMARY_FIELDS) is not None:
+        pass
     _lift_action_type(arguments, tool)
     raw_action = next(
         (value for key, value in arguments.items() if _spelled(key) == "action"), None

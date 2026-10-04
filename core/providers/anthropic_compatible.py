@@ -28,6 +28,7 @@ from core.providers._http_shared import (
     classify_http_status,
     connect_streaming_with_retry,
     decode_response_json,
+    enforce_request_body_limit,
     iter_sse_data,
     parse_sse_json_data,
     wrap_network_error,
@@ -583,6 +584,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
 
         request_headers = self._stable_request_headers(model_id, kwargs)
         payload = self._build_payload(messages, model_id, **kwargs)
+        await enforce_request_body_limit(payload, self.request_body_limit(model_id))
 
         auth_recovery = OAuthRequestRecovery(self._token_getter, self._auth_config)
 
@@ -672,6 +674,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             return built
 
         payload = build_stream_payload()
+        await enforce_request_body_limit(payload, self.request_body_limit(model_id))
         auth_recovery = OAuthRequestRecovery(self._token_getter, self._auth_config)
 
         async def _build_headers() -> dict[str, str]:

@@ -450,7 +450,6 @@ export default Object.freeze({
   'sessions.source_channel': 'Source channel',
   'sessions.subagent_parent': 'Parent',
   'sessions.details.created': 'Created',
-  'sessions.details.changes': 'Changes',
   'sessions.details.forkedFrom': 'Forked from',
   'sessions.details.originValue': '{session} · {agent}',
   'sessions.details.originOfAgent': 'A Session of {agent}',
