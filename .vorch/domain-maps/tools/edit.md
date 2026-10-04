@@ -92,19 +92,20 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
 ## Agent-facing text
 
 Texts are minimal by user decision (2026-10-04): the boundary between `edit` and
-`write` comes from the names, details belong in results and errors. About 182
-tokens (`python -m scripts.tool_lab definitions` estimate); `write` adds about 76,
-against about 315 for `apply_patch`.
+`write` comes from the names, details belong in results and errors. About 128
+tokens (`python -m scripts.tool_lab definitions` estimate); `write` adds about 62,
+against about 315 for `apply_patch`. `edits`, `new_string` and `minItems` carry no
+text: the names say enough, an edit against text an earlier edit changed fails
+with `Line numbers count the text as edit 1 left it.`, and empty `edits` fail
+with the call to send (review 2026-10-04).
 
 | Text | Reason |
 |---|---|
 | `Replace text in a file.` | Names the effect; what to do with a whole file comes from `write`'s name and the `content` refusal. |
-| `Put all changes to one file in one call; for several files, call edit once per file in the same response.` | Batching cuts round trips: several places go into one call, several files into sibling calls of one response, which run concurrently. |
-| `path`: `File to change, relative to the working directory or absolute.` | States both accepted path forms, worded like `read` and `apply_patch`. |
-| `edits`: `Changes, applied in order.` | Each edit sees the text the edits before it left, so later edits may build on earlier ones. |
-| `edits[].old_string`: `Exact text from the file. Unless replace_all is true, it must occur only once; add surrounding lines until it does.` | Uniqueness prevents ambiguous edits: a repeated `old_string` fails with its line numbers instead of changing a guessed occurrence; the clause after it gives the fix before the first failure. The `replace_all` condition keeps a literal reader from padding an `old_string` it means to replace everywhere (review 2026-10-04). |
-| `edits[].new_string`: `Replacement text.` | Needs no more; `""` deleting text is said by the half-pair refusals. |
-| `edits[].replace_all`: `Replace every occurrence. Omit to replace exactly one.` | The one opt-in exception to uniqueness; omitting it keeps the safe default. |
+| `Put all changes to one file in one call.` | Batching cuts round trips: several places go into one call. Several files in one response come from the System Prompt's parallel-call rule; an item naming another file is refused with that instruction. |
+| `path`: `Relative to the working directory or absolute.` | States both accepted path forms (shared with `write`). |
+| `edits[].old_string`: `Exact text from the file. Without replace_all it must occur once.` | Uniqueness prevents ambiguous edits: a repeated `old_string` fails with its lines and the fix instead of changing a guessed occurrence. The `replace_all` condition keeps a literal reader from padding an `old_string` it means to replace everywhere. |
+| `edits[].replace_all`: `Replace every occurrence.` | The one opt-in exception to uniqueness. |
 | Failure closings (`Neither edit was applied, so no file was changed. Send both edits again with edit 2 corrected or left out.`, `None of the N edits were applied, ...`) | The call is atomic, so the Agent must resend every edit, not only the failed one; naming the edit avoids a guess. |
 | `ambiguous_replacement`: `old_string matches N places (lines ...). Include more of the surrounding text so it matches once, or set replace_all to true to change every match.` | "matches" holds also when only whitespace-tolerant matching found the places; "occurs" was false there (review 2026-10-04). |
 | `write`'s `file_not_read` closing: `... send the same call again to replace it, or call edit to change only part of it.` | Names the Tool for the other valid intent (`partial_change` template). |

@@ -52,36 +52,28 @@ _REPLACE_TOOLS = frozenset({EDIT_TOOL_NAME, WRITE_TOOL_NAME})
 
 EditDialect = Literal["patch", "replace"]
 
-EDIT_TOOL_DESCRIPTION = (
-    "Replace text in a file. Put all changes to one file in one call; for several files, "
-    "call edit once per file in the same response."
-)
+EDIT_TOOL_DESCRIPTION = "Replace text in a file. Put all changes to one file in one call."
+_PATH: JsonObject = {
+    "type": "string",
+    "description": "Relative to the working directory or absolute.",
+}
 EDIT_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
-        "path": {
-            "type": "string",
-            "description": "File to change, relative to the working directory or absolute.",
-        },
+        "path": dict(_PATH),
         "edits": {
             "type": "array",
-            "description": "Changes, applied in order.",
-            "minItems": 1,
             "items": {
                 "type": "object",
                 "properties": {
                     "old_string": {
                         "type": "string",
                         "description": (
-                            "Exact text from the file. Unless replace_all is true, it must occur "
-                            "only once; add surrounding lines until it does."
+                            "Exact text from the file. Without replace_all it must occur once."
                         ),
                     },
-                    "new_string": {"type": "string", "description": "Replacement text."},
-                    "replace_all": {
-                        "type": "boolean",
-                        "description": "Replace every occurrence. Omit to replace exactly one.",
-                    },
+                    "new_string": {"type": "string"},
+                    "replace_all": {"type": "boolean", "description": "Replace every occurrence."},
                 },
                 "required": ["old_string", "new_string"],
             },
@@ -90,16 +82,11 @@ EDIT_TOOL_PARAMETERS: JsonObject = {
     "required": ["path", "edits"],
 }
 
-WRITE_TOOL_DESCRIPTION = (
-    "Create a file or replace all of its content. To replace an existing file, read it first."
-)
+WRITE_TOOL_DESCRIPTION = "Create a file or replace all of its content."
 WRITE_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
-        "path": {
-            "type": "string",
-            "description": "File to write, relative to the working directory or absolute.",
-        },
+        "path": dict(_PATH),
         "content": {"type": "string", "description": "Complete file content."},
     },
     "required": ["path", "content"],
