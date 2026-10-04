@@ -677,8 +677,10 @@ export default Object.freeze({
   'settings.specializedModels.customTarget': 'Custom target: {target}',
   'settings.specializedModels.aboutAria': 'About {name}',
   'settings.specializedModels.resetOptionsAria': 'Reset options for {task}',
-  'settings.specializedModels.jsonPlaceholder':
-    'e.g. [{"text":"hello","bbox":[[0,0],[1,0],[1,1],[0,1]]}]',
+  'settings.specializedModels.jsonPlaceholder': 'e.g. {"name": "value"}',
+  'settings.specializedModels.providerDefault': 'Provider default',
+  'settings.specializedModels.booleanOn': 'On',
+  'settings.specializedModels.booleanOff': 'Off',
   'settings.specializedModels.jsonInvalid': 'Invalid JSON: {error}',
   'settings.specializedModels.decision': 'Decision model',
   'settings.specializedModels.decisionHelp':

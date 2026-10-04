@@ -556,6 +556,7 @@ describe('SettingsSpecializedModelsPanel', () => {
             type: 'json',
             label: 'Text layout',
             default: [],
+            placeholder: '[{"text": "..."}]',
           },
         ],
       });
@@ -577,8 +578,9 @@ describe('SettingsSpecializedModelsPanel', () => {
       expect(advanced.open).toBe(false);
       advanced.querySelector('summary').click();
       expect(advanced.open).toBe(true);
-      // The structured default serializes to JSON text.
-      expect(textarea.value).toBe('[]');
+      // An empty default leaves the field blank behind the schema's example.
+      expect(textarea.value).toBe('');
+      expect(textarea.placeholder).toBe('[{"text": "..."}]');
       expect(textarea.getAttribute('aria-invalid')).toBe('false');
 
       const setText = (value) => {
@@ -621,6 +623,129 @@ describe('SettingsSpecializedModelsPanel', () => {
       expect(lastSavedLayout()).toEqual({
         target,
         options: { text_layout: layout },
+      });
+
+      // Emptying the field clears the stored value; the text stays as typed.
+      setText(' ');
+      expect(textarea.value).toBe(' ');
+      expect(textarea.getAttribute('aria-invalid')).toBe('false');
+      button('Save').click();
+      await waitForCondition(
+        () => api.updateTaskModelSettings.mock.calls.length === 3,
+      );
+      expect(lastSavedLayout()).toEqual({ target, options: {} });
+    });
+
+    it('offers provider default, on and off for a switch without a default', async () => {
+      const target = 'openrouter/video/model::api-key';
+      targetsFor('video_generation', [
+        { id: target, kind: 'provider', label: 'Video model', usable: true },
+      ]);
+      api.getTaskModelOptions.mockResolvedValue({
+        fields: [
+          {
+            name: 'generate_audio',
+            type: 'boolean',
+            label: 'Generate audio',
+            default: null,
+          },
+        ],
+      });
+      echoSavedModelTasks();
+      mountPanel(
+        committingProps({
+          taskTypes: ['video_generation'],
+          settings: {
+            model_tasks: {
+              video_generation: { target, options: { generate_audio: true } },
+            },
+          },
+        }),
+      );
+      const controlId = 'task-model-video_generation-generate_audio';
+      await waitForCondition(() => document.getElementById(controlId));
+      const control = document.getElementById(controlId);
+      expect(document.querySelector('button[role="switch"]')).toBeNull();
+      expect(control.textContent).toContain('On');
+
+      const choose = async (label, calls) => {
+        control.click();
+        flushSync();
+        [...document.querySelectorAll('[role="option"]')]
+          .find((option) => option.textContent.trim() === label)
+          .click();
+        flushSync();
+        button('Save').click();
+        await waitForCondition(
+          () => api.updateTaskModelSettings.mock.calls.length === calls,
+        );
+        return api.updateTaskModelSettings.mock.calls.at(-1)[0].video_generation
+          .options;
+      };
+      expect(await choose('Off', 1)).toEqual({ generate_audio: false });
+      expect(await choose('Provider default', 2)).toEqual({});
+    });
+
+    it('keeps the options a newly selected target accepts unchanged', async () => {
+      const targets = [
+        { id: 'openai/gpt-image-1::api-key', label: 'GPT Image 1' },
+        { id: 'openai/gpt-image-1.5::api-key', label: 'GPT Image 1.5' },
+      ].map((target) => ({ ...target, kind: 'provider', usable: true }));
+      targetsFor('image_generation', targets);
+      const quality = (values) => ({
+        name: 'quality',
+        type: 'select',
+        label: 'Quality',
+        default: '',
+        options: values.map((value) => ({ value, label: value })),
+      });
+      api.getTaskModelOptions.mockImplementation(async (_taskType, target) => ({
+        fields:
+          target === targets[0].id
+            ? [quality(['', 'low', 'high']), { name: 'n', type: 'number' }]
+            : [
+                quality(['', 'high']),
+                { name: 'n', type: 'number', min: 1, max: 4 },
+              ],
+      }));
+      echoSavedModelTasks();
+      mountPanel(
+        committingProps({
+          taskTypes: ['image_generation'],
+          settings: {
+            model_tasks: {
+              image_generation: {
+                target: targets[0].id,
+                options: { quality: 'high', n: 8, style: 'vivid' },
+              },
+            },
+          },
+        }),
+      );
+      await waitForCondition(() =>
+        document.getElementById('task-model-image_generation-quality'),
+      );
+
+      selectTarget('image_generation', 'GPT Image 1.5');
+      await waitForCondition(
+        () =>
+          api.getTaskModelOptions.mock.calls.some(
+            ([, target]) => target === targets[1].id,
+          ) &&
+          document
+            .getElementById('task-model-image_generation-quality')
+            ?.textContent.includes('high'),
+      );
+      button('Save').click();
+      await waitForCondition(
+        () => api.updateTaskModelSettings.mock.calls.length === 1,
+      );
+      // The count is out of the new range and the other Model's option is unknown.
+      expect(api.updateTaskModelSettings.mock.calls[0][0]).toEqual({
+        image_generation: {
+          target: targets[1].id,
+          options: { quality: 'high' },
+        },
       });
     });
 
