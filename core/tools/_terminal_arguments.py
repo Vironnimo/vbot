@@ -2,11 +2,12 @@
 
 Agents call the terminal Tool with habits from other harnesses: Codex
 ``write_stdin`` ``chars`` and ``yield_time_ms``, ``session_id`` for the terminal
-id, ``enter: true``, key names such as ``"Ctrl+C"``, ``close`` for kill, and
-every optional field filled with a placeholder. The normalizer maps each shape
-whose intent is exact onto the advertised fields and drops values that request
-nothing. A value that asks for an effect the chosen action cannot provide fails
-before anything runs, with the call that provides it.
+id, ``enter: true``, key names such as ``"Ctrl+C"``, ``close`` for kill, text
+ending in a line break to submit it, and every optional field filled with a
+placeholder. The normalizer maps each shape whose intent is exact onto the
+advertised fields and drops values that request nothing. A value that asks for
+an effect the chosen action cannot provide fails before anything runs, with the
+call that provides it.
 """
 
 from __future__ import annotations
@@ -48,9 +49,12 @@ _FIELD_ALIASES = SpellingAliases(
         "timeout": ("timeout_seconds", "timeout_secs", "timeout_sec", "timeout_s", "seconds"),
         "expected_screen_revision": ("screen_revision", "expected_revision"),
         "after_revision": ("attention_revision", "since_revision"),
+        "pattern": ("regex", "regexp", "until", "wait_for", "expect", "match"),
     }
 )
 _SUBMIT = "submit"
+# The terminal's size follows the user's view of it; no call resizes it.
+_RESIZE = "resize"
 _ACTION_VALUES = {
     **dict.fromkeys(("start", "launch", "spawn", "create", "new"), "start"),
     **dict.fromkeys(("list", "ls", "listterminals", "terminals"), "list"),
@@ -99,7 +103,7 @@ _ACTION_VALUES = {
         "input",
     ),
     **dict.fromkeys(("submit", "sendline", "writeline"), _SUBMIT),
-    **dict.fromkeys(("resize", "setsize", "size"), "resize"),
+    **dict.fromkeys(("resize", "setsize", "size"), _RESIZE),
     **dict.fromkeys(
         ("kill", "stop", "close", "terminate", "end", "destroy", "killsession"), "kill"
     ),
@@ -135,6 +139,7 @@ _OBSERVATION_FIELDS = (
     "after_revision",
     "timeout_ms",
     "timeout",
+    "pattern",
     "expected_screen_revision",
 )
 # Labels and start settings that change nothing on an existing terminal.
@@ -147,11 +152,20 @@ _ACCEPTED_FIELDS = {
     "attach": frozenset({"terminal_id"}),
     "detach": frozenset({"terminal_id"}),
     "status": frozenset({"terminal_id", "lines", "start_line"}),
-    "wait": frozenset({"terminal_id", "after_revision", "timeout_ms", "timeout"}),
+    "wait": frozenset({"terminal_id", "after_revision", "timeout_ms", "timeout", "pattern"}),
+    # A timeout makes input wait for the reply, as wait does.
     "input": frozenset(
-        {"terminal_id", "text", "data", "key", "expected_screen_revision", "timeout_ms", "timeout"}
+        {
+            "terminal_id",
+            "text",
+            "data",
+            "key",
+            "expected_screen_revision",
+            "timeout_ms",
+            "timeout",
+            "pattern",
+        }
     ),
-    "resize": frozenset({"terminal_id", "columns", "rows"}),
     "kill": frozenset({"terminal_id"}),
 }
 # Zero requests nothing for these fields; elsewhere zero is a real value.
@@ -196,7 +210,19 @@ def normalize_terminal_arguments(arguments: Any) -> Any:
         normalized["action"] = "input"
         press_enter = True
     _drop_placeholders(normalized)
+    if "action" not in normalized and "command" in normalized and "terminal_id" not in normalized:
+        # Only start takes a command, so a call that names a program starts it.
+        normalized["action"] = "start"
     action = normalized.get("action")
+    if action == _RESIZE:
+        status = _call("status", normalized)
+        raise ValueError(
+            _not_run(
+                "the terminal's size follows the user's view of it, so no call resizes it; "
+                f"nothing was changed. To read the screen at its current size, call terminal "
+                f"{status}."
+            )
+        )
     if not isinstance(action, str) or action not in _ACCEPTED_FIELDS:
         return normalized
     if action == "start":
@@ -222,11 +248,10 @@ def normalize_terminal_arguments(arguments: Any) -> Any:
         if key in {"command", "args"}:
             raise ValueError(_not_run(_command_elsewhere_problem(action, normalized)))
         if key in {"columns", "rows"}:
-            size = {name: normalized[name] for name in ("columns", "rows") if name in normalized}
             raise ValueError(
                 _not_run(
-                    f"{action} does not change the size; resize with "
-                    f"{_call('resize', normalized, **size)}."
+                    f"{action} does not change the size: the terminal's size follows the user's "
+                    "view of it. Repeat the call without columns and rows."
                 )
             )
     return normalized
@@ -321,6 +346,8 @@ def _normalize_start(arguments: dict[str, Any]) -> None:
         raise ValueError(
             _not_run(f'start presses no keys; send key "{key}" with the input action after start.')
         )
+    # start presses Enter after its text; a line break at its end would be a second one.
+    _submit_line_break(arguments)
     if "data" in arguments:
         raise ValueError(
             _not_run(
@@ -331,21 +358,39 @@ def _normalize_start(arguments: dict[str, Any]) -> None:
 
 
 def _normalize_input(arguments: dict[str, Any], press_enter: bool) -> None:
-    if not press_enter:
-        return
-    key = arguments.get("key")
-    if "data" in arguments and "text" not in arguments and key is None:
-        # data is exact; Enter is the carriage return the enter key sends.
-        arguments["data"] = f"{arguments['data']}{_ENTER}"
-        return
-    if key not in (None, "enter"):
-        raise ValueError(
-            _not_run(
-                f'enter asks for Enter and key asks for "{key}"; one input call sends one key. '
-                "Send them in two input calls, or send both sequences as data."
+    if press_enter:
+        key = arguments.get("key")
+        if "data" in arguments and "text" not in arguments and key is None:
+            # data is exact; Enter is the carriage return the enter key sends.
+            arguments["data"] = f"{arguments['data']}{_ENTER}"
+            return
+        if key not in (None, "enter"):
+            raise ValueError(
+                _not_run(
+                    f'enter asks for Enter and key asks for "{key}"; one input call sends one '
+                    "key. Send them in two input calls, or send both sequences as data."
+                )
             )
-        )
-    arguments["key"] = "enter"
+        arguments["key"] = "enter"
+    if arguments.get("key") in (None, "enter") and _submit_line_break(arguments):
+        # Text that ends in a line break is meant to be submitted: press Enter
+        # once, instead of typing the break into a pasted block.
+        arguments["key"] = "enter"
+
+
+def _submit_line_break(arguments: dict[str, Any]) -> bool:
+    """Drop the line breaks that end text; True when there were any."""
+    text = arguments.get("text")
+    if not isinstance(text, str):
+        return False
+    stripped = text.rstrip("\r\n")
+    if stripped == text:
+        return False
+    if stripped:
+        arguments["text"] = stripped
+    else:
+        del arguments["text"]
+    return True
 
 
 def _input_elsewhere_problem(action: str, arguments: dict[str, Any]) -> str:

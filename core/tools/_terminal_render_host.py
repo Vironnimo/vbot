@@ -68,6 +68,15 @@ class TerminalScreen:
         )
         return page
 
+    async def mark_input(self) -> None:
+        await self._backend.call("mark_input", ())
+
+    async def pattern_text(self, *, start_line: int | None) -> dict[str, Any]:
+        found: dict[str, Any] = await self._backend.call(
+            "pattern_text", (), {"start_line": start_line}
+        )
+        return found
+
     async def ansi_snapshot(self) -> str:
         ansi: str = await self._backend.call("ansi_snapshot", ())
         return ansi

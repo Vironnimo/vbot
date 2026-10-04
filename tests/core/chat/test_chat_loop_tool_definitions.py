@@ -168,7 +168,7 @@ async def test_shell_definition_fits_the_run_depth_and_offered_tools(tmp_path: P
     for definition in (top_level, nested):
         assert "read" not in definition["description"]
         assert "terminal;" not in definition["description"]
-    assert "continues in the background" in top_level["description"]
+    assert "keeps running in the background" in top_level["description"]
     assert "mode" in top_level["parameters"]["properties"]
     assert "continues" not in nested["description"]
     assert "mode" not in nested["parameters"]["properties"]

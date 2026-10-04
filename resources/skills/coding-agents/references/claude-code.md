@@ -1,6 +1,6 @@
 # Claude Code interactive reference
 
-Interactive executable: `claude`. Put launch options in `args`; use the Terminal Tool's `workdir` for the repository and optional `text` for the initial task.
+Interactive executable: `claude`.
 
 ## Launch options
 
@@ -19,15 +19,15 @@ Interactive executable: `claude`. Put launch options in `args`; use the Terminal
 | Browser integration | `--chrome` / `--no-chrome` |
 | Worktree | `--worktree [name]` |
 
-For a request specifying Sonnet and medium effort:
+For a request specifying Sonnet and medium effort, with the values in angle brackets replaced:
 
 ```json
 {
   "action": "start",
   "command": "claude",
   "args": ["--model", "sonnet", "--effort", "medium"],
-  "workdir": "C:/repo",
-  "text": "Refactor authentication and run the relevant tests."
+  "workdir": "<repository path>",
+  "text": "<the user's task>"
 }
 ```
 

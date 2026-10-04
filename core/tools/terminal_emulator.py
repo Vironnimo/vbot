@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import itertools
 import re
 from collections import deque
 from collections.abc import Callable, Mapping
@@ -132,10 +133,18 @@ class _EmulatorScreen(pyte.Screen):
     A row the cursor left by auto-wrap carries ``wrapped = True``: its text
     continues on the next row. Explicit line feeds and erasing the row's end
     clear the mark, so it names exactly the rows a long line was folded into.
+    ``on_clear`` runs when the whole primary screen is erased or reset.
     """
 
-    def __init__(self, columns: int, lines: int, on_scroll: Callable[[Any], None]) -> None:
+    def __init__(
+        self,
+        columns: int,
+        lines: int,
+        on_scroll: Callable[[Any], None],
+        on_clear: Callable[[], None],
+    ) -> None:
         self._on_scroll = on_scroll
+        self._on_clear = on_clear
         self._primary_state: dict[str, Any] | None = None
         self._alternate_modes: set[int] = set()
         self._private_modes: set[int] = set()
@@ -157,11 +166,20 @@ class _EmulatorScreen(pyte.Screen):
     def reset(self) -> None:
         super().reset()
         self.cursor.attrs = self.default_char
+        if self._primary_state is None:
+            self._on_clear()
 
     @property
     def alternate_active(self) -> bool:
         """Whether the rendered screen is the alternate screen buffer."""
         return self._primary_state is not None
+
+    @property
+    def primary_cursor_row(self) -> int:
+        """The cursor's row on the primary screen, also while the alternate one shows."""
+        if self._primary_state is None:
+            return int(self.cursor.y)
+        return int(self._primary_state["cursor"].y)
 
     @property
     def private_modes(self) -> frozenset[int]:
@@ -209,6 +227,8 @@ class _EmulatorScreen(pyte.Screen):
                 # drawn there next is new content.
                 self.committed_rows = min(self.committed_rows, self.cursor.y if how == 0 else 0)
         super().erase_in_display(how, *args, **kwargs)
+        if how in (2, 3) and self._primary_state is None:
+            self._on_clear()
 
     @override
     def index(self) -> None:
@@ -374,7 +394,9 @@ class _EmulatorScreen(pyte.Screen):
 
 class _HistoryLine(NamedTuple):
     number: int
+    # A wrapped row keeps its trailing spaces: its text continues on the next row.
     text: str
+    wrapped: bool = False
 
 
 class TerminalEmulator:
@@ -399,7 +421,10 @@ class TerminalEmulator:
         self.rows = rows
         self._next_line = 0
         self._history: deque[_HistoryLine] = deque(maxlen=scrollback_lines)
-        self._screen = _EmulatorScreen(columns, rows, self._remember_line)
+        # Where a wait's pattern starts matching: a row number, and whether
+        # the logical line on that row is skipped too. None: every retained line.
+        self._match_start: tuple[int, bool] | None = None
+        self._screen = _EmulatorScreen(columns, rows, self._remember_line, self._cleared)
         self._stream = _EmulatorStream(self._screen)
         self._held = ""
         self._responses: list[str] = []
@@ -530,6 +555,69 @@ class TerminalEmulator:
             "next_start_line": end if start_line is not None and end < total else None,
         }
 
+    def mark_input(self) -> None:
+        """The Agent types now: a wait's pattern matches only lines below the cursor's line.
+
+        So neither earlier output nor the echo of the input matches. On the
+        alternate screen the primary screen's cursor counts, where output
+        continues once the full-screen view closes.
+        """
+        self._match_start = (self._next_line + self._screen.primary_cursor_row, True)
+
+    def pattern_text(self, *, start_line: int | None) -> dict[str, Any]:
+        """The output a wait's pattern is matched against, and the line to check from next.
+
+        The text is logical lines: rows a long line was auto-wrapped into are
+        joined again. Without input every retained line counts; after
+        ``mark_input`` only the lines below the input's line, or, once the
+        screen was cleared since, the lines from the cleared screen on. A
+        full-screen view counts only what it shows. *start_line* skips lines
+        an earlier check already read; ``next_line`` is the start of the
+        logical line just above the screen, the first that can still change.
+        """
+        screen_rows = self._screen_rows()
+        first = self._history[0].number if self._history else self._next_line
+        screen_start = self._next_line
+
+        def wrapped(number: int) -> bool:
+            if number < first:
+                return False
+            if number < screen_start:
+                return self._history[number - first].wrapped
+            index = number - screen_start
+            return index < len(screen_rows) and screen_rows[index][1]
+
+        begin = first
+        if self._screen.alternate_active:
+            begin = screen_start
+        elif self._match_start is not None:
+            row, skip_line = self._match_start
+            if skip_line:
+                while wrapped(row):
+                    row += 1
+                row += 1
+            begin = max(begin, row)
+        if start_line is not None:
+            begin = max(begin, start_line)
+        rows: list[tuple[str, bool]] = [
+            (line.text, line.wrapped)
+            for line in itertools.islice(self._history, max(0, begin - first), None)
+        ]
+        rows.extend(screen_rows[max(0, begin - screen_start) :])
+        lines: list[str] = []
+        parts: list[str] = []
+        for text, continues in rows:
+            parts.append(text)
+            if not continues:
+                lines.append("".join(parts))
+                parts.clear()
+        if parts:
+            lines.append("".join(parts))
+        next_line = screen_start - 1
+        while next_line > first and wrapped(next_line - 1):
+            next_line -= 1
+        return {"text": "\n".join(lines), "next_line": max(first, next_line)}
+
     def ansi_snapshot(self) -> str:
         """Serialize bounded history plus the current screen for a late viewer.
 
@@ -589,9 +677,26 @@ class TerminalEmulator:
             lines.pop()
         return lines
 
+    def _screen_rows(self) -> list[tuple[str, bool]]:
+        """Each screen row's text and whether it is wrapped, through the last non-blank row."""
+        screen = self._screen
+        rows: list[tuple[str, bool]] = []
+        for y in range(screen.lines):
+            line = screen.buffer[y]
+            continues = bool(getattr(line, "wrapped", False))
+            rows.append((_render_buffer_line(line, screen.columns, strip=not continues), continues))
+        while rows and not rows[-1][0].strip():
+            rows.pop()
+        return rows
+
     def _remember_line(self, line: Any) -> None:
+        continues = bool(getattr(line, "wrapped", False))
         self._history.append(
-            _HistoryLine(self._next_line, _render_buffer_line(line, self._screen.columns))
+            _HistoryLine(
+                self._next_line,
+                _render_buffer_line(line, self._screen.columns, strip=not continues),
+                continues,
+            )
         )
         self._next_line += 1
         if not self._transcript:
@@ -600,6 +705,12 @@ class TerminalEmulator:
             self._screen.committed_rows -= 1
             return
         self._transcribe_row(line)
+
+    def _cleared(self) -> None:
+        # Everything drawn on a cleared screen is new: after input, the
+        # pattern matches from the cleared screen on.
+        if self._match_start is not None:
+            self._match_start = (self._next_line, False)
 
     def _transcribe_row(self, line: Any) -> None:
         self._transcript_partial.append(
@@ -675,8 +786,9 @@ def _semicolon_form(match: re.Match[str]) -> str:
     return f"\x1b[{';'.join(attributes)}m" if attributes else ""
 
 
-def _render_buffer_line(line: Any, columns: int) -> str:
-    return "".join(line[column].data for column in range(columns)).rstrip()
+def _render_buffer_line(line: Any, columns: int, *, strip: bool = True) -> str:
+    text = "".join(line[column].data for column in range(columns))
+    return text.rstrip() if strip else text
 
 
 def _normalize_terminal_title(value: object) -> str:

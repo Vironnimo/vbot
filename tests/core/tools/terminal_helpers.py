@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Collection
 from pathlib import Path
 
 import pytest_asyncio
@@ -10,9 +10,8 @@ import pytest_asyncio
 from core.projects import ProjectStore
 from core.tools.terminal import TERMINAL_TOOL_NAME, register_terminal_tool
 from core.tools.terminal_manager import TerminalManager, TerminalRenderHost
-from core.tools.tools import JsonObject, ToolContext, ToolRegistry
+from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure_for_exception
 from tests.core.tools.terminal_manager_helpers import AdapterFactory
-from tests.core.tools.tools_test_support import dispatch_as_executor
 
 
 @pytest_asyncio.fixture
@@ -36,7 +35,10 @@ def make_context(
     *,
     session_id: str = "session-a",
     result_persisted_hook: Callable[[Callable[[], None]], None] | None = None,
+    nesting_depth: int = 0,
+    offered_tools: Collection[str] | None = None,
 ) -> ToolContext:
+    """A terminal call's context; *offered_tools* are the Tools the Model was shown."""
     return ToolContext(
         agent_id="agent-a",
         session_id=session_id,
@@ -50,6 +52,8 @@ def make_context(
         cwd=tmp_path,
         project_id="project-a",
         result_persisted_hook=result_persisted_hook,
+        nesting_depth=nesting_depth,
+        offered_tools=offered_tools,
     )
 
 
@@ -63,13 +67,18 @@ async def call(
 
     The registered Tool normalizes other harnesses' spellings and validates the
     contract before the handler runs; the executor turns a refused call into the
-    ``invalid_arguments`` result the Agent reads.
+    ``invalid_arguments`` result the Agent reads. The Run may call the Tools the
+    context offers besides terminal.
     """
     registry = ToolRegistry()
     register_terminal_tool(
         registry, manager, projects if projects is not None else ProjectStore(context.data_root)
     )
-    return await dispatch_as_executor(registry, context, arguments)
+    allowed = sorted({TERMINAL_TOOL_NAME, *(context.offered_tools or ())})
+    try:
+        return await registry.dispatch(context, arguments, allowed)
+    except Exception as error:
+        return tool_failure_for_exception(context.tool_name, error)
 
 
 def details(

@@ -148,6 +148,34 @@ def test_page_addresses_retained_lines_by_stable_number() -> None:
     assert emulator.page(start_line=None, limit=1)["screen_start_line"] == 10
 
 
+def test_pattern_text_holds_the_logical_lines_printed_after_the_last_input() -> None:
+    emulator = TerminalEmulator(10, 4, scrollback_lines=20)
+    # Without input every retained line counts; an auto-wrapped line is one line again,
+    # also when its first row scrolled into history.
+    emulator.feed("booting\r\n0123456789abcdefghij0123456789xy\r\n> ")
+    assert emulator.pattern_text(start_line=None) == {
+        "text": "booting\n0123456789abcdefghij0123456789xy\n>",
+        "next_line": 1,
+    }
+
+    # After input, neither earlier output nor the echo of the input line counts,
+    # even when the echo wraps.
+    emulator.mark_input()
+    assert emulator.pattern_text(start_line=None)["text"] == ""
+    emulator.feed("make all the things\r\nbuilt\r\n")
+    assert emulator.pattern_text(start_line=None)["text"] == "built"
+
+    # Everything on a cleared screen is new.
+    emulator.feed("\x1b[2J\x1b[Hfresh\r\n")
+    assert emulator.pattern_text(start_line=None)["text"] == "fresh"
+
+    # next_line starts the logical line above the screen, the first that can still change.
+    paged = TerminalEmulator(10, 4, scrollback_lines=20)
+    paged.feed("".join(f"line{index}\r\n" for index in range(6)) + "end")
+    assert paged.pattern_text(start_line=None)["next_line"] == 2
+    assert paged.pattern_text(start_line=2)["text"] == "line2\nline3\nline4\nline5\nend"
+
+
 def test_only_scrolling_from_the_top_row_of_the_primary_screen_keeps_history() -> None:
     emulator = TerminalEmulator(20, 5, scrollback_lines=10)
     emulator.feed("one\r\ntwo\r\nthree\r\nfour\r\nstatus")

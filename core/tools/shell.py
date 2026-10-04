@@ -4,13 +4,14 @@ Every call starts the host shell (PowerShell 7 on Windows, bash elsewhere) on
 the command in a new Terminal Session of kind ``command`` and waits for it. The
 result is the command's rendered output - what a person would have seen in the
 terminal - with the shell's exit code and the facts that exit code hides:
-programs that failed inside the command, processes it left running, and why
-vBot stopped it when vBot did.
+programs that failed inside the command, processes it left running, why vBot
+stopped it when vBot did, and a hint for well-known failures.
 
 A command that is still running after the hand-off time, waits for input, or
 is moved to the background by the user continues as a listed terminal. At
 Session depth 0 its result arrives as a new message when it exits; the Agent
-can answer or stop it with the terminal Tool.
+can wait for it, answer it or stop it with the terminal Tool, whose results for
+a command terminal come from ``command_terminal_result`` in the same shape.
 """
 
 from __future__ import annotations
@@ -25,11 +26,14 @@ import sys
 from collections.abc import Callable, Coroutine, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
 
+from core.projects import ProjectStore
 from core.runs import TOOL_CALL_OUTPUT_EVENT
 from core.tools._path_suggestions import similar_entries
+from core.tools._powershell import powershell_command
 from core.tools._shell_arguments import (
     SHELL_UNADVERTISED_PARAMETERS,
     inherited_env_keys_note,
@@ -41,12 +45,15 @@ from core.tools._shell_arguments import (
 )
 from core.tools._terminal_command import COMMAND_IDLE_SECONDS, CommandReport, StopReason
 from core.tools._tool_display import display_notice, display_text
+from core.tools._workdir import ProjectWorkdirError, is_project_workdir, project_workdir
 from core.tools.arguments import optional_number, optional_string
 from core.tools.availability import bash_allowed_env_keys, normalize_env_keys
 from core.tools.contracts import ToolContractError
 from core.tools.model_names import BASH_TOOL_NAME, SHELL_MODEL_NAME
 from core.tools.shell_environment import RunIdentity, command_environment, inherited_value
+from core.tools.shell_hints import HINT_TOOL_NAMES, annotate_failure
 from core.tools.terminal_manager import (
+    TERMINAL_MAX_ROWS,
     TerminalManager,
     TerminalManagerError,
     TerminalOwner,
@@ -71,33 +78,19 @@ CredentialResolver = Callable[[str], str]
 SHELL_TOOL_NAME = BASH_TOOL_NAME
 # The Tool waits this long at Session depth 0 before the command continues as a terminal.
 SHELL_HANDOFF_SECONDS = 90.0
+# The timeout of a foreground command that names none; a background command has none.
 SHELL_DEFAULT_TIMEOUT_SECONDS = 600.0
 # The output text of one result: head and tail around an omitted middle.
 SHELL_OUTPUT_HEAD_CHARS = 4_000
 SHELL_OUTPUT_TAIL_CHARS = 8_000
 SHELL_OUTPUT_LINE_CHARS = 2_000
-# Screen rows a running command's result shows after its transcript.
-_RUNNING_SCREEN_ROWS = 40
+# A running command's output is its transcript and then its whole screen; a
+# screen has at most this many rows.
+_SCREEN_ROWS = TERMINAL_MAX_ROWS
 # Windows rejects longer command lines.
 _WINDOWS_COMMAND_LINE_MAX_CHARS = 32_000
 _TERMINAL_TOOL = "terminal"
-# Console encodings for the command's own output and input; without them
-# programs print in the console's legacy code page.
-_POWERSHELL_UTF8_PREFIX = (
-    "[Console]::OutputEncoding=[Console]::InputEncoding=[Text.UTF8Encoding]::new();"
-)
-# Statements PowerShell accepts only at the start of a script.
-_POWERSHELL_LEADING_STATEMENTS = ("using ", "param(", "param ", "#requires", "[cmdletbinding")
-# pwsh -Command exits with 1 whenever the last statement failed, also when a native
-# program returned another code; this ending passes that program's code on. The
-# blank line ends a trailing line continuation; $? is read before anything changes it.
-_POWERSHELL_EXIT_STATUS = (
-    "\n\nif ($?) { exit 0 }; "
-    "$__vbotExitCode = Get-Variable LASTEXITCODE -ValueOnly -ErrorAction Ignore; "
-    "if ($__vbotExitCode) { exit $__vbotExitCode }; exit 1"
-)
-# A script made of named blocks accepts no statement after them.
-_POWERSHELL_NAMED_BLOCK = re.compile(r"^\s*(?:begin|process|end|dynamicparam)\s*\{", re.I | re.M)
+_WEB_FETCH_TOOL = "web_fetch"
 
 BACKGROUND_AT_DEPTH_FAILURE_CODE = "background_unavailable_in_subagent"
 
@@ -107,71 +100,92 @@ BACKGROUND_AT_DEPTH_FAILURE_CODE = "background_unavailable_in_subagent"
 
 # The file Tools the description points to, by use; each use names the first of
 # its Tools that is offered. A route offers one file edit dialect: apply_patch,
-# or edit with write. Registry names, literal to avoid importing the file Tools.
+# or write and edit. Registry names, literal to avoid importing the file Tools.
 _FILE_TOOL_USES = (
-    ("read", ("read",)),
-    ("search", ("search_files",)),
-    ("edit", ("apply_patch", "edit")),
+    ("reading", ("read",)),
+    ("searching", ("search_files",)),
+    ("creating", ("apply_patch", "write")),
+    ("editing", ("apply_patch", "edit")),
 )
+# The Tools a usual request offers alongside the shell: the canonical description's.
+_USUAL_TOOLS = frozenset({"read", "search_files", "apply_patch", _WEB_FETCH_TOOL, _TERMINAL_TOOL})
+
+if sys.platform == "win32":
+    _OPENING = (
+        "Run a PowerShell 7 command in a new terminal and return its output and exit code. "
+        "Write PowerShell, not bash or cmd: $env:NAME for environment variables, $null instead "
+        "of /dev/null, Select-String instead of grep for command output, and single quotes or a "
+        "here-string (@'...'@) instead of \\\" escapes and heredocs."
+    )
+    # How Agents start a program in the background without the Tool.
+    _DETACHED_START = "Start-Process or a trailing &"
+else:
+    _OPENING = (
+        "Run a bash command in a new terminal and return its output and exit code. Use bash syntax."
+    )
+    _DETACHED_START = "nohup or a trailing &"
 
 
 def _joined(words: Sequence[str]) -> str:
     return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
 
 
-def _file_tool_uses(offered: frozenset[str] | None) -> list[tuple[str, str]]:
-    """Each use with the offered Tool that serves it; None offers each use's first Tool."""
+def _neighbor_sentence(offered: frozenset[str]) -> str:
+    """Which offered Tools to use instead of shell commands for files and web pages."""
     uses: list[tuple[str, str]] = []
     for use, names in _FILE_TOOL_USES:
-        name = next((name for name in names if offered is None or name in offered), None)
+        name = next((name for name in names if name in offered), None)
         if name is not None:
             uses.append((use, name))
-    return uses
+    parts: list[str] = []
+    if uses:
+        tools = list(dict.fromkeys(name for _, name in uses))
+        parts.append(
+            f"for {_joined([use for use, _ in uses])} files, use {_joined(tools)} "
+            "instead of shell commands"
+        )
+    if _WEB_FETCH_TOOL in offered:
+        parts.append(f"for web pages, use {_WEB_FETCH_TOOL}")
+    if not parts:
+        return ""
+    sentence = "; ".join(parts)
+    return f" {sentence[0].upper()}{sentence[1:]}."
 
 
 def _shell_description(offered: frozenset[str] | None, *, nesting_depth: int) -> str:
     """The description for the Tools offered with the shell, at this Session depth.
 
-    *offered* None stands for the usual set: the file Tools of the apply_patch
-    dialect and the terminal Tool.
+    *offered* None stands for the usual set (``_USUAL_TOOLS``).
     """
-    if sys.platform == "win32":
-        opening = (
-            "Run a PowerShell 7 command in a new terminal and return its output and exit "
-            "code. Use PowerShell syntax."
-        )
-    else:
-        opening = (
-            "Run a bash command in a new terminal and return its output and exit code. "
-            "Use bash syntax."
-        )
-    uses = _file_tool_uses(offered)
-    output = "Output is rendered terminal text"
-    if uses:
-        output += (
-            f"; use {_joined([name for _, name in uses])} to "
-            f"{_joined([use for use, _ in uses])} files"
-        )
-    terminal = offered is None or _TERMINAL_TOOL in offered
+    offered = _USUAL_TOOLS if offered is None else offered
+    terminal = _TERMINAL_TOOL in offered
     if nesting_depth < 1 and terminal:
         continuation = (
-            f" A command still running after {SHELL_HANDOFF_SECONDS:g} seconds, or waiting "
-            "for input, continues as a terminal; the result says how to proceed."
+            f" A command still running after {SHELL_HANDOFF_SECONDS:g} seconds, or waiting for "
+            "input, keeps running in a terminal, and the result says how to follow it up."
         )
     elif nesting_depth < 1:
         continuation = (
-            f" A command still running after {SHELL_HANDOFF_SECONDS:g} seconds continues "
-            "in the background; the result says how to proceed."
+            f" A command still running after {SHELL_HANDOFF_SECONDS:g} seconds keeps running "
+            "in the background, and its result arrives as a new message when it exits."
         )
     elif terminal:
         continuation = (
-            " A command waiting for input continues as a terminal; the result says how to proceed."
+            " A command waiting for input keeps running in a terminal, and the result says "
+            "how to follow it up."
         )
     else:
         continuation = ""
+    boundary = (
+        " For programs you operate by typing into them, such as REPLs, TUIs and coding-agent "
+        f"CLIs, use {_TERMINAL_TOOL}."
+        if terminal
+        else ""
+    )
     return (
-        f"{opening} {output}. No editor or credential prompt is available: pass commit "
-        f"messages and answers as arguments.{continuation}"
+        f"{_OPENING}{_neighbor_sentence(offered)} Output is rendered terminal text. No editor or "
+        "credential prompt is available: pass commit messages and answers as arguments."
+        f"{continuation}{boundary}"
     )
 
 
@@ -195,14 +209,6 @@ _WORKDIR_PARAMETER: JsonObject = {
         "working directory."
     ),
 }
-_TIMEOUT_PARAMETER: JsonObject = {
-    "type": "number",
-    "minimum": 0,
-    "description": (
-        f"Seconds before the command is stopped. Omit for {SHELL_DEFAULT_TIMEOUT_SECONDS:g}; "
-        "0 for no limit."
-    ),
-}
 _ENV_KEYS_PARAMETER: JsonObject = {
     "type": "array",
     "description": (
@@ -217,13 +223,31 @@ _MODE_PARAMETER: JsonObject = {
     "type": "string",
     "enum": ["foreground", "background"],
     "description": (
-        "foreground returns when the command exits, or hands it to the background "
-        f"after {SHELL_HANDOFF_SECONDS:g} seconds. background returns at once; "
-        "use it for servers, watchers and other commands whose result your next "
-        "step does not need. Background results arrive automatically. "
-        "Omit for foreground."
+        f"foreground waits up to {SHELL_HANDOFF_SECONDS:g} seconds for the command to exit. "
+        "background returns at once; use it for servers, watchers and other commands whose "
+        f"result your next step does not need, instead of {_DETACHED_START}. A background "
+        "command's result arrives as a new message when it exits. Omit for foreground."
     ),
 }
+
+
+def _timeout_parameter(*, subagent: bool) -> JsonObject:
+    # The handler's defaults: SHELL_DEFAULT_TIMEOUT_SECONDS in the foreground, none
+    # in the background, which a Sub-Agent cannot choose.
+    omitted = (
+        f"Omitted, it is {SHELL_DEFAULT_TIMEOUT_SECONDS:g}."
+        if subagent
+        else f"Omitted, it is {SHELL_DEFAULT_TIMEOUT_SECONDS:g} in foreground and no limit in "
+        "background."
+    )
+    return {
+        "type": "number",
+        "minimum": 0,
+        "description": (
+            "Seconds before the command is stopped, counted from its start; 0 for no limit. "
+            f"{omitted}"
+        ),
+    }
 
 
 def _shell_parameters(*, subagent: bool) -> JsonObject:
@@ -231,7 +255,7 @@ def _shell_parameters(*, subagent: bool) -> JsonObject:
         "command": _COMMAND_PARAMETER,
         "description": _DESCRIPTION_PARAMETER,
         "workdir": _WORKDIR_PARAMETER,
-        "timeout": _TIMEOUT_PARAMETER,
+        "timeout": _timeout_parameter(subagent=subagent),
         "env_keys": _ENV_KEYS_PARAMETER,
     }
     if not subagent:
@@ -315,7 +339,9 @@ def _not_run(problem: str) -> ToolContractError:
     return ToolContractError(f"{SHELL_MODEL_NAME} was not run: {problem}")
 
 
-def _parse_call(context: ToolContext, arguments: JsonObject) -> _ShellCall:
+def _parse_call(
+    context: ToolContext, arguments: JsonObject, projects: ProjectStore | None
+) -> _ShellCall:
     notes: list[str] = []
     command = arguments.get("command")
     if not isinstance(command, str) or not command.strip():
@@ -332,14 +358,14 @@ def _parse_call(context: ToolContext, arguments: JsonObject) -> _ShellCall:
         notes.append(note)
     if timeout is not None and timeout < 0:
         raise _not_run("timeout must be 0 or more seconds.")
-    timeout_seconds = (
-        SHELL_DEFAULT_TIMEOUT_SECONDS if timeout is None else (timeout if timeout > 0 else None)
-    )
+    background = mode == "background"
+    if timeout is None:
+        # A background command runs until it exits: servers and watchers never finish.
+        timeout_seconds = None if background else SHELL_DEFAULT_TIMEOUT_SECONDS
+    else:
+        timeout_seconds = timeout if timeout > 0 else None
 
-    raw_workdir = optional_string(arguments.get("workdir"), field_name="workdir")
-    workdir = context.resolve_path(raw_workdir) if raw_workdir else context.effective_cwd
-    if not workdir.is_dir():
-        raise _not_run(_missing_workdir(workdir))
+    workdir = _workdir(context, arguments, projects)
 
     granted = frozenset(bash_allowed_env_keys(context.tool_settings)) | frozenset(
         context.skill_env_keys
@@ -368,19 +394,42 @@ def _parse_call(context: ToolContext, arguments: JsonObject) -> _ShellCall:
         description=description.strip() if description and description.strip() else None,
         workdir=workdir,
         timeout_seconds=timeout_seconds,
-        background=mode == "background",
+        background=background,
         variables=variables,
         credential_names=tuple(name for name in names if name in granted),
         notes=tuple(notes),
     )
 
 
-def _missing_workdir(workdir: Path) -> str:
+def _workdir(context: ToolContext, arguments: JsonObject, projects: ProjectStore | None) -> Path:
+    raw = optional_string(arguments.get("workdir"), field_name="workdir")
+    if not raw:
+        workdir = context.effective_cwd
+    elif is_project_workdir(raw):
+        # Not advertised; the Projects block names each Project's directory path.
+        try:
+            return project_workdir(projects, raw)
+        except ProjectWorkdirError as error:
+            raise _not_run(str(error)) from error
+    else:
+        workdir = context.resolve_path(raw)
+    if not workdir.is_dir():
+        raise _not_run(_missing_workdir(workdir, given=bool(raw)))
+    return workdir
+
+
+def _missing_workdir(workdir: Path, *, given: bool) -> str:
+    """The failure for a missing directory; *given* when the call named it as workdir."""
+    if not given:
+        return (
+            f"the working directory {model_path(workdir)} is not an existing directory. Pass an "
+            "existing directory as workdir."
+        )
     message = f"workdir {model_path(workdir)} is not an existing directory."
     nearby = similar_entries(workdir, kind="dirs")
     if nearby:
         message += f" Similar directories: {', '.join(model_path(path) for path in nearby)}."
-    return message
+    return f"{message} Pass an existing directory, or omit workdir to use the working directory."
 
 
 def _shell_argv(command: str, environment: dict[str, str]) -> list[str]:
@@ -394,20 +443,14 @@ def _shell_argv(command: str, environment: dict[str, str]) -> list[str]:
             raise _not_run(
                 "PowerShell 7 (pwsh) is not installed on this host. Ask the user to install it."
             )
-        first = command.lstrip().casefold()
-        script = (
-            command
-            if first.startswith(_POWERSHELL_LEADING_STATEMENTS)
-            else _POWERSHELL_UTF8_PREFIX + command
-        )
-        if not _POWERSHELL_NAMED_BLOCK.search(command):
-            script += _POWERSHELL_EXIT_STATUS
-        argv = [pwsh, "-NoProfile", "-Command", script]
-        if len(subprocess.list2cmdline(argv)) > _WINDOWS_COMMAND_LINE_MAX_CHARS:
+        argv = [pwsh, "-NoProfile", "-Command", powershell_command(command)]
+        length = len(subprocess.list2cmdline(argv))
+        if length > _WINDOWS_COMMAND_LINE_MAX_CHARS:
+            room = max(0, _WINDOWS_COMMAND_LINE_MAX_CHARS - (length - len(command)))
             raise _not_run(
-                f"the command is {len(command):,} characters long and Windows accepts at most "
-                f"{_WINDOWS_COMMAND_LINE_MAX_CHARS:,} for a command line. Save the script to a "
-                ".ps1 file and run that file."
+                f"the command is {len(command):,} characters long, and the Windows command "
+                f"line takes at most about {room:,} for it. Save the script to a .ps1 file and "
+                "run that file."
             )
         return argv
     bash = shutil.which("bash", path=search_path)
@@ -452,15 +495,17 @@ class ShellTool:
         *,
         credential_resolver: CredentialResolver | None = None,
         update_handoffs: UpdateHandoffs | None = None,
+        projects: ProjectStore | None = None,
     ) -> None:
         self._terminals = terminal_manager
         self._resolve_credential = credential_resolver or (lambda _name: "")
         self._update_handoffs = update_handoffs
+        self._projects = projects
         # Tasks that outlive their call: releasing handoff tokens, stopping commands.
         self._tasks: set[asyncio.Task[Any]] = set()
 
     async def __call__(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
-        call = _parse_call(context, arguments)
+        call = _parse_call(context, arguments, self._projects)
         if call.background and context.nesting_depth >= 1:
             return tool_failure(
                 BACKGROUND_AT_DEPTH_FAILURE_CODE,
@@ -477,10 +522,8 @@ class ShellTool:
         if handoff is not None:
             self._keep(self._release_when_finished(terminal_id, handoff))
         if call.background:
-            report = self._terminals.hand_off_command(terminal_id, deliver=True)
-            if report.exited:
-                return self._exited(context, call, report)
-            return await self._running(context, call, terminal_id, reason="requested")
+            self._terminals.hand_off_command(terminal_id, deliver=True)
+            return await self._result(context, call, terminal_id, reason="requested")
         return await self._wait(context, call, terminal_id)
 
     async def _start(
@@ -499,6 +542,10 @@ class ShellTool:
             credentials=credentials,
         )
         argv = _shell_argv(call.command, environment)
+        # The delivery names only Tools offered now; it outlives this context.
+        offered = frozenset(
+            name for name in (*HINT_TOOL_NAMES, _TERMINAL_TOOL) if context.offers(name)
+        )
         try:
             return await self._terminals.spawn_command(
                 TerminalOwner(context.project_id, context.agent_id, context.session_id),
@@ -508,7 +555,7 @@ class ShellTool:
                 cwd=call.workdir,
                 env=environment,
                 timeout_seconds=call.timeout_seconds,
-                formatter=format_command_delivery,
+                formatter=partial(format_command_delivery, offers=offered.__contains__),
                 origin_run_id=context.run_id,
                 execution_owner=context.execution_owner,
             )
@@ -550,7 +597,8 @@ class ShellTool:
             self._terminals.wait_command(
                 terminal_id,
                 seconds=SHELL_HANDOFF_SECONDS if depth < 1 else None,
-                idle_seconds=COMMAND_IDLE_SECONDS if context.can_call(_TERMINAL_TOOL) else None,
+                # Idleness hands a command off only to an Agent that can answer it.
+                idle_seconds=COMMAND_IDLE_SECONDS if context.offers(_TERMINAL_TOOL) else None,
                 progress=progress,
             )
         )
@@ -575,45 +623,24 @@ class ShellTool:
             if report.still_running:
                 # Listed, so the user and the Agent can see and stop what remains.
                 self._terminals.hand_off_command(terminal_id, deliver=False)
-            return self._exited(context, call, report)
-        report = self._terminals.hand_off_command(terminal_id, deliver=depth < 1)
-        if report.exited:
-            return self._exited(context, call, report)
-        return await self._running(context, call, terminal_id, reason=outcome)
+        else:
+            self._terminals.hand_off_command(terminal_id, deliver=depth < 1)
+        return await self._result(context, call, terminal_id, reason=outcome)
 
-    # Results
-
-    def _exited(self, context: ToolContext, call: _ShellCall, report: CommandReport) -> JsonObject:
-        data: JsonObject = {"status": "stopped" if report.stop_reason else "exited"}
-        if report.stop_reason is not None:
-            data["stopped_because"] = _stop_text(report)
-        if report.exit_code is not None:
-            data["exit_code"] = report.exit_code
-        output, truncated = command_output_text(report)
-        data["output"] = output
-        if truncated and report.transcript.log_path is not None:
-            data["log_file"] = model_path(report.transcript.log_path)
-        if report.nonzero_exits:
-            data["failed_programs"] = list(report.nonzero_exits)
-        if report.still_running:
-            data["terminal_id"] = report.terminal_id
-            data["still_running"] = [_process_text(process) for process in report.still_running]
-            data["next"] = _still_running_text(context, report)
-        return _with_notes(data, call.notes)
-
-    async def _running(
+    async def _result(
         self, context: ToolContext, call: _ShellCall, terminal_id: str, *, reason: str
     ) -> JsonObject:
-        report = self._terminals.command_report(terminal_id)
-        screen = ""
-        with contextlib.suppress(TerminalManagerError):
-            screen = await self._terminals.command_screen(terminal_id, _RUNNING_SCREEN_ROWS)
-        output, truncated = command_output_text(report, screen=screen)
-        data: JsonObject = {"status": "running", "terminal_id": terminal_id, "output": output}
-        if truncated and report.transcript.log_path is not None:
-            data["log_file"] = model_path(report.transcript.log_path)
-        data["next"] = _running_text(context, terminal_id, reason=reason)
-        return _with_notes(data, call.notes)
+        report, screen = await _report_with_screen(self._terminals, terminal_id)
+        idle_seconds = None
+        if reason == "idle" and not report.exited:
+            # The hand-off found it idle; the text names how long it has been.
+            idle_seconds = await self._terminals.command_idle_seconds(terminal_id)
+        data = _result_data(
+            context, report, screen=screen, reason=reason, idle_seconds=idle_seconds
+        )
+        if call.notes:
+            data["notes"] = list(call.notes)
+        return tool_success(data)
 
     # Background work
 
@@ -638,19 +665,149 @@ class ShellTool:
             handoff.release()
 
 
-def _with_notes(data: JsonObject, notes: Sequence[str]) -> JsonObject:
-    if notes:
-        data["notes"] = list(notes)
-    return tool_success(data)
+# Results
 
 
-def _stop_text(report: CommandReport) -> str:
+async def command_terminal_result(
+    terminals: TerminalManager,
+    context: ToolContext,
+    terminal_id: str,
+    *,
+    wait_ended: str | None = None,
+) -> JsonObject:
+    """The current result of a command terminal, in the shape of a shell result.
+
+    Returns the ``data`` of a Tool result, not wrapped in ``tool_success``:
+    ``status`` (``running``, ``exited`` or ``stopped``) and, as they apply,
+    ``terminal_id``, ``exit_code``, ``stopped_because``, ``output``,
+    ``log_file`` (only when the output was cut), ``failed_programs``,
+    ``still_running``, ``hint`` and ``next``, plus ``wait_ended`` when given.
+    A running command's ``next`` follows from how the wait ended
+    (``matched``, ``timeout``, or no wait), unless the command is idle: then
+    it is the idle text with the seconds it has been idle.
+    Raises ``TerminalManagerError`` for an unknown terminal or one that runs no
+    command.
+    """
+    report, screen = await _report_with_screen(terminals, terminal_id)
+    reason = {"matched": "matched", "timeout": "waited"}.get(wait_ended or "", "following")
+    idle_seconds = None
+    if not report.exited and reason != "matched":
+        idle_seconds = await terminals.command_idle_seconds(terminal_id)
+    data = _result_data(
+        context,
+        report,
+        screen=screen,
+        reason="idle" if idle_seconds is not None else reason,
+        idle_seconds=idle_seconds,
+    )
+    if wait_ended is not None:
+        data["wait_ended"] = wait_ended
+    return data
+
+
+async def _report_with_screen(
+    terminals: TerminalManager, terminal_id: str
+) -> tuple[CommandReport, str]:
+    """The command's report and, while it runs, its whole screen, without gap or overlap.
+
+    The transcript holds the lines that scrolled off the screen, and output is
+    rendered and the screen read under the same session lock. The report is taken
+    right after the screen, with no await in between, so the transcript ends
+    exactly where the screen starts. Once the shell exited, the transcript holds
+    the screen as well.
+    """
+    if terminals.command_report(terminal_id).exited:
+        return terminals.command_report(terminal_id), ""
+    screen = ""
+    # A session that closed meanwhile has a final report that holds every line.
+    with contextlib.suppress(TerminalManagerError):
+        screen = await terminals.command_screen(terminal_id, _SCREEN_ROWS)
+    report = terminals.command_report(terminal_id)
+    return report, "" if report.exited else screen
+
+
+def _result_data(
+    context: ToolContext,
+    report: CommandReport,
+    *,
+    screen: str = "",
+    reason: str = "continues",
+    idle_seconds: float | None = None,
+) -> JsonObject:
+    """The result data of one command; *reason* says why a running command was returned,
+    and *idle_seconds* how long an idle one has been idle."""
+    if not report.exited:
+        output, truncated = command_output_text(report, screen=screen)
+        running: JsonObject = {
+            "status": "running",
+            "terminal_id": report.terminal_id,
+            "output": output,
+        }
+        if truncated and report.transcript.log_path is not None:
+            running["log_file"] = model_path(report.transcript.log_path)
+        running["next"] = _running_text(context, report, reason=reason, idle_seconds=idle_seconds)
+        return running
+    data: JsonObject = {"status": "stopped" if report.stop_reason else "exited"}
+    if report.still_running:
+        data["terminal_id"] = report.terminal_id
+    if report.exit_code is not None:
+        data["exit_code"] = report.exit_code
+    if report.stop_reason is not None:
+        data["stopped_because"] = _stop_text(report, mode=context.nesting_depth < 1)
+    output, truncated = command_output_text(report)
+    data["output"] = output
+    if truncated and report.transcript.log_path is not None:
+        data["log_file"] = model_path(report.transcript.log_path)
+    failed = _failed_programs(report)
+    if failed:
+        data["failed_programs"] = list(failed)
+    if report.still_running:
+        data["still_running"] = [_process_text(process) for process in report.still_running]
+    hint = _failure_hint(report, output, context.offers)
+    if hint is not None:
+        data["hint"] = hint
+    if report.still_running:
+        data["next"] = _still_running_text(context, report)
+    return data
+
+
+def _failed_programs(report: CommandReport) -> tuple[str, ...]:
+    """The failed programs that tell more than the exit code.
+
+    A single failed program whose code is the command's exit code repeats it.
+    Each entry reads ``<name> exited with code <code>``, with the hex form after
+    large codes.
+    """
+    exits = report.nonzero_exits
+    if len(exits) == 1:
+        code = exits[0].rpartition(" exited with code ")[2].split(" ", 1)[0]
+        if code == str(report.exit_code):
+            return ()
+    return exits
+
+
+def _failure_hint(report: CommandReport, output: str, offers: Callable[[str], bool]) -> str | None:
+    """A hint for a command that failed on its own; a stop by vBot explains itself."""
+    if report.stop_reason is not None:
+        return None
+    return annotate_failure(
+        report.command, report.exit_code, output, workdir=report.workdir, offers=offers
+    )
+
+
+def _stop_text(report: CommandReport, *, mode: bool) -> str:
+    """Why vBot stopped the command; *mode* when the Agent can choose background mode."""
     reason = report.stop_reason
     if reason == "timeout":
-        limit = f"{report.timeout_seconds:g}" if report.timeout_seconds else "its"
+        limit = (
+            f"the {report.timeout_seconds:g}-second timeout"
+            if report.timeout_seconds
+            else "its timeout"
+        )
+        servers = "; run servers and watchers with mode background" if mode else ""
         return (
-            f"it was still running at the {limit}-second timeout. To let it finish, run it "
-            "again with a larger timeout, or 0 for no limit."
+            f"it was still running at {limit}. To let it finish, run it again with a larger "
+            f"timeout, or 0 for no limit{servers}."
         )
     if reason == "user":
         return "the user stopped it."
@@ -665,12 +822,18 @@ def _process_text(process: Any) -> str:
     return f"{process.name} (pid {process.pid})"
 
 
+def _terminal_call(action: str, terminal_id: str) -> str:
+    """A complete terminal call, as the Agent writes it."""
+    return f"{_TERMINAL_TOOL} {json.dumps({'action': action, 'terminal_id': terminal_id})}"
+
+
 def _still_running_text(context: ToolContext, report: CommandReport) -> str:
     names = ", ".join(_process_text(process) for process in report.still_running)
-    if context.can_call(_TERMINAL_TOOL):
+    if context.offers(_TERMINAL_TOOL):
         return (
             f"The shell exited, but processes the command started still run: {names}. Stop "
-            f"them with terminal kill on {report.terminal_id} once they are no longer needed."
+            f"them with {_terminal_call('kill', report.terminal_id)} when they are no longer "
+            "needed."
         )
     return (
         f"The shell exited, but processes the command started still run: {names}. They "
@@ -678,37 +841,111 @@ def _still_running_text(context: ToolContext, report: CommandReport) -> str:
     )
 
 
-def _running_text(context: ToolContext, terminal_id: str, *, reason: str) -> str:
-    delivers = context.nesting_depth < 1
-    arrives = " Its result arrives as a new message when it exits." if delivers else ""
-    if reason == "idle":
-        return (
-            f"The command printed nothing for {COMMAND_IDLE_SECONDS:g} seconds and uses no "
-            "CPU; it is probably waiting for input. Answer with terminal input, or stop it "
-            f"with terminal kill.{arrives}"
-        )
-    where = (
-        f"in terminal {terminal_id}" if context.can_call(_TERMINAL_TOOL) else "in the background"
+def _limit_text(report: CommandReport) -> str:
+    """The time limit of a running command, as a clause."""
+    if not report.timeout_seconds:
+        return "it has no timeout"
+    remaining = max(0.0, report.timeout_seconds - report.duration_seconds)
+    return f"its {report.timeout_seconds:g}-second timeout stops it in {remaining:.0f} seconds"
+
+
+def _running_text(
+    context: ToolContext,
+    report: CommandReport,
+    *,
+    reason: str,
+    idle_seconds: float | None = None,
+) -> str:
+    """What to do about a command that keeps running after the result.
+
+    *reason* is ``idle`` for a command that printed nothing and used no CPU
+    (for *idle_seconds*), ``moved`` when the user moved it to the background;
+    for a terminal call, ``matched`` when a wait matched its pattern,
+    ``waited`` when a wait timed out and ``following`` for a status or an
+    input; otherwise the shell call handed the command off.
+    """
+    terminal_id = report.terminal_id
+    limit = _limit_text(report)
+    follow_up = context.offers(_TERMINAL_TOOL)
+    delivered = (
+        "Its result arrives as a new message when it exits."
+        if report.delivers_result
+        else "Its result does not arrive on its own."
     )
+    if reason == "idle" and follow_up:
+        silent = COMMAND_IDLE_SECONDS if idle_seconds is None else idle_seconds
+        return (
+            f"The command in terminal {terminal_id} has printed nothing for "
+            f"{silent:.0f} seconds and uses no CPU; {limit}. If its output ends in "
+            f'a question or prompt, answer it with terminal action "input", terminal_id '
+            f'"{terminal_id}", your answer as text, and key "enter". Otherwise it is waiting '
+            f"for something else: wait for it with {_terminal_call('wait', terminal_id)}, or "
+            f"stop it with {_terminal_call('kill', terminal_id)} if it hangs. {delivered}"
+        )
+    if reason in {"matched", "waited", "following"} and follow_up:
+        return _followed_text(report, limit, matched=reason == "matched", waited=reason == "waited")
     moved = "The user moved the command to the background. " if reason == "moved" else ""
+    if not follow_up:
+        text = f"{moved}The command keeps running in the background; {limit}."
+        if report.delivers_result:
+            text += f" {delivered} Continue other work or end your turn; do not start it again."
+        return text
+    wait = _terminal_call("wait", terminal_id)
+    pattern = "add pattern to wait for a line it prints, such as a server's ready line"
+    if report.delivers_result:
+        return (
+            f"{moved}The command keeps running in terminal {terminal_id}; {limit}. {delivered} "
+            f"To wait for it now, call {wait}; {pattern}. Otherwise continue other work or end "
+            "your turn; do not start it again."
+        )
     return (
-        f"{moved}The command continues {where}.{arrives} Do not poll or start it again; "
-        "continue other work or end your turn."
+        f"{moved}The command keeps running in terminal {terminal_id}; {limit}. {delivered[:-1]}"
+        f": wait for it with {wait}; {pattern}. Do not start it again."
+    )
+
+
+def _followed_text(report: CommandReport, limit: str, *, matched: bool, waited: bool) -> str:
+    """What to do about a running command a terminal wait, status or input returned.
+
+    After a match the Agent continues; otherwise it waits again or stops it.
+    """
+    wait = _terminal_call("wait", report.terminal_id)
+    if matched:
+        arrival = (
+            "Its result arrives as a new message when it exits."
+            if report.delivers_result
+            else f"Its result does not arrive on its own; to get it, call {wait}."
+        )
+        return (
+            f"The command keeps running; {limit}. {arrival} Continue with your next step; do "
+            "not start it again."
+        )
+    arrival = (
+        "its result arrives as a new message when it exits"
+        if report.delivers_result
+        else "its result does not arrive on its own"
+    )
+    again = "Wait again" if waited else "Wait for it"
+    return (
+        f"The command keeps running; {limit}. {again} with {wait}, or stop it with "
+        f"{_terminal_call('kill', report.terminal_id)}; {arrival}."
     )
 
 
 def command_output_text(report: CommandReport, *, screen: str = "") -> tuple[str, bool]:
     """The output for a result: head and tail within the character budget.
 
+    *screen* is the screen of a running command, which follows its transcript.
     Returns the text and whether anything was left out of it.
     """
     transcript = report.transcript
     head = [_shortened(line) for line in transcript.head]
     tail = [_shortened(line) for line in transcript.tail]
-    if screen:
-        tail.extend(_shortened(line) for line in screen.splitlines())
+    screen_lines = screen.splitlines()
+    tail.extend(_shortened(line) for line in screen_lines)
     shortened = any(
-        len(line) > SHELL_OUTPUT_LINE_CHARS for line in (*transcript.head, *transcript.tail)
+        len(line) > SHELL_OUTPUT_LINE_CHARS
+        for line in (*transcript.head, *transcript.tail, *screen_lines)
     )
     omitted = transcript.omitted_lines
     head, dropped_head = _within(head, SHELL_OUTPUT_HEAD_CHARS, keep="start")
@@ -743,20 +980,41 @@ def _within(lines: list[str], budget: int, *, keep: str) -> tuple[list[str], int
     return (kept if keep == "start" else list(reversed(kept))), dropped
 
 
-def format_command_delivery(report: CommandReport) -> str:
-    """The message that delivers a handed-off command's result when it ends."""
+def _offers_nothing(_name: str) -> bool:
+    return False
+
+
+def format_command_delivery(
+    report: CommandReport, *, offers: Callable[[str], bool] = _offers_nothing
+) -> str:
+    """The message that delivers a handed-off command's result when it ends.
+
+    *offers* tells which Tools the message can name.
+    """
     subject = report.description or _first_line(report.command)
     if report.stop_reason is not None:
-        status = f"was stopped: {_stop_text(report)}"
+        # Only depth 0 delivers, where background mode exists.
+        status = f"was stopped: {_stop_text(report, mode=True)}"
     else:
         status = f"exited with code {report.exit_code}."
     lines = [f"The command in terminal {report.terminal_id} ({subject}) {status}"]
-    if report.nonzero_exits:
-        lines.append(f"Failed programs: {'; '.join(report.nonzero_exits)}.")
+    output, truncated = command_output_text(report)
+    hint = _failure_hint(report, output, offers)
+    if hint is not None:
+        lines.append(f"Hint: {hint}")
+    # The status line of a stopped command names no exit code to repeat.
+    failed = report.nonzero_exits if report.stop_reason is not None else _failed_programs(report)
+    if failed:
+        lines.append(f"Failed programs: {'; '.join(failed)}.")
     if report.still_running:
         names = ", ".join(_process_text(process) for process in report.still_running)
-        lines.append(f"Processes it started still run: {names}.")
-    output, truncated = command_output_text(report)
+        stop = (
+            f" Stop them with {_terminal_call('kill', report.terminal_id)} when they are no "
+            "longer needed."
+            if offers(_TERMINAL_TOOL)
+            else ""
+        )
+        lines.append(f"Processes it started still run: {names}.{stop}")
     if truncated and report.transcript.log_path is not None:
         lines.append(f"Full output: {model_path(report.transcript.log_path)}")
     lines.append("Output:" if output else "Output: (none)")
@@ -847,6 +1105,8 @@ def shell_detail_blocks(arguments: JsonObject, result: JsonObject | None) -> lis
     failed = data.get("failed_programs")
     if isinstance(failed, list) and failed:
         blocks.append(display_notice("warning", "; ".join(str(item) for item in failed)))
+    if isinstance(data.get("hint"), str):
+        blocks.append(display_notice("info", f"Hint: {data['hint']}"))
     if data.get("status") == "running":
         blocks.append(display_notice("info", "The command continues in a terminal."))
     return blocks
@@ -859,12 +1119,17 @@ def register_shell_tool(
     credential_resolver: CredentialResolver | None = None,
     prompt_blocks: ToolPromptBlockRegistry | None = None,
     update_handoffs: UpdateHandoffs | None = None,
+    projects: ProjectStore | None = None,
 ) -> ShellTool:
-    """Register the shell Tool with a vBot Tool registry."""
+    """Register the shell Tool with a vBot Tool registry.
+
+    *projects* resolves ``workdir: "project:<project-id>"``; without it that form fails.
+    """
     tool = ShellTool(
         terminal_manager,
         credential_resolver=credential_resolver,
         update_handoffs=update_handoffs,
+        projects=projects,
     )
     registry.register(
         SHELL_TOOL_NAME,
@@ -894,6 +1159,7 @@ __all__ = [
     "ShellTool",
     "background_command_statuses",
     "command_output_text",
+    "command_terminal_result",
     "format_command_delivery",
     "format_shell_env_usage",
     "project_shell_tool_definitions",

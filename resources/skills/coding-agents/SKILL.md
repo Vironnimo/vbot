@@ -5,36 +5,26 @@ description: Operate Codex, Claude Code, OpenCode, and other coding-agent CLIs t
 
 # Coding Agents
 
-The `terminal` Tool and the user share the same live terminal. A `terminal_id` addresses that process across Runs; a CLI's saved conversation id is separate.
+The `terminal` Tool and the user share the same live terminal. A `terminal_id` addresses that program in later turns too; a CLI's saved conversation id is separate.
 
 ## Launch settings
 
-For an interactive launch, use the CLI executable as `command`, separate argument tokens in `args`, and the repository as `workdir`. The Tool also accepts `project:<project-id>` as the working directory.
-
-`start.text` queues an initial instruction followed by Enter. The start result can arrive before that input is sent. Omit `text` when no initial input should be sent.
+Start the CLI's interactive interface with `start`: the CLI executable as `command`, each argument as its own item in `args`, the repository path as `workdir`, and the user's task as `text`. Omit `text` when the request has no task yet.
 
 Pass the requested model, reasoning, profile, and other launch settings as separate CLI options. Omitted options retain the CLI's configuration. If the CLI rejects a requested setting, its error, help, or model catalog can identify supported values.
 
-CLI-specific syntax and saved-conversation resume:
+Before you start or resume one of these CLIs, read its reference for launch options and saved-conversation syntax:
 
 - Codex: `references/codex.md`
 - Claude Code: `references/claude-code.md`
 - OpenCode: `references/opencode.md`
 
-## Observe and interact
+## Follow the task
 
-Tool results and activity notifications provide rendered terminal text. Use `status` for additional screen or history context. An attached terminal can notify across Runs; starting without `text` does not notify for the initial startup output.
+When the CLI's output settles, read the screen it shows: the CLI can be asking a question, waiting for an approval, or showing its final summary. Judge whether the coding task succeeded by the CLI's output and the task's results, such as changed files or test output, not by the output going quiet.
 
-`wait` pauses until new output settles or `timeout_ms` passes; `input` with `timeout_ms` sends and then waits the same way, returning the screen. A timeout leaves the process running. Quiet output and the `ready` state describe terminal activity, not whether the coding task succeeded; assess the CLI's output and task results.
-
-Use `input.text` with `key: "enter"` to submit instructions, named keys for menus, and `data` for control sequences. For input tied to a displayed prompt, pass its `screen_revision` as `expected_screen_revision`. A `stale_screen` error means the input was not sent: read the current screen and reconsider the response.
-
-## Read longer output
-
-Default `status` returns the current screen and the history right above it. Line numbers stay fixed as output arrives; `scrollback.first_line` is the oldest retained line. Follow `scrollback.older_request` to read further back. For the complete retained buffer, start at `start_line` = `scrollback.first_line` and follow `scrollback.newer_request` until it is absent; pages contain the current screen only when they reach it. A full-screen program (alternate screen) keeps no terminal history: use its own scrolling or paging instead.
-
-Rendered text represents terminal cells, not exact file contents. `log_file`, when present, contains raw terminal output with control sequences and redraws.
+The `log_file` of a `status` result contains raw terminal output with control sequences and redraws.
 
 ## Launch problems
 
-If the executable is not found, tell the user that the requested CLI could not be started. If login or setup blocks progress, report what the CLI is asking for.
+If `start` reports that the CLI was not found and the steps that error names do not start it either, tell the user that the requested CLI could not be started. If login or setup blocks progress, report what the CLI is asking for.

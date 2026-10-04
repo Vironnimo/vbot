@@ -688,6 +688,7 @@ def bootstrap(runtime: Runtime) -> None:
             credential_resolver=runtime.resolve_environment_credential,
             prompt_blocks=runtime._tool_prompt_blocks,
             update_handoffs=runtime._update_handoffs,
+            projects=runtime._projects,
         )
         runtime._subagent_coordinator = SubAgentCoordinator(
             runtime,

@@ -54,21 +54,20 @@ async def test_list_shows_every_terminal_with_its_title_and_attachment(
 
     listed = await call(terminal_manager, context, {"action": "list"})
     terminals = cast(dict[str, Any], listed["data"])["terminals"]
-    assert [(item["terminal_id"], item["attachment"]) for item in terminals] == [
-        (terminal_id, "current")
+    assert terminals == [
+        {"terminal_id": terminal_id, "program": "fake-tui", "state": "running", "attached": "here"}
     ]
-    assert terminals[0]["title"] == "Codex migration"
     [shown] = details(terminal_manager, tmp_path, {"action": "list"}, listed)
     assert shown["type"] == "results"
-    assert shown["items"][0]["title"] == "Codex migration"
-    assert shown["items"][0]["meta"].endswith(" · attached here")
+    assert shown["items"] == [{"title": "fake-tui", "meta": "running · attached here"}]
     discovered = await call(
         terminal_manager, make_context(tmp_path, session_id="other"), {"action": "list"}
     )
     other_terminals = cast(dict[str, Any], discovered["data"])["terminals"]
-    assert [(item["terminal_id"], item["attachment"]) for item in other_terminals] == [
+    assert [(item["terminal_id"], item["attached"]) for item in other_terminals] == [
         (terminal_id, "other")
     ]
+    # The program's own window title shows with the launch facts.
     status = await call(terminal_manager, context, {"action": "status", "terminal_id": terminal_id})
     assert cast(dict[str, Any], status["data"])["title"] == "Codex migration"
 
@@ -151,8 +150,10 @@ async def test_status_pages_the_whole_buffer_by_absolute_start_line(
     await _render(terminal_manager, factory, terminal_id, "\x1b[?1049h\x1b[Hfull-screen view")
     full_screen = await status()
     assert full_screen["screen"] == "full-screen view"
-    assert full_screen["alternate_screen"] is True
-    assert full_screen["note"]
+    assert full_screen["note"] == (
+        "The program shows a full-screen view (alternate screen), which keeps no terminal "
+        "history; to see earlier content, use the program's own scrolling or paging."
+    )
     await _render(terminal_manager, factory, terminal_id, "\x1b[?1049l")
     primary = await status()
     assert primary["screen"].splitlines()[-1] == "more-4"
@@ -164,7 +165,7 @@ async def test_status_pages_the_whole_buffer_by_absolute_start_line(
     [
         ({"action": "start", "command": "   "}, "command"),
         ({"action": "input", "terminal_id": "missing", "data": "raw", "key": "enter"}, "data"),
-        ({"action": "resize", "terminal_id": "missing", "columns": 120}, "rows"),
+        ({"action": "resize", "terminal_id": "missing", "columns": 120}, "no call resizes it"),
         ({"action": "status", "terminal_id": "missing", "lines": 150}, "lines"),
         ({"action": "status", "terminal_id": "missing", "cursor": "signed"}, "cursor"),
         ({"action": "unknown"}, "action"),
@@ -172,7 +173,7 @@ async def test_status_pages_the_whole_buffer_by_absolute_start_line(
     ids=[
         "blank-command",
         "data-with-key",
-        "resize-without-rows",
+        "resize",
         "too-many-lines",
         "cursor",
         "action",
@@ -204,20 +205,20 @@ async def test_a_failure_while_acting_reports_unknown_effects(
     started = await call(terminal_manager, context, {"action": "start", "command": "fake-tui"})
     terminal_id = started["data"]["terminal_id"]
 
-    def fail(rows: int, columns: int) -> None:
-        raise OSError("resize ioctl failed")
+    def fail(text: str) -> None:
+        raise RuntimeError("console write failed")
 
-    monkeypatch.setattr(factory.adapters[0], "resize", fail)
+    monkeypatch.setattr(factory.adapters[0], "write", fail)
 
     result = await call(
         terminal_manager,
         context,
-        {"action": "resize", "terminal_id": terminal_id, "columns": 100, "rows": 30},
+        {"action": "input", "terminal_id": terminal_id, "text": "y", "key": "enter"},
     )
 
     assert result["error"] == {
         "code": "tool_execution_error",
-        "message": "terminal failed while running: resize ioctl failed. It is unknown how much "
+        "message": "terminal failed while running: console write failed. It is unknown how much "
         "of the call took effect. Check the current state before you call terminal again.",
     }
 
@@ -236,7 +237,7 @@ async def _start_persisted(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["status", "wait", "kill"])
+@pytest.mark.parametrize("action", ["status", "wait"])
 async def test_resize_notice_is_consumed_only_with_a_persisted_screen(
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path, action: str
 ) -> None:
@@ -248,13 +249,15 @@ async def test_resize_notice_is_consumed_only_with_a_persisted_screen(
         await terminal_manager.resize_for_operator(terminal_id, columns=columns, rows=rows)
     arguments: JsonObject = {"action": action, "terminal_id": terminal_id}
     if action == "wait":
-        arguments["timeout_ms"] = 0
+        arguments["timeout"] = 0.01
     result = await call(terminal_manager, context, arguments)
     data = cast(dict[str, Any], result["data"])
-    assert (data["columns"], data["rows"]) == (100, 30)
     change = data["size_change"]
     assert (change["previous_columns"], change["previous_rows"]) == (80, 24)
-    assert isinstance(change["notice"], str) and change["notice"]
+    assert change["notice"] == (
+        "The terminal was resized since your previous screen result. Previous size: 80 columns "
+        "x 24 rows. Current size: 100 columns x 30 rows. Use positions from the current screen."
+    )
     assert "size_change" in await terminal_manager.snapshot(terminal_id, OWNER)
     callbacks.pop()()
     assert "size_change" not in await terminal_manager.snapshot(terminal_id, OWNER)
@@ -276,7 +279,7 @@ async def test_resize_after_screen_capture_remains_unseen_after_persistence(
     data = cast(dict[str, Any], result["data"])
     change = data["size_change"]
     assert (change["previous_columns"], change["previous_rows"]) == (140, 40)
-    assert (data["columns"], data["rows"]) == (160, 48)
+    assert "Current size: 160 columns x 48 rows." in change["notice"]
 
 
 @pytest.mark.asyncio
@@ -372,3 +375,17 @@ async def test_only_a_persisted_current_screen_acknowledges_resize_and_attention
     callbacks.pop()()
     assert info().acknowledged_attention_revision == info().attention_revision
     assert "size_change" not in await terminal_manager.snapshot(terminal_id, OWNER)
+
+    # input shows the screen its output settled on, so that settle is not delivered again.
+    settled = info().attention_revision
+    replied = await call(
+        terminal_manager,
+        context,
+        {"action": "input", "terminal_id": terminal_id, "text": "go", "key": "enter"},
+    )
+    assert replied["data"]["screen"] == "new prompt"
+    assert info().attention_revision > settled
+    assert info().acknowledged_attention_revision == settled
+    while callbacks:
+        callbacks.pop()()
+    assert info().acknowledged_attention_revision == info().attention_revision

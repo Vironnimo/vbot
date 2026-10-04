@@ -14,13 +14,6 @@ from scripts.provider_probe.common import PROJECT_ROOT
 
 
 def _terminal_cases() -> list[dict[str, Any]]:
-    from core.tools.terminal_manager import (
-        TERMINAL_MAX_COLUMNS,
-        TERMINAL_MAX_ROWS,
-        TERMINAL_MIN_COLUMNS,
-        TERMINAL_MIN_ROWS,
-    )
-
     cases = []
 
     def add(case_id, action, error=None, **fields):
@@ -48,8 +41,9 @@ def _terminal_cases() -> list[dict[str, Any]]:
     add("status_page_later", "status", start_line=3, lines=2)
     add("wait_default", "wait")
     add("wait_revision", "wait", after_revision=0)
-    add("wait_timeout", "wait", after_revision=999, timeout_ms=0)
-    add("wait_max", "wait", timeout_ms=10000)
+    add("wait_timeout", "wait", after_revision=999, timeout=0)
+    add("wait_max", "wait", timeout=600)
+    add("wait_pattern", "wait", pattern="proceed with")
     add("input_noop", "input")
     add("input_text", "input", text="hello")
     add("input_submit", "input", text="hello", key="enter")
@@ -58,12 +52,9 @@ def _terminal_cases() -> list[dict[str, Any]]:
     for key in ("enter", "up", "shift_tab", "f12", "ctrl_c"):
         add("input_key_" + key, "input", key=key)
     add("input_guard", "input", text="y", expected_screen_revision="{revision}")
-    add("resize_min", "resize", columns=TERMINAL_MIN_COLUMNS, rows=TERMINAL_MIN_ROWS)
-    add("resize_max", "resize", columns=TERMINAL_MAX_COLUMNS, rows=TERMINAL_MAX_ROWS)
     add("kill", "kill")
     add("invalid_fields", "list", "invalid_arguments", text="extra")
     add("invalid_combination", "input", "invalid_arguments", data="x", text="y")
-    add("invalid_resize", "resize", "invalid_arguments", columns=80)
     add("invalid_stale", "input", "stale_screen", text="y", expected_screen_revision=999)
     add("invalid_project", "start", "project_not_found", workdir="project:missing")
     add("invalid_args", "start", "invalid_arguments", args=["orphan"])
@@ -89,10 +80,9 @@ def _terminal_cases() -> list[dict[str, Any]]:
             },
             {
                 "id": "natural_history",
-                "task": "Read the first 10 lines of the retained terminal buffer.",
+                "task": "Show the screen with the 10 history lines above it.",
                 "expected": {
                     "action": "status",
-                    "start_line": 0,
                     "lines": 10,
                     "terminal_id": "{terminal_id}",
                 },
@@ -107,7 +97,6 @@ def _terminal_cases() -> list[dict[str, Any]]:
                     "action": "input",
                     "text": "y",
                     "key": "enter",
-                    "expected_screen_revision": "{revision}",
                     "terminal_id": "{terminal_id}",
                 },
             },
@@ -136,6 +125,7 @@ async def _probe_terminal_case(
 ) -> dict[str, Any]:
     # Reuse the existing disposable PTY fixture; Model output never launches a host program.
     from core.projects import ProjectStore
+    from core.tools._terminal_arguments import normalize_terminal_arguments
     from core.tools._terminal_input import input_chunks
     from core.tools.terminal import register_terminal_tool
     from core.tools.terminal_manager import TerminalManager, TerminalRenderHost
@@ -290,7 +280,7 @@ async def _probe_terminal_case(
             # A guard is also a valid conservative choice for natural plain input.
             compared = dict(actual)
             if (
-                case["id"] in {"natural_submit", "natural_continue"}
+                case["id"] in {"natural_submit", "natural_continue", "natural_notice"}
                 and compared.get("expected_screen_revision") == revision
             ):
                 compared.pop("expected_screen_revision")
@@ -303,6 +293,9 @@ async def _probe_terminal_case(
             launches_before = len(factory.calls)
             result = None
             effect_ok = False
+            if valid and actual.get("action") == "start":
+                # start returns once the program's first screen settled and its text was typed.
+                factory.initial_output = "ready> "
             if valid:
                 try:
                     result = await registry.dispatch(context, actual, ["terminal"])
@@ -316,23 +309,13 @@ async def _probe_terminal_case(
                         and len(factory.calls) == launches_before
                     )
                 elif actual["action"] == "input":
+                    # What input writes: text ending in a line break is submitted with Enter.
+                    typed = normalize_terminal_arguments(dict(actual))
                     chunks = input_chunks(
-                        data=actual.get("data"), text=actual.get("text"), key=actual.get("key")
+                        data=typed.get("data"), text=typed.get("text"), key=typed.get("key")
                     )
-                    effect_ok = factory.adapters[0].writes == writes_before + list(
-                        chunks
-                    ) and data.get("characters_sent") == sum(map(len, chunks))
+                    effect_ok = factory.adapters[0].writes == writes_before + list(chunks)
                 elif actual["action"] == "start":
-                    if actual.get("text"):
-                        # The start input waits for a quiet, non-empty start screen.
-                        factory.adapters[-1].emit("ready> ")
-                        await eventually(
-                            lambda: (
-                                bool(factory.adapters[-1].writes)
-                                and factory.adapters[-1].writes[-1] == "\r"
-                            ),
-                            attempts=600,
-                        )
                     child = manager.terminal(data["terminal_id"], owner())
                     effect_ok = (
                         len(factory.calls) == launches_before + 1
@@ -360,14 +343,10 @@ async def _probe_terminal_case(
                             "start_line"
                         ] <= actual.get("lines", 30)
                 elif actual["action"] == "wait":
+                    ended = {"wait_timeout": "timeout", "wait_pattern": "matched"}
                     effect_ok = (
-                        data["timed_out"] == (case["id"] == "wait_timeout")
+                        data["wait_ended"] == ended.get(case["id"], "quiet")
                         and factory.adapters[0].alive
-                    )
-                elif actual["action"] == "resize":
-                    effect_ok = factory.adapters[0].resizes[-1] == (
-                        actual["rows"],
-                        actual["columns"],
                     )
                 elif actual["action"] == "attach":
                     effect_ok = terminal_info(manager, terminal_id).attachment == owner()
@@ -377,7 +356,7 @@ async def _probe_terminal_case(
                         and factory.adapters[0].alive
                     )
                 elif actual["action"] == "kill":
-                    effect_ok = not factory.adapters[0].alive and data["state"] == "exited"
+                    effect_ok = not factory.adapters[0].alive and data["state"] == "stopped"
                 else:
                     effect_ok = data["terminals"][0]["terminal_id"] == terminal_id
             code = ((result or {}).get("error") or {}).get("code")

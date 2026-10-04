@@ -102,21 +102,59 @@ def test_windows_base_is_a_fresh_login_environment(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
-def test_git_fails_at_once_where_it_would_open_an_editor(tmp_path: Path) -> None:
+def test_git_uses_prepared_messages_and_fails_with_the_fix_where_it_needs_text(
+    tmp_path: Path,
+) -> None:
     environment = command_environment(RunIdentity("a", "s", None))
     environment["PATH"] = os.environ["PATH"]
-    git = ["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid"]
-    subprocess.run([*git, "init", "-q", str(tmp_path)], check=True, env=environment)
+    # The repository's own identity; nothing outside it is configured.
+    identity = {
+        "GIT_AUTHOR_NAME": "Test",
+        "GIT_AUTHOR_EMAIL": "test@example.invalid",
+        "GIT_COMMITTER_NAME": "Test",
+        "GIT_COMMITTER_EMAIL": "test@example.invalid",
+    }
+    environment.update(identity)
 
-    result = subprocess.run(
-        [*git, "commit", "--allow-empty", "-q"],
-        cwd=tmp_path,
-        env=environment,
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    def git(*arguments: str, **variables: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=tmp_path,
+            env={**environment, **variables},
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
 
-    assert result.returncode != 0
-    assert "No editor is available in this terminal" in result.stderr
+    def commit_file(text: str, message: str) -> None:
+        (tmp_path / "file.txt").write_text(text, encoding="utf-8")
+        git("add", "file.txt")
+        assert git("commit", "-q", "-m", message).returncode == 0
+
+    git("init", "-q", "-b", "main")
+    commit_file("base\n", "base")
+    git("checkout", "-q", "-b", "side")
+    commit_file("side\n", "side change")
+    git("checkout", "-q", "main")
+    commit_file("main\n", "main change")
+
+    # Without -m, the message is empty: git fails at once and the error names the fix.
+    empty = git("commit", "--allow-empty")
+    assert empty.returncode != 0
+    assert "pass the message as an argument, for example git commit -m" in empty.stderr
+
+    # A message git prepared is used as is: rebase --continue has no flag to skip it.
+    git("checkout", "-q", "side")
+    assert git("rebase", "main").returncode != 0
+    (tmp_path / "file.txt").write_text("resolved\n", encoding="utf-8")
+    git("add", "file.txt")
+    resumed = git("rebase", "--continue")
+    assert resumed.returncode == 0, resumed.stderr
+    assert git("log", "-1", "--format=%s").stdout.strip() == "side change"
+
+    # A rebase todo list needs a real edit; the error names the assignment that runs it as is.
+    todo = git("rebase", "-i", "HEAD~1")
+    assert todo.returncode != 0
+    assert "GIT_SEQUENCE_EDITOR" in todo.stderr
+    assert git("rebase", "-i", "HEAD~1", GIT_SEQUENCE_EDITOR=":").returncode == 0
