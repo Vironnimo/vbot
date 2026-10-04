@@ -16,7 +16,7 @@ from PIL import Image as PILImage
 from core.attachments import sniff_media_type
 from core.attachments.images import ImageConversionError, ImageConverter, PreparedImage
 from core.debug import DebugContext
-from core.model_tasks.artifacts import OutputWriteError, ensure_output_dir
+from core.model_tasks.artifacts import OutputWriteError, ensure_output_dir, os_error_reason
 from core.model_tasks.constants import TASK_IMAGE_GENERATION, TASK_IMAGE_UNDERSTANDING
 from core.model_tasks.image_profile import ImageCallOptionError, ImageProfile
 from core.model_tasks.image_providers import ProviderImageClient
@@ -272,8 +272,9 @@ class ImageService:
             limit = profile.max_source_images
             if limit is not None and len(source_paths) > limit:
                 raise ImageTooLargeError(
-                    f"The configured image model accepts at most {limit} source images, "
-                    f"but received {len(source_paths)}."
+                    f"Nothing was generated. The configured image model accepts at most {limit} "
+                    f"source images, but received {len(source_paths)}. Pass at most {limit} "
+                    "source_images."
                 )
         try:
             wire_options = profile.wire_options(call_options or {}, options)
@@ -567,17 +568,23 @@ class ImageService:
             usage_context=usage_context,
         )
         extension = _extension_for_media_type(result.media_type)
-        return tuple(
-            _write_image_artifact(
-                image_bytes,
-                output_dir=directory,
-                extension=extension,
-                media_type=result.media_type,
-                index=idx,
-                revised_prompt=result.revised_prompt,
-            )
-            for idx, image_bytes in enumerate(result.images)
-        )
+        artifacts: list[ImageArtifact] = []
+        for idx, image_bytes in enumerate(result.images):
+            try:
+                artifacts.append(
+                    _write_image_artifact(
+                        image_bytes,
+                        output_dir=directory,
+                        extension=extension,
+                        media_type=result.media_type,
+                        index=idx,
+                        revised_prompt=result.revised_prompt,
+                    )
+                )
+            except OutputWriteError as exc:
+                saved = tuple(artifact.file_path for artifact in artifacts)
+                raise OutputWriteError(exc.directory, exc.reason, saved=saved) from exc
+        return tuple(artifacts)
 
 
 def _attempts_made(error: VBotError) -> int | None:
@@ -778,7 +785,7 @@ def _write_image_artifact(
     try:
         file_path = write_id_file(output_dir, "img", f".{extension}", payload)
     except OSError as exc:
-        raise OutputWriteError(output_dir, exc.strerror or str(exc)) from exc
+        raise OutputWriteError(output_dir, os_error_reason(exc)) from exc
     width, height = _pixel_size(payload)
     return ImageArtifact(
         id=file_path.stem,

@@ -56,23 +56,18 @@ GENERATE_MUSIC_TOOL_NAME = "generate_music"
 _VIDEO_DIRECTORY_NAME = "video-gen"
 _MUSIC_DIRECTORY_NAME = "music-gen"
 
-_VIDEO_BILLING = (
-    " Each call is billed by the provider and waits, often several minutes, until the video "
-    "is saved."
-)
+_BILLING = " Each call is billed by the provider."
 GENERATE_VIDEO_TEXT_ONLY_DESCRIPTION = (
     "Generate a video from a text prompt with the configured model and save it as a local file."
-    + _VIDEO_BILLING
+    + _BILLING
 )
 GENERATE_VIDEO_FIRST_FRAME_DESCRIPTION = (
-    "Generate a video from a text prompt with the configured model and save it as a local "
-    "file, optionally starting from a local first-frame image, which is uploaded to the "
-    "provider." + _VIDEO_BILLING
+    GENERATE_VIDEO_TEXT_ONLY_DESCRIPTION + " An image passed as first_frame is uploaded to the "
+    "provider."
 )
 GENERATE_VIDEO_FRAME_RANGE_DESCRIPTION = (
-    "Generate a video from a text prompt with the configured model and save it as a local "
-    "file, optionally using local first- and last-frame images, which are uploaded to the "
-    "provider." + _VIDEO_BILLING
+    GENERATE_VIDEO_TEXT_ONLY_DESCRIPTION + " Images passed as first_frame or last_frame are "
+    "uploaded to the provider."
 )
 GENERATE_VIDEO_PARAMETERS: JsonObject = {
     "type": "object",
@@ -133,17 +128,13 @@ GENERATE_VIDEO_PARAMETERS: JsonObject = {
     "required": ["prompt"],
 }
 
-_MUSIC_BILLING = (
-    " Each call is billed by the provider and waits, up to a few minutes, until the track is saved."
-)
-GENERATE_MUSIC_DESCRIPTION = (
-    "Generate a music track from a text prompt, optionally guided by local reference images "
-    "that are uploaded to the provider, with the configured model and save it as a local "
-    "file." + _MUSIC_BILLING
-)
 GENERATE_MUSIC_TEXT_ONLY_DESCRIPTION = (
     "Generate a music track from a text prompt with the configured model and save it as a "
-    "local file." + _MUSIC_BILLING
+    "local file." + _BILLING
+)
+GENERATE_MUSIC_DESCRIPTION = (
+    GENERATE_MUSIC_TEXT_ONLY_DESCRIPTION + " Images passed as source_images are uploaded to the "
+    "provider."
 )
 GENERATE_MUSIC_PARAMETERS: JsonObject = {
     "type": "object",
@@ -161,8 +152,8 @@ GENERATE_MUSIC_PARAMETERS: JsonObject = {
             "items": {"type": "string", "minLength": 1},
             "minItems": 1,
             "description": (
-                "Optional local image paths to use as visual references. Relative paths start "
-                "at the working directory."
+                "Local images to use as references for the track. Relative paths start at the "
+                "working directory. Omit to generate from the prompt alone."
             ),
         },
         "output_dir": {
@@ -392,10 +383,11 @@ def make_generate_music_handler(music_service: Any):
             return _output_failure(exc, "music track")
         context.add_display_media(artifact.file_path, artifact.media_type)
         music = _artifact_payload(artifact)
-        for name in ("transcript", "text"):
+        # The audio transcript and the text the music model sent beside the audio.
+        for key, name in (("transcript", "transcript"), ("model_reply", "text")):
             value = getattr(artifact, name, "")
             if value:
-                music[name] = value
+                music[key] = value
         return tool_success({"music": music})
 
     return handler
@@ -507,7 +499,7 @@ def register_generate_music_tool(registry: ToolRegistry, music_service: Any) -> 
                         "media_type": {"type": "string", "minLength": 1},
                         "size_bytes": {"type": "integer", "minimum": 1},
                         "transcript": {"type": "string", "minLength": 1},
-                        "text": {"type": "string", "minLength": 1},
+                        "model_reply": {"type": "string", "minLength": 1},
                     },
                     "required": ["path", "media_type", "size_bytes"],
                     "additionalProperties": False,

@@ -7,6 +7,7 @@ the generation Tools take local image files only (``resolve_local_images``).
 from __future__ import annotations
 
 import json
+import re
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
@@ -160,12 +161,25 @@ def normalize_image_generation_arguments(contract: ToolContract, arguments: Any)
     )
 
 
+_SECONDS = re.compile(r"\s*(\d+(?:\.\d+)?)\s*(?:s|sec|secs|seconds?)\s*", re.IGNORECASE)
+
+
+def _seconds(value: Any) -> Any:
+    """Read "6s" or "6 seconds" as 6; anything else is left for the contract to check."""
+    if isinstance(value, str):
+        match = _SECONDS.fullmatch(value)
+        if match is not None:
+            return match[1]
+    return value
+
+
 def normalize_generate_video_arguments(contract: ToolContract, arguments: Any) -> Any:
     """Return canonical generate_video arguments for calls written in other dialects."""
     return normalize_call_arguments(
         contract,
         arguments,
         field_aliases=VIDEO_FIELD_ALIASES,
+        field_normalizers={"duration": _seconds},
         empty_as_omitted=(
             "output_dir",
             "first_frame",

@@ -13,6 +13,7 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
+from core.utils.paths import model_path
 
 _MAX_DETAIL_CHARS = 200
 _PREFIXES = ("Authentication error:", "Rate limited:", "Provider error:")
@@ -154,24 +155,34 @@ def outcome_unknown_message(*, task: str, product: str) -> str:
 
 
 def output_failure_message(error: OutputDirectoryError | OutputWriteError, *, product: str) -> str:
-    """Say why generated media has no file and whether the request was already paid."""
+    """Say what was saved, why the folder failed, and the next call."""
     if isinstance(error, OutputDirectoryError):
+        folder = model_path(error.directory)
         return (
-            f"{error}. Nothing was generated. Pass another output_dir, or omit output_dir to "
-            "use the default folder."
+            f"Nothing was generated. The output folder {folder} cannot be used: "
+            f"{error.reason}. Pass another output_dir, or omit output_dir to use the default "
+            "folder."
         )
+    saved = (
+        "Files saved before the failure: "
+        + ", ".join(model_path(path) for path in error.saved)
+        + "."
+        if error.saved
+        else "No file was saved."
+    )
+    folder = model_path(error.directory)
     return (
-        f"Generation succeeded, but the {product} could not be saved in {error.directory}: "
-        f"{error.reason}. The provider charged for this request. Tell the user; repeating the "
-        "call generates and charges again."
+        f"The provider generated the {product}, but saving to {folder} failed: "
+        f"{error.reason}. {saved} Repeating the call generates the {product} again at new "
+        "cost. Tell the user before you repeat it."
     )
 
 
 def unfinished_job_message(*, task: str, product: str, job_id: str, reason: str) -> str:
     """Say that an accepted job's result could not be collected and must not be resubmitted."""
     return (
-        f"The {task} provider accepted the request as job {job_id}, but "
-        f"{_shortened(' '.join(reason.split()))}. The job can still finish and be charged; "
-        f"nothing was saved. Do not request the same {product} again. Tell the user, "
-        "including the job id."
+        f"Nothing was saved. The {task} provider accepted the request as job {job_id}, but "
+        f"{_shortened(' '.join(reason.split()))}. If the job finishes, the provider bills it. "
+        f"Repeating the call starts and bills a second {product} job. Tell the user, including "
+        "the job id, instead of repeating the call."
     )

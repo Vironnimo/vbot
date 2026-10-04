@@ -11,6 +11,7 @@ as :class:`OutputWriteError`.
 
 from __future__ import annotations
 
+import errno
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -197,6 +198,32 @@ class GeneratedMediaArtifact:
     file_path: Path
 
 
+# English causes by error number; the system's own message follows the host
+# language ("Zugriff verweigert") and names no next step.
+_OS_ERROR_REASONS = {
+    errno.EACCES: "access is denied",
+    errno.EPERM: "access is denied",
+    errno.ENOENT: "the path or its drive does not exist",
+    errno.ENOTDIR: "a part of the path is a file",
+    errno.EEXIST: "a file with that name exists",
+    errno.ENOSPC: "the disk is full",
+    errno.EROFS: "the drive is read-only",
+    errno.ENAMETOOLONG: "the path is too long",
+    errno.EINVAL: "the path is not valid on this system",
+}
+
+
+def os_error_reason(error: OSError) -> str:
+    """Return why a file operation failed, in English and independent of the host."""
+
+    if isinstance(error.errno, int):
+        known = _OS_ERROR_REASONS.get(error.errno)
+        if known is not None:
+            return known
+        return f"the system refused it ({errno.errorcode.get(error.errno, error.errno)})"
+    return "the system refused it"
+
+
 class OutputDirectoryError(TaskError):
     """Raised before generation when the caller-selected folder cannot hold files."""
 
@@ -210,14 +237,18 @@ class OutputDirectoryError(TaskError):
 
 
 class OutputWriteError(TaskError):
-    """Raised when generated media could not be written after a successful request."""
+    """Raised when generated media could not be written after a successful request.
+
+    ``saved`` lists the files of the same request written before the failure.
+    """
 
     code = "output_write_failed"
     retryable = False
 
-    def __init__(self, directory: Path, reason: str) -> None:
+    def __init__(self, directory: Path, reason: str, *, saved: tuple[Path, ...] = ()) -> None:
         self.directory = directory
         self.reason = reason
+        self.saved = saved
         super().__init__(f"Generated media could not be saved in {directory}: {reason}")
 
 
@@ -234,7 +265,7 @@ def ensure_output_dir(output_dir: str | Path) -> Path:
     except FileExistsError:
         raise OutputDirectoryError(directory, "a file with that name exists") from None
     except OSError as exc:
-        raise OutputDirectoryError(directory, exc.strerror or str(exc)) from exc
+        raise OutputDirectoryError(directory, os_error_reason(exc)) from exc
     return directory
 
 
@@ -252,7 +283,7 @@ def write_generated_media_artifact(
         prefix = "vid" if media_type.startswith("video/") else "mus"
         file_path = write_id_file(destination, prefix, f".{extension}", payload)
     except OSError as exc:
-        raise OutputWriteError(destination, exc.strerror or str(exc)) from exc
+        raise OutputWriteError(destination, os_error_reason(exc)) from exc
     return GeneratedMediaArtifact(
         id=file_path.stem,
         filename=file_path.name,

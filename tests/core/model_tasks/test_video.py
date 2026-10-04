@@ -54,12 +54,14 @@ def test_profile_offers_real_choices_in_order() -> None:
         ),
         pytest.param(
             {"duration": 5},
-            "duration 5 is not offered by the configured video model; choose one of: 4, 6, 10.",
+            "Nothing was generated. The configured video model does not offer duration 5. "
+            "Pass one of 4, 6, 10, or omit duration to use the configured default.",
             id="value-not-offered",
         ),
         pytest.param(
             {"resolution": "720p"},
-            "The configured video model has no resolution choice; omit resolution.",
+            "Nothing was generated. The configured video model has no resolution choice. "
+            "Repeat the call without resolution.",
             id="option-not-offered",
         ),
     ],
@@ -78,8 +80,9 @@ def test_call_choices_are_checked_against_the_profile(
 
 
 class _ModelTasks:
-    def __init__(self, options: dict[str, Any]) -> None:
+    def __init__(self, options: dict[str, Any], facts: dict[str, Any] = _FACTS) -> None:
         self._options = options
+        self._facts = facts
 
     def binding_for(self, task_type: str) -> object:
         return SimpleNamespace(task_type=task_type, target="openrouter/v/m::api-key", options={})
@@ -91,7 +94,7 @@ class _ModelTasks:
         return dict(self._options)
 
     def model_for_target(self, _target_ref: object) -> Any:
-        return _model(_FACTS)
+        return _model(self._facts)
 
 
 class _Client:
@@ -102,23 +105,48 @@ class _Client:
         return VideoGenerationResult(data=b"v", media_type="video/mp4", model="m", job_id="j")
 
 
+_RESOLUTION_FACTS: dict[str, Any] = {
+    **_FACTS,
+    "parameters": {
+        **cast(dict[str, Any], _FACTS["parameters"]),
+        "resolution": {"type": "enum", "values": ["720p", "1080p"]},
+    },
+}
+
+
 @pytest.mark.parametrize(
-    ("call_options", "sent"),
+    ("facts", "call_options", "sent"),
     [
         # A requested shape replaces the configured size, which would override it.
         pytest.param(
+            _FACTS,
             {"aspect_ratio": "9:16"},
             {"size": None, "aspect_ratio": "9:16", "duration": "4"},
             id="shape",
         ),
-        pytest.param({"duration": 10}, {"size": "1280x720", "duration": 10}, id="duration"),
+        # The half of the shape the call leaves out keeps the configured size's value.
+        pytest.param(
+            _RESOLUTION_FACTS,
+            {"aspect_ratio": "9:16"},
+            {"size": None, "aspect_ratio": "9:16", "resolution": "720p"},
+            id="aspect-keeps-configured-resolution",
+        ),
+        pytest.param(
+            _RESOLUTION_FACTS,
+            {"resolution": "1080p"},
+            {"size": None, "aspect_ratio": "16:9", "resolution": "1080p"},
+            id="resolution-keeps-configured-aspect",
+        ),
+        pytest.param(_FACTS, {"duration": 10}, {"size": "1280x720", "duration": 10}, id="duration"),
     ],
 )
 @pytest.mark.asyncio
 async def test_call_choices_override_settings(
-    call_options: dict[str, Any], sent: dict[str, Any]
+    facts: dict[str, Any], call_options: dict[str, Any], sent: dict[str, Any]
 ) -> None:
-    service = VideoService(_ModelTasks({"size": "1280x720", "duration": "4"}), cast(Any, None))
+    service = VideoService(
+        _ModelTasks({"size": "1280x720", "duration": "4"}, facts), cast(Any, None)
+    )
     client = _Client()
 
     with patch("core.model_tasks.video.ProviderVideoClient.from_runtime", return_value=client):
