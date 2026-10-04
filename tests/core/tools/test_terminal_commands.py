@@ -150,7 +150,15 @@ async def test_handed_off_command_is_listed_and_delivers_its_result_unless_the_a
     assert terminal_id in harness.listed()
 
     if ending == "exit":
+        waiting = asyncio.create_task(
+            harness.manager.wait_for_attention(
+                terminal_id, owner(), after_revision=0, timeout_ms=60_000
+            )
+        )
         tree.shell_exits(0)
+        # The exit wakes a terminal wait only once the terminal shows it exited.
+        snapshot, timed_out = await waiting
+        assert (timed_out, snapshot["state"], snapshot["exit_code"]) == (False, "exited", 0)
     elif ending == "operator_kill":
         # The shell ignores Ctrl+C; after the grace period the tree is killed.
         stopping = asyncio.create_task(harness.manager.kill_for_operator(terminal_id))
@@ -176,15 +184,19 @@ async def test_timeout_interrupts_the_command_and_reports_why_it_stopped(
     waiting = asyncio.create_task(
         harness.manager.wait_command(terminal_id, seconds=None, idle_seconds=None)
     )
+    tree.exits = (ProgramExit("lint.exe", 2),)
     await eventually(lambda: harness.clock.sleeping)
     await harness.clock.advance(600)
     await eventually(lambda: "\x03" in adapter.writes)
-    # The shell honours Ctrl+C: nothing has to be killed.
+    # The shell honours Ctrl+C: nothing has to be killed. A child ending from
+    # the Ctrl+C is no failure of the command.
+    tree.exits = (*tree.exits, ProgramExit("python.exe", 0xC000013A))
     tree.shell_exits(1)
 
     assert await waiting == "exited"
     report = harness.manager.command_report(terminal_id)
     assert (report.exit_code, report.stop_reason) == (1, "timeout")
+    assert report.nonzero_exits == ("lint.exe exited with code 2",)
     assert tree.terminated == 0 or tree.running == ()
 
 

@@ -101,6 +101,9 @@ class FakeTree:
     def facts(self) -> ProcessTreeFacts:
         return ProcessTreeFacts(self.running, self.cpu_seconds, self.started, self.exits)
 
+    def exit_count(self) -> int:
+        return len(self.exits)
+
     def terminate(self) -> None:
         self.terminated += 1
         self.running = ()

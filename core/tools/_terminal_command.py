@@ -26,7 +26,7 @@ from typing import Literal, TextIO
 
 from core.storage.temp_files import TemporaryFileLease
 
-from ._terminal_process_tree import ProcessTree, ProcessTreeFacts, RunningProcess
+from ._terminal_process_tree import ProcessTree, ProcessTreeFacts, ProgramExit, RunningProcess
 
 COMMAND_TEMPORARY_CATEGORY = "commands"
 COMMAND_HEAD_LINES = 40
@@ -107,6 +107,9 @@ class CommandState:
         self.ended_at: float | None = None
         self.exit_code: int | None = None
         self.stop_reason: StopReason | None = None
+        # Failed children recorded before vBot stopped the command; later ones
+        # ended because of the stop and are no failures of the command.
+        self._exits_before_stop: int | None = None
         # Visible in the catalog and Terminal list; set when the command is handed off.
         self.hidden = True
         self.delivers_result = False
@@ -177,6 +180,8 @@ class CommandState:
         """Remember why vBot stops the command; the first reason wins."""
         if self.stop_reason is None and not self.shell_exited:
             self.stop_reason = reason
+            if self.tree is not None:
+                self._exits_before_stop = self.tree.exit_count()
 
     def transcript(self) -> CommandTranscript:
         # The tail holds only lines after the head, so nothing appears twice.
@@ -200,12 +205,19 @@ class CommandState:
             exit_code=self.exit_code,
             stop_reason=self.stop_reason,
             transcript=self.transcript(),
-            nonzero_exits=(tuple(exit.describe() for exit in facts.nonzero_exits) if facts else ()),
+            nonzero_exits=tuple(exit.describe() for exit in self._failed_exits(facts)),
             still_running=facts.running if facts else (),
             duration_seconds=max(0.0, ended - self.started_at),
             timeout_seconds=self.timeout_seconds,
             delivers_result=self.delivers_result,
         )
+
+    def _failed_exits(self, facts: ProcessTreeFacts | None) -> tuple[ProgramExit, ...]:
+        if facts is None:
+            return ()
+        if self._exits_before_stop is None:
+            return facts.nonzero_exits
+        return facts.nonzero_exits[: self._exits_before_stop]
 
     def tree_facts(self) -> ProcessTreeFacts | None:
         """Query the tree now (blocking; call off the Event Loop)."""

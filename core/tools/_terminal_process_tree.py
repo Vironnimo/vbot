@@ -76,6 +76,9 @@ class ProcessTree(Protocol):
 
     def facts(self) -> ProcessTreeFacts: ...
 
+    def exit_count(self) -> int:
+        """How many failed child exits are recorded so far; does not block."""
+
     def terminate(self) -> None:
         """Kill every process of the tree; raise OSError when that is not confirmed."""
 
@@ -134,6 +137,9 @@ class _PosixSessionTree:
             started=len(self._started),
             nonzero_exits=(),
         )
+
+    def exit_count(self) -> int:
+        return 0
 
     def terminate(self) -> None:
         kill = cast(Any, os).killpg
@@ -485,6 +491,10 @@ class _WindowsJobTree:
             started=int(accounting.TotalProcesses),
             nonzero_exits=exits,
         )
+
+    def exit_count(self) -> int:
+        with self._lock:
+            return len(self._exits)
 
     def _running(self) -> tuple[RunningProcess, ...]:
         capacity = _MAX_LISTED_PROCESSES

@@ -177,6 +177,8 @@ class TerminalSession:
         self._activity_origin_run_id: str | None = None
         self._activity_execution_owner = execution_owner
         self._suppress_exit_attention = False
+        # A command's exit attention, held until the session has finished.
+        self._command_attention: dict[str, Any] | None = None
         self._termination_pending = False
         self._termination_targets: list[Any] = []
         self._output_event = asyncio.Event()
@@ -566,17 +568,23 @@ class TerminalSession:
             if reason is None
             else f"Command stopped ({reason})."
         )
-        self._set_attention(
-            kind="exited",
-            summary=summary,
-            details={"exit_code": exit_code, "stop_reason": reason},
-            deliver=command.delivers_result
+        attention: dict[str, Any] = {
+            "kind": "exited",
+            "summary": summary,
+            "details": {"exit_code": exit_code, "stop_reason": reason},
+            "deliver": command.delivers_result
             and not self._suppress_exit_attention
             and reason != "agent",
-            body=command.formatter(report),
-        )
+            "body": command.formatter(report),
+        }
         # The session's own end later adds no second attention.
         self._suppress_exit_attention = True
+        if facts is not None and facts.running:
+            # Processes the command started keep the terminal live: tell it now.
+            self._set_attention(**attention)
+        else:
+            # The session finishes next; a waiter woken then sees it exited.
+            self._command_attention = attention
 
     # Attachment
 
@@ -1076,7 +1084,10 @@ class TerminalSession:
                     self.terminal_id,
                     exc_info=True,
                 )
-            if self._suppress_exit_attention:
+            if self._command_attention is not None:
+                attention, self._command_attention = self._command_attention, None
+                self._set_attention(**attention)
+            elif self._suppress_exit_attention:
                 self._publish_state()
             elif error is None:
                 self._set_attention(
