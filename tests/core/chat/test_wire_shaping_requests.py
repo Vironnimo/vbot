@@ -19,7 +19,11 @@ from core.chat._message_history import reply_surface_from_note
 from core.chat._tool_epoch import ToolChange
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
-from core.chat.messages import COMPACTION_SUMMARY_NOTE_PREFIX, ERROR_KIND_PROVIDER_ERROR
+from core.chat.messages import (
+    COMPACTION_SUMMARY_NOTE_PREFIX,
+    ERROR_KIND_AUTH,
+    ERROR_KIND_PROVIDER_ERROR,
+)
 from core.chat.output_files import AssistantFileReference
 from core.chat.wire_shaping import (
     INTERRUPTED_TOOL_RESULT_CODE,
@@ -487,6 +491,69 @@ def test_history_only_entries_never_reach_the_provider(entry: ChatMessage) -> No
         ("user", "Earlier turn"),
         ("user", "Later turn"),
     ]
+
+
+_PARTIAL = ChatMessage.assistant(
+    model="openai/gpt-5.2", content="Half an answer", interrupted=True, interruption_cause="user"
+)
+_ANSWER = ChatMessage.assistant(model="openai/gpt-5.2", content="The whole answer")
+_VISIBLE_ERROR = ChatMessage.error(ERROR_KIND_PROVIDER_ERROR, "Run aborted.")
+_HIDDEN_ERROR = ChatMessage.error(ERROR_KIND_AUTH, "Invalid key.")
+_STOPPED = "Your previous turn stopped before it was complete because "
+
+
+@pytest.mark.parametrize(
+    ("status", "reason", "run_entries", "notice"),
+    [
+        (
+            "cancelled",
+            "user",
+            [_PARTIAL],
+            "The user stopped your previous turn before it was complete.",
+        ),
+        ("cancelled", "shutdown", [], _STOPPED + "vBot shut down."),
+        ("cancelled", None, [_PARTIAL], "Your previous turn was cancelled before it was complete."),
+        ("interrupted", "process_restart", [_PARTIAL], _STOPPED + "vBot restarted."),
+        (
+            "interrupted",
+            "network",
+            [_PARTIAL],
+            _STOPPED + "the connection to the Model provider failed.",
+        ),
+        ("interrupted", "timeout", [], _STOPPED + "the Model provider stopped responding."),
+        ("interrupted", "provider", [], _STOPPED + "the Model provider returned an error."),
+        ("interrupted", "internal", [], _STOPPED + "of an internal error."),
+        ("failed", None, [_PARTIAL, _HIDDEN_ERROR], _STOPPED + "of an error."),
+        # The request already carries the failed Run's error.
+        ("failed", None, [_VISIBLE_ERROR], None),
+        # A Run stopped after its final answer left nothing unfinished.
+        ("cancelled", "user", [_ANSWER], None),
+        ("failed", None, [_ANSWER, _HIDDEN_ERROR], None),
+    ],
+)
+def test_a_run_that_stopped_unfinished_is_announced_before_the_next_turn(
+    status: str, reason: str | None, run_entries: list[ChatMessage], notice: str | None
+) -> None:
+    messages = [
+        ChatMessage.user("Earlier turn", timestamp=FIXED_TIMESTAMP),
+        *run_entries,
+        ChatMessage.run_summary(
+            run_id="run-one",
+            status=status,
+            iteration_count=1,
+            timing=FIXED_TIMING,
+            completion_reason=reason,
+        ),
+        ChatMessage.user("Later turn", timestamp=FIXED_TIMESTAMP),
+    ]
+
+    request = _embed_notes_into_request(messages)
+
+    request_text = "\n".join(item["content"] for item in request)
+    assert request_text.count("previous turn") == (notice is not None)
+    if notice is not None:
+        assert _reminders(notice) in request_text
+    assert (request[-1]["role"], request[-1]["content"]) == ("user", "Later turn")
 
 
 def _calls(*call_ids: str) -> ChatMessage:

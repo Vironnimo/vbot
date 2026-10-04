@@ -319,7 +319,9 @@ class ChatSessionManager:
         )
         await self._store.run_async(self._store.admit_run, address, admission)
 
-    async def finish_run(self, run: Run, status: str, payload: JsonObject) -> JsonObject:
+    async def finish_run(
+        self, run: Run, status: str, payload: JsonObject, *, completion_reason: str | None
+    ) -> JsonObject:
         address = SessionAddress(
             project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
         )
@@ -330,7 +332,7 @@ class ChatSessionManager:
             timing=payload["timing"],
             iteration_count=run.iteration_count,
             change_stats=payload.get("change_stats"),
-            completion_reason=run.cancel_reason,
+            completion_reason=completion_reason,
             contributes_to_activity=run.contributes_to_agent_activity,
         )
         return await self._store.run_async(self._store.finish_run, address, completion)
@@ -653,7 +655,6 @@ class ChatSessionManager:
         run_id: str | None = None,
         assistant_message_id: str | None = None,
         tool_results: Mapping[str, ToolResultFacts] | None = None,
-        continuation_records: Sequence[JsonObject] = (),
         since: SessionReadCursor | None = None,
     ) -> SessionReadBatch | None:
         return await self._store.run_async(
@@ -667,7 +668,6 @@ class ChatSessionManager:
                 run_id=run_id,
                 assistant_message_id=assistant_message_id,
                 tool_results=tool_results,
-                continuation_records=continuation_records,
                 since=since,
             )
         )
@@ -684,7 +684,6 @@ class ChatSessionManager:
         run_id: str | None = None,
         assistant_message_id: str | None = None,
         tool_results: Mapping[str, ToolResultFacts] | None = None,
-        continuation_records: Sequence[JsonObject] = (),
         since: SessionReadCursor | None = None,
     ) -> SessionReadBatch | None:
         """Append owned deliveries; see ``SessionStore.append_messages`` for the options."""
@@ -698,7 +697,6 @@ class ChatSessionManager:
             run_id=run_id,
             assistant_message_id=assistant_message_id,
             tool_results=tool_results,
-            continuation_records=continuation_records,
             since=since,
         )
 

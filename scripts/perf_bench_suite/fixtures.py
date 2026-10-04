@@ -457,7 +457,12 @@ async def persist_history(
         if run.summary is not None:
             assert run.summary.timing is not None and run.summary.status is not None
             record.iteration_count = run.summary.iteration_count or 0
-            await sessions.finish_run(record, run.summary.status, {"timing": run.summary.timing})
+            await sessions.finish_run(
+                record,
+                run.summary.status,
+                {"timing": run.summary.timing},
+                completion_reason=run.summary.completion_reason,
+            )
 
 
 # --- Provider ---------------------------------------------------------------

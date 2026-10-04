@@ -659,10 +659,12 @@ async function handleChatCompletion(request, response) {
     offeredTools,
   );
 
+  // A stopped Run's notice precedes the next input; the stopped work stays
+  // earlier in the request.
   const currentInput = trailingUserText(body?.messages);
   if (
-    currentInput.includes("E2E_COMMAND_CONTINUE") &&
-    currentInput.includes("<continuation-checkpoint")
+    messagesText(body?.messages, "user").includes("E2E_COMMAND_CONTINUE") &&
+    currentInput.includes("previous turn")
   ) {
     await streamCompletion(
       response,

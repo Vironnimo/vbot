@@ -18,7 +18,6 @@ from core.runs import (
     RunStatus,
 )
 from core.sessions import ChatSession
-from core.sessions.store import SessionStore
 from core.tools import (
     ToolContext,
     ToolDisplay,
@@ -183,7 +182,7 @@ async def test_sibling_calls_run_concurrently_and_persist_in_call_order_as_one_b
 
 
 @pytest.mark.asyncio
-async def test_tool_cycle_boundaries_need_no_separate_journal_writes(
+async def test_starting_a_tool_writes_nothing_after_the_assistant_append(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -205,16 +204,6 @@ async def test_tool_cycle_boundaries_need_no_separate_journal_writes(
 
     monkeypatch.setattr(runtime.adapter, "send", observing_send)
     runtime.chat_sessions.create("coder", session_id="session-one")
-    journal_writes: list[list[str]] = []
-    original_append_continuation = SessionStore.append_continuation
-
-    def recording_append_continuation(
-        self: SessionStore, address: Any, records: list[JsonObject]
-    ) -> None:
-        journal_writes.append([str(record["type"]) for record in records])
-        original_append_continuation(self, address, records)
-
-    monkeypatch.setattr(SessionStore, "append_continuation", recording_append_continuation)
     store = runtime.chat_sessions._store
     execute_write = store._execute_write
 
@@ -229,9 +218,6 @@ async def test_tool_cycle_boundaries_need_no_separate_journal_writes(
         "coder", "probe once", session_id="session-one"
     )
 
-    # The journal starts with the input append, and Assistant boundaries and
-    # Tool Results commit inside their history writes.
-    assert journal_writes == []
     # Only the Assistant append separates the Model response from the Tool
     # handler: starting a Tool writes nothing.
     assert writes_at["handler"] == writes_at["first_request"] + 1
@@ -432,8 +418,7 @@ async def test_real_run_cancel_during_parallel_tools_repairs_the_next_request(
     for message in repaired_results:
         assert json.loads(message["content"])["error"]["code"] == "result_unavailable"
     final_history = history(runtime)
-    # The next Run persists the cancelled Run's continuation checkpoint before its input.
-    assert persisted_roles(final_history) == ["user", "assistant", "note", "user", "assistant"]
+    assert persisted_roles(final_history) == ["user", "assistant", "user", "assistant"]
     assert [m.status for m in final_history if m.role == "run_summary"] == [
         "cancelled",
         "completed",

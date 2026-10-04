@@ -10,14 +10,10 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from core.chat._prompt_block_epoch import PromptBlockPin
 from core.chat._step_outcomes import _ToolProgress
+from core.chat._stream_draft import StreamDraft
 from core.chat._tool_epoch import ToolEpochView
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.content_blocks import ContentBlock
-from core.chat.continuation import (
-    ContinuationState,
-    ContinuationTracker,
-    JournalBoundary,
-)
 from core.chat.errors import ChatError
 from core.chat.events import _close_adapter
 from core.chat.messages import (
@@ -171,7 +167,6 @@ class _RunRequest:
     # Narrows the loop's dispatched Tool-iteration limit for this Run only.
     max_tool_iterations: int | None = None
     input_persisted_hook: Callable[[], None] | None = None
-    resume_process_restart: bool = False
     edit_message_id: str | None = None
     temporary_binding: TemporarySessionBinding | None = None
     input_already_persisted: bool = False
@@ -191,7 +186,6 @@ class _RunRequest:
             and self.temporary_binding is None
             and self.temporary_parent_binding is None
             and not self.input_already_persisted
-            and not self.resume_process_restart
         )
 
 
@@ -238,8 +232,6 @@ class _RunExecutionContext:
     skill_registry: SkillRegistry
     skill_catalog: PinnedSkillCatalog
     prompt_cache_affinity_id: str
-    prior_continuation: ContinuationState | None
-    continuation_tracker: ContinuationTracker | None
     session_snapshot: _SessionSnapshot
     request_state: _RequestState | None = None
     image_budget: RequestImageBudget = field(default_factory=RequestImageBudget)
@@ -250,12 +242,14 @@ class _RunExecutionContext:
     # perf_counter() at which the first step's request assembly began; the
     # progression consumes it for the ``chat.request_build`` measurement.
     request_build_started: float | None = None
+    stream_draft: StreamDraft = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.stream_draft = StreamDraft(self.session)
 
 
 class _HistoryWrite(Protocol):
-    def __call__(
-        self, *, continuation_records: list[JsonObject], since: SessionReadCursor
-    ) -> Awaitable[SessionReadBatch | None]: ...
+    def __call__(self, *, since: SessionReadCursor) -> Awaitable[SessionReadBatch | None]: ...
 
 
 @dataclass
@@ -307,7 +301,6 @@ class _SessionSnapshot:
         session: ChatSession,
         messages: list[ChatMessage],
         *,
-        journal: JournalBoundary | None = None,
         seen_skills: SeenSkillsUpdate | None = None,
         tool_results: Mapping[str, ToolResultFacts] | None = None,
     ) -> None:
@@ -327,7 +320,6 @@ class _SessionSnapshot:
                 seen_skills=seen_skills,
                 tool_results=tool_results,
             ),
-            journal=journal,
         )
 
     async def apply_edit(
@@ -335,24 +327,16 @@ class _SessionSnapshot:
         session: ChatSession,
         messages: list[ChatMessage],
         *,
-        journal: JournalBoundary | None = None,
         seen_skills: SeenSkillsUpdate | None = None,
     ) -> None:
         """Commit the admitted edit with its replacement *messages* in one transaction.
 
-        The Continuation restarts from *journal*'s records. The snapshot is
-        replaced by the Session's state after the edit.
+        The snapshot is replaced by the Session's state after the edit.
         """
         target = self.pending_edit_message_id
         if target is None:
             raise ValueError("no history edit was admitted")
-
-        async def write(records: list[JsonObject]) -> SessionReadBatch:
-            return await session.apply_edit_async(
-                target, messages, seen_skills=seen_skills, continuation_records=records
-            )
-
-        batch = await (write([]) if journal is None else journal.commit(write))
+        batch = await session.apply_edit_async(target, messages, seen_skills=seen_skills)
         self.pending_edit_message_id = None
         self.messages = list(batch.messages)
         self.active_lineage = list(batch.active_messages)
@@ -383,22 +367,13 @@ class _SessionSnapshot:
         self,
         session: ChatSession,
         write: _HistoryWrite,
-        *,
-        journal: JournalBoundary | None = None,
     ) -> None:
         """Run one history *write* of this Session and advance to its result.
 
-        *write* persists the given Continuation records in its own transaction
-        and returns every record after *since* from that transaction, including
-        other writers' appends, exactly as :meth:`refresh` would.
+        *write* returns every record after *since* from its own transaction,
+        including other writers' appends, exactly as :meth:`refresh` would.
         """
-        if journal is None:
-            batch = await write(continuation_records=[], since=self.cursor)
-        else:
-            batch = await journal.commit(
-                lambda records: write(continuation_records=records, since=self.cursor)
-            )
-        await self._apply(session, batch)
+        await self._apply(session, await write(since=self.cursor))
 
     async def flush_deferred_notes(self, session: ChatSession) -> None:
         """Persist deferred notes, then include every newer record."""
@@ -591,8 +566,6 @@ async def create_run_execution_context(
     *,
     session: ChatSession,
     session_snapshot: _SessionSnapshot | None = None,
-    prior_continuation: ContinuationState | None,
-    continuation_tracker: ContinuationTracker | None,
 ) -> _RunExecutionContext:
     """Resolve all stable execution inputs once at the Run boundary."""
     if session_snapshot is None:
@@ -772,8 +745,6 @@ async def create_run_execution_context(
             skill_registry=skill_registry,
             skill_catalog=skill_catalog,
             prompt_cache_affinity_id=prompt_cache_affinity_id,
-            prior_continuation=prior_continuation,
-            continuation_tracker=continuation_tracker,
             session_snapshot=session_snapshot,
         )
         if project_id is None and temporary_source is None:

@@ -10,6 +10,7 @@ commit writes.
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from collections.abc import Callable
 from typing import Any
@@ -36,7 +37,8 @@ HISTORY_OLDER_LIMIT = 50
 HISTORY_OLDER_HOPS = 8
 SEARCH_QUERY = "stream provider"
 SEARCH_LIMIT = 21
-STREAM_STEP_CHARS = 256 * 1024
+STREAM_DRAFT_CHARS = 256 * 1024
+STREAM_MODEL = "openai/gpt-5"
 STREAM_DELTA_CHARS = 512
 
 
@@ -160,47 +162,32 @@ def _search_setup(*, use_fts: bool) -> Callable[[BenchContext], Prepared]:
     return setup
 
 
-def _stream_record(run_id: str, content: str) -> dict[str, Any]:
-    return {
-        "version": 1,
-        "type": "stream_delta",
-        "run_id": run_id,
-        "step": 1,
-        "reasoning_delta": "",
-        "content_delta": content,
-        "timestamp": "2026-01-05T09:00:01Z",
-    }
-
-
 def _stream_flush_setup(context: BenchContext) -> Prepared:
-    """Flush one Continuation stream delta into a step that already holds a long text."""
+    """Store one stream draft chunk of a Run whose draft already holds a long text."""
     session = session_store(context, "stream-store").create(AGENT_ID)
-    run_id = "run-stream"
-    # Continuation records belong to a Run the Session admitted.
-    session.start_run(run_id)
+    # A stream draft belongs to a Run the Session admitted.
+    writer = session.start_run("run-stream")
+    loop = asyncio.new_event_loop()
+    context.add_cleanup(loop.close)
     text = TextFactory(5)
-    session.append_continuation_records(
-        [
-            {
-                "version": 1,
-                "type": "run_started",
-                "run_id": run_id,
-                "checkpoint_id": "checkpoint-stream",
-                "origin_run_id": run_id,
-                "timestamp": "2026-01-05T09:00:00Z",
-            },
-            _stream_record(run_id, text.words(STREAM_STEP_CHARS)),
-        ]
+    loop.run_until_complete(
+        writer.append_stream_draft_async(
+            model=STREAM_MODEL, reasoning_delta="", content_delta=text.words(STREAM_DRAFT_CHARS)
+        )
     )
-    record = _stream_record(run_id, text.words(STREAM_DELTA_CHARS))
+    delta = text.words(STREAM_DELTA_CHARS)
 
     def flush() -> None:
-        session.append_continuation_record(record)
+        loop.run_until_complete(
+            writer.append_stream_draft_async(
+                model=STREAM_MODEL, reasoning_delta="", content_delta=delta
+            )
+        )
 
     return Prepared(
         flush,
         params={
-            "initial_step_chars": STREAM_STEP_CHARS,
+            "initial_draft_chars": STREAM_DRAFT_CHARS,
             "delta_chars": STREAM_DELTA_CHARS,
             "synchronous": "FULL",
         },
@@ -265,8 +252,8 @@ BENCHMARKS = (
     Benchmark(
         name="sessions.stream_flush",
         description=(
-            f"One ~{STREAM_DELTA_CHARS}-char Continuation stream delta flushed into a step "
-            f"already holding ~{STREAM_STEP_CHARS // 1024} KB (one committed transaction)."
+            f"One ~{STREAM_DELTA_CHARS}-char stream draft chunk stored for a Run whose draft "
+            f"already holds ~{STREAM_DRAFT_CHARS // 1024} KB (one committed transaction)."
         ),
         setup=_stream_flush_setup,
     ),

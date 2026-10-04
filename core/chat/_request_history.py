@@ -14,7 +14,7 @@ from core.chat._message_history import (
     effective_compaction_messages,
 )
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
-from core.chat.content_blocks import ContentBlock, MediaBlock, content_block_to_dict
+from core.chat.content_blocks import ContentBlock, MediaBlock
 from core.chat.messages import (
     ChatMessage,
     JsonObject,
@@ -248,12 +248,3 @@ def _restore_live_tool_content(
             ):
                 pending.append((content, index))
     return pending
-
-
-def _serialize_continuation_request(
-    content: str | list[ContentBlock] | None,
-) -> str | list[JsonObject] | None:
-    """Return the canonical JSON form stored by the continuation journal."""
-    if isinstance(content, list):
-        return [content_block_to_dict(block) for block in content]
-    return content

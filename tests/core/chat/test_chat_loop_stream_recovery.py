@@ -9,7 +9,6 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage
-from core.chat.continuation import recover_continuation
 from core.chat.streaming import StreamingChunkTimeoutError
 from core.providers.errors import NetworkError, ProviderStreamingUnsupportedError
 from core.providers.github_copilot_responses import (
@@ -41,7 +40,6 @@ from tests.core.chat.chat_loop_support import (
     history,
     last_run,
     persisted_roles,
-    session_address,
 )
 
 
@@ -114,14 +112,8 @@ async def test_failure_before_answer_text_restarts_the_identical_request(
     assert adapter.stream_requests[0]["messages"] == adapter.stream_requests[1]["messages"]
     assert run.status == RunStatus.COMPLETED
     assert STREAM_ATTEMPT_RESTARTED_EVENT in await event_types(runtime, run)
-    # The discarded attempt leaves no error, partial or Continuation state behind.
+    # The discarded attempt leaves no error or partial behind.
     assert persisted_roles(history(runtime)) == ["user", "assistant"]
-    assert (
-        await recover_continuation(
-            runtime.chat_sessions.get(session_address("coder", "session-one"))
-        )
-        is None
-    )
 
 
 @pytest.mark.asyncio

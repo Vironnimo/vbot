@@ -100,7 +100,6 @@ async def test_once_job_arms_for_next_startup_and_completes(tmp_path: Path) -> N
             "project_id": None,
             "run_kind": "system",
             "contributes_to_agent_activity": False,
-            "resume_process_restart": True,
         }
     ]
     completed = second.get_job(created.id)

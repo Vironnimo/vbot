@@ -208,7 +208,7 @@ def test_fts_projection_uses_canonical_message_key_and_recall_text_only(tmp_path
                 "tool_calls",
                 "runs",
                 "checkpoint_entries",
-                "continuations",
+                "run_stream_drafts",
             }.issubset(tables)
             assert [row[1:] for row in rows] == [
                 (visible.id, "visible searchable content", 1),

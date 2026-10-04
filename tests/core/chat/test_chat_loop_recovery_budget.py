@@ -7,7 +7,6 @@ from typing import Any, override
 
 import pytest
 
-from core.chat.continuation import recover_continuation
 from core.chat.streaming import StreamingProgressTimeoutError
 from core.providers.errors import (
     NetworkError,
@@ -192,10 +191,7 @@ async def test_exhausted_reasoning_only_restarts_keep_only_the_final_attempt_che
     messages = history(runtime, "test")
     assert [m.role for m in messages] == ["user", "assistant", "run_summary"]
     assert (messages[1].reasoning, messages[1].interrupted) == ("Attempt 9", True)
-    assert messages[-1].status == "interrupted"
-    state = await recover_continuation(runtime.chat_sessions.get(session_address("coder", "test")))
-    assert state is not None
-    assert (state.reasoning, state.cause) == ("Attempt 9", "network")
+    assert (messages[-1].status, messages[-1].completion_reason) == ("interrupted", "network")
 
 
 @pytest.mark.asyncio

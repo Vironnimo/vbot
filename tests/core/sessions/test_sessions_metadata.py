@@ -15,7 +15,7 @@ from core.runs import RunKind
 from core.sessions import SESSION_RUN_KINDS_META_KEY, SeenSkillsUpdate, SessionAddress
 from core.sessions.errors import SessionNotFoundError
 from tests.core.sessions.history_fixtures import admit_run, history_revision, settle_run
-from tests.core.sessions.sessions_test_support import _address, _continuation_start
+from tests.core.sessions.sessions_test_support import _address
 
 
 def _count_writes(manager, monkeypatch) -> list[object]:
@@ -148,23 +148,22 @@ def test_prompt_cache_affinity_id_is_prompt_state_not_metadata(manager, monkeypa
         manager.prompt_cache_affinity_id(_address("coder", "missing"))
 
 
-def test_metadata_activity_and_continuation_change_state_not_history(manager) -> None:
+def test_metadata_activity_and_stream_drafts_change_state_not_history(manager) -> None:
     address = _address("coder", "session-one")
     session = manager.create("coder", session_id=address.session_id)
     session.append(ChatMessage.user("hello"))
     settle_run(manager, address, "run-1")
-    session.start_run("run-one")
+    streaming = session.start_run("run-one")
     revision = history_revision(manager, address)
 
     manager.set_metadata(address, {"project": "vbot"})
-    session.append_continuation_records([_continuation_start()])
+    asyncio.run(
+        streaming.append_stream_draft_async(model="test", reasoning_delta="", content_delta="half")
+    )
 
     assert history_revision(manager, address) == revision
     assert manager.get_metadata(address)["project"] == "vbot"
     assert manager.get_metadata(address)[SESSION_RUN_KINDS_META_KEY] == [RunKind.USER.value]
-    continuation = session.load_continuation()
-    assert continuation is not None
-    assert continuation.checkpoint_id == "checkpoint-one"
     assert manager.mark_terminal_run_read(address, "wrong")["marked_read"] is False
     assert manager.mark_terminal_run_read(address, "run-1")["marked_read"] is True
     assert history_revision(manager, address) == revision

@@ -389,6 +389,23 @@ CREATE TABLE checkpoint_projections (
   projection_json TEXT NOT NULL CHECK (json_valid(projection_json) AND json_type(projection_json) = 'array')
 ) STRICT;
 
+-- The streamed output of a running Run's current Model step that no Assistant
+-- entry holds yet, in append order. Appending the Run's next Assistant entry
+-- and finishing the Run delete it; restart recovery turns what is left into
+-- the Run's interrupted Assistant entry.
+CREATE TABLE run_stream_drafts (
+  chunk_key INTEGER PRIMARY KEY,
+  run_key INTEGER NOT NULL REFERENCES runs (run_key) ON DELETE CASCADE,
+  model TEXT NOT NULL,
+  reasoning_delta TEXT NOT NULL DEFAULT '',
+  content_delta TEXT NOT NULL DEFAULT ''
+) STRICT;
+
+-- Draft chunks of one Run in append order (recovery, deletes, the runs FK).
+CREATE INDEX run_stream_drafts_by_run ON run_stream_drafts (run_key, chunk_key);
+
+-- Retired: the continuation tables below held an interrupted Run's journal.
+-- vBot no longer reads or writes them; the format generation keeps them.
 CREATE TABLE continuations (
   session_key INTEGER PRIMARY KEY REFERENCES sessions (session_key) ON DELETE CASCADE,
   checkpoint_id TEXT NOT NULL,

@@ -18,14 +18,17 @@ from core.chat._step_outcomes import (
     _with_assistant_output_files,
 )
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
-from core.chat.continuation import normalize_interruption_cause
 from core.chat.events import (
     _emit_assistant_events,
     _emit_streaming_assistant_events,
     _exception_to_error_kind,
 )
-from core.chat.messages import JsonObject
-from core.chat.recovery import IncompleteResponseError, RecoveryBudget
+from core.chat.messages import InterruptionCause, JsonObject
+from core.chat.recovery import (
+    IncompleteResponseError,
+    RecoveryBudget,
+    normalize_interruption_cause,
+)
 from core.chat.streaming import (
     STREAM_CHUNK_TIMEOUT_SECONDS,
     STREAM_PROGRESS_TIMEOUT_SECONDS,
@@ -64,7 +67,7 @@ from core.utils.logging import get_logger
 from core.utils.retry import RetryNotice, caller_owns_retries
 
 if TYPE_CHECKING:
-    from core.chat.continuation import ContinuationCause, ContinuationTracker
+    from core.chat._stream_draft import StreamDraft
     from core.runs import Run
 
 _LOGGER = get_logger("chat")
@@ -275,7 +278,7 @@ class WireRequestRunner:
         prompt_cache_affinity_id: str,
         output_cwd: Path | None,
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
-        continuation_tracker: ContinuationTracker | None = None,
+        stream_draft: StreamDraft | None = None,
         *,
         public_model: str,
         provider_id: str = "",
@@ -346,7 +349,7 @@ class WireRequestRunner:
                                 can_restart=budget.available(response_model),
                                 chunk_timeout_seconds=chunk_timeout_seconds,
                                 request_context=request_context,
-                                continuation_tracker=continuation_tracker,
+                                stream_draft=stream_draft,
                                 output_cwd=output_cwd,
                                 temperature=temperature,
                                 top_p=top_p,
@@ -511,7 +514,7 @@ class WireRequestRunner:
         output_cwd: Path | None,
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
         request_context: dict[str, Any] | None = None,
-        continuation_tracker: ContinuationTracker | None = None,
+        stream_draft: StreamDraft | None = None,
         temperature: float | None = None,
         top_p: float | None = None,
         has_fallback_chain: bool = False,
@@ -535,7 +538,7 @@ class WireRequestRunner:
                 output_cwd=output_cwd,
                 chunk_timeout_seconds=chunk_timeout_seconds,
                 request_context=request_context,
-                continuation_tracker=continuation_tracker,
+                stream_draft=stream_draft,
                 temperature=temperature,
                 top_p=top_p,
                 has_fallback_chain=has_fallback_chain,
@@ -548,6 +551,10 @@ class WireRequestRunner:
                     accumulator.usage,
                     status="cancelled" if isinstance(exc, asyncio.CancelledError) else "failed",
                 )
+            if stream_draft is not None and isinstance(exc, Exception):
+                # The attempt left no Assistant entry: a restart or fallback
+                # replaces its output, and a failure ends the Run without it.
+                await stream_draft.discard()
             raise
         if recorder is not None and call_id is not None:
             status = (
@@ -585,7 +592,7 @@ class WireRequestRunner:
         output_cwd: Path | None,
         chunk_timeout_seconds: float | None,
         request_context: dict[str, Any] | None,
-        continuation_tracker: ContinuationTracker | None,
+        stream_draft: StreamDraft | None,
         temperature: float | None,
         top_p: float | None,
         has_fallback_chain: bool,
@@ -632,8 +639,9 @@ class WireRequestRunner:
                 last_model_delta_at = time.monotonic()
                 visible_deltas = accumulator.add_delta(delta)
                 for visible_delta in visible_deltas:
-                    if continuation_tracker is not None:
-                        continuation_tracker.record_stream_delta(
+                    if stream_draft is not None:
+                        stream_draft.record(
+                            model=public_model,
                             reasoning=str(visible_delta.payload.get("reasoning_delta", "")),
                             content=str(visible_delta.payload.get("content_delta", "")),
                         )
@@ -677,14 +685,10 @@ class WireRequestRunner:
                 )
                 assistant_fields = accumulator.finalize_assistant_fields()
             elif action is StreamRecoveryAction.FALLBACK:
-                if continuation_tracker is not None:
-                    await continuation_tracker.discard_stream_attempt()
                 if accumulator.partial_reasoning is not None or accumulator.has_partial_tool_call:
                     run.emit(STREAM_ATTEMPT_RESTARTED_EVENT)
                 raise _StreamRestartNeeded(exc, non_streaming=True) from exc
             elif action is StreamRecoveryAction.RESTART:
-                if continuation_tracker is not None:
-                    await continuation_tracker.discard_stream_attempt()
                 run.emit(STREAM_ATTEMPT_RESTARTED_EVENT)
                 run.emit(
                     PROVIDER_REQUEST_STATUS_EVENT,
@@ -697,8 +701,6 @@ class WireRequestRunner:
                 raise _StreamRestartNeeded(exc) from exc
             elif action is StreamRecoveryAction.PRESERVE_PARTIAL:
                 interruption_cause = normalize_interruption_cause(exc)
-                if continuation_tracker is not None:
-                    continuation_tracker.mark_interruption_cause(interruption_cause)
                 run.stream_recovery_count += 1
                 _LOGGER.debug(
                     "Provider stream interrupted after visible output; preserving partial "
@@ -720,8 +722,6 @@ class WireRequestRunner:
                 )
             elif action is StreamRecoveryAction.INTERRUPT:
                 interruption_cause = normalize_interruption_cause(exc)
-                if continuation_tracker is not None:
-                    continuation_tracker.mark_interruption_cause(interruption_cause)
                 # A Model fallback or the Run's terminal line reports the outcome.
                 _LOGGER.debug(
                     "Provider stream recovery exhausted before answer text "
@@ -834,7 +834,7 @@ class WireRequestRunner:
         accumulator: StreamingAccumulator,
         run: Run,
         *,
-        interruption_cause: ContinuationCause,
+        interruption_cause: InterruptionCause,
         output_cwd: Path | None,
         recovery: Literal["none", "continue", "interrupt"] = "none",
         recovery_note: str | None = None,

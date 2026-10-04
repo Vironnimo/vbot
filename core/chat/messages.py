@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from typing import Any, Literal, cast
+from typing import Any, Literal, cast, get_args
 
 from core.chat import _message_history, _message_validation
 from core.chat.content_blocks import (
@@ -24,16 +24,9 @@ from core.providers.adapter import (
 from core.utils.ids import new_id
 from core.utils.timestamps import format_canonical_timestamp
 
-INTERRUPTION_CAUSES = frozenset(
-    {
-        "user",
-        "provider",
-        "network",
-        "timeout",
-        "process_restart",
-        "internal",
-    }
-)
+# Why a streamed Assistant turn or a Run stopped before it was complete.
+InterruptionCause = Literal["user", "provider", "network", "timeout", "process_restart", "internal"]
+INTERRUPTION_CAUSES: frozenset[str] = frozenset(get_args(InterruptionCause))
 MessageRole = Literal[
     "system",
     "user",
@@ -385,6 +378,8 @@ class ChatMessage:
     status: str | None = None
     iteration_count: int | None = None
     change_stats: JsonObject | None = None
+    # Why a cancelled or interrupted Run ended: a cancel reason or an interruption cause.
+    completion_reason: str | None = None
     target_message_id: str | None = None
     sender: MessageSender | None = None
     # How a user message was entered: dictated, or passed on by Live voice.
@@ -545,6 +540,7 @@ class ChatMessage:
         timing: JsonObject,
         iteration_count: int,
         change_stats: JsonObject | None = None,
+        completion_reason: str | None = None,
         timestamp: datetime | None = None,
     ) -> ChatMessage:
         """Create a Timeline projection of a persisted Run completion."""
@@ -558,6 +554,7 @@ class ChatMessage:
             timing=dict(timing),
             iteration_count=iteration_count,
             change_stats=dict(change_stats) if change_stats is not None else None,
+            completion_reason=completion_reason,
         )
 
     @staticmethod
@@ -740,6 +737,7 @@ class ChatMessage:
         _add_if_not_none(message, "status", self.status)
         _add_if_not_none(message, "iteration_count", self.iteration_count)
         _add_if_not_none(message, "change_stats", self.change_stats)
+        _add_if_not_none(message, "completion_reason", self.completion_reason)
         _add_if_not_none(message, "target_message_id", self.target_message_id)
         if self.sender is not None:
             message["sender"] = self.sender.to_dict()
@@ -854,6 +852,7 @@ class ChatMessage:
             status=_message_validation._optional_string(data, "status"),
             iteration_count=iteration_count,
             change_stats=dict(change_stats) if change_stats is not None else None,
+            completion_reason=_message_validation._optional_string(data, "completion_reason"),
             target_message_id=_message_validation._optional_string(data, "target_message_id"),
             sender=MessageSender.from_dict(sender_data) if sender_data is not None else None,
             input_origin=cast(InputOrigin | None, input_origin),
@@ -881,6 +880,14 @@ class ChatMessage:
                 )
         if self.iteration_count is not None and self.role != "run_summary":
             raise ChatMessageValidationError(f"{self.role} messages cannot include iteration_count")
+        if self.completion_reason is not None and (
+            self.role != "run_summary"
+            or self.status not in {"cancelled", "interrupted"}
+            or not self.completion_reason
+        ):
+            raise ChatMessageValidationError(
+                "completion_reason requires a cancelled or interrupted run summary"
+            )
         match self.role:
             case "system":
                 _message_validation._validate_system_message(self)

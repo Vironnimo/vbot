@@ -151,7 +151,15 @@ def _session_address(project_id: str | None, agent_id: str, session_id: str) -> 
 class RunPersistence(Protocol):
     async def start_run(self, run: Run) -> None: ...
 
-    async def finish_run(self, run: Run, status: str, payload: JsonObject) -> JsonObject: ...
+    async def finish_run(
+        self, run: Run, status: str, payload: JsonObject, *, completion_reason: str | None
+    ) -> JsonObject:
+        """Persist the Run's completion; *completion_reason* says why it stopped early.
+
+        It is the cancel reason of a cancelled Run and the cause of an
+        interrupted one, otherwise ``None``.
+        """
+        ...
 
 
 class ChatRunManager:
@@ -868,7 +876,17 @@ class ChatRunManager:
                 payload["usage"] = usage
             try:
                 if self._persistence is not None and admitted:
-                    payload.update(await self._persistence.finish_run(run, status.value, payload))
+                    if status == RunStatus.CANCELLED:
+                        reason = run.cancel_reason
+                    elif isinstance(error, RunInterruptedError):
+                        reason = error.cause
+                    else:
+                        reason = None
+                    payload.update(
+                        await self._persistence.finish_run(
+                            run, status.value, payload, completion_reason=reason
+                        )
+                    )
                 elif self._persistence is not None:
                     payload["history_persisted"] = False
             except Exception as exc:

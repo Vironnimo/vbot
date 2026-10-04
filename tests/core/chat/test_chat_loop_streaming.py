@@ -9,9 +9,6 @@ from typing import Any
 
 import pytest
 
-from core.chat.continuation import (
-    recover_continuation,
-)
 from core.chat.request_runner import _StreamingRunDeltaEmitter
 from core.chat.streaming import StreamingVisibleDelta
 from core.providers.errors import (
@@ -43,7 +40,6 @@ from tests.core.chat.chat_loop_support import (
     last_run,
     persisted_dict_roles,
     persisted_roles,
-    session_address,
 )
 
 JsonObject = dict[str, Any]
@@ -333,12 +329,6 @@ async def test_streaming_mode_malformed_tool_arguments_return_tool_failure_and_c
     assert failure["error"]["code"] == "malformed_tool_arguments"
     assert failure["error"]["retryable"] is False
     assert not (tmp_path / "todo.html").exists()
-    assert (
-        await recover_continuation(
-            runtime.chat_sessions.get(session_address("coder", "session-one"))
-        )
-        is None
-    )
     assert [event.type for event in run.events][-1] == "run_completed"
 
 

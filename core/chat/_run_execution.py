@@ -1,4 +1,4 @@
-"""Admitted Run execution, fallback, Continuation and terminal cleanup."""
+"""Admitted Run execution, fallback and terminal cleanup."""
 
 from __future__ import annotations
 
@@ -11,10 +11,7 @@ from core.chat._message_history import (
     _append_input_origin_note,
     _append_reply_surface_note,
 )
-from core.chat._request_history import (
-    _assign_session_image_references,
-    _serialize_continuation_request,
-)
+from core.chat._request_history import _assign_session_image_references
 from core.chat._run_state import (
     RequestBuildInputs,
     _SessionSnapshot,
@@ -24,14 +21,6 @@ from core.chat._skill_activation import _activate_triggered_skills
 from core.chat._step_outcomes import OUTPUT_INTEGRITY_RECOVERY_NOTE
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.content_blocks import ContentBlock
-from core.chat.continuation import (
-    ContinuationCause,
-    ContinuationState,
-    ContinuationTracker,
-    normalize_interruption_cause,
-    recover_continuation,
-    render_continuation_reminder,
-)
 from core.chat.errors import (
     ChatError,
     ImageBudgetExceededError,
@@ -159,27 +148,6 @@ class RunExecution:
             session_snapshot = await _SessionSnapshot.load(session)
             if request.edit_message_id is not None:
                 session_snapshot.begin_edit(request.edit_message_id)
-        prior_continuation: ContinuationState | None = None
-        continuation_tracker: ContinuationTracker | None = None
-        if not request.internal or request.resume_process_restart:
-            if request.edit_message_id is not None:
-                recovered = None
-            else:
-                recovered = await recover_continuation(
-                    session,
-                    active_run_id=run.id,
-                )
-            if request.internal and recovered is not None and recovered.cause != "process_restart":
-                recovered = None
-            prior_continuation = recovered
-            if not request.internal or prior_continuation is not None:
-                # The chain starts with this Run's input append (see _execute_run_impl).
-                continuation_tracker = ContinuationTracker(
-                    session,
-                    run_id=run.id,
-                    request=_serialize_continuation_request(request.content),
-                    prior_state=prior_continuation,
-                )
         try:
             context = await create_run_execution_context(
                 self._dependencies,
@@ -188,8 +156,6 @@ class RunExecution:
                 request,
                 session=session,
                 session_snapshot=session_snapshot,
-                prior_continuation=prior_continuation,
-                continuation_tracker=continuation_tracker,
             )
             if self._compaction_service is not None:
                 run.set_compaction_state("idle")
@@ -208,32 +174,7 @@ class RunExecution:
                     await _persist_run_error(run, session, exc)
                 except Exception:
                     _LOGGER.warning("Failed to persist error for run %s", run.id, exc_info=True)
-            if continuation_tracker is not None and not continuation_tracker.closed:
-                cause: ContinuationCause = (
-                    "user"
-                    if run.cancel_requested and run.cancel_reason == "user"
-                    else normalize_interruption_cause(exc)
-                )
-                await continuation_tracker.interrupt(cause)
             raise
-
-    def _append_continuation_note(self, context: _RunExecutionContext) -> None:
-        """Defer the interrupted previous Run's checkpoint as a note before this Run's input.
-
-        It persists with the input, so every later request renders it at the
-        same position with the same text and the Provider prompt cache keeps it.
-        """
-        prior = context.prior_continuation
-        if prior is None or prior.active:
-            return
-        context.session.add_note(
-            render_continuation_reminder(
-                prior,
-                context_window=self._requests.resolve_context_window(
-                    context.agent, context.primary_target
-                ),
-            )
-        )
 
     async def _execute_run_impl(
         self,
@@ -250,8 +191,6 @@ class RunExecution:
         )
         internal = request.internal
         _run_succeeded = True
-        run_error: BaseException | None = None
-        completed_assistant: ChatMessage | None = None
         # The Runs domain logs the one terminal line; Chat supplies the route.
         run.model = parse_bare_model(agent.model)
         start_line_extras = ""
@@ -319,11 +258,9 @@ class RunExecution:
                             request.reply_surface,
                             messages=context.session_snapshot.active_messages,
                         )
-                        self._append_continuation_note(context)
                         session.add_note(request.content)
                         persisted_messages = session.take_deferred_notes()
                     elif request.input_already_persisted:
-                        self._append_continuation_note(context)
                         persisted_messages = session.take_deferred_notes()
                     else:
                         if request.content is None:
@@ -334,7 +271,6 @@ class RunExecution:
                             request.reply_surface,
                             messages=context.session_snapshot.active_messages,
                         )
-                        self._append_continuation_note(context)
                         user_message = ChatMessage.user(
                             _assign_session_image_references(
                                 request.content,
@@ -344,35 +280,27 @@ class RunExecution:
                             input_origin=request.input_origin,
                         )
                         persisted_messages = [*session.take_deferred_notes(), user_message]
-                    # One transaction persists the input, starts the Continuation
-                    # chain and records the announced Skills. An edit also
-                    # replaces the edited history and restarts the chain in
-                    # that transaction.
-                    tracker = context.continuation_tracker
-                    journal = tracker.start_boundary() if tracker is not None else None
+                    # One transaction persists the input and records the announced
+                    # Skills. An edit also replaces the edited history in that
+                    # transaction.
                     if request.edit_message_id is not None:
                         await context.session_snapshot.apply_edit(
                             session,
                             persisted_messages,
-                            journal=journal,
                             seen_skills=record_seen_skills,
                         )
                     elif persisted_messages:
                         await context.session_snapshot.append(
                             session,
                             persisted_messages,
-                            journal=journal,
                             seen_skills=record_seen_skills,
                         )
-                    else:
-                        if record_seen_skills is not None:
-                            await _CHAT_TRANSFORM_WORKERS.run(
-                                self._dependencies.sessions.record_seen_skills,
-                                session_address,
-                                record_seen_skills,
-                            )
-                        if tracker is not None:
-                            await tracker.start()
+                    elif record_seen_skills is not None:
+                        await _CHAT_TRANSFORM_WORKERS.run(
+                            self._dependencies.sessions.record_seen_skills,
+                            session_address,
+                            record_seen_skills,
+                        )
                     record_seen_skills = None
                     if not persisted_messages:
                         await context.session_snapshot.refresh(session)
@@ -435,7 +363,6 @@ class RunExecution:
                 )
             except ImageBudgetExceededError as exc:
                 _run_succeeded = False
-                run_error = exc
                 await _persist_run_error(run, session, exc)
                 raise
 
@@ -454,28 +381,20 @@ class RunExecution:
             context.request_build_started = request_build_started
 
             try:
-                completed_assistant = await self._progression._send_until_final(context, target)
-                return completed_assistant
+                return await self._progression._send_until_final(context, target)
             except (ProviderError, RunInterruptedError) as primary_exc:
                 try:
                     (
                         completed_assistant,
                         chain_error,
                     ) = await self._advance_fallback_chain(context, run, session, primary_exc)
-                except RunInterruptedError as exc:
+                except RunInterruptedError:
                     _run_succeeded = False
-                    run_error = exc
-                    if isinstance(exc.result, ChatMessage):
-                        completed_assistant = exc.result
                     raise
                 if completed_assistant is not None:
                     return completed_assistant
                 _run_succeeded = False
-                run_error = chain_error
-                if isinstance(chain_error, RunInterruptedError):
-                    if isinstance(chain_error.result, ChatMessage):
-                        completed_assistant = chain_error.result
-                else:
+                if not isinstance(chain_error, RunInterruptedError):
                     await _persist_run_error(run, session, chain_error)
                 if chain_error is primary_exc:
                     # Keep the failure behind it for the terminal log line.
@@ -483,21 +402,17 @@ class RunExecution:
                 raise chain_error from primary_exc
             except (ChatError, ConfigError, VBotError) as exc:
                 _run_succeeded = False
-                run_error = exc
                 await _persist_run_error(run, session, exc)
                 raise
             except asyncio.CancelledError:
-                run_error = asyncio.CancelledError()
                 raise
-            except BaseException as exc:
+            except BaseException:
                 _run_succeeded = False
-                run_error = exc
                 raise
         except BaseException as exc:
             # Preparation can fail before Provider progression installs its own
             # handlers. Completion hooks and durable summaries need that failure too.
             _run_succeeded = False
-            run_error = exc
             if (
                 isinstance(exc, Exception)
                 and not isinstance(exc, RunInterruptedError)
@@ -526,6 +441,8 @@ class RunExecution:
                 _LOGGER.warning(
                     "Failed to compute change statistics for run %s", run.id, exc_info=True
                 )
+            # The Run's completion deletes the stored draft; no write may follow it.
+            await context.stream_draft.settle()
             outcome: Literal["success", "error", "cancelled"]
             if run.cancel_requested:
                 outcome = "cancelled"
@@ -533,33 +450,6 @@ class RunExecution:
                 outcome = "success"
             else:
                 outcome = "error"
-            if context.continuation_tracker is not None:
-                answered = completed_assistant is not None and not completed_assistant.interrupted
-                try:
-                    if outcome == "success" and answered:
-                        await context.continuation_tracker.prepare_completion()
-                    elif outcome == "cancelled" and answered:
-                        # Stop after a complete, persisted final answer (for example
-                        # during post-answer Compaction) leaves nothing to recover.
-                        # Only a completed terminal commit removes the journal.
-                        await context.continuation_tracker.resolve()
-                    else:
-                        if outcome == "cancelled":
-                            cause: ContinuationCause = (
-                                "user" if run.cancel_reason == "user" else "internal"
-                            )
-                        else:
-                            cause = (
-                                context.continuation_tracker.interruption_cause
-                                or normalize_interruption_cause(run_error)
-                            )
-                        await context.continuation_tracker.interrupt(cause)
-                except Exception:
-                    _LOGGER.warning(
-                        "Failed to finalize Continuation state for run %s",
-                        run.id,
-                        exc_info=True,
-                    )
             # Session usage totals ride every terminal event so accessors can
             # keep their session-level token/cache display current without
             # re-fetching history. Diagnostics only — never mask the outcome.
