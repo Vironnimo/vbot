@@ -3,8 +3,10 @@
 Speech execution uses the sidecar-backed :class:`TaskArtifactStore`; image
 execution owns its separate caller-directory writer. Video and Music use
 :func:`write_generated_media_artifact` for caller-owned
-exclusive files without a central sidecar. Both paths use compact typed ids
-and preserve each task's own error type.
+exclusive files without a central sidecar. Both paths use compact typed ids.
+Generated media in caller-owned folders checks the folder with
+:func:`ensure_output_dir` before the billed request and reports a failed save
+as :class:`OutputWriteError`.
 """
 
 from __future__ import annotations
@@ -195,13 +197,53 @@ class GeneratedMediaArtifact:
     file_path: Path
 
 
+class OutputDirectoryError(TaskError):
+    """Raised before generation when the caller-selected folder cannot hold files."""
+
+    code = "output_dir_unusable"
+    retryable = False
+
+    def __init__(self, directory: Path, reason: str) -> None:
+        self.directory = directory
+        self.reason = reason
+        super().__init__(f"Cannot use {directory} as the output folder: {reason}")
+
+
+class OutputWriteError(TaskError):
+    """Raised when generated media could not be written after a successful request."""
+
+    code = "output_write_failed"
+    retryable = False
+
+    def __init__(self, directory: Path, reason: str) -> None:
+        self.directory = directory
+        self.reason = reason
+        super().__init__(f"Generated media could not be saved in {directory}: {reason}")
+
+
+def ensure_output_dir(output_dir: str | Path) -> Path:
+    """Create the caller-selected output folder before a billed request is sent.
+
+    A folder that cannot be created or is a file fails here, so no provider
+    request is paid for media that could not be saved.
+    """
+
+    directory = Path(output_dir)
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except FileExistsError:
+        raise OutputDirectoryError(directory, "a file with that name exists") from None
+    except OSError as exc:
+        raise OutputDirectoryError(directory, exc.strerror or str(exc)) from exc
+    return directory
+
+
 def write_generated_media_artifact(
     payload: bytes,
     *,
     output_dir: str | Path,
     extension: str,
     media_type: str,
-    error: type[TaskError],
 ) -> GeneratedMediaArtifact:
     """Write generated media exclusively, never overwriting an existing file."""
 
@@ -209,14 +251,12 @@ def write_generated_media_artifact(
     try:
         prefix = "vid" if media_type.startswith("video/") else "mus"
         file_path = write_id_file(destination, prefix, f".{extension}", payload)
-        artifact_id = file_path.stem
-        filename = file_path.name
-        return GeneratedMediaArtifact(
-            id=artifact_id,
-            filename=filename,
-            media_type=media_type,
-            size_bytes=len(payload),
-            file_path=destination / filename,
-        )
     except OSError as exc:
-        raise error(str(exc)) from exc
+        raise OutputWriteError(destination, exc.strerror or str(exc)) from exc
+    return GeneratedMediaArtifact(
+        id=file_path.stem,
+        filename=file_path.name,
+        media_type=media_type,
+        size_bytes=len(payload),
+        file_path=destination / file_path.name,
+    )

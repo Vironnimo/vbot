@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from core.model_tasks import ImageUnderstandingRunContext
+from core.model_tasks.image_profile import ImageProfile
 from core.tools.image import (
     ANALYZE_IMAGE_TOOL_NAME,
     IMAGE_GENERATION_TOOL_NAME,
@@ -24,6 +25,17 @@ from tests.core.tools.tools_test_support import dispatch_as_executor
 
 PNG = b"\x89PNG\r\n\x1a\nimage"
 ANALYSIS = "Visible details"
+#: An editing Model offering every per-call choice.
+EDITING_PROFILE = ImageProfile(
+    wire="openrouter",
+    call_choices={
+        "aspect_ratio": ("1:1", "16:9", "9:16"),
+        "resolution": ("1K", "2K", "4K"),
+        "background": ("transparent", "opaque"),
+    },
+    max_source_images=None,
+)
+TEXT_ONLY_PROFILE = ImageProfile(wire="openrouter")
 
 
 def write_image(path: Path, data: bytes = PNG) -> Path:
@@ -55,19 +67,19 @@ class ImageService:
         *,
         image_path: Path | None = None,
         error: Exception | None = None,
-        supports_source_images: bool = True,
+        profile: ImageProfile = EDITING_PROFILE,
         revised_prompt: str | None = None,
     ) -> None:
         self.image_path = image_path
         self.revised_prompt = revised_prompt
         self.error = error
-        self.supports_source_images = supports_source_images
+        self.profile = profile
         self.generated: dict[str, Any] | None = None
         self.output_dirs: list[Path] = []
         self.analyzed: dict[str, Any] | None = None
 
-    def generation_supports_source_images(self) -> bool:
-        return self.supports_source_images
+    def generation_profile(self) -> ImageProfile:
+        return self.profile
 
     async def generate_artifacts(
         self,
@@ -92,6 +104,8 @@ class ImageService:
                 file_path=file_path,
                 media_type="image/png",
                 size_bytes=5,
+                width=1024,
+                height=576,
                 revised_prompt=self.revised_prompt,
             ),
         )

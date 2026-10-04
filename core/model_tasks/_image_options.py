@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import Any
 
 from core.model_tasks._option_types import (
     DALL_E_STYLE_CHOICES,
-    FALLBACK_ASPECT_RATIOS,
-    FALLBACK_RESOLUTIONS,
     GPT_IMAGE_BACKGROUND_CHOICES,
     GPT_IMAGE_OUTPUT_FORMAT_CHOICES,
     GPT_IMAGE_QUALITY_CHOICES,
@@ -21,44 +20,33 @@ from core.model_tasks._option_types import (
     IMAGE_PARAMETER_ORDER,
     IMAGE_PARAMETER_SKIP,
     IMAGE_SIZE_SHORTHAND_CONFLICTS,
-    OPENAI_IMAGE_RESPONSE_FORMAT_CHOICES,
     PROVIDER_DEFAULT_CHOICE_LABEL,
     TaskModelOptionChoice,
     TaskModelOptionField,
-    _task_options,
 )
-from core.model_tasks.constants import (
-    TASK_IMAGE_GENERATION,
-)
+from core.model_tasks.image_profile import ImageProfile
 from core.models import Model
 
 
 def _image_generation_fields(
-    provider_id: str,
-    model: Model | None,
+    profile: ImageProfile, model: Model | None
 ) -> tuple[TaskModelOptionField, ...]:
-    """Image option fields, driven by the model's typed parameter schema.
+    """Image option fields, driven by the target's image profile.
 
-    When the model carries ``capabilities.task_options.image_generation``
-    (projected at refresh from the OpenRouter image API, or hand-authored in
-    the override layer), fields render generically from that data. Without
-    it, a conservative provider-level fallback applies. Providers with no
-    image execution path get no fields — the UI must not invent inputs.
+    The profile holds the Model's typed parameter specs after the wire's rules
+    (``core/model_tasks/image_profile.py``). An OpenAI-wire Model without
+    published facts falls back to a conservative gpt-image-shaped union; any
+    other Model without facts gets no generated fields, because the UI must
+    not invent values the Model may reject.
     """
 
-    image_options = _task_options(model, TASK_IMAGE_GENERATION)
-    parameters = image_options.get("parameters")
     fields: list[TaskModelOptionField] = []
-    if isinstance(parameters, Mapping) and parameters:
-        fields.extend(_fields_from_image_parameters(parameters))
-    elif provider_id == "openrouter":
-        fields.extend(_openrouter_image_fallback_fields(model))
-    elif provider_id == "openai":
-        fields.extend(_openai_image_fallback_fields(model))
-
-    passthrough = image_options.get("passthrough")
-    if isinstance(passthrough, Mapping) and passthrough:
-        fields.append(_provider_options_field(passthrough))
+    if profile.parameters:
+        fields.extend(_fields_from_image_parameters(profile.parameters))
+    elif profile.wire in {"openai_images", "openai_subscription"}:
+        fields.extend(_openai_image_fallback_fields(profile, model))
+    if profile.passthrough:
+        fields.append(_provider_options_field(profile.passthrough))
     return tuple(fields)
 
 
@@ -104,6 +92,15 @@ def _field_from_image_parameter(
         return _enum_image_field(name, spec)
     if spec_type == "range":
         return _range_image_field(name, spec)
+    if spec_type == "number":
+        return TaskModelOptionField(
+            name=name,
+            type="number",
+            label=_image_parameter_label(name),
+            default=None,
+            step=1,
+            description=_image_parameter_description(name, spec),
+        )
     if spec_type == "string":
         return TaskModelOptionField(
             name=name,
@@ -212,36 +209,32 @@ def _image_choice(value: str) -> TaskModelOptionChoice:
 
 def _provider_options_field(passthrough: Mapping[str, Any]) -> TaskModelOptionField:
     allowed_parts: list[str] = []
+    example: dict[str, dict[str, str]] = {}
     for slug in sorted(str(key) for key in passthrough):
         keys = passthrough.get(slug)
         if isinstance(keys, list | tuple) and keys:
             allowed_parts.append(f"{slug}: {', '.join(str(key) for key in keys)}")
-    allowed = "; ".join(allowed_parts)
+            if not example:
+                example[slug] = {str(keys[0]): "..."}
     description = (
-        "Provider-specific options (JSON object) sent as provider.options, keyed by provider slug."
+        "Options only one upstream provider understands, as a JSON object keyed by that "
+        "provider. vBot sends them unchanged; the provider's documentation lists their values."
     )
-    if allowed:
-        description = f"{description} Allowed keys — {allowed}."
+    if allowed_parts:
+        description = f"{description} Supported keys: {'; '.join(allowed_parts)}."
     return TaskModelOptionField(
         name="provider_options",
         type="json",
-        label="Provider options",
+        label="Provider-specific options",
         default={},
         description=description,
+        placeholder=json.dumps(example) if example else "",
     )
 
 
-def _openrouter_image_fallback_fields(model: Model | None) -> list[TaskModelOptionField]:
-    fields = [
-        _enum_image_field("aspect_ratio", {"type": "enum", "values": list(FALLBACK_ASPECT_RATIOS)}),
-        _enum_image_field("resolution", {"type": "enum", "values": list(FALLBACK_RESOLUTIONS)}),
-    ]
-    if model is not None and "seed" in model.capabilities.supported_parameters:
-        fields.append(_field_from_image_parameter("seed", {"type": "boolean"}))
-    return [field for field in fields if field is not None]
-
-
-def _openai_image_fallback_fields(model: Model | None) -> list[TaskModelOptionField]:
+def _openai_image_fallback_fields(
+    profile: ImageProfile, model: Model | None
+) -> list[TaskModelOptionField]:
     """OpenAI native image fallback (gpt-image-shaped union).
 
     Applies only when the model carries no ``task_options`` data — e.g. an
@@ -255,6 +248,8 @@ def _openai_image_fallback_fields(model: Model | None) -> list[TaskModelOptionFi
     )
 
     def has(field_name: str) -> bool:
+        if field_name == "n" and profile.wire == "openai_subscription":
+            return False
         return supported is None or field_name in supported
 
     union: tuple[tuple[str, dict[str, Any]], ...] = (
@@ -264,10 +259,6 @@ def _openai_image_fallback_fields(model: Model | None) -> list[TaskModelOptionFi
         ("n", {"type": "range", "min": 1, "max": 10}),
         ("output_format", {"type": "enum", "values": list(GPT_IMAGE_OUTPUT_FORMAT_CHOICES)}),
         ("style", {"type": "enum", "values": list(DALL_E_STYLE_CHOICES)}),
-        (
-            "response_format",
-            {"type": "enum", "values": list(OPENAI_IMAGE_RESPONSE_FORMAT_CHOICES)},
-        ),
     )
     fields: list[TaskModelOptionField] = []
     for name, spec in union:

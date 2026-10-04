@@ -432,7 +432,7 @@ def _classify_task_response_for_retry_policy(
     operation_key: str,
     extra_retryable_status_codes: frozenset[int],
 ) -> None:
-    refusal = _content_refusal(response)
+    refusal = content_refusal(response)
     if refusal is not None:
         raise refusal
     verified_status_codes = retry_policy.verified_safe_retry_status_codes
@@ -466,7 +466,7 @@ _REFUSAL_ERROR_CODES = frozenset({"moderation_blocked", "content_policy_violatio
 _REFUSAL_PHRASES = ("rejected by the safety system", "content policy", "was flagged")
 
 
-def _content_refusal(response: httpx.Response) -> ProviderContentRefusedError | None:
+def content_refusal(response: httpx.Response) -> ProviderContentRefusedError | None:
     """Return the refusal a client-error response reports, if it reports one."""
 
     if not 400 <= response.status_code < 500:
@@ -476,6 +476,18 @@ def _content_refusal(response: httpx.Response) -> ProviderContentRefusedError | 
     except ValueError, UnicodeError:
         return None
     error = payload.get("error") if isinstance(payload, Mapping) else None
+    return content_refusal_in(error)
+
+
+def content_refusal_in(error: Any) -> ProviderContentRefusedError | None:
+    """Return the refusal a provider error object or message reports, if it reports one.
+
+    *error* is the ``error`` member of a provider answer: an object with
+    ``code`` and ``message``, or a bare message string.
+    """
+
+    if isinstance(error, str):
+        error = {"message": error}
     if not isinstance(error, Mapping):
         return None
     code = error.get("code")

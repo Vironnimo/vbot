@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 
+from core.model_tasks.artifacts import OutputDirectoryError, OutputWriteError
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
@@ -149,4 +150,28 @@ def outcome_unknown_message(*, task: str, product: str) -> str:
         f"whether it created the {product}. Nothing was saved. Repeating the request can "
         f"create and charge a second {product}. If you still need it, repeat the call once, "
         "and tell the user if that fails too."
+    )
+
+
+def output_failure_message(error: OutputDirectoryError | OutputWriteError, *, product: str) -> str:
+    """Say why generated media has no file and whether the request was already paid."""
+    if isinstance(error, OutputDirectoryError):
+        return (
+            f"{error}. Nothing was generated. Pass another output_dir, or omit output_dir to "
+            "use the default folder."
+        )
+    return (
+        f"Generation succeeded, but the {product} could not be saved in {error.directory}: "
+        f"{error.reason}. The provider charged for this request. Tell the user; repeating the "
+        "call generates and charges again."
+    )
+
+
+def unfinished_job_message(*, task: str, product: str, job_id: str, reason: str) -> str:
+    """Say that an accepted job's result could not be collected and must not be resubmitted."""
+    return (
+        f"The {task} provider accepted the request as job {job_id}, but "
+        f"{_shortened(' '.join(reason.split()))}. The job can still finish and be charged; "
+        f"nothing was saved. Do not request the same {product} again. Tell the user, "
+        "including the job id."
     )

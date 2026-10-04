@@ -4,17 +4,22 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from core.model_tasks.artifacts import GeneratedMediaArtifact, write_generated_media_artifact
+from core.model_tasks.artifacts import (
+    GeneratedMediaArtifact,
+    ensure_output_dir,
+    write_generated_media_artifact,
+)
 from core.model_tasks.constants import TASK_MUSIC_GENERATION
 from core.model_tasks.image import load_image_inputs
 from core.model_tasks.model_tasks import TaskModelTargetRef, model_supports_task
 from core.model_tasks.music_providers import ProviderMusicClient
 from core.model_tasks.music_types import MusicGenerationResult
 from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage, TaskUsageContext
-from core.providers.errors import ProviderOutcomeUnknownError
+from core.providers.errors import ProviderContentRefusedError, ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
 from core.usage import UsageRecorder
 from core.utils.errors import TaskError, VBotError
@@ -37,10 +42,36 @@ class MusicExecutionError(MusicError):
     code = "provider_error"
 
 
+class MusicRefusedError(MusicExecutionError):
+    """Raised when the provider declined to create the requested music."""
+
+    code = ProviderContentRefusedError.code
+
+    def __init__(self, reason: str | None) -> None:
+        self.reason = reason
+        super().__init__(
+            f"Music generation was refused: {reason}"
+            if reason
+            else "Music generation was refused without a reason"
+        )
+
+
 class MusicOutcomeUnknownError(MusicExecutionError):
-    """Raised when Music generation may have completed at the provider."""
+    """Raised when Music generation may have completed and been billed."""
 
     code = ProviderOutcomeUnknownError.code
+
+    def __init__(self, message: str, *, operation_key: str) -> None:
+        self.operation_key = operation_key
+        super().__init__(message)
+
+
+@dataclass(frozen=True)
+class MusicArtifact(GeneratedMediaArtifact):
+    """A saved track plus the text the Model returned beside its audio."""
+
+    transcript: str = ""
+    text: str = ""
 
 
 class MusicService:
@@ -106,13 +137,11 @@ class MusicService:
                 options=options,
                 input_images=images,
             )
-        except MusicError:
-            raise
+        except ProviderContentRefusedError as exc:
+            raise MusicRefusedError(exc.reason) from exc
         except ProviderOutcomeUnknownError as exc:
-            raise MusicOutcomeUnknownError(str(exc)) from exc
+            raise MusicOutcomeUnknownError(str(exc), operation_key=exc.operation_key) from exc
         except VBotError as exc:
-            raise MusicExecutionError(str(exc)) from exc
-        except Exception as exc:
             raise MusicExecutionError(str(exc)) from exc
 
     async def generate_artifact(
@@ -122,17 +151,24 @@ class MusicService:
         output_dir: str | Path,
         source_paths: Sequence[str | Path] = (),
         usage_context: TaskUsageContext | None = None,
-    ) -> GeneratedMediaArtifact:
-        """Generate Music and persist it in the caller-owned directory."""
+    ) -> MusicArtifact:
+        """Generate Music and persist it in the caller-owned directory.
 
+        The directory is created before the request, so an unusable folder
+        raises :class:`OutputDirectoryError` without paying for a track.
+        The artifact carries the text the Model returned beside the audio.
+        """
+
+        directory = ensure_output_dir(output_dir)
         result = await self.generate(prompt, source_paths=source_paths, usage_context=usage_context)
-        return write_generated_media_artifact(
+        artifact = await asyncio.to_thread(
+            write_generated_media_artifact,
             result.data,
-            output_dir=output_dir,
+            output_dir=directory,
             extension=_music_extension(result.media_type),
             media_type=result.media_type,
-            error=MusicExecutionError,
         )
+        return MusicArtifact(**asdict(artifact), transcript=result.transcript, text=result.text)
 
     def _configured_model(self) -> Any | None:
         try:
@@ -166,6 +202,9 @@ def _music_extension(media_type: str) -> str:
     normalized = media_type.split(";", 1)[0].strip().lower()
     return {
         "audio/wav": "wav",
+        "audio/x-wav": "wav",
         "audio/flac": "flac",
         "audio/ogg": "ogg",
+        "audio/aac": "aac",
+        "audio/mp4": "m4a",
     }.get(normalized, "mp3")

@@ -5,15 +5,20 @@ from __future__ import annotations
 import asyncio
 import base64
 import inspect
+import io
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
+
+from PIL import Image as PILImage
 
 from core.attachments import sniff_media_type
 from core.attachments.images import ImageConversionError, ImageConverter, PreparedImage
 from core.debug import DebugContext
+from core.model_tasks.artifacts import OutputWriteError, ensure_output_dir
 from core.model_tasks.constants import TASK_IMAGE_GENERATION, TASK_IMAGE_UNDERSTANDING
+from core.model_tasks.image_profile import ImageCallOptionError, ImageProfile
 from core.model_tasks.image_providers import ProviderImageClient
 from core.model_tasks.image_types import (
     ImageArtifact,
@@ -39,13 +44,6 @@ DEFAULT_IMAGE_INPUT_MAX_BYTES = 20 * 1024 * 1024
 DEFAULT_IMAGE_ANALYSIS_MAX_IMAGES = 6
 DEFAULT_IMAGE_ANALYSIS_MAX_TOTAL_BYTES = 100 * 1024 * 1024
 _IMAGE_ANALYSIS_CONCURRENCY_LIMIT = 1
-
-# Per-call knob → prompt-hint phrasing, used when a knob cannot be routed as a
-# native provider parameter. Unknown knobs fall back to a generic label.
-_IMAGE_CALL_OPTION_HINTS: Mapping[str, str] = {
-    "aspect_ratio": "aspect ratio {value}",
-    "resolution": "{value} resolution",
-}
 
 IMAGE_UNDERSTANDING_SYSTEM_PROMPT = (
     "You are a visual analysis service for another AI agent. Examine the supplied "
@@ -129,6 +127,12 @@ class ImageRefusedError(ImageExecutionError):
         )
 
 
+class ImageOptionError(ImageError):
+    """Raised when a per-call option is not one the configured Model offers."""
+
+    code = "invalid_arguments"
+
+
 class ImageInputError(ImageError):
     """Raised when a local source image cannot be loaded."""
 
@@ -180,22 +184,18 @@ class ImageService:
             model_tasks, configuration_error=ImageConfigurationError
         )
 
-    def generation_supports_source_images(self) -> bool:
-        """Return the configured generation Model's stable image-input capability."""
+    def generation_profile(self) -> ImageProfile:
+        """Return what the configured generation target offers, without a request.
+
+        A missing or invalid binding offers nothing: no source images and no
+        per-call options. The image Tool selects its Definition Profile from it.
+        """
         try:
             binding = self._resolver.binding_for(TASK_IMAGE_GENERATION)
             target_ref = self._resolver.parse_target(binding.target)
         except ImageConfigurationError:
-            return False
-        if target_ref.kind == "local":
-            return False
-        model = self._model_tasks.model_for_target(target_ref)
-        input_modalities = getattr(
-            getattr(model, "capabilities", None),
-            "input_modalities",
-            (),
-        )
-        return "image" in input_modalities
+            return ImageProfile(wire="unsupported")
+        return cast(ImageProfile, self._model_tasks.image_profile(target_ref))
 
     async def analysis_is_available(self) -> bool:
         """Return whether the configured understanding target can carry images."""
@@ -234,11 +234,11 @@ class ImageService:
     ) -> ImageGenerationResult:
         """Generate or edit images using the configured binding.
 
-        ``call_options`` carries the agent's per-call intent knobs (aspect
-        ratio, resolution). Each is routed against the resolved model's
-        advertised image parameters: a natively supported value overwrites the
-        binding default in the wire options, while an unsupported value is
-        appended to the prompt as a best-effort hint instead. Empty or absent
+        ``call_options`` carries the agent's per-call intent (aspect ratio,
+        resolution, background). The target's image profile translates it into
+        wire options that override the binding's Settings for this call; an
+        option or value the profile does not offer raises
+        :class:`ImageOptionError` before any request. Empty or absent
         ``call_options`` reproduces the request the binding alone would make.
 
         ``source_paths`` may name any local image file reachable by the process.
@@ -257,21 +257,24 @@ class ImageService:
                 f"Image generation does not support local targets: {_safe_target_label(target_ref)}"
             )
 
-        model = None
-        if call_options or source_paths:
-            model = self._model_tasks.model_for_target(target_ref)
-
-        if source_paths and model is not None:
-            input_modalities = getattr(getattr(model, "capabilities", None), "input_modalities", ())
-            if "image" not in input_modalities:
+        profile: ImageProfile = self._model_tasks.image_profile(target_ref)
+        if source_paths:
+            if not profile.accepts_source_images:
                 raise ImageUnsupportedTargetError(
                     "Configured image model does not support source images: "
                     f"{_safe_target_label(target_ref)}"
                 )
-
-        wire_options, prompt_hints = split_image_call_options(model, call_options or {})
-        merged_options = {**options, **wire_options}
-        request_prompt = _prompt_with_hints(normalized_prompt, prompt_hints)
+            limit = profile.max_source_images
+            if limit is not None and len(source_paths) > limit:
+                raise ImageTooLargeError(
+                    f"The configured image model accepts at most {limit} source images, "
+                    f"but received {len(source_paths)}."
+                )
+        try:
+            wire_options = profile.wire_options(call_options or {}, options)
+        except ImageCallOptionError as exc:
+            raise ImageOptionError(str(exc)) from exc
+        merged_options = {**options, **profile.fixed_options, **wire_options}
         input_images = await asyncio.to_thread(
             _load_image_inputs,
             source_paths or (),
@@ -287,11 +290,11 @@ class ImageService:
         )
         try:
             result = await provider_client.generate(
-                request_prompt,
+                normalized_prompt,
                 options=merged_options,
                 input_images=input_images,
             )
-            return _without_unchanged_revision(result, normalized_prompt, request_prompt)
+            return _without_unchanged_revision(result, normalized_prompt)
         except ImageError:
             raise
         except ProviderContentRefusedError as exc:
@@ -544,8 +547,13 @@ class ImageService:
         source_paths: Sequence[str | Path] | None = None,
         usage_context: TaskUsageContext | None = None,
     ) -> tuple[ImageArtifact, ...]:
-        """Generate images and persist them in the caller-owned output directory."""
+        """Generate images and persist them in the caller-owned output directory.
 
+        The directory is created before the request, so an unusable folder
+        raises :class:`OutputDirectoryError` without paying for images.
+        """
+
+        directory = ensure_output_dir(output_dir)
         result = await self.generate(
             prompt,
             call_options=call_options,
@@ -556,7 +564,7 @@ class ImageService:
         return tuple(
             _write_image_artifact(
                 image_bytes,
-                output_dir=Path(output_dir),
+                output_dir=directory,
                 extension=extension,
                 media_type=result.media_type,
                 index=idx,
@@ -564,84 +572,6 @@ class ImageService:
             )
             for idx, image_bytes in enumerate(result.images)
         )
-
-
-def split_image_call_options(
-    model: Any | None,
-    call_options: Mapping[str, Any],
-) -> tuple[JsonObject, list[str]]:
-    """Route each per-call image knob to a native wire option or a prompt hint.
-
-    A knob goes native (into the returned wire options) only when the model
-    advertises that image parameter *and* the requested value is acceptable for
-    it — the value is in the parameter's ``values`` enum, or the spec is an
-    open/free-form one (``string``/``boolean``) with no fixed value set.
-    Everything else — an unadvertised parameter, a value the enum does not
-    list, a model with no ``task_options``, or ``model is None`` — becomes a
-    best-effort prompt hint. Because a value is only sent when the catalog
-    confirms it, an unsupported knob can never trigger a provider error.
-
-    Blank knob values are treated as omitted; empty ``call_options`` yields
-    ``({}, [])``.
-    """
-
-    parameters = _image_generation_parameters(model)
-    wire_options: JsonObject = {}
-    prompt_hints: list[str] = []
-    for name, raw_value in call_options.items():
-        value = raw_value.strip() if isinstance(raw_value, str) else raw_value
-        if value is None or value == "":
-            continue
-        if _value_routes_native(parameters.get(name), value):
-            wire_options[name] = value
-        else:
-            prompt_hints.append(_image_call_option_hint(name, value))
-    return wire_options, prompt_hints
-
-
-def _image_generation_parameters(model: Any | None) -> Mapping[str, Any]:
-    """Return the model's advertised image-generation parameter specs, if any."""
-
-    if model is None:
-        return {}
-    task_options = getattr(getattr(model, "capabilities", None), "task_options", None)
-    if not isinstance(task_options, Mapping):
-        return {}
-    image_options = task_options.get(TASK_IMAGE_GENERATION)
-    if not isinstance(image_options, Mapping):
-        return {}
-    parameters = image_options.get("parameters")
-    return parameters if isinstance(parameters, Mapping) else {}
-
-
-def _value_routes_native(spec: Any, value: Any) -> bool:
-    """Whether *value* may be sent as a native parameter given its typed *spec*."""
-
-    if not isinstance(spec, Mapping):
-        return False
-    values = spec.get("values")
-    if isinstance(values, list | tuple):
-        # Enum: only a value the catalog lists is safe to send natively.
-        return any(str(value) == str(candidate) for candidate in values)
-    # An open spec (string/boolean = "supported, value free-form") accepts any
-    # value; a range or unknown spec can't confirm a free-form knob value, so
-    # it falls to a safe prompt hint.
-    return spec.get("type") in {"string", "boolean"}
-
-
-def _image_call_option_hint(name: str, value: Any) -> str:
-    template = _IMAGE_CALL_OPTION_HINTS.get(name)
-    if template is not None:
-        return template.format(value=value)
-    return f"{name.replace('_', ' ')} {value}"
-
-
-def _prompt_with_hints(prompt: str, hints: list[str]) -> str:
-    """Append best-effort option hints to the prompt as a trailing parenthetical."""
-
-    if not hints:
-        return prompt
-    return f"{prompt} ({', '.join(hints)})"
 
 
 def _attempts_made(error: VBotError) -> int | None:
@@ -816,15 +746,14 @@ def _input_filename(path: Path, media_type: str) -> str:
 
 
 def _without_unchanged_revision(
-    result: ImageGenerationResult, *prompts: str
+    result: ImageGenerationResult, prompt: str
 ) -> ImageGenerationResult:
     """Keep ``revised_prompt`` only when the provider actually changed the prompt."""
 
     revised = result.revised_prompt
     if revised is None:
         return result
-    key = " ".join(revised.split()).casefold()
-    if any(key == " ".join(prompt.split()).casefold() for prompt in prompts):
+    if " ".join(revised.split()).casefold() == " ".join(prompt.split()).casefold():
         return replace(result, revised_prompt=None)
     return result
 
@@ -842,19 +771,31 @@ def _write_image_artifact(
 
     try:
         file_path = write_id_file(output_dir, "img", f".{extension}", payload)
-        artifact_id = file_path.stem
-        filename = file_path.name
-        return ImageArtifact(
-            id=artifact_id,
-            filename=filename,
-            media_type=media_type,
-            size_bytes=len(payload),
-            file_path=output_dir / filename,
-            index=index,
-            revised_prompt=revised_prompt,
-        )
     except OSError as exc:
-        raise ImageExecutionError(str(exc)) from exc
+        raise OutputWriteError(output_dir, exc.strerror or str(exc)) from exc
+    width, height = _pixel_size(payload)
+    return ImageArtifact(
+        id=file_path.stem,
+        filename=file_path.name,
+        media_type=media_type,
+        size_bytes=len(payload),
+        file_path=output_dir / file_path.name,
+        index=index,
+        revised_prompt=revised_prompt,
+        width=width,
+        height=height,
+    )
+
+
+def _pixel_size(payload: bytes) -> tuple[int | None, int | None]:
+    """Read pixel dimensions from the image header; vector images have none."""
+
+    try:
+        with PILImage.open(io.BytesIO(payload)) as image:
+            width, height = image.size
+    except OSError, ValueError, PILImage.DecompressionBombError:
+        return None, None
+    return width, height
 
 
 def _extension_for_media_type(media_type: str) -> str:

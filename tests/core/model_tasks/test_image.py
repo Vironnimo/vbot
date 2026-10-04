@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,19 +10,21 @@ from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
+from PIL import Image
 
 from core.model_tasks import (
     TASK_IMAGE_GENERATION,
     ImageConfigurationError,
     ImageExecutionError,
     ImageInputError,
+    ImageOptionError,
     ImageOutcomeUnknownError,
     ImageService,
+    ImageTooLargeError,
     ImageUnsupportedTargetError,
 )
-from core.model_tasks.image import (
-    split_image_call_options,
-)
+from core.model_tasks.artifacts import OutputDirectoryError
+from core.model_tasks.image_profile import ImageWire, build_image_profile
 from core.model_tasks.image_types import ImageGenerationResult
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
 from core.utils import ids
@@ -40,39 +43,18 @@ async def test_generate_without_configured_binding_is_expected_error(tmp_path: P
         await service.generate("a cat")
 
 
-def test_generation_source_image_capability_follows_configured_model(tmp_path: Path) -> None:
-    image_model = _image_model({})
+def test_generation_profile_follows_configured_model() -> None:
     text_model = _image_model({})
     text_model.capabilities.input_modalities = ("text",)
 
-    assert (
-        ImageService(
-            _RoutingModelTasks(image_model),
-            cast(Any, object()),
-        ).generation_supports_source_images()
-        is True
-    )
-    assert (
-        ImageService(
-            _RoutingModelTasks(text_model),
-            cast(Any, object()),
-        ).generation_supports_source_images()
-        is False
-    )
-    assert (
-        ImageService(
-            _MissingModelTasks(),
-            cast(Any, object()),
-        ).generation_supports_source_images()
-        is False
-    )
-    assert (
-        ImageService(
-            _LocalModelTasks(),
-            cast(Any, object()),
-        ).generation_supports_source_images()
-        is False
-    )
+    def profile(model_tasks: Any) -> Any:
+        return ImageService(model_tasks, cast(Any, object())).generation_profile()
+
+    assert profile(_RoutingModelTasks(_image_model({}))).accepts_source_images is True
+    assert profile(_RoutingModelTasks(text_model)).accepts_source_images is False
+    # Without a usable binding nothing is offered.
+    assert profile(_MissingModelTasks()).accepts_source_images is False
+    assert profile(_MissingModelTasks()).call_choices == {}
 
 
 @pytest.mark.asyncio
@@ -85,9 +67,22 @@ async def test_generate_with_local_target_is_unsupported(tmp_path: Path) -> None
         await service.generate("a cat")
 
 
+def _png(width: int, height: int) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (width, height)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+_PNG_3X2 = _png(3, 2)
+
+
 @pytest.mark.parametrize(
-    ("media_type", "extension"),
-    [("image/png", ".png"), ("image/svg+xml", ".svg"), ("image/webp", ".webp")],
+    ("media_type", "extension", "images", "dimensions"),
+    [
+        ("image/png", ".png", (_PNG_3X2, _PNG_3X2), (3, 2)),
+        # Vector images have no pixel size.
+        ("image/svg+xml", ".svg", (b"<svg/>", b"<svg></svg>"), (None, None)),
+    ],
 )
 @pytest.mark.asyncio
 async def test_generate_artifacts_stores_each_image_in_the_caller_owned_directory(
@@ -95,15 +90,13 @@ async def test_generate_artifacts_stores_each_image_in_the_caller_owned_director
     monkeypatch: pytest.MonkeyPatch,
     media_type: str,
     extension: str,
+    images: tuple[bytes, bytes],
+    dimensions: tuple[int | None, int | None],
 ) -> None:
     service = ImageService(_MissingModelTasks(), cast(Any, object()))
 
     async def generate(_prompt: str, **_kwargs: Any) -> ImageGenerationResult:
-        return ImageGenerationResult(
-            images=(b"first image", b"second image"),
-            media_type=media_type,
-            model="provider/model",
-        )
+        return ImageGenerationResult(images=images, media_type=media_type, model="provider/model")
 
     monkeypatch.setattr(service, "generate", generate)
 
@@ -116,11 +109,22 @@ async def test_generate_artifacts_stores_each_image_in_the_caller_owned_director
         (media_type, extension)
     }
     assert artifacts[0].file_path != artifacts[1].file_path
-    assert [artifact.file_path.read_bytes() for artifact in artifacts] == [
-        b"first image",
-        b"second image",
-    ]
+    assert [artifact.file_path.read_bytes() for artifact in artifacts] == list(images)
+    assert {(artifact.width, artifact.height) for artifact in artifacts} == {dimensions}
     assert list(output_dir.glob("*.json")) == []
+
+
+@pytest.mark.asyncio
+async def test_unusable_output_folder_fails_before_generating(tmp_path: Path) -> None:
+    service = ImageService(_MissingModelTasks(), cast(Any, object()))
+    occupied = tmp_path / "notes.txt"
+    occupied.write_text("a file, not a folder", encoding="utf-8")
+
+    # The missing binding would fail generation; the folder check comes first.
+    with pytest.raises(OutputDirectoryError) as caught:
+        await service.generate_artifacts("a cat", output_dir=occupied)
+
+    assert caught.value.reason == "a file with that name exists"
 
 
 @pytest.mark.asyncio
@@ -227,9 +231,6 @@ async def test_generate_preserves_unknown_provider_outcome(
     assert caplog.records
 
 
-# ---------------------------------------------------------------------------
-# split_image_call_options — pure per-call routing
-# ---------------------------------------------------------------------------
 def _image_model(parameters: dict[str, Any]) -> Any:
     """A minimal model double exposing image-generation parameter specs."""
 
@@ -239,81 +240,6 @@ def _image_model(parameters: dict[str, Any]) -> Any:
             input_modalities=("image", "text"),
         )
     )
-
-
-_NO_TASK_OPTIONS = SimpleNamespace(capabilities=SimpleNamespace(task_options={}))
-
-
-@pytest.mark.parametrize(
-    ("model", "call_options", "wire_options", "hints"),
-    [
-        pytest.param(
-            _image_model({"aspect_ratio": {"type": "enum", "values": ("1:1", "16:9")}}),
-            {"aspect_ratio": "16:9"},
-            {"aspect_ratio": "16:9"},
-            [],
-            id="advertised-enum-value",
-        ),
-        # Fallback specs build ``values`` as lists; loaded specs freeze them to tuples.
-        pytest.param(
-            _image_model({"resolution": {"type": "enum", "values": ["1K", "2K", "4K"]}}),
-            {"resolution": "2K"},
-            {"resolution": "2K"},
-            [],
-            id="advertised-enum-value-in-list-form",
-        ),
-        pytest.param(
-            _image_model({"aspect_ratio": {"type": "string"}}),
-            {"aspect_ratio": "16:9"},
-            {"aspect_ratio": "16:9"},
-            [],
-            id="open-string-spec",
-        ),
-        pytest.param(
-            _image_model({"resolution": {"type": "enum", "values": ("1K", "2K")}}),
-            {"resolution": "4K"},
-            {},
-            ["4K resolution"],
-            id="unsupported-enum-value",
-        ),
-        pytest.param(
-            _image_model({"resolution": {"type": "enum", "values": ("1K", "2K")}}),
-            {"aspect_ratio": "16:9"},
-            {},
-            ["aspect ratio 16:9"],
-            id="unadvertised-parameter",
-        ),
-        pytest.param(
-            None,
-            {"aspect_ratio": "16:9", "resolution": "4K"},
-            {},
-            ["aspect ratio 16:9", "4K resolution"],
-            id="no-model",
-        ),
-        pytest.param(
-            _NO_TASK_OPTIONS, {"resolution": "2K"}, {}, ["2K resolution"], id="no-task-options"
-        ),
-        pytest.param(None, {"color_space": "srgb"}, {}, ["color space srgb"], id="unknown-knob"),
-        pytest.param(
-            _image_model({"aspect_ratio": {"type": "enum", "values": ("1:1",)}}),
-            {"aspect_ratio": "  "},
-            {},
-            [],
-            id="blank-value",
-        ),
-        pytest.param(
-            _image_model({"aspect_ratio": {"type": "enum", "values": ("1:1",)}}),
-            {},
-            {},
-            [],
-            id="no-call-options",
-        ),
-    ],
-)
-def test_call_options_go_to_the_wire_only_when_the_model_supports_them(
-    model: Any, call_options: dict[str, Any], wire_options: dict[str, Any], hints: list[str]
-) -> None:
-    assert split_image_call_options(model, call_options) == (wire_options, hints)
 
 
 # ---------------------------------------------------------------------------
@@ -342,10 +268,15 @@ class _RecordingImageClient:
 
 
 class _RoutingModelTasks:
-    def __init__(self, model: Any, binding_options: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        model: Any,
+        binding_options: dict[str, Any] | None = None,
+        wire: ImageWire = "openrouter",
+    ) -> None:
         self._model = model
         self._binding_options = binding_options or {}
-        self.model_for_target_calls = 0
+        self._wire = wire
 
     def binding_for(self, task_type: str) -> object:
         return SimpleNamespace(
@@ -361,62 +292,84 @@ class _RoutingModelTasks:
         return dict(self._binding_options)
 
     def model_for_target(self, _target_ref: object) -> Any:
-        self.model_for_target_calls += 1
         return self._model
+
+    def image_profile(self, _target_ref: object) -> Any:
+        return build_image_profile(self._model, self._wire)
+
+
+_GPT_IMAGE_PARAMETERS = {
+    "size": {"type": "string"},
+    "response_format": {"type": "enum", "values": ["url", "b64_json"]},
+}
 
 
 @pytest.mark.parametrize(
-    ("binding_options", "call_options", "wire_options", "prompt"),
+    ("wire", "parameters", "binding_options", "call_options", "wire_options"),
     [
         pytest.param(
+            "openrouter",
+            {"aspect_ratio": {"type": "enum", "values": ("1:1", "16:9")}},
             {"aspect_ratio": "1:1"},
             {"aspect_ratio": "16:9"},
             {"aspect_ratio": "16:9"},
-            "a cat",
-            id="native-call-value-overrides-binding",
+            id="call-choice-overrides-settings",
         ),
-        # A non-native value becomes a prompt hint and keeps the binding default.
+        # The profile translates the choice, and vBot always asks for Base64 images.
         pytest.param(
-            {"aspect_ratio": "1:1"},
-            {"aspect_ratio": "21:9"},
-            {"aspect_ratio": "1:1"},
-            "a cat (aspect ratio 21:9)",
-            id="non-native-call-value-hints",
+            "openai_images",
+            _GPT_IMAGE_PARAMETERS,
+            {"size": "1024x1024", "response_format": "url"},
+            {"aspect_ratio": "16:9"},
+            {"size": "1280x720", "response_format": "b64_json"},
+            id="translated-choice-and-fixed-option",
         ),
         pytest.param(
+            "openrouter",
+            {},
             {"size": "1024x1024"},
             None,
             {"size": "1024x1024"},
-            "a cat",
             id="no-call-options-reproduce-binding",
         ),
     ],
 )
 @pytest.mark.asyncio
-async def test_generate_routes_per_call_options(
+async def test_generate_applies_call_choices_over_settings(
+    wire: ImageWire,
+    parameters: dict[str, Any],
     binding_options: dict[str, Any],
     call_options: dict[str, Any] | None,
     wire_options: dict[str, Any],
-    prompt: str,
 ) -> None:
-    model = _image_model({"aspect_ratio": {"type": "enum", "values": ("1:1", "16:9")}})
-    model_tasks = _RoutingModelTasks(model, binding_options=binding_options)
+    model_tasks = _RoutingModelTasks(_image_model(parameters), binding_options, wire)
     service = ImageService(model_tasks, cast(Any, object()))
     client = _RecordingImageClient()
 
     with patch("core.model_tasks.image.ProviderImageClient.from_runtime", return_value=client):
         await service.generate("a cat", call_options=call_options)
 
-    assert (client.options, client.prompt) == (wire_options, prompt)
-    # Without call options the model is not even resolved.
-    assert model_tasks.model_for_target_calls == (0 if call_options is None else 1)
+    assert (client.options, client.prompt) == (wire_options, "a cat")
+
+
+@pytest.mark.asyncio
+async def test_generate_refuses_a_choice_the_model_lacks_before_any_request() -> None:
+    model = _image_model({"aspect_ratio": {"type": "enum", "values": ("1:1", "16:9")}})
+    service = ImageService(_RoutingModelTasks(model), cast(Any, object()))
+
+    with (
+        patch("core.model_tasks.image.ProviderImageClient.from_runtime") as client,
+        pytest.raises(ImageOptionError, match="choose one of: 1:1, 16:9"),
+    ):
+        await service.generate("a cat", call_options={"aspect_ratio": "21:9"})
+
+    client.assert_not_called()
 
 
 @pytest.mark.parametrize(
     ("revised_prompt", "reported"),
     [
         pytest.param("A cat  ", None, id="same-as-prompt"),
-        pytest.param("a cat (aspect ratio 21:9)", None, id="same-as-prompt-with-hints"),
         pytest.param("an original tabby cat", "an original tabby cat", id="rewritten"),
     ],
 )
@@ -424,12 +377,11 @@ async def test_generate_routes_per_call_options(
 async def test_generate_reports_only_a_revision_that_changes_the_prompt(
     revised_prompt: str, reported: str | None
 ) -> None:
-    model = _image_model({"aspect_ratio": {"type": "enum", "values": ("1:1",)}})
-    service = ImageService(_RoutingModelTasks(model), cast(Any, object()))
+    service = ImageService(_RoutingModelTasks(_image_model({})), cast(Any, object()))
     client = _RecordingImageClient(revised_prompt)
 
     with patch("core.model_tasks.image.ProviderImageClient.from_runtime", return_value=client):
-        result = await service.generate("a cat", call_options={"aspect_ratio": "21:9"})
+        result = await service.generate("a cat")
 
     assert result.revised_prompt == reported
 
@@ -482,6 +434,17 @@ async def test_generate_rejects_source_image_for_text_only_model(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_generate_rejects_more_source_images_than_the_model_takes(tmp_path: Path) -> None:
+    source = tmp_path / "photo.png"
+    source.write_bytes(b"\x89PNG\r\n\x1a\nsource")
+    model = _image_model({"input_references": {"type": "range", "max": 2}})
+    service = ImageService(_RoutingModelTasks(model), cast(Any, object()))
+
+    with pytest.raises(ImageTooLargeError, match="at most 2 source images, but received 3"):
+        await service.generate("make it rainy", source_paths=[source] * 3)
+
+
+@pytest.mark.asyncio
 async def test_generate_rejects_missing_or_non_image_source(tmp_path: Path) -> None:
     model_tasks = _RoutingModelTasks(_image_model({}))
     service = ImageService(model_tasks, cast(Any, object()))
@@ -526,6 +489,9 @@ class _ProviderModelTasks:
 
     def options_with_defaults(self, _binding: object) -> dict[str, object]:
         return {}
+
+    def image_profile(self, _target_ref: object) -> Any:
+        return build_image_profile(None, "openrouter")
 
 
 class _FailingProviderImageClient:

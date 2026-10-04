@@ -12,6 +12,12 @@ from core.model_tasks.constants import (
     TASK_TEXT_EMBEDDING,
 )
 from core.model_tasks.embedding_profiles import embedding_profile
+from core.model_tasks.image_profile import (
+    ImageProfile,
+    ImageWire,
+    build_image_profile,
+    image_wire,
+)
 from core.model_tasks.local_targets import (
     DEFAULT_LOCAL_TASK_TARGET_REGISTRY,
     LocalTaskTargetDescriptor,
@@ -282,6 +288,9 @@ class TaskModelService:
                 f"available: {choices}"
             )
 
+        # A stored option the schema no longer offers never blocks an edit of
+        # its siblings; it is dropped with this save.
+        options = {name: value for name, value in options.items() if name in available}
         options.update(dict(set_values or {}))
         for name in unset_names:
             options.pop(name, None)
@@ -361,12 +370,40 @@ class TaskModelService:
                 raw_options = previous.get("options", {}) if isinstance(previous, Mapping) else {}
             if not isinstance(raw_options, Mapping):
                 raise TaskModelValidationError(f"{task_type} options must be an object")
-            binding = {"target": target, "options": dict(raw_options)}
-            if not target_changed and binding["options"] == previous.get("options", {}):
+            options: JsonObject = dict(raw_options)
+            stored = previous.get("options") if isinstance(previous, Mapping) else None
+            previous_options: Mapping[str, Any] = stored if isinstance(stored, Mapping) else {}
+            if not target_changed and options == previous_options:
                 continue
+            if not target_changed:
+                options = self._without_stale_options(task_type, target, options, previous_options)
+            binding = {"target": target, "options": options}
             self.validate_binding(task_type, binding)
             prepared[task_type] = binding
         return prepared
+
+    def _without_stale_options(
+        self,
+        task_type: str,
+        target: str,
+        options: Mapping[str, Any],
+        previous_options: Mapping[str, Any],
+    ) -> JsonObject:
+        """Drop carried-over options the target's current schema no longer offers.
+
+        Only an unchanged stored value is dropped; a name the caller sends
+        with a new value still fails validation, so a typo is never ignored.
+        """
+
+        try:
+            available = {field.name for field in self.options(task_type, target).fields}
+        except VBotError, ValueError:
+            return dict(options)
+        return {
+            name: value
+            for name, value in options.items()
+            if name in available or name not in previous_options or previous_options[name] != value
+        }
 
     def _validate_target(self, task_type: str, target: str) -> None:
         target_ref = parse_task_model_target_id(target)
@@ -500,6 +537,41 @@ class TaskModelService:
             model=model,
             models=self._models,
             connection_id=target_ref.local_connection_id,
+            wire=self._image_wire(target_ref),
+        )
+
+    def image_profile(self, target_ref: TaskModelTargetRef) -> ImageProfile:
+        """Return what an image generation target offers on its Connection's wire.
+
+        Settings fields, the image Tool's per-call choices and the request
+        translation all read this profile, so they agree for every Model and
+        Connection (`core/model_tasks/image_profile.py`).
+        """
+
+        if target_ref.kind == "local":
+            return build_image_profile(None, "unsupported")
+        return build_image_profile(
+            self._resolve_model(target_ref.provider_id, target_ref.model_id),
+            self._image_wire(target_ref),
+        )
+
+    def _image_wire(self, target_ref: TaskModelTargetRef) -> ImageWire:
+        try:
+            provider = self._providers.get(target_ref.provider_id)
+        except KeyError:
+            return image_wire(target_ref.provider_id, target_ref.provider_id, None)
+        connection = next(
+            (
+                connection
+                for connection in provider.connections
+                if connection.id == target_ref.local_connection_id
+            ),
+            None,
+        )
+        return image_wire(
+            target_ref.provider_id,
+            getattr(provider, "adapter", target_ref.provider_id),
+            getattr(connection, "mode", None),
         )
 
     def model_for_target(self, target_ref: TaskModelTargetRef) -> Any | None:
@@ -538,7 +610,11 @@ class TaskModelService:
         """Return binding options merged over schema defaults."""
 
         schema = self.options(binding.task_type, binding.target)
-        return {**schema.default_options(), **dict(binding.options)}
+        # A stored option the current schema no longer offers (its Model or
+        # wire dropped it) is inert: it never reaches a request.
+        names = {field.name for field in schema.fields}
+        stored = {name: value for name, value in binding.options.items() if name in names}
+        return {**schema.default_options(), **stored}
 
     def _provider_targets(self, task_type: str) -> list[TaskModelTarget]:
         """Return provider targets for *task_type*, filtered by capability and credentials.
