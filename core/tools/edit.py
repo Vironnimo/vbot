@@ -73,8 +73,8 @@ EDIT_TOOL_PARAMETERS: JsonObject = {
                     "old_string": {
                         "type": "string",
                         "description": (
-                            "Exact text from the file. It must occur only once; add surrounding "
-                            "lines until it does."
+                            "Exact text from the file. Unless replace_all is true, it must occur "
+                            "only once; add surrounding lines until it does."
                         ),
                     },
                     "new_string": {"type": "string", "description": "Replacement text."},
@@ -136,6 +136,7 @@ _WRITE_TEMPLATES = {
     "file_changed": (
         "{path} changed on disk while this write ran. Read it before writing it again."
     ),
+    "partial_change": f"call {model_tool_name(EDIT_TOOL_NAME)} to change only part of it",
 }
 _NO_PATH = "The call names no file. Add path, relative to the working directory or absolute."
 
@@ -279,13 +280,24 @@ def normalize_edit_arguments(arguments: Any) -> Any:
 
 
 def _edits_value(value: Any) -> Any:
-    """Return ``edits`` sent as JSON text as the array it encodes."""
-    if isinstance(value, str) and value.lstrip().startswith("["):
-        try:
-            return json.loads(value)
-        except ValueError:
-            return value
-    return value
+    """Return ``edits`` sent as JSON text as the array or object it encodes."""
+    if not isinstance(value, str):
+        return value
+    decoded = _json_value(value)
+    if isinstance(decoded, list | dict):
+        return decoded
+    raise ValueError(
+        "edits arrived as text, not as an array. Send edits as an array of objects, each with "
+        "old_string and new_string."
+    )
+
+
+def _json_value(text: str) -> Any:
+    """Return the value JSON ``text`` encodes, ``None`` when it is not JSON."""
+    try:
+        return json.loads(text)
+    except ValueError:
+        return None
 
 
 def _check_flat_edit(edit: dict[str, Any]) -> None:
@@ -303,8 +315,13 @@ def _check_flat_edit(edit: dict[str, Any]) -> None:
 
 def _edit_item(item: Any, number: int) -> Any:
     """Return one ``edits`` item under canonical field names."""
+    if isinstance(item, str):
+        item = _json_value(item)
     if not isinstance(item, dict):
-        return item
+        raise ValueError(
+            f"edits item {number} is not an object. Send each edit as an object with old_string "
+            "and new_string."
+        )
     edit: dict[str, Any] = {}
     for key, value in item.items():
         field = _EDIT_ALIASES.get(key, key)
@@ -455,7 +472,10 @@ def _edit_failure(
 
 def _execute_edit(context: ToolContext, arguments: JsonObject, state: FileReadState) -> JsonObject:
     edits = arguments["edits"]
-    batch = change_batch(context, _EDIT_TEMPLATES)
+    # Edits that leave the file as it was, such as a change and its reversal.
+    result = "these edits would leave it" if len(edits) > 1 else "this edit would leave it"
+    already = {"already_applied": f"{{where}} already reads as {result}."}
+    batch = change_batch(context, {**_EDIT_TEMPLATES, **already})
     run_operations(context, state, batch, _edit_operations(arguments["path"], edits), atomic=True)
     files = file_reports(context, batch)
     [outcome] = batch.results

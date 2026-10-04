@@ -481,7 +481,7 @@ DIFFERENCE = re.compile(
     r"First difference, file line (?P<line>\d+), character (?P<character>\d+); "
     r"copied line (?P<copy_line>\d+), character (?P<copy_character>\d+) \(excerpts truncated\):\n"
     r"File characters (?P<file_start>\d+)-(?P<file_end>\d+): '(?P<file>[^\n]*)'\n"
-    r"(?:The patch|Old_string) characters (?P<copy_start>\d+)-(?P<copy_end>\d+): "
+    r"(?:The patch|old_string) characters (?P<copy_start>\d+)-(?P<copy_end>\d+): "
     r"'(?P<copy>[^\n]*)'\n"
 )
 

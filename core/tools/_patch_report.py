@@ -238,7 +238,8 @@ def _difference_text(difference: JsonObject) -> list[str]:
         f"character {difference['character']}; copied line {difference['copy_line']}, "
         f"character {difference['copy_character']} (excerpts truncated):"
     ]
-    for key, label in (("file", "File"), ("copy", source.capitalize())):
+    copy_label = "old_string" if source == "old_string" else "The patch"
+    for key, label in (("file", "File"), ("copy", copy_label)):
         start = difference[f"{key}_start"]
         end = start + len(difference[key]) - 1
         lines.append(
@@ -327,6 +328,8 @@ def _entry_text(entry: JsonObject) -> str:
 
 
 def _no_op_text(entry: JsonObject) -> str:
+    if entry.get("note"):
+        return str(entry["note"])
     if entry["status"] == "unchanged":
         return f"{entry['where']}: the new text equals the current text; nothing to change."
     if entry["action"] == "add":

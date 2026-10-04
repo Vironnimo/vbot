@@ -1070,7 +1070,7 @@
     "ok": false,
     "error_code": "ambiguous_match",
     "contains": [
-     "occurs 2 times (lines 5, 16)",
+     "matches 2 places (lines 5, 16)",
      "replace_all"
     ],
     "files": {

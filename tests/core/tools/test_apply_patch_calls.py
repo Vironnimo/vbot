@@ -245,7 +245,7 @@ async def test_replacement_counts_follow_the_call(tmp_path):
 
     ambiguous = await call(tmp_path, edit)
     message = text(ambiguous)
-    assert "old_string occurs 2 times (lines 1, 2)" in message and "replace_all" in message
+    assert "old_string matches 2 places (lines 1, 2)" in message and "replace_all" in message
     assert message.endswith("Where it occurs:\n1| x = 1\n2| x = 1\nNo file was changed.")
     assert path.read_bytes() == b"x = 1\nx = 1\n"
     everywhere = await call(tmp_path, {**edit, "replace_all": True})

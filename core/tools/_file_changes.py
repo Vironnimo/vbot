@@ -185,7 +185,9 @@ class ChangeBatch:
     """One call's file changes: what it observed, changed and reports.
 
     ``templates`` replaces the wording of shared failure codes for the Tool that
-    runs the call, keyed by template name (see ``_patch_syntax._MESSAGES``).
+    runs the call, keyed by template name (see ``_patch_syntax._MESSAGES``);
+    ``already_applied`` words a step whose result the file already holds, and
+    ``partial_change`` how to change part of a file the guard refused to replace.
     """
 
     shown: Callable[[Path], str]
@@ -409,6 +411,7 @@ def _guard_failure(
         and _snapshot(path) == snapshot
     ):
         state.record_read(context.session_id, path)
+        partial = batch.templates.get("partial_change", "change only the parts that need it")
         # A CRLF file shows plain line breaks, as read shows it.
         plain = [plain_line_end(line) for line in lines]
         shown = "".join(add_line_numbers(plain, 1)).rstrip("\n")
@@ -416,7 +419,7 @@ def _guard_failure(
             "code": code,
             "message": (
                 f"{lead} Its current content follows and now counts as read: send the same "
-                "call again to replace it, or change only the parts that need it."
+                f"call again to replace it, or {partial}."
             ),
             "content": shown,
         }
@@ -510,6 +513,8 @@ def _run_step(
             outcome["status"] = "unchanged"
         else:
             outcome["status"] = "already_applied"
+            if "already_applied" in batch.templates:
+                outcome["note"] = batch.templates["already_applied"].format(where=outcome["where"])
     except (OSError, _PatchError) as error:
         outcome.update(status="failed", error=_error_data(error, batch))
         if (

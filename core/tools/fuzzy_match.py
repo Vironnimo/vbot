@@ -460,6 +460,9 @@ def _aligned_start(file_lines: list[str], start: int, wanted_lines: list[str], f
     starts like the first of them.
     """
     span = len(wanted_lines) - first
+    if span == 1:
+        # One copied line drops or adds no line above it; the candidate places it.
+        return start
     for position in range(first, len(wanted_lines)):
         text = _loose(wanted_lines[position])
         if not re.search(r"\w", text):

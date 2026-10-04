@@ -57,8 +57,8 @@ def test_edit_and_write_have_minimal_definitions() -> None:
                     "properties": {
                         "old_string": {
                             "type": "string",
-                            "description": "Exact text from the file. It must occur only once; "
-                            "add surrounding lines until it does.",
+                            "description": "Exact text from the file. Unless replace_all is "
+                            "true, it must occur only once; add surrounding lines until it does.",
                         },
                         "new_string": {"type": "string", "description": "Replacement text."},
                         "replace_all": {
@@ -164,6 +164,7 @@ async def test_empty_old_string_creates_a_missing_or_empty_file(tmp_path) -> Non
         {"path": "a.py", "edits": [{"oldText": "x = 1", "newText": "x = 3"}]},
         {"path": "a.py", "edits": [{"old_text": "x = 1", "new_text": "x = 3"}]},
         {"path": "a.py", "edits": '[{"old_string": "x = 1", "new_string": "x = 3"}]'},
+        {"path": "a.py", "edits": ['{"old_string": "x = 1", "new_string": "x = 3"}']},
         # An item may repeat the call's file.
         {
             "path": "a.py",
@@ -178,6 +179,31 @@ async def test_other_edit_spellings_make_the_same_change(tmp_path, arguments) ->
     result = await call(tmp_path, arguments, name="edit")
 
     assert result["data"] == {"status": "applied", "content": "Updated a.py:\n1| x = 3\n2| y = 2"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("edits", "message"),
+    [
+        (
+            [{"old_string": "x = 1", "new_string": "x = 1"}],
+            "a.py: the new text equals the current text; nothing to change.",
+        ),
+        (
+            [
+                {"old_string": "x = 1", "new_string": "x = 2"},
+                {"old_string": "x = 2", "new_string": "x = 1"},
+            ],
+            "a.py already reads as these edits would leave it.",
+        ),
+    ],
+)
+async def test_edits_that_leave_the_file_as_it_is_say_so(tmp_path, edits, message) -> None:
+    (tmp_path / "a.py").write_bytes(b"x = 1\n")
+
+    result = await call(tmp_path, {"path": "a.py", "edits": edits}, name="edit")
+
+    assert result["data"] == {"status": "unchanged", "content": f"{message} No file was changed."}
 
 
 @pytest.mark.asyncio
@@ -210,6 +236,7 @@ async def test_write_creates_replaces_after_a_read_and_keeps_identical_content(t
 
 FILES = {
     "a.txt": b"one\ntwo\none\n",
+    "app.py": b"def main():\n    total = compute(1, 2)\n    print(total)\n    return total\n",
     "bin.dat": b"\xff\x00\x01 binary",
     "latin.txt": "caf\xe9\n".encode("latin-1"),
 }
@@ -266,10 +293,28 @@ NUL = (
             "edit",
             {"path": "a.txt", "edits": [{"old_string": "one", "new_string": "1"}]},
             "ambiguous_match",
-            "a.txt: old_string occurs 2 times (lines 1, 3). Include more of the surrounding text "
-            "so it matches once, or set replace_all to true to change every occurrence.\n"
+            "a.txt: old_string matches 2 places (lines 1, 3). Include more of the surrounding "
+            "text so it matches once, or set replace_all to true to change every match.\n"
             "Where it occurs:\n1| one\n2| two\n3| one\nNo file was changed.",
             id="ambiguous",
+        ),
+        pytest.param(
+            "edit",
+            {
+                "path": "app.py",
+                "edits": [
+                    {"old_string": "print(total)", "new_string": "log(total)"},
+                    {"old_string": "print(total)", "new_string": "emit(total)"},
+                ],
+            },
+            "text_not_found",
+            "app.py, edit 2 of 2: old_string was not found.\n"
+            "The closest text in the file, line 3:\n3|     log(total)\n"
+            "First difference, line 3: the file has '    log(total)' where old_string has "
+            "'print(total)'.\nLine numbers count the text as edit 1 left it.\n"
+            "Neither edit was applied, so no file was changed. Send both edits again with edit 2 "
+            "corrected or left out.",
+            id="text-an-earlier-edit-replaced",
         ),
         pytest.param(
             "edit",
@@ -281,9 +326,9 @@ NUL = (
                 ],
             },
             "ambiguous_match",
-            "a.txt, edit 2 of 2: old_string occurs 3 times (lines 1, 2, 3). Include more of the "
-            "surrounding text so it matches once, or set replace_all to true to change every "
-            "occurrence.\nWhere it occurs:\n1| one\n2| one\n3| one\n"
+            "a.txt, edit 2 of 2: old_string matches 3 places (lines 1, 2, 3). Include more of "
+            "the surrounding text so it matches once, or set replace_all to true to change every "
+            "match.\nWhere it occurs:\n1| one\n2| one\n3| one\n"
             "Line numbers count the text as edit 1 left it.\n"
             "Neither edit was applied, so no file was changed. Send both edits again with edit 2 "
             "corrected or left out.",
@@ -339,7 +384,7 @@ NUL = (
             "file_not_read",
             "a.txt already exists and this Session has not read it, so it was not replaced. Its "
             "current content follows and now counts as read: send the same call again to replace "
-            "it, or change only the parts that need it.\n1| one\n2| two\n3| one\n"
+            "it, or call edit to change only part of it.\n1| one\n2| two\n3| one\n"
             "No file was changed.",
             id="write-unread",
         ),
@@ -434,6 +479,20 @@ async def test_failed_changes_change_nothing_and_say_what_to_send(
             'edits item 1 has old_string but no new_string. Send new_string, "" to delete the '
             "text.",
             id="item-without-new",
+        ),
+        pytest.param(
+            "edit",
+            {"path": "a.txt", "edits": '[{"old_string": "one", "new_string": "1"'},
+            "edits arrived as text, not as an array. Send edits as an array of objects, each "
+            "with old_string and new_string.",
+            id="edits-as-broken-json-text",
+        ),
+        pytest.param(
+            "edit",
+            {"path": "a.txt", "edits": ["one -> 1"]},
+            "edits item 1 is not an object. Send each edit as an object with old_string and "
+            "new_string.",
+            id="item-not-an-object",
         ),
         pytest.param(
             "edit",

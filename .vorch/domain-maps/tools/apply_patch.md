@@ -249,7 +249,8 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   Diagnostics also note when the new
   text already occurs (a change made earlier; not when `old_string` contains
   `new_string`, as after a deletion); without candidates the text names
-  the `read` call. Ambiguity reports the winning match's actual locations
+  the `read` call. A first difference for a one-line copy is shown at the closest
+  candidate's line; longer copies are aligned by the lines the file holds. Ambiguity reports the winning match's actual locations
   (including section offsets) under `Where it occurs:`, not guessed alternatives.
   These excerpts never authorize a write.
 - A patch line that occurs only inside longer file lines (a fragment copied as a
@@ -363,7 +364,9 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   words or signs on each side of each change must match up to misspellings, and
   within a change other differences need 4 correct words each (a rewrite may
   differ; `3` to `4` where the file says `5` may not); changes separated only by
-  spacing count as one. When the winning passage cannot take the change,
+  spacing count as one. Spaces or tabs a change writes at its edge replace the
+  file's spacing at that seam, so `1,2` -> `5, 6` over `1, 2` gives `5, 6`, not a
+  doubled space. When the winning passage cannot take the change,
   nothing is applied elsewhere and the hunk fails `text_not_found`. Warnings
   name each replaced line and each kept line that differed (`... was edited
   anyway; it read:` / `... was left as it reads:`, long lines from just before

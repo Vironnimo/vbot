@@ -102,9 +102,9 @@ _MESSAGES = {
         "exactly, with enough unchanged lines around them to tell it apart."
     ),
     "ambiguous_replacement": (
-        "{where}: old_string occurs {occurrences} times ({lines}). Include more of the "
+        "{where}: old_string matches {occurrences} places ({lines}). Include more of the "
         "surrounding text so it matches once, or set replace_all to true to change every "
-        "occurrence."
+        "match."
     ),
     "ambiguous_copy": (
         "{where}: old_string does not match the file exactly and resembles {occurrences} "

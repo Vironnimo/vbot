@@ -48,12 +48,14 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   refusal is `invalid_arguments` ending `No file was changed.`): `file_path`/
   `filename` -> `path`, `old_str`/`old_text`/`oldText` and the `new_*` twins,
   any case or separator spelling (`filePath`, `oldString`, `replaceAll`); `edits`
-  sent as JSON text; a flat `old_string`/`new_string` call is one edit; an item's
+  or one of its items sent as JSON text (text that encodes no array or object is
+  refused: `edits arrived as text, not as an array. ...`); a flat `old_string`/`new_string` call is one edit; an item's
   own `path` is accepted when it names the call's file (or supplies the missing
   root path) and refused when it names another file. Refused before any effect,
   each naming the call to send: `edits` beside flat fields, a root `replace_all`
   beside `edits`, `content` (points to `write`), no path, no change, a half pair,
-  an unknown item field, a field given twice with different values. Coverage:
+  an item that is not an object, an unknown item field, a field given twice with
+  different values. Coverage:
   `test_other_edit_spellings_make_the_same_change`,
   `test_open_or_misdirected_calls_say_which_call_to_send`.
 - **Semantics:** the call is one step of the shared pipeline run with `atomic=True`:
@@ -71,7 +73,11 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   result or a match failure (`file_state.md`).
 - **Results** are `apply_patch`'s (`_patch_report.patch_result`, `{status,
   content}`): `Updated X:` with the changed regions as they are now, `Created X (N
-  lines).`, notes and syntax warnings; `unchanged` for identical old/new text. The
+  lines).`, notes and syntax warnings; `unchanged` for identical old/new text, and
+  `X already reads as this edit would leave it.` (`these edits`) when the edits
+  leave the file as it was, such as a change and its reversal (the
+  `already_applied` template).
+  Coverage: `test_edits_that_leave_the_file_as_it_is_say_so`. The
   display shows the path and the shared `file_changes` diff and notices.
 - **Failures** use the engine's messages with `edit` wording where they name the
   Tool (`_EDIT_TEMPLATES`) and a closing that names the edit to fix
@@ -86,8 +92,8 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
 ## Agent-facing text
 
 Texts are minimal by user decision (2026-10-04): the boundary between `edit` and
-`write` comes from the names, details belong in results and errors. About 176
-tokens (`python -m scripts.tool_lab definitions` estimate); `write` adds about 66,
+`write` comes from the names, details belong in results and errors. About 182
+tokens (`python -m scripts.tool_lab definitions` estimate); `write` adds about 76,
 against about 315 for `apply_patch`.
 
 | Text | Reason |
@@ -96,10 +102,12 @@ against about 315 for `apply_patch`.
 | `Put all changes to one file in one call; for several files, call edit once per file in the same response.` | Batching cuts round trips: several places go into one call, several files into sibling calls of one response, which run concurrently. |
 | `path`: `File to change, relative to the working directory or absolute.` | States both accepted path forms, worded like `read` and `apply_patch`. |
 | `edits`: `Changes, applied in order.` | Each edit sees the text the edits before it left, so later edits may build on earlier ones. |
-| `edits[].old_string`: `Exact text from the file. It must occur only once; add surrounding lines until it does.` | Uniqueness prevents ambiguous edits: a repeated `old_string` fails with its line numbers instead of changing a guessed occurrence; the second sentence gives the fix before the first failure. |
+| `edits[].old_string`: `Exact text from the file. Unless replace_all is true, it must occur only once; add surrounding lines until it does.` | Uniqueness prevents ambiguous edits: a repeated `old_string` fails with its line numbers instead of changing a guessed occurrence; the clause after it gives the fix before the first failure. The `replace_all` condition keeps a literal reader from padding an `old_string` it means to replace everywhere (review 2026-10-04). |
 | `edits[].new_string`: `Replacement text.` | Needs no more; `""` deleting text is said by the half-pair refusals. |
 | `edits[].replace_all`: `Replace every occurrence. Omit to replace exactly one.` | The one opt-in exception to uniqueness; omitting it keeps the safe default. |
 | Failure closings (`Neither edit was applied, so no file was changed. Send both edits again with edit 2 corrected or left out.`, `None of the N edits were applied, ...`) | The call is atomic, so the Agent must resend every edit, not only the failed one; naming the edit avoids a guess. |
+| `ambiguous_replacement`: `old_string matches N places (lines ...). Include more of the surrounding text so it matches once, or set replace_all to true to change every match.` | "matches" holds also when only whitespace-tolerant matching found the places; "occurs" was false there (review 2026-10-04). |
+| `write`'s `file_not_read` closing: `... send the same call again to replace it, or call edit to change only part of it.` | Names the Tool for the other valid intent (`partial_change` template). |
 | `file_exists`: `...old_string is empty, which creates a file, but the file already has content. Put the current text to replace in old_string, or call write to replace the whole file.` | An empty `old_string` is the creation form; on an existing file both valid intents are named. |
 
 ## Verification
