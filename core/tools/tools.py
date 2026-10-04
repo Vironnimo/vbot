@@ -772,18 +772,22 @@ class ToolPromptBlockRegistry:
     """
 
     def __init__(self) -> None:
-        self._declarations: dict[str, tuple[str | None, Callable[..., str] | None]] = {}
+        self._declarations: dict[str, tuple[str | None, Callable[..., Any] | None]] = {}
 
     def register(
         self,
         tool_name: str,
         *,
         default_text: str | None = None,
-        render: Callable[..., str] | None = None,
+        render: Callable[..., Any] | None = None,
     ) -> None:
         """Declare a prompt block for *tool_name* (exactly one text / render).
 
-        Passing both or neither raises ``ValueError`` at declaration. A second
+        *render* returns the block's text, or a ``core.prompts.RenderedBlock``
+        that also names the catalog the text lists. Chat pins a dynamic block's
+        text per prompt epoch and tells the Model about later changes in a
+        System Reminder. Passing both or neither raises ``ValueError`` at
+        declaration. A second
         declaration for the same tool name is ignored with a warning (first wins),
         mirroring how a duplicate tool name is handled.
         """

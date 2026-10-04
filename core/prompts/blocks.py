@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, Protocol
@@ -98,8 +98,10 @@ def parse_block_source(block_id: str) -> str:
 # new ``memory_files`` producer renders the memory file contents.
 BlockProducer = Callable[["BlockRenderContext"], str]
 # A dynamic block's build-time render function. Exactly one of ``default_text`` /
-# ``render`` is set on a definition. A raising render drops only that block.
-BlockRenderer = Callable[["BlockRenderContext"], str]
+# ``render`` is set on a definition. A raising render drops only that block. A
+# render may return a :class:`RenderedBlock` instead of plain text to name the
+# catalog its text lists.
+BlockRenderer = Callable[["BlockRenderContext"], "str | RenderedBlock"]
 # Whether the Agent that receives the rendered text can call a Tool, asked by the
 # Tool's registry name. Text names a Tool only when this answers ``True``.
 ToolAvailability = Callable[[str], bool]
@@ -108,6 +110,30 @@ ToolAvailability = Callable[[str], bool]
 def no_tools_available(_tool_name: str) -> bool:
     """The :data:`ToolAvailability` of an Agent that can call no Tool."""
     return False
+
+
+@dataclass(frozen=True)
+class BlockCatalog:
+    """The keyed list a dynamic block shows, so a change can be told entry by entry.
+
+    ``entries`` pairs each entry's key with the line the block shows for it, in
+    display order. ``title`` names the list for the Model (``"Registered
+    Projects"``). ``frame`` is everything else the block's text depends on: while
+    it stays the same, a changed block differs from its earlier text only in its
+    entries.
+    """
+
+    title: str
+    entries: tuple[tuple[str, str], ...]
+    frame: str = ""
+
+
+@dataclass(frozen=True)
+class RenderedBlock:
+    """A dynamic block's rendered text, and the catalog it lists when it has one."""
+
+    text: str
+    catalog: BlockCatalog | None = None
 
 
 @dataclass(frozen=True)
@@ -630,11 +656,8 @@ def resolve_block_text(
     """
     definition = block.definition
     if definition.render is not None:
-        try:
-            return definition.render(context)
-        except Exception as exc:  # noqa: BLE001 - one block drops, never the run
-            _LOGGER.warning("Dropping dynamic block %r: render failed: %s", definition.id, exc)
-            return ""
+        rendered = render_dynamic_block(definition, context)
+        return "" if rendered is None else rendered.text
 
     if definition.kind == BLOCK_KIND_DATA:
         # Data is not editable and may be request-local, with no storage path.
@@ -643,6 +666,48 @@ def resolve_block_text(
     override = override_resolver(definition, context.scope)
     text = override if override is not None else (definition.default_text or "")
     return expand_block_template(text, context, producers=producers, replacements=replacements)
+
+
+def render_dynamic_block(
+    definition: BlockDefinition, context: BlockRenderContext
+) -> RenderedBlock | None:
+    """Call a dynamic block's ``render`` in isolation; ``None`` when it fails.
+
+    A failing render, or one that returns neither text nor a
+    :class:`RenderedBlock`, is logged and drops only this block, never the run.
+    """
+    if definition.render is None:
+        raise PromptError(f"block {definition.id!r} has no render function")
+    try:
+        value = definition.render(context)
+        if isinstance(value, RenderedBlock):
+            return value
+        if isinstance(value, str):
+            return RenderedBlock(value)
+        raise TypeError(f"render returned {type(value).__name__}, not text")
+    except Exception as exc:  # noqa: BLE001 - one block drops, never the run
+        _LOGGER.warning("Dropping dynamic block %r: render failed: %s", definition.id, exc)
+        return None
+
+
+def with_pinned_texts(
+    definitions: Sequence[BlockDefinition], pinned: Mapping[str, str]
+) -> list[BlockDefinition]:
+    """Return *definitions* with each dynamic block named in *pinned* emitting that text.
+
+    The block keeps its id, owner and kind, so the gates treat it as before; only
+    its render is replaced by the pinned text.
+    """
+    return [
+        replace(definition, render=_fixed_render(pinned[definition.id]))
+        if definition.render is not None and definition.id in pinned
+        else definition
+        for definition in definitions
+    ]
+
+
+def _fixed_render(text: str) -> BlockRenderer:
+    return lambda _context: text
 
 
 def apply_replacements(text: str, replacements: Mapping[str, str]) -> str:
@@ -917,6 +982,7 @@ __all__ = [
     "BLOCK_KIND_DATA",
     "BLOCK_KIND_TEXT",
     "BLOCK_SEPARATOR",
+    "BlockCatalog",
     "BlockDefinition",
     "BlockKind",
     "BlockProducer",
@@ -930,6 +996,7 @@ __all__ = [
     "OverrideResolver",
     "OwnerActivity",
     "PromptError",
+    "RenderedBlock",
     "ResolvedBlock",
     "apply_replacements",
     "assemble_system_prompt",
@@ -940,8 +1007,10 @@ __all__ = [
     "normalize_blocks",
     "parse_block_source",
     "passes_gates",
+    "render_dynamic_block",
     "resolve_block_text",
     "resolve_layout",
     "validate_workspace_include",
+    "with_pinned_texts",
     "wrap_include_file",
 ]

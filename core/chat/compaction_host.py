@@ -31,11 +31,14 @@ from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.projects import resolve_prompt_project, resolve_skill_scope, runtime_agent_body
 from core.prompts import ProjectPromptContext
 from core.prompts.pinned_context import (
+    PINNED_DYNAMIC_BLOCKS_SLOT,
     PINNED_TOOL_DEFINITIONS_SLOT,
+    pinned_agent_body,
     pinned_memory_files,
     pinned_skill_catalog,
     pinned_soul_context,
     pinned_working_project_context,
+    pins_agent_body,
     prompt_epoch_pins,
     stamp_prompt_files_read,
 )
@@ -198,6 +201,15 @@ class ChatCompactionHost:
                 agent,
                 run.project_id,
             )
+            agent_body = await self.run_transform(
+                pinned_agent_body,
+                self._dependencies,
+                run.agent_id,
+                run.session_id,
+                agent,
+                run.project_id,
+                runtime_agent_body(agent),
+            )
             skill_project_id, identity_agent_id = resolve_skill_scope(
                 run.project_id,
                 prompt_project,
@@ -234,7 +246,7 @@ class ChatCompactionHost:
                 wire_media_types=adapter.wire_media_support(model_id),
                 max_image_bytes=self._requests._image_size_limit(adapter, model_id),
                 max_request_images=_resolve_request_image_limit(adapter, model_id),
-                agent_body=runtime_agent_body(agent),
+                agent_body=agent_body,
                 project_context=prompt_context,
                 working_project_context=working_project_context,
                 soul_context=soul_context,
@@ -409,6 +421,7 @@ class ChatCompactionHost:
             memory_prompt_mode=getattr(
                 refreshed_agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE
             ),
+            pins_agent_body=pins_agent_body(refreshed_agent),
         )
 
     async def commit_checkpoint(
@@ -493,11 +506,12 @@ class ChatCompactionHost:
         inputs = cast(RequestBuildInputs, request_inputs).merged_with_refresh(
             cast(_CompactionPromptRefresh | None, prompt_refresh)
         )
-        # The new epoch lists every Tool offered now; the commit persists its pin.
+        # The new epoch lists every Tool offered now and shows every dynamic
+        # block as it renders now; the commit persists both pins.
         projected_state = await self._requests.rebuild_live_request_state(
             agent,
             session,
-            inputs=replace(inputs, fresh_tool_epoch=True).with_session_messages(
+            inputs=replace(inputs, fresh_prompt_epoch=True).with_session_messages(
                 [*session_messages, checkpoint]
             ),
             live_messages=live_request_messages,
@@ -572,23 +586,28 @@ def _prompt_epoch(
 ) -> PromptEpoch:
     """The prompt epoch a committed checkpoint starts: fresh pins and seen Skills.
 
-    The Tool pin of the projected request always starts the new epoch, even
-    when the rest of the prompt refresh failed: the checkpoint drops the notes
-    that announced Tool changes, so the old pin would lose them.
+    The Tool pin and the dynamic block pin of the projected request always start
+    the new epoch, even when the rest of the prompt refresh failed: the
+    checkpoint drops the notes that announced their changes, so the old pins
+    would lose them.
     """
     tool_epoch = request_state.tool_epoch
-    tool_pin = {
+    prompt_blocks = request_state.prompt_blocks
+    request_pins = {
         PINNED_TOOL_DEFINITIONS_SLOT: (
             tool_epoch.pin.to_payload() if tool_epoch is not None else None
+        ),
+        PINNED_DYNAMIC_BLOCKS_SLOT: (
+            prompt_blocks.to_payload() if prompt_blocks is not None else None
         ),
         # Compacted history keeps every remaining image until a limit retires it anew.
         PINNED_IMAGE_RETIREMENT_SLOT: None,
     }
     if refresh is None:
-        return PromptEpoch(pins=tool_pin)
+        return PromptEpoch(pins=request_pins)
     return PromptEpoch(
         pins={
-            **tool_pin,
+            **request_pins,
             **prompt_epoch_pins(
                 skill_catalog=refresh.skill_catalog,
                 skill_project_id=refresh.skill_project_id,
@@ -601,6 +620,7 @@ def _prompt_epoch(
                 soul_context=refresh.soul_context,
                 memory_files_context=refresh.memory_files_context,
                 memory_prompt_mode=refresh.memory_prompt_mode,
+                agent_body=refresh.agent_body if refresh.pins_agent_body else None,
             ),
         },
         seen_skills=refresh.available_skill_names,

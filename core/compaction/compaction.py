@@ -39,6 +39,7 @@ from core.providers.adapter import estimate_wire_request_input_tokens
 from core.sessions import (
     SessionAddress,
     current_skill_activation_contents,
+    is_prompt_block_change_note,
     is_skill_context_note,
     is_tool_change_note,
     skill_tool_activation,
@@ -665,10 +666,14 @@ def _finalize_compaction(
 def _is_epoch_bound_note(message: ChatMessage) -> bool:
     """Whether *message* belongs to the prompt epoch a checkpoint ends; no Projection keeps it."""
     return (
-        message.role == "note"
-        and isinstance(message.content, str)
-        and message.content.startswith(COMPACTION_SKILL_NOTE_PREFIX)
-    ) or is_tool_change_note(message)
+        (
+            message.role == "note"
+            and isinstance(message.content, str)
+            and message.content.startswith(COMPACTION_SKILL_NOTE_PREFIX)
+        )
+        or is_tool_change_note(message)
+        or is_prompt_block_change_note(message)
+    )
 
 
 def carry_notes_into_checkpoint(

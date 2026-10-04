@@ -381,9 +381,10 @@ class StubPrompts:
         read_paths: list[Path] | None = None,
         effective_tool_definitions: Any = None,
         session_tool_grants: Any = (),
+        pinned_blocks: Any = None,
         request_block_definitions: Any = (),
     ) -> str:
-        del agent_project_id
+        del agent_project_id, pinned_blocks
         self.effective_tool_name_calls.append(
             tuple(str(definition["name"]) for definition in (effective_tool_definitions or ()))
         )
@@ -419,6 +420,10 @@ class StubPrompts:
             ],
         ]
         return "\n".join(part for part in parts if part)
+
+    def render_dynamic_blocks(self, agent: StubAgent, **_options: Any) -> dict[str, Any]:
+        # The stub contributes no Tool or Extension blocks.
+        return {}
 
     def render_soul(self, agent: StubAgent, *, on_read: Any = None) -> str:
         self.render_soul_calls += 1

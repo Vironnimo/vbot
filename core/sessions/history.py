@@ -11,6 +11,7 @@ from core.sessions._types import (
     CHANNEL_MESSAGE_NOTE_PREFIX,
     PROJECT_TOOL_LOADED_STATUS,
     PROJECT_TOOL_MESSAGE_NAME,
+    PROMPT_BLOCK_CHANGE_NOTE_PREFIX,
     SKILL_AVAILABLE_NOTE_PREFIX,
     SKILL_CONTEXT_NOTE_PREFIX,
     SKILL_TOOL_LOADED_STATUS,
@@ -202,4 +203,12 @@ def is_tool_change_note(message: ChatMessage) -> bool:
         message.role == "note"
         and isinstance(message.content, str)
         and message.content.startswith(TOOL_CHANGE_NOTE_PREFIX)
+    )
+
+
+def is_prompt_block_change_note(message: ChatMessage) -> bool:
+    return (
+        message.role == "note"
+        and isinstance(message.content, str)
+        and message.content.startswith(PROMPT_BLOCK_CHANGE_NOTE_PREFIX)
     )

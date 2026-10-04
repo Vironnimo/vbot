@@ -1,11 +1,11 @@
 """Pinned prompt-epoch snapshots stored as Session prompt pins.
 
-The rendered Skill catalog, Working Project Context, SOUL block, and
-pinned-memory text are prompt-cache state: they stay byte-identical between
-successful Compactions (Memory also refreshes when its mode changes) so ordinary
-file changes cannot break the System Prompt prefix. Assembly reads and writes
-those snapshots through the narrow dependency slice declared by
-:class:`PinnedContextDependencies`.
+The rendered Skill catalog, Working Project Context, SOUL block,
+pinned-memory text and Workspace-less Agent body are prompt-cache state: they
+stay byte-identical between successful Compactions (Memory also refreshes when
+its mode changes) so ordinary file changes cannot break the System Prompt
+prefix. Assembly reads and writes those snapshots through the narrow dependency
+slice declared by :class:`PinnedContextDependencies`.
 """
 
 from __future__ import annotations
@@ -42,6 +42,16 @@ PINNED_MEMORY_FILES_SLOT = "pinned_memory_files"
 # (``core.chat._tool_epoch``); later Tool changes reach the Model as
 # ``[tool-change]`` notes until a successful Compaction replaces it.
 PINNED_TOOL_DEFINITIONS_SLOT = "pinned_tool_definitions"
+# The texts of the Tool and Extension dynamic blocks (``render`` blocks) the
+# epoch's requests show, keyed by block id, plus their epoch key. Chat resolves
+# and reads this pin (``core.chat._prompt_block_epoch``); a later change reaches
+# the Model as a ``[prompt-block-change]`` note until a successful Compaction
+# replaces it.
+PINNED_DYNAMIC_BLOCKS_SLOT = "pinned_dynamic_blocks"
+# The verbatim prompt body of a Workspace-less Agent (a Project Config Agent's
+# imported body, a temporary participant's instructions), pinned like the SOUL
+# block so an edited Agent file cannot break the System Prompt prefix mid-epoch.
+PINNED_AGENT_BODY_SLOT = "pinned_agent_body"
 # Qualifies the Project-dependent snapshots (Working Project Context and Skill
 # catalog) with the Project they were rendered for. The working Project is
 # re-resolved at every Run admission (a Rooted Identity Agent may be re-rooted
@@ -138,6 +148,7 @@ def prompt_epoch_pins(
     soul_context: str | None,
     memory_files_context: str | None,
     memory_prompt_mode: str | None,
+    agent_body: str | None,
 ) -> dict[str, dict[str, Any] | None]:
     """Return every prompt-epoch pin a new epoch starts with, by pin slot.
 
@@ -159,6 +170,7 @@ def prompt_epoch_pins(
         ),
         (PINNED_SOUL_CONTEXT_SLOT, soul_context, {}),
         (PINNED_MEMORY_FILES_SLOT, memory_files_context, {"mode": memory_prompt_mode}),
+        (PINNED_AGENT_BODY_SLOT, agent_body, {}),
     )
     for slot, text, qualifiers in texts:
         pins[slot] = None if text is None else {"text": text, **qualifiers}
@@ -291,6 +303,42 @@ def pinned_soul_context(
     )
     stamp_prompt_files_read(dependencies.file_read_state, session_id, read_paths)
     return text
+
+
+def pins_agent_body(agent: Any) -> bool:
+    """Whether *agent*'s prompt body is a prompt-epoch pin.
+
+    A Workspace-less Agent (a Project Config Agent, a temporary participant)
+    carries its body in the ``core:agent_body`` block; an Identity Agent has none.
+    """
+    return not getattr(agent, "workspace", None)
+
+
+def pinned_agent_body(
+    dependencies: PinnedContextDependencies,
+    agent_id: str,
+    session_id: str,
+    agent: Any,
+    project_id: str | None,
+    body: str,
+) -> str:
+    """Return the prompt epoch's pinned Agent body, pinning *body* on first build.
+
+    *body* is the Agent's current verbatim body. A Project Config Agent re-reads
+    its file at every resolve, so an edited file reaches the System Prompt only
+    when a successful Compaction starts the next epoch. An Identity Agent has no
+    body: *body* is returned and nothing is pinned.
+    """
+    if not pins_agent_body(agent):
+        return body
+    return _pinned_epoch_text(
+        dependencies,
+        PINNED_AGENT_BODY_SLOT,
+        agent_id,
+        session_id,
+        project_id,
+        lambda: body,
+    )
 
 
 def pinned_memory_files(

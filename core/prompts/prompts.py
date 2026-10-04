@@ -74,13 +74,17 @@ from core.prompts.blocks import (
     CallableOwnerActivity,
     EmptyBlockStore,
     LayoutEntry,
+    OwnerActivity,
     PromptError,
+    RenderedBlock,
     ToolAvailability,
     apply_replacements,
     assemble_system_prompt,
     expand_workspace_includes,
+    render_dynamic_block,
     render_prompt_file,
     resolve_layout,
+    with_pinned_texts,
 )
 from core.tools.availability import (
     MEMORY_TOOL_NAME,
@@ -239,6 +243,7 @@ class SystemPromptManager:
         read_paths: list[Path] | None = None,
         effective_tool_definitions: Sequence[Mapping[str, Any]] | None = None,
         session_tool_grants: Sequence[str] = (),
+        pinned_blocks: Mapping[str, str] | None = None,
         request_block_definitions: Sequence[BlockDefinition] = (),
         block_details: list[JsonObject] | None = None,
     ) -> str:
@@ -288,32 +293,27 @@ class SystemPromptManager:
         Tool policy with ``session_tool_grants`` instead (previews). The same Tool
         set decides whether a notice that stands in for an oversized file or a cut
         Memory section names the Tool that shows the rest.
+
+        ``pinned_blocks`` maps Tool and Extension dynamic block ids to the text each
+        emits instead of rendering (Chat passes its prompt epoch's pinned texts,
+        see :meth:`render_dynamic_blocks`); the gates still apply, and a dynamic
+        block without a pinned text renders live.
         """
         prompt_scope = self._resolve_build_scope(agent, scope)
         scope_key = self._catalog.scope_key(prompt_scope)
-        observer: Callable[[Path], None] | None = (
-            read_paths.append if read_paths is not None else None
-        )
-        effective_tool_names = (
-            None
-            if effective_tool_definitions is None
-            else frozenset(str(definition["name"]) for definition in effective_tool_definitions)
-        )
-        context = BlockRenderContext(
-            agent=agent,
+        effective_tool_names = _tool_names(effective_tool_definitions)
+        context = self._render_context(
+            agent,
+            scope_key,
             project_context=project_context,
             working_project_context=working_project_context,
             soul_context=soul_context,
             memory_files_context=memory_files_context,
             agent_project_id=agent_project_id,
             nesting_depth=nesting_depth,
-            scope=scope_key,
-            read_observer=observer,
-            tool_available=self._tool_availability(
-                agent,
-                effective_tool_names=effective_tool_names,
-                session_tool_grants=session_tool_grants,
-            ),
+            effective_tool_names=effective_tool_names,
+            session_tool_grants=session_tool_grants,
+            read_observer=read_paths.append if read_paths is not None else None,
         )
         producers = self._build_producers(
             agent,
@@ -328,36 +328,121 @@ class SystemPromptManager:
             prompt_scope,
             agent_body=agent_body,
             layout=layout,
+            pinned_blocks=pinned_blocks,
             request_block_definitions=request_block_definitions,
         )
-        selected_blocks = getattr(agent, "prompt_blocks", None)
-        if selected_blocks is not None:
-            # An explicit per-participant selection overrides shared enablement.
-            # Every unselected contribution stays off, including future additions.
-            layout = [
-                LayoutEntry(
-                    id=block.definition.id,
-                    enabled=block.definition.id in selected_blocks,
-                    source=block.definition.source,
-                )
-                for block in resolve_layout(definitions, layout)
-            ]
         return assemble_system_prompt(
             definitions,
-            layout,
+            _selected_layout(agent, definitions, layout),
             context,
-            owner_activity=CallableOwnerActivity(
-                lambda owner, owner_agent: self._is_owner_active(
-                    owner,
-                    owner_agent,
-                    effective_tool_names=effective_tool_names,
-                    session_tool_grants=session_tool_grants,
-                )
-            ),
+            owner_activity=self._owner_activity(effective_tool_names, session_tool_grants),
             override_resolver=self._catalog.override_resolver(prompt_scope),
             producers=producers,
             replacements=self._runtime_replacements(agent),
             block_details=block_details,
+        )
+
+    def render_dynamic_blocks(
+        self,
+        agent: PromptAgent,
+        scope: Any = None,
+        *,
+        block_ids: Collection[str] | None = None,
+        skip: Collection[str] = (),
+        project_context: ProjectPromptContext | None = None,
+        working_project_context: str | None = None,
+        soul_context: str | None = None,
+        memory_files_context: str | None = None,
+        agent_project_id: str | None = None,
+        nesting_depth: int = 0,
+        effective_tool_definitions: Sequence[Mapping[str, Any]] | None = None,
+        session_tool_grants: Sequence[str] = (),
+    ) -> dict[str, RenderedBlock]:
+        """Render live the Tool and Extension dynamic blocks a build with these inputs shows.
+
+        Covers every contributed block with a ``render`` that is enabled and whose
+        owner is active (gates 1 and 2), only those in *block_ids* when given and
+        none in *skip*, keyed by block id. Each renders exactly as
+        :meth:`build_system_prompt` renders it without a pinned text; an empty text
+        is kept (the block collapses), a failing render is left out. Chat pins
+        these texts per prompt epoch and compares later renders with them to tell
+        the Model what changed.
+        """
+        prompt_scope = self._resolve_build_scope(agent, scope)
+        scope_key = self._catalog.scope_key(prompt_scope)
+        effective_tool_names = _tool_names(effective_tool_definitions)
+        context = self._render_context(
+            agent,
+            scope_key,
+            project_context=project_context,
+            working_project_context=working_project_context,
+            soul_context=soul_context,
+            memory_files_context=memory_files_context,
+            agent_project_id=agent_project_id,
+            nesting_depth=nesting_depth,
+            effective_tool_names=effective_tool_names,
+            session_tool_grants=session_tool_grants,
+        )
+        owner_activity = self._owner_activity(effective_tool_names, session_tool_grants)
+        dynamic = [definition for definition in self._catalog.definitions if definition.render]
+        layout = _selected_layout(agent, dynamic, self._catalog.resolve_layout(scope_key))
+        rendered: dict[str, RenderedBlock] = {}
+        for block in resolve_layout(dynamic, layout):
+            definition = block.definition
+            if (
+                not block.enabled
+                or definition.id in skip
+                or (block_ids is not None and definition.id not in block_ids)
+                or not owner_activity.is_owner_active(definition.owner, agent)
+            ):
+                continue
+            value = render_dynamic_block(definition, context)
+            if value is not None:
+                rendered[definition.id] = value
+        return rendered
+
+    def _render_context(
+        self,
+        agent: PromptAgent,
+        scope_key: str,
+        *,
+        project_context: ProjectPromptContext | None,
+        working_project_context: str | None,
+        soul_context: str | None,
+        memory_files_context: str | None,
+        agent_project_id: str | None,
+        nesting_depth: int,
+        effective_tool_names: frozenset[str] | None,
+        session_tool_grants: Sequence[str],
+        read_observer: Callable[[Path], None] | None = None,
+    ) -> BlockRenderContext:
+        return BlockRenderContext(
+            agent=agent,
+            project_context=project_context,
+            working_project_context=working_project_context,
+            soul_context=soul_context,
+            memory_files_context=memory_files_context,
+            agent_project_id=agent_project_id,
+            nesting_depth=nesting_depth,
+            scope=scope_key,
+            read_observer=read_observer,
+            tool_available=self._tool_availability(
+                agent,
+                effective_tool_names=effective_tool_names,
+                session_tool_grants=session_tool_grants,
+            ),
+        )
+
+    def _owner_activity(
+        self, effective_tool_names: frozenset[str] | None, session_tool_grants: Sequence[str]
+    ) -> OwnerActivity:
+        return CallableOwnerActivity(
+            lambda owner, owner_agent: self._is_owner_active(
+                owner,
+                owner_agent,
+                effective_tool_names=effective_tool_names,
+                session_tool_grants=session_tool_grants,
+            )
         )
 
     async def build_system_prompt_async(
@@ -381,6 +466,7 @@ class SystemPromptManager:
         *,
         agent_body: str,
         layout: Sequence[LayoutEntry] = (),
+        pinned_blocks: Mapping[str, str] | None = None,
         request_block_definitions: Sequence[BlockDefinition] = (),
     ) -> list[BlockDefinition]:
         """Build the full ordered-agnostic block-definition list for one build.
@@ -393,13 +479,15 @@ class SystemPromptManager:
         can never be shadowed by a contributor or a custom block. A custom
         ``user:`` block has no contributor definition; it is synthesized from the
         scope's *layout* (its existence is layout entry + override file, T1) so it
-        renders its override text.
+        renders its override text. A contributed dynamic block named in
+        *pinned_blocks* emits its pinned text instead of rendering.
         """
+        contributed = self._catalog.definitions
         definitions = [
             *self._catalog.core_text_definitions(prompt_scope, agent.id),
             memory_block_definition(),
             *self._data_block_definitions(agent_body=agent_body),
-            *self._catalog.definitions,
+            *(with_pinned_texts(contributed, pinned_blocks) if pinned_blocks else contributed),
             *request_block_definitions,
             *self._catalog.custom_definitions(layout),
         ]
@@ -1046,6 +1134,33 @@ class SystemPromptManager:
     def reset_layout(self, scope: Any = None) -> JsonObject:
         """Reset a scope's layout (order + on/off) to the bundled default (T6)."""
         return self._catalog.reset_layout(scope)
+
+
+def _tool_names(definitions: Sequence[Mapping[str, Any]] | None) -> frozenset[str] | None:
+    if definitions is None:
+        return None
+    return frozenset(str(definition["name"]) for definition in definitions)
+
+
+def _selected_layout(
+    agent: PromptAgent, definitions: Sequence[BlockDefinition], layout: Sequence[LayoutEntry]
+) -> Sequence[LayoutEntry]:
+    """Return *layout*, or the Agent's explicit block selection over *definitions*.
+
+    An explicit per-participant selection overrides shared enablement. Every
+    unselected contribution stays off, including future additions.
+    """
+    selected_blocks = getattr(agent, "prompt_blocks", None)
+    if selected_blocks is None:
+        return layout
+    return [
+        LayoutEntry(
+            id=block.definition.id,
+            enabled=block.definition.id in selected_blocks,
+            source=block.definition.source,
+        )
+        for block in resolve_layout(definitions, layout)
+    ]
 
 
 def _current_local_date(timezone_name: str) -> str:
