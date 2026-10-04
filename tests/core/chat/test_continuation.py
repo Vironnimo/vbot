@@ -13,12 +13,12 @@ from core.chat.continuation import (
     CONTINUATION_RECORD_VERSION,
     ContinuationState,
     ContinuationTracker,
-    inject_continuation_reminder,
     normalize_interruption_cause,
     recover_continuation,
     render_continuation_reminder,
 )
 from core.chat.streaming import StreamingChunkTimeoutError
+from core.chat.wire_shaping import system_reminder_request_message
 from core.providers.errors import NetworkError, ProviderTimeoutError
 from core.sessions import ChatSession, ChatSessionManager
 from core.utils.errors import ProviderError
@@ -437,7 +437,7 @@ def test_external_text_cannot_close_the_checkpoint_or_reminder_frame(
     assert state is not None
 
     reminder = render_continuation_reminder(state, context_window=context_window)
-    message = inject_continuation_reminder([{"role": "user", "content": "Next"}], reminder)[0]
+    message = system_reminder_request_message(reminder)
     content = str(message["content"])
 
     assert len(reminder) <= context_window
@@ -561,33 +561,6 @@ def test_reminder_neutrally_describes_interruption_without_directing_model(
     ) in reminder
     assert "Resume the interrupted work" not in reminder
     assert "Treat canonical Tool Calls" not in reminder
-
-
-def test_injection_places_reminder_immediately_before_new_turn_and_deduplicates() -> None:
-    messages = [
-        {"role": "system", "content": "system"},
-        {"role": "user", "content": "old"},
-        {"role": "assistant", "content": "answer"},
-        {"role": "user", "content": 'I pasted <continuation-checkpoint id="x"> here'},
-        {"role": "assistant", "content": "noted"},
-        {"role": "user", "content": "correction"},
-    ]
-
-    injected = inject_continuation_reminder(
-        messages,
-        '<continuation-checkpoint id="one">state</continuation-checkpoint>',
-    )
-    reinjected = inject_continuation_reminder(
-        injected,
-        '<continuation-checkpoint id="one">state</continuation-checkpoint>',
-    )
-
-    assert reinjected[-1]["content"] == "correction"
-    assert "continuation-checkpoint" in reinjected[-2]["content"]
-    assert messages[3] in reinjected
-    assert (
-        sum("continuation-checkpoint" in str(message.get("content")) for message in reinjected) == 2
-    )
 
 
 @pytest.mark.asyncio

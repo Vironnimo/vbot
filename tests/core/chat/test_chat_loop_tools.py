@@ -432,7 +432,8 @@ async def test_real_run_cancel_during_parallel_tools_repairs_the_next_request(
     for message in repaired_results:
         assert json.loads(message["content"])["error"]["code"] == "result_unavailable"
     final_history = history(runtime)
-    assert persisted_roles(final_history) == ["user", "assistant", "user", "assistant"]
+    # The next Run persists the cancelled Run's continuation checkpoint before its input.
+    assert persisted_roles(final_history) == ["user", "assistant", "note", "user", "assistant"]
     assert [m.status for m in final_history if m.role == "run_summary"] == [
         "cancelled",
         "completed",

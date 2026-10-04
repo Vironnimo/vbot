@@ -19,10 +19,6 @@ from core.chat._run_state import (
     RequestState,
     _CompactionPromptRefresh,
 )
-from core.chat.continuation import (
-    ContinuationState,
-    render_continuation_reminder,
-)
 from core.chat.events import _close_adapter
 from core.chat.messages import ChatMessage, JsonObject
 from core.chat.model_resolution import (
@@ -493,7 +489,6 @@ class ChatCompactionHost:
         active_adapter: Any,
         active_model_id: str,
         live_request_messages: list[JsonObject] | None = None,
-        continuation_reminder: str | None = None,
     ) -> tuple[ChatMessage, RequestState]:
         inputs = cast(RequestBuildInputs, request_inputs).merged_with_refresh(
             cast(_CompactionPromptRefresh | None, prompt_refresh)
@@ -506,7 +501,6 @@ class ChatCompactionHost:
                 [*session_messages, checkpoint]
             ),
             live_messages=live_request_messages,
-            continuation_reminder=continuation_reminder,
         )
         context_tokens_after = await self.run_transform(
             estimate_wire_request_input_tokens,
@@ -531,7 +525,6 @@ class ChatCompactionHost:
         context_tokens_before: int,
         prompt_refresh: object | None,
         live_request_messages: list[JsonObject] | None,
-        continuation_reminder: str | None,
     ) -> tuple[ChatMessage, RequestState]:
         return await self.project_post_compaction_request(
             agent=context.agent,
@@ -544,23 +537,7 @@ class ChatCompactionHost:
             active_adapter=target.adapter,
             active_model_id=target.model_id,
             live_request_messages=live_request_messages,
-            continuation_reminder=continuation_reminder,
         )
-
-    async def refresh_continuation_reminder(
-        self,
-        context: Any,
-        *,
-        context_window: int | None,
-    ) -> None:
-        if context.continuation_reminder is None or context.continuation_tracker is None:
-            return
-        stored = await context.session.load_continuation_async()
-        if stored is not None:
-            context.continuation_reminder = render_continuation_reminder(
-                ContinuationState.from_stored(stored),
-                context_window=context_window,
-            )
 
     async def rebuild_after_stale_compaction(
         self,
@@ -576,7 +553,6 @@ class ChatCompactionHost:
                 context.session_snapshot.active_messages
             ),
             live_messages=live_request_messages,
-            continuation_reminder=context.continuation_reminder,
         )
 
     @staticmethod
