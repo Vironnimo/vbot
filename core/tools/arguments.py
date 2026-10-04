@@ -288,11 +288,13 @@ def _check_int_range(
     number: int, *, field_name: str, minimum: int | None, maximum: int | None
 ) -> None:
     if minimum is not None and maximum is not None and not (minimum <= number <= maximum):
-        raise ToolContractError(f"{field_name} must be between {minimum} and {maximum}")
+        raise ToolContractError(
+            f"{field_name} must be between {minimum} and {maximum}; received {number}"
+        )
     if minimum is not None and number < minimum:
-        raise ToolContractError(f"{field_name} must be >= {minimum}")
+        raise ToolContractError(f"{field_name} must be at least {minimum}; received {number}")
     if maximum is not None and number > maximum:
-        raise ToolContractError(f"{field_name} must be <= {maximum}")
+        raise ToolContractError(f"{field_name} must be at most {maximum}; received {number}")
 
 
 def _check_float_minimum(
@@ -301,9 +303,11 @@ def _check_float_minimum(
     if minimum is None:
         return
     if exclusive and number <= minimum:
-        raise ToolContractError(f"{field_name} must be > {minimum}")
+        raise ToolContractError(
+            f"{field_name} must be greater than {minimum:g}; received {number:g}"
+        )
     if not exclusive and number < minimum:
-        raise ToolContractError(f"{field_name} must be >= {minimum}")
+        raise ToolContractError(f"{field_name} must be at least {minimum:g}; received {number:g}")
 
 
 __all__ = [
