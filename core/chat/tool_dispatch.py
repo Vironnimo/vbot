@@ -460,7 +460,9 @@ class _EmittingToolRegistry(ToolRegistry):
             if result.get("ok") is True:
                 context._commit_owned_effects()
 
-            if result.get("ok") is True and context.result_media:
+            # Media goes with failures too: a Tool attaches it for the Model to see,
+            # such as a screenshot of what a failed input step left on screen.
+            if context.result_media:
                 self._tool_media[context.tool_call_id] = context.result_media
             timing = _timing_payload(started_at, started_perf)
             self._tool_timings[context.tool_call_id] = timing

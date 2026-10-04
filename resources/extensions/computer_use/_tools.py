@@ -42,6 +42,7 @@ ACTIONS = (
 SCROLL_DIRECTIONS = ("up", "down", "left", "right")
 APPS_ACTIONS = ("list", "open", "request", "release")
 MAX_BATCH_ACTIONS = 60
+MAX_PATH_POINTS = 200
 
 COMPUTER_DESCRIPTION = (
     "Operate the desktop of the computer the vBot server runs on (Windows) with "
@@ -63,7 +64,8 @@ COMPUTER_DESCRIPTION = (
 COMPUTER_BATCH_DESCRIPTION = (
     "Run several computer actions in one call when you can predict the steps, such as "
     "clicking a field, typing and pressing enter. Actions run in order; the batch stops "
-    "at the first one that fails, and the result says which steps ran. Each action takes "
+    "at the first one that fails, and the result says which steps ran and, if input was "
+    "sent, shows the screen in a fresh screenshot. Each action takes "
     "the same fields as computer, except display. Coordinates refer to images you received "
     "before this call: the latest screenshot, or the image named by screenshot_id. Screenshot and "
     "zoom actions return their images after the batch, in order, and a batch that sent "
@@ -102,11 +104,24 @@ _ACTION_PROPERTIES: dict[str, Any] = {
         "[x, y] in the selected image where left_click_drag starts. "
         "Omit to start at the pointer's position."
     ),
+    "path": {
+        "type": "array",
+        "items": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2},
+        "minItems": 2,
+        "maxItems": MAX_PATH_POINTS,
+        "description": (
+            f"left_click_drag along a line through 2-{MAX_PATH_POINTS} points [x, y] of the "
+            "selected image, in place of start_coordinate and coordinate: the left button "
+            "goes down at the first point, the pointer moves straight from point to point "
+            "and the button comes up at the last. Use it to draw, select with a lasso or "
+            "follow a curve; more points give a rounder curve."
+        ),
+    },
     "screenshot_id": {
         "type": "string",
         "description": (
-            "The screenshot_id of the image that coordinate, start_coordinate or region "
-            "refer to, as a result gave it. Omit to use the latest screenshot; a zoom image "
+            "The screenshot_id of the image that coordinate, start_coordinate, path or "
+            "region refer to, as a result gave it. Omit to use the latest screenshot; a zoom image "
             "is used only when named here."
         ),
     },
@@ -148,7 +163,9 @@ _ACTION_PROPERTIES: dict[str, Any] = {
     "duration": {
         "type": "number",
         "description": (
-            "Seconds, 0-100: how long hold_key holds the keys, or how long wait waits (default 1)."
+            "Seconds, 0-100: how long hold_key holds the keys, how long wait waits (default "
+            "1), or how long left_click_drag takes to move (default: 1 s per 1000 pixels of "
+            "the drag, 0.25-5 s)."
         ),
     },
     "region": {
@@ -261,6 +278,7 @@ _FIELD_ALIASES = SpellingAliases(
             "from_coordinate",
             "drag_start",
         ),
+        "path": ("points", "waypoints", "drag_path", "stroke"),
         "region": ("rect", "rectangle", "area", "box", "bbox", "bounds", "zoom_region"),
         "text": (
             "key",
@@ -332,6 +350,7 @@ _READ_ACTIONS = frozenset({"screenshot", "zoom", "wait", "cursor_position"})
 _OPTIONAL = (
     "coordinate",
     "start_coordinate",
+    "path",
     "text",
     "scroll_direction",
     "scroll_amount",
@@ -417,6 +436,18 @@ def _numbers(value: Any, count: int) -> list[int] | None:
 def _point(value: Any) -> Any:
     """``"x,y"``, ``"(x, y)"``, ``{"x": .., "y": ..}`` and fractional pairs as ``[x, y]``."""
     return _numbers(value, 2) or value if value not in (None, "", []) else None
+
+
+def _path(value: Any) -> Any:
+    """A list of points in any representation ``_point`` reads, such as OpenAI's ``{x, y}``."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return value
+    if not isinstance(value, list):
+        return value
+    return [_point(item) for item in value]
 
 
 def _region(value: Any) -> Any:
@@ -539,7 +570,6 @@ def _repair_action(arguments: dict[str, Any], tool: str) -> None:
 
 def _repair_fields(arguments: dict[str, Any], tool: str) -> None:
     """Fields of other harnesses whose meaning is unambiguous for this action."""
-    action = arguments["action"]
     x, y = _pop(arguments, ("x",)), _pop(arguments, ("y",))
     if x is not None or y is not None:
         point = [_number(x[1] if x else None), _number(y[1] if y else None)]
@@ -550,17 +580,6 @@ def _repair_fields(arguments: dict[str, Any], tool: str) -> None:
                 tool, f"x and y say {point}, but coordinate says {arguments['coordinate']}."
             )
         arguments["coordinate"] = point
-    path = _pop(arguments, ("path", "points"))
-    if path is not None:
-        points = [_numbers(item, 2) for item in path[1]] if isinstance(path[1], list) else []
-        if action != "left_click_drag" or len(points) != 2 or None in points:
-            raise _refuse(
-                tool,
-                "a drag takes a start and an end point: send "
-                '{"action":"left_click_drag","start_coordinate":[x0, y0],"coordinate":[x1, y1]}.',
-            )
-        arguments.setdefault("start_coordinate", points[0])
-        arguments.setdefault("coordinate", points[1])
     if _pop(arguments, _PIXEL_SCROLL_FIELDS) is not None:
         raise _refuse(
             tool,
@@ -679,6 +698,7 @@ _APPS_CONTRACT = _contract("computer_apps", COMPUTER_APPS_PARAMETERS)
 _FIELD_NORMALIZERS: Mapping[str, Callable[[Any], Any]] = {
     "coordinate": _point,
     "start_coordinate": _point,
+    "path": _path,
     "region": _region,
     "display": _display,
 }
@@ -775,6 +795,7 @@ __all__ = [
     "COMPUTER_DESCRIPTION",
     "COMPUTER_PARAMETERS",
     "MAX_BATCH_ACTIONS",
+    "MAX_PATH_POINTS",
     "RESULT_SCHEMA",
     "SCROLL_DIRECTIONS",
     "normalize_apps",

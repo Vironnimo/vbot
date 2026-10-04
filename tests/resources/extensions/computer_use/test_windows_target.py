@@ -84,6 +84,30 @@ def test_absolute_mouse_coordinates_land_on_the_requested_pixel(origin, size):
         assert origin + normalized * size // 65536 == position  # how Windows maps it back
 
 
+@pytest.mark.parametrize(
+    "path,seconds",
+    [
+        ([(0, 0), (100, 0)], 0.25),
+        ([(0, 0), (300, 0), (300, 100), (0, 100)], 1.5),
+        ([(5, 5), (5, 5), (5, 5)], 0.0),
+    ],
+)
+def test_a_drag_passes_every_point_at_steady_speed(path, seconds):
+    steps = _win_input.drag_steps(path, seconds)
+    positions = [(x, y) for _, x, y in steps]
+    times = [at for at, _, _ in steps]
+    assert all(point in positions for point in path[1:])
+    assert positions[-1] == path[-1]
+    assert times == sorted(times) and times[-1] == pytest.approx(seconds)
+    # Moves come about every 10 ms, and no move jumps further than the speed allows.
+    assert len(steps) >= max(len(path) - 1, round(seconds / 0.01))
+    if seconds:
+        length = sum(abs(a[0] - b[0]) + abs(a[1] - b[1]) for a, b in itertools.pairwise(path))
+        step = length / len(steps)
+        moves = itertools.pairwise([path[0], *positions])
+        assert all(abs(a[0] - b[0]) + abs(a[1] - b[1]) <= step + 2 for a, b in moves)
+
+
 def test_typed_text_presses_enter_once_per_line_break_and_tab_for_tabs():
     assert _win_input.text_units("a\r\nb\rc\nd\te") == [
         (ord("a"),), "enter", (ord("b"),), "enter", (ord("c"),), "enter", (ord("d"),), "tab",

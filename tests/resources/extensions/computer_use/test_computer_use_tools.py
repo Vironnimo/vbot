@@ -182,8 +182,9 @@ async def test_zoom_coordinates_are_local_to_the_returned_crop_when_named(
     result = await computer.call(
         "computer", {"action": "zoom", "region": [100, 100, 300, 200]}, context
     )
-    assert "400x200 pixels" in model_text(result)
-    assert [image.size for image in images(context)] == [(400, 200)]
+    # The region spans 400x200 screen pixels; a zoom that small is enlarged twice.
+    assert "800x400 pixels" in model_text(result)
+    assert [image.size for image in images(context)] == [(800, 400)]
     crop_id = screenshot_id(context)
     assert model_text(result).endswith(
         f'To click something you see here, pass screenshot_id="{crop_id}" with its position '
@@ -191,12 +192,12 @@ async def test_zoom_coordinates_are_local_to_the_returned_crop_when_named(
     )
     result = await computer.computer(
         action="left_click_drag",
-        start_coordinate=[50, 50],
-        coordinate=[150, 100],
+        start_coordinate=[100, 100],
+        coordinate=[300, 200],
         screenshot_id=crop_id,
     )
     assert result["ok"], result
-    assert computer.target.inputs[-1] == ("drag", (-2886, 250), (-2786, 300), [])
+    assert computer.target.inputs[-1] == ("drag", [(-2886, 250), (-2786, 300)], 0.25, [])
     # A zoom is a magnifier: without screenshot_id, coordinates stay on the screenshot.
     await computer.computer(action="screenshot")
     await computer.computer(action="zoom", region=[100, 100, 300, 200])
@@ -206,23 +207,23 @@ async def test_zoom_coordinates_are_local_to_the_returned_crop_when_named(
     context = computer.context_for("computer")
     result = await computer.call(
         "computer",
-        {"action": "zoom", "screenshot_id": crop_id, "region": [50, 50, 150, 100], "scale": 0.5},
+        {"action": "zoom", "screenshot_id": crop_id, "region": [100, 100, 300, 200], "scale": 0.5},
         context,
     )
     assert result["ok"], result
-    assert images(context)[0].size == (100, 50)
+    assert images(context)[0].size == (400, 200)
     nested_id = screenshot_id(context)
-    # The nested zoom shows physical [-2886, 250] onward, one image pixel per screen pixel.
+    # The nested zoom shows physical [-2886, 250] onward, four image pixels per screen pixel.
     result = await computer.computer(
-        action="left_click", coordinate=[25, 10], screenshot_id=nested_id
+        action="left_click", coordinate=[100, 40], screenshot_id=nested_id
     )
     assert result["ok"]
     assert computer.target.inputs[-1] == ("click", -2861, 260, "left", 1, [])
     result = await computer.computer(
-        action="zoom", screenshot_id=crop_id, region=[350, 0, 450, 100]
+        action="zoom", screenshot_id=crop_id, region=[750, 0, 850, 100]
     )
     assert result["error"]["code"] == "invalid_arguments"
-    assert "400x200" in result["error"]["message"]
+    assert "800x400" in result["error"]["message"]
 
 
 async def test_window_view_includes_owned_popups_and_spans_displays(
@@ -344,11 +345,18 @@ async def paint_on_the_wide_display(computer: Harness) -> None:
                 "coordinate": [200, 150],
                 "text": "alt",
             },
-            [("drag", (-2935, 201), (-2735, 301), ["alt"])],
+            [("drag", [(-2935, 201), (-2735, 301)], 0.25, ["alt"])],
         ),
         (
             {"action": "left_click_drag", "coordinate": [200, 150]},
-            [("drag", (-2000, 500), (-2735, 301), [])],
+            [("drag", [(-2000, 500), (-2735, 301)], 0.25, [])],
+        ),
+        (
+            {
+                "action": "left_click_drag",
+                "path": [[100, 100], [700, 100], [700, 400], [100, 400]],
+            },
+            [("drag", [(-2935, 201), (-1735, 201), (-1735, 801), (-2935, 801)], 1.5, [])],
         ),
         (
             {"action": "left_mouse_up", "coordinate": [300, 300]},
@@ -460,6 +468,17 @@ async def test_keys_are_refused_when_another_app_came_to_the_front(computer: Har
         ({"action": "screenshot", "view": "window", "display": "1"}, "Omit display"),
         ({"action": "type", "text": "x", "coordinate": [200, 150]}, "computer_batch"),
         ({"action": "mouse_move"}, '"coordinate": [x, y]'),
+        ({"action": "left_click_drag"}, '"start_coordinate" and "coordinate", or "path"'),
+        (
+            {"action": "left_click_drag", "path": [[200, 150], [300, 200]], "coordinate": [1, 1]},
+            "not both",
+        ),
+        ({"action": "left_click_drag", "path": [[200, 150]]}, '"path" needs at least 2 items'),
+        (
+            {"action": "left_click_drag", "path": [[200, 150], [300, 200], [1300, 200]]},
+            "path point 3 [1300, 200] is outside image",
+        ),
+        ({"action": "mouse_move", "path": [[200, 150], [300, 200]]}, "does not take a path"),
         ({"action": "scroll", "coordinate": [200, 150]}, '"scroll_direction"'),
         ({"action": "hold_key", "text": "shift"}, '"duration"'),
         ({"action": "hold_key", "text": "a b", "duration": 1}, "one key or chord"),
@@ -505,16 +524,18 @@ async def test_key_names_from_other_harnesses_press_canonical_keys(
     assert computer.target.inputs == [("keys", chord, 1) for chord in chords]
 
 
-async def test_unexpected_target_failure_says_whether_input_was_sent(
-    computer: Harness,
-) -> None:
+async def test_target_failure_after_input_shows_the_screen(computer: Harness) -> None:
     computer.target.fail["type"] = computer_use.TargetError("The keyboard layout is missing.")
-    result = await computer.computer(action="type", text="x")
+    context = computer.context_for("computer")
+    result = await computer.call("computer", {"action": "type", "text": "x"}, context)
     assert result["error"]["code"] == "computer_use_failed"
+    shot = screenshot_id(context)
     assert result["error"]["message"] == (
-        "The keyboard layout is missing. Input may have been sent; take a screenshot before "
-        "repeating it."
+        "The keyboard layout is missing. Input may have been sent.\nThe screen now: Screenshot "
+        f'of foreground window "Notepad": 500x400 pixels, screenshot_id="{shot}". Use '
+        "positions in this image as coordinates."
     )
+    assert len(images(context)) == 1
     computer.target.fail["move"] = computer_use.TargetError("The pointer is blocked.")
     await computer.computer(action="screenshot", view="display")
     result = await computer.computer(action="mouse_move", coordinate=[200, 150])

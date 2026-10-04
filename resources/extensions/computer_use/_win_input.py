@@ -8,8 +8,11 @@ releases everything it holds before an interruption or input failure surfaces.
 from __future__ import annotations
 
 import ctypes as ct
+import itertools
 import logging
+import math
 import threading
+import time
 
 from . import _win32
 from .target import BUTTONS, InputInterrupted, TargetError
@@ -99,7 +102,9 @@ _WHEEL_DELTA = 120
 # Windows 11 Notepad and other WinUI text boxes drop or repeat keys that go down and
 # up in the same instant; a held key followed by a short gap reads like real typing.
 _KEY_HOLD, _KEY_GAP = 0.02, 0.02
-_DRAG_STEPS, _DRAG_SECONDS = 15, 0.25
+# A drag moves the pointer this often, so apps that sample it see a continuous stroke.
+_DRAG_INTERVAL = 0.01
+_DRAG_MAX_STEPS = 10_000
 _BLOCKED = (
     "Windows blocked the input: the screen may be locked, or a secure prompt such as "
     "User Account Control may be open. Take a screenshot to check, and ask the user to "
@@ -119,6 +124,35 @@ def decode_key_scan(result: int) -> tuple[int, tuple[str, ...]] | None:
     if state & ~0x7:
         return None
     return vk, tuple(name for bit, name in _SHIFT_STATE if state & bit)
+
+
+def drag_steps(path: list[tuple[int, int]], seconds: float) -> list[tuple[float, int, int]]:
+    """Plan a drag through *path*: ``(time, x, y)`` moves after the button went down.
+
+    The pointer travels the straight segments between the points at constant speed
+    and passes every point exactly; a move comes about every ``_DRAG_INTERVAL``.
+    Without distance (all points equal) the time is split evenly between segments.
+    """
+    segments = list(itertools.pairwise(path))
+    lengths = [math.dist(start, end) for start, end in segments]
+    total = sum(lengths)
+    wanted = min(_DRAG_MAX_STEPS, max(len(segments), math.ceil(seconds / _DRAG_INTERVAL)))
+    steps: list[tuple[float, int, int]] = []
+    elapsed = 0.0
+    for (start, end), length in zip(segments, lengths, strict=True):
+        share = length / total if total else 1 / len(segments)
+        count = max(1, math.ceil(wanted * share))
+        for step in range(1, count + 1):
+            fraction = step / count
+            steps.append(
+                (
+                    elapsed + seconds * share * fraction,
+                    round(start[0] + (end[0] - start[0]) * fraction),
+                    round(start[1] + (end[1] - start[1]) * fraction),
+                )
+            )
+        elapsed += seconds * share
+    return steps
 
 
 def absolute_coordinate(position: int, origin: int, size: int) -> int:
@@ -239,22 +273,21 @@ class WindowsInput:
         finally:
             self._release_keys(keys)
 
-    def drag(self, start: tuple[int, int], end: tuple[int, int], modifiers: list[str]) -> None:
+    def drag(self, path: list[tuple[int, int]], seconds: float, modifiers: list[str]) -> None:
         _win32.enter_thread()
         keys = self._plan(modifiers)
-        self._inside_desktop(*end)
+        for point in path:
+            self._inside_desktop(*point)
         press, release = self._button_flags("left")
-        self._move(*start)
+        self._move(*path[0])
         try:
             self._press_keys(keys)
             self._press("button:left", mouse_event(press), mouse_event(release))
             self._pause(0.05)
-            for step in range(1, _DRAG_STEPS + 1):
-                self._pause(_DRAG_SECONDS / _DRAG_STEPS)
-                self._move(
-                    round(start[0] + (end[0] - start[0]) * step / _DRAG_STEPS),
-                    round(start[1] + (end[1] - start[1]) * step / _DRAG_STEPS),
-                )
+            began = time.monotonic()
+            for at, x, y in drag_steps(path, seconds):
+                self._pause(at - (time.monotonic() - began))
+                self._move(x, y)
             self._pause(0.05)  # let the drop target notice the hover before release
             self._release("button:left", strict=True)
         finally:

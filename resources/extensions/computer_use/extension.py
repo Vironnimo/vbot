@@ -494,7 +494,7 @@ class ComputerUseService:
         except ActionError as error:
             return self._failed(tool, "invalid_arguments", str(error))
         except CallRefusedError as refusal:
-            return self._failed(tool, refusal.code, str(refusal))
+            return self._failed(tool, refusal.code, _with_screen(str(refusal), desktop))
         except InputInterrupted:
             return self._failed(
                 tool,
@@ -502,7 +502,9 @@ class ComputerUseService:
                 f"{self._stopped_text()}; held keys and buttons were released. {_STOPPED_ADVICE}",
             )
         except TargetError as error:
-            return self._failed(tool, error.code, _target_text(error, desktop))
+            # A batch error already says which of its actions may have sent input.
+            text = str(error).rstrip() if tool == "computer_batch" else _target_text(error, desktop)
+            return self._failed(tool, error.code, _with_screen(text, desktop))
         except Exception as error:
             self.api.logger.exception("Computer Use %s call failed", tool)
             return self._failed(
@@ -606,7 +608,26 @@ class ComputerUseService:
                 + f". Held keys and buttons were released. {_STOPPED_ADVICE}",
                 "computer_use_interrupted",
             ) from None
+        except TargetError:
+            await self._screen_after_failure(desktop)
+            raise
         return "\n".join([*lines, *action.notes])
+
+    async def _screen_after_failure(self, desktop: Desktop) -> None:
+        """Screenshot the result of a failed call that had sent input.
+
+        The Agent sees what the input did without another call; the screenshot's
+        text goes to ``desktop.failure_screen``. Without input nothing is taken.
+        """
+        if not desktop.input_started:
+            return
+        try:
+            await self._pause(SETTLE_SECONDS)
+            desktop.failure_screen = await self._on_worker(desktop.screenshot)
+        except TargetError:
+            pass
+        except Exception:
+            self.api.logger.exception("Computer Use screenshot after a failed call failed")
 
     async def _act(self, context: ToolContext, desktop: Desktop, action: Action, frame: Any) -> str:
         done = await self._on_worker(desktop.act, action, frame)
@@ -654,7 +675,11 @@ class ComputerUseService:
                 lines.extend(f"   {note}" for note in action.notes)
                 sent = sent or action.sends_input
         except (CallRefusedError, TargetError) as error:
-            raise _batch_error(error, actions, number, lines, self._stopped_text()) from None
+            if not isinstance(error, InputInterrupted):
+                await self._screen_after_failure(desktop)
+            raise _batch_error(
+                error, actions, number, lines, self._stopped_text(), desktop.failure_screen
+            ) from None
         if sent and actions[-1].name != "screenshot":
             try:
                 await self._pause(SETTLE_SECONDS)
@@ -859,9 +884,18 @@ def _name(app: AppInfo) -> str:
 
 
 def _sent_text(desktop: Desktop | None) -> str:
+    if desktop is not None and desktop.failure_screen is not None:
+        return "Input may have been sent."
     if desktop is not None and desktop.input_started:
         return "Input may have been sent; take a screenshot before repeating it."
     return "No input was sent."
+
+
+def _with_screen(message: str, desktop: Desktop | None) -> str:
+    """*message* followed by the screenshot taken after the failure, if any."""
+    if desktop is None or desktop.failure_screen is None:
+        return message
+    return f"{message}\nThe screen now: {desktop.failure_screen}"
 
 
 def _target_text(error: TargetError, desktop: Desktop | None) -> str:
@@ -877,11 +911,19 @@ def _batch_error(
     number: int,
     lines: list[str],
     stopped: str,
+    shot: str | None = None,
 ) -> Exception:
-    """The error of a batch stopped at action *number*, naming the steps that ran."""
+    """The error of a batch stopped at action *number*, naming the steps that ran.
+
+    *shot* is the text of a screenshot taken after the failure, which the
+    caller appends to the message.
+    """
     action = actions[number - 1]
     ran = (
-        "Actions that ran (take a screenshot to see the current state):\n" + "\n".join(lines)
+        "Actions that ran"
+        + ("" if shot else " (take a screenshot to see the current state)")
+        + ":\n"
+        + "\n".join(lines)
         if lines
         else "No action ran before it."
     )

@@ -177,9 +177,9 @@ class FakeTarget:
         self._input("click", x, y, button, count, modifiers)
         self.pointer = (x, y)
 
-    def drag(self, start: tuple[int, int], end: tuple[int, int], modifiers: list[str]) -> None:
-        self._input("drag", start, end, modifiers)
-        self.pointer = end
+    def drag(self, path: list[tuple[int, int]], seconds: float, modifiers: list[str]) -> None:
+        self._input("drag", path, seconds, modifiers)
+        self.pointer = path[-1]
 
     def scroll(self, x: int, y: int, direction: str, amount: int, modifiers: list[str]) -> None:
         self._input("scroll", x, y, direction, amount, modifiers)
