@@ -977,6 +977,236 @@
      "copy all of line 3"
     ]
    }
+  },
+  {
+   "name": "edit: several changes to one file in one call",
+   "tool": "edit",
+   "arguments": {
+    "path": "src/app.py",
+    "edits": [
+     {
+      "old_string": "class Greeter:",
+      "new_string": "class Welcomer:"
+     },
+     {
+      "old_string": "g = Greeter(\"world\")",
+      "new_string": "g = Welcomer(\"mars\")"
+     }
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Welcomer:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Welcomer(\"mars\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "edit: Claude Code Edit shape",
+   "tool": "edit",
+   "arguments": {
+    "file_path": "src/app.py",
+    "old_string": "g = Greeter(\"world\")",
+    "new_string": "g = Greeter(\"mars\")"
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "edit: line-number prefixes copied from read",
+   "tool": "edit",
+   "arguments": {
+    "path": "src/app.py",
+    "edits": [
+     {
+      "old_string": "12| def main():\n13|     g = Greeter(\"world\")",
+      "new_string": "def main():\n    g = Greeter(\"mars\")"
+     }
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "edit: CRLF file keeps CRLF",
+   "tool": "edit",
+   "arguments": {
+    "path": "src/notes.txt",
+    "edits": [
+     {
+      "old_string": "second line",
+      "new_string": "2nd line"
+     }
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/notes.txt": "first line\r\n2nd line\r\nthird line\r\n"
+    }
+   }
+  },
+  {
+   "name": "edit: repeated old_string names its lines",
+   "tool": "edit",
+   "arguments": {
+    "path": "src/buffer.rs",
+    "edits": [
+     {
+      "old_string": "self.revision += 1;",
+      "new_string": "self.revision += 2;"
+     }
+    ]
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "ambiguous_match",
+    "contains": [
+     "occurs 2 times (lines 5, 16)",
+     "replace_all"
+    ],
+    "files": {
+     "src/buffer.rs": "fn undo(&mut self) -> bool {\n    let ok = self.history.undo(&mut self.text, &mut self.cursor);\n    if ok {\n        if self.track_revision {\n            self.revision += 1;\n        }\n        self.shadow = Some(self.text.clone());\n        self.shadow_cursor = self.cursor;\n    }\n    ok\n}\n\nfn redo(&mut self) -> bool {\n    let ok = self.history.redo(&mut self.text, &mut self.cursor);\n    if ok {\n        self.revision += 1;\n        self.shadow = Some(self.text.clone());\n        self.shadow_cursor = self.cursor;\n    }\n    ok\n}\n"
+    }
+   }
+  },
+  {
+   "name": "edit: a failed second edit writes nothing",
+   "tool": "edit",
+   "arguments": {
+    "path": "src/app.py",
+    "edits": [
+     {
+      "old_string": "g = Greeter(\"world\")",
+      "new_string": "g = Greeter(\"mars\")"
+     },
+     {
+      "old_string": "print(g.hello())",
+      "new_string": "print(g.greet())"
+     }
+    ]
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "text_not_found",
+    "contains": [
+     "edit 2 of 2",
+     "Neither edit was applied",
+     "with edit 2 corrected"
+    ],
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"world\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "edit: empty old_string creates a file",
+   "tool": "edit",
+   "arguments": {
+    "path": "src/new.txt",
+    "edits": [
+     {
+      "old_string": "",
+      "new_string": "hello\n"
+     }
+    ]
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "Created src/new.txt"
+    ],
+    "files": {
+     "src/new.txt": "hello\n"
+    }
+   }
+  },
+  {
+   "name": "edit: content instead of edits names write",
+   "tool": "edit",
+   "arguments": {
+    "path": "src/app.py",
+    "content": "x\n"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "call write with path and content"
+    ],
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"world\")\n    print(g.greet())\n"
+    }
+   }
+  },
+  {
+   "name": "write: create a file",
+   "tool": "write",
+   "arguments": {
+    "path": "docs/new.md",
+    "content": "# New\n"
+   },
+   "expect": {
+    "ok": true,
+    "contains": [
+     "Created docs/new.md"
+    ],
+    "files": {
+     "docs/new.md": "# New\n"
+    }
+   }
+  },
+  {
+   "name": "write: over an unread file shows it, then the resend replaces it",
+   "steps": [
+    {
+     "tool": "write",
+     "arguments": {
+      "path": "src/notes.txt",
+      "content": "replaced\n"
+     }
+    },
+    {
+     "tool": "write",
+     "arguments": {
+      "path": "src/notes.txt",
+      "content": "replaced\n"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "files": {
+     "src/notes.txt": "replaced\r\n"
+    }
+   }
+  },
+  {
+   "name": "write: old_string and new_string name edit",
+   "tool": "write",
+   "arguments": {
+    "path": "src/app.py",
+    "old_string": "world",
+    "new_string": "mars"
+   },
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "call edit with path and edits"
+    ],
+    "files": {
+     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"world\")\n    print(g.greet())\n"
+    }
+   }
   }
  ]
 }
