@@ -13,7 +13,6 @@ from core.tools.tools import JsonObject
 from tests.core.tools.terminal_helpers import call, details, make_context
 from tests.core.tools.terminal_helpers import manager as manager
 from tests.core.tools.terminal_manager_helpers import AdapterFactory, eventually
-from tests.core.tools.terminal_manager_helpers import shell_environment as shell_environment
 
 OWNER = TerminalOwner("project-a", "agent-a", "session-a")
 

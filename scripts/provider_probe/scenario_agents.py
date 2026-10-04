@@ -7,15 +7,14 @@ from typing import Any
 
 from core.channels import ChannelConfig
 from core.tools import model_tool_name
-from core.tools.bash import (
-    BASH_TOOL_DESCRIPTION,
-    BASH_TOOL_NAME,
-    BASH_TOOL_PARAMETERS,
-    project_bash_tool_definitions,
-)
 from core.tools.channel import CHANNEL_SEND_TOOL_NAME, _channel_send_definition_profile
-from core.tools.process import PROCESS_TOOL_DESCRIPTION, PROCESS_TOOL_NAME, PROCESS_TOOL_PARAMETERS
 from core.tools.project import PROJECT_TOOL_DESCRIPTION, PROJECT_TOOL_NAME, PROJECT_TOOL_PARAMETERS
+from core.tools.shell import (
+    SHELL_TOOL_DESCRIPTION,
+    SHELL_TOOL_NAME,
+    SHELL_TOOL_PARAMETERS,
+    project_shell_tool_definitions,
+)
 from core.tools.skill import SKILL_TOOL_DESCRIPTION, SKILL_TOOL_NAME, SKILL_TOOL_PARAMETERS
 from core.tools.skill_manage import (
     SKILL_MANAGE_TOOL_DESCRIPTION,
@@ -109,15 +108,15 @@ def _bash_scenario(case_name: str) -> ProbeScenario:
     }
     expected_arguments = bash_arguments[case_name]
     definition = {
-        "name": BASH_TOOL_NAME,
-        "description": BASH_TOOL_DESCRIPTION,
-        "parameters": BASH_TOOL_PARAMETERS,
+        "name": SHELL_TOOL_NAME,
+        "description": SHELL_TOOL_DESCRIPTION,
+        "parameters": SHELL_TOOL_PARAMETERS,
     }
     if case_name.startswith("sub_"):
-        definition = project_bash_tool_definitions([definition], nesting_depth=1)[0]
+        definition = project_shell_tool_definitions([definition], nesting_depth=1)[0]
     rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
     instruction = (
-        f"Call {model_tool_name(BASH_TOOL_NAME)} exactly once with exactly this JSON object "
+        f"Call {model_tool_name(SHELL_TOOL_NAME)} exactly once with exactly this JSON object "
         "as its arguments: "
         f"{rendered_arguments}. Preserve every value and do not add any field. Do not execute "
         "or describe the command yourself."
@@ -126,7 +125,7 @@ def _bash_scenario(case_name: str) -> ProbeScenario:
         "bash",
         [definition],
         _probe_messages(instruction),
-        BASH_TOOL_NAME,
+        SHELL_TOOL_NAME,
         require_closed_input=False,
         expected_arguments=expected_arguments,
     )
@@ -244,46 +243,6 @@ def _channel_send_scenario(case_name: str) -> ProbeScenario:
         ],
         _probe_messages(instruction),
         CHANNEL_SEND_TOOL_NAME,
-        require_closed_input=False,
-        expected_arguments=expected_arguments,
-    )
-
-
-def _process_scenario(case_name: str) -> ProbeScenario:
-    process_id = "process-probe-process"
-    process_arguments: dict[str, dict[str, Any]] = {
-        "status_list": {"action": "status"},
-        "status_one": {"action": "status", "process_id": process_id},
-        "kill": {"action": "kill", "process_id": process_id},
-        "wait": {"action": "wait", "process_id": process_id, "timeout": 120},
-        "wait_pattern": {"action": "wait", "process_id": process_id, "pattern": "ready"},
-        "running": {"action": "status", "filter": "running"},
-        "finished": {"action": "status", "filter": "finished"},
-        "all": {"action": "status", "filter": "all"},
-        "limit_min": {"action": "status", "filter": "all", "limit": 1},
-        "limit_max": {"action": "status", "filter": "all", "limit": 100},
-        "before": {"action": "status", "filter": "finished", "limit": 20, "before": process_id},
-        "kill_filter": {"action": "kill", "process_id": process_id, "filter": "all"},
-        "status_one_limit": {"action": "status", "process_id": process_id, "limit": 1},
-    }
-    expected_arguments = process_arguments[case_name]
-    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
-    instruction = (
-        f"Call {PROCESS_TOOL_NAME} exactly once with exactly this JSON object as its "
-        f"arguments: {rendered_arguments}. Preserve every value and omit every field not "
-        "shown."
-    )
-    return ProbeScenario(
-        "process",
-        [
-            {
-                "name": PROCESS_TOOL_NAME,
-                "description": PROCESS_TOOL_DESCRIPTION,
-                "parameters": PROCESS_TOOL_PARAMETERS,
-            }
-        ],
-        _probe_messages(instruction),
-        PROCESS_TOOL_NAME,
         require_closed_input=False,
         expected_arguments=expected_arguments,
     )

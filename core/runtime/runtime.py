@@ -115,7 +115,6 @@ from core.tools import (
     register_skill_manage_tool,
     register_skill_tool,
 )
-from core.tools.process_manager import ProcessManager
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.usage import UsageRecorder
@@ -205,7 +204,6 @@ class Runtime:
         self._tools: ToolRegistry | None = None
         self._memory_service: MemoryService | None = None
         self._file_state: FileReadState | None = None
-        self._process_manager: ProcessManager | None = None
         self._update_handoffs: UpdateHandoffs | None = None
         self._terminal_manager: TerminalManager | None = None
         self._skills: SkillRegistry | None = None
@@ -295,7 +293,7 @@ class Runtime:
                 get_skills=lambda: self.skills,
                 skills_for=self.skills_for,
                 project_skill_names=self.project_skill_names,
-                resources=(self.process_manager, self.terminal_manager, self.trigger_service),
+                resources=(self.terminal_manager, self.trigger_service),
                 terminals=self.terminal_manager,
                 get_change_publisher=lambda: self._extension_change_publisher,
                 get_title_service=lambda: self._session_title_service,
@@ -514,9 +512,6 @@ class Runtime:
             return {}
         value = config.get(name, {})
         return value if isinstance(value, dict) else {}
-
-    def _start_process_manager(self) -> None:
-        start_event_loop_service(self._process_manager, "Process manager service not available")
 
     def _start_terminal_manager(self) -> None:
         if self._terminal_manager is None:
@@ -1090,10 +1085,6 @@ class Runtime:
 
     tools: _StartedService[ToolRegistry] = _StartedService(
         lambda runtime: runtime._tools, "Tool service not available"
-    )
-
-    process_manager: _StartedService[ProcessManager] = _StartedService(
-        lambda runtime: runtime._process_manager, "Process manager service not available"
     )
 
     update_handoffs: _StartedService[UpdateHandoffs] = _StartedService(

@@ -139,7 +139,7 @@ def _claimed_handoff(install: Installation, handoff_token: str | None) -> str | 
 
 def _normalized_handoff(install: Installation, handoff_ticket: str) -> str:
     assert install.server_data_directory is not None
-    from core.tools._bash_update_handoff import read_handoff_ticket, ticket_id_from_path
+    from core.tools.update_handoff import read_handoff_ticket, ticket_id_from_path
 
     data_directory = Path(install.server_data_directory)
     try:

@@ -150,8 +150,7 @@ def test_detect_collects_only_top_level_agents_sorted_by_filename(tmp_path: Path
     [
         # The edit permission covers targeted changes and full replacement.
         pytest.param("permission:\n  edit: deny\n", {"apply_patch"}, id="edit"),
-        # OpenCode bash maps to both vBot bash and process.
-        pytest.param("permission:\n  bash: deny\n", {"bash", "process"}, id="bash"),
+        pytest.param("permission:\n  bash: deny\n", {"bash"}, id="bash"),
         pytest.param("permission:\n  task: DENY\n", {"subagent"}, id="case-insensitive"),
         pytest.param(
             "permission:\n  read: deny\n  grep: deny\n  glob: deny\n"
@@ -173,7 +172,7 @@ def test_detect_collects_only_top_level_agents_sorted_by_filename(tmp_path: Path
         # A granular map denies only when every entry denies.
         pytest.param(
             'permission:\n  bash:\n    "*": deny\n    "rm *": deny\n',
-            {"bash", "process"},
+            {"bash"},
             id="granular-all-deny",
         ),
         pytest.param(

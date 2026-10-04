@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
+import core.tools._terminal_session as terminal_session
 import core.tools._terminal_state as terminal_state
-import core.tools.process_manager as process_manager
 from core.runs import RunAdmissionBlockedError
 from core.tools.terminal_manager import (
     TerminalClosedError,
@@ -35,7 +35,6 @@ from tests.core.tools.terminal_manager_helpers import (
 from tests.core.tools.terminal_manager_helpers import clocked_manager as clocked_manager
 from tests.core.tools.terminal_manager_helpers import default_shell as default_shell
 from tests.core.tools.terminal_manager_helpers import delivering_manager as delivering_manager
-from tests.core.tools.terminal_manager_helpers import shell_environment as shell_environment
 from tests.core.tools.terminal_manager_helpers import terminal_manager as terminal_manager
 
 Delivering = tuple[TerminalManager, AdapterFactory, PendingTriggerService]
@@ -147,7 +146,7 @@ async def test_failed_attention_delivery_stays_undelivered_and_logs_only_faults(
     )
     errors: list[tuple[Any, ...]] = []
     monkeypatch.setattr(
-        process_manager._LOGGER, "error", lambda *args, **_kwargs: errors.append(args)
+        terminal_session._LOGGER, "error", lambda *args, **_kwargs: errors.append(args)
     )
     started = await spawn(manager, tmp_path)
     await _agent_input(manager, started, text="do work", key="enter")

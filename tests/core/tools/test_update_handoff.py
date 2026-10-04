@@ -1,17 +1,13 @@
 """Update handoff tokens: what a shell command may claim, and when it expires."""
 
-import asyncio
 import logging
 import os
 import time
-from dataclasses import replace
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-import core.tools.bash as bash_module
-from core.tools._bash_update_handoff import (
+from core.tools.update_handoff import (
     CONTINUATION_DIRECTORY,
     HANDOFF_DIRECTORY,
     UPDATE_HANDOFF_FILE_RETENTION,
@@ -21,11 +17,6 @@ from core.tools._bash_update_handoff import (
     read_update_handoff_ticket,
     ticket_id_from_path,
 )
-from core.tools.bash import bash_handler
-from core.tools.process_manager import ProcessManager
-from tests.core.tools.bash_test_support import AGENT_ID, make_context, python_command
-from tests.core.tools.bash_test_support import manager as manager
-from tests.core.tools.bash_test_support import shell_env_cache as shell_env_cache
 
 
 def _issue(handoffs: UpdateHandoffs):
@@ -96,7 +87,7 @@ def test_minting_and_failed_acknowledgement_log_no_capability(
     handoffs = UpdateHandoffs(tmp_path)
     grant = _issue(handoffs)
 
-    with caplog.at_level(logging.INFO, logger="vbot.tools.bash"):
+    with caplog.at_level(logging.INFO, logger="vbot.tools.update_handoff"):
         ticket = handoffs.mint(grant.token)
         handoffs.mint(grant.token)
         ticket.path.unlink()
@@ -135,7 +126,7 @@ def test_startup_sweep_removes_only_expired_files_and_logs_counts(
         tmp_path / CONTINUATION_DIRECTORY / "upd_new.json", age_seconds=recent, now=now
     )
 
-    with caplog.at_level(logging.DEBUG, logger="vbot.tools.bash"):
+    with caplog.at_level(logging.DEBUG, logger="vbot.tools.update_handoff"):
         UpdateHandoffs(tmp_path).remove_expired_files(now=now)
 
     assert not old_ticket.exists() and not old_receipt.exists()
@@ -154,120 +145,8 @@ def test_startup_sweep_is_silent_when_nothing_expired(
     now = time.time()
     _file(tmp_path / HANDOFF_DIRECTORY / "recent.json", age_seconds=60, now=now)
 
-    with caplog.at_level(logging.DEBUG, logger="vbot.tools.bash"):
+    with caplog.at_level(logging.DEBUG, logger="vbot.tools.update_handoff"):
         UpdateHandoffs(tmp_path).remove_expired_files(now=now)
         UpdateHandoffs(tmp_path / "missing").remove_expired_files(now=now)
 
     assert caplog.records == []
-
-
-# --- Tokens handed to shell commands ---------------------------------------
-
-_PRINT_HANDOFF = "import os; print(os.environ.get('VBOT_UPDATE_HANDOFF', 'missing'), flush=True)"
-
-
-@pytest.mark.asyncio
-async def test_bash_exports_update_handoff_token_without_writing_a_ticket(
-    manager: ProcessManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv("VBOT_UPDATE_HANDOFF", raising=False)
-    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
-    data_dir = tmp_path / "data"
-    handoffs = UpdateHandoffs(data_dir)
-    persisted: list[Any] = []
-    context = replace(make_context(tmp_path), result_persisted_hook=persisted.append)
-
-    result = await bash_handler(
-        context, {"command": _PRINT_HANDOFF}, manager, update_handoffs=handoffs
-    )
-
-    token = result["data"]["output"].strip()
-    assert token not in {"", "missing"}
-    assert len(persisted) == 1
-    assert not (data_dir / "runtime").exists()
-    # The foreground process has exited: nothing can claim its token any more.
-    with pytest.raises(UpdateHandoffUnavailableError):
-        handoffs.mint(token)
-
-    # A call whose result is never persisted gets no token.
-    unpersisted = await bash_handler(
-        make_context(tmp_path), {"command": _PRINT_HANDOFF}, manager, update_handoffs=handoffs
-    )
-    assert unpersisted["data"]["output"].strip() == "missing"
-    # Neither does a call whose Run ids cannot scope one; its command still runs.
-    unscoped = await bash_handler(
-        replace(context, session_id=""),
-        {"command": _PRINT_HANDOFF},
-        manager,
-        update_handoffs=handoffs,
-    )
-    assert unscoped["data"]["output"].strip() == "missing"
-
-
-@pytest.mark.asyncio
-async def test_background_update_handoff_is_claimable_until_its_process_exits(
-    manager: ProcessManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
-    handoffs = UpdateHandoffs(tmp_path / "data")
-    persisted: list[Any] = []
-    context = replace(make_context(tmp_path), result_persisted_hook=persisted.append)
-
-    result = await bash_handler(
-        context,
-        {
-            "command": (
-                f"{_PRINT_HANDOFF}\nfrom pathlib import Path\nimport time\n"
-                "while not Path('release').exists():\n    time.sleep(0.01)"
-            ),
-            "mode": "background",
-        },
-        manager,
-        update_handoffs=handoffs,
-    )
-    process_id = result["data"]["process_id"]
-    token = ""
-    async with asyncio.timeout(5):
-        while not token:
-            token = str((await manager.snapshot(process_id, AGENT_ID))["output"]).strip()
-            await asyncio.sleep(0.01)
-
-    ticket = handoffs.mint(token)
-    assert handoffs.mint(token).path == ticket.path
-    assert read_handoff_ticket(tmp_path / "data", ticket.ticket_id)["acknowledged"] is False
-    persisted[0]()
-    assert read_handoff_ticket(tmp_path / "data", ticket.ticket_id)["acknowledged"] is True
-
-    (tmp_path / "release").write_text("done", encoding="utf-8")
-    wait_task = manager.get_process(process_id, AGENT_ID).wait_task
-    assert wait_task is not None
-    await asyncio.wait_for(asyncio.shield(wait_task), 5)
-    await asyncio.sleep(0)
-    with pytest.raises(UpdateHandoffUnavailableError):
-        handoffs.mint(token)
-
-
-@pytest.mark.asyncio
-async def test_failed_spawn_releases_its_update_handoff(
-    manager: ProcessManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    handoffs = UpdateHandoffs(tmp_path / "data")
-    offered: list[str] = []
-
-    async def failing_spawn(*_args: Any, env: dict[str, str], **_kwargs: Any) -> str:
-        offered.append(env["VBOT_UPDATE_HANDOFF"])
-        raise OSError("spawn unavailable")
-
-    monkeypatch.setattr(manager, "spawn", failing_spawn)
-    context = replace(make_context(tmp_path), result_persisted_hook=lambda _callback: None)
-
-    result = await bash_handler(
-        context, {"command": "print('never')"}, manager, update_handoffs=handoffs
-    )
-
-    assert result["error"] == {
-        "code": "process_spawn_failed",
-        "message": "failed to start process: spawn unavailable",
-    }
-    with pytest.raises(UpdateHandoffUnavailableError):
-        handoffs.mint(offered[0])

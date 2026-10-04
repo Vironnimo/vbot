@@ -275,7 +275,7 @@ function preferredToolErrorValue(value) {
 }
 
 function preferredBashResultValue(data, tool) {
-  const hasStreamedOutput = Boolean(tool?.stdout || tool?.stderr);
+  const hasStreamedOutput = Boolean(tool?.output);
   if (!hasStreamedOutput && hasMeaningfulToolDetail(data.output)) {
     return sanitizeToolDetailNode(data.output);
   }

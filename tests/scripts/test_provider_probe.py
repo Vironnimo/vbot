@@ -238,9 +238,9 @@ def test_search_probe_case_reaches_the_production_search_tool(case_id: str) -> N
     assert result["passed"], result
 
 
-def test_bash_probe_reports_the_violated_env_keys_keyword() -> None:
+def test_shell_probe_reports_the_violated_env_keys_keyword() -> None:
     # Holds the uniqueItems message in core/tools/contracts.py.
-    from core.tools import bash
+    from core.tools.shell import SHELL_TOOL_NAME
     from scripts.provider_probe.measurements import (
         _compile_probe_contracts,
         _validation_measurements,
@@ -255,7 +255,7 @@ def test_bash_probe_reports_the_violated_env_keys_keyword() -> None:
         _validation_measurements(
             [
                 {
-                    "name": bash.BASH_TOOL_NAME,
+                    "name": SHELL_TOOL_NAME,
                     "arguments": {"mode": "foreground", "command": "ls", "env_keys": keys},
                 }
             ],

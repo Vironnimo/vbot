@@ -20,16 +20,20 @@ import {
   subAgentShouldFetchResult,
   visibleRunChildren,
 } from '../chatTimelinePresentation.js';
+import { isRecord } from './sessionState.js';
 
 const SUBAGENT_LEGACY_HISTORY_LIMIT = 20;
 const SUBAGENT_STATUS_CACHE_LIMIT = 2000;
-const BACKGROUND_BASH_PROCESS_CACHE_LIMIT = 200;
+const COMMAND_STATUS_CACHE_LIMIT = 200;
+const COMMAND_STATUS_RUNNING = 'running';
+const COMMAND_STATUS_STOPPED = 'stopped';
 const SUBAGENT_RESULT_CACHE_LIMIT = 100;
 const RPC_ERROR_QUEUE_ITEM_NOT_FOUND = 'queue_item_not_found';
 const RPC_ERROR_RUN_NOT_FOUND = 'run_not_found';
 
 // Internal child-task lifecycle: bounded status/result caches, exact-work
-// inspection, cancellation races and background-process notifications.
+// inspection, cancellation races and the live statuses of handed-off shell
+// commands.
 export function createChatChildTasks({ chatState, operations, errorMessage }) {
   const subAgentStatusVerificationKeys = new Set();
   const subAgentStatusInflightKeys = new Set();
@@ -407,29 +411,30 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     }
   }
 
-  async function cancelBackgroundProcess({
-    sessionState,
-    agentId = '',
-    processId = '',
-    projectId = '',
-  } = {}) {
-    const normalizedProcessId = trimmedString(processId);
-    const targetAgentId = qualifyAgentAddress(agentId, projectId);
-    if (!sessionState || !normalizedProcessId || !targetAgentId) {
+  function setCommandStatuses(updates) {
+    chatState.commandStatuses = mergeBoundedEntries(
+      chatState.commandStatuses,
+      updates,
+      COMMAND_STATUS_CACHE_LIMIT,
+    ).entries;
+  }
+
+  // A handed-off command is stopped by killing its terminal. The server then
+  // reports `stopped` itself; showing it at once only anticipates that, and
+  // never replaces an end the command already reached.
+  async function cancelCommand({ sessionState, terminalId = '' } = {}) {
+    const normalizedTerminalId = trimmedString(terminalId);
+    if (!sessionState || !normalizedTerminalId) {
       return false;
     }
 
     sessionState.actionError = '';
     try {
-      const result = await operations.cancelProcess({
-        agentId: targetAgentId,
-        processId: normalizedProcessId,
-      });
-      const status = trimmedString(result?.status) || 'cancelled';
-      sessionState.backgroundBashStatuses = {
-        ...sessionState.backgroundBashStatuses,
-        [normalizedProcessId]: status,
-      };
+      await operations.killTerminal(normalizedTerminalId);
+      const known = chatState.commandStatuses[normalizedTerminalId];
+      if (!known || known === COMMAND_STATUS_RUNNING) {
+        setCommandStatuses({ [normalizedTerminalId]: COMMAND_STATUS_STOPPED });
+      }
       return true;
     } catch (error) {
       sessionState.actionError = `${t(
@@ -473,45 +478,39 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     }
   }
 
-  // Background Bash terminal notifications arrive as accessor events with the
-  // exact process start/end times. Applying the whole list is idempotent —
-  // entries merge by process id — so the View forwards the bounded list on
-  // every change and no per-event dedup bookkeeping is needed.
-  function applyBackgroundBashStatusEvents(events) {
-    if (!Array.isArray(events) || events.length === 0) {
+  // The View forwards App's bounded live map of `command_status_changed`
+  // statuses (terminal id -> status) on every change; applying it again is
+  // idempotent. A command never runs again once it ended, so a `running` the
+  // map still holds cannot undo a known end, such as a stop shown right after
+  // a successful cancel.
+  function applyCommandStatuses(statuses) {
+    if (!isRecord(statuses)) {
       return;
     }
     const updates = {};
-    for (const event of events) {
-      const data = event?.payload;
-      const processId = trimmedString(data?.process_id);
-      if (!processId) {
+    for (const [terminalId, value] of Object.entries(statuses)) {
+      const status = trimmedString(value);
+      const known = chatState.commandStatuses[terminalId];
+      if (
+        !status ||
+        status === known ||
+        (status === COMMAND_STATUS_RUNNING && known)
+      ) {
         continue;
       }
-      updates[processId] = {
-        status: trimmedString(data.status) || 'completed',
-        exitCode: typeof data.exit_code === 'number' ? data.exit_code : null,
-        cancelledByUser: data.cancelled_by_user === true,
-        startedAt: trimmedString(data.started_at),
-        finishedAt: trimmedString(data.finished_at),
-        output: typeof data.output === 'string' ? data.output : '',
-        truncated: data.truncated === true,
-        logFile: trimmedString(data.log_file),
-      };
+      updates[terminalId] = status;
     }
-    chatState.backgroundBashProcesses = mergeBoundedEntries(
-      chatState.backgroundBashProcesses,
-      updates,
-      BACKGROUND_BASH_PROCESS_CACHE_LIMIT,
-    ).entries;
+    if (Object.keys(updates).length > 0) {
+      setCommandStatuses(updates);
+    }
   }
 
   return {
+    applyCommandStatuses,
     applySubAgentStatusUpdates,
-    cancelBackgroundProcess,
+    cancelCommand,
     cancelSubAgent,
     reconcileSubAgentRows,
-    applyBackgroundBashStatusEvents,
     dispose() {
       subAgentStatusInflightKeys.clear();
       subAgentStatusVerificationKeys.clear();

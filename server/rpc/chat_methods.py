@@ -26,10 +26,10 @@ from core.sessions import (
     SessionAddress,
     SessionChatHistorySnapshot,
 )
-from core.tools.bash import (
-    BACKGROUND_STATUS_NOTE_MARKER,
-    BACKGROUND_STATUS_TOOL_NAMES,
-    background_bash_statuses,
+from core.tools.shell import (
+    COMMAND_STATUS_NOTE_MARKER,
+    COMMAND_STATUS_TOOL_NAMES,
+    background_command_statuses,
 )
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -84,7 +84,7 @@ WEBUI_REPLY_SURFACE = ReplySurface.webui()
 @dataclass(frozen=True)
 class _ChatHistoryProjection:
     messages: list[JsonObject]
-    background_bash_statuses: JsonObject
+    background_command_statuses: JsonObject
     context_usage: JsonObject | None
 
 
@@ -151,10 +151,10 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     Without ``before`` or ``after`` the response is the newest page with the
     Session's whole-Session facts, reflection Runs and Compaction Policy. An
     ``after`` read appends to the caller's page (``incremental``); its
-    ``background_bash_statuses`` then cover only the appended records, for the
+    ``background_command_statuses`` then cover only the appended records, for the
     caller to merge. An ``after`` read with nothing appended returns an empty
     page without ``session_usage``, ``context_usage``,
-    ``background_bash_statuses`` or ``compaction_policy``: the caller's values
+    ``background_command_statuses`` or ``compaction_policy``: the caller's values
     stay current. A ``before`` page carries neither background statuses nor
     the Compaction Policy.
     """
@@ -264,7 +264,9 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
             context_usage = with_context_window(context_usage, read.context_window)
         response["context_usage"] = context_usage
         if before is None:
-            response["background_bash_statuses"] = projection.background_bash_statuses
+            response["background_command_statuses"] = _current_command_statuses(
+                state, projection.background_command_statuses
+            )
     if reflection_runs is not None:
         response["reflection_runs"] = reflection_runs
     if read.compaction_policy is not None:
@@ -291,8 +293,8 @@ def _read_chat_history(
         after=after,
         excluded_roles=("note", "history_edit"),
         complete_run_segment=True,
-        background_tool_names=BACKGROUND_STATUS_TOOL_NAMES if before is None else (),
-        background_note_marker=BACKGROUND_STATUS_NOTE_MARKER if before is None else None,
+        background_tool_names=COMMAND_STATUS_TOOL_NAMES if before is None else (),
+        background_note_marker=COMMAND_STATUS_NOTE_MARKER if before is None else None,
         skip_unchanged=True,
     )
     if history.unchanged:
@@ -422,6 +424,23 @@ async def _chat_reflections(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(exc) from exc
 
 
+def _current_command_statuses(state: Any, statuses: JsonObject) -> JsonObject:
+    """Replace each recorded ``running`` status by the command's current one.
+
+    A command no terminal runs any longer ended without a delivered result
+    (vBot restarted), so it has no status to show.
+    """
+    terminals = state.runtime.terminal_manager
+    current: JsonObject = {}
+    for terminal_id, status in statuses.items():
+        if status == "running":
+            status = terminals.command_status(terminal_id)
+            if status is None:
+                continue
+        current[terminal_id] = status
+    return current
+
+
 def _project_chat_history(
     history: SessionChatHistorySnapshot, *, file_delivery: Any
 ) -> _ChatHistoryProjection:
@@ -438,7 +457,7 @@ def _project_chat_history(
     ]
     return _ChatHistoryProjection(
         messages=messages,
-        background_bash_statuses=background_bash_statuses(history.background_records),
+        background_command_statuses=background_command_statuses(history.background_records),
         context_usage=latest_session_context_usage(list(history.context_messages)),
     )
 
@@ -865,27 +884,6 @@ async def _control_run_chat(state: Any, params: JsonObject) -> JsonObject:
     return _run_response(run)
 
 
-async def _cancel_process_chat(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(
-        params,
-        {"agent_id", "process_id"},
-        "chat.cancel_process",
-    )
-
-    agent_id, project_id = _required_agent_address(params, "agent_id")
-    process_id = _required_string(params, "process_id")
-    try:
-        tracked = await state.runtime.process_manager.cancel_for_user(
-            process_id,
-            agent_id,
-            project_id=project_id,
-        )
-    except Exception as exc:
-        raise _map_expected_error(exc) from exc
-    status = "cancelled" if tracked.cancelled_by_user else tracked.status
-    return {"process_id": process_id, "status": status}
-
-
 def _chat_queue_list(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"agent_id", "session_id"}, "chat.queue_list")
 
@@ -1058,7 +1056,6 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "chat.cancel": _cancel_chat,
         "chat.cancel_tool_call": _cancel_tool_call_chat,
         "chat.control_run": _control_run_chat,
-        "chat.cancel_process": _cancel_process_chat,
         "chat.queue_steer": _chat_queue_steer,
         "chat.queue_list": _chat_queue_list,
         "chat.queue_remove": _chat_queue_remove,

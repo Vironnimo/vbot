@@ -16,7 +16,6 @@ import {
   CHAT_STATUS_INTERRUPTED,
 } from './model.js';
 import { isPlainObject } from '../values.js';
-import { RUN_EVENT_TOOL_CALL_STDERR } from '../api.js';
 
 // Reasoning has no explicit end event: any other live Run event (except the
 // idle heartbeat) means the streamed reasoning draft stopped growing, so its
@@ -291,6 +290,8 @@ export function mergeToolStarted(assistantRun, event) {
   syncAssistantRunCollections(assistantRun);
 }
 
+// A Tool output event carries the command's current screen, which replaces
+// the live output shown so far.
 export function mergeToolOutput(assistantRun, event) {
   const payload = event.payload ?? {};
   const toolCallId = payload.tool_call_id ?? payload.id;
@@ -302,10 +303,8 @@ export function mergeToolOutput(assistantRun, event) {
       id: toolCallId,
     },
   );
-  const key = event.type === RUN_EVENT_TOOL_CALL_STDERR ? 'stderr' : 'stdout';
   tool.toolCallId = toolCallId ?? tool.toolCallId;
-  tool[key] = `${tool[key] ?? ''}${payload.data ?? ''}`;
-  tool.outputEvents = [...(tool.outputEvents ?? []), event];
+  tool.output = typeof payload.screen === 'string' ? payload.screen : '';
   tool.events = [...tool.events, event];
   syncAssistantRunCollections(assistantRun);
 }
@@ -423,9 +422,8 @@ function upsertToolRow(assistantRun, key, event, toolCall = {}) {
     resultEvent: null,
     timing: null,
     durationMs: null,
-    stdout: '',
-    stderr: '',
-    outputEvents: [],
+    // The latest live output (the command's current screen) while it runs.
+    output: '',
     events: [],
   };
   assistantRun.items.push(tool);

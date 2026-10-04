@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 from collections.abc import Mapping
@@ -23,8 +24,8 @@ from core.tools.arguments import (
     required_int,
     required_string,
 )
-from core.tools.bash import get_shell_env
 from core.tools.contracts import ToolContractError
+from core.tools.shell_environment import terminal_environment
 from core.tools.terminal_backend import default_terminal_argv
 from core.tools.terminal_manager import (
     TERMINAL_DEFAULT_COLUMNS,
@@ -343,7 +344,7 @@ async def _handle_start(
         requested_id = None
     raw_command = arguments.get("command")
     args = _optional_string_array(arguments.get("args"), field_name="args")
-    environment = await get_shell_env()
+    environment = await asyncio.to_thread(terminal_environment)
     if raw_command in (None, ""):
         if args:
             raise ToolContractError("args requires command to be set")
@@ -809,11 +810,6 @@ def _terminals_text(terminal_manager: TerminalManager, owner: TerminalOwner) -> 
 def _not_found_message(
     terminal_manager: TerminalManager, owner: TerminalOwner, terminal_id: str
 ) -> str:
-    if terminal_id.startswith("proc_"):
-        return (
-            f"{terminal_id} is a background command, not a terminal. Use the process Tool with "
-            "this process_id."
-        )
     return f"No terminal has the id {terminal_id}. {_terminals_text(terminal_manager, owner)}"
 
 

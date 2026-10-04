@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import re
-import sys
 import threading
 import time
 from functools import partial
@@ -42,9 +41,8 @@ from core.statistics.index import StatisticsIndex
 from core.storage.layout import DataDirectoryLayout
 from core.storage.storage import StorageManager
 from core.storage.temp_files import TemporaryFileManager
-from core.tools._bash_update_handoff import HANDOFF_DIRECTORY, UPDATE_HANDOFF_FILE_RETENTION
-from core.tools.process_manager import ProcessManager
 from core.tools.terminal_manager import TerminalManager, TerminalManagerError
+from core.tools.update_handoff import HANDOFF_DIRECTORY, UPDATE_HANDOFF_FILE_RETENTION
 from core.utils.config import Config
 from tests.core.sessions.history_fixtures import seed_history
 from tests.core.usage.usage_test_support import read_ledger
@@ -57,7 +55,6 @@ _STARTED_SERVICES = (
     "providers",
     "models",
     "tools",
-    "process_manager",
     "update_handoffs",
     "terminal_manager",
     "skills",
@@ -393,7 +390,6 @@ async def test_failed_start_logs_once_releases_started_resources_and_can_retry(
     record(TemporaryFileManager, "stop", "temporary_files")
     record(KeepAwakeController, "close", "keep_awake")
     record(SpeechService, "close", "speech")
-    record(ProcessManager, "stop", "process_manager")
     record(TerminalManager, "stop", "terminal_manager")
     record(PerformanceService, "stop", "performance")
     record(RecallIntegration, "close", "recall")
@@ -409,7 +405,7 @@ async def test_failed_start_logs_once_releases_started_resources_and_can_retry(
 
     assert caught.value is failure
     _assert_not_started(runtime)
-    started = {"temporary_files", "keep_awake", "speech", "process_manager"}
+    started = {"temporary_files", "keep_awake", "speech"}
     started |= {"recall", "statistics_index"}
     expected = {
         "ensure_directories": set(),
@@ -608,12 +604,11 @@ async def test_loop_started_runtime_owns_background_services_until_aclose(
     runtime = Runtime(config)
     runtime.start()
     try:
-        process_manager = runtime.process_manager
         terminal_manager = runtime.terminal_manager
         temporary_files = runtime.storage.temporary_files
         sweepers = [
             manager._sweeper_task  # noqa: SLF001 - lifecycle resource under test.
-            for manager in (process_manager, terminal_manager, temporary_files)
+            for manager in (terminal_manager, temporary_files)
         ]
         assert all(task is not None and not task.done() for task in sweepers)
         assert isinstance(runtime.cron_service, CronService)
@@ -640,7 +635,6 @@ async def test_loop_started_runtime_owns_background_services_until_aclose(
     assert gauges["runs.active"] == 0 and gauges["runs.queued"] == 0
     assert not performance.monitoring
     assert watchdog is not None and not watchdog.is_alive()
-    assert process_manager._sweeper_task is None  # noqa: SLF001
     assert terminal_manager._sweeper_task is None  # noqa: SLF001
     assert temporary_files._sweeper_task is None  # noqa: SLF001
     assert database.is_closed()
@@ -649,7 +643,7 @@ async def test_loop_started_runtime_owns_background_services_until_aclose(
 
 
 @pytest.mark.asyncio
-async def test_aclose_cancels_work_reaps_processes_and_persists_handed_off_traces(
+async def test_aclose_cancels_work_and_persists_handed_off_traces(
     config: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = Runtime(config)
@@ -680,15 +674,6 @@ async def test_aclose_cancels_work_reaps_processes_and_persists_handed_off_trace
     assert title_service is not None and reflection_service is not None
     title_service._background_tasks.add(title_task)  # noqa: SLF001
     reflection_service._background_tasks.add(reflection_task)  # noqa: SLF001
-    process_manager = runtime.process_manager
-    process_id = await process_manager.spawn(
-        "run-one",
-        "agent-one",
-        [sys.executable, "-c", "import time; time.sleep(30)"],
-        env={},
-        cwd=config.data_dir,
-    )
-    tracked = process_manager.get_process(process_id, "agent-one")
     await run_started.wait()
     await background_started.wait()
 
@@ -732,9 +717,6 @@ async def test_aclose_cancels_work_reaps_processes_and_persists_handed_off_trace
     assert title_task.cancelled()
     assert reflection_task.cancelled()
     assert runtime.chat_runs is None
-    assert tracked.status == "killed"
-    assert tracked.exit_code is not None
-    assert tracked.wait_task is not None and tracked.wait_task.done()
 
 
 # Every shutdown step in dependency order, named after the recording services below.
@@ -746,6 +728,7 @@ _ASYNC_SHUTDOWN = (
     "calendar_actions.aclose",
     "bootstrap.aclose",
     "archive_retention.aclose",
+    "commands.shutdown_commands",
     "triggers.aclose",
     "reflection.aclose",
     "librarian.aclose",
@@ -757,7 +740,6 @@ _ASYNC_SHUTDOWN = (
     "provider_usage.aclose",
     "debug_traces.aclose",
     "performance.aclose",
-    "processes.aclose",
     "terminals.aclose",
     "keep_awake.close",
     "temporary_files.aclose",
@@ -782,7 +764,6 @@ _SYNC_SHUTDOWN = (
     "speech.close",
     "provider_usage.close",
     "performance.stop",
-    "processes.stop",
     "terminals.stop",
     "keep_awake.close",
     "temporary_files.stop",
@@ -808,6 +789,10 @@ def _recording_service(
     async def acall(method: str) -> None:
         call(method)
 
+    async def stop_commands() -> None:
+        # The "commands" step of the terminal manager, apart from its close.
+        events.append("commands.shutdown_commands")
+
     return SimpleNamespace(
         stop=partial(call, "stop"),
         close=partial(call, "close"),
@@ -815,6 +800,7 @@ def _recording_service(
         aclose=partial(acall, "aclose"),
         fire_shutdown=partial(acall, "fire_shutdown"),
         drain_activity=partial(acall, "drain_activity"),
+        shutdown_commands=stop_commands,
     )
 
 
@@ -875,7 +861,6 @@ async def test_runtime_shutdown_runs_every_step_before_reporting_failures(
         ("_speech", "speech"),
         ("_provider_usage", "provider_usage"),
         ("_performance", "performance"),
-        ("_process_manager", "processes"),
         ("_terminal_manager", "terminals"),
         ("_keep_awake", "keep_awake"),
         ("_recall", "recall"),

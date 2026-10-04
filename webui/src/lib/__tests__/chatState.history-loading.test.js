@@ -25,7 +25,7 @@ describe('History reads', () => {
         session_usage: { input_tokens: 10 },
         context_usage: { used_tokens: 5 },
         compaction_policy: policy,
-        background_bash_statuses: { 'process-one': 'running' },
+        background_command_statuses: { term_one: 'running' },
         reflection_runs: [],
       })
       .mockResolvedValueOnce({
@@ -64,8 +64,8 @@ describe('History reads', () => {
     expect(source.sessionUsage).toEqual({ input_tokens: 10 });
     expect(source.contextUsage).toEqual({ used_tokens: 5 });
     expect(source.compactionPolicy).toBe(policy);
-    expect(source.backgroundBashStatuses).toEqual({
-      'process-one': 'running',
+    expect(source.backgroundCommandStatuses).toEqual({
+      term_one: 'running',
     });
   });
 
@@ -78,9 +78,9 @@ describe('History reads', () => {
         next_after: 'cursor-1',
         incremental: false,
         context_usage: { used_tokens: 5 },
-        background_bash_statuses: {
-          'process-one': 'running',
-          'process-two': 'running',
+        background_command_statuses: {
+          term_one: 'running',
+          term_two: 'running',
         },
       })
       .mockResolvedValueOnce({
@@ -90,7 +90,7 @@ describe('History reads', () => {
         incremental: true,
         has_newer: true,
         context_usage: { used_tokens: 7 },
-        background_bash_statuses: { 'process-one': 'completed' },
+        background_command_statuses: { term_one: 'completed' },
       })
       .mockResolvedValueOnce({
         messages: [],
@@ -98,7 +98,7 @@ describe('History reads', () => {
         next_after: 'cursor-3',
         incremental: true,
         context_usage: null,
-        background_bash_statuses: { 'process-two': 'failed' },
+        background_command_statuses: { term_two: 'failed' },
       });
     const { chatState, controller } = setupController({
       operationOverrides: { loadChatHistory },
@@ -109,9 +109,9 @@ describe('History reads', () => {
     const source = chatState.sessions['alpha::source'];
     expect(loadChatHistory).toHaveBeenCalledTimes(3);
     expect(source.historyAfter).toBe('cursor-3');
-    expect(source.backgroundBashStatuses).toEqual({
-      'process-one': 'completed',
-      'process-two': 'failed',
+    expect(source.backgroundCommandStatuses).toEqual({
+      term_one: 'completed',
+      term_two: 'failed',
     });
     // A page that read the context and found none clears it.
     expect(source.contextUsage).toBeNull();
@@ -443,7 +443,7 @@ describe('older History pages', () => {
         older.resolve({
           messages: [message('oldest')],
           has_more: false,
-          background_bash_statuses: { 'old-process': 'running' },
+          background_command_statuses: { term_old: 'running' },
         });
       }
 
@@ -456,7 +456,7 @@ describe('older History pages', () => {
       expect(sessionState.hasOlderHistory).toBe(true);
       expect(sessionState.loadingOlderHistory).toBe(false);
       expect(sessionState.actionError).toBe('newer-action-error');
-      expect(sessionState.backgroundBashStatuses).toEqual({});
+      expect(sessionState.backgroundCommandStatuses).toEqual({});
 
       expect(await controller.loadOlderHistory(sessionState)).toBe(true);
       expect(loadChatHistory).toHaveBeenLastCalledWith({

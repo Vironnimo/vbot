@@ -80,7 +80,7 @@ def wait_for_handoff(install: Installation, operation: Operation) -> str | None:
     if not install.owns_server:
         raise ApplicationError("An Agent handoff cannot target a client-only installation")
     assert install.server_data_directory is not None
-    from core.tools._bash_update_handoff import read_handoff_ticket, ticket_id_from_path
+    from core.tools.update_handoff import read_handoff_ticket, ticket_id_from_path
 
     # The server validates the same capability before it arms the continuation.
     ticket_path = Path(operation.handoff_ticket)

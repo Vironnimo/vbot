@@ -90,9 +90,9 @@
     siblingSessionDeletion = null,
     runServerEvent = null,
     runServerEvents = [],
-    // Bounded list of `bash_process_status_changed` accessor events; the
-    // controller re-applies the whole list (idempotent merge by process id).
-    backgroundBashStatusEvents = [],
+    // App's bounded live map of handed-off shell command statuses by terminal
+    // id (`command_status_changed`); the controller re-applies the whole map.
+    commandStatuses = {},
     connectionSnapshot = null,
     // App's live list of the Runs active now (the snapshot's list advanced by
     // later lifecycle events). An owner mounted after the app connected starts
@@ -481,8 +481,8 @@
   });
 
   $effect(() => {
-    const events = backgroundBashStatusEvents;
-    untrack(() => chatController.applyBackgroundBashStatusEvents(events));
+    const statuses = commandStatuses;
+    untrack(() => chatController.applyCommandStatuses(statuses));
   });
 
   // Durable completion activity for the displayed Agent addresses. A reconnect
@@ -853,9 +853,9 @@
               ?.loadingOlderHistory === true}
             subAgentStatuses={chatState.subAgentStatuses}
             subAgentResults={chatState.subAgentResults}
-            backgroundBashStatuses={target.activeSessionState
-              ?.backgroundBashStatuses}
-            backgroundBashProcesses={chatState.backgroundBashProcesses}
+            backgroundCommandStatuses={target.activeSessionState
+              ?.backgroundCommandStatuses}
+            commandStatuses={chatState.commandStatuses}
             onLoadOlder={actions.loadOlderHistory}
             onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
             onCancelToolCall={actions.handleCancelToolCall}
@@ -1035,9 +1035,9 @@
       <ChatActivityPanel
         timelineItems={activeTimelineItems}
         subAgentStatuses={chatState.subAgentStatuses}
-        backgroundBashStatuses={target.activeSessionState
-          ?.backgroundBashStatuses}
-        backgroundBashProcesses={chatState.backgroundBashProcesses}
+        backgroundCommandStatuses={target.activeSessionState
+          ?.backgroundCommandStatuses}
+        commandStatuses={chatState.commandStatuses}
         reflectionTasks={reflectionTaskRows(target.activeSessionState)}
         sessionStats={sessionChanges.stats}
         onSessionStatsWanted={sessionChanges.setWanted}
@@ -1053,7 +1053,7 @@
         onUndoReflection={(row) =>
           chatController.undoReflection(target.activeSessionState, row.runId)}
         onCancelSubAgent={actions.handleCancelSubAgent}
-        onCancelBackgroundProcess={actions.handleCancelBackgroundProcess}
+        onCancelBackgroundCommand={actions.handleCancelBackgroundCommand}
       />
     </div>
   {/if}

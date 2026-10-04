@@ -80,7 +80,7 @@ from core.tools import (
     ToolContract,
     ToolDefinitionChangeNote,
     ToolNotFoundError,
-    project_bash_tool_definitions,
+    project_shell_tool_definitions,
     tool_is_ready,
 )
 from core.utils.errors import ConfigError, ProviderError, VBotError
@@ -847,7 +847,7 @@ class RequestBuilder:
     ) -> list[JsonObject]:
         """Apply effective Model-route gates to route-dependent Tools."""
 
-        tools = project_bash_tool_definitions(tools, nesting_depth=self.nesting_depth)
+        tools = project_shell_tool_definitions(tools, nesting_depth=self.nesting_depth)
         if not any(definition.get("name") == ANALYZE_IMAGE_TOOL_NAME for definition in tools):
             return tools
         route_can_view_images = "image" in input_modalities and any(

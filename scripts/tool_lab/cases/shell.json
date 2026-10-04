@@ -1,7 +1,6 @@
 {
  "files": {
-  "sub/marker.txt": "marker\n",
-  "tools/fake_error.py": "import sys\n\nMESSAGES = {\n    \"grep\": \"grep: The term 'grep' is not recognized as a name of a cmdlet, function, script file, or executable program.\",\n    \"devnull\": \"Out-File: Could not find a part of the path 'C:\\\\dev\\\\null'.\",\n    \"parser\": \"ParserError:\\nLine |\\n   1 |  cat <<EOF\\n     |       ~\\n     | Missing file specification after redirection operator.\",\n}\nprint(MESSAGES[sys.argv[1]])\nsys.exit(1)\n"
+  "sub/marker.txt": "marker\n"
  },
  "cases": [
   {
@@ -162,8 +161,8 @@
    "expect": {
     "ok": true,
     "contains": [
-     "process_id",
-     "running"
+     "status: running",
+     "terminal_id"
     ]
    }
   },
@@ -178,8 +177,8 @@
    "expect": {
     "ok": true,
     "contains": [
-     "process_id",
-     "running"
+     "status: running",
+     "terminal_id"
     ]
    }
   },
@@ -338,124 +337,55 @@
    }
   },
   {
-   "name": "shell: pty request names the terminal Tool",
+   "name": "shell: pty flag is ignored",
    "tool": "bash",
    "arguments": {
     "command": "python -c \"print('hello there')\"",
     "pty": true
    },
    "expect": {
-    "ok": false,
+    "ok": true,
     "contains": [
-     "terminal"
-    ],
-    "absent": [
      "hello there"
     ]
    }
   },
   {
-   "name": "shell: timeout failure names the next call",
+   "name": "shell: timeout stops the command and names the retry",
    "tool": "bash",
    "arguments": {
     "command": "python -c \"import time; time.sleep(5)\"",
     "timeout": 1
    },
    "expect": {
-    "ok": false,
-    "error_code": "process_timeout",
+    "ok": true,
     "contains": [
-     "1 s",
-     "background"
+     "status: stopped",
+     "it was still running at the 1-second timeout",
+     "run it again with a larger timeout, or 0 for no limit"
     ]
    }
   },
   {
-   "name": "shell: head in a pipeline",
+   "name": "shell: non-zero exit is ok and names the failed program",
    "tool": "bash",
    "arguments": {
-    "command": "python -c \"print('alpha'); print('beta'); print('gamma')\" | head -n 2"
+    "command": "python -c \"import sys; print('about to fail'); sys.exit(3)\""
    },
    "expect": {
     "ok": true,
     "contains": [
-     "beta"
+     "status: exited",
+     "about to fail",
+     "python.exe exited with code 3"
     ],
     "absent": [
-     "gamma"
+     "exit_code: 0"
     ]
    }
   },
   {
-   "name": "shell: tail in a pipeline",
-   "tool": "bash",
-   "arguments": {
-    "command": "python -c \"print('alpha'); print('beta'); print('gamma')\" | tail -n 1"
-   },
-   "expect": {
-    "ok": true,
-    "contains": [
-     "gamma"
-    ],
-    "absent": [
-     "alpha"
-    ]
-   }
-  },
-  {
-   "name": "shell hint: grep is not PowerShell",
-   "tool": "bash",
-   "arguments": {
-    "command": "python tools/fake_error.py grep"
-   },
-   "expect": {
-    "ok": true,
-    "contains": [
-     "Select-String"
-    ]
-   }
-  },
-  {
-   "name": "shell hint: /dev/null",
-   "tool": "bash",
-   "arguments": {
-    "command": "python tools/fake_error.py devnull"
-   },
-   "expect": {
-    "ok": true,
-    "contains": [
-     "$null"
-    ]
-   }
-  },
-  {
-   "name": "shell hint: ls -la",
-   "tool": "bash",
-   "arguments": {
-    "command": "ls -la"
-   },
-   "expect": {
-    "ok": true,
-    "contains": [
-     "Get-ChildItem -Force"
-    ]
-   }
-  },
-  {
-   "name": "shell hint: heredoc",
-   "tool": "bash",
-   "arguments": {
-    "command": "python tools/fake_error.py parser \"cat <<EOF\""
-   },
-   "expect": {
-    "ok": true,
-    "contains": [
-     "here-string"
-    ]
-   }
-  },
-  {
-   "name": "process: wait for a background command",
+   "name": "terminal: wait for a background command",
    "steps": [
     {
      "tool": "bash",
@@ -465,10 +395,11 @@
      }
     },
     {
-     "tool": "process",
+     "tool": "terminal",
      "arguments": {
       "action": "wait",
-      "process_id": "$1.process_id"
+      "terminal_id": "$1.terminal_id",
+      "timeout_ms": 10000
      }
     }
    ],
@@ -476,12 +407,13 @@
     "ok": true,
     "contains": [
      "work done",
-     "exit_code: 0"
+     "exit_code: 0",
+     "\"exited\":true"
     ]
    }
   },
   {
-   "name": "process: wait for an output pattern",
+   "name": "terminal: wait sees a background server that keeps running",
    "steps": [
     {
      "tool": "bash",
@@ -491,11 +423,11 @@
      }
     },
     {
-     "tool": "process",
+     "tool": "terminal",
      "arguments": {
       "action": "wait",
-      "process_id": "$1.process_id",
-      "pattern": "ready"
+      "terminal_id": "$1.terminal_id",
+      "timeout_ms": 10000
      }
     }
    ],
@@ -503,157 +435,38 @@
     "ok": true,
     "contains": [
      "server ready",
-     "running"
+     "\"exited\":false"
     ]
    }
   },
   {
-   "name": "process: status ignores list placeholders",
+   "name": "terminal: status of a running background command",
    "steps": [
     {
      "tool": "bash",
      "arguments": {
-      "command": "python -c \"print('work done')\"",
+      "command": "python -c \"import time; time.sleep(20)\"",
       "mode": "background"
      }
     },
     {
-     "tool": "process",
+     "tool": "terminal",
      "arguments": {
       "action": "status",
-      "process_id": "$1.process_id",
-      "filter": "all",
-      "limit": 20,
-      "before": " "
+      "terminal_id": "$1.terminal_id"
      }
     }
    ],
    "expect": {
     "ok": true,
     "contains": [
-     "process_id"
+     "time.sleep(20)",
+     "\"exited\":false"
     ]
    }
   },
   {
-   "name": "process: session_id alias (Hermes)",
-   "steps": [
-    {
-     "tool": "bash",
-     "arguments": {
-      "command": "python -c \"print('work done')\"",
-      "mode": "background"
-     }
-    },
-    {
-     "tool": "process",
-     "arguments": {
-      "action": "status",
-      "session_id": "$1.process_id"
-     }
-    }
-   ],
-   "expect": {
-    "ok": true,
-    "contains": [
-     "process_id"
-    ]
-   }
-  },
-  {
-   "name": "process: poll alias",
-   "steps": [
-    {
-     "tool": "bash",
-     "arguments": {
-      "command": "python -c \"print('work done')\"",
-      "mode": "background"
-     }
-    },
-    {
-     "tool": "process",
-     "arguments": {
-      "action": "poll",
-      "process_id": "$1.process_id"
-     }
-    }
-   ],
-   "expect": {
-    "ok": true,
-    "contains": [
-     "process_id"
-    ]
-   }
-  },
-  {
-   "name": "process: Hermes wait with timeout seconds",
-   "steps": [
-    {
-     "tool": "bash",
-     "arguments": {
-      "command": "python -c \"import time; time.sleep(1); print('work done')\"",
-      "mode": "background"
-     }
-    },
-    {
-     "tool": "process",
-     "arguments": {
-      "action": "wait",
-      "session_id": "$1.process_id",
-      "timeout": 30
-     }
-    }
-   ],
-   "expect": {
-    "ok": true,
-    "contains": [
-     "work done"
-    ]
-   }
-  },
-  {
-   "name": "process: OpenClaw poll with timeout ms",
-   "steps": [
-    {
-     "tool": "bash",
-     "arguments": {
-      "command": "python -c \"import time; time.sleep(1); print('work done')\"",
-      "mode": "background"
-     }
-    },
-    {
-     "tool": "process",
-     "arguments": {
-      "action": "poll",
-      "sessionId": "$1.process_id",
-      "timeout": 30000
-     }
-    }
-   ],
-   "expect": {
-    "ok": true,
-    "contains": [
-     "work done"
-    ]
-   }
-  },
-  {
-   "name": "process: unknown id names the listing call",
-   "tool": "process",
-   "arguments": {
-    "action": "status",
-    "process_id": "proc_does_not_exist"
-   },
-   "expect": {
-    "ok": false,
-    "error_code": "process_not_found",
-    "contains": [
-     "\"status\""
-    ]
-   }
-  },
-  {
-   "name": "process: kill ignores list placeholders",
+   "name": "terminal: kill a background command",
    "steps": [
     {
      "tool": "bash",
@@ -663,55 +476,19 @@
      }
     },
     {
-     "tool": "process",
+     "tool": "terminal",
      "arguments": {
       "action": "kill",
-      "process_id": "$1.process_id",
-      "filter": "running",
-      "limit": 20
+      "terminal_id": "$1.terminal_id"
      }
     }
    ],
    "expect": {
     "ok": true,
     "contains": [
-     "killed"
+     "\"exited\":true",
+     "\"stop_reason\":\"agent\""
     ]
-   }
-  },
-  {
-   "name": "process: stop alias",
-   "steps": [
-    {
-     "tool": "bash",
-     "arguments": {
-      "command": "python -c \"import time; time.sleep(30)\"",
-      "mode": "background"
-     }
-    },
-    {
-     "tool": "process",
-     "arguments": {
-      "action": "stop",
-      "process_id": "$1.process_id"
-     }
-    }
-   ],
-   "expect": {
-    "ok": true,
-    "contains": [
-     "killed"
-    ]
-   }
-  },
-  {
-   "name": "process: list alias",
-   "tool": "process",
-   "arguments": {
-    "action": "list"
-   },
-   "expect": {
-    "ok": true
    }
   },
   {

@@ -52,6 +52,16 @@ class _HistoryAgents:
         return SimpleNamespace(compaction_policy=self.compaction_policy, model=self.model)
 
 
+class _Terminals:
+    """The commands the TerminalManager still knows, by terminal id."""
+
+    def __init__(self) -> None:
+        self.statuses: dict[str, str] = {}
+
+    def command_status(self, terminal_id: str) -> str | None:
+        return self.statuses.get(terminal_id)
+
+
 @dataclass
 class _History:
     state: SimpleNamespace
@@ -83,6 +93,7 @@ def history(tmp_path: Path) -> Iterator[_History]:
                 load_compaction_settings=lambda: normalize_compaction_settings(None)
             ),
             chat_sessions=sessions,
+            terminal_manager=_Terminals(),
             memory=memory,
             learning_changes=LearningChanges(
                 memory=memory,
@@ -113,27 +124,24 @@ def _summary(run_id: str, message_id: str) -> ChatMessage:
     )
 
 
-def _background_bash(session: ChatSession, call_id: str, process_id: str) -> None:
+def _handed_off_command(session: ChatSession, call_id: str, terminal_id: str) -> None:
     append_tool_fixture(
         session,
         ChatMessage.tool(
             tool_call_id=call_id,
             name="bash",
             content=json.dumps(
-                tool_success(
-                    {"process_id": process_id, "status": "running", "delivery": "automatic"}
-                )
+                tool_success({"status": "running", "terminal_id": terminal_id, "output": ""})
             ),
         ),
     )
 
 
-def _completion_note(process_id: str, status: str) -> str:
+def _delivery_note(terminal_id: str, exit_code: int) -> str:
     return (
-        "Automatic completion delivery\n\n"
-        f"### Bash process — {status}\n"
-        f"Process ID: {process_id}\n"
-        "Command: make"
+        "Background results\n\n"
+        f"The command in terminal {terminal_id} (make) exited with code {exit_code}.\n"
+        "Output: (none)"
     )
 
 
@@ -390,32 +398,37 @@ async def test_history_projects_the_active_edit_lineage_but_keeps_raw_usage(
 
 
 @pytest.mark.asyncio
-async def test_history_reports_background_bash_statuses_of_the_records_it_returns(
+async def test_history_reports_background_command_statuses_of_the_records_it_returns(
     history: _History,
 ) -> None:
     session = history.session()
-    _background_bash(session, "bash-one", "process-one")
-    _background_bash(session, "bash-two", "process-two")
-    session.add_note(_completion_note("process-two", "failed"))
+    _handed_off_command(session, "bash-one", "term_one")
+    _handed_off_command(session, "bash-two", "term_two")
+    _handed_off_command(session, "bash-three", "term_gone")
+    session.add_note(_delivery_note("term_two", 3))
     session.add_note("Skill context: unrelated")
+    terminals = history.state.runtime.terminal_manager
+    # term_one exited, its result not yet delivered; vBot restarted since term_gone ran.
+    terminals.statuses = {"term_one": "completed", "term_two": "failed"}
 
-    # A replacement read carries the complete map, completion notes applied.
+    # A replacement read carries the complete map: deliveries applied, running
+    # commands at their current status, commands no terminal runs dropped.
     first = await history.read(limit=1)
-    assert first["background_bash_statuses"] == {
-        "process-one": "running",
-        "process-two": "failed",
+    assert first["background_command_statuses"] == {
+        "term_one": "completed",
+        "term_two": "failed",
     }
     assert all(message["role"] != "note" for message in first["messages"])
 
     # An incremental read carries only the appended records' statuses.
-    session.add_note(_completion_note("process-one", "completed"))
+    session.add_note(_delivery_note("term_one", 0))
     delta = await history.read(after=first["next_after"])
     assert delta["incremental"] is True
-    assert delta["background_bash_statuses"] == {"process-one": "completed"}
+    assert delta["background_command_statuses"] == {"term_one": "completed"}
 
     # An older page carries none.
     older = await history.read(before=first["next_before"])
-    assert "background_bash_statuses" not in older
+    assert "background_command_statuses" not in older
 
 
 # ---------------------------------------------------------------------------
@@ -589,7 +602,7 @@ async def test_unchanged_after_read_returns_only_the_cursor_in_one_worker_hop(
     session.append(ChatMessage.user("Hello"))
 
     first = await history.read()
-    assert {"session_usage", "background_bash_statuses", "compaction_policy"} <= set(first)
+    assert {"session_usage", "background_command_statuses", "compaction_policy"} <= set(first)
     assert first["reflection_runs"] == []
     # Read but absent: an explicit null clears the caller's value.
     assert first["context_usage"] is None
@@ -616,7 +629,7 @@ async def test_unchanged_after_read_returns_only_the_cursor_in_one_worker_hop(
     monkeypatch.setattr(chat_methods._CHAT_RPC_WORKERS, "run", projection_hop)
     monkeypatch.setattr(chat_methods, "_session_compaction_policy", unexpected)
     monkeypatch.setattr(chat_methods, "_read_reflection_runs", unexpected)
-    monkeypatch.setattr(chat_methods, "background_bash_statuses", unexpected)
+    monkeypatch.setattr(chat_methods, "background_command_statuses", unexpected)
 
     unchanged = await history.read(session_id=session.id, after=first["next_after"])
 
@@ -641,7 +654,7 @@ async def test_unchanged_after_read_returns_only_the_cursor_in_one_worker_hop(
     assert [message["content"] for message in appended["messages"]] == ["Reply"]
     assert appended["incremental"] is True
     assert {"session_usage", "context_usage", "compaction_policy"} <= set(appended)
-    assert appended["background_bash_statuses"] == {}
+    assert appended["background_command_statuses"] == {}
     # Reflection Runs arrive with a full read; live events keep them current.
     assert "reflection_runs" not in appended
 

@@ -32,7 +32,7 @@ from server.live.registry import LiveCallRegistry
 from server.rpc.dispatcher import dispatch_method
 from server.rpc.event_bridge import (
     bridge_run_to_event_bus,
-    publish_bash_process_status_changed,
+    publish_command_status_changed,
     publish_recall_index_status,
     publish_resource_changed,
     publish_session_changed,
@@ -84,9 +84,6 @@ def _initialize_app_state(
         app.state
     )
     app.state.terminal_change_bridge_unsubscribe = _register_terminal_change_bridge(app.state)
-    app.state.bash_process_change_bridge_unsubscribe = _register_bash_process_change_bridge(
-        app.state
-    )
     app.state.activity = ActivityMonitor(
         runtime,
         lambda activities: app.state.event_bus.publish(
@@ -272,13 +269,19 @@ def _unregister_model_catalog_change_bridge(state: Any) -> None:
 
 
 def _register_terminal_change_bridge(state: Any) -> Any:
-    return state.runtime.terminal_manager.add_changed_callback(
-        lambda terminal_id: publish_resource_changed(
-            state,
-            RESOURCE_KIND_TERMINALS,
-            scope={"terminal_id": terminal_id},
-        )
-    )
+    terminals = state.runtime.terminal_manager
+    command_statuses: dict[str, str] = {}
+
+    def forward(terminal_id: str) -> None:
+        publish_resource_changed(state, RESOURCE_KIND_TERMINALS, scope={"terminal_id": terminal_id})
+        status = terminals.command_status(terminal_id)
+        if status is None:
+            command_statuses.pop(terminal_id, None)
+        elif command_statuses.get(terminal_id) != status:
+            command_statuses[terminal_id] = status
+            publish_command_status_changed(state, terminal_id, status)
+
+    return terminals.add_changed_callback(forward)
 
 
 def _unregister_terminal_change_bridge(state: Any) -> None:
@@ -286,19 +289,6 @@ def _unregister_terminal_change_bridge(state: Any) -> None:
     if unsubscribe is not None:
         unsubscribe()
     state.terminal_change_bridge_unsubscribe = None
-
-
-def _register_bash_process_change_bridge(state: Any) -> Any:
-    return state.runtime.process_manager.add_terminal_callback(
-        lambda notification: publish_bash_process_status_changed(state, notification)
-    )
-
-
-def _unregister_bash_process_change_bridge(state: Any) -> None:
-    unsubscribe = state.bash_process_change_bridge_unsubscribe
-    if unsubscribe is not None:
-        unsubscribe()
-    state.bash_process_change_bridge_unsubscribe = None
 
 
 def _register_recall_index_status_bridge(state: Any) -> Any:

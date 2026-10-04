@@ -25,7 +25,6 @@ if TYPE_CHECKING:
     from core.skills.skills import SkillMetadata, SkillRegistry
     from core.storage import StorageManager
     from core.tools.file_state import FileReadState
-    from core.tools.process_manager import ProcessManager
     from core.tools.terminal_manager import TerminalManager
     from core.tools.tools import ToolRegistry
 
@@ -217,11 +216,6 @@ class RuntimeServices(Protocol):
     @property
     def system_prompts(self) -> SystemPromptManager:
         """System prompt assembly."""
-        ...
-
-    @property
-    def process_manager(self) -> ProcessManager:
-        """Shared host process lifecycle management."""
         ...
 
     @property

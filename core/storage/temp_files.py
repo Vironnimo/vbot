@@ -21,7 +21,7 @@ from core.utils.workers import BoundedWorkerPool
 _LOGGER = get_logger("storage.temp_files")
 
 TEMPORARY_FILE_RETENTION: Mapping[str, timedelta] = {
-    "bash": timedelta(hours=72),
+    "commands": timedelta(hours=72),
     "computer_use": timedelta(hours=72),
     "subagents": timedelta(hours=24),
     "terminals": timedelta(hours=72),

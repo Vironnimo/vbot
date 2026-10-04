@@ -65,7 +65,6 @@ from scripts.provider_probe.choices import (  # noqa: E402
     MEMORY_CASES,
     OPTIONAL_BOOLEAN_CASES,
     PROBE_SCENARIOS,
-    PROCESS_CASES,
     READ_CASES,
     SESSION_SEARCH_CASES,
     SKILL_CASES,
@@ -255,12 +254,6 @@ def _parser() -> argparse.ArgumentParser:
         choices=HA_CALL_SERVICE_CASES,
         default="base",
         help="Exact ha_call_service argument shape requested by the scenario.",
-    )
-    parser.add_argument(
-        "--process-case",
-        choices=PROCESS_CASES,
-        default="status_list",
-        help="Exact process argument shape requested by the process scenario.",
     )
     parser.add_argument(
         "--read-case",
@@ -532,7 +525,6 @@ async def _run(args: argparse.Namespace) -> int:
                 args.image_generation_case if scenario.name == "image_generation" else None
             ),
             "memory_case": args.memory_case if scenario.name == "memory" else None,
-            "process_case": args.process_case if scenario.name == "process" else None,
             "read_case": args.read_case if scenario.name == "read" else None,
             "session_search_case": (
                 args.session_search_case if scenario.name == "session_search" else None

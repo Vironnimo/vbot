@@ -5,9 +5,10 @@
   // A Tool whose display declares detail blocks shows those to the user
   // (texts such as its command and output, the files it changed, what it
   // found, the Memory entries it changed, notices),
-  // with the raw call and result behind a disclosure. Live Stdout/Stderr
-  // take the place of an Output block, or follow the blocks while the call
-  // runs. Any other Tool shows Args, live Stdout/Stderr and its Result.
+  // with the raw call and result behind a disclosure. The live Output (the
+  // command's current screen) takes the place of an Output block, or follows
+  // the blocks while the call runs. Any other Tool shows Args, live Output
+  // and its Result.
   import { toolDetailBlocks, toolDetailMedia } from '$lib/chatToolDetails.js';
   import { t } from '$lib/i18n.js';
   import ToolDetailSection from './ToolDetailSection.svelte';
@@ -22,8 +23,8 @@
     tool,
     toolName = '',
     args,
-    stdout = '',
-    stderr = '',
+    // Live output while the call runs: the command's current screen.
+    output = '',
     result,
     resultFailed = false,
     showResult = true,
@@ -52,7 +53,7 @@
 
   let blocks = $derived(toolDetailBlocks(tool, { args, result }));
   let media = $derived(toolDetailMedia(tool, result));
-  let streamed = $derived(Boolean(stdout || stderr));
+  let streamed = $derived(Boolean(output));
   let streamsReplaceOutput = $derived(
     streamed &&
       Boolean(
@@ -75,18 +76,10 @@
 {/snippet}
 
 {#snippet outputSections()}
-  {#if stdout}
+  {#if output}
     <ToolDetailSection
-      label={t('chat.toolStdout')}
-      value={stdout}
-      follow={live}
-    />
-  {/if}
-  {#if stderr}
-    <ToolDetailSection
-      label={t('chat.toolStderr')}
-      value={stderr}
-      isError
+      label={t('chat.toolDetailLabel.output')}
+      value={output}
       follow={live}
     />
   {/if}

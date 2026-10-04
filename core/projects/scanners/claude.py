@@ -67,7 +67,7 @@ _CLAUDE_TOOL_MAP: dict[str, frozenset[str]] = {
     "edit": frozenset({"apply_patch"}),
     "glob": frozenset({"search_files"}),
     "grep": frozenset({"search_files"}),
-    "bash": frozenset({"bash", "process"}),
+    "bash": frozenset({"bash"}),
     "webfetch": frozenset({"web_fetch"}),
     "websearch": frozenset({"web_search"}),
     "agent": frozenset({"subagent"}),

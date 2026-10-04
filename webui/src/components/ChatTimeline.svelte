@@ -51,8 +51,8 @@
     followSessionRequest = null,
     subAgentStatuses = {},
     subAgentResults = {},
-    backgroundBashStatuses = {},
-    backgroundBashProcesses = {},
+    backgroundCommandStatuses = {},
+    commandStatuses = {},
     onNavigateToSubAgent = () => {},
     onCancelToolCall = () => {},
     onBackgroundToolCall = () => {},
@@ -141,10 +141,16 @@
   $effect(() => {
     const visibleItems = timelineItems;
     const statuses = subAgentStatuses;
-    const bashProcesses = backgroundBashProcesses;
+    const durableCommandStatuses = backgroundCommandStatuses;
+    const liveCommandStatuses = commandStatuses;
     if (
-      liveClockCadenceMs(visibleItems, statuses, Date.now(), bashProcesses) ===
-      0
+      liveClockCadenceMs(
+        visibleItems,
+        statuses,
+        Date.now(),
+        durableCommandStatuses,
+        liveCommandStatuses,
+      ) === 0
     ) {
       return undefined;
     }
@@ -166,7 +172,8 @@
         visibleItems,
         statuses,
         Date.now(),
-        bashProcesses,
+        durableCommandStatuses,
+        liveCommandStatuses,
       );
       if (delay === 0) {
         return;
@@ -587,8 +594,8 @@
         {chatWorkingMode}
         {subAgentStatuses}
         {subAgentResults}
-        {backgroundBashStatuses}
-        {backgroundBashProcesses}
+        {backgroundCommandStatuses}
+        {commandStatuses}
         {nowMs}
         {isReasoningOpen}
         onReasoningOpenChange={setReasoningOpen}

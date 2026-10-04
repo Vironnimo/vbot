@@ -55,9 +55,17 @@ class TerminalActivity:
     """Activity phase, quiet-boundary wakeups and the delivered-screen baseline."""
 
     def __init__(
-        self, *, awaiting_initial_input: bool, startup_silence: bool, repaint_window: float
+        self,
+        *,
+        awaiting_initial_input: bool,
+        startup_silence: bool,
+        repaint_window: float,
+        output_wakes: bool = True,
     ) -> None:
         self._phase: _Phase = "starting" if awaiting_initial_input else "ready"
+        # False: only input wakes the attached Agent, never spontaneous output
+        # (a command's output is its result, delivered when it ends).
+        self._spontaneous_wakes = output_wakes
         self._repaint_window = repaint_window
         # Set when a quiet terminal is resized: output before this monotonic
         # time redraws known content for the new size and is not activity.
@@ -99,7 +107,10 @@ class TerminalActivity:
         self._repaint_deadline = None
         changed = self._phase != "working"
         self._phase = "working"
-        restart = self._restart(notify=attached and self._output_wakes, supersede=delivery_pending)
+        restart = self._restart(
+            notify=attached and self._output_wakes and self._spontaneous_wakes,
+            supersede=delivery_pending,
+        )
         return OutputEffect(True, restart, changed)
 
     def input(self, *, notify: bool, delivery_pending: bool) -> tuple[QuietRestart, bool]:

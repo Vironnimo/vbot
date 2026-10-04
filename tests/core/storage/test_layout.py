@@ -54,7 +54,7 @@ def test_layout_exposes_every_canonical_named_path(tmp_path: Path) -> None:
     assert layout.debug == tmp_path / "artifacts" / "debug"
     assert layout.performance == tmp_path / "artifacts" / "performance"
     assert layout.atomic_temporary == tmp_path / "artifacts" / "temp" / "atomic"
-    assert layout.bash_temporary == tmp_path / "artifacts" / "temp" / "bash"
+    assert layout.command_temporary == tmp_path / "artifacts" / "temp" / "commands"
     assert layout.subagent_temporary == tmp_path / "artifacts" / "temp" / "subagents"
     assert layout.terminal_temporary == tmp_path / "artifacts" / "temp" / "terminals"
     assert layout.bootstrap == tmp_path / "bootstrap"
@@ -173,7 +173,7 @@ def test_initialize_tolerates_concurrently_created_canonical_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     data_dir = tmp_path / "data"
-    contested = data_dir / "artifacts" / "temp" / "bash"
+    contested = data_dir / "artifacts" / "temp" / "commands"
     _race_mkdir(monkeypatch, contested)
 
     result = initialize_data_directory(data_dir, resources_dir=PROJECT_ROOT / "resources")

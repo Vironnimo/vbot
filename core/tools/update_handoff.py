@@ -1,6 +1,6 @@
-"""Update handoff capabilities for Bash calls that run ``vbot update``.
+"""Update handoff capabilities for shell commands that run ``vbot update``.
 
-Every Bash call with a persistence boundary receives an unguessable in-memory
+Every shell call with a persistence boundary receives an unguessable in-memory
 token through ``VBOT_UPDATE_HANDOFF``. Only a packaged ``vbot update`` claims
 it: the server then writes one durable,
 opaque ticket that the independent updater and the private application RPCs
@@ -37,7 +37,7 @@ _TICKET_BYTES = 20
 _MAX_TICKET_BYTES = 16_384
 _ID_CHARACTERS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
 
-_LOGGER = get_logger("tools.bash")
+_LOGGER = get_logger("tools.update_handoff")
 
 
 class UpdateHandoffUnavailableError(ValueError):
@@ -58,9 +58,9 @@ class UpdateHandoffTicket:
 
 
 class UpdateHandoffGrant:
-    """One Bash call's in-memory handoff capability.
+    """One shell call's in-memory handoff capability.
 
-    The Bash handler exports ``token`` to the command, calls ``acknowledge``
+    The shell Tool exports ``token`` to the command, calls ``acknowledge``
     after the Tool Result enters Session history, and calls ``release`` once no
     process of the call can still run. Acknowledgement keeps working after
     release so a ticket claimed by a finished command is still acknowledged.

@@ -93,7 +93,6 @@ PROJECT_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
     "apply_patch",
     "search_files",
     "bash",
-    "process",
     "terminal",
     "web_fetch",
     "web_search",

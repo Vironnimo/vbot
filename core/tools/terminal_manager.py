@@ -14,7 +14,7 @@ from typing import Any, TextIO
 from core.runs import RunExecutionOwner
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
 from core.tools import terminal_backend
-from core.tools.bash import get_shell_env, reset_shell_env_cache
+from core.tools.shell_environment import terminal_environment
 from core.tools.terminal_backend import (
     TerminalAdapter,
     TerminalAdapterFactory,
@@ -38,9 +38,18 @@ from core.utils.paths import model_path
 from core.utils.processes import process_tree_runs
 
 from ._terminal_catalog import TerminalCatalog
+from ._terminal_command import (
+    COMMAND_TEMPORARY_CATEGORY,
+    CommandReport,
+    CommandReportFormatter,
+    CommandState,
+    StopReason,
+)
 from ._terminal_launch import shell_launch
+from ._terminal_process_tree import ProcessTreeTracker, track_process_tree
 from ._terminal_render_host import TerminalRenderHost
 from ._terminal_session import (
+    CommandWaitOutcome,
     TerminalLaunch,
     TerminalObservation,
     TerminalSession,
@@ -48,12 +57,15 @@ from ._terminal_session import (
 )
 from ._terminal_state import (
     TERMINAL_ACTIVITY_QUIET_SECONDS,
+    TERMINAL_COMMAND_COLUMNS,
+    TERMINAL_COMMAND_ROWS,
     TERMINAL_DEFAULT_COLUMNS,
     TERMINAL_DEFAULT_ROWS,
     TERMINAL_FINISHED_TTL,
     TERMINAL_INPUT_KEY_SEQUENCES,
     TERMINAL_INPUT_MAX_CHARS,
     TERMINAL_MAX_COLUMNS,
+    TERMINAL_MAX_LIVE_COMMANDS,
     TERMINAL_MAX_LIVE_GLOBAL,
     TERMINAL_MAX_LIVE_PER_SESSION,
     TERMINAL_MAX_ROWS,
@@ -70,6 +82,7 @@ from ._terminal_state import (
     TerminalChangedCallback,
     TerminalClosedError,
     TerminalInfo,
+    TerminalKind,
     TerminalLaunchError,
     TerminalManagerError,
     TerminalNotAttachedError,
@@ -113,6 +126,7 @@ class TerminalManager:
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         program_probe: Callable[[int, str], bool] = process_tree_runs,
+        process_tracker: ProcessTreeTracker = track_process_tree,
     ) -> None:
         if scrollback_lines < 1:
             raise ValueError("Terminal scrollback cap must be positive")
@@ -136,17 +150,24 @@ class TerminalManager:
         self._finished_session_ttl = finished_session_ttl
         self._sweep_interval_seconds = sweep_interval_seconds
         self._sessions: dict[str, TerminalSession] = {}
-        self._pending_spawns: dict[asyncio.Task[TerminalSession], TerminalOwner | None] = {}
+        self._pending_spawns: dict[
+            asyncio.Task[TerminalSession], tuple[TerminalOwner | None, TerminalKind]
+        ] = {}
         self._pending_execution_spawns: dict[asyncio.Task[TerminalSession], RunExecutionOwner] = {}
+        self._pending_command_runs: dict[asyncio.Task[TerminalSession], str] = {}
         self._closed_execution_groups: set[tuple[str, str, str]] = set()
+        # Runs being cancelled: their commands are stopped and no new one starts.
+        self._cancelled_runs: set[str] = set()
         self._closed = False
         self._program_probe = program_probe
+        self._process_tracker = process_tracker
         self._reader_executor = ThreadPoolExecutor(
-            max_workers=TERMINAL_MAX_LIVE_GLOBAL, thread_name_prefix="vbot-terminal-read"
+            max_workers=TERMINAL_MAX_LIVE_GLOBAL + TERMINAL_MAX_LIVE_COMMANDS,
+            thread_name_prefix="vbot-terminal-read",
         )
         self._catalog = TerminalCatalog(
             self._operator_store,
-            lambda: [session.info() for session in self._sessions.values()],
+            lambda: [session.info() for session in self._sessions.values() if not session.hidden],
             self._terminate_by_id,
         )
         self._services = TerminalSessionServices(
@@ -328,7 +349,7 @@ class TerminalManager:
         shell's own start options: the shell loads its profile, runs the
         program, and keeps its prompt after the program ends or is interrupted.
         """
-        environment = await get_shell_env()
+        environment = await asyncio.to_thread(terminal_environment)
         shell_argv = default_terminal_argv(environment)
         workdir = cwd or Path.home()
         if command is None:
@@ -381,12 +402,166 @@ class TerminalManager:
         )
         return self._catalog.summary(session.info())
 
+    async def spawn_command(
+        self,
+        owner: TerminalOwner,
+        argv: Sequence[str],
+        *,
+        command: str,
+        description: str | None,
+        cwd: Path,
+        env: Mapping[str, str],
+        timeout_seconds: float | None,
+        formatter: CommandReportFormatter,
+        origin_run_id: str,
+        execution_owner: RunExecutionOwner | None = None,
+        command_line: str | None = None,
+    ) -> str:
+        """Start one shell command in a new terminal; returns its terminal id.
+
+        *env* is the complete environment. The command stays unlisted until
+        ``hand_off_command``; its process tree is tracked from the start, and a
+        tree that cannot be tracked is not started. *timeout_seconds* stops the
+        command (Ctrl+C, then a kill), whether or not it was handed off.
+        """
+        _validate_owner(owner)
+        if origin_run_id in self._cancelled_runs:
+            raise TerminalClosedError("The Run that started this command was cancelled")
+        session = await self._spawn(
+            owner,
+            argv,
+            launch=TerminalLaunch(command=argv[0], arguments=tuple(argv[1:]), cwd=cwd),
+            env=env,
+            exact_env=True,
+            columns=TERMINAL_COMMAND_COLUMNS,
+            rows=TERMINAL_COMMAND_ROWS,
+            origin_run_id=origin_run_id,
+            name=description,
+            execution_owner=execution_owner,
+            command_line=command_line,
+            kind="command",
+            command_options=(command, description, timeout_seconds, formatter),
+        )
+        return session.terminal_id
+
+    async def wait_command(
+        self,
+        terminal_id: str,
+        *,
+        seconds: float | None,
+        idle_seconds: float | None,
+        progress: Callable[[str], Awaitable[None]] | None = None,
+    ) -> CommandWaitOutcome:
+        """Wait for the command to exit, for *seconds* (None: no limit), or idleness."""
+        deadline = None if seconds is None else self._services.monotonic() + seconds
+        return await self._get(terminal_id).wait_command(
+            deadline=deadline, idle_seconds=idle_seconds, progress=progress
+        )
+
+    async def stop_command(self, terminal_id: str, reason: StopReason) -> CommandReport:
+        """Interrupt the command, kill what still runs, and return its outcome."""
+        session = self._get(terminal_id)
+        await session.stop_command(reason)
+        return session.command_report()
+
+    def hand_off_command(self, terminal_id: str, *, deliver: bool) -> CommandReport:
+        """List a running command; with *deliver*, its result is delivered when it ends.
+
+        The returned report tells whether the shell exited before the hand-off,
+        in which case nothing is delivered and the caller reports the result.
+        """
+        session = self._get(terminal_id)
+        session.hand_off(deliver=deliver)
+        return session.command_report()
+
+    def command_report(self, terminal_id: str) -> CommandReport:
+        return self._get(terminal_id).command_report()
+
+    def command_status(self, terminal_id: str) -> str | None:
+        """The status of a listed command, or None for an unknown or unlisted terminal.
+
+        ``running``, ``completed`` (exit code 0), ``failed`` (another exit
+        code) or ``stopped`` (vBot stopped it).
+        """
+        session = self._sessions.get(terminal_id)
+        if session is None or session.command is None or session.hidden:
+            return None
+        report = session.command_report()
+        if not report.exited:
+            return "running"
+        if report.stop_reason is not None:
+            return "stopped"
+        return "completed" if report.exit_code == 0 else "failed"
+
+    async def wait_finished(self, terminal_id: str) -> None:
+        """Wait until none of the terminal's processes runs any longer."""
+        await self._get(terminal_id).wait_finished()
+
+    async def command_screen(self, terminal_id: str, lines: int) -> str:
+        """The newest non-blank rows of a command's screen."""
+        return await self._get(terminal_id).command_screen(lines)
+
+    async def cancel_run(self, run_id: str) -> None:
+        """Kill the commands a cancelled Run started and reject new ones for it."""
+        if not run_id:
+            return
+        self._cancelled_runs.add(run_id)
+        pending = [task for task, run in self._pending_command_runs.items() if run == run_id]
+        if pending:
+            await asyncio.gather(
+                *(asyncio.shield(task) for task in pending), return_exceptions=True
+            )
+        sessions = [
+            session
+            for session in self._sessions.values()
+            if session.command is not None
+            and session.origin_run_id == run_id
+            and not session.finished
+        ]
+        await asyncio.gather(
+            *(
+                session.terminate(suppress_attention=True, reason="run_cancelled")
+                for session in sessions
+            )
+        )
+
+    def release_run(self, run_id: str) -> None:
+        """Forget a settled Run's cancellation marker.
+
+        Call this only once the Run is terminal and its Tool tasks have settled:
+        no command for it can start any more.
+        """
+        self._cancelled_runs.discard(run_id)
+
+    async def shutdown_commands(self) -> None:
+        """Stop every command before vBot shuts down.
+
+        A handed-off command's result is submitted as stopped by the shutdown,
+        so it reaches its Session even though the command could not finish.
+        Call this before the delivery service closes.
+        """
+        sessions = [
+            session
+            for session in self._sessions.values()
+            if session.command is not None and not session.finished
+        ]
+        await asyncio.gather(
+            *(
+                session.terminate(suppress_attention=False, reason="shutdown")
+                for session in sessions
+            ),
+            return_exceptions=True,
+        )
+        # Let the result deliveries the stops scheduled hand their results over.
+        await asyncio.sleep(0)
+
     async def _spawn(
         self,
         owner: TerminalOwner | None,
         argv: Sequence[str],
         *,
         execution_owner: RunExecutionOwner | None = None,
+        kind: TerminalKind = "terminal",
         **kwargs: Any,
     ) -> TerminalSession:
         """Reserve capacity before starting work and retain ownership through cancellation."""
@@ -402,13 +577,15 @@ class TerminalManager:
             in self._closed_execution_groups
         ):
             raise TerminalClosedError("Terminal Session is no longer running")
-        self._enforce_capacity(owner)
+        self._enforce_capacity(owner, kind)
         task = asyncio.create_task(
             self._spawn_admitted(owner, argv, execution_owner=execution_owner, **kwargs)
         )
-        self._pending_spawns[task] = owner
+        self._pending_spawns[task] = (owner, kind)
         if execution_owner is not None:
             self._pending_execution_spawns[task] = execution_owner
+        if kind == "command" and kwargs.get("origin_run_id"):
+            self._pending_command_runs[task] = kwargs["origin_run_id"]
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
@@ -424,6 +601,7 @@ class TerminalManager:
         finally:
             self._pending_spawns.pop(task, None)
             self._pending_execution_spawns.pop(task, None)
+            self._pending_command_runs.pop(task, None)
 
     async def _discard_cancelled_spawn(self, task: asyncio.Task[TerminalSession]) -> None:
         try:
@@ -448,6 +626,8 @@ class TerminalManager:
         execution_owner: RunExecutionOwner | None = None,
         command_line: str | None = None,
         cleanup: Callable[[], None] | None = None,
+        exact_env: bool = False,
+        command_options: tuple[str, str | None, float | None, CommandReportFormatter] | None = None,
     ) -> TerminalSession:
         """Start one process behind PTY/ConPTY and its Terminal Session."""
         _validate_dimensions(columns, rows)
@@ -460,18 +640,53 @@ class TerminalManager:
         log_path: Path | None = None
         log_handle: TextIO | None = None
         log_lease: TemporaryFileLease | None = None
+        transcript_lease: TemporaryFileLease | None = None
         screen = None
+        adapter: TerminalAdapter | None = None
+        command: CommandState | None = None
         try:
             await asyncio.to_thread(self._render_host.prepare)
             screen = self._render_host.open_screen(
-                columns, rows, scrollback_lines=self._scrollback_lines
+                columns,
+                rows,
+                scrollback_lines=self._scrollback_lines,
+                transcript=command_options is not None,
             )
-            log_path, log_handle, log_lease = self._open_raw_log()
-            adapter = await self._start_process(argv, cwd, env, rows, columns, command_line)
+            if command_options is None:
+                log_path, log_handle, log_lease = self._open_raw_log()
+            elif self._temporary_files is not None:
+                transcript_lease = self._temporary_files.create(COMMAND_TEMPORARY_CATEGORY, ".log")
+            adapter = await self._start_process(
+                argv, cwd, env, rows, columns, command_line, exact_env=exact_env
+            )
+            if command_options is not None:
+                tree = await asyncio.to_thread(self._process_tracker, adapter.pid)
+                text, description, timeout_seconds, formatter = command_options
+                command = CommandState(
+                    command=text,
+                    description=description,
+                    workdir=cwd,
+                    tree=tree,
+                    transcript_lease=transcript_lease,
+                    timeout_seconds=timeout_seconds,
+                    formatter=formatter,
+                    started_at=self._services.monotonic(),
+                )
             if self._closed:
-                await asyncio.to_thread(terminal_backend.terminate_process_tree, adapter)
                 raise TerminalClosedError("Terminal Session is no longer running")
         except Exception as error:
+            if adapter is not None:
+                with contextlib.suppress(OSError, ProcessLookupError):
+                    if command is not None and command.tree is not None:
+                        await asyncio.to_thread(command.tree.terminate)
+                    else:
+                        await asyncio.to_thread(terminal_backend.terminate_process_tree, adapter)
+                with contextlib.suppress(OSError):
+                    await asyncio.to_thread(adapter.close)
+            if command is not None:
+                command.close()
+            elif transcript_lease is not None:
+                transcript_lease.finish()
             if screen is not None:
                 screen.close()
             if log_handle is not None:
@@ -499,6 +714,7 @@ class TerminalManager:
             log_lease=log_lease,
             cleanup=cleanup,
             services=self._services,
+            command=command,
         )
         if group_id is not None:
             self._catalog.add_to_group(group_id, terminal_id)
@@ -514,38 +730,30 @@ class TerminalManager:
         rows: int,
         columns: int,
         command_line: str | None,
+        *,
+        exact_env: bool = False,
     ) -> TerminalAdapter:
-        """Start the process; a program missing from a stale PATH gets one fresh retry."""
-        for attempt in range(2):
-            process_env = await get_shell_env()
-            # A service or pipe-based parent may advertise no terminal. The child
-            # has a real VT here; preserve only an explicit caller override.
-            if process_env.get("TERM") in {None, "", "dumb"}:
-                process_env["TERM"] = "xterm-256color"
-            if env is not None:
-                process_env.update(env)
-            try:
-                return await asyncio.to_thread(
-                    self._adapter_factory,
-                    list(argv),
-                    cwd,
-                    process_env,
-                    rows,
-                    columns,
-                    command_line=command_line,
-                )
-            except FileNotFoundError:
-                if attempt:
-                    raise
-                reset_shell_env_cache()
-        raise AssertionError("unreachable")
+        """Start the process in *env* when exact, else in a terminal environment plus *env*."""
+        if exact_env and env is not None:
+            process_env = dict(env)
+        else:
+            process_env = await asyncio.to_thread(terminal_environment, env)
+        return await asyncio.to_thread(
+            self._adapter_factory,
+            list(argv),
+            cwd,
+            process_env,
+            rows,
+            columns,
+            command_line=command_line,
+        )
 
     # Finding and attaching terminals
 
     def list_terminals(self) -> list[TerminalInfo]:
         """Return all retained Terminal Sessions discoverable for attachment."""
         return sorted(
-            (session.info() for session in self._sessions.values()),
+            (session.info() for session in self._sessions.values() if not session.hidden),
             key=lambda info: info.started_at,
         )
 
@@ -646,9 +854,16 @@ class TerminalManager:
         return self._catalog.summary(session.info())
 
     async def kill_for_operator(self, terminal_id: str) -> dict[str, Any]:
-        """Explicitly stop an operator-selected Terminal Session."""
+        """Explicitly stop an operator-selected Terminal Session.
+
+        A command is interrupted and then killed; its result tells its Session
+        that the user stopped it.
+        """
         session = self._get(terminal_id)
-        await session.terminate(suppress_attention=True)
+        if session.command is not None:
+            await session.stop_command("user")
+        else:
+            await session.terminate(suppress_attention=True)
         return self._catalog.summary(session.info())
 
     def forget_for_operator(self, terminal_id: str) -> dict[str, Any]:
@@ -879,9 +1094,24 @@ class TerminalManager:
     async def _terminate_by_id(self, terminal_id: str) -> None:
         await self._get(terminal_id).terminate(suppress_attention=True)
 
-    def _enforce_capacity(self, owner: TerminalOwner | None) -> None:
-        pending = [owner for task, owner in self._pending_spawns.items() if not task.done()]
-        live = [session for session in self._sessions.values() if not session.finished]
+    def _enforce_capacity(self, owner: TerminalOwner | None, kind: TerminalKind) -> None:
+        pending = [
+            pending_owner
+            for task, (pending_owner, pending_kind) in self._pending_spawns.items()
+            if not task.done() and pending_kind == kind
+        ]
+        live = [
+            session
+            for session in self._sessions.values()
+            if not session.finished
+            and ("command" if session.command is not None else "terminal") == kind
+        ]
+        if kind == "command":
+            if len(live) + len(pending) >= TERMINAL_MAX_LIVE_COMMANDS:
+                raise TerminalCapacityError(
+                    f"Running command limit reached ({TERMINAL_MAX_LIVE_COMMANDS})"
+                )
+            return
         if len(live) + len(pending) >= TERMINAL_MAX_LIVE_GLOBAL:
             raise TerminalCapacityError(
                 f"Live Terminal Session limit reached ({TERMINAL_MAX_LIVE_GLOBAL})"

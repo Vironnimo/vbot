@@ -2,27 +2,22 @@
 
 from __future__ import annotations
 
-import os
-from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-import core.tools._bash_environment as bash_environment
 import core.tools._terminal_launch as terminal_launch
 import core.tools.terminal_manager as terminal_module
 from core.tools._terminal_launch import shell_launch
 from core.tools.terminal_manager import (
     TerminalLaunchError,
     TerminalManager,
-    TerminalRenderHost,
     TerminalStaleScreenError,
 )
 from tests.core.tools.terminal_manager_helpers import (
     AdapterFactory,
     FakeClock,
-    FakeTerminalAdapter,
     PendingTriggerService,
     eventually,
     owner,
@@ -31,83 +26,29 @@ from tests.core.tools.terminal_manager_helpers import (
 )
 from tests.core.tools.terminal_manager_helpers import clocked_manager as clocked_manager
 from tests.core.tools.terminal_manager_helpers import quick_readiness as quick_readiness
-from tests.core.tools.terminal_manager_helpers import shell_environment as shell_environment
 from tests.core.tools.terminal_manager_helpers import terminal_manager as terminal_manager
 
 Clocked = tuple[TerminalManager, AdapterFactory, PendingTriggerService, FakeClock]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("inherited", "explicit", "expected"),
-    [
-        (None, None, "xterm-256color"),
-        ("", None, "xterm-256color"),
-        ("dumb", None, "xterm-256color"),
-        ("screen-256color", None, "screen-256color"),
-        ("screen-256color", {"TERM": "dumb"}, "dumb"),
-    ],
-    ids=["unset", "empty", "dumb", "real-terminal", "explicit-env"],
-)
-async def test_launch_corrects_an_inherited_dumb_term_and_keeps_explicit_env(
+async def test_launch_runs_in_the_terminal_environment_and_keeps_explicit_env(
     terminal_manager: tuple[TerminalManager, AdapterFactory],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    inherited: str | None,
-    explicit: dict[str, str] | None,
-    expected: str,
 ) -> None:
-    if inherited is None:
-        monkeypatch.delenv("TERM", raising=False)
-    else:
-        monkeypatch.setenv("TERM", inherited)
+    monkeypatch.setenv("VBOT_RUN_AGENT_ID", "server-only")
     manager, factory = terminal_manager
 
-    await manager.spawn(owner(), ["fake-tui"], cwd=tmp_path, env=explicit, origin_run_id="run-a")
+    await manager.spawn(owner(), ["fake-tui"], cwd=tmp_path, env=None, origin_run_id="run-a")
+    await manager.spawn(
+        owner(), ["fake-tui"], cwd=tmp_path, env={"TERM": "dumb"}, origin_run_id="run-a"
+    )
 
-    assert factory.calls[0][2]["TERM"] == expected
-    assert os.environ.get("TERM") == inherited
-
-
-@pytest.mark.asyncio
-async def test_terminal_reprobes_missing_program_and_keeps_explicit_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    calls: list[dict[str, str]] = []
-    probes = 0
-
-    async def probe() -> dict[str, str]:
-        nonlocal probes
-        probes += 1
-        return {"PATH": f"path-{probes}", "TERM": "dumb"}
-
-    factory = AdapterFactory()
-
-    def launch(
-        argv: Sequence[str],
-        cwd: Path,
-        env: Mapping[str, str],
-        rows: int,
-        columns: int,
-        *,
-        command_line: str | None = None,
-    ) -> FakeTerminalAdapter:
-        calls.append(dict(env))
-        if len(calls) == 1:
-            raise FileNotFoundError("test-owned absent executable")
-        return factory(argv, cwd, env, rows, columns, command_line=command_line)
-
-    monkeypatch.setattr(bash_environment, "_probe_shell_env", probe)
-    manager = TerminalManager(adapter_factory=launch, render_host=TerminalRenderHost.in_process())
-    try:
-        await manager.spawn(
-            owner(), ["new-program"], cwd=tmp_path, env={"EXPLICIT": "kept"}, origin_run_id="run"
-        )
-        assert [call["PATH"] for call in calls] == ["path-1", "path-2"]
-        assert all(call["TERM"] == "xterm-256color" for call in calls)
-        assert all(call["EXPLICIT"] == "kept" for call in calls)
-    finally:
-        await manager.aclose()
+    default, explicit = (call[2] for call in factory.calls)
+    assert default["TERM"] == "xterm-256color"
+    assert "VBOT_RUN_AGENT_ID" not in default
+    assert explicit["TERM"] == "dumb"
 
 
 @pytest.mark.asyncio

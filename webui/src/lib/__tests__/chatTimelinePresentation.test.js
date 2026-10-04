@@ -403,18 +403,6 @@ describe('Tool row presentation', () => {
       'notes/plan.md',
     ],
     [
-      'the flat process action',
-      'process',
-      { action: 'status', process_id: 'process-1' },
-      'status · process-1',
-    ],
-    [
-      'a legacy process request after History reload',
-      'process',
-      { request: { operation: 'list' } },
-      'list',
-    ],
-    [
       'a cron job by id',
       'cron',
       { action: 'disable', id: 'cron_abc' },
@@ -588,9 +576,9 @@ describe('Tool row presentation', () => {
       },
     }).primary;
     const [silent] = toolRowPresentation({
-      name: 'process',
+      name: 'terminal',
       display: {
-        primary: [{ kind: 'identifier', value: 'p1', tooltip: 'none' }],
+        primary: [{ kind: 'identifier', value: 'term_one', tooltip: 'none' }],
       },
     }).primary;
 

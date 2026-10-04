@@ -3,7 +3,7 @@
   import { SvelteSet } from 'svelte/reactivity';
 
   import {
-    backgroundBashStatusDetails,
+    backgroundCommandStatusDetails,
     backgroundTasks,
     reflectionChangeItems,
     reflectionElapsedLabel,
@@ -22,8 +22,8 @@
   let {
     timelineItems = [],
     subAgentStatuses = {},
-    backgroundBashStatuses = {},
-    backgroundBashProcesses = {},
+    backgroundCommandStatuses = {},
+    commandStatuses = {},
     reflectionTasks = [],
     // The displayed Session's change statistics: undefined until read, null
     // when it changed no files. The panel asks for them while it is open.
@@ -36,12 +36,12 @@
     onLoadReflectionChanges = () => {},
     onUndoReflection = async () => {},
     onCancelSubAgent = () => {},
-    onCancelBackgroundProcess = () => {},
+    onCancelBackgroundCommand = () => {},
   } = $props();
 
   let open = $state(false);
-  let bashExpanded = $state(null);
-  let defaultBashOpen = $derived(
+  let commandsExpanded = $state(null);
+  let defaultCommandsOpen = $derived(
     subagentTasks.length === 0 && reflectionTasks.length === 0,
   );
   const cancellingTaskIds = new SvelteSet();
@@ -53,8 +53,8 @@
     backgroundTasks(
       timelineItems,
       subAgentStatuses,
-      backgroundBashStatuses,
-      backgroundBashProcesses,
+      backgroundCommandStatuses,
+      commandStatuses,
       nowMs,
     ),
   );
@@ -67,9 +67,9 @@
   let activeSubagentCount = $derived(
     subagentTasks.filter((task) => task.dotStatus === 'running').length,
   );
-  let bashTasks = $derived(tasks.filter((task) => task.kind === 'bash'));
-  let activeBashCount = $derived(
-    bashTasks.filter((task) => task.dotStatus === 'running').length,
+  let commandTasks = $derived(tasks.filter((task) => task.kind === 'command'));
+  let activeCommandCount = $derived(
+    commandTasks.filter((task) => task.dotStatus === 'running').length,
   );
   let activeReflections = $derived(
     reflectionTasks.filter((row) => row.status === 'running'),
@@ -173,11 +173,11 @@
   };
 
   // Details behind a status icon: the state in words, since when, how long,
-  // and for a process its exit code.
+  // and for a command its terminal id.
   const statusDetails = (task) => {
     const details =
-      task.kind === 'bash'
-        ? backgroundBashStatusDetails(task.tool, task.rowState, Date.now())
+      task.kind === 'command'
+        ? backgroundCommandStatusDetails(task.tool, task.rowState, Date.now())
         : task.kind === 'subagent'
           ? subAgentStatusDetails(
               task.tool,
@@ -236,8 +236,8 @@
     });
 
   const taskLabel = (task) => {
-    if (task.kind === 'bash') {
-      return t('chat.activity.bashTaskAria', {
+    if (task.kind === 'command') {
+      return t('chat.activity.commandTaskAria', {
         command: task.command,
         status: statusLabel(task.dotStatus),
       });
@@ -249,8 +249,8 @@
   };
 
   const cancelTaskLabel = (task) => {
-    if (task.kind === 'bash') {
-      return t('chat.activity.cancelBashAria', { command: task.command });
+    if (task.kind === 'command') {
+      return t('chat.activity.cancelCommandAria', { command: task.command });
     }
     return t('chat.activity.cancelSubAgentAria', { agent: task.agentId });
   };
@@ -262,9 +262,9 @@
     }
     cancellingTaskIds.add(task.id);
     try {
-      if (task.kind === 'bash') {
-        await onCancelBackgroundProcess({
-          processId: task.processId,
+      if (task.kind === 'command') {
+        await onCancelBackgroundCommand({
+          terminalId: task.terminalId,
         });
       } else {
         await onCancelSubAgent({ tool: task.tool });
@@ -339,7 +339,7 @@
 {/snippet}
 
 {#snippet taskRow(task)}
-  {#if task.kind === 'bash'}
+  {#if task.kind === 'command'}
     <div
       class="chat-activity__task-row chat-activity__task-row--bash"
       aria-label={taskLabel(task)}
@@ -705,12 +705,12 @@
                 </ul>
               </section>
             {/if}
-            {#if bashTasks.length > 0}
+            {#if commandTasks.length > 0}
               <details
-                class="chat-activity__group chat-activity__group--bash"
+                class="chat-activity__group chat-activity__group--commands"
                 bind:open={
-                  () => bashExpanded ?? defaultBashOpen,
-                  (value) => (bashExpanded = value)
+                  () => commandsExpanded ?? defaultCommandsOpen,
+                  (value) => (commandsExpanded = value)
                 }
               >
                 <summary class="chat-activity__group-title">
@@ -721,16 +721,17 @@
                     height="12"
                     aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg
                   >
-                  {t('chat.activity.bash')}
-                  <span class="chat-activity__count">{bashTasks.length}</span>
-                  {#if activeBashCount > 0}
+                  {t('chat.activity.commands')}
+                  <span class="chat-activity__count">{commandTasks.length}</span
+                  >
+                  {#if activeCommandCount > 0}
                     <span class="chat-activity__running-count"
-                      >{runningLabel(activeBashCount)}</span
+                      >{runningLabel(activeCommandCount)}</span
                     >
                   {/if}
                 </summary>
                 <ul class="chat-activity__task-list">
-                  {#each bashTasks as task (task.id)}
+                  {#each commandTasks as task (task.id)}
                     <li>{@render taskRow(task)}</li>
                   {/each}
                 </ul>

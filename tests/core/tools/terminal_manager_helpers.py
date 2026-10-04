@@ -4,18 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import os
 import queue
-from collections.abc import AsyncIterator, Mapping, Sequence
+import threading
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 import pytest_asyncio
 
-import core.tools._bash_environment as bash_environment
 import core.tools._terminal_session as terminal_session
 import core.tools.terminal_manager as terminal_manager_module
+from core.tools._terminal_process_tree import (
+    ProcessTreeFacts,
+    ProgramExit,
+    RunningProcess,
+)
 from core.tools.terminal_manager import (
     TerminalInfo,
     TerminalManager,
@@ -79,6 +84,39 @@ class FakeTerminalAdapter:
         self.code = code
         self.alive = False
         self._output.put(None)
+
+
+class FakeTree:
+    """A command's process tree: what runs, CPU used, failed children, and the kill."""
+
+    def __init__(self) -> None:
+        self.adapter: FakeTerminalAdapter | None = None
+        self.running: tuple[RunningProcess, ...] = (RunningProcess(1, "pwsh.exe"),)
+        self.cpu_seconds = 0.0
+        self.started = 1
+        self.exits: tuple[ProgramExit, ...] = ()
+        self.terminated = 0
+        self.closed = False
+
+    def facts(self) -> ProcessTreeFacts:
+        return ProcessTreeFacts(self.running, self.cpu_seconds, self.started, self.exits)
+
+    def exit_count(self) -> int:
+        return len(self.exits)
+
+    def terminate(self) -> None:
+        self.terminated += 1
+        self.running = ()
+        if self.adapter is not None:
+            self.adapter.finish(1)
+
+    def close(self) -> None:
+        self.closed = True
+
+    def shell_exits(self, code: int, *, survivors: tuple[RunningProcess, ...] = ()) -> None:
+        self.running = survivors
+        assert self.adapter is not None
+        self.adapter.finish(code)
 
 
 class AdapterFactory:
@@ -169,21 +207,57 @@ class FakeClock:
         await asyncio.sleep(0)
 
 
-@pytest.fixture(autouse=True)
-def shell_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Answer the login-shell environment probe from this process's environment.
+class TrackedExecutor(ThreadPoolExecutor):
+    """A loop's default executor that tells whether thread work is in flight.
 
-    Terminal launches read the probed shell environment; the fake keeps them from
-    starting a real shell and makes the first launch in a worker as fast as later ones.
+    Fake time advances only while no ``asyncio.to_thread`` call runs, so a
+    waiter is never overtaken by the clock while it reads process facts.
     """
 
-    async def probe() -> dict[str, str]:
-        return dict(os.environ)
+    def __init__(self) -> None:
+        super().__init__(max_workers=4, thread_name_prefix="tracked-test")
+        self._lock = threading.Lock()
+        self._in_flight = 0
 
-    monkeypatch.setattr(bash_environment, "_probe_shell_env", probe)
-    monkeypatch.setattr(bash_environment, "_cached_shell_env", None)
-    monkeypatch.setattr(bash_environment, "_shell_env_cache_time", 0.0)
-    monkeypatch.setattr(bash_environment, "_shell_env_probe_task", None)
+    @override
+    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future[Any]:
+        with self._lock:
+            self._in_flight += 1
+
+        def run() -> Any:
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                with self._lock:
+                    self._in_flight -= 1
+
+        return super().submit(run)
+
+    @property
+    def busy(self) -> bool:
+        with self._lock:
+            return self._in_flight > 0
+
+
+async def settle(
+    clock: FakeClock, executor: TrackedExecutor, task: asyncio.Future[Any] | None = None
+) -> None:
+    """Wait until every task sleeps on *clock* or an event, with no thread work in flight.
+
+    Returns early once *task* is done.
+    """
+    for attempt in range(450):
+        if task is not None and task.done():
+            return
+        if clock.sleeping and not executor.busy:
+            waiters = list(clock._waiters)
+            # Finished thread work wakes its awaiting task over a few loop turns.
+            for _turn in range(10):
+                await asyncio.sleep(0)
+            if clock.sleeping and not executor.busy and clock._waiters == waiters:
+                return
+        # Loop turns settle most steps; real time passes only for thread work.
+        await asyncio.sleep(0 if attempt < 50 else 0.005)
 
 
 @pytest.fixture

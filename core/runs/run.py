@@ -42,8 +42,7 @@ ASSISTANT_OUTPUT_DELTA_EVENT = "assistant_output_delta"
 REASONING_DELTA_EVENT = "reasoning_delta"
 TOOL_CALL_DELTA_EVENT = "tool_call_delta"
 STREAM_ATTEMPT_RESTARTED_EVENT = "stream_attempt_restarted"
-TOOL_CALL_STDOUT_EVENT = "tool_call_stdout"
-TOOL_CALL_STDERR_EVENT = "tool_call_stderr"
+TOOL_CALL_OUTPUT_EVENT = "tool_call_output"
 TOOL_CALL_STARTED_EVENT = "tool_call_started"
 TOOL_CALL_RESULT_EVENT = "tool_call_result"
 ASSISTANT_OUTPUT_EVENT = "assistant_output"
@@ -73,8 +72,7 @@ TRANSIENT_EVENT_TYPES = frozenset(
         ASSISTANT_OUTPUT_DELTA_EVENT,
         REASONING_DELTA_EVENT,
         TOOL_CALL_DELTA_EVENT,
-        TOOL_CALL_STDOUT_EVENT,
-        TOOL_CALL_STDERR_EVENT,
+        TOOL_CALL_OUTPUT_EVENT,
         STREAM_ATTEMPT_RESTARTED_EVENT,
         PROVIDER_HEARTBEAT_EVENT,
     }
@@ -525,7 +523,7 @@ class Run:
         # A Run cancel subsumes every still-active per-call cancel. Fire those
         # callbacks before cancelling the executor task so Tool-owned processes,
         # connections, and other resources receive their cleanup signal even
-        # when they are not managed by the Run-level ProcessManager scope.
+        # when no Run-level owner (such as the TerminalManager) tracks them.
         # Registration order is stable and completed calls have already cleared
         # their entries, so only active calls participate.
         for tool_call_id in list(self._tool_cancel_callbacks):
