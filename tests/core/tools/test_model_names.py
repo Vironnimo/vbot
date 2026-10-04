@@ -47,7 +47,6 @@ def test_shell_tool_is_offered_under_the_host_shell_name() -> None:
         # Other harnesses' names for an offered capability.
         ("run_shell_command", BASH_TOOL_NAME),
         ("read_file", "read"),
-        ("Edit", "apply_patch"),
         ("Grep", "search_files"),
         ("Task", "subagent"),
         ("fetch", "web_fetch"),
@@ -93,6 +92,24 @@ def test_names_without_one_clear_offered_meaning_stay_as_called(
     called: str, offered: tuple[str, ...], registered: Collection[str]
 ) -> None:
     assert called_tool_name(called, offered, registered=registered) == called
+
+
+@pytest.mark.parametrize(
+    ("called", "patch_route", "replace_route"),
+    [
+        ("Edit", "apply_patch", "edit"),
+        ("MultiEdit", "apply_patch", "edit"),
+        ("str_replace_based_edit_tool", "apply_patch", "edit"),
+        ("Write", "apply_patch", "write"),
+        ("create_file", "apply_patch", "write"),
+        ("apply_diff", "apply_patch", "apply_diff"),
+    ],
+)
+def test_file_edit_names_resolve_to_the_offered_edit_dialect(
+    called: str, patch_route: str, replace_route: str
+) -> None:
+    assert called_tool_name(called, (BASH_TOOL_NAME, "read", "apply_patch")) == patch_route
+    assert called_tool_name(called, (BASH_TOOL_NAME, "read", "edit", "write")) == replace_route
 
 
 def test_an_offered_tool_wins_over_a_harness_name() -> None:

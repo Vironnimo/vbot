@@ -959,6 +959,7 @@ class ToolExecutor:
                 session_tool_grants=config.session_tool_grants,
                 nesting_depth=config.nesting_depth,
                 input_contract=config.input_contracts.get(tool_call.name),
+                offered_tools=frozenset(config.input_contracts) or None,
                 change_tracker=config.change_tracker,
             )
             return await self._dispatch_with_envelope(context, tool_call, config.allowed_tools)

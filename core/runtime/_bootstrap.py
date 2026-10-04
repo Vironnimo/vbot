@@ -100,6 +100,7 @@ from core.tools import (
     register_analyze_image_tool,
     register_apply_patch_tool,
     register_bash_tool,
+    register_edit_tools,
     register_generate_music_tool,
     register_generate_video_tool,
     register_image_generation_tool,
@@ -315,8 +316,8 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._tool_prompt_blocks = ToolPromptBlockRegistry()
         # Each Agent's Memory history lives beside its default Workspace.
         runtime._memory_service = MemoryService(history_root=runtime._storage.layout.agents)
-        # Read stamps protect full-file writes; apply_patch uses the same state
-        # for mutation locks and post-success drift warnings (file_state.py).
+        # Read stamps protect full-file writes; the file edit Tools use the same
+        # state for mutation locks and post-success drift warnings (file_state.py).
         runtime._file_state = FileReadState()
         # Session-scoped file-content tracker for git-style change statistics
         # (change_tracker.py). Shared by apply_patch and the chat loop.
@@ -329,6 +330,7 @@ def bootstrap(runtime: Runtime) -> None:
             speech_max_size_bytes=runtime._speech_upload_max_size_bytes,
         )
         register_apply_patch_tool(runtime._tools, file_state=runtime._file_state)
+        register_edit_tools(runtime._tools, file_state=runtime._file_state)
         register_search_files_tool(runtime._tools)
         register_memory_tool(runtime._tools, runtime._memory_service)
         register_web_fetch_tool(

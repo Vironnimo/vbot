@@ -34,6 +34,7 @@ from core.tools.contracts import (
     ToolContractError,
     compile_tool_contract,
 )
+from core.tools.edit import register_edit_tools
 from core.tools.file_state import (
     FileReadState,
     StaleReason,
@@ -191,6 +192,7 @@ __all__ = [
     "SEARCH_FILES_TOOL_PARAMETERS",
     "register_search_files_tool",
     "register_apply_patch_tool",
+    "register_edit_tools",
     "BASH_SUBAGENT_TOOL_DESCRIPTION",
     "BASH_SUBAGENT_TOOL_PARAMETERS",
     "BASH_TOOL_DESCRIPTION",

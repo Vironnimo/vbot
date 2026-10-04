@@ -1,4 +1,4 @@
-"""Shared helpers for the apply_patch Tool tests.
+"""Shared helpers for the file edit Tool tests (apply_patch, edit, write).
 
 ``apply`` runs a patch through the Tool handler. ``call`` runs any call shape
 through the Tool executor, as a Run does: argument repair and refusals included,
@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from core.tools.apply_patch import make_apply_patch_handler, register_apply_patch_tool
+from core.tools.edit import register_edit_tools
 from core.tools.file_state import FileReadState
 from core.tools.read import register_read_tool
 from core.tools.tools import (
@@ -48,10 +49,11 @@ def apply(root: Path, patch: str, *, state=None, ctx=None):
 
 
 def registry(state: FileReadState | None = None, *, read: bool = False) -> ToolRegistry:
-    """Register apply_patch, and read when a test follows a result into a read call."""
+    """Register the file edit Tools, and read when a test follows a result into a read call."""
     state = state or FileReadState()
     tools = ToolRegistry()
     register_apply_patch_tool(tools, file_state=state)
+    register_edit_tools(tools, file_state=state)
     if read:
         register_read_tool(
             tools,
@@ -77,7 +79,7 @@ async def call(
             workspace=root,
             data_root=root / "data",
             vbot_root=root,
-            allowed_tools=["apply_patch", "read"],
+            allowed_tools=["apply_patch", "edit", "write", "read"],
         ),
     )
     assert is_tool_result_envelope(results[0])
@@ -89,7 +91,7 @@ def update(body: str, path: str = "file.txt") -> str:
 
 
 def text(result: dict) -> str:
-    """Return the Model-facing text of an apply_patch result: content or error message."""
+    """Return the Model-facing text of a Tool result: content or error message."""
     if result["ok"]:
         return str(result["data"]["content"])
     return str(result["error"]["message"])

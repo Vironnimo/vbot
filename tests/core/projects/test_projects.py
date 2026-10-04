@@ -49,9 +49,9 @@ def test_build_project_fills_every_optional_field_with_its_default(tmp_path: Pat
     }
     assert is_canonical_timestamp(created_at)
     assert updated_at == created_at
-    # The base Tool Whitelist uses the successor of the retired edit Tool.
+    # The base Tool Whitelist names apply_patch; edit and write follow it.
     assert "apply_patch" in PROJECT_DEFAULT_ALLOWED_TOOLS
-    assert "edit" not in PROJECT_DEFAULT_ALLOWED_TOOLS
+    assert not {"edit", "write"} & set(PROJECT_DEFAULT_ALLOWED_TOOLS)
 
 
 def test_build_project_keeps_every_explicit_field_through_a_round_trip(tmp_path: Path) -> None:
