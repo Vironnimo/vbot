@@ -3,18 +3,22 @@
 ``WindowsTarget`` implements ``DesktopTarget`` with Win32 through ctypes and
 Pillow. Every method enters per-monitor DPI awareness on its calling thread,
 so all coordinates are physical virtual-desktop pixels. Input comes from
-:class:`WindowsInput`; app identity from ``_win_apps``.
+:class:`WindowsInput`; app identity from ``_win_apps``. Captures come without a
+colour filter that desktop composition applied, when references prove one
+(``_color_filter``).
 """
 
 from __future__ import annotations
 
+import logging
 import sys
+import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 
 from PIL import Image
 
-from . import _win32, _win_apps
+from . import _color_filter, _win32, _win_apps
 from ._win_input import WindowsInput
 from ._win_overlay import ActivityOverlay
 from .target import AppInfo, Display, TargetError, WindowInfo
@@ -25,6 +29,12 @@ _LOCKED = (
 )
 _FIRST_DISCOVERY_WAIT = 20.0  # seconds the first app lookup waits for the Start-menu listing
 _ACTIVATION_WAIT = 0.5
+# Seconds a reference window may take to render itself; a busy app blocks rendering.
+_REFERENCE_WAIT = 0.25
+_TASKBAR_CLASSES = frozenset({"Shell_TrayWnd", "Shell_SecondaryTrayWnd"})
+# The desktop renders the composed screen, filter included, so it is no reference.
+_DESKTOP_CLASSES = frozenset({"Progman", "WorkerW"})
+_LOGGER = logging.getLogger("vbot.extensions.computer_use")
 
 
 def name_displays(monitors: Sequence[_win32.Monitor], names: dict[str, str]) -> list[Display]:
@@ -66,6 +76,10 @@ class WindowsTarget(WindowsInput):
         self._own_integrity: int | None = None
         self._display_names: tuple[tuple[str, ...], dict[str, str]] = ((), {})
         self._overlay = ActivityOverlay()
+        # The colour filter last proven per display id, and windows still rendering.
+        self._filters: dict[str, _color_filter.Matrix] = {}
+        self._filtered: set[str] = set()
+        self._rendering: set[int] = set()
 
     def readiness(self) -> str | None:
         if sys.platform != "win32":
@@ -101,7 +115,98 @@ class WindowsTarget(WindowsInput):
             raise TargetError("The display has no visible area.", "computer_use_unavailable")
         pixels = _win32.capture_bgrx(display.left, display.top, display.width, display.height)
         size = (display.width, display.height)
-        return Image.frombuffer("RGB", size, pixels, "raw", "BGRX", 0, 1)
+        image = Image.frombuffer("RGB", size, pixels, "raw", "BGRX", 0, 1)
+        return self._without_filter(display, image)
+
+    def _without_filter(self, display: Display, image: Image.Image) -> Image.Image:
+        """*image* with a proven composition colour filter removed, else unchanged."""
+        matrix = _color_filter.measure(
+            self._references(display, image), self._filters.get(display.id)
+        )
+        if (matrix is not None) != (display.id in self._filtered):
+            self._filtered ^= {display.id}
+            _LOGGER.debug(
+                "Screen colour filter %s on display %s",
+                "removed from captures" if matrix is not None else "no longer removed",
+                display.id,
+            )
+        if matrix is None:
+            return image
+        self._filters[display.id] = matrix
+        return _color_filter.remove(image, matrix)
+
+    def _references(
+        self, display: Display, image: Image.Image
+    ) -> Iterator[_color_filter.Reference]:
+        """The foreground window and the taskbar as they drew themselves, beside *image*."""
+        foreground = _win32.foreground_window()
+        handles = (
+            [foreground]
+            if foreground and _win32.window_class(foreground) not in _DESKTOP_CLASSES
+            else []
+        )
+        handles += [
+            handle
+            for handle in _win32.top_level_windows()
+            if handle != foreground and _win32.window_class(handle) in _TASKBAR_CLASSES
+        ]
+        for handle in handles:
+            if (
+                not _win32.is_visible(handle)
+                or _win32.is_minimized(handle)
+                or _win32.is_cloaked(handle)
+                or _win32.is_hung(handle)
+            ):
+                continue
+            bounds = _win32.window_bounds(handle)
+            if bounds is None:
+                continue
+            left, top = max(bounds[0], display.left), max(bounds[1], display.top)
+            right = min(bounds[2], display.left + display.width)
+            bottom = min(bounds[3], display.top + display.height)
+            if right - left < 32 or bottom - top < 16:
+                continue
+            rendered = self._render(handle)
+            if rendered is None:
+                continue
+            rect, pixels = rendered
+            size = (rect[2] - rect[0], rect[3] - rect[1])
+            drawn = Image.frombuffer("RGB", size, pixels, "raw", "BGRX", 0, 1)
+            yield _color_filter.Reference(
+                drawn.crop((left - rect[0], top - rect[1], right - rect[0], bottom - rect[1])),
+                image.crop(
+                    (
+                        left - display.left,
+                        top - display.top,
+                        right - display.left,
+                        bottom - display.top,
+                    )
+                ),
+            )
+
+    def _render(self, handle: int) -> tuple[tuple[int, int, int, int], bytes] | None:
+        """A window's own rendering, or ``None`` when it does not arrive within the wait.
+
+        A window busy past the wait finishes on its own thread; until then it is skipped.
+        """
+        if handle in self._rendering:
+            return None
+        result: list[tuple[tuple[int, int, int, int], bytes] | None] = []
+
+        def render() -> None:
+            try:
+                _win32.enter_thread()
+                result.append(_win32.render_window_bgrx(handle))
+            except Exception:
+                _LOGGER.debug("A reference window could not render", exc_info=True)
+            finally:
+                self._rendering.discard(handle)
+
+        self._rendering.add(handle)
+        thread = threading.Thread(target=render, name="computer-use-reference", daemon=True)
+        thread.start()
+        thread.join(_REFERENCE_WAIT)
+        return result[0] if result else None
 
     # Windows
 

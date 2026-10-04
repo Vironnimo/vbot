@@ -13,6 +13,7 @@ import functools
 import os
 import sys
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -124,6 +125,7 @@ _GW_OWNER, _GA_ROOT = 4, 2
 _LWA_ALPHA = 0x2
 _ULW_ALPHA, _AC_SRC_ALPHA = 0x2, 0x1
 _SRCCOPY_CAPTUREBLT = 0x00CC0020 | 0x40000000
+_PW_RENDERFULLCONTENT = 0x2
 _QDC_ONLY_ACTIVE_PATHS = 2
 _DPI = threading.local()
 
@@ -228,6 +230,7 @@ _SIGNATURES: dict[str, dict[str, tuple[list[Any], Any]]] = {
         ),
         "SetWindowDisplayAffinity": ([_HANDLE, _UINT32], _INT),
         "SetWindowPos": ([_HANDLE, _HANDLE, _INT, _INT, _INT, _INT, ct.c_uint], _INT),
+        "PrintWindow": ([_HANDLE, _HANDLE, ct.c_uint], _INT),
     },
     "gdi32": {
         "CreateCompatibleDC": ([_HANDLE], _HANDLE),
@@ -433,6 +436,51 @@ def buttons_swapped() -> bool:
 
 def capture_bgrx(left: int, top: int, width: int, height: int) -> bytes:
     """Screen pixels of a rectangle as top-down 32-bit BGRX rows."""
+
+    def copy(memory: int, screen: int) -> bool:
+        # CAPTUREBLT includes layered windows such as menus and tooltips.
+        gdi32 = api().gdi32
+        return bool(
+            gdi32.BitBlt(memory, 0, 0, width, height, screen, left, top, _SRCCOPY_CAPTUREBLT)
+        )
+
+    pixels = _draw_bgrx(width, height, copy)
+    if pixels is None:
+        raise TargetError(
+            "Windows refused the screenshot; the desktop may be locked.",
+            "computer_use_unavailable",
+        )
+    return pixels
+
+
+def render_window_bgrx(handle: int) -> tuple[tuple[int, int, int, int], bytes] | None:
+    """A window's own rendering of its whole rectangle, before desktop composition.
+
+    Returns the rectangle and its top-down 32-bit BGRX rows, or ``None`` when the
+    window cannot render. Blocks while the window's thread is busy, so callers
+    bound the wait. Composition effects such as a colour filter are absent.
+    """
+    rect = Rect()
+    if not api().user32.GetWindowRect(handle, ct.byref(rect)):
+        return None
+    width, height = rect.right - rect.left, rect.bottom - rect.top
+    if width <= 0 or height <= 0:
+        return None
+
+    def render(memory: int, _screen: int) -> bool:
+        return bool(api().user32.PrintWindow(handle, memory, _PW_RENDERFULLCONTENT))
+
+    try:
+        pixels = _draw_bgrx(width, height, render)
+    except TargetError:
+        return None
+    if pixels is None:
+        return None
+    return (int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)), pixels
+
+
+def _draw_bgrx(width: int, height: int, draw: Callable[[int, int], bool]) -> bytes | None:
+    """Pixels *draw* paints into a screen-compatible bitmap; ``None`` when it fails."""
     bound = api()
     user32, gdi32 = bound.user32, bound.gdi32
     screen = user32.GetDC(None)
@@ -444,14 +492,10 @@ def capture_bgrx(left: int, top: int, width: int, height: int) -> bytes:
         if not memory or not bitmap:
             raise TargetError("Windows could not allocate the screenshot.")
         previous = gdi32.SelectObject(memory, bitmap)
-        # CAPTUREBLT includes layered windows such as menus and tooltips.
-        copied = gdi32.BitBlt(memory, 0, 0, width, height, screen, left, top, _SRCCOPY_CAPTUREBLT)
+        drawn = draw(memory, screen)
         gdi32.SelectObject(memory, previous)  # GetDIBits needs the bitmap deselected
-        if not copied:
-            raise TargetError(
-                "Windows refused the screenshot; the desktop may be locked.",
-                "computer_use_unavailable",
-            )
+        if not drawn:
+            return None
         header = _BitmapInfoHeader(ct.sizeof(_BitmapInfoHeader), width, -height, 1, 32)
         info = ct.create_string_buffer(ct.sizeof(_BitmapInfoHeader) + 16)
         ct.memmove(info, ct.byref(header), ct.sizeof(header))
