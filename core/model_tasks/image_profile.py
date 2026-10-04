@@ -129,15 +129,10 @@ class ImageProfile:
                 continue
             choices = self.call_choices.get(name)
             if choices is None:
-                raise ImageCallOptionError(
-                    f"The configured image model has no {name} choice; omit {name}."
-                )
+                raise ImageCallOptionError(missing_choice_message("image", name))
             matched = match_choice(str(value), choices)
             if matched is None:
-                raise ImageCallOptionError(
-                    f"{name} {value!r} is not offered by the configured image model; "
-                    f"choose one of: {', '.join(choices)}."
-                )
+                raise ImageCallOptionError(unoffered_choice_message("image", name, value, choices))
             requested[name] = matched
         if self.size_translation == "none":
             return dict(requested)
@@ -224,6 +219,25 @@ def build_image_profile(model: Any | None, wire: ImageWire) -> ImageProfile:
         size_translation=size_translation,
         fixed_sizes=fixed_sizes,
         fixed_options=fixed_options,
+    )
+
+
+def missing_choice_message(medium: str, name: str) -> str:
+    """Refuse a per-call option the configured *medium* Model does not offer."""
+
+    return (
+        f"Nothing was generated. The configured {medium} model has no {name} choice. "
+        f"Repeat the call without {name}."
+    )
+
+
+def unoffered_choice_message(medium: str, name: str, value: Any, choices: tuple[str, ...]) -> str:
+    """Refuse a per-call value the configured *medium* Model does not offer."""
+
+    return (
+        f"Nothing was generated. The configured {medium} model does not offer {name} "
+        f"{value!r}. Pass one of {', '.join(choices)}, or omit {name} to use the configured "
+        "default."
     )
 
 

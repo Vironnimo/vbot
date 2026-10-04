@@ -336,6 +336,12 @@ def _provider_failure(cause: Exception, status: int) -> ImageExecutionError:
         return error
 
 
+_UNOFFERED_ASPECT_RATIO = (
+    "Nothing was generated. The configured image model does not offer aspect_ratio '5:4'. "
+    "Pass one of 1:1, 16:9, or omit aspect_ratio to use the configured default."
+)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("error", "expected"),
@@ -407,36 +413,42 @@ def _provider_failure(cause: Exception, status: int) -> ImageExecutionError:
             id="provider-rejection",
         ),
         pytest.param(
-            ImageOptionError(
-                "aspect_ratio '5:4' is not offered by the configured image model; choose one "
-                "of: 1:1, 16:9."
-            ),
-            failure(
-                "invalid_arguments",
-                "aspect_ratio '5:4' is not offered by the configured image model; choose one "
-                "of: 1:1, 16:9.",
-            ),
+            ImageOptionError(_UNOFFERED_ASPECT_RATIO),
+            failure("invalid_arguments", _UNOFFERED_ASPECT_RATIO),
             id="option-not-offered",
         ),
         pytest.param(
             OutputDirectoryError(Path("notes.txt"), "a file with that name exists"),
             failure(
                 "output_dir_unusable",
-                "Cannot use notes.txt as the output folder: a file with that name exists. "
-                "Nothing was generated. Pass another output_dir, or omit output_dir to use the "
+                "Nothing was generated. The output folder notes.txt cannot be used: a file with "
+                "that name exists. Pass another output_dir, or omit output_dir to use the "
                 "default folder.",
             ),
             id="unusable-folder",
         ),
         pytest.param(
-            OutputWriteError(Path("full-disk"), "No space left on device"),
+            OutputWriteError(Path("full-disk"), "the disk is full"),
             failure(
                 "output_write_failed",
-                "Generation succeeded, but the images could not be saved in full-disk: No "
-                "space left on device. The provider charged for this request. Tell the user; "
-                "repeating the call generates and charges again.",
+                "The provider generated the images, but saving to full-disk failed: the disk "
+                "is full. No file was saved. Repeating the call generates the images again at "
+                "new cost. Tell the user before you repeat it.",
             ),
             id="save-failed",
+        ),
+        pytest.param(
+            OutputWriteError(
+                Path("full-disk"), "the disk is full", saved=(Path("full-disk/img_1.png"),)
+            ),
+            failure(
+                "output_write_failed",
+                "The provider generated the images, but saving to full-disk failed: the disk "
+                "is full. Files saved before the failure: full-disk/img_1.png. Repeating the "
+                "call generates the images again at new cost. Tell the user before you repeat "
+                "it.",
+            ),
+            id="save-failed-after-one",
         ),
     ],
 )

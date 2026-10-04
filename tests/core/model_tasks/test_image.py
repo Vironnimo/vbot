@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import io
 import logging
 from pathlib import Path
@@ -23,7 +24,8 @@ from core.model_tasks import (
     ImageTooLargeError,
     ImageUnsupportedTargetError,
 )
-from core.model_tasks.artifacts import OutputDirectoryError
+from core.model_tasks import image as image_module
+from core.model_tasks.artifacts import OutputDirectoryError, OutputWriteError
 from core.model_tasks.image_profile import ImageWire, build_image_profile
 from core.model_tasks.image_types import ImageGenerationResult
 from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
@@ -115,16 +117,62 @@ async def test_generate_artifacts_stores_each_image_in_the_caller_owned_director
 
 
 @pytest.mark.asyncio
-async def test_unusable_output_folder_fails_before_generating(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("denied", "reason"),
+    [
+        pytest.param(False, "a file with that name exists", id="file-in-the-way"),
+        # The host's own message is localized; the reason comes from the error number.
+        pytest.param(True, "access is denied", id="access-denied"),
+    ],
+)
+async def test_unusable_output_folder_fails_before_generating(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, denied: bool, reason: str
+) -> None:
     service = ImageService(_MissingModelTasks(), cast(Any, object()))
-    occupied = tmp_path / "notes.txt"
-    occupied.write_text("a file, not a folder", encoding="utf-8")
+    folder = tmp_path / "notes.txt"
+    if denied:
+
+        def deny(*_args: Any, **_kwargs: Any) -> None:
+            raise PermissionError(errno.EACCES, "Zugriff verweigert")
+
+        monkeypatch.setattr(Path, "mkdir", deny)
+    else:
+        folder.write_text("a file, not a folder", encoding="utf-8")
 
     # The missing binding would fail generation; the folder check comes first.
     with pytest.raises(OutputDirectoryError) as caught:
-        await service.generate_artifacts("a cat", output_dir=occupied)
+        await service.generate_artifacts("a cat", output_dir=folder)
 
-    assert caught.value.reason == "a file with that name exists"
+    assert caught.value.reason == reason
+
+
+@pytest.mark.asyncio
+async def test_failed_save_names_the_images_already_saved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = ImageService(_MissingModelTasks(), cast(Any, object()))
+
+    async def generate(_prompt: str, **_kwargs: Any) -> ImageGenerationResult:
+        return ImageGenerationResult(images=(b"one", b"two"), media_type="image/png", model="m")
+
+    monkeypatch.setattr(service, "generate", generate)
+    real_write = image_module.write_id_file
+    writes: list[Path] = []
+
+    def write_until_full(directory: Path, prefix: str, suffix: str, payload: bytes) -> Path:
+        if writes:
+            raise OSError(errno.ENOSPC, "Nicht genügend Speicherplatz")
+        writes.append(real_write(directory, prefix, suffix, payload))
+        return writes[-1]
+
+    monkeypatch.setattr(image_module, "write_id_file", write_until_full)
+
+    with pytest.raises(OutputWriteError) as caught:
+        await service.generate_artifacts("a cat", output_dir=tmp_path)
+
+    assert caught.value.reason == "the disk is full"
+    assert caught.value.saved == (tmp_path / writes[0].name,)
+    assert (tmp_path / writes[0].name).read_bytes() == b"one"
 
 
 @pytest.mark.asyncio
@@ -359,7 +407,7 @@ async def test_generate_refuses_a_choice_the_model_lacks_before_any_request() ->
 
     with (
         patch("core.model_tasks.image.ProviderImageClient.from_runtime") as client,
-        pytest.raises(ImageOptionError, match="choose one of: 1:1, 16:9"),
+        pytest.raises(ImageOptionError, match="Pass one of 1:1, 16:9"),
     ):
         await service.generate("a cat", call_options={"aspect_ratio": "21:9"})
 

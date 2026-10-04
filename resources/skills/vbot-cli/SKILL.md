@@ -28,7 +28,7 @@ For a focused question about a past conversation, use `session_search` and answe
 | Archived Agents, Projects and Sessions: list, restore, delete permanently | `references/agents-projects.md` |
 | Send a message to an Agent and read its answer, continue one of its Sessions, set a Session's Model, thinking effort or temperature | `references/chat.md` |
 | Extended Session search, listing past conversations, full transcripts or exact Tool Results | `references/session-search.md` |
-| Provider keys/OAuth/limits, Models, voices and specialized Task Models | `references/providers.md` |
+| Provider keys/OAuth/limits, Models, voices, specialized Task Models, and image, video or music generation settings such as quality, image count or video length | `references/providers.md` |
 | Settings, System Prompt blocks, Extension settings | `references/configuration.md` |
 | Create or change an Extension, its Tools, hooks or Commands | `references/extensions.md` |
 | Give an Extension a page or its own Sessions | `references/extensions.md`, then `references/extension-pages.md` |

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,7 +16,11 @@ from core.model_tasks.artifacts import (
 )
 from core.model_tasks.constants import TASK_VIDEO_GENERATION
 from core.model_tasks.image import load_image_inputs
-from core.model_tasks.image_profile import match_choice
+from core.model_tasks.image_profile import (
+    match_choice,
+    missing_choice_message,
+    unoffered_choice_message,
+)
 from core.model_tasks.model_tasks import TaskModelTargetRef, model_supports_task
 from core.model_tasks.task_execution import (
     TaskBindingResolver,
@@ -112,23 +117,15 @@ class VideoProfile:
                 continue
             if name == "generate_audio":
                 if not self.generate_audio:
-                    raise VideoOptionError(
-                        "The configured video model has no generate_audio choice; omit "
-                        "generate_audio."
-                    )
+                    raise VideoOptionError(missing_choice_message("video", name))
                 validated[name] = bool(value)
                 continue
             choices = self.call_choices.get(name)
             if choices is None:
-                raise VideoOptionError(
-                    f"The configured video model has no {name} choice; omit {name}."
-                )
+                raise VideoOptionError(missing_choice_message("video", name))
             matched = match_choice(str(value).removesuffix("s").strip(), choices)
             if matched is None:
-                raise VideoOptionError(
-                    f"{name} {value!r} is not offered by the configured video model; choose "
-                    f"one of: {', '.join(choices)}."
-                )
+                raise VideoOptionError(unoffered_choice_message("video", name, value, choices))
             validated[name] = int(matched) if name == "duration" else matched
         return validated
 
@@ -214,17 +211,11 @@ class VideoService:
         try:
             _binding, options, target_ref = self._resolver.resolve(TASK_VIDEO_GENERATION)
         except VideoConfigurationError as exc:
-            raise VideoConfigurationError(
-                "Video generation is not configured. Select a Video generation "
-                "Task Model in Settings."
-            ) from exc
+            raise VideoConfigurationError("no Video generation model is chosen") from exc
         model = self._validated_model(target_ref)
         profile = build_video_profile(model)
         requested = profile.validated_options(call_options or {})
-        if {"aspect_ratio", "resolution"} & requested.keys():
-            # A configured size would override the requested shape on the wire.
-            options = {name: value for name, value in options.items() if name != "size"}
-        merged_options = {**options, **requested}
+        merged_options = {**_shape_options(options, requested, profile), **requested}
         frames = await self._load_frames(profile, frame_paths or {})
 
         client = ProviderVideoClient.from_runtime(
@@ -284,19 +275,12 @@ class VideoService:
 
     def _validated_model(self, target_ref: TaskModelTargetRef) -> Any:
         if target_ref.kind != "provider" or target_ref.provider_id != "openrouter":
-            raise VideoConfigurationError(
-                "The configured provider does not support Video generation."
-            )
+            raise VideoConfigurationError("the chosen provider does not offer Video generation")
         model = self._model_tasks.model_for_target(target_ref)
         if model is None:
-            raise VideoConfigurationError(
-                "The configured Video generation model is no longer available. "
-                "Select another Task Model in Settings."
-            )
+            raise VideoConfigurationError("the chosen Video generation model is no longer offered")
         if not model_supports_task(model, TASK_VIDEO_GENERATION):
-            raise VideoConfigurationError(
-                "The configured provider does not support Video generation."
-            )
+            raise VideoConfigurationError("the chosen model does not generate videos")
         return model
 
     async def _load_frames(
@@ -309,7 +293,8 @@ class VideoService:
         for frame_type in frame_paths:
             if frame_type not in profile.frame_images:
                 raise VideoOptionError(
-                    f"The configured video model does not accept {frame_type}; omit {frame_type}."
+                    f"Nothing was generated. The configured video model does not accept "
+                    f"{frame_type}. Repeat the call without {frame_type}."
                 )
         ordered = [
             (frame_type, frame_paths[frame_type])
@@ -320,6 +305,37 @@ class VideoService:
         return tuple(
             (frame_type, image) for (frame_type, _), image in zip(ordered, images, strict=True)
         )
+
+
+def _shape_options(
+    options: Mapping[str, Any], requested: Mapping[str, Any], profile: VideoProfile
+) -> dict[str, Any]:
+    """Return the Settings options without ``size`` when a call asks for a shape.
+
+    A configured size would override the requested aspect ratio or resolution
+    on the wire, so it is dropped; the half of the shape the call left out is
+    taken from that size, so an omitted choice keeps its configured value.
+    """
+
+    if "size" not in options or not {"aspect_ratio", "resolution"} & requested.keys():
+        return dict(options)
+    shaped = {name: value for name, value in options.items() if name != "size"}
+    width, _, height = str(options["size"]).partition("x")
+    if not (width.isdecimal() and height.isdecimal()) or not int(width) or not int(height):
+        return shaped
+    width_px, height_px = int(width), int(height)
+    divisor = math.gcd(width_px, height_px)
+    implied = {
+        "aspect_ratio": f"{width_px // divisor}:{height_px // divisor}",
+        "resolution": "4K" if min(width_px, height_px) >= 2160 else f"{min(width_px, height_px)}p",
+    }
+    for name, value in implied.items():
+        if name in requested or name in shaped:
+            continue
+        matched = match_choice(value, profile.call_choices.get(name, ()))
+        if matched is not None:
+            shaped[name] = matched
+    return shaped
 
 
 def _video_task_options(model: Any) -> Mapping[str, Any]:

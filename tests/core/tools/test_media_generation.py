@@ -11,7 +11,6 @@ from core.model_tasks import (
     MusicExecutionError,
     VideoConfigurationError,
     VideoExecutionError,
-    VideoOptionError,
     VideoOutcomeUnknownError,
     VideoRefusedError,
 )
@@ -151,7 +150,7 @@ async def test_music_tool_returns_local_artifact_facts(tmp_path: Path) -> None:
         "path": model_path(tmp_path / "music.mp3"),
         "media_type": "audio/mpeg",
         "size_bytes": 5,
-        "text": "A calm piano piece",
+        "model_reply": "A calm piano piece",
     }
     assert service.source_paths == ((tmp_path / "cover.png").resolve(),)
     assert service.output_dir == tmp_path / "music-gen"
@@ -174,7 +173,7 @@ async def test_music_tool_returns_local_artifact_facts(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_video_tool_accepts_other_spellings_and_empty_options(tmp_path: Path) -> None:
     service = _VideoService(
-        tmp_path / "video.mp4", _profile("first_frame", "last_frame", "resolution")
+        tmp_path / "video.mp4", _profile("first_frame", "last_frame", "resolution", "duration")
     )
     registry = ToolRegistry()
     register_generate_video_tool(registry, service)
@@ -188,13 +187,14 @@ async def test_video_tool_accepts_other_spellings_and_empty_options(tmp_path: Pa
             "start_frame": "start.png",
             "end_image": "end.png",
             "resolution": "",
+            "duration": "6s",
             "output_directory": "clips",
         },
     )
 
     assert result["ok"] is True
     assert service.frame_paths == {"first_frame": start.resolve(), "last_frame": end.resolve()}
-    assert service.call_options == {}
+    assert service.call_options == {"duration": 6}
     assert service.output_dir == (tmp_path / "clips").resolve()
 
 
@@ -255,19 +255,11 @@ async def test_music_source_alias_and_provider_wording(tmp_path: Path) -> None:
     ("error", "code", "message"),
     [
         pytest.param(
-            VideoOptionError(
-                "duration '7' is not offered by the configured video model; choose one of: 5, 10."
-            ),
-            "invalid_arguments",
-            "duration '7' is not offered by the configured video model; choose one of: 5, 10.",
-            id="choice-not-offered",
-        ),
-        pytest.param(
-            VideoConfigurationError("The configured provider does not support Video generation."),
+            VideoConfigurationError("no Video generation model is chosen"),
             "video_error",
-            "Video generation is not available (The configured provider does not support "
-            "Video generation.). Tell the user to choose a working Video generation model in "
-            "Settings → Tools → Images, video & music.",
+            "Video generation is not available (no Video generation model is chosen). Tell the "
+            "user to choose a working Video generation model in Settings → Tools → Images, "
+            "video & music.",
             id="not-available",
         ),
         pytest.param(
@@ -294,9 +286,10 @@ async def test_music_source_alias_and_provider_wording(tmp_path: Path) -> None:
                 "it had not finished after 20 minutes", operation_key="job-1", job_id="job-1"
             ),
             "provider_outcome_unknown",
-            "The video-generation provider accepted the request as job job-1, but it had not "
-            "finished after 20 minutes. The job can still finish and be charged; nothing was "
-            "saved. Do not request the same video again. Tell the user, including the job id.",
+            "Nothing was saved. The video-generation provider accepted the request as job "
+            "job-1, but it had not finished after 20 minutes. If the job finishes, the provider "
+            "bills it. Repeating the call starts and bills a second video job. Tell the user, "
+            "including the job id, instead of repeating the call.",
             id="job-unfinished",
         ),
     ],

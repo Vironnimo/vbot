@@ -41,6 +41,12 @@ class MusicConfigurationError(MusicError):
     """Raised when Music generation is not configured or usable."""
 
 
+class MusicOptionError(MusicError):
+    """Raised when a call asks for input the configured Music Model does not accept."""
+
+    code = "invalid_arguments"
+
+
 class MusicExecutionError(MusicError):
     """Raised when an OpenRouter Music request fails."""
 
@@ -118,14 +124,12 @@ class MusicService:
         try:
             _binding, options, target_ref = self._resolver.resolve(TASK_MUSIC_GENERATION)
         except MusicConfigurationError as exc:
-            raise MusicConfigurationError(
-                "Music generation is not configured. Select a Music generation "
-                "Task Model in Settings."
-            ) from exc
+            raise MusicConfigurationError("no Music generation model is chosen") from exc
         model = self._validated_model(target_ref)
         if source_paths and "image" not in model.capabilities.input_modalities:
-            raise MusicConfigurationError(
-                "The configured Music generation model does not accept reference images."
+            raise MusicOptionError(
+                "Nothing was generated. The configured music model does not accept "
+                "source_images. Repeat the call without source_images."
             )
         images = await asyncio.to_thread(load_image_inputs, source_paths)
 
@@ -188,19 +192,12 @@ class MusicService:
 
     def _validated_model(self, target_ref: TaskModelTargetRef) -> Any:
         if target_ref.kind != "provider" or target_ref.provider_id != "openrouter":
-            raise MusicConfigurationError(
-                "The configured provider does not support Music generation."
-            )
+            raise MusicConfigurationError("the chosen provider does not offer Music generation")
         model = self._model_tasks.model_for_target(target_ref)
         if model is None:
-            raise MusicConfigurationError(
-                "The configured Music generation model is no longer available. "
-                "Select another Task Model in Settings."
-            )
+            raise MusicConfigurationError("the chosen Music generation model is no longer offered")
         if not model_supports_task(model, TASK_MUSIC_GENERATION):
-            raise MusicConfigurationError(
-                "The configured provider does not support Music generation."
-            )
+            raise MusicConfigurationError("the chosen model does not generate music")
         return model
 
 

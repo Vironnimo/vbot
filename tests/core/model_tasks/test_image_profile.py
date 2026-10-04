@@ -190,13 +190,14 @@ def test_call_choices_become_wire_options(
     [
         pytest.param(
             {"aspect_ratio": "5:4"},
-            "aspect_ratio '5:4' is not offered by the configured image model; choose one of: "
-            "1:1, 16:9.",
+            "Nothing was generated. The configured image model does not offer aspect_ratio "
+            "'5:4'. Pass one of 1:1, 16:9, or omit aspect_ratio to use the configured default.",
             id="value",
         ),
         pytest.param(
             {"resolution": "2K"},
-            "The configured image model has no resolution choice; omit resolution.",
+            "Nothing was generated. The configured image model has no resolution choice. "
+            "Repeat the call without resolution.",
             id="option",
         ),
     ],
