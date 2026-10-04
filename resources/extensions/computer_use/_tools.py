@@ -41,7 +41,7 @@ ACTIONS = (
 )
 SCROLL_DIRECTIONS = ("up", "down", "left", "right")
 APPS_ACTIONS = ("list", "open", "request", "release")
-MAX_BATCH_ACTIONS = 30
+MAX_BATCH_ACTIONS = 60
 
 COMPUTER_DESCRIPTION = (
     "Operate the desktop of the computer the vBot server runs on (Windows) with "
