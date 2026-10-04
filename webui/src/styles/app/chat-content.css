@@ -287,36 +287,27 @@
   margin: 0 0 0.6em;
 }
 
+/* Chat headings structure an answer rather than title a document: only h1
+   and h2 grow, h3-h6 are bold body text, and the space sits above a heading
+   so it binds to the content it introduces. */
 .msg-markdown h1,
 .msg-markdown h2,
 .msg-markdown h3,
 .msg-markdown h4,
 .msg-markdown h5,
 .msg-markdown h6 {
-  margin: 0.8em 0 0.3em;
+  margin: 1.1em 0 0.35em;
+  font-size: 1em;
   font-weight: 600;
-  line-height: 1.3;
+  line-height: 1.35;
 }
 
 .msg-markdown h1 {
-  font-size: 1.5em;
+  font-size: 1.25em;
 }
 
 .msg-markdown h2 {
-  font-size: 1.35em;
-}
-
-.msg-markdown h3 {
-  font-size: 1.2em;
-}
-
-.msg-markdown h4 {
-  font-size: 1.1em;
-}
-
-.msg-markdown h5,
-.msg-markdown h6 {
-  font-size: 1em;
+  font-size: 1.13em;
 }
 
 .msg-markdown ul,
@@ -343,14 +334,19 @@
   border-radius: var(--r-sm);
   padding: 10px 14px;
   background: var(--surface-2);
+  font-size: var(--fs-mono-body);
+  line-height: 1.5;
 }
 
+/* Code blocks set size and line height on the pre, not the inline code: a
+   pre inheriting the prose size keeps the prose line height as the minimum
+   height of every code line. */
 .msg-markdown pre code {
   border: none;
   padding: 0;
   background: none;
   font-family: var(--font-mono);
-  font-size: var(--fs-mono-body);
+  font-size: inherit;
 }
 
 /* Fenced Markdown code is a bounded technical artifact, so it gets the
@@ -392,6 +388,7 @@
 .btn-tertiary.btn-icon.msg-code__copy {
   width: 24px;
   height: 24px;
+  min-height: 24px;
 }
 
 .msg-markdown .msg-code pre,
@@ -402,6 +399,8 @@
   border-radius: 0;
   padding: 12px 14px;
   background: var(--bg);
+  font-size: var(--fs-mono-xs);
+  line-height: 1.65;
 }
 
 .msg-markdown .msg-code pre code,
@@ -411,9 +410,9 @@
   color: var(--text-med);
   background: none;
   font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: inherit;
   font-style: normal;
-  line-height: 1.65;
+  line-height: inherit;
   white-space: pre;
 }
 

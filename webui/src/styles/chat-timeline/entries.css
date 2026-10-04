@@ -414,13 +414,16 @@
   border-radius: var(--r-sm);
   padding: 8px 12px;
   background: var(--surface-2);
+  font-size: 12px;
   font-style: normal;
+  line-height: 1.5;
 }
 
 .reasoning-body pre code {
   border: none;
   padding: 0;
   background: none;
+  font-size: inherit;
 }
 
 .reasoning-block[open] .reasoning-body,
