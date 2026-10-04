@@ -27,6 +27,7 @@ from ._screens import (
     mask,
     publish_image,
     resized,
+    zoom_fit,
 )
 from .target import DesktopTarget, Display, WindowInfo
 
@@ -53,6 +54,8 @@ class Desktop:
         self.context = context
         # Set right before the first input method runs: from then on, input may have been sent.
         self.input_started = False
+        # The text of the screenshot taken after a failure that followed input.
+        self.failure_screen: str | None = None
 
     # Frames and displays
 
@@ -141,7 +144,12 @@ class Desktop:
     def check_bounds(action: Action, frame: Frame) -> None:
         """Refuse coordinates outside *frame* before anything runs."""
         size = f'image "{frame.screenshot_id}", which is {frame.size_text} pixels'
-        for name, point in (("start_coordinate", action.start), ("coordinate", action.point)):
+        named = (
+            [(f"path point {number}", point) for number, point in enumerate(action.path, 1)]
+            if action.path
+            else [("start_coordinate", action.start), ("coordinate", action.point)]
+        )
+        for name, point in named:
             if point is not None and not frame.contains(*point):
                 raise CallRefusedError(
                     "invalid_arguments",
@@ -243,7 +251,7 @@ class Desktop:
                 capture.paste(image, (left - area[0], top - area[1]))
         visible = self.access.window_visible
         covered, hidden = mask(capture, area, self.target.windows(), visible)
-        size = fit(*covered.size)
+        size = zoom_fit(*covered.size) if zoom else fit(*covered.size)
         path = publish_image(self.context, resized(covered, size))
         foreground = self.target.foreground()
         front = foreground.app if foreground is not None and visible(foreground) else None
@@ -322,7 +330,7 @@ class Desktop:
         elif name == "mouse_move":
             target.move(*points[0])
         elif name == "left_click_drag":
-            target.drag(points[0], points[1], modifiers)
+            target.drag(points, action.seconds, modifiers)
         elif name in {"left_mouse_down", "left_mouse_up"}:
             if action.point is not None:
                 target.move(*points[0])
@@ -357,7 +365,7 @@ class Desktop:
             return cursor
 
         if action.name == "left_click_drag":
-            return [at(action.start), at(action.point)]
+            return [at(action.start), *(at(point) for point in action.via), at(action.point)]
         return [at(action.point)]
 
     def _check_access(self, action: Action, frame: Frame, points: list[Point]) -> None:
