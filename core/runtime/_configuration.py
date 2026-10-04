@@ -149,9 +149,12 @@ def _resolve_resources_path(config: ConfigProtocol) -> Path:
 
 
 def _resolve_data_dir(config: ConfigProtocol) -> Path:
+    # The same order as StorageManager: a Config's own directory, which
+    # already honors VBOT_DATA_DIR, wins over environment values, so logs
+    # land next to the data of a Runtime built on an explicit directory.
+    if hasattr(config, "data_dir"):
+        return Path(cast(Any, config).data_dir).expanduser()
     data_dir_raw = config.get("DATA_DIR") or config.get("VBOT_DATA_DIR")
     if data_dir_raw:
         return Path(cast(str, data_dir_raw)).expanduser()
-    if hasattr(config, "data_dir"):
-        return Path(cast(Any, config).data_dir).expanduser()
     raise ConfigError("Runtime requires a data directory to initialize logging")
