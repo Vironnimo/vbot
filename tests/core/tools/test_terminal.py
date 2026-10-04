@@ -35,7 +35,6 @@ from tests.core.tools.terminal_manager_helpers import (
     eventually,
 )
 from tests.core.tools.terminal_manager_helpers import quick_readiness as quick_readiness
-from tests.core.tools.terminal_manager_helpers import shell_environment as shell_environment
 
 
 def test_definition_follows_flat_action_conventions_within_its_budget(tmp_path: Path) -> None:

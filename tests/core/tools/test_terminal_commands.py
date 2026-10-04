@@ -28,7 +28,6 @@ from tests.core.tools.terminal_manager_helpers import (
     eventually,
     owner,
 )
-from tests.core.tools.terminal_manager_helpers import shell_environment as shell_environment
 
 
 class FakeTree:

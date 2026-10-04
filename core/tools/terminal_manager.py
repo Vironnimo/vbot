@@ -14,7 +14,7 @@ from typing import Any, TextIO
 from core.runs import RunExecutionOwner
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
 from core.tools import terminal_backend
-from core.tools.bash import get_shell_env, reset_shell_env_cache
+from core.tools.shell_environment import terminal_environment
 from core.tools.terminal_backend import (
     TerminalAdapter,
     TerminalAdapterFactory,
@@ -349,7 +349,7 @@ class TerminalManager:
         shell's own start options: the shell loads its profile, runs the
         program, and keeps its prompt after the program ends or is interrupted.
         """
-        environment = await get_shell_env()
+        environment = await asyncio.to_thread(terminal_environment)
         shell_argv = default_terminal_argv(environment)
         workdir = cwd or Path.home()
         if command is None:
@@ -712,40 +712,20 @@ class TerminalManager:
         *,
         exact_env: bool = False,
     ) -> TerminalAdapter:
-        """Start the process; a program missing from a stale PATH gets one fresh retry."""
+        """Start the process in *env* when exact, else in a terminal environment plus *env*."""
         if exact_env and env is not None:
-            return await asyncio.to_thread(
-                self._adapter_factory,
-                list(argv),
-                cwd,
-                dict(env),
-                rows,
-                columns,
-                command_line=command_line,
-            )
-        for attempt in range(2):
-            process_env = await get_shell_env()
-            # A service or pipe-based parent may advertise no terminal. The child
-            # has a real VT here; preserve only an explicit caller override.
-            if process_env.get("TERM") in {None, "", "dumb"}:
-                process_env["TERM"] = "xterm-256color"
-            if env is not None:
-                process_env.update(env)
-            try:
-                return await asyncio.to_thread(
-                    self._adapter_factory,
-                    list(argv),
-                    cwd,
-                    process_env,
-                    rows,
-                    columns,
-                    command_line=command_line,
-                )
-            except FileNotFoundError:
-                if attempt:
-                    raise
-                reset_shell_env_cache()
-        raise AssertionError("unreachable")
+            process_env = dict(env)
+        else:
+            process_env = await asyncio.to_thread(terminal_environment, env)
+        return await asyncio.to_thread(
+            self._adapter_factory,
+            list(argv),
+            cwd,
+            process_env,
+            rows,
+            columns,
+            command_line=command_line,
+        )
 
     # Finding and attaching terminals
 

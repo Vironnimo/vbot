@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import os
 import queue
 from collections.abc import AsyncIterator, Mapping, Sequence
 from pathlib import Path
@@ -13,7 +12,6 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-import core.tools._bash_environment as bash_environment
 import core.tools._terminal_session as terminal_session
 import core.tools.terminal_manager as terminal_manager_module
 from core.tools.terminal_manager import (
@@ -167,23 +165,6 @@ class FakeClock:
             if not future.done():
                 future.set_result(None)
         await asyncio.sleep(0)
-
-
-@pytest.fixture(autouse=True)
-def shell_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Answer the login-shell environment probe from this process's environment.
-
-    Terminal launches read the probed shell environment; the fake keeps them from
-    starting a real shell and makes the first launch in a worker as fast as later ones.
-    """
-
-    async def probe() -> dict[str, str]:
-        return dict(os.environ)
-
-    monkeypatch.setattr(bash_environment, "_probe_shell_env", probe)
-    monkeypatch.setattr(bash_environment, "_cached_shell_env", None)
-    monkeypatch.setattr(bash_environment, "_shell_env_cache_time", 0.0)
-    monkeypatch.setattr(bash_environment, "_shell_env_probe_task", None)
 
 
 @pytest.fixture
