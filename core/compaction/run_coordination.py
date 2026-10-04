@@ -168,7 +168,6 @@ class CompactionRunHost(Protocol):
         active_adapter: Any,
         active_model_id: str,
         live_request_messages: list[JsonObject] | None = None,
-        continuation_reminder: str | None = None,
     ) -> tuple[ChatMessage, RequestState]: ...
 
     async def project_automatic_compaction_request(
@@ -181,15 +180,7 @@ class CompactionRunHost(Protocol):
         context_tokens_before: int,
         prompt_refresh: object | None,
         live_request_messages: list[JsonObject] | None,
-        continuation_reminder: str | None,
     ) -> tuple[ChatMessage, RequestState]: ...
-
-    async def refresh_continuation_reminder(
-        self,
-        context: Any,
-        *,
-        context_window: int | None,
-    ) -> None: ...
 
     async def rebuild_after_stale_compaction(
         self,
@@ -628,12 +619,6 @@ class CompactionRunCoordinator:
                         run.session_id,
                         exc_info=True,
                     )
-
-                if continue_same_run:
-                    await self._host.refresh_continuation_reminder(
-                        context,
-                        context_window=self._host.resolve_context_window(agent, target),
-                    )
             except Exception:
                 self._abort_failed_projection(run)
                 return current_state
@@ -668,9 +653,6 @@ class CompactionRunCoordinator:
                         context_tokens_before=input_tokens,
                         prompt_refresh=prompt_refresh,
                         live_request_messages=messages if continue_same_run else None,
-                        continuation_reminder=(
-                            context.continuation_reminder if continue_same_run else None
-                        ),
                     )
                 except Exception:
                     self._abort_failed_projection(run)

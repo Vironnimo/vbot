@@ -14,8 +14,6 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from core.chat.wire_shaping import (
     _quote_external_json,
-    is_system_reminder_request_message,
-    system_reminder_request_message,
 )
 from core.providers.errors import NetworkError, ProviderTimeoutError
 from core.sessions import ChatSession, SessionContinuationState, SessionContinuationStep
@@ -37,7 +35,6 @@ ContinuationCause = Literal[
 
 CONTINUATION_RECORD_VERSION = 1
 CONTINUATION_FLUSH_INTERVAL_SECONDS = 2.0
-CONTINUATION_REMINDER_MARKER = "<continuation-checkpoint"
 # Retain edit for interrupted Calls already stored in Session history.
 UNCERTAIN_EFFECT_TOOLS = frozenset({"write", "apply_patch", "edit", "bash"})
 _PROMPT_MIN_CHARS = 4_000
@@ -598,26 +595,6 @@ def continuation_prompt_budget(context_window: int | None) -> int:
     if context_window is None:
         return 16_000
     return max(_PROMPT_MIN_CHARS, min(_PROMPT_MAX_CHARS, context_window))
-
-
-def inject_continuation_reminder(
-    messages: list[JsonObject],
-    reminder: str,
-) -> list[JsonObject]:
-    """Inject exactly one reminder immediately before the new user turn."""
-    filtered = [
-        message
-        for message in messages
-        if not (
-            is_system_reminder_request_message(message)
-            and CONTINUATION_REMINDER_MARKER in message["content"]
-        )
-    ]
-    reminder_message = system_reminder_request_message(reminder)
-    for index in range(len(filtered) - 1, -1, -1):
-        if filtered[index].get("role") == "user":
-            return [*filtered[:index], reminder_message, *filtered[index:]]
-    return [*filtered, reminder_message]
 
 
 def normalize_interruption_cause(error: BaseException | None) -> ContinuationCause:

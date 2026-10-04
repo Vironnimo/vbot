@@ -115,5 +115,4 @@ async def rebuild_after_steering(
             context.session_snapshot.active_messages
         ),
         live_messages=context.request_state.messages if context.request_state else [],
-        continuation_reminder=context.continuation_reminder,
     )

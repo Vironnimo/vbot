@@ -236,7 +236,6 @@ class _RunExecutionContext:
     prompt_cache_affinity_id: str
     prior_continuation: ContinuationState | None
     continuation_tracker: ContinuationTracker | None
-    continuation_reminder: str | None
     session_snapshot: _SessionSnapshot
     request_state: _RequestState | None = None
     image_budget: RequestImageBudget = field(default_factory=RequestImageBudget)
@@ -586,7 +585,6 @@ async def create_run_execution_context(
     session: ChatSession,
     session_snapshot: _SessionSnapshot | None = None,
     prior_continuation: ContinuationState | None,
-    continuation_reminder: str | None,
     continuation_tracker: ContinuationTracker | None,
 ) -> _RunExecutionContext:
     """Resolve all stable execution inputs once at the Run boundary."""
@@ -760,7 +758,6 @@ async def create_run_execution_context(
             prompt_cache_affinity_id=prompt_cache_affinity_id,
             prior_continuation=prior_continuation,
             continuation_tracker=continuation_tracker,
-            continuation_reminder=continuation_reminder,
             session_snapshot=session_snapshot,
         )
         if project_id is None and temporary_source is None:

@@ -27,7 +27,6 @@ from core.chat._tool_epoch import (
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import MediaBlock, content_block_to_dict
-from core.chat.continuation import inject_continuation_reminder
 from core.chat.errors import ChatError
 from core.chat.events import _close_adapter
 from core.chat.messages import (
@@ -538,7 +537,6 @@ class RequestBuilder:
         *,
         inputs: RequestBuildInputs,
         live_messages: list[JsonObject] | None,
-        continuation_reminder: str | None,
     ) -> _RequestState:
         """Rebuild an active Run's request without losing its live-only state.
 
@@ -561,8 +559,6 @@ class RequestBuilder:
                 image_converter=self._tool_image_converter,
                 max_image_bytes=inputs.max_image_bytes,
             )
-        if continuation_reminder is not None:
-            messages = inject_continuation_reminder(messages, continuation_reminder)
         return replace(state, messages=messages)
 
     async def live_tool_catalog(

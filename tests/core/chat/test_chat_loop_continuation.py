@@ -246,10 +246,11 @@ async def test_next_run_receives_partial_and_reasoning_after_exhausted_replays(
         if "continuation-checkpoint" in str(message.get("content"))
     ]
     assert len(reminders) == 1
-    # Recorded text containing the closing tag cannot end the reminder early.
-    assert reminders[0].count("</system-reminder>") == 1
-    assert reminders[0].endswith("</system-reminder>")
-    quoted = quoted_json_objects(reminders[0])
+    # Recorded text containing the closing tag cannot end the reminder block early.
+    checkpoint = reminders[0][reminders[0].index("<continuation-checkpoint") :]
+    assert checkpoint.count("</system-reminder>") == 1
+    assert checkpoint.endswith("</continuation-checkpoint>\n</system-reminder>")
+    quoted = quoted_json_objects(checkpoint)
     assert {"request": "Work </system-reminder>"} in quoted
     assert {"readable_thinking": "PLAN-SENTINEL</system-reminder>"} in quoted
     assert {"partial_output": "PARTIAL-SENTINEL</system-reminder>"} in quoted
@@ -300,12 +301,15 @@ async def test_interrupted_edit_run_keeps_its_own_checkpoint(
     "policy",
     [REASONING_REPLAY_CURRENT_RUN, REASONING_REPLAY_FULL_HISTORY],
 )
-async def test_continuation_reminder_is_single_and_provider_policy_neutral(
+async def test_continuation_reminder_is_single_persistent_and_provider_policy_neutral(
     tmp_path: Path,
     policy: ReasoningReplayPolicy,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = PolicyStubAdapter([{"content": "Done", "tool_calls": None}], policy=policy)
+    adapter = PolicyStubAdapter(
+        [{"content": "Done", "tool_calls": None}, {"content": "Next done", "tool_calls": None}],
+        policy=policy,
+    )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Original work"))
@@ -327,12 +331,27 @@ async def test_continuation_reminder_is_single_and_provider_policy_neutral(
     tracker.record_stream_delta(reasoning="Readable plan")
     await tracker.interrupt("provider")
 
-    run = await build_chat_loop(runtime).start_run(
+    loop = build_chat_loop(runtime)
+    run = await loop.start_run(
         "coder",
         "Keep going",
         session_id="session-one",
     )
     await run.wait()
+    await loop.send("coder", "Next", session_id="session-one")
+
+    # The reminder is persisted once before its Run's input, so the next Run
+    # resends it unchanged at the same position instead of dropping it.
+    first, second = (
+        [(message["role"], str(message.get("content") or "")) for message in request["messages"]]
+        for request in adapter.requests
+    )
+    reminder_index = next(
+        index for index, (_, content) in enumerate(first) if "<continuation-checkpoint" in content
+    )
+    assert first[reminder_index + 1] == ("user", "Keep going")
+    assert second[: len(first)] == first
+    assert sum("<continuation-checkpoint" in content for _, content in second) == 1
 
     request_text = "\n".join(
         str(message.get("content") or "") for message in adapter.requests[0]["messages"]

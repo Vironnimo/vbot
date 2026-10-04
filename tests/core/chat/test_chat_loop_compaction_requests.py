@@ -11,12 +11,6 @@ import pytest
 from core.chat import ChatMessage
 from core.chat._request_history import _restore_in_run_tool_result_content
 from core.chat._run_state import RequestBuildInputs
-from core.chat.continuation import (
-    ContinuationTracker,
-    inject_continuation_reminder,
-    recover_continuation,
-    render_continuation_reminder,
-)
 from core.compaction import TOOL_RESULT_COMPACTED_FIELD, CompactionService
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.utils.tokens import estimate_request_input_tokens
@@ -24,7 +18,6 @@ from tests.core.chat.chat_loop_compaction_test_support import (
     CompactOnceService,
     JsonObject,
     RecordingCompactionAdapter,
-    auto_compact,
     compaction_runtime,
     real_compaction_runtime,
     word_count_tools,
@@ -32,7 +25,6 @@ from tests.core.chat.chat_loop_compaction_test_support import (
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
-    StubCompactionService,
     StubModels,
     build_chat_loop,
     build_request_messages,
@@ -266,51 +258,3 @@ async def test_final_answer_checkpoint_keeps_the_tool_list_of_the_next_run(tmp_p
         [tool["name"] for tool in request["kwargs"]["tools"]] for request in adapter.requests
     ]
     assert tool_names == [["word_count"], ["word_count"]]
-
-
-@pytest.mark.asyncio
-async def test_compaction_reinjects_the_active_continuation_checkpoint(tmp_path: Path) -> None:
-    runtime = compaction_runtime(tmp_path)
-    agent = runtime.agents.get("coder")
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
-    session.append(ChatMessage.user("Original work"))
-    session.append(ChatMessage.assistant(model=agent.model, content="Partial"))
-    checkpoint = ChatMessage.compaction_checkpoint(
-        summary="Compacted context.", projection=session.load(), compacted_token_count=42
-    )
-    service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
-    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
-
-    session.start_run("run-one")
-    interrupted = ContinuationTracker(session, run_id="run-one", request="Original work")
-    interrupted.record_stream_delta(reasoning="Keep this plan")
-    await interrupted.interrupt("network")
-    prior = await recover_continuation(session)
-    assert prior is not None
-    session.append(ChatMessage.user("Keep going"))
-    session.start_run("run-two")
-    active = ContinuationTracker(session, run_id="run-two", request="Keep going", prior_state=prior)
-    reminder = render_continuation_reminder(prior, context_window=100)
-    request = inject_continuation_reminder(
-        await build_request_messages(loop, agent, session), reminder
-    )
-
-    probe = await auto_compact(
-        loop,
-        agent,
-        session,
-        usage={"input_tokens": 90},
-        request=request,
-        run_id="run-two",
-        continuation_tracker=active,
-        continuation_reminder=reminder,
-    )
-
-    reminders = [
-        message
-        for message in probe.rebuilt
-        if "<continuation-checkpoint" in str(message.get("content") or "")
-    ]
-    assert len(reminders) == 1
-    assert "Keep this plan" in reminders[0]["content"]
-    await active.interrupt("network")

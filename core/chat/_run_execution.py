@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from core.chat._boundaries import _finish_visible_boundary
@@ -29,7 +28,6 @@ from core.chat.continuation import (
     ContinuationCause,
     ContinuationState,
     ContinuationTracker,
-    inject_continuation_reminder,
     normalize_interruption_cause,
     recover_continuation,
     render_continuation_reminder,
@@ -162,7 +160,6 @@ class RunExecution:
             if request.edit_message_id is not None:
                 session_snapshot.begin_edit(request.edit_message_id)
         prior_continuation: ContinuationState | None = None
-        continuation_reminder: str | None = None
         continuation_tracker: ContinuationTracker | None = None
         if not request.internal or request.resume_process_restart:
             if request.edit_message_id is not None:
@@ -175,11 +172,6 @@ class RunExecution:
             if request.internal and recovered is not None and recovered.cause != "process_restart":
                 recovered = None
             prior_continuation = recovered
-            if prior_continuation is not None and not prior_continuation.active:
-                continuation_reminder = render_continuation_reminder(
-                    prior_continuation,
-                    context_window=None,
-                )
             if not request.internal or prior_continuation is not None:
                 # The chain starts with this Run's input append (see _execute_run_impl).
                 continuation_tracker = ContinuationTracker(
@@ -197,7 +189,6 @@ class RunExecution:
                 session=session,
                 session_snapshot=session_snapshot,
                 prior_continuation=prior_continuation,
-                continuation_reminder=continuation_reminder,
                 continuation_tracker=continuation_tracker,
             )
             if self._compaction_service is not None:
@@ -225,6 +216,24 @@ class RunExecution:
                 )
                 await continuation_tracker.interrupt(cause)
             raise
+
+    def _append_continuation_note(self, context: _RunExecutionContext) -> None:
+        """Defer the interrupted previous Run's checkpoint as a note before this Run's input.
+
+        It persists with the input, so every later request renders it at the
+        same position with the same text and the Provider prompt cache keeps it.
+        """
+        prior = context.prior_continuation
+        if prior is None or prior.active:
+            return
+        context.session.add_note(
+            render_continuation_reminder(
+                prior,
+                context_window=self._requests.resolve_context_window(
+                    context.agent, context.primary_target
+                ),
+            )
+        )
 
     async def _execute_run_impl(
         self,
@@ -306,9 +315,11 @@ class RunExecution:
                             request.reply_surface,
                             messages=context.session_snapshot.active_messages,
                         )
+                        self._append_continuation_note(context)
                         session.add_note(request.content)
                         persisted_messages = session.take_deferred_notes()
                     elif request.input_already_persisted:
+                        self._append_continuation_note(context)
                         persisted_messages = session.take_deferred_notes()
                     else:
                         if request.content is None:
@@ -319,6 +330,7 @@ class RunExecution:
                             request.reply_surface,
                             messages=context.session_snapshot.active_messages,
                         )
+                        self._append_continuation_note(context)
                         user_message = ChatMessage.user(
                             _assign_session_image_references(
                                 request.content,
@@ -422,19 +434,6 @@ class RunExecution:
                 run_error = exc
                 await _persist_run_error(run, session, exc)
                 raise
-            if context.continuation_reminder is not None:
-                assert context.prior_continuation is not None
-                context.continuation_reminder = render_continuation_reminder(
-                    context.prior_continuation,
-                    context_window=self._requests.resolve_context_window(agent, target),
-                )
-                context.request_state = replace(
-                    context.request_state,
-                    messages=inject_continuation_reminder(
-                        context.request_state.messages,
-                        context.continuation_reminder,
-                    ),
-                )
 
             if self._compaction_service is not None:
                 built_state = context.request_state
@@ -691,14 +690,6 @@ class RunExecution:
                 ):
                     await session.add_note_async(OUTPUT_INTEGRITY_RECOVERY_NOTE)
                 await context.session_snapshot.refresh(session)
-                if context.continuation_reminder is not None:
-                    assert context.prior_continuation is not None
-                    context.continuation_reminder = render_continuation_reminder(
-                        context.prior_continuation,
-                        context_window=self._requests.resolve_context_window(
-                            agent, candidate_target
-                        ),
-                    )
                 context.request_state = await self._requests.rebuild_live_request_state(
                     agent,
                     session,
@@ -706,7 +697,6 @@ class RunExecution:
                         context, candidate_target
                     ).with_session_messages(context.session_snapshot.active_messages),
                     live_messages=context.request_state.messages if context.request_state else [],
-                    continuation_reminder=context.continuation_reminder,
                 )
                 # Rebuilding applies the fallback route's media and Tool
                 # capabilities. The persisted previous tool cycle may still carry
