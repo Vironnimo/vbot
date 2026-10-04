@@ -77,11 +77,14 @@ Modes:
 - With no pattern, the call lists files. `{}` lists the working directory, and
   `glob` or `path` narrow it.
 - A pattern beside `--files` is rejected with the field that was sent.
-- A pattern beside `--dirs` filters directory names (`name_patterns`,
-  `_name_matcher`: Python `re.search` on the name, ORed, `-F` literal; letter
-  case follows `-i`/`-S`/`-s`, case-sensitive by default) with a `note`. An
-  invalid expression is rejected. Agents sent `--dirs` with `pattern: "^empty$"`
-  (first-use probe, 2026-10).
+- A pattern beside `--dirs` filters directory names, with a `note`
+  (`name_patterns`). ripgrep matches them (`match_names`): the names go
+  NUL-separated through `--null-data` with the query's matching flags (`-i`,
+  `-S`, `-F`, `-w`, `-x`, `-v`, `-P`, `--engine`, ...), so the `pattern`
+  description's "ripgrep syntax" holds and `-x` compares the whole name. A
+  rejected pattern takes the content search's repairs (`pattern_retry`) and
+  otherwise its error, even when there are no directories. Agents sent `--dirs`
+  with `pattern: "^empty$"` (first-use probe, 2026-10).
 - `output: "count"` or context without a pattern is rejected.
 - Context with count or file-list output is dropped with a note (Sessions,
   2026-09: Agents sent `output: "files"` with `context: 3`).

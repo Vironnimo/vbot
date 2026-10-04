@@ -598,9 +598,9 @@ _PATHS = "path must name a file or directory"
             "contents, remove --files.",
         ),
         (
-            {"pattern": "(", "args": ["--dirs"]},
-            "invalid_arguments",
-            "The pattern for directory names is not a valid regular expression",
+            {"pattern": "a{2,1}", "args": ["--dirs"]},
+            "search_error",
+            "The pattern is not a valid regular expression (ripgrep syntax)",
         ),
         ({"args": ["--help", "missing"]}, "invalid_arguments", "--help shows a reference"),
         # Incomplete or unavailable options, and roots that are not paths.

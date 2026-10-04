@@ -196,6 +196,11 @@ def test_file_lists_equal_ripgreps(
         (["--dirs", "-e", "^emp"], {"src/empty/"}),
         (["--dirs", "-e", "^EMP"], set()),
         (["--dirs", "-i", "-e", "^EMP", "-e", "^li"], {"src/empty/", "src/lib/"}),
+        # Names match with ripgrep's syntax and matching flags, each name as one whole text.
+        (
+            ["--dirs", "-x", "-e", "[[:lower:]]+"],
+            {"src/", "src/empty/", "src/lib/", "vendor/", "vendor/deep/"},
+        ),
         (["--dirs", "-d", "1"], {"src/", ".cache/", "vendor/"}),
         (
             ["--dirs", "-u"],
