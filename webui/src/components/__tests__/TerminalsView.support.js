@@ -8,9 +8,11 @@ const listTerminalsMock = vi.fn();
 
 const startTerminalMock = vi.fn();
 
-const sendTerminalInputMock = vi.fn();
+// What the Terminal sockets carried: input as (terminalId, data), resize
+// requests as (terminalId, columns, rows) resolving to the server's answer.
+const terminalInputMock = vi.fn();
 
-const resizeTerminalMock = vi.fn();
+const terminalResizeMock = vi.fn();
 
 const killTerminalMock = vi.fn();
 
@@ -54,8 +56,6 @@ vi.mock('$lib/api.js', () => ({
     prepareSpeechTranscriptionMock(...args),
   listTerminals: (...args) => listTerminalsMock(...args),
   startTerminal: (...args) => startTerminalMock(...args),
-  sendTerminalInput: (...args) => sendTerminalInputMock(...args),
-  resizeTerminal: (...args) => resizeTerminalMock(...args),
   killTerminal: (...args) => killTerminalMock(...args),
   forgetTerminal: (...args) => forgetTerminalMock(...args),
   createTerminalGroup: (...args) => createTerminalGroupMock(...args),
@@ -352,8 +352,8 @@ function setupTerminalsViewSuite() {
       .mockResolvedValue({ state: 'loading' });
     listTerminalsMock.mockReset();
     startTerminalMock.mockReset().mockResolvedValue({});
-    sendTerminalInputMock.mockReset().mockResolvedValue({});
-    resizeTerminalMock
+    terminalInputMock.mockReset();
+    terminalResizeMock
       .mockReset()
       .mockImplementation(async (_id, columns, rows) => ({
         terminal: { columns, rows },
@@ -366,8 +366,31 @@ function setupTerminalsViewSuite() {
     setTerminalGroupOrderMock.mockReset().mockResolvedValue({});
     subscribeTerminalEventsMock
       .mockReset()
-      .mockImplementation((_id, handlers) => {
-        const connection = { close: vi.fn() };
+      .mockImplementation((terminalId, handlers) => {
+        // The socket answers requests as the server does.
+        const send = (message) => {
+          if (message.type === 'input') {
+            terminalInputMock(terminalId, message.data);
+          } else if (message.type === 'resize') {
+            const { request, columns, rows } = message;
+            Promise.resolve(terminalResizeMock(terminalId, columns, rows)).then(
+              (result) =>
+                handlers.onEvent({
+                  type: 'resize_done',
+                  request,
+                  terminal: result.terminal,
+                }),
+              (error) =>
+                handlers.onEvent({
+                  type: 'resize_failed',
+                  request,
+                  message: error.message,
+                }),
+            );
+          }
+          return true;
+        };
+        const connection = { close: vi.fn(), send };
         streams.push({ handlers, connection });
         return connection;
       });
@@ -412,8 +435,8 @@ function setupTerminalsViewSuite() {
 export {
   listTerminalsMock,
   startTerminalMock,
-  sendTerminalInputMock,
-  resizeTerminalMock,
+  terminalInputMock,
+  terminalResizeMock,
   killTerminalMock,
   forgetTerminalMock,
   setTerminalGroupOrderMock,

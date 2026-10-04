@@ -330,7 +330,18 @@ describe('subscribeTerminalEvents()', () => {
       expect.objectContaining({ code: WEBSOCKET_ERROR_RESPONSE }),
       expect.any(Object),
     );
+
+    // Requests go out as JSON only while the socket is open.
+    connection.socket.send = vi.fn();
+    expect(connection.send({ type: 'input', data: 'ls\r' })).toBe(false);
+    connection.socket.readyState = 1;
+    expect(connection.send({ type: 'input', data: 'ls\r' })).toBe(true);
+    expect(connection.socket.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'input', data: 'ls\r' }),
+    );
     connection.close();
+    expect(connection.send({ type: 'input', data: 'x' })).toBe(false);
+    expect(connection.socket.send).toHaveBeenCalledTimes(1);
   });
 });
 

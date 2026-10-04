@@ -8,7 +8,8 @@ browser xterm restores the interactive state instead of showing dead text.
 
 The mode sequences travel through stdout from a real child program, exactly
 like a TUI (opencode, claude code) emits them; the harness itself is a file so
-the sequences are never passed through the shell's own line editor.
+the sequences are never passed through the shell's own line editor. The
+snapshot is the first event a new viewer's watch receives.
 
 Usage: python scripts/probe_terminal_snapshot_modes.py
 """
@@ -16,9 +17,9 @@ Usage: python scripts/probe_terminal_snapshot_modes.py
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
 import tempfile
-from collections.abc import Callable
 from pathlib import Path
 
 # Import this checkout's packages first; from a linked worktree `core` would
@@ -39,12 +40,19 @@ TUI_HARNESS_SOURCE = (
 )
 
 
-async def eventually(predicate: Callable[[], bool], *, attempts: int = 120) -> None:
-    for _ in range(attempts):
-        if predicate():
+async def wait_for_screen(manager: TerminalManager, terminal_id: str, text: str) -> None:
+    for _ in range(120):
+        if text in str((await manager.read_for_operator(terminal_id))["screen"]):
             return
         await asyncio.sleep(0.05)
-    raise AssertionError("condition was not reached")
+    raise AssertionError(f"{text!r} did not appear on the screen")
+
+
+async def late_viewer_snapshot(manager: TerminalManager, terminal_id: str) -> str:
+    """Return the ANSI snapshot a viewer that connects now receives first."""
+    async with contextlib.aclosing(manager.watch_for_operator(terminal_id)) as events:
+        ready = await anext(events)
+    return str(ready["ansi"])
 
 
 async def main() -> int:
@@ -59,10 +67,9 @@ async def main() -> int:
             cwd=Path.home(),
         )
         terminal_id = result["terminal_id"]
-        session = manager._sessions[terminal_id]
 
-        await eventually(lambda: "TUI-READY" in session.renderer.screen_text())
-        snapshot = session.renderer.ansi_snapshot()
+        await wait_for_screen(manager, terminal_id, "TUI-READY")
+        snapshot = await late_viewer_snapshot(manager, terminal_id)
 
         expected = {
             "\x1b[?1049h": "alternate screen",

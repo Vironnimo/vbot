@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 
-from core.tools.terminal_manager import TerminalNotFoundError
+from core.tools.terminal_manager import TerminalClosedError, TerminalNotFoundError
 from server.app import create_app
 from server.events import APP_ERROR_EVENT, RUN_STARTED_SERVER_EVENT
 from tests.server.rpc_test_support import StubAdapter, StubRuntime
@@ -263,6 +264,73 @@ def test_terminal_websocket_sends_snapshot_then_live_output_and_terminal_state(
         },
     ]
     assert terminal_manager.unsubscribed
+
+
+class StubTerminalRequestManager(StubTerminalWebsocketManager):
+    """A Terminal that stays live until the socket's requests were applied."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.applied: list[tuple[str, Any]] = []
+        self.done = asyncio.Event()
+
+    async def send_operator_input(self, terminal_id: str, data: str) -> dict[str, Any]:
+        if data == "closed":
+            raise TerminalClosedError("Terminal Session is no longer running")
+        self.applied.append(("input", data))
+        return {"terminal_id": terminal_id}
+
+    async def resize_for_operator(
+        self, terminal_id: str, *, columns: int, rows: int
+    ) -> dict[str, Any]:
+        if columns < 40:
+            self.done.set()
+            raise ValueError("columns must be between 40 and 240")
+        self.applied.append(("resize", (columns, rows)))
+        return {"terminal_id": terminal_id, "columns": columns, "rows": rows}
+
+    @override
+    async def _frames(self, terminal_id: str) -> AsyncIterator[dict[str, Any]]:
+        yield {"type": "terminal_ready", "sequence": 1, "terminal": {}, "ansi": ""}
+        await self.done.wait()
+        yield {"type": "terminal_state", "sequence": 2, "terminal": {"state": "exited"}}
+
+
+def test_terminal_websocket_applies_operator_requests_in_order_and_answers_them(
+    tmp_path: Path,
+) -> None:
+    runtime = StubRuntime(tmp_path, StubAdapter())
+    terminal_manager = StubTerminalRequestManager()
+    runtime.terminal_manager = cast(Any, terminal_manager)
+    app = create_app(runtime=cast(Any, runtime))
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect("/ws/terminals/term-1") as websocket,
+    ):
+        assert websocket.receive_json()["type"] == "terminal_ready"
+        websocket.send_json({"type": "input", "data": "ls"})
+        websocket.send_json({"type": "resize", "request": 1, "columns": 100, "rows": 30})
+        websocket.send_json({"type": "input", "data": "closed"})
+        websocket.send_json({"type": "input", "data": "\r"})
+        websocket.send_json({"type": "resize", "request": 2, "columns": 1, "rows": 30})
+        replies = [websocket.receive_json() for _ in range(4)]
+
+    assert terminal_manager.applied == [("input", "ls"), ("resize", (100, 30)), ("input", "\r")]
+    assert replies == [
+        {
+            "type": "resize_done",
+            "request": 1,
+            "terminal": {"terminal_id": "term-1", "columns": 100, "rows": 30},
+        },
+        {"type": "input_failed", "message": "Terminal Session is no longer running"},
+        {
+            "type": "resize_failed",
+            "request": 2,
+            "message": "columns must be between 40 and 240",
+        },
+        {"type": "terminal_state", "sequence": 2, "terminal": {"state": "exited"}},
+    ]
 
 
 def test_terminal_websocket_closes_cleanly_when_subscription_setup_fails(

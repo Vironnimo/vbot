@@ -5,8 +5,8 @@ import {
   flushSync,
   listTerminalsMock,
   startTerminalMock,
-  sendTerminalInputMock,
-  resizeTerminalMock,
+  terminalInputMock,
+  terminalResizeMock,
   killTerminalMock,
   forgetTerminalMock,
   setTerminalGroupOrderMock,
@@ -600,6 +600,7 @@ describe('TerminalsView rendering and input', () => {
 
   it('focuses the clicked tile, routes native keys to it, and exposes scrollback recovery', async () => {
     await view.mountWith(twoTerminals());
+    readyAll(twoTerminals());
     expect(tileClasses().map((tile) => tile.focused)).toEqual([true, false]);
 
     document
@@ -628,8 +629,8 @@ describe('TerminalsView rendering and input', () => {
     }
     terminalInstances[1].onDataCallback('ls');
     await wait(30);
-    expect(sendTerminalInputMock).toHaveBeenCalledWith('term-1', '\u001b[A\r');
-    expect(sendTerminalInputMock).toHaveBeenCalledWith('term-2', 'ls');
+    expect(terminalInputMock).toHaveBeenCalledWith('term-1', '\u001b[A\r');
+    expect(terminalInputMock).toHaveBeenCalledWith('term-2', 'ls');
 
     terminalInstances[0].buffer.active = { viewportY: 3, baseY: 12 };
     terminalInstances[0].onScrollCallback();
@@ -654,11 +655,12 @@ describe('TerminalsView rendering and input', () => {
       expect(handler('rgb:0000/0000/0000')).toBe(false);
     }
     expect(parser.registerDcsHandler.mock.calls[0][1]('m')).toBe(true);
-    expect(sendTerminalInputMock).not.toHaveBeenCalled();
+    expect(terminalInputMock).not.toHaveBeenCalled();
   });
 
   it('maximizes a tile, resizes its PTY at once, keeps it streaming, and restores the grid', async () => {
     await view.mountWith(twoTerminals());
+    readyAll(twoTerminals());
     await waitFor(() => fitAddons[0].fit.mock.calls.length > 0);
     const canvas = document.querySelector('.terminals-view__canvas');
     expect(canvas.getAttribute('style')).toContain('repeat(2, minmax(0, 1fr))');
@@ -674,12 +676,12 @@ describe('TerminalsView rendering and input', () => {
     ]);
     // Maximize is a deterministic user action: its fit resizes the PTY
     // without the debounce.
-    await waitFor(() => resizeTerminalMock.mock.calls.length > 0);
-    expect(resizeTerminalMock).toHaveBeenCalledWith('term-1', 100, 32);
+    await waitFor(() => terminalResizeMock.mock.calls.length > 0);
+    expect(terminalResizeMock).toHaveBeenCalledWith('term-1', 100, 32);
 
     streams[0].handlers.onEvent({
       type: 'terminal_output',
-      sequence: 1,
+      sequence: 2,
       data: 'more output',
     });
     expect(terminalInstances[0].write).toHaveBeenCalledWith('more output');
@@ -697,16 +699,17 @@ describe('TerminalsView rendering and input', () => {
 
   it('fits a resized tile at the base font and debounces it into the PTY', async () => {
     await view.mountWith([terminal()]);
+    readyAll([terminal()]);
     await wait(150);
     const xterm = terminalInstances[0];
-    resizeTerminalMock.mockClear();
+    terminalResizeMock.mockClear();
 
     // 300 columns at the base font exceed the PTY limit: the font grows.
     fixtureState.mockHostWidth = 2400;
     resizeObservers[0].fire();
     await wait(120);
     expect(xterm.options.fontSize).toBeGreaterThan(12);
-    expect(resizeTerminalMock).toHaveBeenLastCalledWith('term-1', 240, 25);
+    expect(terminalResizeMock).toHaveBeenLastCalledWith('term-1', 240, 25);
 
     // Shrinking again returns to the base font instead of keeping it large.
     fixtureState.mockHostWidth = 400;
@@ -714,9 +717,9 @@ describe('TerminalsView rendering and input', () => {
     await Promise.resolve();
     flushSync();
     expect(xterm.options.fontSize).toBe(12);
-    expect(resizeTerminalMock).toHaveBeenCalledTimes(1);
+    expect(terminalResizeMock).toHaveBeenCalledTimes(1);
     await wait(120);
-    expect(resizeTerminalMock).toHaveBeenLastCalledWith('term-1', 50, 32);
+    expect(terminalResizeMock).toHaveBeenLastCalledWith('term-1', 50, 32);
   });
 
   it('re-fits the first tile when a second terminal joins the canvas', async () => {
@@ -739,40 +742,41 @@ describe('TerminalsView rendering and input', () => {
 
   it('mirrors a grid another viewer set until this tile is used again', async () => {
     await view.mountWith([terminal()]);
+    readyAll([terminal()]);
     await wait(150);
     const xterm = terminalInstances[0];
-    expect(resizeTerminalMock).toHaveBeenCalledWith('term-1', 100, 32);
-    resizeTerminalMock.mockClear();
+    expect(terminalResizeMock).toHaveBeenCalledWith('term-1', 100, 32);
+    terminalResizeMock.mockClear();
 
     // Output is laid out for the PTY grid, so the tile renders that grid.
     streams[0].handlers.onEvent({
       type: 'terminal_state',
-      sequence: 1,
+      sequence: 2,
       terminal: terminal({ columns: 90, rows: 30 }),
     });
     await wait(120);
     expect([xterm.cols, xterm.rows]).toEqual([90, 30]);
     expect(xterm.options.fontSize).toBe(12);
-    expect(resizeTerminalMock).not.toHaveBeenCalled();
+    expect(terminalResizeMock).not.toHaveBeenCalled();
 
     // A grid larger than the tile shrinks the font instead of clipping.
     streams[0].handlers.onEvent({
       type: 'terminal_state',
-      sequence: 2,
+      sequence: 3,
       terminal: terminal({ columns: 200, rows: 40 }),
     });
     await wait(120);
     expect([xterm.cols, xterm.rows]).toEqual([200, 40]);
     expect(xterm.options.fontSize).toBeLessThanOrEqual(6);
     expect(xterm.options.fontSize).toBeGreaterThanOrEqual(4);
-    expect(resizeTerminalMock).not.toHaveBeenCalled();
+    expect(terminalResizeMock).not.toHaveBeenCalled();
 
     // Typing makes this tile the one the PTY follows again.
     xterm.onDataCallback('x');
     await wait(120);
     expect([xterm.cols, xterm.rows]).toEqual([100, 32]);
     expect(xterm.options.fontSize).toBe(12);
-    expect(resizeTerminalMock).toHaveBeenCalledWith('term-1', 100, 32);
+    expect(terminalResizeMock).toHaveBeenCalledWith('term-1', 100, 32);
   });
 
   it('keeps the live tiles while a list refresh fails', async () => {
@@ -828,7 +832,7 @@ describe('TerminalsView voice and dictation', () => {
     ).rejects.toThrow('group_not_found');
     expect(context().selected_group_id).toBe('review');
     expect(killTerminalMock).not.toHaveBeenCalled();
-    expect(sendTerminalInputMock).not.toHaveBeenCalled();
+    expect(terminalInputMock).not.toHaveBeenCalled();
   });
 
   it('records from the tile bar and pastes through xterm into the original terminal without Enter', async () => {
@@ -879,7 +883,7 @@ describe('TerminalsView voice and dictation', () => {
     expect(terminalInstances[1].paste).not.toHaveBeenCalled();
     expect(terminalInstances[0].focus).not.toHaveBeenCalled();
     await wait(30);
-    expect(sendTerminalInputMock).toHaveBeenCalledWith(
+    expect(terminalInputMock).toHaveBeenCalledWith(
       'term-1',
       'Bitte prüfen und ergänzen.',
     );

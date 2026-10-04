@@ -15,11 +15,9 @@ from core.runs import RunExecutionOwner
 from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
 from core.tools import terminal_backend
 from core.tools.bash import get_shell_env, reset_shell_env_cache
-from core.tools.process_manager import log_background_task_result
 from core.tools.terminal_backend import (
     TerminalAdapter,
     TerminalAdapterFactory,
-    TerminalRenderer,
     default_terminal_argv,
     spawn_terminal_adapter,
 )
@@ -40,8 +38,14 @@ from core.utils.paths import model_path
 from core.utils.processes import process_tree_runs
 
 from ._terminal_catalog import TerminalCatalog
-from ._terminal_events import TerminalEvents
-from ._terminal_io import TerminalSessionIO
+from ._terminal_launch import shell_launch
+from ._terminal_render_host import TerminalRenderHost
+from ._terminal_session import (
+    TerminalLaunch,
+    TerminalObservation,
+    TerminalSession,
+    TerminalSessionServices,
+)
 from ._terminal_state import (
     TERMINAL_ACTIVITY_QUIET_SECONDS,
     TERMINAL_DEFAULT_COLUMNS,
@@ -65,6 +69,7 @@ from ._terminal_state import (
     TerminalCapacityError,
     TerminalChangedCallback,
     TerminalClosedError,
+    TerminalInfo,
     TerminalLaunchError,
     TerminalManagerError,
     TerminalNotAttachedError,
@@ -72,12 +77,9 @@ from ._terminal_state import (
     TerminalNotOwnedError,
     TerminalOwner,
     TerminalProgramNotRunningError,
-    TerminalSession,
     TerminalStaleScreenError,
     TerminalState,
     TerminalStreamEvent,
-    _finish_files,
-    _require_live,
     _utc_now,
     _validate_dimensions,
     _validate_owner,
@@ -87,7 +89,12 @@ _LOGGER = get_logger("tools.terminal_manager")
 
 
 class TerminalManager:
-    """Own Agent and manually started interactive terminal processes."""
+    """Own Agent and manually started interactive terminal processes.
+
+    Each process is a ``TerminalSession``; the manager admits, finds and
+    authorizes them, applies scope lifecycle, and hands out ``TerminalInfo``
+    views. Operator groups, ordering and summaries belong to the catalog.
+    """
 
     def __init__(
         self,
@@ -98,6 +105,7 @@ class TerminalManager:
         groups_path: Path | None = None,
         data_dir: Path | None = None,
         adapter_factory: TerminalAdapterFactory | None = None,
+        render_host: TerminalRenderHost | None = None,
         scrollback_lines: int = TERMINAL_SCROLLBACK_LINES,
         finished_session_ttl: timedelta = TERMINAL_FINISHED_TTL,
         sweep_interval_seconds: float = TERMINAL_SWEEP_INTERVAL_SECONDS,
@@ -120,7 +128,10 @@ class TerminalManager:
             groups_path=groups_path,
             data_dir=data_dir,
         )
-        self._adapter_factory = adapter_factory or spawn_terminal_adapter
+        self._adapter_factory: TerminalAdapterFactory = adapter_factory or spawn_terminal_adapter
+        # A host passed in belongs to the caller, which closes it.
+        self._owns_render_host = render_host is None
+        self._render_host = render_host or TerminalRenderHost()
         self._scrollback_lines = scrollback_lines
         self._finished_session_ttl = finished_session_ttl
         self._sweep_interval_seconds = sweep_interval_seconds
@@ -129,24 +140,28 @@ class TerminalManager:
         self._pending_execution_spawns: dict[asyncio.Task[TerminalSession], RunExecutionOwner] = {}
         self._closed_execution_groups: set[tuple[str, str, str]] = set()
         self._closed = False
+        self._program_probe = program_probe
         self._reader_executor = ThreadPoolExecutor(
             max_workers=TERMINAL_MAX_LIVE_GLOBAL, thread_name_prefix="vbot-terminal-read"
         )
         self._catalog = TerminalCatalog(
-            self._sessions, self._operator_store, self._terminate_session
+            self._operator_store,
+            lambda: [session.info() for session in self._sessions.values()],
+            self._terminate_by_id,
         )
-        self._events = TerminalEvents(self._catalog)
-        self._program_probe = program_probe
-        self._io = TerminalSessionIO(
-            self._events,
-            self._reader_executor,
-            trigger_service,
+        self._services = TerminalSessionServices(
+            trigger_service=trigger_service,
+            reader_executor=self._reader_executor,
             activity_quiet_seconds=activity_quiet_seconds,
             monotonic=monotonic,
             sleep=sleep,
             program_probe=program_probe,
+            operator_summary=self._catalog.summary,
+            changed=self._catalog.notify_changed,
         )
         self._sweeper_task: asyncio.Task[None] | None = None
+
+    # Operator catalog
 
     def add_changed_callback(self, callback: TerminalChangedCallback) -> Callable[[], None]:
         """Notify transport edges when operator-visible Terminal state changes."""
@@ -160,33 +175,6 @@ class TerminalManager:
         """Return operator-visible groups: user/agent groups, then the shared
         manual automatic group, then one automatic group per active Agent."""
         return self._catalog.list_groups_for_operator()
-
-    async def running_programs_for_operator(self) -> dict[str, bool]:
-        """Whether each live manual Terminal's launch program still runs in it.
-
-        Keyed by terminal id, for Terminals started with a launch command that
-        have not finished. The program is the command's file name without its
-        extension (``codex`` for ``C:\\bin\\codex.cmd``), looked up in the
-        Terminal's process tree with the probe that guards expected-program
-        input, off the Event Loop; a tree that cannot be inspected reads as not
-        running. The shell stays open after its program ends or fails to start,
-        so the Terminal's state alone cannot tell.
-        """
-        checks = [
-            (session.terminal_id, session.adapter.pid, program)
-            for session in self._sessions.values()
-            if session.finished_at is None
-            and session.state not in {"exited", "error"}
-            and (program := _launch_program(session.launch_command))
-        ]
-        if not checks:
-            return {}
-        probe = self._program_probe
-
-        def run_checks() -> dict[str, bool]:
-            return {terminal_id: probe(pid, program) for terminal_id, pid, program in checks}
-
-        return await asyncio.to_thread(run_checks)
 
     def list_operator_launch_history(self) -> list[dict[str, Any]]:
         """Return newest-first manual launch configurations for operator reuse."""
@@ -212,6 +200,33 @@ class TerminalManager:
         """Resolve an existing named group or create a non-durable Agent group."""
         return self._catalog.resolve_or_create_agent_group(name)
 
+    async def running_programs_for_operator(self) -> dict[str, bool]:
+        """Whether each live manual Terminal's launch program still runs in it.
+
+        Keyed by terminal id, for Terminals started with a launch command that
+        have not finished. The program is the command's file name without its
+        extension (``codex`` for ``C:\\bin\\codex.cmd``), looked up in the
+        Terminal's process tree with the probe that guards expected-program
+        input, off the Event Loop; a tree that cannot be inspected reads as not
+        running. The shell stays open after its program ends or fails to start,
+        so the Terminal's state alone cannot tell.
+        """
+        checks = [
+            (session.terminal_id, session.pid, program)
+            for session in self._sessions.values()
+            if not session.finished and (program := _launch_program(session.launch.launch_command))
+        ]
+        if not checks:
+            return {}
+        probe = self._program_probe
+
+        def run_checks() -> dict[str, bool]:
+            return {terminal_id: probe(pid, program) for terminal_id, pid, program in checks}
+
+        return await asyncio.to_thread(run_checks)
+
+    # Lifecycle
+
     def start(self) -> None:
         """Start bounded retention cleanup when an event loop is available."""
         if self._sweeper_task is not None and not self._sweeper_task.done():
@@ -228,30 +243,8 @@ class TerminalManager:
         if self._sweeper_task is not None:
             self._sweeper_task.cancel()
             self._sweeper_task = None
-        failures: list[str] = []
-        for session in list(self._sessions.values()):
-            session.suppress_exit_attention = True
-            self._io._cancel_delivery(session)
-            if session.termination_pending or session.state not in {"exited", "error"}:
-                session.termination_pending = True
-                try:
-                    terminal_backend.terminate_process_tree(
-                        session.adapter, targets=session.termination_targets
-                    )
-                except OSError:
-                    failures.append(session.terminal_id)
-                    continue
-                session.termination_pending = False
-            session.adapter.close()
-            for task in (
-                session.reader_task,
-                session.initial_input_task,
-                session.operator_command_task,
-                session.settle_task,
-            ):
-                if task is not None and not task.done():
-                    task.cancel()
-            _finish_files(session)
+        sessions = list(self._sessions.values())
+        failures = [session.terminal_id for session in sessions if not session.stop_now()]
         if failures:
             raise TerminalManagerError(
                 "Could not terminate terminal process trees: " + ", ".join(failures)
@@ -259,33 +252,26 @@ class TerminalManager:
         self._reader_executor.shutdown(wait=False, cancel_futures=True)
 
     async def aclose(self) -> None:
-        """Stop all children and await reader, event, notification, and sweep tasks."""
+        """Stop all children, await their tasks, then release the renderer."""
         sweeper = self._sweeper_task
         failure: TerminalManagerError | None = None
         try:
             self.stop()
         except TerminalManagerError as error:
             failure = error
-        tasks: list[asyncio.Task[Any]] = []
-        tasks.extend(self._pending_spawns)
+        tasks: list[asyncio.Task[Any]] = list(self._pending_spawns)
         if sweeper is not None and not sweeper.done():
             tasks.append(sweeper)
         for session in self._sessions.values():
-            if session.termination_pending:
-                continue
-            for task in (
-                session.reader_task,
-                session.initial_input_task,
-                session.operator_command_task,
-                session.settle_task,
-                session.notification_task,
-            ):
-                if task is not None and not task.done():
-                    tasks.append(task)
+            tasks.extend(session.pending_tasks())
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        if self._owns_render_host:
+            await asyncio.to_thread(self._render_host.close)
         if failure is not None:
             raise failure
+
+    # Starting terminals
 
     async def spawn(
         self,
@@ -301,13 +287,17 @@ class TerminalManager:
         name: str | None = None,
         group_id: str | None = None,
         execution_owner: RunExecutionOwner | None = None,
-    ) -> TerminalSession:
-        """Start one Agent-owned program behind PTY/ConPTY."""
+    ) -> TerminalInfo:
+        """Start one Agent-owned program behind PTY/ConPTY with its exact argv."""
         _validate_owner(owner)
-        return await self._spawn(
+        if not argv or not argv[0]:
+            raise ValueError("Terminal command must not be empty")
+        if any(not isinstance(token, str) for token in argv):
+            raise ValueError("Terminal command and arguments must be strings")
+        session = await self._spawn(
             owner,
             argv,
-            cwd=cwd,
+            launch=TerminalLaunch(command=argv[0], arguments=tuple(argv[1:]), cwd=cwd),
             env=env,
             columns=columns,
             rows=rows,
@@ -317,6 +307,7 @@ class TerminalManager:
             group_id=group_id,
             execution_owner=execution_owner,
         )
+        return session.info()
 
     async def spawn_for_operator(
         self,
@@ -332,66 +323,75 @@ class TerminalManager:
     ) -> dict[str, Any]:
         """Start one manual Terminal Session that behaves like a normal terminal.
 
-        A requested command runs inside the interactive shell instead of as the
-        bare PTY child, so the Session keeps a live prompt after the program
-        ends, is interrupted, or is stopped. The command is entered through the
-        existing initial-input path, which means the exact launch command stays
-        available as metadata and the Agent-owned spawn path (exact argv) is
-        untouched.
+        Without a command the interactive shell starts with *arguments*. A
+        requested command runs inside that shell, handed over through the
+        shell's own start options: the shell loads its profile, runs the
+        program, and keeps its prompt after the program ends or is interrupted.
         """
         environment = await get_shell_env()
+        shell_argv = default_terminal_argv(environment)
+        workdir = cwd or Path.home()
         if command is None:
-            argv = default_terminal_argv(environment)
-            argv.extend(arguments)
-            launch_command = None
-            launch_arguments: tuple[str, ...] = ()
+            argv = [*shell_argv, *arguments]
+            launch = TerminalLaunch(command=argv[0], arguments=tuple(argv[1:]), cwd=workdir)
+            session = await self._spawn(
+                None,
+                argv,
+                launch=launch,
+                env=None,
+                columns=columns,
+                rows=rows,
+                origin_run_id=None,
+                name=name,
+                group_id=group_id,
+            )
         else:
-            argv = default_terminal_argv(environment)
-            launch_command = command
-            launch_arguments = tuple(arguments)
-        session = await self._spawn(
-            None,
-            argv,
-            cwd=cwd or Path.home(),
-            env=None,
-            columns=columns,
-            rows=rows,
-            origin_run_id=None,
-            name=name,
-            launch_command=launch_command,
-            launch_arguments=launch_arguments,
-            group_id=group_id,
-        )
-        if launch_command is not None:
-            session.operator_command_task = asyncio.create_task(
-                self._io._send_operator_command(session),
-                name=f"terminal:{session.terminal_id}:operator-command",
+            start = shell_launch(shell_argv, command, arguments, environment=environment)
+            launch = TerminalLaunch(
+                command=shell_argv[0],
+                arguments=tuple(shell_argv[1:]),
+                cwd=workdir,
+                launch_command=command,
+                launch_arguments=tuple(arguments),
             )
-            session.operator_command_task.add_done_callback(
-                lambda task: log_background_task_result(
-                    task, f"Terminal operator command failed for terminal={session.terminal_id}"
+            try:
+                session = await self._spawn(
+                    None,
+                    start.argv,
+                    launch=launch,
+                    env=start.environment or None,
+                    columns=columns,
+                    rows=rows,
+                    origin_run_id=None,
+                    name=name,
+                    group_id=group_id,
+                    command_line=start.command_line,
+                    cleanup=start.remove_scratch if start.scratch is not None else None,
                 )
-            )
+            except BaseException:
+                start.remove_scratch()
+                raise
         remembered_workdir = launch_workdir
         if remembered_workdir is None and cwd is not None:
             remembered_workdir = str(cwd)
         self._operator_store.remember_launch(
-            command=launch_command,
-            arguments=launch_arguments,
+            command=launch.launch_command,
+            arguments=launch.launch_arguments,
             workdir=remembered_workdir,
         )
-        return self._catalog._operator_summary(session)
+        return self._catalog.summary(session.info())
 
     async def _spawn(
         self,
         owner: TerminalOwner | None,
         argv: Sequence[str],
+        *,
+        execution_owner: RunExecutionOwner | None = None,
         **kwargs: Any,
     ) -> TerminalSession:
         """Reserve capacity before starting work and retain ownership through cancellation."""
         if self._closed:
             raise TerminalClosedError("Terminal Session is no longer running")
-        execution_owner = kwargs.get("execution_owner")
         if (
             execution_owner is not None
             and (
@@ -403,7 +403,9 @@ class TerminalManager:
         ):
             raise TerminalClosedError("Terminal Session is no longer running")
         self._enforce_capacity(owner)
-        task = asyncio.create_task(self._spawn_admitted(owner, argv, **kwargs))
+        task = asyncio.create_task(
+            self._spawn_admitted(owner, argv, execution_owner=execution_owner, **kwargs)
+        )
         self._pending_spawns[task] = owner
         if execution_owner is not None:
             self._pending_execution_spawns[task] = execution_owner
@@ -428,144 +430,128 @@ class TerminalManager:
             session = await task
         except Exception:
             return
-        await self._terminate_session(session, suppress_attention=True)
+        await session.terminate(suppress_attention=True)
 
     async def _spawn_admitted(
         self,
         owner: TerminalOwner | None,
         argv: Sequence[str],
         *,
-        cwd: Path,
+        launch: TerminalLaunch,
         env: Mapping[str, str] | None,
         columns: int,
         rows: int,
         origin_run_id: str | None,
         initial_text: str | None = None,
         name: str | None = None,
-        launch_command: str | None = None,
-        launch_arguments: tuple[str, ...] = (),
         group_id: str | None = None,
         execution_owner: RunExecutionOwner | None = None,
+        command_line: str | None = None,
+        cleanup: Callable[[], None] | None = None,
     ) -> TerminalSession:
-        """Start one unmodified program behind PTY/ConPTY."""
-        if not argv or not argv[0]:
-            raise ValueError("Terminal command must not be empty")
-        if any(not isinstance(token, str) for token in argv):
-            raise ValueError("Terminal command and arguments must be strings")
+        """Start one process behind PTY/ConPTY and its Terminal Session."""
         _validate_dimensions(columns, rows)
+        cwd = launch.cwd
         if not cwd.is_dir():
             raise ValueError(f"Terminal workdir is not a directory: {model_path(cwd)}")
         if group_id is not None:
-            self._catalog._require_group(group_id)
+            self._catalog.require_group(group_id)
 
         log_path: Path | None = None
         log_handle: TextIO | None = None
         log_lease: TemporaryFileLease | None = None
-        process_env = await get_shell_env()
-        # A service or pipe-based parent may advertise no terminal. The child
-        # has a real VT here; preserve only an explicit caller override.
-        if process_env.get("TERM") in {None, "", "dumb"}:
-            process_env["TERM"] = "xterm-256color"
-        if env is not None:
-            process_env.update(env)
-
+        screen = None
         try:
+            await asyncio.to_thread(self._render_host.prepare)
+            screen = self._render_host.open_screen(
+                columns, rows, scrollback_lines=self._scrollback_lines
+            )
             log_path, log_handle, log_lease = self._open_raw_log()
-            for attempt in range(2):
-                try:
-                    adapter = await asyncio.to_thread(
-                        self._adapter_factory, list(argv), cwd, process_env, rows, columns
-                    )
-                    break
-                except FileNotFoundError:
-                    if attempt:
-                        raise
-                    reset_shell_env_cache()
-                    process_env = await get_shell_env()
-                    if process_env.get("TERM") in {None, "", "dumb"}:
-                        process_env["TERM"] = "xterm-256color"
-                    if env is not None:
-                        process_env.update(env)
+            adapter = await self._start_process(argv, cwd, env, rows, columns, command_line)
             if self._closed:
                 await asyncio.to_thread(terminal_backend.terminate_process_tree, adapter)
                 raise TerminalClosedError("Terminal Session is no longer running")
         except Exception as error:
+            if screen is not None:
+                screen.close()
             if log_handle is not None:
                 log_handle.close()
             if log_lease is not None:
                 log_lease.finish()
+            if isinstance(error, TerminalClosedError):
+                raise
             raise TerminalLaunchError(f"Terminal process could not be started: {error}") from error
 
         terminal_id = new_id("term", claim=lambda candidate: candidate not in self._sessions)
         session = TerminalSession(
-            terminal_id=terminal_id,
+            terminal_id,
             owner=owner,
-            lifecycle_owner=owner,
-            attachment=owner,
             adapter=adapter,
-            renderer=TerminalRenderer(columns, rows, scrollback_lines=self._scrollback_lines),
-            command=argv[0],
-            arguments=tuple(argv[1:]),
-            launch_command=launch_command,
-            launch_arguments=launch_arguments,
+            screen=screen,
+            launch=launch,
             name=name,
             group_id=group_id,
-            cwd=cwd,
-            state="starting" if initial_text is not None else "ready",
-            started_at=_utc_now(),
             origin_run_id=origin_run_id,
-            activity_origin_run_id=None,
-            suppress_until_activity=(owner is not None and initial_text is None),
+            execution_owner=execution_owner,
+            awaiting_initial_input=initial_text is not None,
             log_path=log_path,
             log_handle=log_handle,
             log_lease=log_lease,
-            execution_owner=execution_owner,
-            activity_execution_owner=execution_owner,
+            cleanup=cleanup,
+            services=self._services,
         )
         if group_id is not None:
-            self._catalog._append_group_terminal(group_id, terminal_id)
+            self._catalog.add_to_group(group_id, terminal_id)
         self._sessions[terminal_id] = session
-        session.reader_task = asyncio.create_task(
-            self._io._read_terminal(session), name=f"terminal:{terminal_id}:reader"
-        )
-        session.reader_task.add_done_callback(
-            lambda task: log_background_task_result(
-                task, f"Terminal reader failed for terminal={terminal_id}"
-            )
-        )
-        if initial_text is not None and origin_run_id is not None:
-            session.initial_input_task = asyncio.create_task(
-                self._io._send_initial_input_when_ready(
-                    session, initial_text, origin_run_id=origin_run_id
-                ),
-                name=f"terminal:{terminal_id}:initial-input",
-            )
-            session.initial_input_task.add_done_callback(
-                lambda task: log_background_task_result(
-                    task, f"Terminal initial input failed for terminal={terminal_id}"
-                )
-            )
-        self._events._publish_state(session)
+        session.start(initial_text=initial_text)
         return session
 
-    def list_sessions(self) -> list[TerminalSession]:
+    async def _start_process(
+        self,
+        argv: Sequence[str],
+        cwd: Path,
+        env: Mapping[str, str] | None,
+        rows: int,
+        columns: int,
+        command_line: str | None,
+    ) -> TerminalAdapter:
+        """Start the process; a program missing from a stale PATH gets one fresh retry."""
+        for attempt in range(2):
+            process_env = await get_shell_env()
+            # A service or pipe-based parent may advertise no terminal. The child
+            # has a real VT here; preserve only an explicit caller override.
+            if process_env.get("TERM") in {None, "", "dumb"}:
+                process_env["TERM"] = "xterm-256color"
+            if env is not None:
+                process_env.update(env)
+            try:
+                return await asyncio.to_thread(
+                    self._adapter_factory,
+                    list(argv),
+                    cwd,
+                    process_env,
+                    rows,
+                    columns,
+                    command_line=command_line,
+                )
+            except FileNotFoundError:
+                if attempt:
+                    raise
+                reset_shell_env_cache()
+        raise AssertionError("unreachable")
+
+    # Finding and attaching terminals
+
+    def list_terminals(self) -> list[TerminalInfo]:
         """Return all retained Terminal Sessions discoverable for attachment."""
         return sorted(
-            self._sessions.values(),
-            key=lambda session: session.started_at,
+            (session.info() for session in self._sessions.values()),
+            key=lambda info: info.started_at,
         )
 
-    def get_session(self, terminal_id: str, owner: TerminalOwner) -> TerminalSession:
+    def terminal(self, terminal_id: str, owner: TerminalOwner) -> TerminalInfo:
         """Return a Terminal Session attached to the exact vBot Session."""
-        session = self._sessions.get(terminal_id)
-        if session is None:
-            raise TerminalNotFoundError(f"Terminal Session not found: {terminal_id}")
-        if session.attachment != owner:
-            raise TerminalNotOwnedError(
-                f"Terminal Session is not attached to this vBot Session; attach it first "
-                f"(id: {terminal_id})"
-            )
-        return session
+        return self._attached(terminal_id, owner).info()
 
     def attach(
         self,
@@ -574,31 +560,14 @@ class TerminalManager:
         *,
         origin_run_id: str,
         execution_owner: RunExecutionOwner | None = None,
-    ) -> tuple[TerminalSession, bool]:
+    ) -> tuple[TerminalInfo, bool]:
         """Attach one live Terminal Session without changing its process or lifecycle."""
         _validate_owner(attachment)
-        session = self._catalog._get_for_operator(terminal_id)
-        _require_live(session)
-        if session.attachment is not None and session.attachment != attachment:
-            raise TerminalAlreadyAttachedError(
-                "Terminal Session is already attached to another vBot Session."
-            )
-        changed = session.attachment is None
+        session = self._get(terminal_id)
+        changed = session.attach(
+            attachment, origin_run_id=origin_run_id, execution_owner=execution_owner
+        )
         if changed:
-            session.observed_screen = None
-        session.attachment = attachment
-        session.activity_origin_run_id = origin_run_id
-        session.activity_execution_owner = execution_owner
-        session.acknowledged_attention_revision = session.attention_revision
-        session.settled_delivery_enabled = True
-        # An explicit Agent attach is deliberate contact: the Agent sees the
-        # current screen in the attach result, so the startup suppression no
-        # longer applies and delivery resumes normally.
-        session.suppress_until_activity = False
-        if session.state == "working":
-            self._io._schedule_settle(session, notify=True)
-        if changed:
-            self._events._publish_state(session)
             _LOGGER.info(
                 "Attached Terminal Session (terminal=%s agent=%s session=%s project=%s)",
                 terminal_id,
@@ -606,15 +575,14 @@ class TerminalManager:
                 attachment.session_id,
                 attachment.project_id,
             )
-        return session, changed
+        return session.info(), changed
 
-    def detach(self, terminal_id: str, attachment: TerminalOwner) -> TerminalSession:
+    def detach(self, terminal_id: str, attachment: TerminalOwner) -> TerminalInfo:
         """Remove only one exact vBot Session attachment."""
-        session = self._catalog._get_for_operator(terminal_id)
+        session = self._get(terminal_id)
         if session.attachment != attachment:
             raise TerminalNotAttachedError("Terminal Session is not attached to this vBot Session.")
-        self._io._detach_session(session)
-        self._events._publish_state(session)
+        session.detach()
         _LOGGER.info(
             "Detached Terminal Session (terminal=%s agent=%s session=%s project=%s)",
             terminal_id,
@@ -622,18 +590,20 @@ class TerminalManager:
             attachment.session_id,
             attachment.project_id,
         )
-        return session
+        return session.info()
+
+    # Operator access (no attachment required)
 
     async def watch_for_operator(self, terminal_id: str) -> AsyncGenerator[TerminalStreamEvent]:
         """Yield an authoritative VT snapshot followed by sequenced live events."""
-        session = self._catalog._get_for_operator(terminal_id)
-        async with contextlib.aclosing(self._events.watch_for_operator(session)) as events:
+        session = self._get(terminal_id)
+        async with contextlib.aclosing(session.watch()) as events:
             async for event in events:
                 yield event
 
-    def read_for_operator(self, terminal_id: str) -> dict[str, Any]:
+    async def read_for_operator(self, terminal_id: str) -> dict[str, Any]:
         """Read a bounded screen without changing any Agent's observation or binding."""
-        return self._events.read_for_operator(self._catalog._get_for_operator(terminal_id))
+        return await self._get(terminal_id).read_for_operator()
 
     async def send_operator_input(
         self,
@@ -659,40 +629,39 @@ class TerminalManager:
             not isinstance(expected_program, str) or not expected_program.strip()
         ):
             raise ValueError("expected_program must be a non-empty program name")
-        session = self._catalog._get_for_operator(terminal_id)
-        await self._io.send_operator_input(
-            session,
+        session = self._get(terminal_id)
+        await session.send_operator_input(
             data,
             expected_screen_revision=expected_screen_revision,
             expected_program=expected_program,
         )
-        return self._catalog._operator_summary(session)
+        return self._catalog.summary(session.info())
 
     async def resize_for_operator(
         self, terminal_id: str, *, columns: int, rows: int
     ) -> dict[str, Any]:
         """Resize an operator-selected Terminal Session."""
-        session = self._catalog._get_for_operator(terminal_id)
-        await self._io._resize_session(session, columns=columns, rows=rows)
-        return self._catalog._operator_summary(session)
+        session = self._get(terminal_id)
+        await session.resize(columns, rows)
+        return self._catalog.summary(session.info())
 
     async def kill_for_operator(self, terminal_id: str) -> dict[str, Any]:
         """Explicitly stop an operator-selected Terminal Session."""
-        session = self._catalog._get_for_operator(terminal_id)
-        await self._terminate_session(session, suppress_attention=True)
-        return self._catalog._operator_summary(session)
+        session = self._get(terminal_id)
+        await session.terminate(suppress_attention=True)
+        return self._catalog.summary(session.info())
 
     def forget_for_operator(self, terminal_id: str) -> dict[str, Any]:
         """Remove one finished Terminal Session from the retained operator catalog."""
-        session = self._catalog._get_for_operator(terminal_id)
-        if session.state not in {"exited", "error"} or session.finished_at is None:
+        session = self._get(terminal_id)
+        info = session.info()
+        if not info.finished or info.finished_at is None:
             raise ValueError("A running Terminal Session must be stopped before removal")
-        summary = self._catalog._operator_summary(session)
-        self._sessions.pop(terminal_id)
-        self._io._cancel_delivery(session)
-        _finish_files(session)
-        self._catalog._notify_changed(terminal_id)
+        summary = self._catalog.summary(info)
+        self._forget(session)
         return summary
+
+    # Agent access (attachment required)
 
     async def snapshot(
         self,
@@ -703,19 +672,18 @@ class TerminalManager:
         start_line: int | None = None,
         include_name: bool = True,
     ) -> dict[str, Any]:
-        """Return one bounded rendered status page.
+        """Return the screen and one history page.
 
-        ``start_line`` addresses the whole buffer by absolute zero-based line
-        (Hermes ``read_terminal`` contract); omit it for the newest page.
+        ``start_line`` is an absolute history line; omit it for the lines
+        directly above the screen. The ``observation`` entry identifies the
+        shown screen for ``acknowledge_screen``.
         """
         if not 1 <= lines <= TERMINAL_STATUS_MAX_LINES:
             raise ValueError(f"lines must be between 1 and {TERMINAL_STATUS_MAX_LINES}")
         if start_line is not None and start_line < 0:
             raise ValueError("start_line must be a non-negative integer")
-        session = self.get_session(terminal_id, owner)
-        return await self._events.snapshot(
-            session, lines=lines, start_line=start_line, include_name=include_name
-        )
+        session = self._attached(terminal_id, owner)
+        return await session.snapshot(lines=lines, start_line=start_line, include_name=include_name)
 
     async def wait_for_attention(
         self,
@@ -726,25 +694,10 @@ class TerminalManager:
         timeout_ms: int,
     ) -> tuple[dict[str, Any], bool]:
         """Wait for a newer attention revision without owning the child lifetime."""
-        session = self.get_session(terminal_id, owner)
-        deadline = asyncio.get_running_loop().time() + timeout_ms / 1000
-        timed_out = False
-        while session.attention_revision <= after_revision and session.state not in {
-            "exited",
-            "error",
-        }:
-            session.attention_event.clear()
-            if session.attention_revision > after_revision:
-                break
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                timed_out = True
-                break
-            try:
-                await asyncio.wait_for(session.attention_event.wait(), timeout=remaining)
-            except TimeoutError:
-                timed_out = True
-                break
+        session = self._attached(terminal_id, owner)
+        timed_out = await session.wait_for_attention(
+            after_revision=after_revision, timeout_ms=timeout_ms
+        )
         return await self.snapshot(terminal_id, owner, include_name=False), timed_out
 
     async def send_input(
@@ -760,9 +713,7 @@ class TerminalManager:
         execution_owner: RunExecutionOwner | None = None,
     ) -> dict[str, Any]:
         """Write exact data or named terminal input and track generic PTY activity."""
-        session = self.get_session(terminal_id, owner)
-        return await self._io.send_input(
-            session,
+        return await self._attached(terminal_id, owner).send_input(
             text=text,
             key=key,
             expected_screen_revision=expected_screen_revision,
@@ -780,18 +731,33 @@ class TerminalManager:
         rows: int,
     ) -> dict[str, Any]:
         """Resize both the host PTY/ConPTY and rendered screen."""
-        session = self.get_session(terminal_id, owner)
-        return await self._io._resize_session(session, columns=columns, rows=rows)
+        return await self._attached(terminal_id, owner).resize(columns, rows)
 
     async def kill(self, terminal_id: str, owner: TerminalOwner) -> dict[str, Any]:
         """Explicitly terminate one Terminal Session without an automatic exit wakeup."""
-        session = self.get_session(terminal_id, owner)
-        await self._terminate_session(session, suppress_attention=True)
+        session = self._attached(terminal_id, owner)
+        await session.terminate(suppress_attention=True)
         return await self.snapshot(terminal_id, owner, include_name=False)
+
+    def acknowledge_screen(
+        self, terminal_id: str, owner: TerminalOwner, observation: TerminalObservation
+    ) -> bool:
+        """Remember a durably delivered screen; False when the attachment is gone."""
+        session = self._sessions.get(terminal_id)
+        if session is None or session.attachment != owner:
+            return False
+        session.acknowledge_screen(observation)
+        return True
+
+    def acknowledge_attention(self, terminal_id: str, owner: TerminalOwner, revision: int) -> None:
+        """Cancel equivalent automatic delivery after a manual result is durable."""
+        self._attached(terminal_id, owner).acknowledge_attention(revision)
+
+    # Scope lifecycle
 
     def has_execution_work(self, owner: RunExecutionOwner) -> bool:
         return any(value == owner for value in self._pending_execution_spawns.values()) or any(
-            session.execution_owner == owner and session.state not in {"exited", "error"}
+            session.execution_owner == owner and not session.finished
             for session in self._sessions.values()
         )
 
@@ -825,7 +791,7 @@ class TerminalManager:
         ]
         try:
             await asyncio.gather(
-                *(self._terminate_session(session, suppress_attention=True) for session in sessions)
+                *(session.terminate(suppress_attention=True) for session in sessions)
             )
         finally:
             # The group owner settles every Run of the group before closing its
@@ -836,154 +802,86 @@ class TerminalManager:
 
     async def close_scope(self, owner: TerminalOwner) -> None:
         """Apply Terminal lifecycle and attachment cleanup for a removed Session."""
-        sessions = [
-            session for session in self._sessions.values() if session.lifecycle_owner == owner
-        ]
-        for session in self._sessions.values():
-            if session.lifecycle_owner != owner and session.attachment == owner:
-                self._io._detach_session(session)
-                self._events._publish_state(session)
-        await asyncio.gather(
-            *(self._terminate_session(session, suppress_attention=True) for session in sessions),
-            return_exceptions=False,
-        )
+        await self._close_matching(lambda scope: scope == owner)
 
     async def close_agent_scope(self, agent_id: str, project_id: str | None) -> None:
         """Apply Terminal lifecycle and attachment cleanup for a removed Agent scope."""
-        sessions = [
-            session
-            for session in self._sessions.values()
-            if session.lifecycle_owner is not None
-            and session.lifecycle_owner.agent_id == agent_id
-            and session.lifecycle_owner.project_id == project_id
-        ]
-        terminating = {session.terminal_id for session in sessions}
-        for session in self._sessions.values():
-            attachment = session.attachment
-            if (
-                session.terminal_id not in terminating
-                and attachment is not None
-                and attachment.agent_id == agent_id
-                and attachment.project_id == project_id
-            ):
-                self._io._detach_session(session)
-                self._events._publish_state(session)
-        await asyncio.gather(
-            *(self._terminate_session(session, suppress_attention=True) for session in sessions),
-            return_exceptions=False,
+        await self._close_matching(
+            lambda scope: scope.agent_id == agent_id and scope.project_id == project_id
         )
 
     async def close_project_scope(self, project_id: str) -> None:
         """Apply Terminal lifecycle and attachment cleanup for a removed Project."""
-        sessions = [
-            session
-            for session in self._sessions.values()
-            if session.lifecycle_owner is not None
-            and session.lifecycle_owner.project_id == project_id
-        ]
-        terminating = {session.terminal_id for session in sessions}
-        for session in self._sessions.values():
-            attachment = session.attachment
-            if (
-                session.terminal_id not in terminating
-                and attachment is not None
-                and attachment.project_id == project_id
-            ):
-                self._io._detach_session(session)
-                self._events._publish_state(session)
-        await asyncio.gather(
-            *(self._terminate_session(session, suppress_attention=True) for session in sessions),
-            return_exceptions=False,
-        )
+        await self._close_matching(lambda scope: scope.project_id == project_id)
 
     def transfer_scope(self, source: TerminalOwner, target: TerminalOwner) -> int:
         """Transfer lifecycle and attachment scopes after a successful Session move."""
-        transferred = 0
+        return sum(session.transfer(source, target) for session in self._sessions.values())
+
+    async def _close_matching(self, matches: Callable[[TerminalOwner], bool]) -> None:
+        """Stop terminals whose lifecycle owner matches; detach the others' attachments."""
+        terminating = [
+            session
+            for session in self._sessions.values()
+            if session.lifecycle_owner is not None and matches(session.lifecycle_owner)
+        ]
         for session in self._sessions.values():
-            lifecycle_matches = session.lifecycle_owner == source
-            attachment_matches = session.attachment == source
-            if lifecycle_matches or attachment_matches:
-                attention = session.attention
-                pending_delivery = (
-                    attachment_matches
-                    and attention is not None
-                    and session.notification_task is not None
-                    and not session.notification_task.done()
-                )
-                if pending_delivery:
-                    self._io._cancel_delivery(session)
-                if lifecycle_matches:
-                    session.lifecycle_owner = target
-                if attachment_matches:
-                    session.attachment = target
-                self._events._publish_state(session)
-                if pending_delivery and attention is not None:
-                    self._io._schedule_attention_delivery(session, attention)
-                transferred += 1
-        return transferred
-
-    def acknowledge_screen(
-        self,
-        terminal_id: str,
-        owner: TerminalOwner,
-        *,
-        screen_revision: int,
-        columns: int,
-        rows: int,
-    ) -> bool:
-        """Remember a durably delivered screen without consuming later resizes."""
-        session = self._sessions.get(terminal_id)
-        if session is None or session.attachment != owner:
-            return False
-        observed = session.observed_screen
-        if observed is None or screen_revision >= observed[0]:
-            session.observed_screen = (screen_revision, columns, rows)
-        return True
-
-    def acknowledge_attention(
-        self,
-        terminal_id: str,
-        owner: TerminalOwner,
-        revision: int,
-    ) -> None:
-        """Cancel equivalent automatic delivery after a manual result is durable."""
-        session = self.get_session(terminal_id, owner)
-        attention = session.attention
-        if attention is None or attention.revision != revision:
-            return
-        session.acknowledged_attention_revision = max(
-            session.acknowledged_attention_revision, revision
+            attachment = session.attachment
+            if session not in terminating and attachment is not None and matches(attachment):
+                session.detach()
+        await asyncio.gather(
+            *(session.terminate(suppress_attention=True) for session in terminating)
         )
-        if attention.details.get("screen_revision") == session.renderer.revision:
-            session.settled_screen_signature = session.renderer.screen_signature()
-        self._io._cancel_delivery(session)
+
+    # Retention
 
     async def sweep_finished(self) -> None:
         """Forget terminal metadata after the bounded inspection window."""
         cutoff = _utc_now() - self._finished_session_ttl
         expired = [
-            terminal_id
-            for terminal_id, session in self._sessions.items()
+            session
+            for session in self._sessions.values()
             if session.finished_at is not None and session.finished_at < cutoff
         ]
-        for terminal_id in expired:
-            session = self._sessions.pop(terminal_id)
-            self._io._cancel_delivery(session)
-            _finish_files(session)
-            self._catalog._notify_changed(terminal_id)
+        for session in expired:
+            self._forget(session)
 
-    async def _terminate_session(
-        self, session: TerminalSession, *, suppress_attention: bool
-    ) -> None:
-        await self._io._terminate_session(session, suppress_attention=suppress_attention)
+    def _forget(self, session: TerminalSession) -> None:
+        self._sessions.pop(session.terminal_id, None)
+        session.release()
+        self._catalog.notify_changed(session.terminal_id)
+
+    async def _sweep_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(self._sweep_interval_seconds)
+                await self.sweep_finished()
+        except asyncio.CancelledError:
+            return
+
+    # Helpers
+
+    def _get(self, terminal_id: str) -> TerminalSession:
+        session = self._sessions.get(terminal_id)
+        if session is None:
+            raise TerminalNotFoundError(f"Terminal Session not found: {terminal_id}")
+        return session
+
+    def _attached(self, terminal_id: str, owner: TerminalOwner) -> TerminalSession:
+        session = self._get(terminal_id)
+        if session.attachment != owner:
+            raise TerminalNotOwnedError(
+                f"Terminal Session is not attached to this vBot Session; attach it first "
+                f"(id: {terminal_id})"
+            )
+        return session
+
+    async def _terminate_by_id(self, terminal_id: str) -> None:
+        await self._get(terminal_id).terminate(suppress_attention=True)
 
     def _enforce_capacity(self, owner: TerminalOwner | None) -> None:
         pending = [owner for task, owner in self._pending_spawns.items() if not task.done()]
-        live = [
-            session
-            for session in self._sessions.values()
-            if session.state not in {"exited", "error"}
-        ]
+        live = [session for session in self._sessions.values() if not session.finished]
         if len(live) + len(pending) >= TERMINAL_MAX_LIVE_GLOBAL:
             raise TerminalCapacityError(
                 f"Live Terminal Session limit reached ({TERMINAL_MAX_LIVE_GLOBAL})"
@@ -1004,13 +902,14 @@ class TerminalManager:
         lease = self._temporary_files.create(TERMINAL_TEMPORARY_CATEGORY, ".log")
         return lease.path, lease.path.open("a", encoding="utf-8", newline=""), lease
 
-    async def _sweep_loop(self) -> None:
-        try:
-            while True:
-                await asyncio.sleep(self._sweep_interval_seconds)
-                await self.sweep_finished()
-        except asyncio.CancelledError:
-            return
+
+def _launch_program(command: str | None) -> str:
+    """The program a launch command starts: its file name without the extension."""
+    if not command or not command.strip():
+        return ""
+    name = command.strip().strip("\"'").replace("\\", "/").rsplit("/", 1)[-1]
+    stem, dot, _extension = name.rpartition(".")
+    return stem if dot and stem else name
 
 
 __all__ = [
@@ -1037,25 +936,18 @@ __all__ = [
     "TerminalCapacityError",
     "TerminalClosedError",
     "TerminalGroup",
+    "TerminalInfo",
     "TerminalLaunchError",
     "TerminalLaunchHistoryEntry",
     "TerminalManager",
     "TerminalManagerError",
     "TerminalNotFoundError",
     "TerminalNotAttachedError",
+    "TerminalObservation",
     "TerminalOwner",
     "TerminalProgramNotRunningError",
-    "TerminalSession",
+    "TerminalRenderHost",
     "TerminalStaleScreenError",
     "TerminalState",
     "agent_group_id",
 ]
-
-
-def _launch_program(command: str | None) -> str:
-    """The program a launch command starts: its file name without the extension."""
-    if not command or not command.strip():
-        return ""
-    name = command.strip().strip("\"'").replace("\\", "/").rsplit("/", 1)[-1]
-    stem, dot, _extension = name.rpartition(".")
-    return stem if dot and stem else name

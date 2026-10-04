@@ -194,8 +194,6 @@ export {
   listTerminals,
   readTerminal,
   startTerminal,
-  sendTerminalInput,
-  resizeTerminal,
   killTerminal,
   forgetTerminal,
   createTerminalGroup,

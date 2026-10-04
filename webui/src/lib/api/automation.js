@@ -18,44 +18,6 @@ export function startTerminal(params = {}, options = {}) {
   return rpc('terminal.start', params, options);
 }
 
-export function sendTerminalInput(terminalId, data, options = {}) {
-  requireNonEmptyString(
-    terminalId,
-    'Terminal id must be a non-empty string',
-    'terminal.input',
-  );
-  requireNonEmptyString(
-    data,
-    'Terminal input must be a non-empty string',
-    'terminal.input',
-  );
-  const { expectedScreenRevision, ...requestOptions } = options;
-  return rpc(
-    'terminal.input',
-    {
-      terminal_id: terminalId,
-      data,
-      ...(expectedScreenRevision === undefined
-        ? {}
-        : { expected_screen_revision: expectedScreenRevision }),
-    },
-    requestOptions,
-  );
-}
-
-export function resizeTerminal(terminalId, columns, rows, options = {}) {
-  requireNonEmptyString(
-    terminalId,
-    'Terminal id must be a non-empty string',
-    'terminal.resize',
-  );
-  return rpc(
-    'terminal.resize',
-    { terminal_id: terminalId, columns, rows },
-    options,
-  );
-}
-
 export function killTerminal(terminalId, options = {}) {
   requireNonEmptyString(
     terminalId,

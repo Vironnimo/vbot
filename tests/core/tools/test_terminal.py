@@ -23,7 +23,7 @@ from core.tools.terminal import (
     TERMINAL_TOOL_PARAMETERS,
     register_terminal_tool,
 )
-from core.tools.terminal_manager import TerminalManager, TerminalOwner
+from core.tools.terminal_manager import TerminalManager, TerminalOwner, TerminalRenderHost
 from core.tools.tools import JsonObject, ToolRegistry, tool_failure
 from core.utils.paths import model_path
 from core.utils.tokens import estimate_json_tokens
@@ -186,13 +186,19 @@ async def test_launch_failure_is_reported_and_releases_capacity(
             env: Mapping[str, str],
             rows: int,
             columns: int,
+            *,
+            command_line: str | None = None,
         ) -> FakeTerminalAdapter:
             if self.failing:
                 raise launch_error
-            return super().__call__(argv, cwd, env, rows, columns)
+            return super().__call__(argv, cwd, env, rows, columns, command_line=command_line)
 
     factory = RecoveringFactory()
-    terminal_manager = TerminalManager(adapter_factory=factory, sweep_interval_seconds=3600)
+    terminal_manager = TerminalManager(
+        adapter_factory=factory,
+        render_host=TerminalRenderHost.in_process(),
+        sweep_interval_seconds=3600,
+    )
     terminal_manager.start()
     try:
         context = make_context(tmp_path)
@@ -203,7 +209,7 @@ async def test_launch_failure_is_reported_and_releases_capacity(
             f"Terminal process could not be started: {launch_error}",
             retryable=False,
         )
-        assert terminal_manager.list_sessions() == []
+        assert terminal_manager.list_terminals() == []
         assert factory.adapters == []
 
         factory.failing = False
@@ -275,7 +281,7 @@ async def test_start_resolves_project_workdirs_by_stable_id_and_relative_workdir
     assert first_data["workdir"] == model_path(first_repo.resolve())
     assert factory.calls[0][1] == first_repo.resolve()
     # The terminal still belongs to the calling Project, not the referenced one.
-    terminal_manager.get_session(
+    terminal_manager.terminal(
         first_data["terminal_id"], TerminalOwner("project-a", "agent-a", "session-a")
     )
 

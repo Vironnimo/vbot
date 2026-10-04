@@ -29,10 +29,18 @@ PYTHON_REPL = (
 )
 
 
-async def eventually(predicate: Callable[[], bool], *, attempts: int = 100) -> None:
+async def screen_until(
+    manager: TerminalManager,
+    terminal_id: str,
+    predicate: Callable[[str], bool],
+    *,
+    attempts: int = 100,
+) -> str:
+    """Return the rendered screen once *predicate* accepts it."""
     for _ in range(attempts):
-        if predicate():
-            return
+        screen = str((await manager.read_for_operator(terminal_id))["screen"])
+        if predicate(screen):
+            return screen
         await asyncio.sleep(0.05)
     raise AssertionError("condition was not reached")
 
@@ -47,32 +55,25 @@ async def main() -> int:
             cwd=Path.home(),
         )
         terminal_id = result["terminal_id"]
-        session = manager._sessions[terminal_id]
         print(f"launched: shell={result['command']!r} launch_command={result['launch_command']!r}")
 
-        await eventually(
-            lambda: "READY" in session.renderer.screen_text(),
-            attempts=120,
-        )
-        print("PASS: command was entered into the shell and its output appears")
+        await screen_until(manager, terminal_id, lambda screen: "READY" in screen, attempts=120)
+        print("PASS: the shell ran the command and its output appears")
 
         await manager.send_operator_input(terminal_id, "hello-shell\r")
-        await eventually(lambda: "ECHO:hello-shell" in session.renderer.screen_text())
-        print("PASS: the shell session still accepts interactive input")
+        await screen_until(manager, terminal_id, lambda screen: "ECHO:hello-shell" in screen)
+        print("PASS: the program still accepts interactive input")
 
         await manager.send_operator_input(terminal_id, "\x03")
-        await eventually(
-            lambda: (
-                session.renderer.screen_text().endswith(">")
-                or session.renderer.screen_text().endswith("$")
-            )
+        screen = await screen_until(
+            manager, terminal_id, lambda screen: screen.endswith((">", "$"))
         )
         print("--- screen after Ctrl+C ---")
-        print(repr(session.renderer.screen_text()))
+        print(repr(screen))
         print("---------------------------")
         print("PASS: Ctrl+C ended the foreground program; the shell prompt is back")
         await manager.send_operator_input(terminal_id, "echo SHELL-ALIVE\r")
-        await eventually(lambda: "SHELL-ALIVE" in session.renderer.screen_text())
+        await screen_until(manager, terminal_id, lambda screen: "SHELL-ALIVE" in screen)
         print("PASS: the shell accepts further commands after Ctrl+C")
 
         summary = manager.list_for_operator()[0]

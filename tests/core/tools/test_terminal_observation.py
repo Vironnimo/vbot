@@ -8,7 +8,7 @@ from typing import Any, cast
 
 import pytest
 
-from core.tools.terminal_manager import TerminalManager, TerminalOwner
+from core.tools.terminal_manager import TerminalInfo, TerminalManager, TerminalOwner
 from core.tools.tools import JsonObject
 from tests.core.tools.terminal_helpers import call, details, make_context
 from tests.core.tools.terminal_helpers import manager as manager
@@ -18,17 +18,29 @@ from tests.core.tools.terminal_manager_helpers import shell_environment as shell
 OWNER = TerminalOwner("project-a", "agent-a", "session-a")
 
 
+async def _render(
+    terminal_manager: TerminalManager, factory: AdapterFactory, terminal_id: str, output: str
+) -> None:
+    """Emit program output and wait until the terminal has rendered it."""
+    shown = terminal_manager.terminal(terminal_id, OWNER).screen_revision
+    factory.adapters[0].emit(output)
+    await eventually(lambda: terminal_manager.terminal(terminal_id, OWNER).screen_revision > shown)
+
+
 async def _start_with_lines(
     terminal_manager: TerminalManager, factory: AdapterFactory, tmp_path: Path, prefix: str = ""
-) -> tuple[str, Any]:
+) -> str:
     started = await call(
         terminal_manager, make_context(tmp_path), {"action": "start", "command": "fake-tui"}
     )
-    terminal_id = cast(dict[str, Any], started["data"])["terminal_id"]
-    session = terminal_manager.get_session(terminal_id, OWNER)
-    factory.adapters[0].emit(prefix + "".join(f"line-{index}\r\n" for index in range(50)))
-    await eventually(lambda: session.renderer.revision > 0)
-    return terminal_id, session
+    terminal_id = str(cast(dict[str, Any], started["data"])["terminal_id"])
+    await _render(
+        terminal_manager,
+        factory,
+        terminal_id,
+        prefix + "".join(f"line-{index}\r\n" for index in range(50)),
+    )
+    return terminal_id
 
 
 @pytest.mark.asyncio
@@ -36,7 +48,7 @@ async def test_list_shows_every_terminal_with_its_title_and_attachment(
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
     terminal_manager, factory = manager
-    terminal_id, _session = await _start_with_lines(
+    terminal_id = await _start_with_lines(
         terminal_manager, factory, tmp_path, prefix="\x1b]0;Codex migration\x07"
     )
     context = make_context(tmp_path)
@@ -67,8 +79,16 @@ async def test_status_pages_the_whole_buffer_by_absolute_start_line(
     manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
     terminal_manager, factory = manager
-    terminal_id, session = await _start_with_lines(terminal_manager, factory, tmp_path)
+    terminal_id = await _start_with_lines(terminal_manager, factory, tmp_path)
     context = make_context(tmp_path)
+
+    def request(start_line: int, lines: int) -> JsonObject:
+        return {
+            "action": "status",
+            "terminal_id": terminal_id,
+            "start_line": start_line,
+            "lines": lines,
+        }
 
     async def status(**fields: Any) -> dict[str, Any]:
         result = await call(
@@ -76,61 +96,68 @@ async def test_status_pages_the_whole_buffer_by_absolute_start_line(
         )
         return cast(dict[str, Any], result["data"])
 
+    # 50 lines on a 24-row screen: lines 0-26 scrolled into history, 27-49 are on screen.
+    current = await status(lines=3)
+    assert current["screen"].splitlines() == [f"line-{index}" for index in range(27, 50)]
+    assert current["history"] == "line-24\nline-25\nline-26"
+    assert current["scrollback"] == {
+        "first_line": 0,
+        "start_line": 24,
+        "end_line": 27,
+        "total_lines": 50,
+        "screen_start_line": 27,
+        "older_request": request(21, 3),
+    }
+
     first = await status(start_line=0, lines=3)
     assert "screen" not in first
     assert first["history"] == "line-0\nline-1\nline-2"
-    first_scrollback = first["scrollback"]
-    assert "text" not in first_scrollback
-    assert "next_cursor" not in first_scrollback
-    assert (
-        first_scrollback["total_lines"],
-        first_scrollback["start_line"],
-        first_scrollback["end_line"],
-        first_scrollback["next_start_line"],
-    ) == (50, 0, 3, 3)
-    assert first_scrollback["next_request"] == {
-        "action": "status",
-        "terminal_id": terminal_id,
-        "start_line": 3,
-        "lines": 3,
-    }
-    followed = await call(terminal_manager, context, first_scrollback["next_request"])
-    assert followed["data"]["history"] == "line-3\nline-4\nline-5"
-    assert followed["data"]["scrollback"]["next_start_line"] == 6
-
-    tail = await status(start_line=48, lines=100)
-    assert "screen" not in tail
-    assert (
-        tail["scrollback"]["line_count"],
-        tail["scrollback"]["end_line"],
-        tail["scrollback"]["next_start_line"],
-        tail["scrollback"]["next_request"],
-    ) == (2, 50, None, None)
-
-    current = await status(lines=3)
-    assert current["screen"] == session.renderer.screen_text()
-    assert current["history"]
-    assert current["scrollback"]["line_count"] == 3
-    assert current["scrollback"]["next_request"] == {
-        "action": "status",
-        "terminal_id": terminal_id,
-        "start_line": current["scrollback"]["next_start_line"],
-        "lines": 3,
-    }
-
-    all_lines: list[str] = []
-    request: JsonObject | None = {
-        "action": "status",
-        "terminal_id": terminal_id,
+    assert first["scrollback"] == {
+        "first_line": 0,
         "start_line": 0,
-        "lines": 7,
+        "end_line": 3,
+        "total_lines": 50,
+        "screen_start_line": 27,
+        "newer_request": request(3, 3),
     }
-    while request is not None:
-        page = await call(terminal_manager, context, request)
-        assert "screen" not in page["data"]
-        all_lines.extend(page["data"]["history"].splitlines())
-        request = page["data"]["scrollback"]["next_request"]
+    # A page runs on into the screen, so newer requests read the whole buffer.
+    straddling = await status(start_line=25, lines=4)
+    assert straddling["history"] == "line-25\nline-26\nline-27\nline-28"
+    assert (
+        straddling["scrollback"]["older_request"],
+        straddling["scrollback"]["newer_request"],
+    ) == (request(21, 4), request(29, 4))
+    all_lines: list[str] = []
+    next_page: JsonObject | None = request(0, 7)
+    while next_page is not None:
+        page = cast(dict[str, Any], (await call(terminal_manager, context, next_page))["data"])
+        assert "screen" not in page
+        all_lines.extend(page["history"].splitlines())
+        next_page = page["scrollback"].get("newer_request")
     assert all_lines == [f"line-{index}" for index in range(50)]
+
+    # Line numbers stay fixed while output arrives; the screen moves on.
+    more = "".join(f"more-{index}\r\n" for index in range(5))
+    await _render(terminal_manager, factory, terminal_id, more)
+    assert (await status(start_line=0, lines=3))["history"] == first["history"]
+    moved = await status(start_line=25, lines=4)
+    assert moved["history"] == straddling["history"]
+    assert (moved["scrollback"]["screen_start_line"], moved["scrollback"]["total_lines"]) == (
+        32,
+        55,
+    )
+    assert (await status(lines=3))["history"] == "line-29\nline-30\nline-31"
+
+    # A full-screen view keeps no terminal history, and status says so.
+    await _render(terminal_manager, factory, terminal_id, "\x1b[?1049h\x1b[Hfull-screen view")
+    full_screen = await status()
+    assert full_screen["screen"] == "full-screen view"
+    assert full_screen["alternate_screen"] is True
+    assert full_screen["note"]
+    await _render(terminal_manager, factory, terminal_id, "\x1b[?1049l")
+    primary = await status()
+    assert primary["screen"].splitlines()[-1] == "more-4"
+    assert not {"alternate_screen", "note"} & set(primary)
 
 
 @pytest.mark.parametrize(
@@ -267,9 +294,10 @@ async def test_out_of_order_screen_persistence_cannot_restore_an_old_size(
     callbacks.pop()()
 
     assert "size_change" not in await terminal_manager.snapshot(terminal_id, OWNER)
-    observed = terminal_manager.get_session(terminal_id, OWNER).observed_screen
-    assert observed is not None
-    assert observed[1:] == (160, 48)
+    # The next resize is reported against the newest persisted size.
+    await terminal_manager.resize_for_operator(terminal_id, columns=100, rows=30)
+    change = (await terminal_manager.snapshot(terminal_id, OWNER))["size_change"]
+    assert (change["previous_columns"], change["previous_rows"]) == (160, 48)
 
 
 @pytest.mark.asyncio
@@ -319,26 +347,29 @@ async def test_only_a_persisted_current_screen_acknowledges_resize_and_attention
     started = await call(terminal_manager, context, {"action": "start", "command": "fake-tui"})
     terminal_id = cast(dict[str, Any], started["data"])["terminal_id"]
     callbacks.pop()()
-    session = terminal_manager.get_session(terminal_id, OWNER)
+
+    def info() -> TerminalInfo:
+        return terminal_manager.terminal(terminal_id, OWNER)
+
     await terminal_manager.resize_for_operator(terminal_id, columns=100, rows=30)
     await terminal_manager.send_operator_input(terminal_id, "next")
     factory.adapters[0].emit("new prompt")
-    await eventually(lambda: session.attention_revision > 0)
-    acknowledged = session.acknowledged_attention_revision
+    await eventually(lambda: info().attention_revision > 0)
+    acknowledged = info().acknowledged_attention_revision
 
     page = await call(
         terminal_manager, context, {"action": "status", "terminal_id": terminal_id, "start_line": 0}
     )
     assert "screen" not in page["data"]
     assert callbacks == []
-    assert session.acknowledged_attention_revision == acknowledged
+    assert info().acknowledged_attention_revision == acknowledged
 
     current = await call(
         terminal_manager, context, {"action": "status", "terminal_id": terminal_id}
     )
     assert current["data"]["screen"] == "new prompt"
     assert "size_change" in current["data"]
-    assert session.acknowledged_attention_revision == acknowledged
+    assert info().acknowledged_attention_revision == acknowledged
     callbacks.pop()()
-    assert session.acknowledged_attention_revision == session.attention_revision
+    assert info().acknowledged_attention_revision == info().attention_revision
     assert "size_change" not in await terminal_manager.snapshot(terminal_id, OWNER)

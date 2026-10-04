@@ -1,14 +1,16 @@
-"""Tests for program-agnostic terminal rendering and the PTY/ConPTY transport."""
+"""PTY/ConPTY transport, default shells and Windows command lines."""
 
 from __future__ import annotations
 
 import ast
 import contextlib
+import json
 import os
 import re
 import shlex
 import signal
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -20,47 +22,10 @@ from types import SimpleNamespace
 import pytest
 
 import core.tools.terminal_backend as terminal_backend
-from core.tools.terminal_backend import TERMINAL_TITLE_MAX_CHARS, TerminalRenderer
 from core.utils import processes as process_utils
 
 # The adapter's child process, already ended, for tests of its descriptor I/O.
 EXITED_PROCESS = SimpleNamespace(pid=0, poll=lambda: 0, wait=lambda timeout=None: 0)
-
-
-def test_screen_signature_tracks_styles_but_ignores_cursor_and_empty_extent() -> None:
-    renderer = TerminalRenderer(80, 24, scrollback_lines=100)
-    renderer.feed("First\r\nSecond")
-    original = renderer.screen_signature()
-    renderer.feed("\x1b[1;1H\x1b[?25l")
-    assert renderer.screen_signature() == original
-    renderer.resize(120, 32)
-    assert renderer.screen_signature() == original
-    renderer.feed("\x1b[7mFirst\x1b[0m")
-    assert renderer.screen_text() == "First\nSecond"
-    assert renderer.screen_signature() != original
-
-
-@pytest.mark.parametrize("chunk_size", [1, 7, 1000])
-def test_terminal_queries_use_canonical_cursor_modes_and_size(chunk_size: int) -> None:
-    renderer = TerminalRenderer(80, 24, scrollback_lines=100)
-    output = (
-        "\x1b[4;9HReady\x1b[?2004h"
-        "\x1b[6n\x1b[?6n\x1b[5n\x1b[c\x1b[>c\x1b[18t"
-        "\x1b[?2004$p\x1b[?2026$p\x1b[?7$p"
-    )
-    responses = []
-    for index in range(0, len(output), chunk_size):
-        renderer.feed(output[index : index + chunk_size])
-        responses.append(renderer.take_responses())
-    assert "".join(responses) == (
-        "\x1b[4;14R\x1b[?4;14R\x1b[0n\x1b[?6c\x1b[>0;0;0c\x1b[8;24;80t"
-        "\x1b[?2004;1$y\x1b[?2026;0$y\x1b[?7;1$y"
-    )
-    assert renderer.take_responses() == ""
-    assert renderer.screen_text() == "\n\n\n        Ready"
-    renderer.resize(100, 30)
-    renderer.feed("\x1b[18t")
-    assert renderer.take_responses() == "\x1b[8;30;100t"
 
 
 def select_default_terminal(
@@ -104,6 +69,86 @@ def test_posix_default_terminal_uses_environment_then_login_shell_then_sh() -> N
     ) == ["/bin/fish"]
     assert select_default_terminal("posix", {}, set(), login_shell="/bin/zsh") == ["/bin/zsh"]
     assert select_default_terminal("posix", {}, set()) == ["/bin/sh"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="cmd.exe command-line contract")
+def test_batch_programs_receive_their_arguments_unchanged_through_the_command_processor(
+    tmp_path: Path,
+) -> None:
+    # npm installs programs such as codex as .cmd shims that hand %* to node.
+    shim = tmp_path / "program dir" / "echo-args.cmd"
+    shim.parent.mkdir()
+    report = "import json, sys; print(json.dumps(sys.argv[1:]))"
+    shim.write_text(f'@"{sys.executable}" -c "{report}" %*\r\n', encoding="utf-8")
+    arguments = [
+        "fix the bug",
+        'say "hi"',
+        "50% & more",
+        "%PATH%",
+        "a^b (c) <d> |e| !f!",
+        "",
+        # Metacharacters without whitespace: the shim's %* parses them again.
+        "a&b",
+        "x|y",
+        "(c)",
+        "^d",
+        "<e>",
+        "dir&\\",
+    ]
+    environment = {"PATH": os.environ["PATH"], "COMSPEC": os.environ["COMSPEC"]}
+
+    executable, line = terminal_backend._windows_command([str(shim), *arguments], environment, None)
+
+    assert Path(executable).name.lower() == "cmd.exe"
+    completed = subprocess.run(
+        f'"{executable}" {line}', capture_output=True, text=True, timeout=10, check=True
+    )
+    assert json.loads(completed.stdout) == arguments
+    # Other programs get the C runtime quoting of their arguments.
+    assert terminal_backend._windows_command([sys.executable, "a b", 'c"d'], environment, None) == (
+        sys.executable,
+        subprocess.list2cmdline(["a b", 'c"d']),
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows console Ctrl+C inheritance")
+def test_ctrl_c_stops_a_terminal_program_of_a_server_that_ignores_ctrl_c(tmp_path: Path) -> None:
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32")  # type: ignore[attr-defined]
+    # A Server started in a new process group, as the managed one is,
+    # ignores Ctrl+C, and its children inherit that.
+    kernel32.SetConsoleCtrlHandler(None, True)
+    adapter = None
+    try:
+        adapter = terminal_backend.spawn_terminal_adapter(
+            [sys.executable, "-c", "import time; print('READY', flush=True); time.sleep(30)"],
+            tmp_path,
+            dict(os.environ),
+            24,
+            80,
+        )
+        output = ""
+        deadline = time.monotonic() + 10
+        while "READY" not in output and time.monotonic() < deadline:
+            with contextlib.suppress(TimeoutError):
+                chunk = adapter.read(4096)
+                output += chunk
+                if "\x1b[c" in chunk:
+                    # ConPTY holds output until its device query is answered.
+                    adapter.write("\x1b[?6c")
+        assert "READY" in output
+        adapter.write("\x03")
+        deadline = time.monotonic() + 5
+        while adapter.is_alive() and time.monotonic() < deadline:
+            with contextlib.suppress(TimeoutError, EOFError):
+                adapter.read(4096)
+        assert not adapter.is_alive()
+    finally:
+        kernel32.SetConsoleCtrlHandler(None, False)
+        if adapter is not None:
+            adapter.terminate()
+            adapter.close()
 
 
 @pytest.fixture(params=[False, True], ids=["direct", "guardian"])
@@ -259,196 +304,6 @@ def test_posix_terminal_reports_a_missing_program_before_launch(tmp_path: Path) 
     with pytest.raises(FileNotFoundError) as raised:
         spawn_posix_terminal(["vbot-no-such-program"], tmp_path)
     assert raised.value.filename == "vbot-no-such-program"
-
-
-def test_terminal_title_uses_vt_metadata_and_is_safe_for_single_line_ui() -> None:
-    renderer = TerminalRenderer(20, 2, scrollback_lines=20)
-
-    renderer.feed("\x1b]1;  fallback   icon  \x07")
-    assert renderer.title == "fallback icon"
-
-    renderer.feed(f"\x1b]2;  Codex\trefactor  {'x' * 200}\x07")
-    assert renderer.title.startswith("Codex refactor ")
-    assert len(renderer.title) == TERMINAL_TITLE_MAX_CHARS
-
-
-def test_alternate_screen_is_rendered_and_primary_screen_restores_after_resize() -> None:
-    renderer = TerminalRenderer(12, 3, scrollback_lines=20)
-    renderer.feed("primary")
-
-    assert renderer.feed("\x1b[?1049h\x1b[2J\x1b[Hgame\x1b[2;1Hscore: 7") is False
-
-    assert renderer.screen_text() == "game\nscore: 7"
-    assert "game" in renderer.ansi_snapshot()
-    assert "primary" not in renderer.ansi_snapshot()
-
-    renderer.resize(16, 4)
-    renderer.feed("\x1b[3;1Hresized")
-    assert renderer.screen_text() == "game\nscore: 7\nresized"
-
-    assert renderer.feed("\x1b[?1049l") is True
-
-    assert renderer.columns == 16
-    assert renderer.rows == 4
-    assert renderer.screen_text() == "primary"
-    assert "primary" in renderer.ansi_snapshot()
-
-
-def test_renderer_tracks_bracketed_paste_mode() -> None:
-    renderer = TerminalRenderer(12, 3, scrollback_lines=20)
-
-    renderer.feed("\x1b[?2004h")
-    assert renderer.bracketed_paste_enabled is True
-
-    renderer.feed("\x1b[?2004l")
-    assert renderer.bracketed_paste_enabled is False
-
-
-def test_keyboard_mode_sequences_do_not_corrupt_cell_attributes() -> None:
-    renderer = TerminalRenderer(20, 3, scrollback_lines=20)
-
-    # opencode2 enables xterm modifyOtherKeys with CSI > 4 ; 1 m. pyte
-    # ignores the ">" prefix and would misread it as SGR underscore+bold,
-    # painting white underlines under every blank cell in snapshots.
-    renderer.feed("\x1b[>4;1m\x1b[2J\x1b[H")
-
-    assert all(not renderer._screen.buffer[0][col].underscore for col in range(20))
-    assert all(not renderer._screen.buffer[0][col].bold for col in range(20))
-    assert ";4m" not in renderer.ansi_snapshot()
-
-    renderer.feed("\x1b[>4;2m\x1b[1;1Htext")
-    assert renderer.screen_text() == "text"
-
-
-def test_keyboard_mode_sequence_split_across_feeds_is_dropped() -> None:
-    renderer = TerminalRenderer(20, 3, scrollback_lines=20)
-
-    renderer.feed("a\x1b[>4")
-    renderer.feed(";1mb")
-
-    assert renderer.screen_text().startswith("ab")
-    assert all(not renderer._screen.buffer[0][col].underscore for col in range(20))
-    assert all(not renderer._screen.buffer[0][col].bold for col in range(20))
-
-
-@pytest.mark.parametrize("sequence", ["\x1b[>4;1m", "\x1b[=1u", "\x1b[<1u"])
-def test_keyboard_modes_are_filtered_at_every_stream_boundary(sequence: str) -> None:
-    for boundary in range(1, len(sequence)):
-        renderer = TerminalRenderer(40, 10, scrollback_lines=20)
-        renderer.feed("before" + sequence[:boundary])
-        renderer.feed(sequence[boundary:] + "after")
-        assert renderer.screen_text() == "beforeafter"
-        assert not renderer._screen.cursor.attrs.underscore
-        assert not renderer._screen.cursor.attrs.bold
-
-
-@pytest.mark.parametrize("alternate", [False, True])
-@pytest.mark.parametrize(
-    "text", ["\u4e2d\u6587AB", "\U0001f600AB", "e\u0301\u4e2d", "x" * 38 + "\u4e2d"]
-)
-def test_unicode_snapshot_preserves_screen_and_cursor(text: str, alternate: bool) -> None:
-    source = TerminalRenderer(40, 10, scrollback_lines=20)
-    if alternate:
-        source.feed("\x1b[?1049h")
-    source.feed(text + "\r\n\x1b[31mTAIL\x1b[0m")
-    viewer = TerminalRenderer(40, 10, scrollback_lines=20)
-    viewer.feed(source.ansi_snapshot())
-    assert viewer.screen_text() == source.screen_text()
-    assert viewer.page(limit=20) == source.page(limit=20)
-    assert (viewer._screen.cursor.x, viewer._screen.cursor.y) == (
-        source._screen.cursor.x,
-        source._screen.cursor.y,
-    )
-    assert viewer._screen.buffer[1][0].fg == "red"
-
-
-def test_ansi_snapshot_reemits_alternate_screen_and_terminal_modes() -> None:
-    renderer = TerminalRenderer(12, 3, scrollback_lines=20)
-    renderer.feed("primary")
-
-    renderer.feed("\x1b[?1049h\x1b[?1h\x1b[?1000h\x1b[?2004h\x1b[2J\x1b[Hgame")
-    assert renderer.screen_text() == "game"
-
-    snapshot = renderer.ansi_snapshot()
-    assert "\x1b[?1049h" in snapshot
-    assert "\x1b[?1h" in snapshot
-    assert "\x1b[?1000h" in snapshot
-    assert "\x1b[?2004h" in snapshot
-    assert "game" in snapshot
-
-    renderer.feed("\x1b[?1049l")
-    assert renderer.screen_text() == "primary"
-    assert "\x1b[?1049h" not in renderer.ansi_snapshot()
-    assert "\x1b[?1h" not in renderer.ansi_snapshot()
-    assert "\x1b[?1000h" not in renderer.ansi_snapshot()
-    assert "\x1b[?2004h" not in renderer.ansi_snapshot()
-
-
-def test_ansi_snapshot_preserves_styles_cursor_and_visibility() -> None:
-    renderer = TerminalRenderer(10, 2, scrollback_lines=20)
-    renderer.feed("\x1b[31;1mred\x1b[0m\x1b[2;4Htail\x1b[?25l")
-
-    snapshot = renderer.ansi_snapshot()
-
-    assert "\x1b[31;1m" in snapshot or "\x1b[0;31;49;1m" in snapshot
-    assert "red" in snapshot
-    assert "tail" in snapshot
-    assert snapshot.endswith("\x1b[?25l")
-
-
-def test_ansi_snapshot_rebuilds_bounded_scrollback_for_a_late_viewer() -> None:
-    source = TerminalRenderer(12, 3, scrollback_lines=4)
-    source.feed("".join(f"line-{index}\r\n" for index in range(8)))
-    source.feed("\x1b[31mFINAL\x1b[0m")
-
-    late_viewer = TerminalRenderer(12, 3, scrollback_lines=20)
-    late_viewer.feed(source.ansi_snapshot())
-
-    assert late_viewer.page(limit=20) == source.page(limit=20)
-    assert late_viewer.screen_text() == source.screen_text()
-
-
-def test_page_from_handles_empty_and_overflow_addresses() -> None:
-    renderer = TerminalRenderer(12, 3, scrollback_lines=20)
-    renderer.feed("")
-
-    empty = renderer.page_from(0, 3)
-    assert empty["text"] == ""
-    assert empty["total_lines"] == 0
-    assert empty["start_line"] == 0
-    assert empty["end_line"] == 0
-    assert empty["next_start_line"] is None
-    assert empty["cursor_row"] == 0
-
-    renderer.feed("one\ntwo")
-    beyond = renderer.page_from(99, 3)
-    assert beyond["total_lines"] == 2
-    assert beyond["start_line"] == 2
-    assert beyond["line_count"] == 0
-    assert beyond["end_line"] == 2
-    assert beyond["next_start_line"] is None
-
-
-def test_screen_tail_returns_newest_non_blank_rows() -> None:
-    renderer = TerminalRenderer(12, 3, scrollback_lines=20)
-    renderer.feed("a\r\nb\r\nc")
-
-    assert renderer.screen_tail(2) == "b\nc"
-    assert renderer.screen_tail(10) == "a\nb\nc"
-    assert renderer.screen_tail(0) == ""
-
-
-def test_cursor_page_carries_absolute_buffer_metrics() -> None:
-    renderer = TerminalRenderer(12, 3, scrollback_lines=20)
-    renderer.feed("".join(f"line-{index}\r\n" for index in range(6)))
-
-    page = renderer.page(limit=2)
-
-    assert page["text"] == "line-2\nline-3"
-    assert page["total_lines"] == 6
-    assert page["cursor_row"] == 6
-    assert page["viewport_rows"] == 3
-    assert page["next_start_line"] is not None
 
 
 @pytest.mark.parametrize("platform_name", ["nt", "posix"])

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -22,10 +22,10 @@ from core.utils.paths import model_path
 
 from ._terminal_state import (
     TerminalChangedCallback,
+    TerminalInfo,
     TerminalManagerError,
     TerminalNotFoundError,
     TerminalOwner,
-    TerminalSession,
     _utc_now,
 )
 
@@ -33,17 +33,21 @@ _LOGGER = get_logger("tools.terminal_manager")
 
 
 class TerminalCatalog:
-    """Own retained Terminal catalog ordering, groups and operator presentation."""
+    """Own operator groups, Terminal ordering and operator summaries.
+
+    It sees Terminal Sessions only as ``TerminalInfo`` views from *terminals*
+    and stops them through *terminate* (a terminal id).
+    """
 
     def __init__(
         self,
-        sessions: dict[str, TerminalSession],
         store: TerminalOperatorStore,
-        terminate: Callable[..., Awaitable[None]],
+        terminals: Callable[[], Iterable[TerminalInfo]],
+        terminate: Callable[[str], Awaitable[None]],
     ) -> None:
-        self._sessions = sessions
         self._operator_store = store
-        self._terminate_session = terminate
+        self._terminals = terminals
+        self._terminate = terminate
         self._changed_callbacks: list[TerminalChangedCallback] = []
 
     def add_changed_callback(self, callback: TerminalChangedCallback) -> Callable[[], None]:
@@ -62,7 +66,7 @@ class TerminalCatalog:
             group["group_id"]: index for index, group in enumerate(self.list_groups_for_operator())
         }
 
-        def sort_key(session: TerminalSession) -> tuple[int, int, int, float]:
+        def sort_key(session: TerminalInfo) -> tuple[int, int, int, float]:
             group_id = self._session_group(session).group_id
             group = self._operator_store.groups.get(group_id)
             position = len(group.order) + 1 if group is not None else -1
@@ -74,8 +78,8 @@ class TerminalCatalog:
             stamp = session.finished_at if session.finished_at else session.started_at
             return (rank.get(group_id, 10**9), position, 0, -stamp.timestamp())
 
-        sessions = sorted(self._sessions.values(), key=sort_key)
-        return [self._operator_summary(session) for session in sessions]
+        sessions = sorted(self._terminals(), key=sort_key)
+        return [self.summary(session) for session in sessions]
 
     def list_operator_launch_history(self) -> list[dict[str, Any]]:
         """Return newest-first manual launch configurations for operator reuse."""
@@ -118,14 +122,14 @@ class TerminalCatalog:
         )
         self._operator_store.groups[group.group_id] = group
         self._operator_store.persist_groups()
-        self._notify_changed("")
+        self.notify_changed("")
         # Group names are user or Agent text: lines name the group by its id only.
         _LOGGER.info("Created Terminal group (group=%s)", group.group_id)
         return self._group_summary(group)
 
     def rename_group_for_operator(self, group_id: str, name: str) -> dict[str, Any]:
         """Rename one user or agent group; automatic groups are fixed."""
-        group = self._require_group(group_id)
+        group = self.require_group(group_id)
         if group.kind == "automatic" or group.kind == "finished":
             raise TerminalManagerError("This Terminal group cannot be renamed")
         name = validate_group_name(name)
@@ -134,7 +138,7 @@ class TerminalCatalog:
         group.name = name
         if group.kind == "user":
             self._operator_store.persist_groups()
-        self._notify_changed("")
+        self.notify_changed("")
         _LOGGER.info("Renamed Terminal group (group=%s kind=%s)", group_id, group.kind)
         return self._group_summary(group)
 
@@ -144,21 +148,21 @@ class TerminalCatalog:
         Killed terminals stay in the retained catalog and appear in the
         finished group, exactly like an explicit kill.
         """
-        group = self._require_group(group_id)
+        group = self.require_group(group_id)
         if group.kind == "automatic" or group.kind == "finished":
             raise TerminalManagerError("This Terminal group cannot be deleted")
         terminals = [
             session
-            for session in self._sessions.values()
+            for session in self._terminals()
             if self._session_group(session).group_id == group_id
         ]
         for session in terminals:
-            if session.state not in {"exited", "error"}:
-                await self._terminate_session(session, suppress_attention=True)
+            if not session.finished:
+                await self._terminate(session.terminal_id)
         del self._operator_store.groups[group_id]
         if group.kind == "user":
             self._operator_store.persist_groups()
-        self._notify_changed("")
+        self.notify_changed("")
         _LOGGER.info(
             "Deleted Terminal group (group=%s kind=%s terminals=%d)",
             group_id,
@@ -169,7 +173,7 @@ class TerminalCatalog:
 
     def set_group_order_for_operator(self, group_id: str, order: Sequence[str]) -> dict[str, Any]:
         """Persist one user-set Terminal order; missing ids are appended."""
-        group = self._require_group(group_id)
+        group = self.require_group(group_id)
         if not isinstance(order, list) or any(
             not isinstance(item, str) or not item for item in order
         ):
@@ -190,7 +194,7 @@ class TerminalCatalog:
         group.order = ordered
         if group.kind == "user":
             self._operator_store.persist_groups()
-        self._notify_changed("")
+        self.notify_changed("")
         return {"group_id": group_id, "order": list(ordered)}
 
     def resolve_or_create_agent_group(self, name: str) -> TerminalGroup:
@@ -212,11 +216,11 @@ class TerminalCatalog:
             source=None,
         )
         self._operator_store.groups[group.group_id] = group
-        self._notify_changed("")
+        self.notify_changed("")
         _LOGGER.info("Created Agent Terminal group (group=%s)", group.group_id)
         return group
 
-    def _session_group(self, session: TerminalSession) -> TerminalGroup:
+    def _session_group(self, session: TerminalInfo) -> TerminalGroup:
         """Return the operator-visible group a Terminal Session belongs to."""
         if session.state in {"exited", "error"} and session.finished_at is not None:
             return self._finished_group()
@@ -227,10 +231,10 @@ class TerminalCatalog:
             return self._automatic_group(TERMINAL_MANUAL_GROUP_ID)
         return self._automatic_group(agent_group_id(session.owner.agent_id))
 
-    def _group_members(self, group_id: str) -> list[TerminalSession]:
+    def _group_members(self, group_id: str) -> list[TerminalInfo]:
         return [
             session
-            for session in self._sessions.values()
+            for session in self._terminals()
             if self._session_group(session).group_id == group_id
         ]
 
@@ -250,7 +254,7 @@ class TerminalCatalog:
 
     def _automatic_group_terminals(self, group_id: str) -> bool:
         return any(
-            self._session_group(session).group_id == group_id for session in self._sessions.values()
+            self._session_group(session).group_id == group_id for session in self._terminals()
         )
 
     def _finished_group(self) -> TerminalGroup:
@@ -263,11 +267,11 @@ class TerminalCatalog:
         )
 
     def _finished_group_terminals(self) -> bool:
-        return any(session.finished_at is not None for session in self._sessions.values())
+        return any(session.finished_at is not None for session in self._terminals())
 
     def _distinct_agent_owners(self) -> list[TerminalOwner]:
         owners: dict[tuple[str | None, str], TerminalOwner] = {}
-        for session in self._sessions.values():
+        for session in self._terminals():
             owner = session.owner
             if owner is None:
                 continue
@@ -289,7 +293,7 @@ class TerminalCatalog:
             "source": group.source,
         }
 
-    def _require_group(self, group_id: str) -> TerminalGroup:
+    def require_group(self, group_id: str) -> TerminalGroup:
         if not isinstance(group_id, str) or not group_id:
             raise ValueError("group_id must be a non-empty string")
         group = self._operator_store.groups.get(group_id)
@@ -297,19 +301,15 @@ class TerminalCatalog:
             raise TerminalNotFoundError(f"Terminal group not found: {group_id}")
         return group
 
-    def _append_group_terminal(self, group_id: str, terminal_id: str) -> None:
+    def add_to_group(self, group_id: str, terminal_id: str) -> None:
+        """Place a new Terminal at the end of its group's user-set order."""
         group = self._operator_store.groups.get(group_id)
         if group is None or terminal_id in group.order:
             return
         group.order.append(terminal_id)
 
-    def _get_for_operator(self, terminal_id: str) -> TerminalSession:
-        session = self._sessions.get(terminal_id)
-        if session is None:
-            raise TerminalNotFoundError(f"Terminal Session not found: {terminal_id}")
-        return session
-
-    def _operator_summary(self, session: TerminalSession) -> dict[str, Any]:
+    def summary(self, session: TerminalInfo) -> dict[str, Any]:
+        """The operator summary of one Terminal, as the WebUI and RPC show it."""
         attention = session.attention
         owner = session.owner
         attachment = session.attachment
@@ -322,15 +322,15 @@ class TerminalCatalog:
             "arguments": list(session.arguments),
             "launch_command": session.launch_command,
             "launch_args": list(session.launch_arguments),
-            "title": session.renderer.title,
+            "title": session.title,
             "workdir": model_path(session.cwd),
-            "pid": session.adapter.pid,
+            "pid": session.pid,
             "exit_code": session.exit_code,
             "started_at": session.started_at.isoformat(),
             "finished_at": session.finished_at.isoformat() if session.finished_at else None,
-            "columns": session.renderer.columns,
-            "rows": session.renderer.rows,
-            "screen_revision": session.renderer.revision,
+            "columns": session.columns,
+            "rows": session.rows,
+            "screen_revision": session.screen_revision,
             "owner": (
                 {
                     "project_id": owner.project_id,
@@ -361,7 +361,8 @@ class TerminalCatalog:
             ),
         }
 
-    def _notify_changed(self, terminal_id: str) -> None:
+    def notify_changed(self, terminal_id: str) -> None:
+        """Tell transport edges that operator-visible Terminal state changed."""
         for callback in list(self._changed_callbacks):
             try:
                 callback(terminal_id)
