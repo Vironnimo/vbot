@@ -161,10 +161,18 @@ A content search runs in two phases:
 2. For line output, a `--json --max-count N` pass runs over only the page's files,
    given as explicit paths in batches of at most 28,000 command-line bytes.
 
-Listings use `--files --null`. `--dirs` derives directories from the listed files,
-applies `--max-depth` and the globs to the directories themselves
-(`_directory_selected`, with `PurePath.full_match`), and lists only directories
-that hold searchable files.
+Listings use `--files --null`. ripgrep lists no directories, so `--dirs` runs
+`--files --debug` with only the excluding globs and collects the paths ripgrep's
+walker reports as skipped (`ignoring <path>: Ignore(...)`, captured by
+`native_lines`; file type lines are dropped because types skip files only). The
+owner then walks the directories without those paths (`_walk_directories`), so
+empty directories are listed and ignore rules, hidden paths and excluding globs
+stay ripgrep's decisions. Links and junctions are entered only with `--follow`.
+`--max-depth` and the selecting globs apply to the directories themselves
+(`_directory_selected`, with `PurePath.full_match`). With `-t` or `-T`, only
+directories holding a selected file are listed. The `--debug` line format is
+ripgrep 15.1.0's; `test_directory_lists_include_empty_directories_ripgrep_enters`
+fails if an upgrade changes it.
 
 Result units:
 
@@ -181,8 +189,8 @@ Documented deviations from plain `rg`, all deliberate:
 - `-uuu` shows binary matching lines instead of the "binary file matches"
   message.
 - With `-U`, results and counts count matches.
-- `--dirs` exists, and it omits empty directories and directories without
-  searchable files.
+- `--dirs` exists; it lists every directory ripgrep's walker enters, empty ones
+  included.
 - `-q` returns the file list.
 - `-o` shows no column.
 
@@ -306,6 +314,7 @@ remain readable.
 | path: `File or directory ..., or a list of them. Relative paths start at the working directory. Omit to search the working directory.` | Weak Models filled `path` with guesses; states the base of relative paths (F2, F3). |
 | glob: `File name filter such as *.py ...; a leading ! excludes. Without a / it matches names at any depth. Case-insensitive. A list applies each.` | Glob anchoring and case differ between harnesses (F3). |
 | output: `content (default) ...; files ...; count ...` | Names the three shapes in Agent terms (F2). |
+| output: `..., or every match with "--count-matches" in args.` | Agents asked for occurrences per file knew `count` counts lines but did not find `--count-matches`; they read files or tried `rg -o` in the shell (first-use probe, 2026-10). |
 | context: `Lines to show before and after each match.` | Unit and meaning (F2). |
 | args: `More ripgrep arguments, one per item: -i ..., --dirs list directories.` | One item per argument prevents command-line strings; the flag list covers the common needs without opening help (F2, F6). |
 | args: `A plain ripgrep argument list also works: the first operand is the pattern, later ones are paths.` | Agents write rg argument lists from habit (862 calls used args, Sessions 2026-09). |

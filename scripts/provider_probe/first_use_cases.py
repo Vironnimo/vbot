@@ -15,7 +15,7 @@ BASE_FILES = {
     "README.md": "Release tag: ORCHID-73.\n",
     "check.py": (
         "from pathlib import Path\n"
-        "Path('check-result.txt').write_text('CHECK-42 passed\\n', encoding='utf-8')\n"
+        "Path('check-result.txt').write_bytes(b'CHECK-42 passed\\n')\n"
         "print('CHECK-42 passed')\n"
     ),
 }
@@ -492,6 +492,14 @@ def assess(
             ):
                 counts = Counter(re.sub(r":\d+(?::\d+)?:alpha$", "", line) for line in raw_lines)
                 actual = {f"{path}:{count}" for path, count in counts.items()}
+            elif case["id"] == "search_count":
+                # Matching lines shown in full, by search or read, also prove the counts.
+                counts = Counter()
+                for row in actual:
+                    match = re.match(r"^(.+?):\d+:(.*)$", row)
+                    if match:
+                        counts[match[1]] += len(re.findall(r"\balpha\b", match[2]))
+                actual |= {f"{path}:{count}" for path, count in counts.items() if count}
             outcome = case["rows"].issubset(actual)
             if case["id"] == "search_absent":
                 # Empty output alone proves nothing about the intended query/scope.
@@ -512,8 +520,10 @@ def assess(
                     absence_verified |= bool(
                         covers_pattern
                         and covers_scope
-                        and data.get("complete")
-                        and (data.get("matched") is False or data.get("content") == "No results.")
+                        # A complete search without results has no warnings and no next page.
+                        and str(data.get("summary", "")).startswith("No matches")
+                        and not data.get("warnings")
+                        and "next_offset" not in data
                     )
                 outcome = absence_verified
             answer = final.replace("\\", "/").replace("`", "")

@@ -184,6 +184,48 @@ def test_file_lists_equal_ripgreps(
     assert not any(line.startswith(".git/") for line in listed)
 
 
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        (["--dirs"], {"src/", "src/empty/", "src/lib/", ".cache/", "vendor/", "vendor/deep/"}),
+        (["--dirs", "--no-hidden"], {"src/", "src/empty/", "src/lib/", "vendor/", "vendor/deep/"}),
+        (["--dirs", "-g", "!vendor"], {"src/", "src/empty/", "src/lib/", ".cache/"}),
+        (["--dirs", "-g", "empty"], {"src/empty/"}),
+        (["--dirs", "-t", "py"], {"src/", "src/lib/"}),
+        (["--dirs", "-d", "1"], {"src/", ".cache/", "vendor/"}),
+        (
+            ["--dirs", "-u"],
+            {
+                "src/",
+                "src/empty/",
+                "src/lib/",
+                ".cache/",
+                "vendor/",
+                "vendor/deep/",
+                "build/",
+                "build/out/",
+                "src/lib/ignored/",
+            },
+        ),  # fmt: skip
+    ],
+)
+def test_directory_lists_include_empty_directories_ripgrep_enters(
+    tmp_path: Path, args: list[str], expected: set[str]
+) -> None:
+    _write(
+        tmp_path,
+        {
+            ".gitignore": "build/\nignored/\n",
+            "src/lib/a.py": "x\n",
+            ".cache/state": "x\n",
+            "vendor/deep/notes.txt": "x\n",
+        },
+    )
+    for name in ("src/empty", "build/out", "src/lib/ignored", ".git/objects"):
+        (tmp_path / name).mkdir(parents=True)
+    assert set(_all_pages(tmp_path, {"args": args}, limit=2)) == expected
+
+
 @pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
 def test_ignore_rules_select_the_files_git_selects(tmp_path: Path) -> None:
     rules = [
