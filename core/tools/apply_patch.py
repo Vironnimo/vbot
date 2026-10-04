@@ -42,34 +42,13 @@ from core.tools.tools import (
     tool_failure,
 )
 
-APPLY_PATCH_TOOL_DESCRIPTION = (
-    "Edit, create, delete or move files with a patch. One call can change several places "
-    "in several files; the changes apply in order, and changes that succeed stay applied "
-    "if another one fails."
-)
+APPLY_PATCH_TOOL_DESCRIPTION = "Edit, create, delete or move files with a patch."
 APPLY_PATCH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
         "patch": {
             "type": "string",
-            "description": (
-                "Patch text, for example:\n"
-                "*** Begin Patch\n*** Update File: src/app.py\n@@ def main():\n"
-                "-    count = 1\n+    count = 2\n     run(count)\n"
-                "*** Add File: notes.txt\n+first line of a new file\n"
-                "*** Delete File: old.txt\n*** Move File: a.txt -> b.txt\n*** End Patch\n"
-                "Under Update File, the lines of an @@ block follow the file from top to "
-                "bottom: lines starting with a space stay unchanged, - lines are removed, and "
-                "+ lines are added at their position. Each is a whole line; copy - and "
-                "unchanged lines exactly from the file. To replace a line, write it as a - "
-                "line; to insert above a line, write the + lines before it. Every @@ block "
-                "needs a - or + line. Text after @@ is optional and names an earlier line, "
-                "such as the enclosing function. "
-                "Start another @@ block for another place in the same file. A block of only "
-                "+ lines goes after the @@ line, or at the end of the file after a bare @@. "
-                "Add File creates a file or replaces all of its content. Paths are relative "
-                "to the working directory or absolute."
-            ),
+            "description": "Patch text from *** Begin Patch to *** End Patch.",
         },
     },
     "required": ["patch"],
@@ -100,9 +79,19 @@ def _locate_context(
         whole_lines=True,
         typographic=True,
     )
-    if not isinstance(found, FuzzyReplacement):
-        return []
     file_lines = split_text_lines(content)
+    if not isinstance(found, FuzzyReplacement):
+        # A line the file lacks is usually a new line written without its +.
+        present = {line.strip() for line in file_lines}
+        absent = next((line for line in lines if line.strip() not in present), None)
+        if absent is None:
+            return []
+        shown = absent if len(absent) <= 80 else absent[:77] + "..."
+        return [
+            f"The patch line {shown!r} is not in {batch.shown(path)}. "
+            "That patch line has no + prefix, so it must already be in the file; if it is "
+            "new, start it with +."
+        ]
     spans = [
         (content.count("\n", 0, start) + 1, content.count("\n", 0, max(start, end - 1)) + 1)
         for start, end in found.before_spans

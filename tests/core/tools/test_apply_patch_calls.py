@@ -6,31 +6,26 @@ from copy import deepcopy
 
 import pytest
 
-from core.tools.apply_patch import APPLY_PATCH_TOOL_PARAMETERS
-from core.tools.file_state import FileReadState
 from tests.core.tools.apply_patch_test_support import apply, call, context, registry, text
 
 
-def test_the_example_in_the_patch_description_applies(tmp_path):
+def test_apply_patch_has_a_minimal_definition():
     tools = registry()
     assert tools.get("apply_patch").family == "files"
-    definition = tools.provider_definitions(allowed_tools=["apply_patch"])[0]["parameters"]
+    definition = tools.provider_definitions(allowed_tools=["apply_patch"])[0]
+
+    assert definition["description"] == "Edit, create, delete or move files with a patch."
     # Other harnesses' fields are accepted but never advertised.
-    assert definition["required"] == ["patch"] and list(definition["properties"]) == ["patch"]
-    description = APPLY_PATCH_TOOL_PARAMETERS["properties"]["patch"]["description"]
-    example = description.partition("for example:\n")[2].partition("*** End Patch\n")[0]
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src/app.py").write_bytes(b"def main():\n    count = 1\n    run(count)\n")
-    (tmp_path / "old.txt").write_bytes(b"old\n")
-    (tmp_path / "a.txt").write_bytes(b"a\n")
-
-    result = apply(tmp_path, example + "*** End Patch", state=FileReadState())
-
-    assert result["ok"] and result["data"]["status"] == "applied", result
-    assert (tmp_path / "src/app.py").read_bytes() == b"def main():\n    count = 2\n    run(count)\n"
-    assert (tmp_path / "notes.txt").read_bytes() == b"first line of a new file\n"
-    assert not (tmp_path / "old.txt").exists()
-    assert (tmp_path / "b.txt").read_bytes() == b"a\n" and not (tmp_path / "a.txt").exists()
+    assert definition["parameters"] == {
+        "type": "object",
+        "properties": {
+            "patch": {
+                "type": "string",
+                "description": "Patch text from *** Begin Patch to *** End Patch.",
+            }
+        },
+        "required": ["patch"],
+    }
 
 
 @pytest.mark.parametrize(

@@ -94,7 +94,7 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
 Texts are minimal by user decision (2026-10-04): the boundary between `edit` and
 `write` comes from the names, details belong in results and errors. About 133
 tokens (`python -m scripts.tool_lab definitions` estimate, mostly schema); `write`
-adds about 58, against about 315 for `apply_patch`. A sentence stays only when a
+adds about 68, against about 53 for `apply_patch`. A sentence stays only when a
 fresh Agent would often make a failing call without it; occasional extra
 verification calls do not justify text every request pays for (user decision
 2026-10-04). Parameter descriptions name the role; format sentences are left out

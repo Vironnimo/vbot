@@ -55,15 +55,13 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   `old_string` creates a file or fills an empty one and fails with `file_exists`
   otherwise. `patch_targets(arguments)` lists every named path for callers that
   vet targets first (the provider probe).
-- The description says one call can change several places in several files, in
-  order, and that successful changes stay applied when another fails. The `patch`
-  parameter carries one example (Update with an `@@` hint, Add, Delete, Move File)
-  and the rules for `-`/`+`/space lines (each a whole line), `@@` text,
-  insertion-only blocks and EOF appends, Add File replacement and path
-  resolution; `## Agent-facing text` records why each sentence is there.
-  `test_the_example_in_the_patch_description_applies` runs the example. Other
-  harnesses' fields are never described. Detailed continuation guidance belongs in results; matching
-  errors distinguish missing/ambiguous context hints from hunk text.
+- The definition is minimal (user decision 2026-10-04): the description names
+  the four effects, and `patch` names its frame. The patch route is offered only to
+  GPT families, which know V4A from Codex, so the format, the hunk rules and the
+  partial semantics are taught by results and errors, not by definition text.
+  `test_apply_patch_has_a_minimal_definition` pins it. Other harnesses' fields are
+  never described. Matching errors distinguish missing/ambiguous context hints from
+  hunk text.
 - Add, Update, Delete, standalone `Move File: source -> destination`, and
   Update plus `Move to: destination` are supported. Paths use ordinary
   `ToolContext.resolve_path` semantics: cwd-relative or absolute, with resolved
@@ -418,12 +416,14 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   the anchor resolve to the first (step 8 above). Anchors do
   not leak into subsequent edits or files.
   An entirely context-only patch fails with `no_changes`, says that without a
-  `-` or `+` line every line stays unchanged, and repeats the description's
-  replace/insert-above rule. For each context-only block (at most 3) whose lines
-  are found, it shows where: `The unchanged lines match X line(s) N-M:` with the
-  matched lines and 2 lines around them numbered like `read`, or, for several
-  occurrences, `occur K times` with the first 3 excerpts and asks for more
-  unchanged lines.
+  `-` or `+` line every line stays unchanged, and
+  states the replace/insert-above rule. For each context-only block (at most 3)
+  whose lines are found, it shows where: `The unchanged lines match X line(s)
+  N-M:` with the matched lines and 2 lines around them numbered like `read`, or,
+  for several occurrences, `occur K times` with the first 3 excerpts and asks for
+  more unchanged lines. When the block's lines are not found, it names the first
+  line the file lacks and that a new line starts with `+` (new lines written
+  without `+` parse as unchanged lines).
   It never invents omitted replacement content or reports success. Identical old/new line sequences are no-ops only when located. A unique
   precise post-state with at least four shared non-whitespace context characters
   permits an already-applied retry before approximate matching. A single-line
@@ -488,24 +488,26 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
 
 ## Agent-facing text
 
+About 53 tokens (`python -m scripts.tool_lab definitions` estimate), against about
+315 before 2026-10-05. A sentence stays only when a fresh Agent would often make a
+failing call without it (user decision 2026-10-04). Removed, with what carries
+each case instead: the example and the prefix, `@@`, whole-line and Add File rules
+(trained V4A semantics; Add File on an existing file overwrites in Codex too), the
+replace/insert advice and the rule that every block needs a change (`no_changes`
+names both and shows where the lines are, or the line the file lacks without `+`),
+batching and partial semantics (a partial result says what was applied and what
+to resend), and the path forms (both are accepted). Pure `+` blocks after an `@@`
+hint are inserted after that line, where Codex appends them at the end of the
+file; the result shows the changed region.
+
 | Text | Reason |
 |---|---|
 | `Edit, create, delete or move files with a patch.` | Names all four effects, so deletes and renames do not go through the shell, which bypasses read stamps and change tracking (F1). |
-| `One call can change several places in several files; the changes apply in order, and changes that succeed stay applied if another one fails.` | Invites batching instead of one call per place (F6), and states the partial semantics, so an Agent resends only failed changes instead of replaying applied ones (F3, F5). |
-| `patch`: the example (Update with `@@` hint, Add, Delete, Move File) | The V4A format is not universal; one example shows every header form once (F2). `test_the_example_in_the_patch_description_applies` keeps it valid. |
-| `patch`: `Under Update File, the lines of an @@ block follow the file from top to bottom: lines starting with a space stay unchanged, - lines are removed, and + lines are added at their position.` | Defines the three prefixes and that a line's position in the block is its place in the file (F2, F3). |
-| `patch`: `Each is a whole line; copy - and unchanged lines exactly from the file.` | Models sent a fragment of a long line as a `-` line (Sessions, 2026-09) (F2). Exact copies avoid relying on `copy_match`. |
-| `patch`: `To replace a line, write it as a - line; to insert above a line, write the + lines before it.` | Context-only patches (`no_changes`, about 3% of one Model's patches in Sessions since 2026-09-10) mostly end after one or two unchanged lines that the follow-up patch replaced, inserted above or rewrote: the Model opened the block with the target line as unchanged, which rules out those edits (F2). |
-| `patch`: `Every @@ block needs a - or + line.` | A block without changes fails with `no_changes` (F2). |
-| `patch`: `Text after @@ is optional and names an earlier line, such as the enclosing function.` | Optional, so an Agent does not invent a hint; the example shows what a hint names. |
-| `patch`: `Start another @@ block for another place in the same file.` | Avoids repeated Update headers and long context spanning distant places (F6). |
-| `patch`: `A block of only + lines goes after the @@ line, or at the end of the file after a bare @@.` | Without it, where pure insertions land is a guess (F3). |
-| `patch`: `Add File creates a file or replaces all of its content.` | Add File replacement is a vBot extension; on the patch route it is the only whole-file write (`write` is offered only with `edit`), and without it Agents delete and re-add or write through the shell (F1). |
-| `patch`: `Paths are relative to the working directory or absolute.` | States both accepted forms; the System Prompt names the working directory. |
+| `patch`: `Patch text from *** Begin Patch to *** End Patch.` | Pins `patch` to V4A by its frame, so a Model does not send a unified diff (F2). |
 
 ## Verification
 
-- `tests/core/tools/test_apply_patch_calls.py` covers the description example,
+- `tests/core/tools/test_apply_patch_calls.py` covers the pinned definition,
   display metadata (including the file diffs and their shared line budget), patch spellings and wrappers, and other harnesses' shapes
   (Edit, MultiEdit, Write, text-editor and MCP field names)
   through production dispatch, including empty-text edits and refused open,

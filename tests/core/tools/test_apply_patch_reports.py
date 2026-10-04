@@ -114,8 +114,24 @@ def test_changes_already_made_leave_the_file_untouched(tmp_path, before, earlier
     assert [entry.name for entry in tmp_path.iterdir()] == ["file.txt"]
 
 
-@pytest.mark.parametrize("locator", [" summary();", "summary();", "@@ summary();"])
-def test_context_only_patch_changes_nothing_and_shows_where_it_matches(tmp_path, locator):
+MATCH = "The unchanged lines match file.txt line 2:\n1| start();\n2| summary();\n"
+UNPREFIXED = (
+    "The patch line 'final();' is not in file.txt. That patch line has no + prefix, so it "
+    "must already be in the file; if it is new, start it with +.\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("locator", "tail"),
+    [
+        (" summary();", MATCH),
+        ("summary();", MATCH),
+        ("@@ summary();", None),
+        # A new line written without its +.
+        (" summary();\nfinal();", UNPREFIXED),
+    ],
+)
+def test_context_only_patch_changes_nothing_and_shows_where_it_matches(tmp_path, locator, tail):
     path = tmp_path / "file.txt"
     path.write_bytes(b"start();\nsummary();\n")
 
@@ -123,12 +139,9 @@ def test_context_only_patch_changes_nothing_and_shows_where_it_matches(tmp_path,
 
     assert result["error"]["code"] == "no_changes"
     assert path.read_bytes() == b"start();\nsummary();\n"
-    if locator != "@@ summary();":
+    if tail is not None:
         assert text(result).startswith("The patch changes nothing: it has no - or + line")
-        assert text(result).endswith(
-            "The unchanged lines match file.txt line 2:\n1| start();\n2| summary();\n"
-            "No file was changed."
-        )
+        assert text(result).endswith(tail + "No file was changed.")
 
 
 def test_context_only_patch_shows_the_lines_around_each_occurrence(tmp_path):
