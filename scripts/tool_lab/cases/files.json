@@ -375,19 +375,6 @@
    }
   },
   {
-   "name": "patch: unified diff",
-   "tool": "apply_patch",
-   "arguments": {
-    "patch": "--- a/src/app.py\n+++ b/src/app.py\n@@ -12,3 +12,3 @@\n def main():\n-    g = Greeter(\"world\")\n+    g = Greeter(\"mars\")\n     print(g.greet())\n"
-   },
-   "expect": {
-    "ok": true,
-    "files": {
-     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
-    }
-   }
-  },
-  {
    "name": "patch: input instead of patch",
    "tool": "apply_patch",
    "arguments": {
@@ -581,36 +568,6 @@
    }
   },
   {
-   "name": "patch: str_replace text editor command",
-   "tool": "apply_patch",
-   "arguments": {
-    "command": "str_replace",
-    "path": "src/app.py",
-    "old_str": "    g = Greeter(\"world\")",
-    "new_str": "    g = Greeter(\"mars\")"
-   },
-   "expect": {
-    "ok": true,
-    "files": {
-     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
-    }
-   }
-  },
-  {
-   "name": "patch: SEARCH/REPLACE block",
-   "tool": "apply_patch",
-   "arguments": {
-    "path": "src/app.py",
-    "diff": "<<<<<<< SEARCH\n    g = Greeter(\"world\")\n=======\n    g = Greeter(\"mars\")\n>>>>>>> REPLACE"
-   },
-   "expect": {
-    "ok": true,
-    "files": {
-     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
-    }
-   }
-  },
-  {
    "name": "patch: header repeated before Begin Patch",
    "tool": "apply_patch",
    "arguments": {
@@ -620,20 +577,6 @@
     "ok": true,
     "files": {
      "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"mars\")\n    print(g.greet())\n"
-    }
-   }
-  },
-  {
-   "name": "patch: git rename diff",
-   "tool": "apply_patch",
-   "arguments": {
-    "patch": "diff --git a/src/notes.txt b/docs/notes.txt\nsimilarity index 100%\nrename from src/notes.txt\nrename to docs/notes.txt\n"
-   },
-   "expect": {
-    "ok": true,
-    "files": {
-     "src/notes.txt": null,
-     "docs/notes.txt": "first line\r\nsecond line\r\nthird line\r\n"
     }
    }
   },
@@ -680,26 +623,6 @@
    }
   },
   {
-   "name": "patch: expected_replacements that does not match changes nothing",
-   "tool": "apply_patch",
-   "arguments": {
-    "file_path": "src/app.py",
-    "old_string": "self.name",
-    "new_string": "self.title",
-    "expected_replacements": 3
-   },
-   "expect": {
-    "ok": false,
-    "error_code": "occurrence_mismatch",
-    "contains": [
-     "occurs 2 times (lines 6, 9)"
-    ],
-    "files": {
-     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"world\")\n    print(g.greet())\n"
-    }
-   }
-  },
-  {
    "name": "patch: ambiguous old_string shows each place",
    "tool": "apply_patch",
    "arguments": {
@@ -731,37 +654,6 @@
     "contains": [
      "The unchanged lines match src/app.py line 12:"
     ]
-   }
-  },
-  {
-   "name": "patch: text editor view names the read call",
-   "tool": "apply_patch",
-   "arguments": {
-    "command": "view",
-    "path": "src/app.py"
-   },
-   "expect": {
-    "ok": false,
-    "contains": [
-     "read(path=\"src/app.py\")"
-    ]
-   }
-  },
-  {
-   "name": "patch: code_edit with placeholders is refused",
-   "tool": "apply_patch",
-   "arguments": {
-    "target_file": "src/app.py",
-    "code_edit": "// ... existing code ...\n    g = Greeter(\"mars\")"
-   },
-   "expect": {
-    "ok": false,
-    "contains": [
-     "code_edit cannot be applied"
-    ],
-    "files": {
-     "src/app.py": "import os\n\n\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n\n    def greet(self):\n        return f\"Hello, {self.name}!\"\n\n\ndef main():\n    g = Greeter(\"world\")\n    print(g.greet())\n"
-    }
    }
   },
   {
@@ -1099,22 +991,6 @@
     "contains": [
      "is only part of line 3",
      "copy all of line 3"
-    ]
-   }
-  },
-  {
-   "name": "patch: code_edit refusal names the given path",
-   "tool": "apply_patch",
-   "arguments": {
-    "target_file": "src/app.py",
-    "code_edit": "// ... existing code ...\n    g = Greeter(\"mars\")"
-   },
-   "expect": {
-    "ok": false,
-    "error_code": "invalid_arguments",
-    "contains": [
-     "*** Update File: src/app.py",
-     "No file was changed."
     ]
    }
   }

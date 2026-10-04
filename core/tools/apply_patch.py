@@ -30,7 +30,6 @@ from core.tools._patch_requests import (
     APPLY_PATCH_TOOL_NAME,
     PATCH_HIDDEN_PARAMETERS,
     normalize_patch_arguments,
-    patch_ignores_old_string,
     patch_operations,
 )
 from core.tools._patch_syntax import _HEADER, _Operation, _PatchError
@@ -117,7 +116,6 @@ _STALE_WARNING = (
     "{path} changed after this Session last read it; the change used its current content."
 )
 _STALE_FAILURE = "{path} changed after this Session last read it; read it again before resending."
-_IGNORED_OLD_STRING_NOTE = "old_string was ignored because patch describes the change."
 # Failures that mean the patch's view of the file differs from its current content.
 _MISMATCH_CODES = frozenset(
     {"text_not_found", "context_not_found", "ambiguous_match", "ambiguous_context"}
@@ -715,7 +713,6 @@ def _execute(context: ToolContext, arguments: JsonObject, state: FileReadState) 
         operations = patch_operations(arguments)
     except _PatchError as error:
         return _request_failure(context, batch, error)
-    call_notes = [_IGNORED_OLD_STRING_NOTE] if patch_ignores_old_string(arguments) else []
     _label_hunks(operations)
     resolved: dict[str, Path] = {}
     resolution_errors: dict[str, JsonObject] = {}
@@ -801,9 +798,7 @@ def _execute(context: ToolContext, arguments: JsonObject, state: FileReadState) 
                 else:
                     _run_step(context, state, batch, step, paths, outcome)
                 operation_failed |= outcome["status"] in {"failed", "skipped", "partial"}
-    return patch_result(
-        context, _file_reports(context, batch), batch.results, _cancelled(batch), call_notes
-    )
+    return patch_result(context, _file_reports(context, batch), batch.results, _cancelled(batch))
 
 
 def _display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:

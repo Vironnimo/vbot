@@ -37,7 +37,6 @@ GUTTER_NOTE = "Note: Removed read-output line-number prefixes"
         ("", "@@\n+added", "added\n"),
         ("first\nlast\n", "@@ first\n+middle", "first\nmiddle\nlast\n"),
         ("start\nlast\n", "@@\n+above\n last", "start\nabove\nlast\n"),
-        ("first\nold\nlast\n", "@@ -1,3 +1,3 @@\n first\n-old\n+new\n last", "first\nnew\nlast\n"),
         ("same\nfirst\nsame\n", "@@\n-same\n+new\n*** End of File", "same\nfirst\nnew\n"),
         ("old\n", "@@\n-old\n+new\n\\ No newline at end of file", "new"),
         ("a\n\nb\n", "@@\n a\n\n-b\n+c", "a\n\nc\n"),

@@ -377,13 +377,8 @@ def patch_result(
     files: list[_FileReport],
     entries: list[JsonObject],
     cancelled: list[str],
-    call_notes: list[str] | None = None,
 ) -> JsonObject:
-    """Return the Tool Result envelope for a completed apply_patch call.
-
-    ``call_notes`` say how the call was read; they follow the applied changes
-    and stay out of the user's notices, which ``context`` records.
-    """
+    """Return the Tool Result envelope for a completed apply_patch call."""
     failed = [entry for entry in entries if entry["status"] in _FAILED]
     no_ops = [entry for entry in entries if entry["status"] in {"unchanged", "already_applied"}]
     if failed and not files and len(failed) == len(entries):
@@ -425,7 +420,7 @@ def patch_result(
         if shown:
             notes.append(" ".join(shown.values()) + ("" if cancelled else " No file was changed."))
     _record_notices(context, files, notes, failed)
-    sections.extend([*(call_notes or []), *notes])
+    sections.extend(notes)
     sections.extend(_entry_text(entry) for entry in failed)
     status = "partial" if failed else "applied" if files else "unchanged"
     return tool_success({"status": status, "content": "\n".join(sections)})

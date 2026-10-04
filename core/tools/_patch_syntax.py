@@ -1,10 +1,9 @@
 """Patch text syntax, parsed operations, and structured patch failures.
 
-``_parse`` accepts the advertised V4A form and the other patch dialects Models
-write: unified diffs (``diff --git`` and ``---``/``+++`` file pairs) and
-SEARCH/REPLACE blocks, alone or inside a V4A Update. Every dialect becomes the
-same ordered operations. Parsing reads no files; matching happens in
-``_patch_hunks.py``.
+``_parse`` reads the advertised V4A form, tolerating its common framing
+mistakes, into ordered operations. Other patch dialects (unified diffs,
+SEARCH/REPLACE blocks) fail as text before a file header. Parsing reads no
+files; matching happens in ``_patch_hunks.py``.
 """
 
 from __future__ import annotations
@@ -12,7 +11,6 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from difflib import SequenceMatcher
 from pathlib import Path
 
 from core.tools.tools import JsonObject
@@ -27,7 +25,9 @@ _MESSAGES = {
     "invalid_patch": "Patch line {line} cannot be read: {text}",
     "before_header": (
         "Patch line {line} comes before any file header: {text}\n"
-        f"Start each file's changes with a header: {_HEADERS_HELP}."
+        "A patch names each file in a header before its changes, like this:\n"
+        "*** Begin Patch\n*** Update File: <path>\n@@\n-old line\n+new line\n*** End Patch\n"
+        f"The file headers are {_HEADERS_HELP}."
     ),
     "after_end": (
         "Patch line {line} follows *** End Patch: {text}\nMove it above *** End Patch or remove it."
@@ -64,24 +64,6 @@ _MESSAGES = {
         "{text}\nThe file exists, and Add File replaces all of its content. To change part of "
         "the file, use *** Update File. To replace the whole file, start every line of the "
         "new content with +."
-    ),
-    "unified_add_line": (
-        "Patch line {line} changes a file the diff creates from /dev/null: {text}\n"
-        "A new file's hunk contains only + lines."
-    ),
-    "binary_diff": "Patch line {line} is a binary diff, which cannot be applied as text: {text}",
-    "block_syntax": (
-        "Patch line {line} breaks a SEARCH/REPLACE block: {text}\n"
-        "Each block is <<<<<<< SEARCH, the current lines, =======, the new lines, "
-        ">>>>>>> REPLACE."
-    ),
-    "block_path": (
-        "The SEARCH/REPLACE block at patch line {line} names no file. Put the file path "
-        "on the line before the block, or send it as path."
-    ),
-    "block_text": (
-        "Patch line {line} is outside the SEARCH/REPLACE blocks: {text}\n"
-        "Only a file path may stand on the line before a block."
     ),
     "path_mismatch": (
         "path is {path}, but the patch changes {other}. Send only the patch, or a path "
@@ -257,7 +239,7 @@ class _Operation:
     destination: str | None = None
     hunks: list[_Hunk] = field(default_factory=list)
     hunk_number: int = 1
-    # Add only when the file is missing or empty (an empty old_string or SEARCH).
+    # Add only when the file is missing or empty (an empty old_string).
     only_if_empty: bool = False
     # Line ending for a file this Add creates; existing files keep their own.
     newline: str = "\n"
@@ -287,22 +269,7 @@ _END = re.compile(r"\*{3}\s*end\s+patch\s*", re.IGNORECASE)
 _MOVE_TO = re.compile(r"\*{3}\s*move\s+to\s*:\s*(.*)", re.IGNORECASE)
 _END_OF_FILE = re.compile(r"\*{3}\s*end\s+of\s+file\s*", re.IGNORECASE)
 _NO_NEWLINE = "\\ No newline at end of file"
-_NUMBERED_HUNK = re.compile(r"-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?")
-_UNIFIED_HUNK = re.compile(r"@@+\s*-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s*@@+.*")
 _FENCE = re.compile(r"```[\w+.-]*\s*")
-_SEARCH = re.compile(r"(?:<{5,}|-{5,})\s*SEARCH\s*", re.IGNORECASE)
-_DIVIDER = re.compile(r"={5,}\s*")
-_REPLACE = re.compile(r"(?:>{5,}|\+{5,})\s*REPLACE\s*", re.IGNORECASE)
-_BLOCK_POSITION = re.compile(r":(?:start|end)_line:\s*\d+\s*")
-_GIT_METADATA = (
-    "index ",
-    "new file mode ",
-    "deleted file mode ",
-    "old mode ",
-    "new mode ",
-    "similarity index ",
-    "dissimilarity index ",
-)
 
 
 def _clip(text: str) -> str:
@@ -342,37 +309,15 @@ def _patch_lines(patch: str) -> list[str]:
     return lines
 
 
-def _is_unified(lines: list[str]) -> bool:
-    """Whether a file pair or ``diff --git`` comes before the first hunk."""
-    for index, line in enumerate(lines):
-        if line.startswith("diff --git "):
-            return True
-        if line.startswith("@@"):
-            return False
-        if (
-            line.startswith("--- ")
-            and index + 1 < len(lines)
-            and lines[index + 1].startswith("+++ ")
-        ):
-            return True
-    return False
-
-
 def _parse(patch: str, default_path: str | None = None) -> list[_Operation]:
-    """Parse patch text in any accepted dialect into ordered operations.
+    """Parse V4A patch text into ordered operations.
 
     ``default_path`` is the file a call names outside the patch text; a patch
     without file headers then changes that file, and headers must agree with it.
     """
     lines = _patch_lines(patch)
-    if any(_HEADER.fullmatch(line) for line in lines):
-        operations = _parse_v4a(lines, None)
-    elif _is_unified(lines):
-        operations = _parse_unified(lines)
-    elif any(_SEARCH.fullmatch(line) for line in lines):
-        operations = _parse_blocks(lines, default_path)
-    else:
-        operations = _parse_v4a(lines, default_path)
+    headers = any(_HEADER.fullmatch(line) for line in lines)
+    operations = _parse_v4a(lines, None if headers else default_path)
     if default_path is not None:
         for operation in operations:
             if not _same_path(operation.path, default_path):
@@ -484,14 +429,6 @@ def _parse_v4a(lines: list[str], default_path: str | None) -> list[_Operation]:
             current = _Operation(action, path, destination)
             operations.append(current)
             hunk = None
-            # A unified-diff file pair pasted under an Update header repeats the path.
-            if (
-                action == "update"
-                and index + 1 < len(lines)
-                and lines[index].startswith("--- ")
-                and lines[index + 1].startswith("+++ ")
-            ):
-                index += 2
             continue
         duplicate = None
         move_to = _MOVE_TO.fullmatch(line)
@@ -513,28 +450,12 @@ def _parse_v4a(lines: list[str], default_path: str | None) -> list[_Operation]:
         if current is None and default_path is not None and line.strip():
             current = _Operation("update", default_path)
             operations.append(current)
-        if _SEARCH.fullmatch(line) and current and current.action == "update":
-            index, old, new = _read_block(lines, index, number)
-            if not old:
-                raise _PatchError(
-                    "invalid_patch",
-                    message=(
-                        f"The SEARCH/REPLACE block at patch line {number} has an empty SEARCH "
-                        "part inside *** Update File. Put the current lines to replace in "
-                        "SEARCH, or use *** Add File to create a file."
-                    ),
-                )
-            current.hunks.append(_block_hunk(old, new))
-            hunk = None
-            continue
         if line.startswith("@@") and current and current.action in {"update", "move"}:
             # Explicit hunks after Move File unambiguously mean update-and-move.
             current.action = "update"
             hint = line[2:].strip()
             if "@@" in hint:
                 hint = hint.split("@@", 1)[0].strip()
-            if _NUMBERED_HUNK.fullmatch(hint):
-                hint = ""  # Unified-diff line numbers are advisory, never authority.
             if (
                 hunk is not None
                 and hunk.lines
@@ -605,202 +526,4 @@ def _parse_v4a(lines: list[str], default_path: str | None) -> list[_Operation]:
             prefix, text = (line[0], line[1:]) if line and line[0] in " +-" else (" ", line)
             hunk.written.append(line)
         hunk.lines.append((prefix, text))
-    return operations
-
-
-def _read_block(lines: list[str], index: int, number: int) -> tuple[int, list[str], list[str]]:
-    """Read the SEARCH/REPLACE block whose SEARCH marker precedes ``lines[index]``.
-
-    Returns the index after the block and its SEARCH and REPLACE lines.
-    """
-    old: list[str] = []
-    new: list[str] = []
-    # Roo Code places advisory line numbers and a dash separator before the text.
-    while index < len(lines) and _BLOCK_POSITION.fullmatch(lines[index]):
-        index += 1
-        if index < len(lines) and re.fullmatch(r"-{3,}\s*", lines[index]):
-            index += 1
-    target = old
-    while index < len(lines):
-        line = lines[index]
-        index += 1
-        if _DIVIDER.fullmatch(line) and target is old:
-            target = new
-            continue
-        if _REPLACE.fullmatch(line) and target is new:
-            return index, old, new
-        if _SEARCH.fullmatch(line) or _REPLACE.fullmatch(line):
-            break
-        target.append(line)
-    raise _PatchError(
-        "invalid_patch", template="block_syntax", line=number, text=_clip(lines[number - 1])
-    )
-
-
-def _block_hunk(old: list[str], new: list[str]) -> _Hunk:
-    """Express a SEARCH/REPLACE block as a hunk: shared lines become context."""
-    hunk = _Hunk()
-    matcher = SequenceMatcher(None, old, new, autojunk=False)
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag == "equal":
-            hunk.lines.extend((" ", text) for text in old[i1:i2])
-            continue
-        hunk.lines.extend(("-", text) for text in old[i1:i2])
-        hunk.lines.extend(("+", text) for text in new[j1:j2])
-    return hunk
-
-
-def _parse_blocks(lines: list[str], default_path: str | None) -> list[_Operation]:
-    """Parse SEARCH/REPLACE blocks (Aider, Cline, Roo Code) into Update hunks."""
-    operations: list[_Operation] = []
-    candidate: tuple[int, str] | None = None
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        number = index + 1
-        index += 1
-        stripped = line.strip()
-        if not stripped or _FENCE.fullmatch(stripped) or stripped == "```":
-            continue
-        if not _SEARCH.fullmatch(line):
-            if candidate is not None:
-                raise _PatchError(
-                    "invalid_patch", template="block_text", line=candidate[0], text=candidate[1]
-                )
-            candidate = (number, line)
-            continue
-        path = default_path
-        if candidate is not None:
-            named = _clean_path(candidate[1])
-            if default_path is None:
-                path = named
-            elif not _same_path(named, default_path):
-                raise _PatchError(
-                    "invalid_patch", template="block_text", line=candidate[0], text=candidate[1]
-                )
-        candidate = None
-        if path is None:
-            raise _PatchError("invalid_patch", template="block_path", line=number)
-        index, old, new = _read_block(lines, index, number)
-        if not old:
-            # An empty SEARCH creates the file, as in Aider.
-            hunks = [_Hunk(lines=[("+", text) for text in new])] if new else []
-            operations.append(_Operation("add", path, hunks=hunks, only_if_empty=True))
-            continue
-        hunk = _block_hunk(old, new)
-        if operations and operations[-1].action == "update" and operations[-1].path == path:
-            operations[-1].hunks.append(hunk)
-        else:
-            operations.append(_Operation("update", path, hunks=[hunk]))
-    if candidate is not None:
-        raise _PatchError(
-            "invalid_patch", template="block_text", line=candidate[0], text=candidate[1]
-        )
-    return operations
-
-
-def _diff_path(text: str) -> str | None:
-    """Return a unified-diff header path, or ``None`` for /dev/null."""
-    path = text.split("\t", 1)[0].strip()
-    if len(path) >= 2 and path[0] == path[-1] == '"':
-        path = path[1:-1]
-    return None if path == "/dev/null" else path
-
-
-def _strip_prefixes(old: str | None, new: str | None, git: bool) -> tuple[str | None, str | None]:
-    """Remove git's a/ and b/ prefixes when the diff shows git's convention."""
-    if git or (old or "a/").startswith("a/") and (new or "b/").startswith("b/"):
-        if old is not None and old.startswith("a/"):
-            old = old[2:]
-        if new is not None and new.startswith("b/"):
-            new = new[2:]
-    return old, new
-
-
-def _parse_unified(lines: list[str]) -> list[_Operation]:
-    """Parse a unified diff; hunk line numbers are advisory like V4A's."""
-    operations: list[_Operation] = []
-    current: _Operation | None = None
-    hunk: _Hunk | None = None
-    git = False
-    rename: dict[str, str] = {}
-    remaining = [0, 0]  # old and new lines a numbered hunk header still promises
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        number = index + 1
-        index += 1
-        if line.startswith("diff --git "):
-            git = True
-            if rename.keys() == {"from", "to"} and current is None:
-                operations.append(_Operation("move", rename["from"], rename["to"]))
-            current = hunk = None
-            rename = {}
-            continue
-        if line.startswith("@@") and current is not None and current.action != "delete":
-            numbers = _UNIFIED_HUNK.fullmatch(line)
-            remaining = [0, 0]
-            if numbers:
-                remaining = [
-                    int(numbers[2]) if numbers[2] is not None else 1,
-                    int(numbers[4]) if numbers[4] is not None else 1,
-                ]
-            hunk = _Hunk()
-            current.hunks.append(hunk)
-            continue
-        # Promised hunk lines are content even when they look like a file pair.
-        inside = hunk is not None and (remaining[0] > 0 or remaining[1] > 0)
-        if not inside:
-            if _BEGIN.fullmatch(line) or _END.fullmatch(line):
-                continue
-            if line.startswith(_GIT_METADATA):
-                continue
-            if line.startswith(("rename from ", "rename to ")):
-                rename[line.split()[1]] = line.split(" ", 2)[2].strip()
-                continue
-            if line.startswith("Binary files ") or line == "GIT binary patch":
-                raise _PatchError(
-                    "invalid_patch", template="binary_diff", line=number, text=_clip(line)
-                )
-            if line.startswith("--- ") and index < len(lines) and lines[index].startswith("+++ "):
-                old, new = _strip_prefixes(_diff_path(line[4:]), _diff_path(lines[index][4:]), git)
-                index += 1
-                # A rename section without a file pair of its own ends here.
-                renamed = (rename.get("from"), rename.get("to"))
-                if rename.keys() == {"from", "to"} and current is None and (old, new) != renamed:
-                    operations.append(_Operation("move", rename["from"], rename["to"]))
-                rename = {}
-                if old is None and new is None:
-                    raise _PatchError("invalid_patch", line=number, text=_clip(line))
-                if old is None:
-                    current = _Operation("add", str(new))
-                elif new is None:
-                    current = _Operation("delete", old)
-                else:
-                    current = _Operation("update", old, None if old == new else new)
-                operations.append(current)
-                hunk = None
-                continue
-        if hunk is None or current is None:
-            if current is not None and current.action == "delete" or not line.strip():
-                continue
-            raise _PatchError(
-                "invalid_patch", template="before_header", line=number, text=_clip(line)
-            )
-        if line.startswith("\\"):
-            if hunk.lines and hunk.lines[-1][0] != "-":
-                hunk.no_newline = True
-            continue
-        prefix, text = (line[0], line[1:]) if line and line[0] in " +-" else (" ", line)
-        if current.action == "add" and prefix != "+":
-            raise _PatchError(
-                "invalid_patch", template="unified_add_line", line=number, text=_clip(line)
-            )
-        if prefix in " -":
-            remaining[0] -= 1
-        if prefix in " +":
-            remaining[1] -= 1
-        hunk.lines.append((prefix, text))
-    if rename.keys() == {"from", "to"} and current is None:
-        operations.append(_Operation("move", rename["from"], rename["to"]))
     return operations
