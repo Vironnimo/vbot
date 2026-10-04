@@ -12,7 +12,7 @@ Read when running, extending or interpreting the learning evaluation of Reflecti
 ## Evaluation rules
 
 - Run at least three repetitions per (case, scope); weak Models carry the signal. `--reflection-case` (comma-separated ids) and `--reflection-scope` (one or more of `memory`, `skill`, `combined`, `learn`, `librarian`, or `all`) narrow the matrix.
-- Run the arms on `--provider opencode-go --model deepseek-v4.1-flash` and `--provider ollama-cloud --connection ollama-cloud:api-key --model glm-5.3-flash` (user decision 2026-10-02: on opencode-go only that Model; `--connection` defaults to `opencode-go:api-key`).
+- Run the arms on `--provider opencode-go --model deepseek-v4.1-flash` and `--provider ollama-cloud --connection ollama-cloud:api-key --model glm-5.3-flash` (user decision 2026-10-02: on opencode-go only that Model; `--connection` defaults to `<provider>:api-key`).
 - Compare arms only with equal attempt counts per (case, scope); never drop an attempt from one arm. A crashed attempt stays in the report with its error and counts as a failure.
 - Scoring is code only, no LLM judge. Every attempt is a Provider request loop: do not run the full matrix casually.
 

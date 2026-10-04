@@ -58,7 +58,7 @@ Examples:
     python scripts/probe_reasoning_replay_exact.py --provider ollama-cloud \\
         --model deepseek-v4-flash:0731 --scenario tool_loop
     python scripts/probe_reasoning_replay_exact.py --provider ollama-cloud \\
-        --model glm-5.2 --scenario cross_turn
+        --model glm-5.3-flash --scenario cross_turn
     python scripts/probe_reasoning_replay_exact.py --provider opencode-go \\
         --model glm-5.3 --scenario instruction
     python scripts/probe_reasoning_replay_exact.py --provider opencode-go \\

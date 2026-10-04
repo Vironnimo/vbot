@@ -12,7 +12,7 @@ comparison live in scripts/provider_probe/learning_eval.py.
 Credentials are never included in reports.
 
 Examples:
-    python scripts/probe_provider_tool_call.py --model glm-5.2 --mode stream
+    python scripts/probe_provider_tool_call.py --model glm-5.3-flash --mode stream
     python scripts/probe_provider_tool_call.py --wire openai --profile explicit_non_strict \
         --scenario nested_operation --mode nonstream
     python scripts/probe_provider_tool_call.py --provider openai \
@@ -51,7 +51,6 @@ from scripts.provider_probe.choices import (  # noqa: E402
     CALENDAR_CASES,
     CHANNEL_SEND_CASES,
     CRON_CASES,
-    DEFAULT_CONNECTION,
     DEFAULT_IDLE_TIMEOUT_SECONDS,
     DEFAULT_LINES,
     DEFAULT_MODEL,
@@ -112,7 +111,7 @@ from scripts.provider_probe.workflow_tolerance import _probe_tool_tolerance  # n
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--provider", default=DEFAULT_PROVIDER)
-    parser.add_argument("--connection", default=DEFAULT_CONNECTION)
+    parser.add_argument("--connection", help="Defaults to <provider>:api-key.")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--mode", choices=("stream", "nonstream"), default="stream")
     parser.add_argument("--wire", choices=("auto", "openai", "anthropic"), default="auto")
@@ -566,7 +565,9 @@ async def _run(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    return asyncio.run(_run(_parser().parse_args()))
+    args = _parser().parse_args()
+    args.connection = args.connection or f"{args.provider}:api-key"
+    return asyncio.run(_run(args))
 
 
 if __name__ == "__main__":

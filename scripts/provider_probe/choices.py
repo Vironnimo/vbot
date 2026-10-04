@@ -4,13 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-DEFAULT_PROVIDER = "opencode-go"
+DEFAULT_PROVIDER = "ollama-cloud"
 
 
-DEFAULT_CONNECTION = "opencode-go:api-key"
-
-
-DEFAULT_MODEL = "glm-5.2"
+DEFAULT_MODEL = "deepseek-v4.1-flash"
 
 
 DEFAULT_LINES = 8
