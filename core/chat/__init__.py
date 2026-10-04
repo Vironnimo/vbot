@@ -41,9 +41,6 @@ if TYPE_CHECKING:
         parse_agent_argument,
         parse_handoff_argument,
     )
-    from core.chat.continuation import (
-        ContinuationState,
-    )
     from core.chat.errors import (
         ChatError,
         ChatMessageValidationError,
@@ -102,7 +99,6 @@ _EXPORT_MODULES = {
     "CommandSpec": "core.chat.commands",
     "CommandUnavailability": "core.chat.commands",
     "ExtensionCommandContext": "core.chat.commands",
-    "ContinuationState": "core.chat.continuation",
     "HandoffArgument": "core.chat.commands",
     "INPUT_ORIGIN_LIVE_VOICE": "core.chat.messages",
     "INPUT_ORIGIN_SPEECH_TRANSCRIPTION": "core.chat.messages",
@@ -150,7 +146,6 @@ __all__ = [
     "CommandSpec",
     "CommandUnavailability",
     "ExtensionCommandContext",
-    "ContinuationState",
     "HandoffArgument",
     "INPUT_ORIGIN_LIVE_VOICE",
     "INPUT_ORIGIN_SPEECH_TRANSCRIPTION",

@@ -20,14 +20,13 @@ from core.prompts.pinned_context import PINNED_SKILL_CATALOG_SLOT
 from core.sessions import (
     ChatSession,
     PromptEpoch,
-    SeenSkillsUpdate,
     ToolResultFacts,
     editable_session_message_index,
 )
 from core.sessions.errors import SessionNotFoundError
 from core.sessions.history import skill_tool_activation
 from tests.core.sessions.history_fixtures import complete_run
-from tests.core.sessions.sessions_test_support import _address, _continuation_start
+from tests.core.sessions.sessions_test_support import _address
 
 
 def test_cursor_reads_only_messages_appended_after_the_snapshot(manager) -> None:
@@ -50,7 +49,7 @@ def test_cursor_reads_only_messages_appended_after_the_snapshot(manager) -> None
     assert session.load_since(replace(appended.cursor, next_seq=3)) is None
 
 
-def test_append_returns_every_record_since_the_cursor_and_commits_its_journal(manager) -> None:
+def test_append_returns_every_record_since_the_cursor(manager) -> None:
     session = manager.create("coder", session_id="session-one")
     session.start_run("run-one")
     session.append(ChatMessage.user("first"))
@@ -60,7 +59,6 @@ def test_append_returns_every_record_since_the_cursor_and_commits_its_journal(ma
 
     delta = session.append_many(
         [ChatMessage.assistant(model="test", content="second")],
-        continuation_records=[_continuation_start()],
         since=initial.cursor,
     )
 
@@ -69,41 +67,6 @@ def test_append_returns_every_record_since_the_cursor_and_commits_its_journal(ma
     assert [message.role for message in delta.active_messages] == ["note", "assistant"]
     latest = session.load_since()
     assert latest is not None and delta.cursor == latest.cursor
-    assert session.load_continuation() is not None
-
-
-def test_a_rejected_continuation_record_rolls_back_the_whole_append(manager) -> None:
-    session = manager.create("coder", session_id="session-one")
-    session.start_run("run-one")
-    session.append_many(
-        [ChatMessage.user("first")],
-        seen_skills=SeenSkillsUpdate(baseline=("alpha",)),
-        continuation_records=[_continuation_start()],
-    )
-    unsupported_version = {**_continuation_start(), "version": 2}
-    # Continuation steps start at one.
-    step_zero = {
-        "version": 1,
-        "type": "stream_delta",
-        "run_id": "run-one",
-        "timestamp": "2026-08-31T12:00:01+00:00",
-        "step": 0,
-        "content_delta": "lost",
-    }
-
-    for rejected in (unsupported_version, step_zero):
-        with pytest.raises(ChatSessionError):
-            session.append_many(
-                [ChatMessage.user("lost")],
-                seen_skills=SeenSkillsUpdate(baseline=(), added=("beta",)),
-                continuation_records=[rejected],
-            )
-
-    assert [message.content for message in session.load()] == ["first"]
-    assert manager.seen_skills(session.address) == frozenset({"alpha"})
-    state = session.load_continuation()
-    assert state is not None
-    assert state.steps == ()
 
 
 def test_compaction_checkpoint_commits_only_while_its_cursor_is_current(manager) -> None:
@@ -139,78 +102,6 @@ def test_compaction_checkpoint_commits_only_while_its_cursor_is_current(manager)
     assert manager.prompt_pin(session.address, PINNED_SKILL_CATALOG_SLOT) == {"catalog": "new"}
     assert manager.seen_skills(session.address) == frozenset({"alpha"})
     assert manager.prompt_cache_affinity_id(session.address) == affinity
-
-
-def test_continuation_events_update_one_normalized_current_state(manager) -> None:
-    session = manager.create("coder", session_id="continuation-state")
-    session.start_run("run-one")
-    session.append_continuation_records(
-        [
-            _continuation_start(),
-            {
-                "version": 1,
-                "type": "stream_delta",
-                "run_id": "run-one",
-                "timestamp": "2026-08-31T12:00:01+00:00",
-                "step": 1,
-                "reasoning_delta": "first ",
-                "content_delta": "partial ",
-            },
-            {
-                "version": 1,
-                "type": "stream_delta",
-                "run_id": "run-one",
-                "timestamp": "2026-08-31T12:00:02+00:00",
-                "step": 1,
-                "reasoning_delta": "second",
-                "content_delta": "answer",
-            },
-            {
-                "version": 1,
-                "type": "assistant_boundary",
-                "run_id": "run-one",
-                "timestamp": "2026-08-31T12:00:03+00:00",
-                "step": 1,
-                "message_id": "assistant-one",
-                "tool_calls": [{"id": "call-one", "name": "bash"}],
-            },
-            {
-                "version": 1,
-                "type": "tool_result",
-                "run_id": "run-one",
-                "timestamp": "2026-08-31T12:00:04+00:00",
-                "tool_call_id": "call-one",
-                "name": "bash",
-                "ok": True,
-            },
-            {
-                "version": 1,
-                "type": "run_interrupted",
-                "run_id": "run-one",
-                "timestamp": "2026-08-31T12:00:05+00:00",
-                "cause": "user",
-            },
-        ]
-    )
-
-    state = session.load_continuation()
-    assert state is not None
-    assert [(step.reasoning, step.content) for step in state.steps] == [
-        ("first second", "partial answer")
-    ]
-    assert [(op.tool_call_id, op.completed, op.ok) for op in state.operations] == [
-        ("call-one", True, True)
-    ]
-    assert (state.active, state.cause) == (False, "user")
-    with sqlite3.connect(manager._store.path) as connection:
-        tables = {
-            row[0]
-            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
-        }
-        assert "continuation_records" not in tables
-        assert connection.execute("SELECT COUNT(*) FROM continuations").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM continuation_steps").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM continuation_operations").fetchone()[0] == 1
 
 
 def test_skill_activation_cache_follows_checkpoints_and_history_edits(manager, monkeypatch) -> None:

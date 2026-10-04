@@ -435,7 +435,7 @@ class AgenticProgression:
                             run,
                             prompt_cache_affinity_id=context.prompt_cache_affinity_id,
                             chunk_timeout_seconds=target.chunk_timeout_seconds,
-                            continuation_tracker=context.continuation_tracker,
+                            stream_draft=context.stream_draft,
                             output_cwd=output_cwd,
                             public_model=target.public_model,
                             provider_id=target.provider_id,
@@ -610,19 +610,15 @@ class AgenticProgression:
             ):
                 preserved_cancelled_output = run.cancel_requested and preserve_after_cancel
                 persist_started = time.perf_counter()
-                tracker = context.continuation_tracker
+
+                async def persist_assistant(message: ChatMessage) -> None:
+                    # The Assistant entry holds the streamed output and deletes its
+                    # draft; no earlier draft write may commit after it.
+                    await context.stream_draft.settle()
+                    await context.session_snapshot.append(session, [message])
+
                 await _finish_visible_boundary(
-                    context.session_snapshot.append(
-                        session,
-                        [assistant_message],
-                        journal=(
-                            None
-                            if tracker is None
-                            else tracker.assistant_boundary(assistant_message)
-                        ),
-                    ),
-                    run,
-                    preserve_after_cancel,
+                    persist_assistant(assistant_message), run, preserve_after_cancel
                 )
                 session.assistant_message_id = assistant_message.id
                 record_span(
@@ -815,11 +811,6 @@ class AgenticProgression:
                     persist_started = time.perf_counter()
                     binding = context.request.temporary_binding
                     extension_registry = self._dependencies.get_extension_registry()
-                    results_journal = (
-                        None
-                        if context.continuation_tracker is None
-                        else context.continuation_tracker.tool_results_boundary(tool_messages)
-                    )
                     result_facts = tool_dispatch_context.with_result_payloads(
                         tool_result_facts(tool_messages)
                     )
@@ -858,13 +849,11 @@ class AgenticProgression:
                                 tool_results=result_facts,
                                 receipts=owned_receipts,
                             ),
-                            journal=results_journal,
                         )
                     else:
                         await context.session_snapshot.append(
                             session,
                             batch_messages,
-                            journal=results_journal,
                             tool_results=result_facts,
                         )
                     record_span(

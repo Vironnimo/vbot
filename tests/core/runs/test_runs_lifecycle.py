@@ -287,8 +287,10 @@ class _BlockingAdmission:
             raise self.failure
         self.admitted.append(run.id)
 
-    async def finish_run(self, run: Run, status: str, payload: dict[str, Any]) -> dict[str, Any]:
-        del payload
+    async def finish_run(
+        self, run: Run, status: str, payload: dict[str, Any], *, completion_reason: str | None
+    ) -> dict[str, Any]:
+        del payload, completion_reason
         self.finished.append(status)
         return {}
 

@@ -5,14 +5,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 from pathlib import Path
 from typing import Any, override
 
 import pytest
 
-from core.chat.continuation import (
-    recover_continuation,
-)
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
@@ -133,9 +131,8 @@ async def test_user_cancel_after_visible_stream_closes_the_adapter_and_keeps_the
     assert messages[1].interruption_cause == "user"
     assert messages[1].tool_calls is None
     assert run.tool_call_count == 0
-    assert runtime.chat_sessions.get(session_address("coder", "session-one")).load_continuation()
     assert messages[-1].role == "run_summary"
-    assert messages[-1].status == "cancelled"
+    assert (messages[-1].status, messages[-1].completion_reason) == ("cancelled", "user")
     expected_events = [
         "run_started",
         "user_message_persisted",
@@ -215,19 +212,18 @@ async def test_user_cancel_after_complete_stream_preserves_answer(
     assert messages[1].interrupted is False
     assert adapter.closed is True
     assert run.iteration_count == 1
-    # A complete answer resolves the Continuation checkpoint even though Stop won.
-    assert session.load_continuation() is None
+    # A complete answer leaves nothing unfinished even though Stop won.
     followup_adapter = StubAdapter([{"content": "New answer", "tool_calls": None}])
     runtime.adapter = followup_adapter
     await build_chat_loop(runtime).send("coder", "New independent task", session_id="session-one")
     assert not any(
-        "<continuation-checkpoint" in str(message.get("content") or "")
+        "previous turn" in str(message.get("content") or "")
         for message in followup_adapter.requests[0]["messages"]
     )
 
 
 @pytest.mark.asyncio
-async def test_user_cancel_replays_interrupted_reasoning_only_through_checkpoint(
+async def test_user_cancel_keeps_interrupted_reasoning_out_of_later_requests(
     tmp_path: Path,
 ) -> None:
     adapter = BlockingReasoningStreamingStubAdapter()
@@ -259,11 +255,6 @@ async def test_user_cancel_replays_interrupted_reasoning_only_through_checkpoint
     assert "reasoning_meta" not in reasoning_events[-1].payload["message"]
     assert assistant_events[-1].payload["message"]["interrupted"] is True
 
-    state = await recover_continuation(
-        runtime.chat_sessions.get(session_address("coder", "session-one"))
-    )
-    assert state is not None
-    assert state.reasoning == "Thinking hard."
     summaries = [message for message in messages if message.role == "run_summary"]
     assert summaries[-1].status == "cancelled"
 
@@ -275,12 +266,10 @@ async def test_user_cancel_replays_interrupted_reasoning_only_through_checkpoint
     await build_chat_loop(runtime).send("coder", "Continue safely", session_id="session-one")
 
     request_messages = followup_adapter.requests[0]["messages"]
-    reminder = next(
-        str(message["content"])
-        for message in request_messages
-        if "<continuation-checkpoint" in str(message.get("content") or "")
-    )
-    assert "Thinking hard." in reminder
+    request_text = "\n".join(str(message.get("content") or "") for message in request_messages)
+    # The reasoning-only turn is not sent; the next request only says why it stopped.
+    assert "Thinking hard." not in request_text
+    assert request_text.count("The user stopped your previous turn before it was complete.") == 1
     assert not [message for message in request_messages if message["role"] == "assistant"]
     persisted = history(runtime)
     assert persisted[1].reasoning == "Thinking hard."
@@ -358,7 +347,7 @@ async def test_cancel_during_completed_answer_preparation_preserves_visible_answ
 
 
 @pytest.mark.asyncio
-async def test_internal_cancellation_after_reasoning_keeps_a_continuation_checkpoint(
+async def test_internal_cancellation_after_reasoning_leaves_only_its_summary(
     tmp_path: Path,
 ) -> None:
     runtime = stream_runtime(tmp_path, MidStreamCancelledStubAdapter([]))
@@ -366,9 +355,8 @@ async def test_internal_cancellation_after_reasoning_keeps_a_continuation_checkp
     with pytest.raises(RunCancelledError):
         await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
-    assert persisted_roles(history(runtime)) == ["user"]
-    state = await recover_continuation(
-        runtime.chat_sessions.get(session_address("coder", "session-one"))
-    )
-    assert state is not None
-    assert (state.reasoning, state.cause) == ("Need network.", "internal")
+    messages = history(runtime)
+    assert persisted_roles(messages) == ["user"]
+    assert (messages[-1].role, messages[-1].status) == ("run_summary", "cancelled")
+    with sqlite3.connect(runtime.chat_sessions._store.path) as connection:
+        assert connection.execute("SELECT count(*) FROM run_stream_drafts").fetchone() == (0,)

@@ -346,10 +346,10 @@ async def test_bound_session_capability_delivers_once_and_ends_after_tool_batch(
 
     finish = runtime.chat_sessions.finish_run
 
-    async def finish_with_failure(*args):
+    async def finish_with_failure(*args, **kwargs):
         if finalization_failure == "summary":
             raise OSError("summary-fixture")
-        return await finish(*args)
+        return await finish(*args, **kwargs)
 
     monkeypatch.setattr(runtime.chat_sessions, "finish_run", finish_with_failure)
     run = await build_chat_loop(runtime).start_temporary_run(binding, "initial")

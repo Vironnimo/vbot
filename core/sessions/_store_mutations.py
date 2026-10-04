@@ -178,9 +178,10 @@ def append_messages(
 
     Messages of a Run require that Run to be admitted and running here. A Tool
     result links to the one stored call it answers; its *tool_results* facts
-    record how the call ended, and a result without facts completed. An Agent
-    takeover moves the cursor floor past itself, so no earlier read cursor
-    continues across it.
+    record how the call ended, and a result without facts completed. An
+    Assistant entry of a Run holds the output streamed so far, so it deletes
+    that Run's stream draft. An Agent takeover moves the cursor floor past
+    itself, so no earlier read cursor continues across it.
     """
     if not messages:
         return []
@@ -220,6 +221,8 @@ def append_messages(
             floor = seq + 1
         keys.append(entry_key)
         seq += 1
+    if run_key is not None and any(message.role == "assistant" for message in messages):
+        connection.execute("DELETE FROM run_stream_drafts WHERE run_key = ?", (run_key,))
     last = messages[-1]
     connection.execute(
         "UPDATE sessions SET next_seq = ?, last_activity_at = ?, last_entry_id = ?, "

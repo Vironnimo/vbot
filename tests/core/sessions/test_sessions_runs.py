@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import sqlite3
 
 import pytest
@@ -9,7 +11,7 @@ import pytest
 from core.chat import ChatMessage
 from core.chat.errors import ChatSessionError
 from core.chat.messages import ToolCall
-from core.runs import ChatRunManager, RunAdmission, RunKind
+from core.runs import ChatRunManager, Run, RunAdmission, RunInterruptedError, RunKind
 from core.sessions import SESSION_RUN_KINDS_META_KEY, SessionRunRecord
 from core.sessions._types import SessionRunCompletion
 from core.sessions.errors import SessionNotFoundError
@@ -160,25 +162,117 @@ async def test_run_admission_requires_the_expected_live_generation(manager, sess
     await runs.aclose()
 
 
-def test_restart_settles_run_and_unfinished_calls_once(manager):
+@pytest.mark.asyncio
+async def test_restart_settles_run_streamed_output_and_unfinished_calls_once(manager):
     session = manager.create("coder").start_run("abandoned")
     session.append(
         ChatMessage.assistant(
             model="test", content=None, tool_calls=[ToolCall(id="call", name="write", arguments={})]
         )
     )
+    # The next Model step streamed output that no Assistant entry holds yet.
+    await session.append_stream_draft_async(
+        model="first", reasoning_delta="Plan ", content_delta="Half"
+    )
+    await session.append_stream_draft_async(
+        model="second", reasoning_delta="more.", content_delta=" an answer"
+    )
     manager.recover_interrupted_runs()
     first = session.load()
     manager.recover_interrupted_runs()
     assert session.load() == first
-    assert session.find_run_summary(run_id="abandoned").status == "interrupted"
+    partial = first[-2]
+    assert (partial.role, partial.model, partial.content, partial.reasoning) == (
+        "assistant",
+        "second",
+        "Half an answer",
+        "Plan more.",
+    )
+    assert (partial.interrupted, partial.interruption_cause) == (True, "process_restart")
+    summary = session.find_run_summary(run_id="abandoned")
+    assert (summary.status, summary.completion_reason) == ("interrupted", "process_restart")
+    assert first[-1] == summary
     with sqlite3.connect(manager._store.path) as connection:
         assert connection.execute("SELECT status, result_entry_key FROM tool_calls").fetchall() == [
             ("interrupted", None)
         ]
-        assert connection.execute("SELECT completion_reason FROM runs").fetchone() == (
-            "process_restart",
+        assert connection.execute("SELECT count(*) FROM run_stream_drafts").fetchone() == (0,)
+
+
+@pytest.mark.asyncio
+async def test_a_stream_draft_lasts_until_the_runs_next_assistant_entry(manager):
+    session = manager.create("coder")
+    writer = session.start_run("run")
+
+    async def draft(content: str) -> None:
+        await writer.append_stream_draft_async(
+            model="test", reasoning_delta="", content_delta=content
         )
+
+    def stored() -> list[tuple[str, ...]]:
+        with sqlite3.connect(manager._store.path) as connection:
+            return connection.execute(
+                "SELECT content_delta FROM run_stream_drafts ORDER BY chunk_key"
+            ).fetchall()
+
+    await draft("restarted")
+    await writer.discard_stream_draft_async()
+    assert stored() == []
+    await draft("streamed")
+    writer.append(ChatMessage.user("steering"))
+    assert stored() == [("streamed",)]
+    writer.append(ChatMessage.assistant(model="test", content="streamed"))
+    assert stored() == []
+    await draft("next step")
+    await manager.finish_run(
+        Run(run_id="run", agent_id="coder", session_id=session.id),
+        "cancelled",
+        {
+            "timing": {
+                "started_at": "2026-09-19T10:00:00Z",
+                "completed_at": "2026-09-19T10:00:01Z",
+                "duration_ms": 1000,
+            }
+        },
+        completion_reason="user",
+    )
+    assert stored() == []
+    with pytest.raises(ChatSessionError, match="running Run"):
+        await draft("late")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "status", "reason"),
+    [
+        ("answer", "completed", None),
+        ("cancel", "cancelled", "user"),
+        ("interrupt", "interrupted", "network"),
+    ],
+)
+async def test_the_run_summary_names_why_a_run_stopped_early(manager, outcome, status, reason):
+    session = manager.create("coder")
+    runs = ChatRunManager(persistence=manager)
+    stopped = asyncio.Event()
+
+    async def execute(run):
+        session.for_run(run.id).append(ChatMessage.user("question"))
+        if outcome == "interrupt":
+            raise RunInterruptedError("network")
+        if outcome == "cancel":
+            stopped.set()
+            await asyncio.Event().wait()
+        return "answer"
+
+    run = await runs.start(session.address, execute)
+    if outcome == "cancel":
+        await stopped.wait()
+        await runs.cancel(run.id, reason="user")
+    with contextlib.suppress(Exception, asyncio.CancelledError):
+        await run.wait()
+    summary = session.find_run_summary(run_id=run.id)
+    assert (summary.status, summary.completion_reason) == (status, reason)
+    await runs.aclose()
 
 
 @pytest.mark.asyncio
@@ -186,7 +280,7 @@ async def test_failed_terminal_transaction_never_claims_persistence(manager, mon
     session = manager.create("coder")
     runs = ChatRunManager(persistence=manager)
 
-    async def fail_finish(*args):
+    async def fail_finish(*args, **kwargs):
         raise OSError("storage unavailable")
 
     monkeypatch.setattr(manager, "finish_run", fail_finish)
@@ -269,7 +363,7 @@ async def test_settled_run_rejects_late_output_and_duplicate_completion(manager)
     with pytest.raises(ChatSessionError, match="running Run"):
         session.for_run(run.id).append(ChatMessage.assistant(model="test", content="late"))
     with pytest.raises(ChatSessionError, match="running Run"):
-        await manager.finish_run(run, "completed", run.events[-1].payload)
+        await manager.finish_run(run, "completed", run.events[-1].payload, completion_reason=None)
     await runs.aclose()
 
 

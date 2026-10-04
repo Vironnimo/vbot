@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 from typing import Any, cast
@@ -12,6 +13,7 @@ import pytest
 from core.chat import ChatMessage
 from core.chat._message_history import effective_compaction_messages
 from core.chat._run_state import _RequestState
+from core.chat.wire_shaping import _embed_notes_into_request
 from core.compaction import CompactionError, CompactionService
 from core.compaction.run_coordination import AUTO_COMPACTION_COMMIT_ATTEMPTS
 from core.prompts.pinned_context import PINNED_SKILL_CATALOG_SLOT, pinned_skill_catalog
@@ -463,4 +465,6 @@ async def test_stop_during_post_answer_compaction_keeps_the_answer_resolved(
     session = runtime.chat_sessions.get(session_address("coder", "one"))
     assistant = next(message for message in session.load() if message.role == "assistant")
     assert (assistant.content, assistant.interrupted) == ("Complete answer", False)
-    assert session.load_continuation() is None
+    # The Run stopped after its final answer, so the next request tells nothing about it.
+    request = _embed_notes_into_request(session.load())
+    assert "previous turn" not in json.dumps(request)

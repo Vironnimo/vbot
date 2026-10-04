@@ -16,7 +16,6 @@ from core.sessions._types import (
     SeenSkillsUpdate,
     SessionAddress,
     SessionChatHistorySnapshot,
-    SessionContinuationState,
     SessionReadBatch,
     SessionReadCursor,
     SessionRunAdmission,
@@ -101,7 +100,6 @@ class ChatSession:
         *,
         tool_results: Mapping[str, ToolResultFacts] | None = None,
         seen_skills: SeenSkillsUpdate | None = None,
-        continuation_records: Sequence[JsonObject] = (),
         since: SessionReadCursor | None = None,
     ) -> SessionReadBatch | None:
         """Append *messages*; see ``SessionStore.append_messages`` for the options."""
@@ -112,7 +110,6 @@ class ChatSession:
             assistant_message_id=self.assistant_message_id,
             tool_results=tool_results,
             seen_skills=seen_skills,
-            continuation_records=continuation_records,
             since=since,
         )
         self._appended(messages)
@@ -156,12 +153,10 @@ class ChatSession:
         messages: list[ChatMessage],
         *,
         seen_skills: SeenSkillsUpdate | None = None,
-        continuation_records: Sequence[JsonObject] = (),
     ) -> SessionReadBatch:
         """Replace history from *target_message_id* on with *messages*, in one transaction.
 
-        The Continuation restarts from *continuation_records*; see
-        ``SessionStore.apply_edit``.
+        See ``SessionStore.apply_edit``.
         """
         result = self._store.apply_edit(
             self.address,
@@ -169,7 +164,6 @@ class ChatSession:
             messages=messages,
             run_id=self.run_id,
             seen_skills=seen_skills,
-            continuation_records=continuation_records,
         )
         # The edit deactivated the tail it replaced; reload the Skill cache on next use.
         with self._buffers.lock:
@@ -183,14 +177,12 @@ class ChatSession:
         messages: list[ChatMessage],
         *,
         seen_skills: SeenSkillsUpdate | None = None,
-        continuation_records: Sequence[JsonObject] = (),
     ) -> SessionReadBatch:
         return await self._store.run_async(
             lambda: self.apply_edit(
                 target_message_id,
                 list(messages),
                 seen_skills=seen_skills,
-                continuation_records=list(continuation_records),
             )
         )
 
@@ -211,7 +203,6 @@ class ChatSession:
         *,
         tool_results: Mapping[str, ToolResultFacts] | None = None,
         seen_skills: SeenSkillsUpdate | None = None,
-        continuation_records: Sequence[JsonObject] = (),
         since: SessionReadCursor | None = None,
     ) -> SessionReadBatch | None:
         if not messages and seen_skills is None:
@@ -221,42 +212,45 @@ class ChatSession:
                 list(messages),
                 tool_results=tool_results,
                 seen_skills=seen_skills,
-                continuation_records=list(continuation_records),
                 since=since,
             )
         )
 
     async def record_change_stats_async(self, change_stats: JsonObject) -> None:
         """Store the bound running Run's change statistics so far."""
-        if self.run_id is None:
-            raise ChatSessionError("Change statistics need a Run-bound Session")
-        run_id = self.run_id
+        run_id = self._require_run_id("Change statistics")
         await self._store.run_async(
             lambda: self._store.record_run_changes(self.address, run_id, change_stats)
         )
 
-    def append_continuation_record(self, record: JsonObject) -> None:
-        self.append_continuation_records([record])
+    async def append_stream_draft_async(
+        self, *, model: str, reasoning_delta: str, content_delta: str
+    ) -> None:
+        """Append streamed output of the bound running Run's current Model step to its draft.
 
-    def append_continuation_records(self, records: list[JsonObject]) -> None:
-        self._store.append_continuation(self.address, records)
+        Restart recovery turns the draft into the Run's interrupted Assistant
+        entry; appending the Run's next Assistant entry deletes it.
+        """
+        run_id = self._require_run_id("A stream draft")
+        await self._store.run_async(
+            lambda: self._store.append_stream_draft(
+                self.address,
+                run_id,
+                model=model,
+                reasoning_delta=reasoning_delta,
+                content_delta=content_delta,
+            )
+        )
 
-    async def append_continuation_records_async(self, records: list[JsonObject]) -> None:
-        if records:
-            await self._store.run_async(self.append_continuation_records, list(records))
+    async def discard_stream_draft_async(self) -> None:
+        """Delete the bound running Run's stream draft, whose Model step starts over."""
+        run_id = self._require_run_id("A stream draft")
+        await self._store.run_async(lambda: self._store.discard_stream_draft(self.address, run_id))
 
-    def load_continuation(self) -> SessionContinuationState | None:
-        """Return the current Continuation state folded from its records."""
-        return self._store.continuation(self.address)
-
-    async def load_continuation_async(self) -> SessionContinuationState | None:
-        return await self._store.run_async(self.load_continuation)
-
-    def clear_continuation(self) -> None:
-        self._store.clear_continuation(self.address)
-
-    async def clear_continuation_async(self) -> None:
-        await self._store.run_async(self.clear_continuation)
+    def _require_run_id(self, subject: str) -> str:
+        if self.run_id is None:
+            raise ChatSessionError(f"{subject} needs a Run-bound Session")
+        return self.run_id
 
     def begin_defer_notes(self) -> None:
         with self._buffers.lock:

@@ -30,7 +30,7 @@ Task-gated detail for `sessions.md`: how forks share history, how a history edit
 3. Supersede own non-superseded entries at or after the target at `marker_seq` (the current `next_seq`), then `truncate` the lineage at the target (segments starting at or after it are deleted, longer ones shortened). `fork_point_seq` does not change.
 4. Insert the `history_edit` marker at `marker_seq`, superseded at its own seq; set `next_seq` and `cursor_floor_seq` to `marker_seq + 1`, so every earlier cursor stops continuing.
 5. Append the replacement Messages, then re-index the candidates; only entries some view still holds return.
-6. Delete the Continuation and fold `continuation_records`; record `seen_skills` if given; the prompt-cache affinity id stays.
+6. Record `seen_skills` if given; the prompt-cache affinity id stays.
 7. If no current User entry precedes the target, clear `auto_title` and `auto_title_initialized` (no title callback).
 8. Return the complete own audit and current view; `ChatSession.apply_edit` then drops its Skill activation cache.
 
@@ -42,6 +42,6 @@ Task-gated detail for `sessions.md`: how forks share history, how a history edit
 3. For each descendant segment that names this Session (`session_lineage_by_ancestor`), live or archived alike, so purging an archived ancestor leaves every descendant whole: `copy_entries` gives the descendant its own copies of the entries that segment admits (same `seq` and id, new keys, current; side rows, Tool calls with payloads, and referenced Runs), deletes the segment, indexes the copies, and bumps the descendant's `history_revision` and `state_revision`. Copied Runs are `inherited = 1` with `contributes_to_activity = 0` and no `end_entry_key` until their copied `run_summary` sets it; running ones and unfinished calls end `interrupted`.
 4. Delete the Session's own lineage rows and re-index the collected candidates.
 
-Then the `sessions` row is deleted (entries, Runs, side rows, prompt pins, seen Skills, Continuation and owned relations cascade; direct forks' `fork_parent_key` becomes NULL, so their `fork_source` disappears), and prompt blobs no other Session pins are deleted. A descendant's cursor stays valid across the materialization (same seqs and ids), while its revision bump makes Recall and Statistics re-read it.
+Then the `sessions` row is deleted (entries, Runs, side rows, prompt pins, seen Skills, Stream drafts and owned relations cascade; direct forks' `fork_parent_key` becomes NULL, so their `fork_source` disappears), and prompt blobs no other Session pins are deleted. A descendant's cursor stays valid across the materialization (same seqs and ids), while its revision bump makes Recall and Statistics re-read it.
 
 Materialization copies every live `entries` column, including additive columns unknown to this version, while replacing only the entry key, owning Session, Run reference and supersession state. Side-row and Run copies, including Run change paths, likewise preserve additive columns; deleting an ancestor must not erase newer fields from the descendant's history.

@@ -693,7 +693,6 @@ def _optional_run_kwargs(
     callback: Callable[[], None] | None,
     contributes_to_agent_activity: bool,
     run_kind: RunKind,
-    resume_process_restart: bool = False,
 ) -> dict[str, Any]:
     """Project non-default Run options onto the ChatLoop call."""
     options: dict[str, Any] = {}
@@ -703,8 +702,6 @@ def _optional_run_kwargs(
         options["contributes_to_agent_activity"] = False
     if run_kind is not RunKind.USER:
         options["run_kind"] = run_kind
-    if resume_process_restart:
-        options["resume_process_restart"] = True
     return options
 
 
@@ -839,7 +836,6 @@ class TriggerService:
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
-        resume_process_restart: bool = False,
     ) -> Run:
         """Start a run immediately, or queue it until the target session is idle.
 
@@ -868,7 +864,6 @@ class TriggerService:
                             input_persisted_hook,
                             contributes_to_agent_activity,
                             run_kind,
-                            resume_process_restart,
                         ),
                     )
                 return await self._trigger_chat_loop.start_run_in_new_session(
@@ -882,7 +877,6 @@ class TriggerService:
                         input_persisted_hook,
                         contributes_to_agent_activity,
                         run_kind,
-                        resume_process_restart,
                     ),
                 )
             finally:
@@ -903,7 +897,6 @@ class TriggerService:
                         input_persisted_hook,
                         contributes_to_agent_activity,
                         run_kind,
-                        resume_process_restart,
                     ),
                 )
             else:
@@ -919,7 +912,6 @@ class TriggerService:
                         input_persisted_hook,
                         contributes_to_agent_activity,
                         run_kind,
-                        resume_process_restart,
                     ),
                 )
         except ActiveRunError:
@@ -938,7 +930,6 @@ class TriggerService:
                                 input_persisted_hook,
                                 contributes_to_agent_activity,
                                 run_kind,
-                                resume_process_restart,
                             ),
                         )
                     else:
@@ -955,7 +946,6 @@ class TriggerService:
                                 input_persisted_hook,
                                 contributes_to_agent_activity,
                                 run_kind,
-                                resume_process_restart,
                             ),
                         )
                 else:
@@ -972,7 +962,6 @@ class TriggerService:
                                 input_persisted_hook,
                                 contributes_to_agent_activity,
                                 run_kind,
-                                resume_process_restart,
                             ),
                         )
                     else:
@@ -989,7 +978,6 @@ class TriggerService:
                                 input_persisted_hook,
                                 contributes_to_agent_activity,
                                 run_kind,
-                                resume_process_restart,
                             ),
                         )
                 try:

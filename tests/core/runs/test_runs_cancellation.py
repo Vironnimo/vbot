@@ -42,7 +42,7 @@ async def test_completion_observer_abort_cannot_strand_committed_run(cancelled):
         async def start_run(self, run):
             pass
 
-        async def finish_run(self, run, status, payload):
+        async def finish_run(self, run, status, payload, *, completion_reason):
             committed.append((run.id, status))
             return {}
 
@@ -285,7 +285,9 @@ async def test_cancel_during_admission_still_persists_the_cancelled_run() -> Non
             admitting.set()
             await release.wait()
 
-        async def finish_run(self, run: Run, status: str, payload: dict) -> dict:
+        async def finish_run(
+            self, run: Run, status: str, payload: dict, *, completion_reason: str | None
+        ) -> dict:
             finished.append((run.id, status))
             return {}
 

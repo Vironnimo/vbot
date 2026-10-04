@@ -1,8 +1,7 @@
 """Compound Session operations: each one domain step in one transaction.
 
-A Compaction commit and a history edit each change history, prompt state and
-Continuation state together, so no caller ever observes (or crashes between)
-half of one.
+A Compaction commit and a history edit each change history and prompt state
+together, so no caller ever observes (or crashes between) half of one.
 """
 # ruff: noqa: E501
 
@@ -15,7 +14,6 @@ from typing import TYPE_CHECKING
 from core.chat.errors import ChatSessionError
 from core.sessions import (
     _store_codec,
-    _store_continuation,
     _store_fts,
     _store_history,
     _store_lineage,
@@ -24,7 +22,7 @@ from core.sessions import (
     _store_timeline,
     _store_values,
 )
-from core.sessions._types import JsonObject, PromptEpoch, SeenSkillsUpdate
+from core.sessions._types import PromptEpoch, SeenSkillsUpdate
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
@@ -98,15 +96,13 @@ def apply_edit(
     messages: Sequence[ChatMessage],
     run_id: str | None,
     seen_skills: SeenSkillsUpdate | None = None,
-    continuation_records: Sequence[JsonObject] = (),
 ) -> _store_history.HistoryDelta:
     """Replace history from one User message on, in one transaction.
 
     Everything from the target on leaves the current view: the Session's own
     entries are superseded and inherited history is cut at the target. A
     ``history_edit`` marker (kept only in the own audit) and *messages* follow
-    at the end. The Continuation starts over from *continuation_records*, and
-    a generated title is cleared when the edit replaces the first User
+    at the end. A generated title is cleared when the edit replaces the first User
     message. The prompt-cache affinity id stays, so the Provider keeps routing
     to the cache that holds the unchanged history before the edit. Returns
     the complete history after the edit.
@@ -165,8 +161,6 @@ def apply_edit(
     _store_mutations.append_messages(connection, address, messages, run_id=run_id)
     _store_fts.fts_index_keys(connection, candidates)
 
-    connection.execute("DELETE FROM continuations WHERE session_key = ?", (session_key,))
-    _store_continuation.append_continuation(connection, address, continuation_records)
     if seen_skills is not None:
         _store_prompts.record_seen_skills(connection, session_key, seen_skills)
     if reset_title:

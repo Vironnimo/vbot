@@ -594,7 +594,6 @@ class BootstrapService:
                 project_id=job.project_id,
                 run_kind=RunKind.SYSTEM,
                 contributes_to_agent_activity=False,
-                resume_process_restart=job.session_id is not None,
             )
             self._active_runs[job_id] = run
             latest = self._jobs.get(job_id)

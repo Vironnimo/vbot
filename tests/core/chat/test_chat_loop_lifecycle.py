@@ -1,5 +1,4 @@
-"""Chat Run lifecycle: run-end observers, admission records, restart Continuations and
-failure outcomes."""
+"""Chat Run lifecycle: run-end observers, admission records and failure outcomes."""
 
 from __future__ import annotations
 
@@ -16,7 +15,6 @@ from core.attachments import AttachmentStore
 from core.chat import ChatMessage, ChatSessionError
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import TextBlock
-from core.chat.continuation import ContinuationCause, ContinuationTracker
 from core.chat.streaming import StreamingChunkTimeoutError
 from core.compaction import CompactionService
 from core.providers.errors import NetworkError, ProviderError, ProviderTimeoutError
@@ -55,23 +53,6 @@ def _runtime(tmp_path: Path, responses: list[Any], **adapter_options: Any) -> An
 
 def _answer(content: str = "Done") -> JsonObject:
     return {"content": content, "reasoning": None, "tool_calls": None}
-
-
-async def _interrupted_by_restart(
-    runtime: Any, cause: ContinuationCause = "process_restart"
-) -> Any:
-    """A Session whose previous Run was interrupted, by default by a process restart."""
-    session = runtime.chat_sessions.get(SESSION)
-    session.start_run("run-before-restart")
-    tracker = ContinuationTracker(session, run_id="run-before-restart", request="update vBot")
-    await tracker.interrupt(cause)
-    return session
-
-
-def _sent_text(runtime: Any) -> str:
-    return "\n".join(
-        str(message.get("content") or "") for message in runtime.adapter.requests[0]["messages"]
-    )
 
 
 @pytest.mark.asyncio
@@ -263,63 +244,19 @@ async def test_owned_descendant_records_its_admission_and_skips_titles_and_refle
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("cause", "resume", "consumed"),
-    [
-        ("process_restart", False, False),
-        ("process_restart", True, True),
-        ("network", True, False),
-    ],
-    ids=["not-resuming", "resuming", "not-a-restart"],
-)
-async def test_only_a_resuming_internal_run_consumes_a_restart_continuation(
-    tmp_path: Path, cause: ContinuationCause, resume: bool, consumed: bool
-) -> None:
-    runtime = _runtime(tmp_path, [_answer("Verified")])
-    session = await _interrupted_by_restart(runtime, cause)
-    before = session.load_continuation()
-    assert before is not None
-
-    run = await build_chat_loop(runtime).start_run(
-        "coder",
-        "Verify the update and report",
-        session_id="session-one",
-        internal=True,
-        resume_process_restart=resume,
-    )
-    await run.wait()
-
-    # Any other internal Run leaves the checkpoint untouched for the next user Run.
-    assert ("<continuation-checkpoint" in _sent_text(runtime)) is consumed
-    after = session.load_continuation()
-    if consumed:
-        assert after is None
-    else:
-        assert after is not None
-        assert (after.checkpoint_id, after.latest_run_id) == (
-            before.checkpoint_id,
-            before.latest_run_id,
-        )
-
-
-@pytest.mark.asyncio
-async def test_run_commit_failure_preserves_output_and_recoverable_continuation(
+async def test_run_commit_failure_preserves_output_and_leaves_the_run_for_restart_recovery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = _runtime(tmp_path, [_answer("Verified")])
-    session = await _interrupted_by_restart(runtime)
+    session = runtime.chat_sessions.get(SESSION)
 
-    async def fail_finish(*_args: Any) -> None:
+    async def fail_finish(*_args: Any, **_kwargs: Any) -> None:
         raise OSError("injected Run transaction failure")
 
     monkeypatch.setattr(runtime.chat_sessions, "finish_run", fail_finish)
 
     run = await build_chat_loop(runtime).start_run(
-        "coder",
-        "Verify the update",
-        session_id="session-one",
-        internal=True,
-        resume_process_restart=True,
+        "coder", "Verify the update", session_id="session-one"
     )
     with pytest.raises(OSError):
         await run.wait()
@@ -327,33 +264,9 @@ async def test_run_commit_failure_preserves_output_and_recoverable_continuation(
     assert run.status is RunStatus.FAILED
     assert run.events[-1].payload["history_persisted"] is False
     assert any(message.content == "Verified" for message in session.load())
-    assert session.load_continuation() is not None
     assert session.find_run_summary(run_id=run.id) is None
-
-
-@pytest.mark.asyncio
-async def test_continuation_finalization_failure_does_not_replace_run_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    runtime = _runtime(tmp_path, [_answer()])
-    await _interrupted_by_restart(runtime)
-
-    async def fail_resolve(_self: ContinuationTracker) -> None:
-        raise OSError("injected Continuation finalization failure")
-
-    monkeypatch.setattr(ContinuationTracker, "resolve", fail_resolve)
-
-    run = await build_chat_loop(runtime).start_run(
-        "coder",
-        "Finish the update",
-        session_id="session-one",
-        internal=True,
-        resume_process_restart=True,
-    )
-    result = await run.wait()
-
-    assert run.status is RunStatus.COMPLETED
-    assert result.content == "Done"
+    runtime.chat_sessions.recover_interrupted_runs()
+    assert session.find_run_summary(run_id=run.id).status == "interrupted"
 
 
 @pytest.mark.asyncio
@@ -555,7 +468,6 @@ async def test_final_change_stats_allow_loop_progress_and_survive_cancel(
         }
         messages = session.load()
         assert messages[-1].change_stats == run.terminal_payload_extras["change_stats"]
-        assert session.load_continuation() is None
     finally:
         release.set()
         await runtime.chat_runs.aclose()

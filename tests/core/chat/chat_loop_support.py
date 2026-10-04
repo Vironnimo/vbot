@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import atexit
-import json
 import shutil
 import tempfile
 from dataclasses import dataclass, field, replace
@@ -151,23 +150,6 @@ async def event_types(runtime: Any, run: Run) -> list[str]:
         for event_type in await runtime.timelines.types(run)
         if event_type != PROVIDER_REQUEST_STATUS_EVENT
     ]
-
-
-def quoted_json_objects(text: str) -> list[JsonObject]:
-    """Decode every complete top-level JSON object quoted inside rendered text."""
-    decoder = json.JSONDecoder()
-    objects: list[JsonObject] = []
-    index = text.find("{")
-    while index != -1:
-        try:
-            value, end = decoder.raw_decode(text, index)
-        except json.JSONDecodeError:
-            index = text.find("{", index + 1)
-            continue
-        if isinstance(value, dict):
-            objects.append(value)
-        index = text.find("{", end)
-    return objects
 
 
 @dataclass(frozen=True)

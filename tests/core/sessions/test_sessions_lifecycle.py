@@ -22,7 +22,7 @@ from core.prompts.pinned_context import (
 from core.runs import RunKind
 from core.sessions import FORK_SOURCE_META_KEY, ChatSessionManager
 from tests.core.sessions.history_fixtures import admit_run, settle_run
-from tests.core.sessions.sessions_test_support import _address, _continuation_start
+from tests.core.sessions.sessions_test_support import _address
 
 
 def test_committed_message_survives_a_fresh_runtime_open(tmp_path) -> None:
@@ -146,22 +146,23 @@ def test_move_and_fork_read_metadata_inside_their_writer_transaction(
     assert manager.get_metadata(result.address)["title"] == "latest title"
 
 
-def test_fork_inherits_history_but_not_activity_or_continuation(manager) -> None:
+def test_fork_inherits_history_but_not_activity_or_a_stream_draft(manager) -> None:
     source = manager.create("coder", session_id="source")
     source.append_many(
         [ChatMessage.user("hello"), ChatMessage.assistant(model="test", content="hi")]
     )
     source_address = _address("coder", "source")
     settle_run(manager, source_address, "run-1")
-    source.start_run("run-one")
-    source.append_continuation_record(_continuation_start())
+    streaming = source.start_run("run-one")
+    asyncio.run(
+        streaming.append_stream_draft_async(model="test", reasoning_delta="", content_delta="half")
+    )
 
     forked = asyncio.run(manager.fork(source_address, target_agent_id="reviewer"))
 
     # The fork's current view shows the inherited history; its own audit is empty.
     assert forked.load_active() == source.load_active()
     assert forked.load() == []
-    assert forked.load_continuation() is None
     # The latest completion is the source's own; the fork completed no Run, and
     # an inherited Run's id marks nothing read there.
     assert manager.list_completion_activity([(None, "reviewer")]) == {(None, "reviewer"): []}

@@ -287,35 +287,11 @@ def _populate(manager: ChatSessionManager, session_id: str) -> ChatSession:
     edited = ChatMessage.user("draft")
     session.append(edited)
     session.apply_edit(edited.id, [ChatMessage.user("final")])
-    run_id = f"{session_id}-continued"
-    continued = session.start_run(run_id)
-    continued.append_continuation_records(
-        [
-            {
-                "version": 1,
-                "type": "run_started",
-                "checkpoint_id": "checkpoint-one",
-                "run_id": run_id,
-                "origin_run_id": run_id,
-                "timestamp": "2026-08-31T12:00:00+00:00",
-                "request": "continue this work",
-            },
-            {
-                "version": 1,
-                "type": "stream_delta",
-                "run_id": run_id,
-                "step": 1,
-                "content_delta": "partial",
-            },
-            {
-                "version": 1,
-                "type": "assistant_boundary",
-                "run_id": run_id,
-                "step": 1,
-                "message_id": f"{session_id}-partial",
-                "tool_calls": [{"id": "operation", "name": "read"}],
-            },
-        ]
+    streaming = session.start_run(f"{session_id}-streaming")
+    asyncio.run(
+        streaming.append_stream_draft_async(
+            model="test", reasoning_delta="plan", content_delta="partial"
+        )
     )
     return session
 
@@ -356,7 +332,7 @@ def test_deleting_a_session_removes_exactly_what_it_owns(manager: ChatSessionMan
     assert owned <= {table for table, count in populated.items() if count > before[table]}
     assert {
         "tool_result_payloads",
-        "continuation_step_chunks",
+        "run_stream_drafts",
         "user_entry_senders",
         "note_model_fallbacks",
     } <= owned

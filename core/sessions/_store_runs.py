@@ -160,9 +160,9 @@ def finish_run(
     """Complete one running Run with its summary entry, in one transaction.
 
     The summary entry closes the Run's history. Unresolved Tool calls of the
-    Run end cancelled (for a cancelled Run) or interrupted, a completed Run
-    resolves the Continuation it continued, and an activity-contributing Run
-    becomes the Session's latest completion. Returns the committed cursor.
+    Run end cancelled (for a cancelled Run) or interrupted, its stream draft is
+    deleted, and an activity-contributing Run becomes the Session's latest
+    completion. Returns the committed cursor.
     """
     from core.chat.messages import ChatMessage
 
@@ -182,6 +182,11 @@ def finish_run(
         timing=completion.timing,
         iteration_count=completion.iteration_count,
         change_stats=completion.change_stats,
+        completion_reason=(
+            completion.completion_reason
+            if completion.status in {"cancelled", "interrupted"}
+            else None
+        ),
         timestamp=datetime.fromisoformat(
             _store_values._timestamp(completion.timing.get("completed_at", ""), "Run completion")
         ),
@@ -222,11 +227,7 @@ def finish_run(
             run_key,
         ),
     )
-    if completion.status == "completed":
-        connection.execute(
-            "DELETE FROM continuations WHERE session_key = ? AND latest_run_key = ?",
-            (session_key, run_key),
-        )
+    connection.execute("DELETE FROM run_stream_drafts WHERE run_key = ?", (run_key,))
     latest = (
         (run_key, completion.status, completed_at)
         if completion.contributes_to_activity
@@ -264,15 +265,9 @@ def record_run_changes(
     """
     from core.chat.messages import ChatMessage
 
-    state = _store_values._require_live(connection, address)
-    run = connection.execute(
-        "SELECT run_key, status, inherited FROM runs WHERE session_key = ? AND run_id = ?",
-        (int(state["session_key"]), run_id),
-    ).fetchone()
-    if run is None or run["status"] != "running" or run["inherited"]:
-        raise ChatSessionError("Only an admitted running Run records change statistics")
+    run_key = _running_run_key(connection, address, run_id, "records change statistics")
     ChatMessage.validate_change_stats(change_stats)
-    _write_change_stats(connection, int(run["run_key"]), change_stats)
+    _write_change_stats(connection, run_key, change_stats)
 
 
 def _write_change_stats(
@@ -309,11 +304,88 @@ def _write_change_stats(
     )
 
 
+def _running_run_key(
+    connection: sqlite3.Connection, address: SessionAddress, run_id: str, action: str
+) -> int:
+    state = _store_values._require_live(connection, address)
+    run = connection.execute(
+        "SELECT run_key, status, inherited FROM runs WHERE session_key = ? AND run_id = ?",
+        (int(state["session_key"]), run_id),
+    ).fetchone()
+    if run is None or run["status"] != "running" or run["inherited"]:
+        raise ChatSessionError(f"Only an admitted running Run {action}")
+    return int(run["run_key"])
+
+
+def append_stream_draft(
+    connection: sqlite3.Connection,
+    address: SessionAddress,
+    run_id: str,
+    *,
+    model: str,
+    reasoning_delta: str,
+    content_delta: str,
+) -> None:
+    """Append streamed output of a running Run's current Model step to its draft."""
+    if not model:
+        raise ChatSessionError("A stream draft chunk requires its Model")
+    if not reasoning_delta and not content_delta:
+        return
+    run_key = _running_run_key(connection, address, run_id, "records a stream draft")
+    connection.execute(
+        "INSERT INTO run_stream_drafts (run_key, model, reasoning_delta, content_delta) "
+        "VALUES (?, ?, ?, ?)",
+        (run_key, model, reasoning_delta, content_delta),
+    )
+
+
+def discard_stream_draft(
+    connection: sqlite3.Connection, address: SessionAddress, run_id: str
+) -> None:
+    """Delete a running Run's stream draft, whose Model step starts over."""
+    run_key = _running_run_key(connection, address, run_id, "discards a stream draft")
+    connection.execute("DELETE FROM run_stream_drafts WHERE run_key = ?", (run_key,))
+
+
+def _materialize_stream_draft(
+    connection: sqlite3.Connection,
+    address: SessionAddress,
+    run_key: int,
+    run_id: str,
+    timestamp: datetime,
+) -> None:
+    """Append what a Run streamed before a restart as its interrupted Assistant entry."""
+    from core.chat.messages import ChatMessage
+
+    chunks = connection.execute(
+        "SELECT model, reasoning_delta, content_delta FROM run_stream_drafts "
+        "WHERE run_key = ? ORDER BY chunk_key",
+        (run_key,),
+    ).fetchall()
+    content = "".join(str(chunk["content_delta"]) for chunk in chunks)
+    reasoning = "".join(str(chunk["reasoning_delta"]) for chunk in chunks)
+    if not content and not reasoning:
+        return
+    message = ChatMessage.assistant(
+        model=str(chunks[-1]["model"]),
+        content=content or None,
+        reasoning=reasoning or None,
+        interrupted=True,
+        interruption_cause="process_restart",
+        timestamp=timestamp,
+    )
+    _store_mutations.append_messages(connection, address, [message], run_id=run_id)
+
+
 def recover_interrupted_runs(connection: sqlite3.Connection) -> None:
-    """Settle Runs a stopped process left running, without retrying any work."""
+    """Settle Runs a stopped process left running, without retrying any work.
+
+    Output a Run streamed but had not yet stored as an Assistant entry becomes
+    its interrupted Assistant entry, before the Run's summary entry.
+    """
     now = utc_now_timestamp()
     rows = connection.execute(
-        "SELECT r.run_id, r.work_id, r.contributes_to_activity, r.iteration_count, "
+        "SELECT r.run_key, r.run_id, r.work_id, r.contributes_to_activity, r.iteration_count, "
         "r.started_at, s.project_id, s.agent_id, s.session_id FROM runs AS r "
         "JOIN sessions AS s ON s.session_key = r.session_key "
         "WHERE r.status = 'running' AND r.inherited = 0 AND s.state = 'live' "
@@ -322,11 +394,14 @@ def recover_interrupted_runs(connection: sqlite3.Connection) -> None:
     for row in rows:
         started = datetime.fromisoformat(str(row["started_at"]))
         completed = datetime.fromisoformat(now)
+        address = _store_values._address(row)
+        run_id = str(row["run_id"])
+        _materialize_stream_draft(connection, address, int(row["run_key"]), run_id, completed)
         finish_run(
             connection,
-            _store_values._address(row),
+            address,
             SessionRunCompletion(
-                run_id=str(row["run_id"]),
+                run_id=run_id,
                 status="interrupted",
                 contributes_to_activity=bool(row["contributes_to_activity"]),
                 work_id=row["work_id"],

@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, Any
 from core.database import Database, DatabaseError, open_database
 from core.sessions import (
     _store_archive,
-    _store_continuation,
     _store_fts,
     _store_history,
     _store_mutations,
@@ -48,7 +47,6 @@ if TYPE_CHECKING:
         PromptEpoch,
         SeenSkillsUpdate,
         SessionAddress,
-        SessionContinuationState,
         SessionIdentityReferenceUpdate,
         SessionListCursor,
         SessionListFilters,
@@ -380,6 +378,33 @@ class SessionStore:
             )
         )
 
+    def append_stream_draft(
+        self,
+        address: SessionAddress,
+        run_id: str,
+        *,
+        model: str,
+        reasoning_delta: str,
+        content_delta: str,
+    ) -> None:
+        """Append streamed output of a running Run's current Model step to its draft."""
+        self._execute_write(
+            lambda connection: _store_runs.append_stream_draft(
+                connection,
+                address,
+                run_id,
+                model=model,
+                reasoning_delta=reasoning_delta,
+                content_delta=content_delta,
+            )
+        )
+
+    def discard_stream_draft(self, address: SessionAddress, run_id: str) -> None:
+        """Delete a running Run's stream draft, whose Model step starts over."""
+        self._execute_write(
+            lambda connection: _store_runs.discard_stream_draft(connection, address, run_id)
+        )
+
     def recover_interrupted_runs(self) -> None:
         self._execute_write(_store_runs.recover_interrupted_runs)
 
@@ -403,10 +428,9 @@ class SessionStore:
         assistant_message_id: str | None = None,
         tool_results: Mapping[str, ToolResultFacts] | None = None,
         seen_skills: SeenSkillsUpdate | None = None,
-        continuation_records: Sequence[JsonObject] = (),
         since: SessionReadCursor | None = None,
     ) -> SessionReadBatch | None:
-        """Append Messages plus any Continuation records in one transaction.
+        """Append Messages in one transaction.
 
         *tool_results* reports each appended Tool Result's outcome by Tool call
         id. *seen_skills* records the Skills a persisted announcement named in
@@ -430,19 +454,17 @@ class SessionStore:
                 _store_prompts.record_seen_skills(
                     connection, int(state["session_key"]), seen_skills
                 )
-            return self._journal_and_select(connection, address, continuation_records, since)
+            return self._select_since(connection, address, since)
 
         delta = self._execute_write(_fn, patience_s=TRANSCRIPT_WRITE_PATIENCE_S)
         return None if delta is None else _store_history.read_batch(delta)
 
     @staticmethod
-    def _journal_and_select(
+    def _select_since(
         connection: sqlite3.Connection,
         address: SessionAddress,
-        continuation_records: Sequence[JsonObject],
         since: SessionReadCursor | None,
     ) -> _store_history.HistoryDelta | None:
-        _store_continuation.append_continuation(connection, address, continuation_records)
         if since is None:
             return None
         return _store_history.message_rows_since(connection, address, since)
@@ -479,7 +501,6 @@ class SessionStore:
         messages: Sequence[ChatMessage],
         run_id: str | None,
         seen_skills: SeenSkillsUpdate | None = None,
-        continuation_records: Sequence[JsonObject] = (),
     ) -> SessionReadBatch:
         """Replace history from one User message on; see ``_store_operations.apply_edit``.
 
@@ -493,24 +514,10 @@ class SessionStore:
                 messages=messages,
                 run_id=run_id,
                 seen_skills=seen_skills,
-                continuation_records=continuation_records,
             ),
             patience_s=TRANSCRIPT_WRITE_PATIENCE_S,
         )
         return _store_history.read_batch(delta)
-
-    def continuation(self, address: SessionAddress) -> SessionContinuationState | None:
-        return self._read(lambda connection: _store_continuation.continuation(connection, address))
-
-    def append_continuation(self, address: SessionAddress, records: Sequence[JsonObject]) -> None:
-        return self._execute_write(
-            lambda connection: _store_continuation.append_continuation(connection, address, records)
-        )
-
-    def clear_continuation(self, address: SessionAddress) -> None:
-        return self._execute_write(
-            lambda connection: _store_continuation.clear_continuation(connection, address)
-        )
 
     # -- Extension-owned Sessions -----------------------------------------------------
 
@@ -629,7 +636,6 @@ class SessionStore:
         run_id: str | None = None,
         assistant_message_id: str | None = None,
         tool_results: Mapping[str, ToolResultFacts] | None = None,
-        continuation_records: Sequence[JsonObject] = (),
         since: SessionReadCursor | None = None,
     ) -> SessionReadBatch | None:
         """Receipt-carrying variant of :meth:`append_messages` with the same options."""
@@ -647,7 +653,7 @@ class SessionStore:
                 assistant_message_id=assistant_message_id,
                 tool_results=tool_results,
             )
-            return self._journal_and_select(connection, address, continuation_records, since)
+            return self._select_since(connection, address, since)
 
         delta = self._execute_write(_fn, patience_s=TRANSCRIPT_WRITE_PATIENCE_S)
         return None if delta is None else _store_history.read_batch(delta)

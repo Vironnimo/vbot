@@ -14,7 +14,6 @@ from core.chat._run_state import (
     _RunRequest,
     create_run_execution_context,
 )
-from core.chat.continuation import ContinuationTracker
 from core.runs import Run
 from core.sessions import SessionAddress
 from core.tools import ToolRegistry, tool_success
@@ -216,7 +215,6 @@ async def auto_compact(
     request: list[JsonObject] | None = None,
     run_id: str = "run-1",
     compaction_requested: bool = False,
-    continuation_tracker: ContinuationTracker | None = None,
 ) -> AutoCompaction:
     """Evaluate one boundary for ``request`` (default: the Session's request).
 
@@ -233,8 +231,6 @@ async def auto_compact(
         run,
         _RunRequest(content="test"),
         session=session,
-        prior_continuation=None,
-        continuation_tracker=continuation_tracker,
     )
     context.request_state = _RequestState(request, [], (), ())
     if usage is not None:
@@ -262,8 +258,6 @@ async def run_context(
         run,
         request or _RunRequest(content="test"),
         session=session,
-        prior_continuation=None,
-        continuation_tracker=None,
     )
     context.request_state = await loop._requests.build_request_state(
         context.agent,

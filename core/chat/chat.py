@@ -194,7 +194,6 @@ class ChatLoop:
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
-        resume_process_restart: bool = False,
         source_session_id: str | None = None,
     ) -> Run:
         """Start one chat run against an existing session for server-facing callers.
@@ -232,7 +231,6 @@ class ChatLoop:
             input_persisted_hook=input_persisted_hook,
             run_kind=run_kind,
             contributes_to_agent_activity=contributes_to_agent_activity,
-            resume_process_restart=resume_process_restart,
             source_session_id=source_session_id,
         )
 
@@ -273,7 +271,6 @@ class ChatLoop:
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
-        resume_process_restart: bool = False,
     ) -> Run:
         """Validate a target, create its Session, and start one Run.
 
@@ -298,7 +295,6 @@ class ChatLoop:
             input_persisted_hook=input_persisted_hook,
             run_kind=run_kind,
             contributes_to_agent_activity=contributes_to_agent_activity,
-            resume_process_restart=resume_process_restart,
         )
 
     async def queue_run(
@@ -319,7 +315,6 @@ class ChatLoop:
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
-        resume_process_restart: bool = False,
     ) -> QueuedRunItem:
         """Queue one chat run for a busy session or start it immediately when idle.
 
@@ -348,7 +343,6 @@ class ChatLoop:
             tool_denial_resolver=tool_denial_resolver,
             max_tool_iterations=max_tool_iterations,
             input_persisted_hook=input_persisted_hook,
-            resume_process_restart=resume_process_restart,
         )
         return await manager.enqueue(
             SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id),
@@ -473,7 +467,6 @@ class ChatLoop:
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
-        resume_process_restart: bool = False,
         edit_message_id: str | None = None,
         source_session_id: str | None = None,
     ) -> Run:
@@ -504,7 +497,6 @@ class ChatLoop:
             tool_denial_resolver=tool_denial_resolver,
             max_tool_iterations=max_tool_iterations,
             input_persisted_hook=input_persisted_hook,
-            resume_process_restart=resume_process_restart,
             edit_message_id=edit_message_id,
         )
         return await manager.start(

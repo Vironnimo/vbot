@@ -14,7 +14,6 @@ import pytest
 
 from core.automation import LearningChanges
 from core.chat import ChatMessage, ChatSessionManager, ToolCall
-from core.chat.continuation import CONTINUATION_RECORD_VERSION
 from core.chat.messages import ModelFallback
 from core.database import write_bootstrap_marker
 from core.memory import MemoryService, MemoryWriter
@@ -165,7 +164,7 @@ async def test_history_defaults_to_the_current_session_and_strips_opaque_metadat
 
 
 @pytest.mark.asyncio
-async def test_history_hides_notes_and_internal_continuation_records(history: _History) -> None:
+async def test_history_hides_notes(history: _History) -> None:
     session = history.session().start_run("run-one")
     session.append(ChatMessage.user(content="Visible request"))
     session.add_note("Internal reminder")
@@ -175,26 +174,6 @@ async def test_history_hides_notes_and_internal_continuation_records(history: _H
         model_fallback=ModelFallback(from_model="openai/gpt-5.2", to_model="anthropic/claude"),
     )
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="Visible response"))
-    session.append_continuation_records(
-        [
-            {
-                "version": CONTINUATION_RECORD_VERSION,
-                "type": "run_started",
-                "run_id": "run-one",
-                "timestamp": "2026-07-11T12:00:00+00:00",
-                "checkpoint_id": "checkpoint-one",
-                "origin_run_id": "run-one",
-                "request": "work",
-            },
-            {
-                "version": CONTINUATION_RECORD_VERSION,
-                "type": "run_interrupted",
-                "run_id": "run-one",
-                "timestamp": "2026-07-11T12:00:01+00:00",
-                "cause": "network",
-            },
-        ]
-    )
 
     result = await history.read(session_id="session-one")
 
@@ -214,7 +193,6 @@ async def test_history_hides_notes_and_internal_continuation_records(history: _H
     assert "Internal reminder" not in str(result["messages"])
     assert "Sub-agent batch" not in str(result["messages"])
     assert "Model switch note" not in str(result["messages"])
-    assert "continuation" not in result
 
 
 @pytest.mark.asyncio

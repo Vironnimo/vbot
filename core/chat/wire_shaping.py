@@ -67,7 +67,25 @@ from core.tools import model_tool_name, registry_tool_name, tool_failure
 from core.utils.tokens import estimate_message_tokens, estimate_request_input_tokens
 
 INTERRUPTED_TOOL_RESULT_CODE = "result_unavailable"
-INTERRUPTED_TOOL_RESULT_MESSAGE = "Tool run was interrupted before a result was recorded."
+INTERRUPTED_TOOL_RESULT_MESSAGE = (
+    "The Tool call was interrupted before its result was recorded. "
+    "Whether it took effect is unknown; check before you repeat it."
+)
+
+# Why the previous turn stopped, by the Run's completion reason: a cancel reason
+# of a cancelled Run or the cause of an interrupted one.
+_STOPPED_BECAUSE = "Your previous turn stopped before it was complete because "
+_INTERRUPTION_NOTICES = {
+    "user": "The user stopped your previous turn before it was complete.",
+    "shutdown": _STOPPED_BECAUSE + "vBot shut down.",
+    "process_restart": _STOPPED_BECAUSE + "vBot restarted.",
+    "network": _STOPPED_BECAUSE + "the connection to the Model provider failed.",
+    "timeout": _STOPPED_BECAUSE + "the Model provider stopped responding.",
+    "provider": _STOPPED_BECAUSE + "the Model provider returned an error.",
+}
+_CANCELLED_NOTICE = "Your previous turn was cancelled before it was complete."
+_INTERRUPTED_NOTICE = _STOPPED_BECAUSE + "of an internal error."
+_FAILED_NOTICE = _STOPPED_BECAUSE + "of an error."
 
 SYSTEM_REMINDER_OPEN_TAG = "<system-reminder>"
 SYSTEM_REMINDER_CLOSE_TAG = "</system-reminder>"
@@ -472,9 +490,7 @@ def _replays_assistant_reasoning(
     request scope. A Model, wire, Connection, or account mismatch
     means the opaque reasoning belongs to a different context and is stripped
     exactly like under ``current_run``. An interrupted turn is never a complete
-    Provider reasoning boundary: its readable work survives through the
-    provider-neutral Continuation checkpoint, while native reasoning fields
-    remain canonical evidence only.
+    Provider reasoning boundary: its reasoning stays in the Session history only.
     """
     if message.interrupted:
         return False
@@ -502,8 +518,7 @@ def _portable_assistant_reasoning_note(
     in ``content`` and are not duplicated into future prompts.
 
     The projection is request-only and explicitly quoted as prior Model output.
-    Interrupted turns are a hard boundary and use the separate Continuation
-    checkpoint path instead.
+    Interrupted turns are a hard boundary; their reasoning is never sent.
     """
     if message.role != "assistant" or message.interrupted or agent_model is None:
         return None
@@ -697,10 +712,15 @@ def _history_request_parts(
 
     Notes gather until the next message the request sends; notes that arrive
     within a Tool Result batch follow the whole batch, as one group before the
-    notes that arrive after it.
+    notes that arrive after it. The summary of a Run that stopped before its
+    final answer joins the notes and renders as its interruption notice, unless
+    the Run failed with an error the request already carries.
     """
     pending_notes: list[ChatMessage] = []
     deferred_until_after_tools: list[ChatMessage] = []
+    # The Run's latest Assistant or Tool entry; Runs of a Session never overlap.
+    run_last_turn: ChatMessage | None = None
+    run_error_sent = False
 
     for message in messages:
         if message.role == "note":
@@ -710,10 +730,18 @@ def _history_request_parts(
         if message.role == "error":
             if message.error_kind is not None and error_kind_llm_visible(message.error_kind):
                 pending_notes.append(message)
+                run_error_sent = True
             continue
 
         if message.role == "run_summary":
+            if _run_stopped_unanswered(message, run_last_turn, error_sent=run_error_sent):
+                pending_notes.append(message)
+            run_last_turn = None
+            run_error_sent = False
             continue
+
+        if message.role in {"assistant", "tool"}:
+            run_last_turn = message
 
         if message.role == "agent_takeover":
             continue
@@ -757,6 +785,37 @@ def _history_request_parts(
 
     if pending_notes:
         yield tuple(pending_notes)
+
+
+def _run_stopped_unanswered(
+    summary: ChatMessage, last_turn: ChatMessage | None, *, error_sent: bool
+) -> bool:
+    """Whether a Run ended without a complete final answer the request does not explain.
+
+    A Run stopped after its final answer (for example during a later
+    Compaction) left nothing unfinished. A failed Run whose error the request
+    carries needs no second notice.
+    """
+    if summary.status not in {"cancelled", "interrupted", "failed"}:
+        return False
+    if summary.status == "failed" and error_sent:
+        return False
+    return not (
+        last_turn is not None
+        and last_turn.role == "assistant"
+        and not last_turn.interrupted
+        and not last_turn.tool_calls
+    )
+
+
+def _interruption_notice(summary: ChatMessage) -> str:
+    """The Model-facing text that tells why the previous turn stopped."""
+    reason = summary.completion_reason
+    if reason is not None and reason in _INTERRUPTION_NOTICES:
+        return _INTERRUPTION_NOTICES[reason]
+    if summary.status == "failed":
+        return _FAILED_NOTICE
+    return _CANCELLED_NOTICE if summary.status == "cancelled" else _INTERRUPTED_NOTICE
 
 
 def _sends_itself(
@@ -924,7 +983,7 @@ def _notes_to_request_messages(notes: list[ChatMessage]) -> list[JsonObject]:
         note_run_kind = None
 
     for note in notes:
-        if not note.content:
+        if not note.content and note.role != "run_summary":
             continue
         if is_tool_change_note(note) and tool_change_from_note(note) is None:
             continue
@@ -981,8 +1040,10 @@ def _quote_external_json(value: JsonObject) -> str:
 
 
 def _system_reminder_body(message: ChatMessage) -> str:
-    """Return the Model-facing text of one note or Model-visible Run error."""
+    """Return the Model-facing text of one note, Model-visible Run error or stopped Run."""
     message.validate()
+    if message.role == "run_summary":
+        return _interruption_notice(message)
     content = message.content
     if not isinstance(content, str):
         raise ChatMessageValidationError(f"{message.role} messages content must be a string")

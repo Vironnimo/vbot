@@ -1,4 +1,7 @@
-"""Chat-owned recovery budget shared by retries, continuations and Model switches."""
+"""Chat-owned recovery budget shared by retries, continuations and Model switches.
+
+It also classifies the failure that interrupts a Run.
+"""
 
 from __future__ import annotations
 
@@ -7,8 +10,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from core.chat.continuation import normalize_interruption_cause
-from core.providers.errors import ProviderError
+from core.chat.messages import InterruptionCause
+from core.providers.errors import NetworkError, ProviderError, ProviderTimeoutError
 from core.runs import RunInterruptedError
 from core.utils.retry import RetryNotice, compute_retry_delay
 
@@ -25,6 +28,21 @@ class IncompleteResponseError(ProviderError):
 
     def __init__(self, message: str = "The Model response was incomplete") -> None:
         super().__init__(message, retryable=True)
+
+
+def normalize_interruption_cause(error: BaseException | None) -> InterruptionCause:
+    """Classify the failure that ended an unfinished Model step."""
+    if isinstance(error, ProviderTimeoutError) or (
+        error is not None
+        and error.__class__.__name__
+        in {"StreamingChunkTimeoutError", "StreamingProgressTimeoutError"}
+    ):
+        return "timeout"
+    if isinstance(error, NetworkError):
+        return "network"
+    if isinstance(error, ProviderError):
+        return "provider"
+    return "internal"
 
 
 @dataclass

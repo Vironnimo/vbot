@@ -628,6 +628,8 @@ class EntryBatch:
             data["work_id"] = run["work_id"]
         if run["iteration_count"] is not None:
             data["iteration_count"] = run["iteration_count"]
+        if run["completion_reason"] and run["status"] in {"cancelled", "interrupted"}:
+            data["completion_reason"] = run["completion_reason"]
         timing = _timing_value(
             run["timing_started_at"],
             run["completed_at"],
@@ -720,9 +722,9 @@ _CHECKPOINT_COLUMNS = (
     "c.context_tokens_after, c.duration_ms, c.usage_present, c.usage_extra_json"
 )
 _RUN_SUMMARY_COLUMNS = (
-    "end_entry_key, run_key, run_id, work_id, status, iteration_count, timing_started_at, "
-    "completed_at, duration_ms, timing_extra_json, changed_files, lines_added, lines_removed, "
-    "change_stats_extra_json"
+    "end_entry_key, run_key, run_id, work_id, status, completion_reason, iteration_count, "
+    "timing_started_at, completed_at, duration_ms, timing_extra_json, changed_files, "
+    "lines_added, lines_removed, change_stats_extra_json"
 )
 
 
