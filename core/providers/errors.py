@@ -113,6 +113,27 @@ class ProviderOutcomeUnknownError(ProviderError):
         )
 
 
+class ProviderContentRefusedError(ProviderError):
+    """The provider declined to produce the requested content.
+
+    A refusal is a known outcome - nothing was produced - so task clients
+    report it instead of an unknown outcome even for non-idempotent requests.
+    The unchanged request is refused again, so it is never retried.
+    ``reason`` is the provider's own explanation, when it gave one.
+    """
+
+    code = "generation_refused"
+
+    def __init__(self, reason: str | None = None) -> None:
+        self.reason = reason
+        super().__init__(
+            f"The provider refused the request: {reason}"
+            if reason
+            else "The provider refused the request without giving a reason",
+            retryable=False,
+        )
+
+
 class CatalogEntrySkipped(VBotError):  # noqa: N818
     """Signal that a model catalog entry should be skipped during discovery.
 

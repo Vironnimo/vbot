@@ -56,8 +56,10 @@ class ImageService:
         image_path: Path | None = None,
         error: Exception | None = None,
         supports_source_images: bool = True,
+        revised_prompt: str | None = None,
     ) -> None:
         self.image_path = image_path
+        self.revised_prompt = revised_prompt
         self.error = error
         self.supports_source_images = supports_source_images
         self.generated: dict[str, Any] | None = None
@@ -85,7 +87,14 @@ class ImageService:
             "source_paths": source_paths,
         }
         file_path = self.image_path or output_dir / "image.png"
-        return (SimpleNamespace(file_path=file_path, media_type="image/png", size_bytes=5),)
+        return (
+            SimpleNamespace(
+                file_path=file_path,
+                media_type="image/png",
+                size_bytes=5,
+                revised_prompt=self.revised_prompt,
+            ),
+        )
 
     async def analyze(
         self,

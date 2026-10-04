@@ -14,6 +14,7 @@ from core.providers.accounts import ConnectionRef
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
+    ProviderContentRefusedError,
     ProviderError,
     ProviderOutcomeUnknownError,
 )
@@ -223,6 +224,41 @@ _VERIFIED_503_POLICY = TaskRequestRetryPolicy(
             id="fatal-status-is-not-retried",
         ),
         pytest.param(
+            [httpx.Response(400, json={"error": {"message": "Invalid value for 'moderation'."}})],
+            NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
+            ProviderError,
+            1,
+            "Invalid value for 'moderation'",
+            id="other-client-error-is-no-refusal",
+        ),
+        *(
+            pytest.param(
+                [httpx.Response(status, json={"error": error})],
+                NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
+                ProviderContentRefusedError,
+                1,
+                error["message"],
+                id=case,
+            )
+            for case, status, error in (
+                (
+                    "refusal-by-code",
+                    400,
+                    {"code": "moderation_blocked", "message": "Blocked by moderation."},
+                ),
+                (
+                    "refusal-forwarded-message",
+                    400,
+                    {"code": 400, "message": "Your request was rejected by the safety system."},
+                ),
+                (
+                    "refusal-flagged-not-auth",
+                    403,
+                    {"code": 403, "message": "Your input was flagged for violence."},
+                ),
+            )
+        ),
+        pytest.param(
             [httpx.Response(401, text="bad key")],
             DEFAULT_TASK_REQUEST_RETRY_POLICY,
             ProviderAuthError,
@@ -296,6 +332,9 @@ async def test_post_retries_only_what_its_policy_proves_safe(
         assert isinstance(error, NetworkError | ProviderError)
         assert error.retryable is (expected is NetworkError)
         assert detail is not None and detail in str(error)
+        assert isinstance(error, ProviderContentRefusedError) is (
+            expected is ProviderContentRefusedError
+        )
         if isinstance(error, ProviderOutcomeUnknownError):
             assert error.operation_key
     else:

@@ -27,6 +27,9 @@ class ImageGenerationResult:
     model: str
     usage: JsonObject | None = None
     raw: JsonObject | None = None
+    # The prompt the provider actually rendered, when it reports having
+    # rewritten the requested one.
+    revised_prompt: str | None = None
 
     def to_dict(self) -> JsonObject:
         payload: JsonObject = {
@@ -82,3 +85,4 @@ class ImageArtifact:
     size_bytes: int
     file_path: Path
     index: int = 0
+    revised_prompt: str | None = None

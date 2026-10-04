@@ -12,7 +12,7 @@ Dialects (owner argument normalizers): `start_frame`, `start_image`, `first_fram
 
 Requested frame and reference images are recorded via `ToolContext.add_display_media` as sources, and a successful call records the written file, so expanded details show the sources and a video or audio player (see `tools.md`).
 
-Failures keep their Task codes. `provider_error` messages use the shared Provider wording of `core/tools/_media_failures.py` (credentials, rate or usage limit, no answer, other refusal; see `tools/image.md`). Configuration errors pass through unchanged because they also carry request fixes (`duration must be one of the values supported by the configured model: ...`), and `provider_outcome_unknown` keeps its message with `retryable: false`. A missing `prompt` fails with an example prompt.
+Failures keep their Task codes. `provider_error` messages use the shared Provider wording of `core/tools/_media_failures.py` (credentials, rate or usage limit, no answer, other refusal; see `tools/image.md`). Configuration errors pass through unchanged because they also carry request fixes (`duration must be one of the values supported by the configured model: ...`), and `provider_outcome_unknown` uses the shared outcome-unknown wording with `retryable: false` (`tools/image.md` -> Agent-facing text). A chained `ProviderContentRefusedError` gets the shared refusal wording but keeps code `provider_error`. A missing `prompt` fails with an example prompt.
 
 ## Ownership
 

@@ -10,7 +10,12 @@ from typing import Any
 
 import pytest
 
-from core.model_tasks import ImageConfigurationError, ImageExecutionError, ImageOutcomeUnknownError
+from core.model_tasks import (
+    ImageConfigurationError,
+    ImageExecutionError,
+    ImageOutcomeUnknownError,
+    ImageRefusedError,
+)
 from core.tools.image import (
     IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION,
     IMAGE_GENERATION_TOOL_DESCRIPTION,
@@ -63,28 +68,26 @@ def test_profile_offers_source_images_only_to_a_model_that_edits() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generated_images_are_returned_as_local_file_facts(tmp_path: Path) -> None:
-    service = ImageService(image_path=tmp_path / "artifact-1.png")
+@pytest.mark.parametrize("revised_prompt", [None, "An original red fox in deep snow"])
+async def test_generated_images_are_returned_as_local_file_facts(
+    tmp_path: Path, revised_prompt: str | None
+) -> None:
+    service = ImageService(image_path=tmp_path / "artifact-1.png", revised_prompt=revised_prompt)
     registry = image_registry(service)
     context = make_context(tmp_path, IMAGE_GENERATION_TOOL_NAME)
 
     result = await dispatch_as_executor(registry, context, {"prompt": "a red fox"})
 
-    # Model-facing data carries the path and useful file facts, without transport identity.
-    assert result == {
-        "ok": True,
-        "error": None,
-        "data": {
-            "images": [
-                {
-                    "path": model_path(tmp_path / "artifact-1.png"),
-                    "media_type": "image/png",
-                    "size_bytes": 5,
-                }
-            ]
-        },
-        "artifacts": [],
+    # Model-facing data carries the path and useful file facts, without transport identity,
+    # plus the prompt the provider actually rendered when it rewrote the request.
+    image: dict[str, Any] = {
+        "path": model_path(tmp_path / "artifact-1.png"),
+        "media_type": "image/png",
+        "size_bytes": 5,
     }
+    if revised_prompt is not None:
+        image["revised_prompt"] = revised_prompt
+    assert result == {"ok": True, "error": None, "data": {"images": [image]}, "artifacts": []}
     display = registry.display_for_call(
         IMAGE_GENERATION_TOOL_NAME, {"prompt": "a red fox"}, context=context, result=result
     )
@@ -314,9 +317,36 @@ def _provider_failure(cause: Exception, status: int) -> ImageExecutionError:
             ),
             failure(
                 "provider_outcome_unknown",
-                "provider_outcome_unknown (operation_key=image-op): request may have completed",
+                "The request to the image-generation provider ended without a usable answer, "
+                "so it is unknown whether it created the image. Nothing was saved. Repeating "
+                "the request can create and charge a second image. If you still need it, "
+                "repeat the call once, and tell the user if that fails too.",
             ),
             id="outcome-unknown",
+        ),
+        pytest.param(
+            ImageRefusedError("Your request was rejected by the safety system"),
+            failure(
+                "generation_refused",
+                "The image-generation provider refused the request and created nothing. Its "
+                "reason: Your request was rejected by the safety system. Repeating the "
+                "unchanged request gets the same refusal. Change what the prompt asks for, for "
+                "example an original design instead of a named character, brand or real "
+                "person, or tell the user.",
+            ),
+            id="refused",
+        ),
+        pytest.param(
+            ImageRefusedError(None),
+            failure(
+                "generation_refused",
+                "The image-generation provider refused the request and created nothing. It "
+                "gave no reason, which most often means its content policy blocked the "
+                "request. Repeating the unchanged request gets the same refusal. Change what "
+                "the prompt asks for, for example an original design instead of a named "
+                "character, brand or real person, or tell the user.",
+            ),
+            id="refused-without-reason",
         ),
         pytest.param(
             ImageConfigurationError("No task model configured for image_generation"),

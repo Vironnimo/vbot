@@ -8,6 +8,7 @@ import re
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
+    ProviderContentRefusedError,
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
@@ -92,6 +93,9 @@ def provider_failure_message(error: BaseException, *, task: str, setting: str) -
     ``task`` names the provider's job in running text ("image-understanding");
     ``setting`` is the model's Settings entry ("Image understanding").
     """
+    refusal = _cause(error, (ProviderContentRefusedError,))
+    if isinstance(refusal, ProviderContentRefusedError):
+        return refusal_message(refusal.reason, task=task)
     detail = provider_detail(error)
     if _cause(error, (ProviderAuthError,)) is not None:
         return (
@@ -119,4 +123,30 @@ def unavailable_message(error: BaseException, *, setting: str) -> str:
     return (
         f"{setting} is not available ({provider_detail(error)}). Tell the user to choose a "
         f"working {setting} model in {settings_place(setting)}."
+    )
+
+
+def refusal_message(reason: str | None, *, task: str) -> str:
+    """Say that the provider declined the content and how the Agent can go on."""
+    if reason:
+        cause = f"Its reason: {_shortened(' '.join(reason.split()))}"
+        if not cause.endswith((".", "!", "?")):
+            cause += "."
+    else:
+        cause = "It gave no reason, which most often means its content policy blocked the request."
+    return (
+        f"The {task} provider refused the request and created nothing. {cause} Repeating "
+        "the unchanged request gets the same refusal. Change what the prompt asks for, for "
+        "example an original design instead of a named character, brand or real person, "
+        "or tell the user."
+    )
+
+
+def outcome_unknown_message(*, task: str, product: str) -> str:
+    """Say that a billed request ended without a readable answer and what that means."""
+    return (
+        f"The request to the {task} provider ended without a usable answer, so it is unknown "
+        f"whether it created the {product}. Nothing was saved. Repeating the request can "
+        f"create and charge a second {product}. If you still need it, repeat the call once, "
+        "and tell the user if that fails too."
     )

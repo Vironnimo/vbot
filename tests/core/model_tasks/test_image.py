@@ -320,7 +320,8 @@ def test_call_options_go_to_the_wire_only_when_the_model_supports_them(
 # ImageService.generate — per-call routing integration
 # ---------------------------------------------------------------------------
 class _RecordingImageClient:
-    def __init__(self) -> None:
+    def __init__(self, revised_prompt: str | None = None) -> None:
+        self.revised_prompt = revised_prompt
         self.prompt: str | None = None
         self.options: dict[str, Any] | None = None
         self.input_images: tuple[Any, ...] = ()
@@ -335,7 +336,9 @@ class _RecordingImageClient:
         self.prompt = prompt
         self.options = options
         self.input_images = input_images
-        return ImageGenerationResult(images=(b"x",), media_type="image/png", model="m")
+        return ImageGenerationResult(
+            images=(b"x",), media_type="image/png", model="m", revised_prompt=self.revised_prompt
+        )
 
 
 class _RoutingModelTasks:
@@ -407,6 +410,28 @@ async def test_generate_routes_per_call_options(
     assert (client.options, client.prompt) == (wire_options, prompt)
     # Without call options the model is not even resolved.
     assert model_tasks.model_for_target_calls == (0 if call_options is None else 1)
+
+
+@pytest.mark.parametrize(
+    ("revised_prompt", "reported"),
+    [
+        pytest.param("A cat  ", None, id="same-as-prompt"),
+        pytest.param("a cat (aspect ratio 21:9)", None, id="same-as-prompt-with-hints"),
+        pytest.param("an original tabby cat", "an original tabby cat", id="rewritten"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_generate_reports_only_a_revision_that_changes_the_prompt(
+    revised_prompt: str, reported: str | None
+) -> None:
+    model = _image_model({"aspect_ratio": {"type": "enum", "values": ("1:1",)}})
+    service = ImageService(_RoutingModelTasks(model), cast(Any, object()))
+    client = _RecordingImageClient(revised_prompt)
+
+    with patch("core.model_tasks.image.ProviderImageClient.from_runtime", return_value=client):
+        result = await service.generate("a cat", call_options={"aspect_ratio": "21:9"})
+
+    assert result.revised_prompt == reported
 
 
 @pytest.mark.asyncio

@@ -22,7 +22,7 @@ from core.tools._image_inputs import (
     resolve_local_image,
     resolve_local_images,
 )
-from core.tools._media_failures import provider_failure_message
+from core.tools._media_failures import outcome_unknown_message, provider_failure_message
 from core.tools.arguments import optional_bool, optional_int, optional_string
 from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
@@ -187,12 +187,14 @@ def _invalid(message: str) -> JsonObject:
     return tool_failure("invalid_arguments", message, retryable=False)
 
 
-def _media_failure(error: VideoError | MusicError, task: str, setting: str) -> JsonObject:
+def _media_failure(
+    error: VideoError | MusicError, task: str, setting: str, product: str
+) -> JsonObject:
     """Project an expected media failure; provider refusals say what to do next."""
     message = str(error)
-    if isinstance(error, (VideoExecutionError, MusicExecutionError)) and not isinstance(
-        error, (VideoOutcomeUnknownError, MusicOutcomeUnknownError)
-    ):
+    if isinstance(error, (VideoOutcomeUnknownError, MusicOutcomeUnknownError)):
+        message = outcome_unknown_message(task=task, product=product)
+    elif isinstance(error, (VideoExecutionError, MusicExecutionError)):
         message = provider_failure_message(error, task=task, setting=setting)
     return tool_failure(error.code, message, retryable=bool(getattr(error, "retryable", False)))
 
@@ -289,7 +291,7 @@ def make_generate_video_handler(video_service: Any):
                 ),
             )
         except VideoError as exc:
-            return _media_failure(exc, "video-generation", "Video generation")
+            return _media_failure(exc, "video-generation", "Video generation", "video")
         context.add_display_media(artifact.file_path, artifact.media_type)
         return tool_success({"video": _artifact_payload(artifact)})
 
@@ -340,7 +342,7 @@ def make_generate_music_handler(music_service: Any):
                 ),
             )
         except MusicError as exc:
-            return _media_failure(exc, "music-generation", "Music generation")
+            return _media_failure(exc, "music-generation", "Music generation", "music track")
         context.add_display_media(artifact.file_path, artifact.media_type)
         return tool_success({"music": _artifact_payload(artifact)})
 
