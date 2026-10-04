@@ -674,6 +674,22 @@ def test_line_endings_and_indentation_follow_the_file() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("content", "old", "new", "expected"),
+    [
+        ("total = compute(1, 2)\n", "total = compute(1,2)", "total = compute(5, 6)", "(5, 6)"),
+        ("x = f(a ,b)\n", "x = f(a,b)", "x = f(c , d)", "(c , d)"),
+        ("total = compute(1, 2)\n", "total = compute(1,2)", "total = compute(5,6)", "(5, 6)"),
+    ],
+)
+def test_spacing_written_beside_a_change_replaces_the_file_spacing_there(
+    content: str, old: str, new: str, expected: str
+) -> None:
+    found = _applied(replace_copied(content, old, new))
+
+    assert found.new_content == content.replace(content[content.index("(") :], expected + "\n")
+
+
 def test_removing_whole_lines_removes_their_line_breaks() -> None:
     content = "keep one\nremove this reciept line now\nkeep two\n"
 

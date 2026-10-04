@@ -122,6 +122,7 @@ _FOLD = str.maketrans({**_TYPOGRAPHIC_NORMALIZATION, **dict.fromkeys(_INVISIBLE,
 _EM_DASH = _TYPOGRAPHIC_NORMALIZATION["\u2014"]
 _HYPHENS = (["-"], ["-", "-"])
 _BACKSLASH = "\\"
+_INLINE_SPACE = " \t"
 # ``moved``: spacing that differs in line breaks, which a change must not rest on.
 # ``alike``: a hyphen for an em dash, or a lone backslash only the copy holds.
 _SAME, _MISSPELLED, _MOVED, _ALIKE, _OTHER = "same", "misspelled", "moved", "alike", "other"
@@ -623,7 +624,7 @@ def _merge(
     """
     copied = copy.keys
     opcodes = _changes(tuple(copied), tuple(new.keys))
-    pieces = []
+    pieces: list[str] = []
     held = -1  # the file gap the kept text before already holds
     for tag, i1, i2, j1, j2 in opcodes:
         if tag != "equal":
@@ -637,6 +638,9 @@ def _merge(
             written = speller.respell(new.span(j1, j2))
             if unwritable and not unwritable.isdisjoint(written.translate(_FOLD)):
                 return None
+            if pieces and written.startswith(tuple(_INLINE_SPACE)):
+                # Spacing the caller writes replaces the file's spacing at the seam.
+                pieces[-1] = pieces[-1].rstrip(_INLINE_SPACE)
             pieces.append(written)
             continue
         if any(
@@ -652,7 +656,10 @@ def _merge(
             return None
         # The kept text takes the file's invisible characters on both sides.
         begin = actual.gap(first)[1] if first == held else actual.gap(first)[0]
-        pieces.append(actual.source[begin : actual.gap(last)[1]])
+        kept = actual.source[begin : actual.gap(last)[1]]
+        if pieces and pieces[-1].endswith(tuple(_INLINE_SPACE)):
+            kept = kept.lstrip(_INLINE_SPACE)
+        pieces.append(kept)
         held = last
     kept_first = bool(opcodes) and opcodes[0][0] == "equal"
     kept_last = bool(opcodes) and opcodes[-1][0] == "equal"
