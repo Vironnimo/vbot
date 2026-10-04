@@ -70,6 +70,21 @@ function latestUserText(messages) {
   return "";
 }
 
+// Text of the user messages after the last non-user message: the current Run's
+// input together with System Reminder notes persisted alongside it. Notes from
+// earlier Runs stay in history, so a marker must be read from here to belong to
+// this request.
+function trailingUserText(messages) {
+  if (!Array.isArray(messages)) {
+    return "";
+  }
+  let start = messages.length;
+  while (start > 0 && messages[start - 1]?.role === "user") {
+    start -= 1;
+  }
+  return messagesText(messages.slice(start));
+}
+
 function messagesText(messages, role = null) {
   if (!Array.isArray(messages)) {
     return "";
@@ -644,10 +659,10 @@ async function handleChatCompletion(request, response) {
     offeredTools,
   );
 
-  const requestText = messagesText(body?.messages);
+  const currentInput = trailingUserText(body?.messages);
   if (
-    requestText.includes("E2E_COMMAND_CONTINUE") &&
-    requestText.includes("<continuation-checkpoint")
+    currentInput.includes("E2E_COMMAND_CONTINUE") &&
+    currentInput.includes("<continuation-checkpoint")
   ) {
     await streamCompletion(
       response,
