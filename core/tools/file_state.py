@@ -1,15 +1,16 @@
-"""Shared file-mutation coordination for read and apply_patch.
+"""Shared file-mutation coordination for read and the file edit Tools.
 
-Tracks, per session, the ``(mtime, size)`` of every file a session has read, so
-``apply_patch`` Add refuses to clobber a file the session never read or that changed on
-disk since it was last read. Update uses the same state only to report that it
-merged against newer on-disk content. Per-path locks serialize in-process
+Tracks, per session, the ``(mtime, size)`` of every file a session has read, so a
+full replacement (``apply_patch`` Add, ``write``) refuses to clobber a file the session
+never read or that changed on disk since it was last read. A text change (Update,
+``edit``) uses the same state only to report that it merged against newer on-disk
+content. Per-path locks serialize in-process
 mutations, and atomic same-directory replacement prevents partial files on write
 failure. Modeled on OpenCode's (since-removed) ``FileTimeService`` for the
 session-scoped ``(mtime, size)`` stamps, with no content hashing.
 
-The registry is a single runtime-owned instance injected into the read/apply_patch
-tools (constructor injection, like ``ProcessManager`` for ``bash``) — not a module
+The registry is a single runtime-owned instance injected into ``read`` and the file
+edit tools (constructor injection, like ``ProcessManager`` for ``bash``) — not a module
 singleton.
 """
 
@@ -88,8 +89,8 @@ class FileReadState:
     def record_read(self, session_id: str, resolved: Path) -> None:
         """Stamp a file's current ``(mtime, size)`` for a session.
 
-        Called for content a Session received in one step, and by ``apply_patch``
-        after a successful write — the tool's own write is an implicit read, so the
+        Called for content a Session received in one step, and by the file edit
+        Tools after a successful write — the tool's own write is an implicit read, so the
         next full-file write in the same session needs no re-read.
         """
         stamp = self.stamp(resolved)

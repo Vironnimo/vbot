@@ -2,8 +2,8 @@
 
 The chat loop reads a Run's statistics after every Tool round (``peek_run_stats``)
 to stream and persist them, and consumes them once at Run end
-(``take_run_stats``). ``apply_patch`` reports each committed text write with the
-file's actual content right before and after it (``record_write``).
+(``take_run_stats``). The file edit Tools report each committed text write with
+the file's actual content right before and after it (``record_write``).
 
 A Run's statistics cover only its own writes. Consecutive writes of one file
 form a segment that counts once, as the minimal line diff from the content

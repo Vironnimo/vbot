@@ -320,7 +320,7 @@ def bootstrap(runtime: Runtime) -> None:
         # state for mutation locks and post-success drift warnings (file_state.py).
         runtime._file_state = FileReadState()
         # Session-scoped file-content tracker for git-style change statistics
-        # (change_tracker.py). Shared by apply_patch and the chat loop.
+        # (change_tracker.py). Shared by the file edit Tools and the chat loop.
         runtime._change_tracker = ChangeTracker()
         register_read_tool(
             runtime._tools,
