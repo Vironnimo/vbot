@@ -69,6 +69,12 @@ GENERATE_VIDEO_FRAME_RANGE_DESCRIPTION = (
     GENERATE_VIDEO_TEXT_ONLY_DESCRIPTION + " Images passed as first_frame or last_frame are "
     "uploaded to the provider."
 )
+# Only the profile of a Model that can generate audio adds this to the prompt text.
+_AUDIO_PROMPT_SENTENCE = (
+    " For a video with audio, describe the sound too: spoken lines in quotes with who says "
+    "them, sound effects, and ambient sound or music."
+)
+_VIDEO_PROMPT_CLOSING = " Detailed prompts produce markedly better videos than short vague ones."
 GENERATE_VIDEO_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
@@ -76,7 +82,12 @@ GENERATE_VIDEO_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Describe the video: subject, action, setting, camera movement, and style."
+                "The text prompt for the video. Be specific and concrete: name the subject "
+                "and its appearance, the action and how it unfolds over the clip, the setting, "
+                "the shot and camera movement (for example close-up, wide shot, slow dolly-in, "
+                "handheld tracking shot), lighting, mood, and the visual style (for example "
+                "cinematic live action, anime, stop-motion, 3D animation). Keep the action to "
+                "what fits in the clip's length." + _VIDEO_PROMPT_CLOSING
             ),
         },
         "duration": {
@@ -106,7 +117,8 @@ GENERATE_VIDEO_PARAMETERS: JsonObject = {
             "minLength": 1,
             "description": (
                 "Local image to start the video with. Relative paths start at the working "
-                "directory. Omit to start from the prompt alone."
+                "directory. With a first_frame, describe in prompt what happens from that "
+                "image on rather than the image itself. Omit to start from the prompt alone."
             ),
         },
         "last_frame": {
@@ -143,7 +155,13 @@ GENERATE_MUSIC_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Describe the music: style, mood, instrumentation, structure, and any lyrics."
+                "The text prompt for the music. Be specific and concrete: name the genre "
+                "and style, the mood, the tempo (for example 90 BPM), the instruments and "
+                "production, the vocals (voice type and language) or that the track is "
+                "instrumental, and the structure (for example intro, verse, chorus, bridge, "
+                "outro). For a song, write out the full lyrics with each section labeled, for "
+                "example [Verse] and [Chorus]. Detailed prompts produce markedly better music "
+                "than short vague ones."
             ),
         },
         "source_images": {
@@ -234,7 +252,12 @@ def generate_video_parameters(profile: VideoProfile) -> JsonObject:
         else:
             properties[name].pop("pattern")
             properties[name]["enum"] = list(choices)
-    if not profile.generate_audio:
+    if profile.generate_audio:
+        prompt = properties["prompt"]
+        prompt["description"] = prompt["description"].replace(
+            _VIDEO_PROMPT_CLOSING, _AUDIO_PROMPT_SENTENCE + _VIDEO_PROMPT_CLOSING
+        )
+    else:
         properties.pop("generate_audio")
     for frame in ("first_frame", "last_frame"):
         if frame not in profile.frame_images:
