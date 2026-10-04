@@ -236,8 +236,7 @@ def unoffered_choice_message(medium: str, name: str, value: Any, choices: tuple[
 
     return (
         f"Nothing was generated. The configured {medium} model does not offer {name} "
-        f"{value!r}. Pass one of {', '.join(choices)}, or omit {name} to use the configured "
-        "default."
+        f"{value!r}. Pass one of {', '.join(choices)}, or omit {name} to use the default."
     )
 
 

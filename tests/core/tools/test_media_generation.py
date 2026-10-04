@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -86,6 +87,10 @@ def test_video_profile_only_exposes_configured_model_capabilities(
     for name, facts in offered.items():
         assert facts.items() <= properties[name].items()
     assert "billed" in definition["description"]
+    # No text mentions a field this Model does not offer.
+    optional = {"duration", "aspect_ratio", "resolution", "generate_audio", "first_frame"}
+    absent = (optional | {"last_frame"}) - set(offered)
+    assert [name for name in absent if name in json.dumps(definition)] == []
 
 
 @pytest.mark.asyncio
@@ -124,7 +129,7 @@ def test_music_profile_hides_reference_images_for_text_only_model(tmp_path: Path
     )
     contract = registry.contracts_for_provider_definitions(definitions)[GENERATE_MUSIC_TOOL_NAME]
 
-    assert "source_images" not in definitions[0]["parameters"]["properties"]
+    assert "source_images" not in json.dumps(definitions[0])
     assert contract.input_schema["properties"].get("source_images") is None
 
 
@@ -245,8 +250,7 @@ async def test_music_source_alias_and_provider_wording(tmp_path: Path) -> None:
     assert result["error"]["code"] == "provider_error"
     assert result["error"]["message"] == (
         "The music-generation provider is limiting requests or its usage limit is reached "
-        "(HTTP 429: slow down). Wait before trying again, and tell the user if it keeps "
-        "happening."
+        "(HTTP 429: slow down). Tell the user instead of repeating the call right away."
     )
 
 
@@ -266,9 +270,9 @@ async def test_music_source_alias_and_provider_wording(tmp_path: Path) -> None:
             VideoExecutionError("Provider error: 400 prompt rejected by safety filter"),
             "provider_error",
             "The video-generation provider rejected the request (HTTP 400: prompt rejected by "
-            "safety filter). If the reason concerns the request, change it; otherwise "
-            "tell the user, who may need to choose another Video generation model in Settings "
-            "→ Tools → Images, video & music.",
+            "safety filter). If the reason names something in the call, change it and repeat "
+            "the call; otherwise tell the user, who can choose another Video generation model "
+            "in Settings → Tools → Images, video & music.",
             id="provider-rejection",
         ),
         pytest.param(

@@ -29,6 +29,9 @@ Tool definitions, display metadata, result shaping, failure projection, and regi
 | `An image passed as first_frame is uploaded to the provider.` / `Images passed as first_frame or last_frame ...` / `Images passed as source_images ...` | Local files leave the machine; the Agent must know before it passes a private image. |
 | `source_images` (music): `Local images to use as references for the track. ... Omit to generate from the prompt alone.` | Role and omit rule; the earlier `Optional ...` gave no decision. |
 | `prompt` (video): `Describe the video: subject, action, setting, camera movement, and style.` | Names what a video prompt needs beyond a subject: action and camera movement. |
-| `duration`: `Length in seconds. Omit to use the configured default.` | The schema carries the offered seconds; the unit is not visible from an integer enum. |
+| `prompt` (music): `Describe the music: style, mood, instrumentation, structure, and any lyrics.` | Names what a music prompt needs; `any lyrics` tells the Agent that lyrics go in the prompt. |
+| `first_frame`: `Local image to start the video with. Relative paths start at the working directory. Omit to start from the prompt alone.` / `last_frame`: `Local image to end the video with. ... Omit to let the model choose the ending.` | Role, path base and an omit rule; without the omit rule weak Models fill every field. |
+| `output_dir`: `Folder for the generated video, created if missing; relative paths start at the working directory. Omit to use the default video-gen folder.` (music: `music`, `music-gen`) | Weak Models fill `output_dir`; the sentence says omission is fine and where files go. |
+| `duration`: `Length in seconds. Omit to use the default.` | The schema carries the offered seconds; the unit is not visible from an integer enum. |
 | `aspect_ratio`, `resolution`: as in `image_generation` | One wording for the same choice across media Tools. |
-| `generate_audio`: `true to generate a soundtrack with the video, false for a silent video. Omit to use the configured default.` | States what each value produces and that omission keeps the Settings value. |
+| `generate_audio`: `true to generate audio with the video, false for a silent video. Omit to use the default.` | States what each value produces. `audio` covers speech and effects; `soundtrack` read as music only. |
