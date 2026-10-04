@@ -37,29 +37,8 @@ async def dispatch(root: Path, arguments: dict[str, Any], **context_fields: Any)
 
 
 def search(root: Path, **arguments: Any) -> dict[str, Any]:
-    """Run one search written in fixture notation and return its data.
-
-    ``action`` (content or paths), ``kind`` (all, files, directories), ``patterns``,
-    ``options`` and ``paths`` become the ``args`` list; the other keywords are
-    passed as fields.
-    """
-    action = arguments.pop("action", "content")
-    kind = arguments.pop("kind", "all")
-    patterns = arguments.pop("patterns", [])
-    options = arguments.pop("options", [])
-    paths = arguments.pop("paths", [])
-    tokens = list(options)
-    if "--type-list" not in tokens:
-        if action == "paths":
-            tokens.append({"all": "--entries", "files": "--files", "directories": "--dirs"}[kind])
-            for pattern in patterns:
-                tokens.extend(["-g", "./" + pattern])
-        else:
-            for pattern in patterns:
-                tokens.extend(["-e", pattern])
-    if paths:
-        tokens.extend(["--", *paths])
-    result = asyncio.run(dispatch(root, {"args": tokens, **arguments}))
+    """Run one successful search from a synchronous test and return its data."""
+    result = asyncio.run(dispatch(root, arguments))
     assert result["ok"], result
     data: dict[str, Any] = result["data"]
     return data

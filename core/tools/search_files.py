@@ -1,28 +1,51 @@
-"""Unified file and content search with a private native regex engine."""
+"""File and content search: one Tool over the bundled ripgrep.
+
+ripgrep selects and matches files; this module turns a call into a ripgrep
+query, runs it in bounded phases, and renders pages the Agent can continue.
+"""
 
 from __future__ import annotations
 
 import contextlib
-import itertools
+import json
 import os
 import re
 import shlex
-import tempfile
+from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
 from typing import Any
 
 from core.tools._path_suggestions import corrected_paths
-from core.tools._search_arguments import parse_search_args
 from core.tools._search_execution import (
-    content_events,
-    file_types,
+    ScanResult,
+    Scope,
+    SearchRefusedError,
+    count_scan,
+    explain_failure,
+    line_events,
+    list_scan,
     pattern_retry,
-    validate_patterns,
+    reference_text,
 )
-from core.tools._search_options import SearchOptions, help_text, parse_options
-from core.tools._search_results import ResultPage, path_label, render_events
-from core.tools._search_selection import FileSelection
+from core.tools._search_query import (
+    LIST_MODES,
+    MAX_LIMIT,
+    MAX_OFFSET,
+    SearchArgumentError,
+    SearchQuery,
+    interpret,
+)
+from core.tools._search_results import (
+    Entry,
+    Page,
+    content_page,
+    content_window,
+    entry_page,
+    order,
+    path_label,
+    summary,
+)
 from core.tools._tool_context import _path_argument
 from core.tools.arguments import optional_int
 from core.tools.call_syntax import SpellingAliases as _SpellingAliases
@@ -30,7 +53,7 @@ from core.tools.call_syntax import normalize_call_arguments
 from core.tools.call_syntax import spelling as _spelling
 from core.tools.contracts import ToolContractError, _load_json_value, compile_tool_contract
 from core.tools.file_state import os_error_reason
-from core.tools.search import SearchBudget
+from core.tools.search import SearchBudget, _expand_brace_alternations
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -357,117 +380,152 @@ def _strings(arguments: JsonObject, name: str) -> list[str]:
     if not isinstance(value, list) or not all(
         isinstance(item, str) and "\x00" not in item for item in value
     ):
-        raise ValueError(f"{name} must be an array of strings containing no NUL characters.")
+        raise SearchArgumentError(
+            f"{name} must be a string or a list of strings without NUL characters."
+        )
     return value
 
 
-_GLOB_SHAPE = re.compile(r"[^\s()|^$+\\]+")
-_LISTING_BLOCKERS = {"literal", "glob", "context", "before", "after", "output", "quiet", "only"}
-
-
-def _glob_shaped(pattern: str) -> bool:
-    """Whether a pattern can only be meant as a file name glob such as *.py."""
-    return bool(_GLOB_SHAPE.fullmatch(pattern)) and (
-        pattern.startswith("*") or "**" in pattern or "/*." in pattern
-    )
-
-
-def interpret_search_call(arguments: Any) -> dict[str, Any]:
-    """Interpret one call's named fields and args as a single ripgrep query.
-
-    Returns the normalized arguments with the query's action, kind, patterns,
-    paths, option tokens, and notes that explain reinterpretations.
-    """
+def interpret_search_call(arguments: Any) -> SearchQuery:
+    """Interpret one call's named fields and args as a single ripgrep query."""
     arguments = normalize_search_arguments(arguments)
     if not isinstance(arguments, dict):
-        raise ValueError("Provide one search argument object.")
+        raise SearchArgumentError("Provide one search argument object.")
     pattern = arguments.get("pattern")
     if pattern is not None and not isinstance(pattern, str):
-        raise ValueError("pattern must be a string.")
-    query = parse_search_args(
-        _strings(arguments, "args"),
-        patterns=[pattern] if pattern else [],
+        raise SearchArgumentError("pattern must be a string.")
+    output = arguments.get("output")
+    return interpret(
+        pattern=pattern,
         roots=_strings(arguments, "path"),
+        globs=_strings(arguments, "glob"),
+        output=output if isinstance(output, str) else None,
+        context=optional_int(arguments.get("context"), field_name="context", minimum=0),
+        args=_strings(arguments, "args"),
+        limit=optional_int(
+            arguments.get("limit"), field_name="limit", minimum=1, maximum=MAX_LIMIT
+        ),
+        offset=optional_int(
+            arguments.get("offset"), field_name="offset", minimum=0, maximum=MAX_OFFSET
+        ),
     )
-    query["options"] = [
-        *(token for glob in _strings(arguments, "glob") for token in ("-g", glob)),
-        *query["options"],
-    ]
-    output = arguments.get("output", "content")
-    context_lines = optional_int(arguments.get("context"), field_name="context", minimum=0)
-    notes: list[str] = []
-    patterns = query["patterns"]
-    if (
-        query["action"] == "content"
-        and len(patterns) == 1
-        and _glob_shaped(patterns[0])
-        and output != "count"
-        and not context_lines
-    ):
-        listing = [*query["options"], "-g", patterns[0]]
-        try:
-            blocked = any(
-                option.key in _LISTING_BLOCKERS
-                for option, _ in parse_options(listing, action="paths", kind="files").entries[:-1]
-            )
-        except ValueError:
-            blocked = True
-        if not blocked:
-            notes.append(
-                f'pattern "{patterns[0]}" is a file name glob, so matching files were '
-                "listed. To search file contents, put a regex in pattern and the file "
-                "filter in glob."
-            )
-            query.update(action="paths", kind="files", patterns=[], options=listing)
-    if query["action"] == "content":
-        extra = {"files": ["-l"], "count": ["-c"]}.get(output, [])
-        query["options"] = [*extra, *query["options"]]
-        if context_lines:
-            query["options"] = ["-C", str(context_lines), *query["options"]]
-    elif output == "count":
-        raise ValueError(
-            'output "count" counts matching lines per file and needs a pattern; '
-            "omit output to list files."
-        )
-    elif context_lines:
-        raise ValueError(
-            "context shows lines around content matches and needs a pattern; "
-            "omit context to list files."
-        )
-    query["arguments"] = arguments
-    query["notes"] = notes
-    return query
 
 
-def _page_argument(
-    arguments: JsonObject,
-    options: SearchOptions,
-    name: str,
-    *,
-    default: int,
-    minimum: int,
-    maximum: int,
-) -> int:
-    values = [int(value) for value in options.values(name)]
-    if name in arguments:
-        values.append(
-            optional_int(
-                arguments[name],
-                field_name=name,
-                default=default,
-                minimum=minimum,
-                maximum=maximum,
+_GLOB_CHARACTERS = re.compile(r"[*?\[]")
+
+
+@dataclass
+class _Roots:
+    """The roots one call searches, and the requested paths that do not exist."""
+
+    paths: list[Path] = field(default_factory=list)
+    missing: list[tuple[str, Path]] = field(default_factory=list)
+
+
+def _resolve_roots(query: SearchQuery, cwd: Path) -> _Roots:
+    """Resolve the requested roots; a missing path is reported, never replaced.
+
+    A missing path written with glob characters, braces or commas runs as what
+    it evidently means when that names existing paths: ``src/**/*.py`` searches
+    ``src`` with that glob, ``{src,tests}`` and ``src,tests`` search both.
+    """
+    roots = _Roots()
+    for raw in query.roots or [str(cwd)]:
+        text = str(_path_argument(raw, windows=os.name == "nt"))
+        if not text.strip() or text == "-":
+            raise SearchArgumentError(
+                f'path must name a file or directory; received "{raw}". Omit path to search '
+                "the working directory."
             )
+        resolved = _absolute(text, cwd)
+        if os.path.lexists(resolved):
+            _add(roots.paths, resolved)
+            continue
+        alternatives = _existing_alternatives(text, cwd)
+        if alternatives:
+            for path in alternatives:
+                _add(roots.paths, path)
+            shown = ", ".join(path_label(path, cwd) for path in alternatives)
+            query.notes.append(f'path "{raw}" names several paths, so {shown} were searched.')
+            continue
+        base = _glob_root(text, cwd, query)
+        if base is not None:
+            _add(roots.paths, base)
+            continue
+        roots.missing.append((raw, resolved))
+    return roots
+
+
+def _missing_warnings(query: SearchQuery, roots: _Roots, cwd: Path) -> list[str]:
+    warnings = [_missing_root_message(path, cwd) for _, path in roots.missing]
+    missing_operands = [raw for raw, _ in roots.missing if raw in query.operand_roots]
+    if missing_operands and query.mode == "list_files":
+        warnings.append(
+            "--files lists files by name, so every args operand is a path. To list the files "
+            "whose contents match a pattern, replace --files with -l."
         )
-    if len(set(values)) > 1:
-        raise ValueError(f"Conflicting {name} values; provide one intended page.")
-    return optional_int(
-        values[0] if values else None,
-        field_name=name,
-        default=default,
-        minimum=minimum,
-        maximum=maximum,
+    if missing_operands and query.pattern_operand:
+        # Words without a path separator were most likely meant as further patterns.
+        words = [raw for raw in missing_operands if "/" not in raw and "\\" not in raw]
+        patterns = [query.patterns[0], *(words or missing_operands[:1])]
+        if query.literal:
+            flags = ["-F"]
+            for text in patterns:
+                flags += ["-e", text]
+            combined = "args " + json.dumps(flags, ensure_ascii=False)
+        else:
+            combined = f'pattern "{"|".join(patterns)}"'
+        warnings.append(
+            f'The first args operand "{query.patterns[0]}" is the pattern and later operands '
+            "are paths. If a missing path was meant as another pattern, combine the patterns: "
+            f"{combined}."
+        )
+    return warnings
+
+
+def _absolute(text: str, cwd: Path) -> Path:
+    return Path(os.path.abspath(cwd / Path(text).expanduser()))
+
+
+def _add(paths: list[Path], path: Path) -> None:
+    if all(os.path.normcase(path) != os.path.normcase(known) for known in paths):
+        paths.append(path)
+
+
+def _existing_alternatives(text: str, cwd: Path) -> list[Path]:
+    """Return the paths a brace or comma list names, when every one of them exists."""
+    if "{" in text:
+        alternatives = _expand_brace_alternations(text)
+    elif "," in text:
+        alternatives = [part.strip() for part in text.split(",")]
+    else:
+        return []
+    if len(alternatives) < 2 or not all(alternatives):
+        return []
+    paths = [_absolute(alternative, cwd) for alternative in alternatives]
+    return paths if all(os.path.lexists(path) for path in paths) else []
+
+
+def _glob_root(text: str, cwd: Path, query: SearchQuery) -> Path | None:
+    """Search a path written as a glob, such as src/**/*.py, as its directory and glob."""
+    if query.globs or not _GLOB_CHARACTERS.search(text):
+        return None
+    parts = Path(text).parts
+    fixed = next(index for index, part in enumerate(parts) if _GLOB_CHARACTERS.search(part))
+    base = _absolute(str(Path(*parts[:fixed])) if fixed else ".", cwd)
+    if not base.is_dir():
+        return None
+    remainder = "/".join(parts[fixed:])
+    try:
+        glob = "/".join(("", *base.relative_to(cwd).parts, remainder))
+    except ValueError:
+        glob = "/" + remainder
+    query.globs.append(glob)
+    query.notes.append(
+        f'path "{text}" contains glob characters, so {path_label(base, cwd)} was searched with '
+        f'glob "{glob}".'
     )
+    return base
 
 
 def _missing_root_message(root: Path, cwd: Path) -> str:
@@ -478,227 +536,293 @@ def _missing_root_message(root: Path, cwd: Path) -> str:
     return message + "."
 
 
+def _scopes(roots: list[Path], cwd: Path) -> list[Scope]:
+    """Group roots into ripgrep runs: one at the working directory, one per outside root."""
+    inside = Scope(cwd=cwd, paths=[])
+    scopes: list[Scope] = []
+    for root in roots:
+        try:
+            relative = root.relative_to(cwd).as_posix()
+        except ValueError:
+            if root.is_dir():
+                scopes.append(Scope(cwd=root, paths=["."]))
+            else:
+                scopes.append(Scope(cwd=root.parent, paths=[root.name]))
+            continue
+        inside.paths.append(relative)
+        # Explicitly named files bypass globs, so only directories need prefixes.
+        if relative != "." and root.is_dir():
+            inside.prefixes.append(relative)
+    if inside.paths:
+        scopes.insert(0, inside)
+    return scopes
+
+
+def _entry(scope_index: int, scope: Scope, native: bytes, count: int, cwd: Path) -> Entry:
+    path = Path(os.path.normpath(os.path.join(scope.cwd, os.fsdecode(native))))
+    return Entry(path, path_label(path, cwd), scope_index, native, count)
+
+
+@dataclass
+class _Found:
+    """Everything the counting or listing passes found, over all scopes."""
+
+    entries: list[Entry] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    files_searched: int | None = None
+    complete: bool = True
+
+    def take(self, index: int, scope: Scope, result: ScanResult, cwd: Path) -> None:
+        self.entries.extend(
+            _entry(index, scope, path, count, cwd) for path, count in result.entries
+        )
+        self.warnings.extend(result.warnings)
+        if result.truncated:
+            self.warnings.append(
+                "The search stopped after 500000 files; narrow path or glob to see the rest."
+            )
+        if result.truncated or result.interrupted or result.warnings:
+            self.complete = False
+        if result.files_searched is not None:
+            self.files_searched = (self.files_searched or 0) + result.files_searched
+
+    def finish(self, query: SearchQuery) -> None:
+        seen: set[str] = set()
+        unique = []
+        for entry in self.entries:
+            key = os.path.normcase(entry.path)
+            if key not in seen:
+                seen.add(key)
+                unique.append(entry)
+        self.entries = unique
+        order(self.entries, query)
+
+
+def _list_directories(
+    context: ToolContext,
+    query: SearchQuery,
+    roots: list[Path],
+    cwd: Path,
+    binary: Path,
+    budget: SearchBudget,
+    found: _Found,
+) -> None:
+    """List the directories below the roots that hold files ripgrep would search.
+
+    ripgrep lists files only, so the directories come from the listed files;
+    --max-depth and the globs then apply to the directories themselves.
+    """
+    depth = None
+    selection = []
+    for argument in query.rg_args:
+        if argument.startswith("--max-depth="):
+            with contextlib.suppress(ValueError):
+                depth = int(argument.removeprefix("--max-depth="))
+        else:
+            selection.append(argument)
+    query.rg_args = selection
+    files = _Found()
+    for index, scope in enumerate(_scopes(roots, cwd)):
+        files.take(
+            index, scope, list_scan(binary, query, scope, context, budget, cwd, globs=False), cwd
+        )
+    found.warnings, found.complete = files.warnings, files.complete
+    directories: dict[str, Path] = {}
+    bases = [root for root in roots if root.is_dir()]
+    for entry in files.entries:
+        root = next((base for base in bases if entry.path.is_relative_to(base)), None)
+        if root is None:
+            continue
+        parent = entry.path.parent
+        while parent != root:
+            key = os.path.normcase(parent)
+            if key in directories:
+                break
+            if depth is None or len(parent.relative_to(root).parts) <= depth:
+                directories[key] = parent
+            parent = parent.parent
+    case_sensitive = False
+    for argument in query.rg_args:
+        if argument in {"--glob-case-insensitive", "--no-glob-case-insensitive"}:
+            case_sensitive = argument.startswith("--no-")
+    found.entries = [
+        Entry(path, path_label(path, cwd), directory=True)
+        for path in directories.values()
+        if _directory_selected(path, bases, query.globs, cwd, case_sensitive)
+    ]
+
+
+def _directory_selected(
+    path: Path, roots: list[Path], globs: list[str], cwd: Path, case_sensitive: bool
+) -> bool:
+    """Apply ordered globs to one directory as ripgrep applies them to files."""
+    selected = all(glob.startswith("!") for glob in globs)
+    names = []
+    with contextlib.suppress(ValueError):
+        names.append(path.relative_to(cwd).as_posix())
+    names.extend(path.relative_to(root).as_posix() for root in roots if path.is_relative_to(root))
+    for glob in globs:
+        negated = glob.startswith("!")
+        body = (glob[1:] if negated else glob).replace("\\", "/").rstrip("/")
+        body = body[2:] if body.startswith("./") else body.lstrip("/")
+        anchored = "/" in body
+        for alternative in _expand_brace_alternations(body):
+            if any(
+                Path(name if anchored else name.rsplit("/", 1)[-1]).full_match(
+                    alternative, case_sensitive=case_sensitive
+                )
+                for name in names
+            ):
+                selected = not negated
+                break
+    return selected
+
+
+@dataclass
+class _Outcome:
+    page: Page
+    found: _Found
+    total: int
+    lines_total: int
+    patterns: list[str]
+
+
+def _search(
+    context: ToolContext,
+    query: SearchQuery,
+    roots: list[Path],
+    cwd: Path,
+    binary: Path,
+    budget: SearchBudget,
+) -> _Outcome:
+    found = _Found()
+    if query.mode == "list_dirs":
+        _list_directories(context, query, roots, cwd, binary, budget, found)
+    scopes = _scopes(roots, cwd)
+    if query.mode == "list_files":
+        for index, scope in enumerate(scopes):
+            found.take(index, scope, list_scan(binary, query, scope, context, budget, cwd), cwd)
+    if query.mode in LIST_MODES:
+        found.finish(query)
+        total = len(found.entries)
+        return _Outcome(entry_page(found.entries, query), found, total, total, [])
+
+    patterns = query.patterns
+    try:
+        results = [
+            count_scan(binary, query, patterns, scope, context, budget, cwd) for scope in scopes
+        ]
+    except SearchRefusedError as error:
+        retry = None if query.literal else pattern_retry(str(error), patterns, query)
+        if retry is None:
+            raise
+        patterns, pcre2, note = retry
+        if pcre2:
+            query.rg_args.append("--pcre2")
+        try:
+            results = [
+                count_scan(binary, query, patterns, scope, context, budget, cwd) for scope in scopes
+            ]
+        except SearchRefusedError:
+            raise error from None
+        query.notes.append(note)
+    for index, (scope, result) in enumerate(zip(scopes, results, strict=True)):
+        found.take(index, scope, result, cwd)
+    found.finish(query)
+    lines_total = sum(entry.count for entry in found.entries)
+    if query.mode != "content":
+        page = entry_page(found.entries, query)
+        return _Outcome(page, found, len(found.entries), lines_total, patterns)
+    window = content_window(found.entries, query.offset, query.limit)
+    events: dict[tuple[int, bytes], list[dict[str, Any]]] = {}
+    for index, scope in enumerate(scopes):
+        selected = [(entry, skip) for entry, skip in window if entry.scope == index]
+        if not selected:
+            continue
+        scope_events, warnings = line_events(
+            binary,
+            query,
+            patterns,
+            scope,
+            [entry.native for entry, _ in selected],
+            max(skip for _, skip in selected) + query.limit,
+            context,
+            budget,
+            cwd,
+        )
+        found.warnings.extend(warnings)
+        events.update(((index, path), value) for path, value in scope_events.items())
+    page = content_page(window, events, query)
+    return _Outcome(page, found, lines_total, lines_total, patterns)
+
+
 def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     try:
         query = interpret_search_call(arguments)
-        arguments = query["arguments"]
-        action, kind = query["action"], query["kind"]
-        patterns = query["patterns"]
-        notes: list[str] = query["notes"]
-        options = parse_options(query["options"], action=action, kind=kind)
-        notes.extend(options.notes)
-        reference = options.get("reference")
-        searching = set(arguments) - {"args"} or patterns or query["paths"]
-        if reference == "help":
-            if searching or any(option.key != "reference" for option, _ in options.entries):
-                raise ValueError("--help does not search; omit patterns, paths, and other options.")
-            return tool_success({"content": help_text()})
-        roots_input = query["paths"] or [str(context.effective_cwd)]
-        cwd = Path(os.path.abspath(context.effective_cwd.expanduser()))
-        requested: dict[Path, str] = {}
-        for raw in roots_input:
-            resolved = cwd / Path(_path_argument(raw, windows=os.name == "nt")).expanduser()
-            requested.setdefault(Path(os.path.abspath(resolved)), raw)
-        roots = list(requested)
-        limit = _page_argument(arguments, options, "limit", default=100, minimum=1, maximum=10000)
-        offset = _page_argument(arguments, options, "offset", default=0, minimum=0, maximum=1000000)
-        if max(options.context) > 10000:
-            raise ValueError(
-                "Context is limited to 10000 lines per side; use read for larger file sections."
-            )
-        if options.enabled("quiet") and any(
-            name in arguments or options.values(name) for name in ("limit", "offset")
-        ):
-            raise ValueError("Existence searches (-q) do not paginate; omit limit and offset.")
-        missing_roots: list[Path] = []
-        warnings: list[str] = []
-        if reference != "types":
-            for root in roots:
-                if not root.exists():
-                    missing_roots.append(root)
-                elif not root.is_file() and not root.is_dir():
-                    return tool_failure(
-                        "invalid_arguments",
-                        f"Search root is not a regular file or directory: {root.as_posix()}",
-                    )
-            if missing_roots:
-                warnings = [_missing_root_message(root, cwd) for root in missing_roots]
-                if query["pattern_operand"]:
-                    other = requested[missing_roots[0]]
-                    combined = (
-                        f'args ["-F", "-e", "{patterns[0]}", "-e", "{other}"]'
-                        if options.enabled("literal")
-                        else f'pattern "{patterns[0]}|{other}"'
-                    )
-                    warnings.append(
-                        f'The first args operand "{patterns[0]}" is the pattern and later '
-                        "operands are paths. If a missing path was meant as another pattern, "
-                        f"search both with {combined}."
-                    )
-                roots = [root for root in roots if root not in missing_roots]
-                if not roots:
-                    return tool_failure(
-                        "path_not_found", " ".join(warnings) + " Nothing was searched."
-                    )
         binary = require_binary()
-    except (OSError, RuntimeError, ValueError, ToolContractError) as error:
+        if query.mode == "help":
+            return tool_success({"content": help_text()})
+        budget = SearchBudget(context)
+        if query.mode == "reference":
+            text = reference_text(binary, query.reference_args, context, budget)
+            return tool_success({"content": text})
+        cwd = Path(os.path.abspath(context.effective_cwd.expanduser()))
+        roots = _resolve_roots(query, cwd)
+        missing = _missing_warnings(query, roots, cwd)
+        if not roots.paths:
+            return tool_failure("path_not_found", " ".join(missing) + " Nothing was searched.")
+        outcome = _search(context, query, roots.paths, cwd, binary, budget)
+    except (SearchArgumentError, ToolContractError, ValueError) as error:
         return tool_failure("invalid_arguments", str(error))
-    budget = SearchBudget(context)
-    page = ResultPage(offset, limit)
-    complete = True
-    try:
-        types = (
-            file_types(binary, options, context, budget)
-            if reference == "types"
-            or any(
-                o.key in {"type", "type_not", "type_add", "type_clear"} for o, _ in options.entries
-            )
-            else {}
+    except SearchRefusedError as error:
+        return tool_failure("search_error", explain_failure(str(error)))
+    except OSError as error:
+        return tool_failure(
+            "search_error",
+            f"search_files could not run the search: {os_error_reason(error)}. Retry the call.",
         )
-        if reference == "types":
-            if searching or any(
-                o.key not in {"type_add", "type_clear", "reference"} for o, _ in options.entries
-            ):
-                raise ValueError(
-                    "--type-list accepts only type additions/clears; "
-                    "omit search fields and filters."
-                )
-            return tool_success(
-                {
-                    "content": "\n".join(
-                        f"{name}: {', '.join(globs)}" for name, globs in types.items()
-                    )
-                }
-            )
-        with tempfile.TemporaryDirectory(prefix="vbot-search-") as temporary:
-            scratch = Path(temporary)
-            selection = FileSelection(
-                scratch / "selection.sqlite", roots, cwd, options, budget, warnings
-            )
-            with contextlib.closing(selection):
-                selection.populate(
-                    kind if action == "paths" else "files",
-                    types,
-                )
-                complete = selection.complete and not warnings
-                if action == "paths":
-                    for path, directory in selection.entries(action=action):
-                        if not budget.keep_going():
-                            break
-                        page.add([path_label(path, cwd) + ("/" if directory else "")])
-                        if page.more:
-                            break
-                else:
-
-                    def search_contents(active: list[str], active_options: SearchOptions) -> None:
-                        entries = selection.entries(action=action)
-                        first = next(entries, None)
-                        if first is None:
-                            # The native search reports invalid patterns and options;
-                            # without candidates it never runs, so check them alone.
-                            empty = scratch / "empty"
-                            empty.touch()
-                            validate_patterns(
-                                binary, active, active_options, context, budget, empty
-                            )
-                        else:
-                            render_events(
-                                content_events(
-                                    binary,
-                                    itertools.chain([first], entries),
-                                    active,
-                                    active_options,
-                                    context,
-                                    budget,
-                                    offset + limit,
-                                ),
-                                page,
-                                active_options,
-                                cwd,
-                            )
-
-                    try:
-                        search_contents(patterns, options)
-                    except RuntimeError as error:
-                        retry = (
-                            None if page.observed else pattern_retry(str(error), patterns, options)
-                        )
-                        if retry is None:
-                            raise
-                        retry_patterns, pcre2, note = retry
-                        retry_options = (
-                            parse_options([*query["options"], "-P"], action=action, kind=kind)
-                            if pcre2
-                            else options
-                        )
-                        try:
-                            search_contents(retry_patterns, retry_options)
-                        except RuntimeError:
-                            # A retry that found nothing reports the original problem.
-                            if page.observed:
-                                raise
-                            raise error from None
-                        patterns, options = retry_patterns, retry_options
-                        notes.append(note)
-                if options.enabled("debug"):
-                    warnings.append(
-                        f"Inspected {selection.observed} entries; "
-                        f"{selection.skipped} traversal issues. Roots: {', '.join(map(str, roots))}"
-                    )
-                stats = {"entries_inspected": selection.observed, "results_observed": page.observed}
-    except ValueError as error:
-        return tool_failure("invalid_arguments", str(error))
-    except (OSError, RuntimeError) as error:
-        # The system's own message follows the host language and names vBot's
-        # scratch files, such as the candidate spool; say why in English instead.
-        message = (
-            f"search_files could not use a file the search needs: {os_error_reason(error)}. "
-            "Retry the call."
-            if isinstance(error, OSError)
-            else str(error)
-        )
-        if not page.observed:
-            return tool_failure("search_error", message)
-        warnings.append(message)
-        complete = False
     if budget.cancelled_by_user or context.was_cancelled_by_user():
         return tool_failure("cancelled_by_user", "Search aborted by the user")
-    if budget.stopped:
-        complete = False
-        warnings.append(
-            "Search timed out; results are incomplete. Search fewer files or use a narrower path."
-            if budget.timed_out
-            else "Run cancelled; search results are incomplete."
-        )
-    if options.get("max_count") or options.enabled("stop"):
-        warnings.append(
-            "Per-file early stopping was requested; counts and absence apply o"
-            "nly to the searched portions."
-        )
-    data = page.data(complete=complete, warnings=warnings, quiet=options.enabled("quiet"))
+    page, found = outcome.page, outcome.found
+    warnings = [*missing, *found.warnings]
     if budget.timed_out:
-        directories = [root.as_posix() for root in roots if root.is_dir()]
-        if directories:
-            data["narrow_call"] = {
-                "path": directories,
-                "args": ["--dirs", "--max-depth", "1"],
-                "limit": 50,
-            }
-            notes.append(
-                "Use narrow_call to list immediate subdirectories, then repeat this search "
-                "with a narrower path. Lowering limit does not reduce directory traversal."
-            )
-    if notes:
-        data["note"] = " ".join(notes)
-    if missing_roots:
-        data["missing_paths"] = [root.as_posix() for root in missing_roots]
-        data["searched_paths"] = [root.as_posix() for root in roots]
-    if not page.observed and not page.matched:
-        data["searched_paths"] = [root.as_posix() for root in roots]
-        data["patterns"] = patterns
-    if options.enabled("stats"):
-        data["stats"] = locals().get("stats", {"results_observed": page.observed})
-    context.add_display_count(page.returned, "results", at_least=page.more or not complete)
+        warnings.append(
+            "The search stopped at its 30-second limit, so results are partial. Narrow path "
+            "or glob to search the rest."
+        )
+    elif budget.stopped:
+        warnings.append("The Run was cancelled, so results are partial.")
+    complete = found.complete and not budget.stopped
+    if query.mode in {"files_without_match", *LIST_MODES}:
+        files = len(found.entries)
+    else:
+        files = sum(1 for entry in found.entries if entry.count)
+    data: dict[str, Any] = {
+        "summary": summary(
+            page,
+            query,
+            total=outcome.total,
+            files=files,
+            lines_total=outcome.lines_total,
+            files_searched=found.files_searched,
+            complete=complete,
+        )
+    }
+    end = page.offset + page.returned
+    if page.returned and end < outcome.total:
+        data["next_offset"] = end
+    if query.notes:
+        data["note"] = " ".join(dict.fromkeys(query.notes))
+    if warnings:
+        data["warnings"] = warnings[:20]
+    if roots.missing or not outcome.total:
+        data["searched_paths"] = [path.as_posix() for path in roots.paths]
+    if not outcome.total and outcome.patterns:
+        data["patterns"] = outcome.patterns
+    data["content"] = "\n".join(page.lines)
+    context.add_display_count(
+        page.returned, "results", at_least="next_offset" in data or not complete
+    )
     return tool_success(data)
 
 
@@ -720,8 +844,7 @@ def _display_parts(arguments: JsonObject) -> list[ToolDisplayPart]:
 def _display_details(arguments: JsonObject, result: JsonObject | None) -> list[JsonObject]:
     """Show the user what was found, whether more follows, and the warnings.
 
-    Page controls, searched roots and the continuation instruction are for the
-    Agent and stay in the raw result.
+    Page controls and searched roots are for the Agent and stay in the raw result.
     """
     data = result.get("data") if isinstance(result, dict) and result.get("ok") is True else None
     if not isinstance(data, dict):
@@ -762,6 +885,60 @@ def register_search_files_tool(registry: ToolRegistry) -> None:
         ready=lambda: available,
         readiness_hint=hint,
     )
+
+
+HELP_EXAMPLES = (
+    {"pattern": "def load_config", "path": ["src", "tests"], "glob": "*.py", "context": 2},
+    {"pattern": "todo", "args": ["-i", "-w", "-t", "py"], "output": "count"},
+    {"pattern": "connect(", "args": ["-F"]},
+    {"pattern": "error", "args": ["-u", "-i"], "output": "files"},
+    {"glob": "migrations", "args": ["--dirs"]},
+)
+
+
+def help_text() -> str:
+    """Return the reference that args ["--help"] shows."""
+    examples = "\n".join(f"  {json.dumps(example)}" for example in HELP_EXAMPLES)
+    return f"""search_files runs ripgrep over the files below path.
+
+Examples:
+{examples}
+
+Default selection: hidden files are searched, .gitignore and .ignore rules apply (also
+outside git repositories), binary files are skipped, and .git is always skipped. A
+glob that names files also selects files those rules exclude.
+
+Output: content shows path:line:text for matching lines and path-line-text for context
+lines. Content results are ordered by path, file lists newest first. Every page says
+how many results exist; continue with next_offset.
+
+args items, one flag or value per item. Other ripgrep flags work as well:
+  -i / -s / -S          ignore case / match case / ignore case unless the pattern has capitals
+  -F                    match the pattern as literal text
+  -w / -x               match whole words / whole lines
+  -v                    show lines that do not match
+  -e PATTERN            another pattern; a line matching any pattern matches
+  -U                    let a match span lines; add --multiline-dotall for . to match newlines
+  -P                    PCRE2 regex: look-around and backreferences
+  -A N / -B N / -C N    lines after / before / around each match
+  -o                    show only the matched text
+  -m N                  at most N matching lines per file
+  -l / -c / --count-matches / --files-without-match
+                        list matching files / count matching lines / count matches /
+                        list files without a match
+  -t TYPE / -T TYPE     only / not files of a type; --type-list lists the types
+  -g GLOB               like glob; a leading ! excludes
+  -u / -uuu             also search ignored files / and binary files
+  --no-hidden           skip hidden files
+  -L                    follow symbolic links
+  -d N                  descend at most N directory levels
+  --max-filesize SIZE   skip larger files, such as 1M
+  -E ENCODING / -a      read files in an encoding / search binary files as text
+  --files / --dirs      list files / list directories that hold files (without a
+                        pattern, files are listed)
+  --sort KEY / --sortr KEY
+                        order ascending / descending by path, modified, accessed or created
+"""
 
 
 _STRING_OR_LIST: JsonObject = {

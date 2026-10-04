@@ -33,8 +33,8 @@ def search_cases() -> list[dict[str, Any]]:
         },
         {
             "id": "paths_defaults",
-            "arguments": {"args": ["--entries", "--sort=path"]},
-            "content": "other.txt\nsrc/\nsrc/a.py\nsrc/empty/\ntests/\ntests/b.PY",
+            "arguments": {"args": ["--files", "--sort=path"]},
+            "content": "other.txt\nsrc/a.py\ntests/b.PY",
         },
         {
             "id": "paths_patterns",
@@ -43,8 +43,8 @@ def search_cases() -> list[dict[str, Any]]:
         },
         {
             "id": "directories",
-            "arguments": {"args": ["--dirs", "-g", "./**/empty"]},
-            "content": "src/empty/",
+            "arguments": {"args": ["--dirs", "-g", "./**/src"]},
+            "content": "src/",
         },
         {
             "id": "help",
@@ -97,7 +97,7 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "only_matches",
             "arguments": {"args": ["-o", "-e", "alpha"]},
-            "content": "src/a.py:1:1:alpha\nsrc/a.py:1:7:alpha\ntests/b.PY:1:1:alpha",
+            "content": "src/a.py:1:alpha\nsrc/a.py:1:alpha\ntests/b.PY:1:alpha",
         },
         {
             "id": "filters",
@@ -117,12 +117,12 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "type",
             "arguments": {"args": ["-tpy", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
+            "content": "src/a.py:1:alpha alpha",
         },
         {
             "id": "type_not",
             "arguments": {"args": ["-Tpy", "-e", "alpha"]},
-            "content": "No results.",
+            "content": "tests/b.PY:1:alpha",
         },
         {
             "id": "type_add_clear",
@@ -139,7 +139,7 @@ def search_cases() -> list[dict[str, Any]]:
                     "alpha",
                 ]
             },
-            "content": "src/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
+            "content": "tests/b.PY:1:alpha",
         },
         {
             "id": "max_size",
@@ -149,7 +149,7 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "depth",
             "arguments": {"args": ["--max-depth", "1", "-e", "alpha"]},
-            "content": "No results.",
+            "content": "",
         },
         {
             "id": "sort_reverse",
@@ -159,12 +159,12 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "context",
             "arguments": {"args": ["-C1", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha\nsrc/a.py:2-beta\ntests/b.PY:1:alpha",
+            "content": "src/a.py:1:alpha alpha\nsrc/a.py-2-beta\n--\ntests/b.PY:1:alpha",
         },
         {
             "id": "asymmetric_context",
             "arguments": {"args": ["-B2", "-A1", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha\nsrc/a.py:2-beta\ntests/b.PY:1:alpha",
+            "content": "src/a.py:1:alpha alpha\nsrc/a.py-2-beta\n--\ntests/b.PY:1:alpha",
         },
         {
             "id": "flags_separate",
@@ -252,7 +252,7 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "smart_case_upper",
             "arguments": {"args": ["-S", "-e", "ALPHA"]},
-            "content": "No results.",
+            "content": "",
         },
         {
             "id": "inversion",
@@ -262,22 +262,22 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "multiline",
             "arguments": {"args": ["-U", "-e", "alpha alpha\\nbeta"]},
-            "content": "src/a.py:1:alpha alpha\nbeta",
+            "content": "src/a.py:1:alpha alpha\nsrc/a.py:2:beta",
         },
         {
             "id": "dotall",
             "arguments": {"args": ["-U", "--multiline-dotall", "-e", "alpha.*beta"]},
-            "content": "src/a.py:1:alpha alpha\nbeta",
+            "content": "src/a.py:1:alpha alpha\nsrc/a.py:2:beta",
         },
         {
             "id": "pcre",
             "arguments": {"args": ["-P", "-o", "-e", "alpha(?= alpha)"]},
-            "content": "src/a.py:1:1:alpha",
+            "content": "src/a.py:1:alpha",
         },
         {
             "id": "auto_engine",
             "arguments": {"args": ["--engine=auto", "-o", "-e", "alpha(?= alpha)"]},
-            "content": "src/a.py:1:1:alpha",
+            "content": "src/a.py:1:alpha",
         },
         {
             "id": "types_help",
@@ -288,14 +288,12 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "exists",
             "arguments": {"args": ["-q", "-e", "alpha"]},
-            "content": None,
-            "matched": True,
+            "content": "src/a.py\ntests/b.PY",
         },
         {
             "id": "absent",
             "arguments": {"args": ["-q", "-e", "absent"]},
-            "content": None,
-            "matched": False,
+            "content": "",
         },
         {
             "id": "preserve_array_regex",
@@ -311,7 +309,7 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "preserve_quotes",
             "arguments": {"args": ["-e", '"alpha"']},
-            "content": "No results.",
+            "content": "",
             "patterns": ['"alpha"'],
             "searched_paths": ["."],
         },
@@ -319,8 +317,7 @@ def search_cases() -> list[dict[str, Any]]:
             "id": "missing_root",
             "arguments": {"args": ["-e", "alpha", "--", "missing", "src"]},
             "content": "src/a.py:1:alpha alpha",
-            "complete": False,
-            "missing_paths": ["missing"],
+            "contains": "Path not found: missing.",
             "searched_paths": ["src"],
         },
         {
@@ -358,16 +355,14 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "inapplicable",
             "arguments": {"args": ["--files", "-c"]},
-            "content": None,
-            "error": True,
-            "error_contains": "contents",
+            "content": "other.txt\nsrc/a.py\ntests/b.PY",
+            "unordered_lines": True,
+            "contains": "-c was ignored",
         },
         {
             "id": "directory_type",
-            "arguments": {"args": ["--entries", "-tpy"]},
-            "content": None,
-            "error": True,
-            "error_contains": "--files",
+            "arguments": {"args": ["--dirs", "-tpy"]},
+            "content": "src/",
         },
         {
             "id": "invalid_regex",
@@ -381,7 +376,7 @@ def search_cases() -> list[dict[str, Any]]:
             "arguments": {"args": ["--pre", "program", "-e", "alpha"]},
             "content": None,
             "error": True,
-            "error_contains": "unsupported",
+            "error_contains": "not available",
         },
         {
             "id": "natural_word_scope",
@@ -393,8 +388,8 @@ def search_cases() -> list[dict[str, Any]]:
         },
         {
             "id": "natural_directories",
-            "task": "Find directories named empty, including empty directories.",
-            "content": "src/empty/",
+            "task": "Find directories named tests.",
+            "content": "tests/",
         },
         {
             "id": "natural_count",
@@ -438,13 +433,13 @@ def search_cases() -> list[dict[str, Any]]:
         },
         {
             "id": "name_case_sensitive",
-            "arguments": {"args": ["--files", "-s", "-g", "*.py"]},
+            "arguments": {"args": ["--files", "--no-glob-case-insensitive", "-g", "*.py"]},
             "content": "src/a.py",
         },
         {
             "id": "directory_basename",
-            "arguments": {"args": ["--dirs", "-g", "empty"]},
-            "content": "src/empty/",
+            "arguments": {"args": ["--dirs", "-g", "SRC"]},
+            "content": "src/",
         },
         {"id": "empty_root", "arguments": {"args": ["alpha", ""]}, "content": None, "error": True},
         {
@@ -463,7 +458,7 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "literal_boolean_word",
             "arguments": {"args": ["-n", "true"]},
-            "content": "No results.",
+            "content": "",
         },
         {
             "id": "repair_encoded_args",
@@ -515,7 +510,6 @@ async def _case(adapter: Any, args: argparse.Namespace, case: dict) -> dict:
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8", newline="\n")
-        (root / "src/empty").mkdir()
         registry = ToolRegistry()
         register_search_files_tool(registry)
         definitions = registry.provider_definitions(["search_files"])
@@ -572,7 +566,7 @@ async def _case(adapter: Any, args: argparse.Namespace, case: dict) -> dict:
         )
         try:
             query = interpret_search_call(arguments)
-            roots = query["paths"] or ["."]
+            roots = query.roots or ["."]
             if any(not (root / p).resolve().is_relative_to(root) for p in roots):
                 return {"case": case["id"], "passed": False, "reason": "outside fixture scope"}
             result = await registry.dispatch(context, arguments, ["search_files"])
@@ -592,11 +586,12 @@ async def _case(adapter: Any, args: argparse.Namespace, case: dict) -> dict:
                 else actual == expected
             )
         if "contains" in case:
-            passed = passed and case["contains"] in data.get("content", "")
-        for field in ("matched", "next_offset", "patterns", "complete"):
+            visible = "\n".join(str(value) for value in data.values())
+            passed = passed and case["contains"] in visible
+        for field in ("next_offset", "patterns"):
             if field in case:
                 passed = passed and data.get(field) == case[field]
-        for field in ("searched_paths", "missing_paths"):
+        for field in ("searched_paths",):
             if field in case:
                 passed = passed and data.get(field) == [
                     (root / path).as_posix() for path in case[field]

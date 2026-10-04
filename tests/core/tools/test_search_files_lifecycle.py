@@ -24,9 +24,11 @@ from tests.core.tools.search_files_test_support import context, dispatch
 @pytest.mark.parametrize(
     "arguments, success, children",
     [
-        ({"pattern": "needle"}, True, 1),
-        ({"pattern": "needle", "limit": 1}, True, 1),
+        # A content search counts in one pass and reads the page's lines in another.
+        ({"pattern": "needle"}, True, 2),
+        ({"pattern": "needle", "limit": 1}, True, 2),
         ({"pattern": "needle", "args": ["-t", "py"]}, True, 2),
+        ({"pattern": "needle", "output": "files"}, True, 1),
         ({"pattern": "["}, False, 1),
     ],
 )
