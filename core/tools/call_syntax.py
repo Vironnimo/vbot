@@ -186,7 +186,12 @@ def normalize_call_arguments(
     # Check conflicts before omission: an explicit empty alias must not hide
     # contradictory nonempty data from another spelling or wrapper.
     for field in empty_as_omitted:
-        if field in normalized and normalized[field] in (None, ""):
+        value = normalized.get(field)
+        # The contract wraps a string sent for a list field, so "" arrives as [""].
+        if field in normalized and (
+            value in (None, "")
+            or (isinstance(value, list) and all(item in (None, "") for item in value))
+        ):
             del normalized[field]
     return normalized
 

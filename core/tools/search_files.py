@@ -1079,82 +1079,53 @@ args items, one flag or value per item. Other ripgrep flags work as well:
 """
 
 
-_STRING_OR_LIST: JsonObject = {
-    "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]
-}
+_STRING_LIST: JsonObject = {"type": "array", "items": {"type": "string"}}
 SEARCH_FILES_TOOL_DESCRIPTION = (
     "Search file contents with a regular expression, or list files and directories. Use this "
-    "instead of grep, rg, find, or ls in the shell. "
-    'Find text: {"pattern": "def load_config", "path": "src"}. '
-    'List files: {"glob": "*.py", "path": "src"}. '
-    'List directories: {"glob": "build", "args": ["--dirs"]}. '
-    "Matches come back as path:line:text; file lists are newest first. Hidden files are "
-    "included, .gitignore rules apply, and .git is skipped. Results come in pages; "
-    "continue with next_offset."
+    "instead of grep, rg, find, or ls in the shell."
 )
 SEARCH_FILES_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
         "pattern": {
             "type": "string",
-            "description": (
-                "Regular expression (ripgrep syntax) to find in file contents. Omit to list "
-                'files. To match text containing ( [ . * literally, add "-F" to args.'
-            ),
+            "description": "Regular expression (ripgrep syntax). Omit to list files.",
         },
         "path": {
-            **_STRING_OR_LIST,
-            "description": (
-                "File or directory to search, or a list of them. Relative paths start at the "
-                "working directory. Omit to search the working directory."
-            ),
+            **_STRING_LIST,
+            "description": "Files or directories to search. Omit for the working directory.",
         },
         "glob": {
-            **_STRING_OR_LIST,
-            "description": (
-                "File name filter, or directory name filter with --dirs, such as *.py or "
-                "*.{ts,tsx}; a leading ! excludes. Without a / it matches names at any depth. "
-                "Case-insensitive. A list applies each. Omit to include every name."
-            ),
+            **_STRING_LIST,
+            "description": "Name filters such as *.py; a leading ! excludes.",
         },
         "output": {
             "type": "string",
             "enum": ["content", "files", "count"],
             "description": (
-                "content shows matching lines; files lists only the matching "
-                'files; count gives matching lines per file, or every match with "--count-matches" '
-                "in args. Omit for content."
+                "files lists matching files; count counts matching lines per file, every match "
+                'with "--count-matches" in args. Omit for matching lines.'
             ),
         },
         "context": {
             "type": "integer",
-            "minimum": 0,
-            "description": "Lines to show before and after each match. Omit to show only "
-            "the matching lines.",
+            "description": "Lines around each match. Omit for none.",
         },
         "args": {
-            "type": "array",
-            "items": {"type": "string"},
+            **_STRING_LIST,
             "description": (
-                "More ripgrep arguments, one per item: -i ignore case, -F literal text, "
-                "-w whole words, -t py file type, -u include ignored files, --dirs list "
-                "directories. A plain ripgrep argument list also works: the first operand "
-                'is the pattern, later ones are paths. ["--help"] lists every option.'
+                "More ripgrep arguments, one per item, such as -i, -w, -F, -t py, -u (include "
+                'ignored files), --dirs (list directories). ["--help"] lists all.'
             ),
         },
         "limit": {
             "type": "integer",
-            "minimum": 1,
             "default": 100,
-            "description": "Maximum results per page. Omit for 100.",
+            "description": "Results per page.",
         },
         "offset": {
             "type": "integer",
-            "minimum": 0,
-            "description": (
-                "Results to skip; pass next_offset to get the next page. Omit to start at the "
-                "first result."
-            ),
+            "description": "Pass next_offset to continue.",
         },
     },
 }

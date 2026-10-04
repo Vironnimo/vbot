@@ -71,6 +71,7 @@ async def test_named_fields_search_contents(project: Path, arguments: dict, cont
     ("arguments", "content"),
     [
         ({}, "src/app.py\nsrc/view.ts\ndocs/guide.md"),
+        ({"pattern": "", "path": "", "glob": [""]}, "src/app.py\nsrc/view.ts\ndocs/guide.md"),
         ({"path": "src"}, "src/app.py\nsrc/view.ts"),
         ({"glob": "*.md"}, "docs/guide.md"),
         ({"glob": "*.py", "output": "files"}, "src/app.py"),
@@ -652,8 +653,16 @@ _PATHS = "path must name a file or directory"
         ({"args": ["needle", "--limit=0"]}, "invalid_arguments", "between 1 and 10000"),
         ({"args": ["needle", "--limit=10001"]}, "invalid_arguments", "between 1 and 10000"),
         # Rejected before the search runs.
-        ({"args": ["--files"], "limit": 0}, None, '"limit" must be at least 1'),
-        ({"args": ["--files"], "offset": -1}, None, '"offset" must be at least 0'),
+        (
+            {"args": ["--files"], "limit": 0},
+            "invalid_arguments",
+            "limit must be between 1 and 10000; received 0",
+        ),
+        (
+            {"args": ["--files"], "offset": -1},
+            "invalid_arguments",
+            "offset must be between 0 and 1000000; received -1",
+        ),
         ({"args": ["needle"], "fuzzy": True}, None, '"fuzzy" is not a parameter'),
         ({"args": ["needle"], "argv": ["other"]}, None, "Conflicting values for args"),
         ({"args": r'["-e", "\bcall\("]'}, None, _LIST),
