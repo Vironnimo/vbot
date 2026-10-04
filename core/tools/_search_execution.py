@@ -564,6 +564,66 @@ def reference_text(
     return text
 
 
+def widen_type_case(
+    binary: Path, query: SearchQuery, context: ToolContext, budget: SearchBudget
+) -> None:
+    """Make the file types the query selects match names in any letter case.
+
+    ripgrep compares type globs case-sensitively even where file names are not,
+    so ``-t py`` would miss ``b.PY``. While globs ignore case (the default), each
+    selected type gets every glob of its definition again with letters in any case.
+    """
+    insensitive = True
+    for argument in [*DEFAULT_ARGUMENTS, *query.rg_args]:
+        if argument in {"--glob-case-insensitive", "--no-glob-case-insensitive"}:
+            insensitive = argument == "--glob-case-insensitive"
+    names = {
+        argument.split("=", 1)[1]
+        for argument in query.rg_args
+        if argument.startswith(("--type=", "--type-not="))
+    } - {"all"}
+    if not insensitive or not names:
+        return
+    definitions = [
+        argument
+        for argument in query.rg_args
+        if argument.startswith(("--type-add=", "--type-clear="))
+    ]
+    listing = reference_text(binary, [*definitions, "--type-list"], context, budget)
+    for line in listing.splitlines():
+        name, _, globs = line.partition(": ")
+        if name not in names:
+            continue
+        for glob in globs.split(", "):
+            widened = _any_case(glob)
+            if widened != glob:
+                query.rg_args.append(f"--type-add={name}:{widened}")
+
+
+def _any_case(glob: str) -> str:
+    """Return glob with each letter outside character classes matching either case."""
+    result: list[str] = []
+    index = 0
+    while index < len(glob):
+        character = glob[index]
+        if character == "\\" and index + 1 < len(glob):
+            result.append(glob[index : index + 2])
+            index += 2
+            continue
+        if character == "[":
+            end = glob.find("]", index + 2)
+            if end > 0:
+                result.append(glob[index : end + 1])
+                index = end + 1
+                continue
+        if character.lower() != character.upper():
+            result.append(f"[{character.lower()}{character.upper()}]")
+        else:
+            result.append(character)
+        index += 1
+    return "".join(result)
+
+
 def explain_failure(message: str) -> str:
     """Say what ripgrep refused and how to correct the call. Nothing was searched."""
     if any(marker in message for marker in _PATTERN_ERRORS):

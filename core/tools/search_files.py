@@ -29,6 +29,7 @@ from core.tools._search_execution import (
     list_scan,
     pattern_retry,
     reference_text,
+    widen_type_case,
 )
 from core.tools._search_query import (
     LIST_MODES,
@@ -669,11 +670,42 @@ def _list_directories(
                 break
     if budget.stopped:
         found.complete = False
+    names = _name_matcher(query)
     found.entries = [
         Entry(path, path_label(path, cwd), directory=True)
         for path in directories.values()
         if _directory_selected(path, bases, query.globs, cwd, case_sensitive)
+        and (names is None or names.search(path.name))
     ]
+
+
+def _name_matcher(query: SearchQuery) -> re.Pattern[str] | None:
+    """Compile the patterns a --dirs listing matches against directory names.
+
+    Letter case follows ripgrep's content flags: -i ignores it, -S ignores it
+    for patterns without capitals, and matching is case-sensitive otherwise.
+    """
+    if not query.name_patterns:
+        return None
+    mode = "--case-sensitive"
+    for argument in query.rg_args:
+        if argument in {"--case-sensitive", "--ignore-case", "--smart-case"}:
+            mode = argument
+    patterns = query.name_patterns
+    if query.literal:
+        patterns = [re.escape(text) for text in patterns]
+    ignore_case = mode == "--ignore-case" or (
+        mode == "--smart-case" and not any(text != text.lower() for text in query.name_patterns)
+    )
+    try:
+        return re.compile(
+            "|".join(f"(?:{text})" for text in patterns), re.IGNORECASE if ignore_case else 0
+        )
+    except re.error as error:
+        raise SearchArgumentError(
+            f"The pattern for directory names is not a valid regular expression: {error}. "
+            'Correct it, add "-F" to args to match plain text, or select names with glob.'
+        ) from None
 
 
 def _walk_directories(
@@ -763,6 +795,7 @@ def _search(
     binary: Path,
     budget: SearchBudget,
 ) -> _Outcome:
+    widen_type_case(binary, query, context, budget)
     found = _Found()
     if query.mode == "list_dirs":
         _list_directories(context, query, roots, cwd, binary, budget, found)
@@ -974,7 +1007,8 @@ Examples:
 
 Default selection: hidden files are searched, .gitignore and .ignore rules apply (also
 outside git repositories), binary files are skipped, and .git is always skipped. A
-glob that names files also selects files those rules exclude.
+glob that names files also selects files those rules exclude. Globs and file types
+match names in any letter case unless --no-glob-case-insensitive is given.
 
 Output: content shows path:line:text for matching lines and path-line-text for context
 lines. Content results are ordered by path, file lists newest first. Every page says
@@ -1002,8 +1036,8 @@ args items, one flag or value per item. Other ripgrep flags work as well:
   -d N                  descend at most N directory levels
   --max-filesize SIZE   skip larger files, such as 1M
   -E ENCODING / -a      read files in an encoding / search binary files as text
-  --files / --dirs      list files / list directories, empty ones included (without a
-                        pattern, files are listed)
+  --files / --dirs      list files / list directories, empty ones included; with --dirs
+                        a pattern matches directory names
   --sort KEY / --sortr KEY
                         order ascending / descending by path, modified, accessed or created
 """
@@ -1013,10 +1047,11 @@ _STRING_OR_LIST: JsonObject = {
     "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]
 }
 SEARCH_FILES_TOOL_DESCRIPTION = (
-    "Search file contents with a regular expression, or list files. Use this instead of "
-    "grep, rg, find, or ls in the shell. "
+    "Search file contents with a regular expression, or list files and directories. Use this "
+    "instead of grep, rg, find, or ls in the shell. "
     'Find text: {"pattern": "def load_config", "path": "src"}. '
     'List files: {"glob": "*.py", "path": "src"}. '
+    'List directories: {"glob": "build", "args": ["--dirs"]}. '
     "Matches come back as path:line:text; file lists are newest first. Hidden files are "
     "included, .gitignore rules apply, and .git is skipped. Results come in pages; "
     "continue with next_offset."

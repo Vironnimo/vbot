@@ -117,17 +117,18 @@ def search_cases() -> list[dict[str, Any]]:
         {
             "id": "type",
             "arguments": {"args": ["-tpy", "-e", "alpha"]},
-            "content": "src/a.py:1:alpha alpha",
+            "content": "src/a.py:1:alpha alpha\ntests/b.PY:1:alpha",
         },
         {
             "id": "type_not",
-            "arguments": {"args": ["-Tpy", "-e", "alpha"]},
+            "arguments": {"args": ["--no-glob-case-insensitive", "-Tpy", "-e", "alpha"]},
             "content": "tests/b.PY:1:alpha",
         },
         {
             "id": "type_add_clear",
             "arguments": {
                 "args": [
+                    "--no-glob-case-insensitive",
                     "--type-add",
                     "custom:*.py",
                     "--type-clear",
@@ -361,8 +362,8 @@ def search_cases() -> list[dict[str, Any]]:
         },
         {
             "id": "directory_type",
-            "arguments": {"args": ["--dirs", "-tpy"]},
-            "content": "src/",
+            "arguments": {"args": ["--dirs", "-tpy", "--sort=path"]},
+            "content": "src/\ntests/",
         },
         {
             "id": "invalid_regex",

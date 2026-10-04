@@ -6,10 +6,10 @@ import ast
 import contextlib
 import json
 import os
+import queue
 import re
 import shlex
 import signal
-import socket
 import subprocess
 import sys
 import threading
@@ -306,48 +306,114 @@ def test_posix_terminal_reports_a_missing_program_before_launch(tmp_path: Path) 
     assert raised.value.filename == "vbot-no-such-program"
 
 
-@pytest.mark.parametrize("platform_name", ["nt", "posix"])
-def test_adapter_read_is_bounded_and_preserves_split_unicode(platform_name, monkeypatch):
-    if platform_name == "posix" and os.name == "nt":
+def test_posix_adapter_read_is_bounded_and_preserves_split_unicode(monkeypatch):
+    if os.name == "nt":
         pytest.skip("POSIX descriptor readiness requires POSIX")
     # A read waits at most this long for output; zero proves it never blocks past it.
     monkeypatch.setattr(terminal_backend, "TERMINAL_READ_TIMEOUT_SECONDS", 0)
-    if platform_name == "nt":
-        receiver, sender = socket.socketpair()
-        process = SimpleNamespace(fileobj=receiver)
-        adapter = terminal_backend._WindowsTerminalAdapter(process)
-        send = sender.sendall
-
-        def close():
-            receiver.close()
-            sender.close()
-    else:
-        read_fd, write_fd = os.pipe()
-        adapter = terminal_backend._PosixTerminalAdapter(EXITED_PROCESS, read_fd)
-
-        def send(value):
-            os.write(write_fd, value)
-
-        def close():
-            adapter.close()
-            os.close(write_fd)
-
+    read_fd, write_fd = os.pipe()
+    adapter = terminal_backend._PosixTerminalAdapter(EXITED_PROCESS, read_fd)
     try:
         with pytest.raises(TimeoutError):
             adapter.read(4096)
         encoded = "😀".encode()
-        send(encoded[:2])
+        os.write(write_fd, encoded[:2])
         assert adapter.read(4096) == ""
         with pytest.raises(TimeoutError):
             adapter.read(4096)
-        send(encoded[2:])
+        os.write(write_fd, encoded[2:])
         assert adapter.read(4096) == "😀"
     finally:
-        close()
+        adapter.close()
+        os.close(write_fd)
+    with pytest.raises(EOFError):
+        adapter.read(4096)
+
+
+class _FakeConPty:
+    """A ConPTY whose program handle is the test process, so no exit arrives.
+
+    It reports the program as ended, so the adapter's close kills nothing.
+    """
+
+    pid = os.getpid()
+
+    def __init__(self) -> None:
+        self.output: queue.Queue[str | None] = queue.Queue()
+
+    def read(self, blocking: bool) -> str:
+        assert blocking
+        text = self.output.get()
+        if text is None:
+            raise OSError("The I/O operation has been aborted")
+        return text
+
+    def cancel_io(self) -> bool:
+        self.output.put(None)
+        return True
+
+    def iseof(self) -> bool:
+        return False
+
+    def isalive(self) -> bool:
+        return False
+
+
+@pytest.mark.skipif(os.name != "nt", reason="ConPTY adapter")
+def test_windows_adapter_read_is_bounded_returns_output_in_order_and_ends_after_close(
+    monkeypatch,
+):
+    # A read waits at most this long for output; zero proves it never blocks past it.
+    monkeypatch.setattr(terminal_backend, "TERMINAL_READ_TIMEOUT_SECONDS", 0)
+    pty = _FakeConPty()
+    adapter = terminal_backend._WindowsTerminalAdapter(pty)
+    try:
+        with pytest.raises(TimeoutError):
+            adapter.read(4096)
+        pty.output.put("😀 first")
+        pty.output.put(" second")
+        output = ""
+        deadline = time.monotonic() + 5
+        while output != "😀 first second":
+            assert time.monotonic() < deadline, output
+            with contextlib.suppress(TimeoutError):
+                output += adapter.read(3)
+    finally:
+        adapter.close()
     # A kill closes the terminal while its reader thread still reads: that read
     # ends the output like any end of output.
     with pytest.raises(EOFError):
         adapter.read(4096)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="ConPTY output does not end when its program exits")
+def test_windows_terminal_read_reports_the_program_exit_at_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Without the exit wake, the read after the program's last output would
+    # wait out this timeout.
+    monkeypatch.setattr(terminal_backend, "TERMINAL_READ_TIMEOUT_SECONDS", 30)
+    adapter = terminal_backend.spawn_terminal_adapter(
+        [sys.executable, "-c", "print('DONE')"], tmp_path, dict(os.environ), 24, 80
+    )
+    try:
+        output = ""
+        started = time.monotonic()
+        while True:
+            try:
+                chunk = adapter.read(4096)
+            except TimeoutError:
+                break
+            output += chunk
+            if "\x1b[c" in chunk:
+                # ConPTY holds output until its device query is answered.
+                adapter.write("\x1b[?6c")
+        assert "DONE" in output
+        assert time.monotonic() - started < 10
+        assert not adapter.is_alive()
+        assert adapter.exit_code() == 0
+    finally:
+        adapter.close()
 
 
 def test_posix_write_preserves_partial_unicode_input_until_closed(monkeypatch):

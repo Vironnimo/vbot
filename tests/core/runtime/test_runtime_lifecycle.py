@@ -311,9 +311,12 @@ def _expected_provider_counts(runtime: Runtime) -> tuple[int, int, int, int]:
 
 
 def test_runtime_summarizes_its_startup_and_logs_to_the_managed_daily_file(
-    config: Config, monkeypatch: pytest.MonkeyPatch
+    config: Config, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _clear_provider_credential_environment(monkeypatch)
+    # An explicit data directory wins over another instance's, as for Storage.
+    monkeypatch.setenv("VBOT_DATA_DIR", str(tmp_path / "other-instance"))
+    config = Config(data_dir=config.data_dir)
     broken_skill_dir = config.data_dir / "extra-skills" / "broken"
     broken_skill_dir.mkdir(parents=True)
     broken_skill_dir.joinpath("SKILL.md").write_text(
