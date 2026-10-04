@@ -330,18 +330,17 @@ class RunExecution:
                         persisted_messages = [*session.take_deferred_notes(), user_message]
                     # One transaction persists the input, starts the Continuation
                     # chain and records the announced Skills. An edit also
-                    # replaces the edited history, restarts the chain and starts
-                    # a new prompt-cache lineage in that transaction.
+                    # replaces the edited history and restarts the chain in
+                    # that transaction.
                     tracker = context.continuation_tracker
                     journal = tracker.start_boundary() if tracker is not None else None
                     if request.edit_message_id is not None:
-                        edit = await context.session_snapshot.apply_edit(
+                        await context.session_snapshot.apply_edit(
                             session,
                             persisted_messages,
                             journal=journal,
                             seen_skills=record_seen_skills,
                         )
-                        context.prompt_cache_affinity_id = edit.prompt_cache_affinity_id
                     elif persisted_messages:
                         await context.session_snapshot.append(
                             session,

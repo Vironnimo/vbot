@@ -226,17 +226,6 @@ def prompt_cache_affinity_id(connection: sqlite3.Connection, address: SessionAdd
     return affinity_of(_store_values._require_live(connection, address))
 
 
-def rotate_affinity(connection: sqlite3.Connection, session_key: int) -> str:
-    """Start a new prompt-cache lineage and return its affinity id."""
-    value = _new_prompt_cache_affinity_id()
-    connection.execute(
-        "UPDATE sessions SET prompt_cache_affinity_id = ?, state_revision = state_revision + 1 "
-        "WHERE session_key = ?",
-        (value, session_key),
-    )
-    return value
-
-
 def carry_prompt_state(
     connection: sqlite3.Connection,
     *,

@@ -125,6 +125,7 @@ class ChatCompactionHost:
         settings: Any,
         *,
         active_provider_id: str,
+        active_connection_id: str,
     ) -> tuple[Any, str, str]:
         return self._requests.resolve_summary_adapter(
             agent,
@@ -132,6 +133,7 @@ class ChatCompactionHost:
             model_id,
             settings,
             active_provider_id=active_provider_id,
+            active_connection_id=active_connection_id,
         )
 
     def resolve_context_window(self, agent: Any, target: Any) -> int | None:
@@ -158,6 +160,7 @@ class ChatCompactionHost:
                 model_id,
                 settings,
                 active_provider_id=provider_id,
+                active_connection_id=connection_id,
             )
             prompt_project = resolve_prompt_project(
                 self._dependencies.projects,
@@ -447,19 +450,18 @@ class ChatCompactionHost:
         """Commit an automatic *checkpoint* against the Run snapshot and adopt its epoch.
 
         The Run snapshot advances past the checkpoint from the same transaction,
-        and the Run continues with the rotated prompt-cache affinity id, the
-        refreshed prompt inputs and *request_state*, the projected request whose
-        Tool pin starts the new epoch.
+        and the Run continues with the refreshed prompt inputs and *request_state*,
+        the projected request whose Tool pin starts the new epoch. The prompt-cache
+        affinity id stays the Session's.
         """
         refresh = cast(_CompactionPromptRefresh | None, prompt_refresh)
         session = context.session
         async with self.sessions.write_lock(session.address):
-            affinity_id = await context.session_snapshot.commit_checkpoint(
+            committed = await context.session_snapshot.commit_checkpoint(
                 session, checkpoint, epoch=_prompt_epoch(refresh, request_state)
             )
-        if affinity_id is None:
+        if not committed:
             return False
-        context.prompt_cache_affinity_id = affinity_id
         context.image_budget = RequestImageBudget()
         if refresh is not None:
             await self._stamp_prompt_files_read(session.id, refresh)

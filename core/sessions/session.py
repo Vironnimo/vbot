@@ -17,7 +17,6 @@ from core.sessions._types import (
     SessionAddress,
     SessionChatHistorySnapshot,
     SessionContinuationState,
-    SessionEditResult,
     SessionHistoryCheckpoint,
     SessionHistoryRecord,
     SessionHistorySectionStats,
@@ -129,13 +128,13 @@ class ChatSession:
         *,
         since: SessionReadCursor,
         epoch: PromptEpoch,
-    ) -> tuple[SessionReadBatch, str] | None:
+    ) -> SessionReadBatch | None:
         """Commit a Compaction *checkpoint* and its prompt epoch while *since* is current.
 
-        One transaction verifies the cursor, appends the checkpoint, replaces
-        the prompt epoch's pins and seen Skills, and starts a new prompt-cache
-        affinity. Returns the entries after *since* with that affinity id, or
-        ``None`` (nothing written) when another writer advanced the Session first.
+        One transaction verifies the cursor, appends the checkpoint, and
+        replaces the prompt epoch's pins and seen Skills; the prompt-cache
+        affinity stays. Returns the entries after *since*, or ``None`` (nothing
+        written) when another writer advanced the Session first.
         """
         committed = self._store.commit_compaction(
             self.address, checkpoint, since=since, epoch=epoch, run_id=self.run_id
@@ -150,7 +149,7 @@ class ChatSession:
         *,
         since: SessionReadCursor,
         epoch: PromptEpoch,
-    ) -> tuple[SessionReadBatch, str] | None:
+    ) -> SessionReadBatch | None:
         return await self._store.run_async(
             lambda: self.commit_compaction(checkpoint, since=since, epoch=epoch)
         )
@@ -162,11 +161,11 @@ class ChatSession:
         *,
         seen_skills: SeenSkillsUpdate | None = None,
         continuation_records: Sequence[JsonObject] = (),
-    ) -> SessionEditResult:
+    ) -> SessionReadBatch:
         """Replace history from *target_message_id* on with *messages*, in one transaction.
 
-        The Continuation restarts from *continuation_records* and a new
-        prompt-cache affinity starts; see ``SessionStore.apply_edit``.
+        The Continuation restarts from *continuation_records*; see
+        ``SessionStore.apply_edit``.
         """
         result = self._store.apply_edit(
             self.address,
@@ -189,7 +188,7 @@ class ChatSession:
         *,
         seen_skills: SeenSkillsUpdate | None = None,
         continuation_records: Sequence[JsonObject] = (),
-    ) -> SessionEditResult:
+    ) -> SessionReadBatch:
         return await self._store.run_async(
             lambda: self.apply_edit(
                 target_message_id,

@@ -34,7 +34,6 @@ from core.sessions._types import (
     OwnedRunRecord,
     SessionChatHistorySnapshot,
     SessionDescriptorSource,
-    SessionEditResult,
     SessionHistoryRevision,
     SessionSearchOrder,
     SessionSearchResult,
@@ -456,11 +455,11 @@ class SessionStore:
         since: SessionReadCursor,
         epoch: PromptEpoch,
         run_id: str | None,
-    ) -> tuple[SessionReadBatch, str] | None:
+    ) -> SessionReadBatch | None:
         """Commit a Compaction checkpoint and its prompt epoch while *since* is current.
 
-        Returns the entries after *since* with the new prompt-cache affinity
-        id, or ``None`` (nothing written) when another writer advanced first.
+        Returns the entries after *since*, or ``None`` (nothing written) when
+        another writer advanced first.
         """
         committed = self._execute_write(
             lambda connection: _store_operations.commit_compaction(
@@ -470,8 +469,7 @@ class SessionStore:
         )
         if committed is None:
             return None
-        delta, affinity_id = committed
-        return _store_history.read_batch(delta), affinity_id
+        return _store_history.read_batch(committed)
 
     def apply_edit(
         self,
@@ -482,9 +480,12 @@ class SessionStore:
         run_id: str | None,
         seen_skills: SeenSkillsUpdate | None = None,
         continuation_records: Sequence[JsonObject] = (),
-    ) -> SessionEditResult:
-        """Replace history from one User message on; see ``_store_operations.apply_edit``."""
-        outcome = self._execute_write(
+    ) -> SessionReadBatch:
+        """Replace history from one User message on; see ``_store_operations.apply_edit``.
+
+        Returns the Session's complete own audit and current view after the edit.
+        """
+        delta = self._execute_write(
             lambda connection: _store_operations.apply_edit(
                 connection,
                 address,
@@ -496,8 +497,7 @@ class SessionStore:
             ),
             patience_s=TRANSCRIPT_WRITE_PATIENCE_S,
         )
-        delta, affinity_id = outcome
-        return SessionEditResult(_store_history.read_batch(delta), affinity_id)
+        return _store_history.read_batch(delta)
 
     def continuation(self, address: SessionAddress) -> SessionContinuationState | None:
         return self._read(lambda connection: _store_continuation.continuation(connection, address))

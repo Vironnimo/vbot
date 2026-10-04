@@ -1037,8 +1037,14 @@ class RequestBuilder:
         settings: Any,
         *,
         active_provider_id: str,
+        active_connection_id: str,
     ) -> tuple[Any, str, str]:
-        """Resolve compaction summary adapter/model/provider, defaulting to active."""
+        """Resolve compaction summary adapter/model/provider, defaulting to active.
+
+        A configured summary Model that names the active Model, without another
+        Connection, is the active target: it reuses the active adapter so the
+        summary request keeps the Run's Provider prompt cache.
+        """
         del agent
 
         summary_model = settings.summary_model
@@ -1049,6 +1055,15 @@ class RequestBuilder:
             provider_id, summary_model_id, connection_suffix = parse_model_with_connection(
                 summary_model
             )
+            if (
+                provider_id == active_provider_id
+                and summary_model_id == model_id
+                and (
+                    not connection_suffix
+                    or f"{provider_id}:{connection_suffix}" == active_connection_id
+                )
+            ):
+                return adapter, model_id, active_provider_id
             if connection_suffix:
                 connection_id = f"{provider_id}:{connection_suffix}"
             else:

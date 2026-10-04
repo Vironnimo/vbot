@@ -265,18 +265,6 @@ class SessionReadBatch:
 
 
 @dataclass(frozen=True)
-class SessionEditResult:
-    """What one committed history edit produced.
-
-    ``batch`` is the Session's complete own audit and current view after the
-    edit; ``prompt_cache_affinity_id`` names the cache lineage the edit started.
-    """
-
-    batch: SessionReadBatch
-    prompt_cache_affinity_id: str
-
-
-@dataclass(frozen=True)
 class SessionMessagePage:
     messages: tuple[ChatMessage, ...]
     has_more: bool

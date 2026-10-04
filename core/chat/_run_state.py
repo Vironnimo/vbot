@@ -58,7 +58,6 @@ from core.sessions import (
     PromptEpoch,
     SeenSkillsUpdate,
     SessionAddress,
-    SessionEditResult,
     SessionReadBatch,
     SessionReadCursor,
     TemporarySessionBinding,
@@ -335,7 +334,7 @@ class _SessionSnapshot:
         *,
         journal: JournalBoundary | None = None,
         seen_skills: SeenSkillsUpdate | None = None,
-    ) -> SessionEditResult:
+    ) -> None:
         """Commit the admitted edit with its replacement *messages* in one transaction.
 
         The Continuation restarts from *journal*'s records. The snapshot is
@@ -345,17 +344,16 @@ class _SessionSnapshot:
         if target is None:
             raise ValueError("no history edit was admitted")
 
-        async def write(records: list[JsonObject]) -> SessionEditResult:
+        async def write(records: list[JsonObject]) -> SessionReadBatch:
             return await session.apply_edit_async(
                 target, messages, seen_skills=seen_skills, continuation_records=records
             )
 
-        result = await (write([]) if journal is None else journal.commit(write))
+        batch = await (write([]) if journal is None else journal.commit(write))
         self.pending_edit_message_id = None
-        self.messages = list(result.batch.messages)
-        self.active_lineage = list(result.batch.active_messages)
-        self.cursor = result.batch.cursor
-        return result
+        self.messages = list(batch.messages)
+        self.active_lineage = list(batch.active_messages)
+        self.cursor = batch.cursor
 
     async def commit_checkpoint(
         self,
@@ -363,21 +361,20 @@ class _SessionSnapshot:
         checkpoint: ChatMessage,
         *,
         epoch: PromptEpoch,
-    ) -> str | None:
+    ) -> bool:
         """Persist a Compaction *checkpoint* and its prompt *epoch* while this snapshot is current.
 
-        Returns the rotated prompt-cache affinity id and advances past the
-        checkpoint, or returns ``None`` without writing or advancing when
-        another writer changed the Session since this snapshot's cursor.
+        Advances past the checkpoint and returns ``True``, or returns ``False``
+        without writing or advancing when another writer changed the Session
+        since this snapshot's cursor.
         """
         committed = await session.commit_compaction_async(
             checkpoint, since=self.cursor, epoch=epoch
         )
         if committed is None:
-            return None
-        batch, affinity_id = committed
-        await self._apply(session, batch)
-        return affinity_id
+            return False
+        await self._apply(session, committed)
+        return True
 
     async def commit(
         self,
