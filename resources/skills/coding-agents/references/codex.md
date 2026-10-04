@@ -1,6 +1,6 @@
 # Codex interactive reference
 
-Interactive executable: `codex`. Put launch options in `args`; use the Terminal Tool's `workdir` for the repository and optional `text` for the initial task.
+Interactive executable: `codex`.
 
 ## Launch options
 
@@ -17,15 +17,15 @@ Interactive executable: `codex`. Put launch options in `args`; use the Terminal 
 | Inline terminal display | `--no-alt-screen` |
 | Reject unknown config keys | `--strict-config` |
 
-Reasoning is a TOML configuration value. Keep the quotes around the level inside the single argument. For a request specifying GPT-5.6 Terra and medium reasoning:
+Reasoning is a TOML configuration value. Keep the quotes around the level inside the single argument. For a request specifying GPT-5.6 Terra and medium reasoning, with the values in angle brackets replaced:
 
 ```json
 {
   "action": "start",
   "command": "codex",
   "args": ["--model", "gpt-5.6-terra", "-c", "model_reasoning_effort=\"medium\""],
-  "workdir": "C:/repo",
-  "text": "Implement the requested task and verify the result."
+  "workdir": "<repository path>",
+  "text": "<the user's task>"
 }
 ```
 

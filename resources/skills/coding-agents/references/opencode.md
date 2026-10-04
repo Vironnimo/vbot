@@ -1,6 +1,6 @@
 # OpenCode interactive reference
 
-Interactive executable: `opencode`. Put launch options in `args`; use the Terminal Tool's `workdir` for the repository and optional `text` for the initial task.
+Interactive executable: `opencode`.
 
 ## Launch options
 
@@ -13,15 +13,15 @@ Interactive executable: `opencode`. Put launch options in `args`; use the Termin
 | Fork a saved conversation | `--fork` with `--continue` or `--session` |
 | Disable external plugins | `--pure` |
 
-Example with a specified model:
+For a request specifying OpenAI GPT-5, with the values in angle brackets replaced:
 
 ```json
 {
   "action": "start",
   "command": "opencode",
   "args": ["--model", "openai/gpt-5"],
-  "workdir": "C:/repo",
-  "text": "Implement the requested task and verify the result."
+  "workdir": "<repository path>",
+  "text": "<the user's task>"
 }
 ```
 
