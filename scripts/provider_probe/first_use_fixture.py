@@ -211,7 +211,7 @@ class FirstUseFixture:
                 f"Working directory: {self.cwd.as_posix()}\n"
                 f"Operating system: {'Windows' if sys.platform == 'win32' else 'Linux'}",
                 (PROJECT_ROOT / "resources/prompts/tools.md").read_text(encoding="utf-8"),
-                block,
+                block.text if block is not None else "",
             ]
         )
 
