@@ -10,11 +10,7 @@ import pytest
 import pytest_asyncio
 
 from core.tools._terminal_command import CommandReport
-from core.tools._terminal_process_tree import (
-    ProcessTreeFacts,
-    ProgramExit,
-    RunningProcess,
-)
+from core.tools._terminal_process_tree import ProgramExit, RunningProcess
 from core.tools.terminal_manager import (
     TerminalClosedError,
     TerminalManager,
@@ -24,40 +20,11 @@ from tests.core.tools.terminal_manager_helpers import (
     AdapterFactory,
     FakeClock,
     FakeTerminalAdapter,
+    FakeTree,
     PendingTriggerService,
     eventually,
     owner,
 )
-
-
-class FakeTree:
-    """A command's process tree: what runs, CPU used, failed children, and the kill."""
-
-    def __init__(self) -> None:
-        self.adapter: FakeTerminalAdapter | None = None
-        self.running: tuple[RunningProcess, ...] = (RunningProcess(1, "pwsh.exe"),)
-        self.cpu_seconds = 0.0
-        self.started = 1
-        self.exits: tuple[ProgramExit, ...] = ()
-        self.terminated = 0
-        self.closed = False
-
-    def facts(self) -> ProcessTreeFacts:
-        return ProcessTreeFacts(self.running, self.cpu_seconds, self.started, self.exits)
-
-    def terminate(self) -> None:
-        self.terminated += 1
-        self.running = ()
-        if self.adapter is not None:
-            self.adapter.finish(1)
-
-    def close(self) -> None:
-        self.closed = True
-
-    def shell_exits(self, code: int, *, survivors: tuple[RunningProcess, ...] = ()) -> None:
-        self.running = survivors
-        assert self.adapter is not None
-        self.adapter.finish(code)
 
 
 class Harness:
@@ -135,7 +102,7 @@ async def test_finished_command_reports_transcript_exit_code_and_tree_facts(
     tree.exits = (ProgramExit("python.exe", 5),)
     tree.shell_exits(1, survivors=())
 
-    outcome = await harness.manager.wait_command(terminal_id, deadline=None, idle_seconds=None)
+    outcome = await harness.manager.wait_command(terminal_id, seconds=None, idle_seconds=None)
     report = harness.manager.command_report(terminal_id)
     assert outcome == "exited"
     assert (report.exit_code, report.stop_reason, report.exited) == (1, None, True)
@@ -153,7 +120,7 @@ async def test_long_transcript_keeps_head_and_tail_and_counts_the_rest(harness: 
     adapter.emit("".join(f"line {number}\r\n" for number in range(500)))
     await eventually(lambda: harness.manager.command_report(terminal_id).transcript.total_lines > 0)
     tree.shell_exits(0)
-    await harness.manager.wait_command(terminal_id, deadline=None, idle_seconds=None)
+    await harness.manager.wait_command(terminal_id, seconds=None, idle_seconds=None)
 
     transcript = harness.manager.command_report(terminal_id).transcript
     assert transcript.total_lines == 500
@@ -175,9 +142,7 @@ async def test_handed_off_command_is_listed_and_delivers_its_result_unless_the_a
     harness: Harness, ending: str, delivered: str | None
 ) -> None:
     terminal_id, adapter, tree = await harness.start()
-    outcome = await harness.manager.wait_command(
-        terminal_id, deadline=harness.clock.now, idle_seconds=None
-    )
+    outcome = await harness.manager.wait_command(terminal_id, seconds=0, idle_seconds=None)
     assert outcome == "deadline"
 
     report = harness.manager.hand_off_command(terminal_id, deliver=True)
@@ -209,7 +174,7 @@ async def test_timeout_interrupts_the_command_and_reports_why_it_stopped(
 ) -> None:
     terminal_id, adapter, tree = await harness.start(timeout=600)
     waiting = asyncio.create_task(
-        harness.manager.wait_command(terminal_id, deadline=None, idle_seconds=None)
+        harness.manager.wait_command(terminal_id, seconds=None, idle_seconds=None)
     )
     await eventually(lambda: harness.clock.sleeping)
     await harness.clock.advance(600)
@@ -239,7 +204,7 @@ async def test_command_is_idle_after_quiet_output_and_cpu_but_not_while_working(
 ) -> None:
     terminal_id, adapter, tree = await harness.start()
     waiting: asyncio.Task[object] = asyncio.create_task(
-        harness.manager.wait_command(terminal_id, deadline=None, idle_seconds=15)
+        harness.manager.wait_command(terminal_id, seconds=None, idle_seconds=15)
     )
     adapter.emit("Name: ")
     await run_clock(harness, waiting, until=3)
@@ -262,7 +227,7 @@ async def test_survivors_keep_a_finished_command_live_until_they_are_killed(
     survivor = RunningProcess(42, "server.exe")
     tree.shell_exits(0, survivors=(survivor,))
 
-    await harness.manager.wait_command(terminal_id, deadline=None, idle_seconds=None)
+    await harness.manager.wait_command(terminal_id, seconds=None, idle_seconds=None)
     report = harness.manager.command_report(terminal_id)
     assert (report.exit_code, report.still_running) == (0, (survivor,))
     session = harness.manager._get(terminal_id)

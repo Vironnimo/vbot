@@ -116,6 +116,8 @@ class CommandState:
         self._tail: deque[str] = deque(maxlen=COMMAND_TAIL_LINES)
         self._total_lines = 0
         self._lease = transcript_lease
+        # Kept after the lease ends: the file stays until its retention expires.
+        self._log_path = transcript_lease.path if transcript_lease is not None else None
         self._file: TextIO | None = None
         if transcript_lease is not None:
             path = transcript_lease.path
@@ -135,7 +137,7 @@ class CommandState:
 
     @property
     def log_path(self) -> Path | None:
-        return self._lease.path if self._lease is not None else None
+        return self._log_path
 
     def add_lines(self, lines: tuple[str, ...] | list[str]) -> None:
         """Append final transcript lines."""

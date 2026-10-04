@@ -14,6 +14,11 @@ import pytest_asyncio
 
 import core.tools._terminal_session as terminal_session
 import core.tools.terminal_manager as terminal_manager_module
+from core.tools._terminal_process_tree import (
+    ProcessTreeFacts,
+    ProgramExit,
+    RunningProcess,
+)
 from core.tools.terminal_manager import (
     TerminalInfo,
     TerminalManager,
@@ -77,6 +82,36 @@ class FakeTerminalAdapter:
         self.code = code
         self.alive = False
         self._output.put(None)
+
+
+class FakeTree:
+    """A command's process tree: what runs, CPU used, failed children, and the kill."""
+
+    def __init__(self) -> None:
+        self.adapter: FakeTerminalAdapter | None = None
+        self.running: tuple[RunningProcess, ...] = (RunningProcess(1, "pwsh.exe"),)
+        self.cpu_seconds = 0.0
+        self.started = 1
+        self.exits: tuple[ProgramExit, ...] = ()
+        self.terminated = 0
+        self.closed = False
+
+    def facts(self) -> ProcessTreeFacts:
+        return ProcessTreeFacts(self.running, self.cpu_seconds, self.started, self.exits)
+
+    def terminate(self) -> None:
+        self.terminated += 1
+        self.running = ()
+        if self.adapter is not None:
+            self.adapter.finish(1)
+
+    def close(self) -> None:
+        self.closed = True
+
+    def shell_exits(self, code: int, *, survivors: tuple[RunningProcess, ...] = ()) -> None:
+        self.running = survivors
+        assert self.adapter is not None
+        self.adapter.finish(code)
 
 
 class AdapterFactory:

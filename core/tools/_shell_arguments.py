@@ -55,10 +55,10 @@ _BACKGROUND_FLAGS = frozenset({"background", "runinbackground", "isbackground"})
 _YIELD_FIELDS = frozenset({"yieldms", "yieldtimems", "yieldafter", "backgroundafterseconds"})
 _DESCRIPTION_FIELDS = frozenset({"explanation", "justification", "title", "label", "summary"})
 # Requests vBot always satisfies or that only shape output: nothing to do.
+# Every command runs in a terminal, so pty and tty are satisfied too.
 _SATISFIED_FIELDS = frozenset(
-    {"notifyoncomplete", "login", "maxoutputtokens", "dangerouslydisablesandbox"}
+    {"notifyoncomplete", "login", "maxoutputtokens", "dangerouslydisablesandbox", "pty", "tty"}
 )
-_PTY_FIELDS = frozenset({"pty", "tty"})
 _ELEVATION_FIELDS = frozenset({"elevated", "withescalatedpermissions"})
 _POWERSHELL_WRAPPER_OPTIONS = frozenset(
     {"-noprofile", "-nop", "-nologo", "-noninteractive", "-noni"}
@@ -88,12 +88,12 @@ _CREDENTIAL_NAME_PARTS = frozenset(
 
 @cache
 def _repair_contract() -> ToolContract:
-    # Imported lazily: bash.py imports this module for its registration.
-    from core.tools.bash import BASH_TOOL_PARAMETERS
+    # Imported lazily: shell.py imports this module for its registration.
+    from core.tools.shell import SHELL_TOOL_PARAMETERS
 
     schema = {
-        **BASH_TOOL_PARAMETERS,
-        "properties": {**BASH_TOOL_PARAMETERS["properties"], **SHELL_UNADVERTISED_PARAMETERS},
+        **SHELL_TOOL_PARAMETERS,
+        "properties": {**SHELL_TOOL_PARAMETERS["properties"], **SHELL_UNADVERTISED_PARAMETERS},
     }
     return compile_tool_contract(
         name=BASH_TOOL_NAME, input_schema=schema, require_closed_input=False
@@ -224,15 +224,6 @@ def _translate_foreign_fields(arguments: dict[str, Any]) -> None:
                 arguments["description"] = text
         elif word in _SATISFIED_FIELDS:
             del arguments[key]
-        elif word in _PTY_FIELDS:
-            if _flag(key, arguments.pop(key)):
-                raise ValueError(
-                    _not_run(
-                        f"it has no terminal, so {key}: true cannot be honored. Run "
-                        "interactive programs with the terminal Tool if you have it; "
-                        f"otherwise call again without {key}."
-                    )
-                )
         elif word in _ELEVATION_FIELDS or word == "sandboxpermissions":
             value = arguments.pop(key)
             if word == "sandboxpermissions":

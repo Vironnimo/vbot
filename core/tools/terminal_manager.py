@@ -448,11 +448,12 @@ class TerminalManager:
         self,
         terminal_id: str,
         *,
-        deadline: float | None,
+        seconds: float | None,
         idle_seconds: float | None,
         progress: Callable[[str], Awaitable[None]] | None = None,
     ) -> CommandWaitOutcome:
-        """Wait for the command to exit, the monotonic *deadline*, or idleness."""
+        """Wait for the command to exit, for *seconds* (None: no limit), or idleness."""
+        deadline = None if seconds is None else self._services.monotonic() + seconds
         return await self._get(terminal_id).wait_command(
             deadline=deadline, idle_seconds=idle_seconds, progress=progress
         )
@@ -475,6 +476,10 @@ class TerminalManager:
 
     def command_report(self, terminal_id: str) -> CommandReport:
         return self._get(terminal_id).command_report()
+
+    async def wait_finished(self, terminal_id: str) -> None:
+        """Wait until none of the terminal's processes runs any longer."""
+        await self._get(terminal_id).wait_finished()
 
     async def command_screen(self, terminal_id: str, lines: int) -> str:
         """The newest non-blank rows of a command's screen."""

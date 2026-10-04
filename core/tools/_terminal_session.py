@@ -197,6 +197,8 @@ class TerminalSession:
         self._shell_dead_at: float | None = None
         # Set once vBot killed the command's process tree.
         self._tree_killed = asyncio.Event()
+        # Set once the session finished: none of its processes runs any longer.
+        self._finished_event = asyncio.Event()
         self._next_liveness_check = 0.0
         self._next_tree_poll = 0.0
 
@@ -471,6 +473,10 @@ class TerminalSession:
         command.hidden = False
         command.delivers_result = deliver
         self._publish_state()
+
+    async def wait_finished(self) -> None:
+        """Wait until none of the session's processes runs any longer."""
+        await self._finished_event.wait()
 
     def command_report(self) -> CommandReport:
         command = self._require_command()
@@ -1087,6 +1093,7 @@ class TerminalSession:
                 )
             self._attention_event.set()
             self._output_event.set()
+            self._finished_event.set()
             self._finish_files()
 
     # Attention and delivery
