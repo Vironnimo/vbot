@@ -66,13 +66,12 @@ def _prepare_request_messages(
 
 def _request_content_resolution_inputs(
     effective_messages: list[ChatMessage],
-    session_messages: list[ChatMessage],
 ) -> tuple[ChatMessage | None, list[JsonObject]]:
-    """Find attachment boundaries and Run-local media without loop-bound scans."""
+    """Find attachment boundaries and Tool media without loop-bound scans."""
     current_user_message: ChatMessage | None = None
     if _session_has_any_content_blocks(effective_messages):
         current_user_message = _last_user_message(effective_messages)
-    return current_user_message, _current_run_read_media_outputs(session_messages)
+    return current_user_message, _tool_media_outputs(effective_messages)
 
 
 def _assign_session_image_references(
@@ -106,28 +105,29 @@ def _assign_session_image_references(
     return assigned
 
 
-def _current_run_read_media_outputs(
+def _tool_media_outputs(
     messages: list[ChatMessage],
 ) -> list[JsonObject]:
-    """Recover compact media references from the active Run's Tool Results."""
+    """Collect the stored images of every Tool Result the request still carries.
 
-    tail_start = 0
-    for index, message in enumerate(messages):
-        if message.role == "run_summary":
-            tail_start = index + 1
+    *messages* is the effective history since the latest Compaction checkpoint, so
+    Tool images stay in context across Runs until Compaction replaces them.
+    """
+    from core.compaction import is_compacted_tool_result_content
 
     outputs: list[JsonObject] = []
-    for message in messages[tail_start:]:
+    for message in messages:
         if (
             message.role != "tool"
             or not isinstance(message.tool_call_id, str)
             or not isinstance(message.content, str)
+            or is_compacted_tool_result_content(message.content)
         ):
             continue
         try:
             result = json.loads(message.content)
         except TypeError, ValueError:
-            continue
+            result = None
         if isinstance(result, dict):
             outputs.extend(
                 _read_media_outputs(
@@ -136,6 +136,10 @@ def _current_run_read_media_outputs(
                     tool_message_id=message.id,
                 )
             )
+        outputs.extend(
+            {**media, "tool_call_id": message.tool_call_id, "tool_message_id": message.id}
+            for media in message.tool_media or ()
+        )
     return outputs
 
 

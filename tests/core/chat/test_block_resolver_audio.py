@@ -179,7 +179,19 @@ def _transcript(filename: str, media_type: str, text: str) -> str:
             IMAGE_AUDIO_WIRE,
             "unused",
             None,
-            ["[Audio from an earlier turn: clip.wav (audio/wav) — Path: {path}]"],
+            [NATIVE, "[Audio: clip.wav (audio/wav) — Path: {path}]"],
+            False,
+            None,
+        ),
+        # Speech-to-text runs only on the audio's own turn, never again per request.
+        (
+            "voice.ogg",
+            EARLIER,
+            TEXT_IMAGE,
+            IMAGE_AUDIO_WIRE,
+            "unused",
+            None,
+            ["[Audio: voice.ogg (audio/ogg) — " + STT_FAILED + "Path: {path}]"],
             False,
             None,
         ),
@@ -193,7 +205,8 @@ def _transcript(filename: str, media_type: str, text: str) -> str:
         "speech-to-text-empty",
         "cached-transcription",
         "earlier-with-transcription",
-        "earlier-without-transcription",
+        "earlier-native",
+        "earlier-not-transcribed-again",
     ],
 )
 def test_audio_is_native_transcribed_or_a_path_note(

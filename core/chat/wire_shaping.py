@@ -273,6 +273,7 @@ def _message_to_request_dict(
         data.pop("output_files", None)
     data.pop("timing", None)
     data.pop("tool_display", None)
+    data.pop("tool_media", None)
     # Reasoning duration is presentation metadata, never a wire field.
     data.pop("reasoning_timing", None)
     data.pop("reasoning_summary", None)
@@ -481,6 +482,7 @@ def _assistant_continuation_dict(
     data.pop("usage", None)
     data.pop("timing", None)
     data.pop("tool_display", None)
+    data.pop("tool_media", None)
     data.pop("reasoning_timing", None)
     data.pop("reasoning_summary", None)
     data.pop("interrupted", None)

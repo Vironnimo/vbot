@@ -83,6 +83,7 @@ _INTERNAL_MESSAGE_FIELDS = (
     "usage",
     "timing",
     "tool_display",
+    "tool_media",
     "model_fallback",
 )
 

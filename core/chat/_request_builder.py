@@ -485,7 +485,6 @@ class RequestBuilder:
         current_user_message, read_media_outputs = await _CHAT_TRANSFORM_WORKERS.run(
             _request_content_resolution_inputs,
             effective_messages,
-            session_messages,
         )
         # Use the most recently appended user turn as the current-turn marker.
         # If that turn is plain text, all user content blocks resolve as historical.
@@ -777,6 +776,32 @@ class RequestBuilder:
             )
         finally:
             await _close_adapter(target.adapter)
+
+    async def store_tool_media(
+        self, tool_messages: list[ChatMessage], media_outputs: list[JsonObject]
+    ) -> tuple[list[ChatMessage], list[JsonObject]]:
+        """Store a Tool batch's loaded images and reference them from their Results.
+
+        Stored images reach every later request of the Session from their Tool
+        message, so a new Run sends the same bytes again and keeps the prompt cache.
+        """
+        if self._attachment_resolver is None or not any("base64" in m for m in media_outputs):
+            return tool_messages, media_outputs
+        loaded = ["base64" in media for media in media_outputs]
+        media_outputs = await self._attachment_resolver.store_tool_images(media_outputs)
+        stored: dict[str, list[JsonObject]] = {}
+        for was_loaded, media in zip(loaded, media_outputs, strict=True):
+            message_id = media.get("tool_message_id")
+            if was_loaded and "base64" not in media and isinstance(message_id, str):
+                stored.setdefault(message_id, []).append(
+                    {key: media[key] for key in ("attachment_id", "filename", "media_type")}
+                )
+        return [
+            replace(message, tool_media=[*(message.tool_media or []), *stored[message.id]])
+            if message.id in stored
+            else message
+            for message in tool_messages
+        ], media_outputs
 
     async def _attach_tool_result_content(
         self,

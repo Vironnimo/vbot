@@ -780,6 +780,9 @@ class AgenticProgression:
                             message=failure_message,
                         )
                         media_outputs = []
+                    tool_messages, media_outputs = await self._requests.store_tool_media(
+                        tool_messages, media_outputs
+                    )
                     tool_request_messages: list[JsonObject] = []
                     for tool_message in tool_messages:
                         assert tool_message.tool_call_id is not None

@@ -292,7 +292,7 @@ def _tool_result_content_parts(messages: list[JsonObject]) -> list[JsonObject]:
 
 
 @pytest.mark.asyncio
-async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_model(
+async def test_read_image_stays_on_its_tool_result_until_compaction_for_vision_model(
     tmp_path: Path, start_runtime: StartRuntime
 ) -> None:
     class DeletingAdapter(FakeAdapter):
@@ -331,7 +331,6 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
         Path(agent.workspace).joinpath("diagram.png").write_bytes(original_bytes)
 
         Path(agent.workspace).joinpath("notes.txt").write_text("test", encoding="utf-8")
-        stored_before = set((tmp_path / "data" / "artifacts" / "attachments").rglob("*"))
         assistant = await runtime.chat_loop.send(
             "coder", "Look at diagram.png", session_id="session-one"
         )
@@ -347,7 +346,6 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
         assert base64.b64decode(media_parts[0]["base64"]) == original_bytes
         later_parts = _tool_result_content_parts(adapter.requests[2].messages)
         assert [part for part in later_parts if part.get("type") == "media"] == media_parts
-        assert set((tmp_path / "data" / "artifacts" / "attachments").rglob("*")) == stored_before
         assert runtime.chat_runs is not None
         assert "base64" not in json.dumps(
             [
@@ -359,8 +357,9 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
         with Image.open(io.BytesIO(base64.b64decode(media_parts[0]["base64"]))) as delivered:
             assert delivered.size == (16, 12)
 
-        # The canonical Session persists only the original user turn and the
-        # compact Tool envelope; request-only base64 never reaches history.
+        # The canonical Session persists the original user turn and the compact Tool
+        # envelope with a reference to a stored copy of the pixels; base64 never
+        # reaches history.
         messages = runtime.chat_sessions.get(session_address("coder", "session-one")).load()
         assert [message.role for message in messages] == [
             "user",
@@ -376,17 +375,21 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
         )
         persisted = json.dumps([message.to_dict() for message in messages])
         assert "base64" not in persisted
+        (stored,) = messages[2].tool_media or []
+        record = runtime.attachment_store.get(stored["attachment_id"])
+        assert Path(record.file_path).read_bytes() == original_bytes
 
+        # The next Run sends the same bytes on the same Tool Result, although the
+        # workspace file is gone, so the cached request prefix stays valid.
         assert isinstance(adapter.response, list)
-        adapter.response.append({"content": "The image is no longer active.", "tool_calls": None})
+        adapter.response.append({"content": "Still visible.", "tool_calls": None})
         await runtime.chat_loop.send(
             "coder",
             "Continue without reopening it.",
             session_id="session-one",
         )
-        next_run_messages = adapter.requests[3].messages
-        assert all(TOOL_RESULT_CONTENT_BLOCKS_FIELD not in message for message in next_run_messages)
-        assert "base64" not in json.dumps(next_run_messages)
+        next_run_parts = _tool_result_content_parts(adapter.requests[3].messages)
+        assert [part for part in next_run_parts if part.get("type") == "media"] == media_parts
 
 
 @pytest.mark.asyncio
@@ -450,12 +453,18 @@ async def test_rereading_overwritten_image_delivers_each_calls_own_pixels(
     with start_runtime(adapter) as runtime:
         agent = runtime.agents.create("coder", "Coder", model="fake-provider/fake-model-vision")
         image_path = Path(agent.workspace) / "front.png"
-        stored_before = set((tmp_path / "data" / "artifacts" / "attachments").rglob("*"))
         await runtime.chat_loop.send("coder", "Inspect each render", session_id="reread")
         assert len(adapter.requests) == len(frames) + 1
         persisted = runtime.chat_sessions.get(session_address("coder", "reread")).load()
         assert "base64" not in json.dumps([message.to_dict() for message in persisted])
-        assert set((tmp_path / "data" / "artifacts" / "attachments").rglob("*")) == stored_before
+        # Every call keeps its own stored copy, not the file the next call overwrote.
+        stored = [
+            item["attachment_id"]
+            for message in persisted
+            if message.role == "tool"
+            for item in message.tool_media or []
+        ]
+        assert len(set(stored)) == len(frames)
 
 
 # About 2 s per case: sixteen durable Model steps on a real Runtime, each re-encoding up
