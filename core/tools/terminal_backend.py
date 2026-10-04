@@ -5,16 +5,19 @@ from __future__ import annotations
 import codecs
 import contextlib
 import errno
+import functools
 import os
 import re
 import select
 import shutil
-import socket
+import signal
 import struct
 import subprocess
 import sys
 import threading
+import time
 import weakref
+from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
@@ -27,6 +30,10 @@ TERMINAL_READ_TIMEOUT_SECONDS = 0.2
 # the PTY gives its session this long to end on the hangup before it is killed.
 _EXIT_STATUS_GRACE_SECONDS = 0.5
 _CLOSE_GRACE_SECONDS = 0.1
+# How long a Windows program's output must pause after its exit before a read
+# reports the exit; ConPTY delivered all output before the exit in measurements.
+_EXIT_OUTPUT_QUIET_SECONDS = 0.02
+_CLOSE_READER_SECONDS = 2.0
 # cmd.exe metacharacters, escaped with ^ in a typed command line.
 _CMD_META = re.compile(r'([()%!^"<>&|])')
 # Characters cmd acts on outside quotes when it parses a line again.
@@ -119,57 +126,199 @@ def _posix_login_shell() -> str | None:
 
 
 class _WindowsTerminalAdapter:
-    def __init__(self, process: Any) -> None:
-        self._process = process
-        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-        self._process.fileobj.setblocking(False)
+    """A ConPTY and its program, read by a dedicated thread.
+
+    pywinpty's ``PtyProcess`` relays output through a socket thread that
+    sleeps a millisecond after every read, about one line per 1.5 ms, so
+    large output reached the reader seconds after the program ended. ConPTY
+    also never ends its output when the program exits. This adapter reads
+    the ConPTY directly and wakes a waiting read once the program has exited
+    and its output paused, so the reader learns of the exit at once.
+    """
+
+    def __init__(self, pty: Any) -> None:
+        self._pty = pty
+        self._pid = int(pty.pid)
+        self._condition = threading.Condition()
+        self._chunks: deque[str] = deque()
+        self._last_output_at = time.monotonic()
+        self._reading = True
+        self._closed = False
+        self._exit_wake = False
+        kernel = _windows_kernel()
+        self._process_handle = kernel.open_process(self._pid)
+        self._close_event = kernel.create_event()
+        self._pump = threading.Thread(target=self._read_output, name="vbot-conpty", daemon=True)
+        self._pump.start()
+        threading.Thread(target=self._watch_exit, name="vbot-conpty-exit", daemon=True).start()
 
     @property
     def pid(self) -> int:
-        return int(self._process.pid)
+        return self._pid
+
+    def _read_output(self) -> None:
+        try:
+            while not self._closed:
+                text = self._pty.read(blocking=True)
+                if text:
+                    with self._condition:
+                        self._chunks.append(text)
+                        self._last_output_at = time.monotonic()
+                        self._condition.notify_all()
+                elif self._pty.iseof():
+                    break
+        except Exception:
+            # close() cancels the pending read; a broken pipe ends the output too.
+            pass
+        finally:
+            with self._condition:
+                self._reading = False
+                self._condition.notify_all()
+
+    def _watch_exit(self) -> None:
+        kernel = _windows_kernel()
+        try:
+            if not kernel.wait_for_either(self._process_handle, self._close_event):
+                return
+            # ConPTY delivers a program's output before its exit completes
+            # (measured); the pause still catches a late final frame.
+            with self._condition:
+                while not self._closed:
+                    quiet = time.monotonic() - self._last_output_at
+                    if quiet >= _EXIT_OUTPUT_QUIET_SECONDS:
+                        break
+                    self._condition.wait(_EXIT_OUTPUT_QUIET_SECONDS - quiet)
+                self._exit_wake = True
+                self._condition.notify_all()
+        finally:
+            kernel.close_handle(self._process_handle)
+            kernel.close_handle(self._close_event)
 
     def read(self, size: int) -> str:
-        # Read pywinpty's socket directly: its read() waits indefinitely for
-        # both output and the remainder of a split UTF-8 character.
-        connection = self._process.fileobj
-        try:
-            ready = select.select([connection], [], [], TERMINAL_READ_TIMEOUT_SECONDS)[0]
-            data = connection.recv(size) if ready else None
-        except BlockingIOError:
-            raise TimeoutError from None
-        except ValueError, OSError:
-            # close() released the socket while this read waited: the output has ended.
-            if connection.fileno() == -1:
-                raise EOFError from None
-            raise
-        if data is None:
+        with self._condition:
+            if not (self._chunks or self._exit_wake or self._closed or not self._reading):
+                self._condition.wait(TERMINAL_READ_TIMEOUT_SECONDS)
+            if self._chunks:
+                return self._take(size)
+            if self._closed or not self._reading:
+                raise EOFError
+            # After the program's exit, the reader checks it now, not after a timeout.
+            self._exit_wake = False
             raise TimeoutError
-        if not data:
-            raise EOFError
-        if data == b"0011Ignore":
-            return ""
-        return self._decoder.decode(data, final=False)
+
+    def _take(self, size: int) -> str:
+        parts: list[str] = []
+        remaining = size
+        while self._chunks and remaining > 0:
+            chunk = self._chunks.popleft()
+            if len(chunk) > remaining:
+                self._chunks.appendleft(chunk[remaining:])
+                chunk = chunk[:remaining]
+            parts.append(chunk)
+            remaining -= len(chunk)
+        return "".join(parts)
 
     def write(self, text: str) -> None:
-        self._process.write(text)
+        if self._closed or not self._pty.isalive():
+            raise EOFError
+        self._pty.write(text)
 
     def resize(self, rows: int, columns: int) -> None:
-        self._process.setwinsize(rows, columns)
+        self._pty.set_size(columns, rows)
 
     def is_alive(self) -> bool:
-        return bool(self._process.isalive())
+        return bool(self._pty.isalive())
 
     def exit_code(self) -> int | None:
-        value = self._process.exitstatus
+        value = self._pty.get_exitstatus()
         return int(value) if isinstance(value, int) else None
 
     def terminate(self) -> None:
-        self._process.terminate(force=True)
+        if self._pty.isalive():
+            with contextlib.suppress(OSError):
+                os.kill(self._pid, signal.SIGTERM)
 
     def close(self) -> None:
-        with contextlib.suppress(OSError):
-            self._process.fileobj.shutdown(socket.SHUT_RDWR)
-        self._process.close(force=True)
+        with self._condition:
+            if self._closed:
+                return
+            self._closed = True
+            self._condition.notify_all()
+        _windows_kernel().set_event(self._close_event)
+        # A cancel reaches only a read in progress: repeat it until the pump ends.
+        deadline = time.monotonic() + _CLOSE_READER_SECONDS
+        while self._pump.is_alive() and time.monotonic() < deadline:
+            with contextlib.suppress(Exception):
+                self._pty.cancel_io()
+            self._pump.join(_CLOSE_GRACE_SECONDS / 10)
+        # As with pywinpty's close, a program that outlived its tree kill ends here.
+        self.terminate()
+
+
+class _WindowsKernel:
+    """The kernel32 calls the ConPTY adapter waits with."""
+
+    _SYNCHRONIZE = 0x00100000
+    _INFINITE = 0xFFFFFFFF
+
+    def __init__(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.CreateEventW.argtypes = (
+            wintypes.LPVOID,
+            wintypes.BOOL,
+            wintypes.BOOL,
+            wintypes.LPCWSTR,
+        )
+        kernel32.CreateEventW.restype = wintypes.HANDLE
+        kernel32.SetEvent.argtypes = (wintypes.HANDLE,)
+        kernel32.SetEvent.restype = wintypes.BOOL
+        kernel32.WaitForMultipleObjects.argtypes = (
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.HANDLE),
+            wintypes.BOOL,
+            wintypes.DWORD,
+        )
+        kernel32.WaitForMultipleObjects.restype = wintypes.DWORD
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        self._ctypes = ctypes
+        self._handle_type = wintypes.HANDLE
+        self._kernel32 = kernel32
+
+    def open_process(self, pid: int) -> int:
+        # The ConPTY holds the program's own handle, so its pid stays unique.
+        handle = self._kernel32.OpenProcess(self._SYNCHRONIZE, False, pid)
+        if not handle:
+            raise self._ctypes.WinError(self._ctypes.get_last_error())  # type: ignore[attr-defined]
+        return int(handle)
+
+    def create_event(self) -> int:
+        handle = self._kernel32.CreateEventW(None, True, False, None)
+        if not handle:
+            raise self._ctypes.WinError(self._ctypes.get_last_error())  # type: ignore[attr-defined]
+        return int(handle)
+
+    def set_event(self, handle: int) -> None:
+        self._kernel32.SetEvent(handle)
+
+    def wait_for_either(self, process: int, event: int) -> bool:
+        """Wait until *process* exits (True) or *event* is set (False)."""
+        handles = (self._handle_type * 2)(process, event)
+        result = self._kernel32.WaitForMultipleObjects(2, handles, False, self._INFINITE)
+        return bool(result == 0)
+
+    def close_handle(self, handle: int) -> None:
+        self._kernel32.CloseHandle(handle)
+
+
+@functools.cache
+def _windows_kernel() -> _WindowsKernel:
+    return _WindowsKernel()
 
 
 class _PosixTerminalAdapter:
@@ -407,12 +556,12 @@ def _windows_command(
 def _spawn_windows_process(
     executable: str, arguments: str, cwd: Path, env: Mapping[str, str], rows: int, columns: int
 ) -> Any:
-    """Start *executable* with an exact command line behind ConPTY.
+    """Start *executable* with an exact command line behind ConPTY; return the PTY.
 
     ``PtyProcess.spawn`` would join an argument list with the C runtime rules,
-    which cmd.exe does not use; this is its body with the line kept as given.
+    which cmd.exe does not use; the line is kept as given.
     """
-    from winpty import PTY, PtyProcess
+    from winpty import PTY
 
     if not os.path.isfile(executable):
         raise FileNotFoundError(errno.ENOENT, "No executable program found", executable)
@@ -424,12 +573,7 @@ def _spawn_windows_process(
         pty.spawn(executable, cwd=str(cwd), env=environment, cmdline=" " + arguments)
     else:
         pty.spawn(executable, cwd=str(cwd), env=environment)
-    process = PtyProcess(pty)
-    process._winsize = (rows, columns)
-    process.argv = [executable]
-    process.env = environment
-    process.launch_dir = str(cwd)
-    return process
+    return pty
 
 
 def _accept_console_interrupts() -> None:

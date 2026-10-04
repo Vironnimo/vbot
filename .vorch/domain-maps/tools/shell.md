@@ -61,7 +61,7 @@ Interactive Terminal Sessions use `terminal_environment()` (layers 1-3).
 - Child exit codes come from Job notifications on Windows, which are best effort: a missing `failed_programs` entry proves nothing. POSIX reports no child exit codes.
 - Env grants are not a sandbox: a command can print or send an injected credential. The shell runs with the server user's full rights.
 - POSIX commands get the server's environment, not a login shell's `PATH`.
-- Starting a command costs about 0.45-0.8 s (PTY, shell start, tree tracking) before it runs.
+- On Windows a call costs about 0.25 s beyond the command itself: `pwsh -NoProfile` starts in ~0.22 s, ConPTY adds ~0.02 s, and the exit is noticed within a few milliseconds. The first command after a server start costs another ~0.3 s once (first ConPTY start).
 - Capacity: at most 64 live command terminals, independent of the interactive limits (4 per Session, 32 global).
 - A Sub-Agent never hands off with delivery: its Session cannot receive a completion after its Run ends. At depth >= 1 foreground waits until exit, idleness or timeout.
 - Old stored results with `process_id`/`delivery: "automatic"` are plain rows; nothing folds them.
