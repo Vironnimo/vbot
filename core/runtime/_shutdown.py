@@ -129,6 +129,9 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
     if (archive := runtime._archive) is not None:
         # A purge in progress ends before its next Session; the next start continues it.
         yield _Step("archive_retention", archive.stop, archive.aclose)
+    if (terminals := runtime._terminal_manager) is not None:
+        # Before triggers close, so a handed-off command's stopped result is submitted.
+        yield _Step("commands", None, terminals.shutdown_commands)
     if (triggers := runtime._trigger_service) is not None:
         yield _Step("triggers", None, triggers.aclose)
     if (reflection := runtime._reflection_service) is not None:
@@ -162,8 +165,6 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
         )
     if (performance := runtime._performance) is not None:
         yield _Step("performance", performance.stop, performance.aclose)
-    if (processes := runtime._process_manager) is not None:
-        yield _Step("processes", processes.stop, processes.aclose)
     if (terminals := runtime._terminal_manager) is not None:
         yield _Step("terminals", terminals.stop, terminals.aclose)
     if (keep_awake := runtime._keep_awake) is not None:

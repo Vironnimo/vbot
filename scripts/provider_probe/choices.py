@@ -97,7 +97,6 @@ PROBE_SCENARIOS = (
     "ha_list_services",
     "image_generation",
     "memory",
-    "process",
     "project",
     "read",
     "session_search",
@@ -249,23 +248,6 @@ HA_LIST_SERVICES_CASES = ("default", "domain")
 
 
 HA_CALL_SERVICE_CASES = ("base", "entity", "empty_data", "data", "all")
-
-
-PROCESS_CASES = (
-    "status_list",
-    "status_one",
-    "kill",
-    "wait",
-    "wait_pattern",
-    "running",
-    "finished",
-    "all",
-    "limit_min",
-    "limit_max",
-    "before",
-    "kill_filter",
-    "status_one_limit",
-)
 
 
 READ_CASES = (

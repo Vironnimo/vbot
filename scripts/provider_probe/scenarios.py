@@ -16,7 +16,6 @@ from scripts.provider_probe.common import (
 from scripts.provider_probe.scenario_agents import (
     _bash_scenario,
     _channel_send_scenario,
-    _process_scenario,
     _project_scenario,
     _skill_manage_scenario,
     _skill_scenario,
@@ -244,8 +243,6 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _mcp_scenario(str(args.mcp_case))
     if name == "memory":
         return _memory_scenario(str(args.memory_case))
-    if name == "process":
-        return _process_scenario(str(args.process_case))
     if name == "project":
         return _project_scenario()
     if name == "read":

@@ -7,7 +7,7 @@ import pytest
 from cli.application import operations, worker
 from cli.application.state import ApplicationError, Installation
 from core.sessions import SessionNotFoundError
-from core.tools._bash_update_handoff import HANDOFF_DIRECTORY, UpdateHandoffs
+from core.tools.update_handoff import HANDOFF_DIRECTORY, UpdateHandoffs
 from server.rpc.application_methods import method_handlers
 from server.rpc.dispatcher import dispatch_method
 from server.rpc.errors import RpcError

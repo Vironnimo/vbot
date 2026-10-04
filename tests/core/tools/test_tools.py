@@ -23,17 +23,16 @@ from core.tools import (
     tool_success,
 )
 from core.tools.apply_patch import APPLY_PATCH_TOOL_PARAMETERS
-from core.tools.bash import BASH_TOOL_PARAMETERS
 from core.tools.calendar import CALENDAR_TOOL_PARAMETERS
 from core.tools.channel import CHANNEL_SEND_TOOL_PARAMETERS
 from core.tools.cron import CRON_TOOL_PARAMETERS
 from core.tools.image import ANALYZE_IMAGE_TOOL_PARAMETERS, IMAGE_GENERATION_TOOL_PARAMETERS
 from core.tools.memory import MEMORY_TOOL_PARAMETERS
-from core.tools.process import PROCESS_TOOL_PARAMETERS
 from core.tools.project import PROJECT_TOOL_PARAMETERS
 from core.tools.read import READ_TOOL_PARAMETERS
 from core.tools.search_files import SEARCH_FILES_TOOL_PARAMETERS
 from core.tools.session_search import SESSION_SEARCH_TOOL_PARAMETERS
+from core.tools.shell import SHELL_TOOL_PARAMETERS
 from core.tools.skill import SKILL_TOOL_PARAMETERS
 from core.tools.skill_manage import SKILL_MANAGE_TOOL_PARAMETERS
 from core.tools.speech import TEXT_TO_SPEECH_TOOL_PARAMETERS
@@ -499,13 +498,12 @@ async def test_tool_worker_offloads_and_settles_mutation_before_cancellation() -
 _BUILTIN_TOOL_SCHEMAS: dict[str, JsonObject] = {
     "apply_patch": APPLY_PATCH_TOOL_PARAMETERS,
     "analyze_image": ANALYZE_IMAGE_TOOL_PARAMETERS,
-    "bash": BASH_TOOL_PARAMETERS,
+    "bash": SHELL_TOOL_PARAMETERS,
     "calendar": CALENDAR_TOOL_PARAMETERS,
     "channel_send": CHANNEL_SEND_TOOL_PARAMETERS,
     "cron": CRON_TOOL_PARAMETERS,
     "image_generation": IMAGE_GENERATION_TOOL_PARAMETERS,
     "memory": MEMORY_TOOL_PARAMETERS,
-    "process": PROCESS_TOOL_PARAMETERS,
     "project": PROJECT_TOOL_PARAMETERS,
     "read": READ_TOOL_PARAMETERS,
     "search_files": SEARCH_FILES_TOOL_PARAMETERS,

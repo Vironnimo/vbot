@@ -50,7 +50,6 @@ from server._app_lifecycle import (
     _start_speech_preload,
     _start_statistics_warmup,
     _unregister_archive_change_bridge,
-    _unregister_bash_process_change_bridge,
     _unregister_calendar_change_bridge,
     _unregister_cron_change_bridge,
     _unregister_model_catalog_change_bridge,
@@ -345,7 +344,6 @@ def create_app(
                 _unregister_skill_change_bridge(app.state)
                 _unregister_model_catalog_change_bridge(app.state)
                 _unregister_terminal_change_bridge(app.state)
-                _unregister_bash_process_change_bridge(app.state)
                 _unregister_recall_index_status_bridge(app.state)
                 await _shutdown_log_viewer(app.state.log_viewer, server_logger)
                 await _shutdown_device_flow_engine(

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from core.sessions import SessionAddress
-from core.tools._bash_update_handoff import (
+from core.tools.update_handoff import (
     CONTINUATION_DIRECTORY,
     UpdateHandoffUnavailableError,
     read_update_handoff_ticket,

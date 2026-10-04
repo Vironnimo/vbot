@@ -117,7 +117,6 @@ _MAPPED_TOOLS = frozenset(
         "apply_patch",
         "search_files",
         "bash",
-        "process",
         "web_fetch",
         "web_search",
         "subagent",
@@ -133,7 +132,7 @@ _MAPPED_TOOLS = frozenset(
         pytest.param("description: x\n", frozenset(), id="no-tool-fields"),
         pytest.param(
             "disallowedTools: Bash, WebFetch\n",
-            frozenset({"bash", "process", "web_fetch"}),
+            frozenset({"bash", "web_fetch"}),
             id="disallowed-string",
         ),
         pytest.param(
@@ -144,7 +143,7 @@ _MAPPED_TOOLS = frozenset(
         pytest.param("disallowedTools: Write\n", frozenset({"apply_patch"}), id="write-only"),
         pytest.param(
             "disallowedTools: '  BASH , webfetch '\n",
-            frozenset({"bash", "process", "web_fetch"}),
+            frozenset({"bash", "web_fetch"}),
             id="case-insensitive-trimmed",
         ),
         # Unknown Claude Tools (MCP names, future Tools) never deny anything.
@@ -167,7 +166,7 @@ _MAPPED_TOOLS = frozenset(
         # An explicit denial wins over the allow-list entry.
         pytest.param(
             "tools: Read, Write, Bash\ndisallowedTools: Write\n",
-            _MAPPED_TOOLS - {"read", "bash", "process"},
+            _MAPPED_TOOLS - {"read", "bash"},
             id="allow-list-and-disallowed",
         ),
         # Foreign shapes and an empty tools string are noise, treated as absent.

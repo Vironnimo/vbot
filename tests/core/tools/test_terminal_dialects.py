@@ -596,12 +596,6 @@ async def test_unknown_terminal_id_lists_attached_terminals(
         '"list"} shows every terminal, and attach makes one usable here.'
     )
 
-    process = await terminal({"action": "status", "terminal_id": "proc_abc123"})
-    assert _error(process)["message"] == (
-        "proc_abc123 is a background command, not a terminal. Use the process Tool with this "
-        "process_id."
-    )
-
 
 @pytest.mark.asyncio
 async def test_missing_terminal_id_names_the_attached_terminals(terminal: Terminal) -> None:

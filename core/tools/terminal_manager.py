@@ -477,6 +477,22 @@ class TerminalManager:
     def command_report(self, terminal_id: str) -> CommandReport:
         return self._get(terminal_id).command_report()
 
+    def command_status(self, terminal_id: str) -> str | None:
+        """The status of a listed command, or None for an unknown or unlisted terminal.
+
+        ``running``, ``completed`` (exit code 0), ``failed`` (another exit
+        code) or ``stopped`` (vBot stopped it).
+        """
+        session = self._sessions.get(terminal_id)
+        if session is None or session.command is None or session.hidden:
+            return None
+        report = session.command_report()
+        if not report.exited:
+            return "running"
+        if report.stop_reason is not None:
+            return "stopped"
+        return "completed" if report.exit_code == 0 else "failed"
+
     async def wait_finished(self, terminal_id: str) -> None:
         """Wait until none of the terminal's processes runs any longer."""
         await self._get(terminal_id).wait_finished()

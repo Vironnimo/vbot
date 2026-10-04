@@ -99,15 +99,14 @@ from core.tools import (
     UpdateHandoffs,
     register_analyze_image_tool,
     register_apply_patch_tool,
-    register_bash_tool,
     register_generate_music_tool,
     register_generate_video_tool,
     register_image_generation_tool,
     register_memory_tool,
-    register_process_tool,
     register_project_tool,
     register_read_tool,
     register_search_files_tool,
+    register_shell_tool,
     register_skill_manage_tool,
     register_skill_tool,
     register_terminal_tool,
@@ -118,7 +117,6 @@ from core.tools import (
 from core.tools.calendar import register_calendar_tool
 from core.tools.cron import register_cron_tool
 from core.tools.evaluate import register_evaluate_tool
-from core.tools.process_manager import ProcessManager
 from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
 from core.tools.terminal_manager import TerminalManager
@@ -299,11 +297,7 @@ def bootstrap(runtime: Runtime) -> None:
         # roster read or bootstrap Agent: its Agent-owned half first, its references
         # once their owners exist and before any of them starts.
         pending_rename = runtime._agents.recover_rename()
-        runtime._process_manager = ProcessManager(
-            temporary_files=runtime._storage.temporary_files,
-        )
-        runtime._start_process_manager()
-        # Bash update handoffs are claimable only by this server process; files
+        # Shell update handoffs are claimable only by this server process; files
         # claimed by earlier processes are retained for one update's lifetime.
         runtime._update_handoffs = UpdateHandoffs(runtime._storage.data_dir)
         runtime._update_handoffs.remove_expired_files()
@@ -343,7 +337,6 @@ def bootstrap(runtime: Runtime) -> None:
             runtime.resolve_environment_credential,
             runtime._storage.load_web_search_settings,
         )
-        register_process_tool(runtime._tools, runtime._process_manager)
         register_text_to_speech_tool(runtime._tools, runtime._speech)
         register_evaluate_tool(runtime._tools, runtime._decisions)
         register_analyze_image_tool(
@@ -540,7 +533,6 @@ def bootstrap(runtime: Runtime) -> None:
         assert runtime._chat_sessions is not None
         assert runtime._chat_run_manager is not None
         assert runtime._tools is not None
-        assert runtime._process_manager is not None
         assert runtime._file_state is not None
         assert runtime._storage is not None
         assert runtime._image is not None
@@ -553,7 +545,6 @@ def bootstrap(runtime: Runtime) -> None:
             sessions=runtime._chat_sessions,
             run_manager=runtime._chat_run_manager,
             tools=runtime._tools,
-            process_manager=runtime._process_manager,
             file_read_state=runtime._file_state,
             change_tracker=runtime._change_tracker,
             storage=runtime._storage,
@@ -570,6 +561,7 @@ def bootstrap(runtime: Runtime) -> None:
                 if runtime._trigger_service is not None
                 else False
             ),
+            get_terminal_manager=lambda: runtime._terminal_manager,
         )
         runtime._chat_loop = ChatLoop(
             chat_dependencies,
@@ -688,10 +680,9 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._calendar_service,
             reference_lock=runtime._automation_references.lock,
         )
-        register_bash_tool(
+        register_shell_tool(
             runtime._tools,
-            runtime._process_manager,
-            runtime._trigger_service,
+            runtime._terminal_manager,
             credential_resolver=runtime.resolve_environment_credential,
             prompt_blocks=runtime._tool_prompt_blocks,
             update_handoffs=runtime._update_handoffs,

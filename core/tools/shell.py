@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
+import re
 import shutil
 import subprocess
 import sys
@@ -26,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from core.tools._bash_update_handoff import UpdateHandoffGrant, UpdateHandoffs
+from core.runs import TOOL_CALL_OUTPUT_EVENT
 from core.tools._path_suggestions import similar_entries
 from core.tools._shell_arguments import (
     SHELL_UNADVERTISED_PARAMETERS,
@@ -58,6 +60,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.tools.update_handoff import UpdateHandoffGrant, UpdateHandoffs
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
@@ -505,7 +508,7 @@ class ShellTool:
 
         async def progress(screen: str) -> None:
             await context.emit(
-                "tool_call_output",
+                TOOL_CALL_OUTPUT_EVENT,
                 {
                     "tool_call_id": context.tool_call_id,
                     "terminal_id": terminal_id,
@@ -737,6 +740,58 @@ def _first_line(command: str) -> str:
     return line if len(line) <= 120 else line[:117] + "..."
 
 
+# Background command statuses
+
+# The durable records the status fold reads: results of this Tool, and the
+# delivered results of handed-off commands, which start with this text.
+COMMAND_STATUS_TOOL_NAMES = (SHELL_TOOL_NAME,)
+COMMAND_STATUS_NOTE_MARKER = "The command in terminal "
+_DELIVERY_STATUS = re.compile(
+    r"The command in terminal (?P<terminal>term_[A-Za-z0-9]+) \(.*?\) "
+    r"(?:exited with code (?P<code>-?\d+|None)\.|(?P<stopped>was stopped):)"
+)
+
+
+def background_command_statuses(records: Sequence[Any]) -> JsonObject:
+    """Fold durable shell results and deliveries into the statuses of handed-off commands.
+
+    Maps each terminal id to ``running``, ``completed`` (exit code 0),
+    ``failed`` (another exit code) or ``stopped``. Folding a later range of
+    records onto an earlier fold equals folding both ranges at once.
+    """
+    statuses: JsonObject = {}
+    for record in records:
+        role = getattr(record, "role", None)
+        content = getattr(record, "content", None)
+        if not isinstance(content, str):
+            continue
+        if role == "tool" and getattr(record, "name", None) == SHELL_TOOL_NAME:
+            _fold_result(statuses, content)
+        elif role == "note":
+            for match in _DELIVERY_STATUS.finditer(content):
+                statuses[match["terminal"]] = _delivered_status(match)
+    return statuses
+
+
+def _delivered_status(match: re.Match[str]) -> str:
+    if match["stopped"]:
+        return "stopped"
+    return "completed" if match["code"] == "0" else "failed"
+
+
+def _fold_result(statuses: JsonObject, content: str) -> None:
+    try:
+        envelope = json.loads(content)
+    except json.JSONDecodeError:
+        return
+    data = envelope.get("data") if isinstance(envelope, dict) and envelope.get("ok") else None
+    if not isinstance(data, dict) or data.get("status") != "running":
+        return
+    terminal_id = data.get("terminal_id")
+    if isinstance(terminal_id, str) and terminal_id:
+        statuses.setdefault(terminal_id, "running")
+
+
 # Display
 
 
@@ -799,12 +854,15 @@ def register_shell_tool(
 
 
 __all__ = [
+    "COMMAND_STATUS_NOTE_MARKER",
+    "COMMAND_STATUS_TOOL_NAMES",
     "SHELL_DEFAULT_TIMEOUT_SECONDS",
     "SHELL_HANDOFF_SECONDS",
     "SHELL_TOOL_DESCRIPTION",
     "SHELL_TOOL_NAME",
     "SHELL_TOOL_PARAMETERS",
     "ShellTool",
+    "background_command_statuses",
     "command_output_text",
     "format_command_delivery",
     "format_shell_env_usage",

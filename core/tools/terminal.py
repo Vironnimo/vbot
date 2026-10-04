@@ -810,11 +810,6 @@ def _terminals_text(terminal_manager: TerminalManager, owner: TerminalOwner) -> 
 def _not_found_message(
     terminal_manager: TerminalManager, owner: TerminalOwner, terminal_id: str
 ) -> str:
-    if terminal_id.startswith("proc_"):
-        return (
-            f"{terminal_id} is a background command, not a terminal. Use the process Tool with "
-            "this process_id."
-        )
     return f"No terminal has the id {terminal_id}. {_terminals_text(terminal_manager, owner)}"
 
 

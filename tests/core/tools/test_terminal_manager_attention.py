@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
+import core.tools._terminal_session as terminal_session
 import core.tools._terminal_state as terminal_state
-import core.tools.process_manager as process_manager
 from core.runs import RunAdmissionBlockedError
 from core.tools.terminal_manager import (
     TerminalClosedError,
@@ -146,7 +146,7 @@ async def test_failed_attention_delivery_stays_undelivered_and_logs_only_faults(
     )
     errors: list[tuple[Any, ...]] = []
     monkeypatch.setattr(
-        process_manager._LOGGER, "error", lambda *args, **_kwargs: errors.append(args)
+        terminal_session._LOGGER, "error", lambda *args, **_kwargs: errors.append(args)
     )
     started = await spawn(manager, tmp_path)
     await _agent_input(manager, started, text="do work", key="enter")

@@ -29,10 +29,9 @@ from core.runs import (
     RUN_STARTED_EVENT,
     STREAM_ATTEMPT_RESTARTED_EVENT,
     TOOL_CALL_DELTA_EVENT,
+    TOOL_CALL_OUTPUT_EVENT,
     TOOL_CALL_RESULT_EVENT,
     TOOL_CALL_STARTED_EVENT,
-    TOOL_CALL_STDERR_EVENT,
-    TOOL_CALL_STDOUT_EVENT,
     USER_MESSAGE_EVENT,
     QueuedRunItem,
     Run,
@@ -44,7 +43,7 @@ from core.subagents import (
 )
 from server.events import (
     ALLOWED_RESOURCE_KINDS,
-    BASH_PROCESS_STATUS_CHANGED_EVENT,
+    COMMAND_STATUS_CHANGED_EVENT,
     PROVIDER_AUTH_COMPLETED_EVENT,
     RECALL_INDEX_STATUS_EVENT,
     RESOURCE_CHANGED_EVENT,
@@ -152,19 +151,15 @@ def _publish_provider_auth_completed_event(
     )
 
 
-def publish_bash_process_status_changed(state: Any, notification: Any) -> None:
-    """Forward one background-process terminal notification to accessors.
+def publish_command_status_changed(state: Any, terminal_id: str, status: str) -> None:
+    """Forward the new status of a handed-off shell command to accessors.
 
-    The notification is the ProcessManager's plain snapshot; it is pure
-    accessor-facing state (the Model never sees it) and carries the exact
-    start/end timestamps the WebUI needs to replace its live tick with the
-    real runtime.
+    ``status`` is ``running``, ``completed``, ``failed`` or ``stopped``, as in
+    the ``background_command_statuses`` of ``chat.history``.
     """
-    if not isinstance(notification, dict):
-        return
     state.event_bus.publish(
-        BASH_PROCESS_STATUS_CHANGED_EVENT,
-        dict(notification),
+        COMMAND_STATUS_CHANGED_EVENT,
+        {"terminal_id": terminal_id, "status": status},
     )
 
 
@@ -339,8 +334,7 @@ RUN_DELTA_EVENT_TYPES = {
     REASONING_DELTA_EVENT,
     STREAM_ATTEMPT_RESTARTED_EVENT,
     TOOL_CALL_DELTA_EVENT,
-    TOOL_CALL_STDOUT_EVENT,
-    TOOL_CALL_STDERR_EVENT,
+    TOOL_CALL_OUTPUT_EVENT,
 }
 RUN_TERMINAL_EVENT_TYPES = {
     RUN_COMPLETED_EVENT,

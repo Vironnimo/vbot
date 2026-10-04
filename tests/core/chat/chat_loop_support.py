@@ -76,7 +76,6 @@ def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
         sessions=cast(Any, getattr(runtime, "chat_sessions", missing)),
         run_manager=cast(Any, getattr(runtime, "chat_run_manager", missing)),
         tools=cast(Any, getattr(runtime, "tools", missing)),
-        process_manager=cast(Any, getattr(runtime, "process_manager", missing)),
         file_read_state=cast(Any, getattr(runtime, "file_read_state", missing)),
         change_tracker=cast(
             Any,
@@ -92,6 +91,7 @@ def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
         ),
         get_local_context_windows=lambda: runtime.local_context_windows(),
         image_understanding_available=image_understanding_available,
+        get_terminal_manager=lambda: getattr(runtime, "terminal_manager", None),
         deliver_background_completions=lambda run, session: bool(
             getattr(
                 runtime,
@@ -559,17 +559,17 @@ class StubSkills:
         return [self._skills[name] for name in allowed_skills if name in self._skills]
 
 
-class StubProcessManager:
-    """Record Run process-scope cleanup in call order."""
+class StubTerminalManager:
+    """Record the Run-level shell command cleanup in call order."""
 
     def __init__(self) -> None:
-        self.scope_events: list[tuple[str, str]] = []
+        self.run_events: list[tuple[str, str]] = []
 
-    async def cancel_scope_async(self, run_id: str) -> None:
-        self.scope_events.append(("cancel", run_id))
+    async def cancel_run(self, run_id: str) -> None:
+        self.run_events.append(("cancel", run_id))
 
-    def release_scope(self, run_id: str) -> None:
-        self.scope_events.append(("release", run_id))
+    def release_run(self, run_id: str) -> None:
+        self.run_events.append(("release", run_id))
 
 
 _empty_session_store: Path | None = None
@@ -635,7 +635,7 @@ class StubRuntime:
         self.chat_run_manager = self.chat_runs
         # Complete Run timelines; a finished Run itself replays only its ending.
         self.timelines = RunTimelines(self.chat_runs)
-        self.process_manager = StubProcessManager()
+        self.terminal_manager = StubTerminalManager()
         self.extensions: Any = None
         self.providers = StubProviders(
             provider_ids or {agent.model.split("/", 1)[0]},

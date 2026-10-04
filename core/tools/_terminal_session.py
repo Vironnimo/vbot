@@ -15,7 +15,6 @@ from typing import Any, Literal, TextIO
 from core.runs import RunAdmissionBlockedError, RunExecutionOwner
 from core.storage.temp_files import TemporaryFileLease
 from core.tools import terminal_backend
-from core.tools.process_manager import log_background_task_result
 from core.tools.terminal_backend import TerminalAdapter
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
@@ -1274,7 +1273,7 @@ class TerminalSession:
     def _background(self, coroutine: Coroutine[Any, Any, None], label: str) -> asyncio.Task[None]:
         task = asyncio.create_task(coroutine, name=f"terminal:{self.terminal_id}:{label}")
         task.add_done_callback(
-            lambda done: log_background_task_result(
+            lambda done: _log_task_failure(
                 done, f"Terminal {label} failed for terminal={self.terminal_id}"
             )
         )
@@ -1323,3 +1322,9 @@ def _attention_body(
     if len(body) <= TERMINAL_NOTICE_MESSAGE_CAP_CHARS:
         return body
     return body[:TERMINAL_NOTICE_MESSAGE_CAP_CHARS] + "\n[attention details truncated]"
+
+
+def _log_task_failure(task: asyncio.Task[Any], message: str) -> None:
+    if task.cancelled() or (error := task.exception()) is None:
+        return
+    _LOGGER.error("%s: %s", message, error, exc_info=(type(error), error, error.__traceback__))

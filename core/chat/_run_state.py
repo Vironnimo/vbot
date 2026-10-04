@@ -80,7 +80,7 @@ if TYPE_CHECKING:
     from core.storage import StorageManager
     from core.tools.change_tracker import ChangeTracker
     from core.tools.file_state import FileReadState
-    from core.tools.process_manager import ProcessManager
+    from core.tools.terminal_manager import TerminalManager
     from core.tools.tools import ToolRegistry
     from core.usage import UsageRecorder
 
@@ -138,7 +138,6 @@ class ChatLoopDependencies:
     sessions: ChatSessionManager
     run_manager: ChatRunManager
     tools: ToolRegistry
-    process_manager: ProcessManager
     file_read_state: FileReadState
     change_tracker: ChangeTracker
     storage: StorageManager
@@ -150,6 +149,8 @@ class ChatLoopDependencies:
     get_local_context_windows: Callable[[], Mapping[str, Any]]
     image_understanding_available: Callable[[], Awaitable[bool]]
     deliver_background_completions: Callable[[Run, ChatSession], bool]
+    # The Terminal Sessions of shell commands; created after the Chat Loop.
+    get_terminal_manager: Callable[[], TerminalManager | None]
     usage_recorder: UsageRecorder | None = None
 
 
@@ -623,15 +624,18 @@ async def create_run_execution_context(
     )
     try:
         run.add_cancel_callback(lambda: _close_adapter(target.adapter))
-        run.add_cancel_callback(lambda: dependencies.process_manager.cancel_scope_async(run.id))
+        terminals = dependencies.get_terminal_manager()
+        if terminals is not None:
+            # A cancelled Run stops every shell command it started, handed off or not.
+            run.add_cancel_callback(lambda: terminals.cancel_run(run.id))
 
-        async def release_process_scope(_status: RunStatus) -> None:
-            # Completion observers run after the executor, every Tool task, and
-            # all cancellation callbacks have settled, so no Bash launch for this
-            # Run can race the release of its closed-scope marker.
-            dependencies.process_manager.release_scope(run.id)
+            async def release_command_scope(_status: RunStatus) -> None:
+                # Completion observers run after the executor, every Tool task, and
+                # all cancellation callbacks have settled, so no shell command for
+                # this Run can race the release of its cancellation marker.
+                terminals.release_run(run.id)
 
-        run.add_completion_observer(release_process_scope)
+            run.add_completion_observer(release_command_scope)
         temporary_cwd: Path | None = None
         if temporary_source is not None:
             temporary_cwd = getattr(agent, "cwd", None)

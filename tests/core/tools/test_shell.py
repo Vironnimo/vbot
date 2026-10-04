@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
 import shutil
 import sys
 from collections.abc import AsyncIterator, Callable
@@ -20,18 +22,26 @@ from core.tools.shell import (
     SHELL_TOOL_DESCRIPTION,
     SHELL_TOOL_NAME,
     SHELL_TOOL_PARAMETERS,
+    background_command_statuses,
     project_shell_tool_definitions,
     register_shell_tool,
 )
 from core.tools.terminal_manager import TerminalManager, TerminalRenderHost
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure_for_exception
+from core.tools.update_handoff import (
+    UpdateHandoffs,
+    UpdateHandoffUnavailableError,
+    read_update_handoff_ticket,
+)
 from tests.core.tools.terminal_manager_helpers import (
     AdapterFactory,
     FakeClock,
     FakeTerminalAdapter,
     FakeTree,
     PendingTriggerService,
+    TrackedExecutor,
     eventually,
+    settle,
 )
 from tests.core.tools.tools_test_support import dispatch_as_executor
 
@@ -39,7 +49,7 @@ from tests.core.tools.tools_test_support import dispatch_as_executor
 class Shell:
     """The shell Tool over a TerminalManager with fake terminals, trees and time."""
 
-    def __init__(self, tmp_path: Path) -> None:
+    def __init__(self, tmp_path: Path, *, update_handoffs: UpdateHandoffs | None = None) -> None:
         self.tmp_path = tmp_path
         self.clock = FakeClock()
         self.trigger = PendingTriggerService()
@@ -59,10 +69,16 @@ class Shell:
         )
         self.registry = ToolRegistry()
         register_shell_tool(
-            self.registry, self.manager, credential_resolver=lambda name: f"value-of-{name}"
+            self.registry,
+            self.manager,
+            credential_resolver=lambda name: f"value-of-{name}",
+            update_handoffs=update_handoffs,
         )
         self.cancel_callbacks: list[Callable[[], Any]] = []
         self.background_callbacks: list[Callable[[], bool]] = []
+        # Callbacks the call registered to run once its Tool Result is persisted.
+        self.persisted: list[Callable[[], None]] = []
+        self.executor = TrackedExecutor()
 
     def _track(self, _pid: int) -> FakeTree:
         tree = FakeTree()
@@ -87,6 +103,7 @@ class Shell:
             tool_settings={"bash": {"allowed_env": ["API_TOKEN"]}},
             cancel_registration_hook=self.cancel_callbacks.append,
             background_registration_hook=self.background_callbacks.append,
+            result_persisted_hook=self.persisted.append,
         )
 
     def call(
@@ -102,28 +119,32 @@ class Shell:
         await eventually(lambda: bool(self.trees))
         return self.factory.adapters[-1], self.trees[-1]
 
-    async def run_clock(self, task: asyncio.Task[Any], *, until: float) -> None:
+    async def run_clock(self, task: asyncio.Future[Any], *, until: float) -> None:
         """Advance fake time in half seconds while *task* waits on it."""
         while self.clock.now < until and not task.done():
-            for _ in range(200):
-                if self.clock.sleeping or task.done():
-                    break
-                await asyncio.sleep(0.005)
+            await settle(self.clock, self.executor, task)
             await self.clock.advance(0.5)
 
     def bodies(self) -> list[str]:
         return [kwargs["body"] for _args, kwargs in self.trigger.submissions]
 
 
-@pytest_asyncio.fixture
-async def shell(tmp_path: Path) -> AsyncIterator[Shell]:
-    harness = Shell(tmp_path)
+@contextlib.asynccontextmanager
+async def started_shell(tmp_path: Path, **options: Any) -> AsyncIterator[Shell]:
+    harness = Shell(tmp_path, **options)
+    asyncio.get_running_loop().set_default_executor(harness.executor)
     harness.manager.start()
     try:
         yield harness
     finally:
         harness.trigger.release.set()
         await harness.manager.aclose()
+
+
+@pytest_asyncio.fixture
+async def shell(tmp_path: Path) -> AsyncIterator[Shell]:
+    async with started_shell(tmp_path) as harness:
+        yield harness
 
 
 async def dispatch(
@@ -168,6 +189,22 @@ async def test_finished_command_reports_output_exit_code_failed_programs_and_env
     assert (env["API_TOKEN"], env["MODE"]) == ("value-of-API_TOKEN", "ci")
     assert env["GIT_TERMINAL_PROMPT"] == "0"
     assert shell.manager.list_terminals() == []
+
+
+@pytest.mark.asyncio
+async def test_leniently_read_arguments_run_with_a_note(
+    shell: Shell, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PATH", "original-path")
+    call = shell.call({"cmd": "ls", "timeout": 60000, "env_keys": ["PATH"]})
+    _adapter, tree = await shell.started()
+    tree.shell_exits(0)
+
+    assert data(await call)["notes"] == [
+        "timeout 60000 was read as milliseconds (60 s); timeout takes seconds.",
+        "PATH is not a granted credential, so the command sees the value it inherits; "
+        "env_keys is only for granted credentials.",
+    ]
 
 
 @pytest.mark.asyncio
@@ -316,6 +353,76 @@ async def test_missing_workdir_and_ungranted_credentials_run_nothing(shell: Shel
     assert "is not an existing directory" in missing["error"]["message"]
     assert "not granted to this Agent" in secret["error"]["message"]
     assert shell.factory.calls == []
+
+
+@pytest.mark.asyncio
+async def test_update_handoff_token_is_claimable_exactly_while_the_command_runs(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    handoffs = UpdateHandoffs(data_dir)
+    async with started_shell(tmp_path, update_handoffs=handoffs) as shell:
+        call = shell.call({"command": "vbot update", "mode": "background"})
+        _adapter, tree = await shell.started()
+        assert data(await call)["status"] == "running"
+        token = shell.factory.calls[0][2]["VBOT_UPDATE_HANDOFF"]
+
+        ticket = handoffs.mint(token)
+        assert read_update_handoff_ticket(data_dir, ticket.ticket_id).acknowledged is False
+        for callback in shell.persisted:
+            callback()
+        assert read_update_handoff_ticket(data_dir, ticket.ticket_id).acknowledged
+        tree.shell_exits(0)
+        finished = asyncio.ensure_future(
+            shell.manager.wait_finished(data(await call)["terminal_id"])
+        )
+        await shell.run_clock(finished, until=30)
+        await finished
+
+        def released(candidate: str) -> bool:
+            try:
+                handoffs.mint(candidate)
+            except UpdateHandoffUnavailableError:
+                return True
+            return False
+
+        await eventually(lambda: released(token))
+
+        # A command that cannot start releases its token at once.
+        shell.factory.error = OSError("spawn unavailable")
+        failed = await shell.call({"command": "vbot update"})
+        assert failed["ok"] is False
+        assert released(shell.factory.calls[-1][2]["VBOT_UPDATE_HANDOFF"])
+
+
+@pytest.mark.asyncio
+async def test_statuses_of_handed_off_commands_fold_from_results_and_deliveries(
+    shell: Shell,
+) -> None:
+    call = shell.call({"command": "serve", "description": "Serve (dev)"}, depth=0)
+    _adapter, tree = await shell.started()
+    await shell.run_clock(call, until=SHELL_HANDOFF_SECONDS + 1)
+    running = await call
+    terminal_id = data(running)["terminal_id"]
+    tree.shell_exits(2)
+    await eventually(lambda: len(shell.trigger.submissions) == 1)
+
+    def record(role: str, content: str, name: str | None = None) -> Any:
+        return type("Record", (), {"role": role, "content": content, "name": name})()
+
+    result = record("tool", json.dumps(running), SHELL_TOOL_NAME)
+    delivery = record("note", "Background results:\n" + shell.bodies()[0])
+    stopped = record(
+        "note", "The command in terminal term_x (a (b) c) was stopped: vBot shut down."
+    )
+
+    assert background_command_statuses([result]) == {terminal_id: "running"}
+    assert background_command_statuses([result, delivery, stopped]) == {
+        terminal_id: "failed",
+        "term_x": "stopped",
+    }
+    assert shell.manager.command_status(terminal_id) == "failed"
+    assert shell.manager.command_status("term_unknown") is None
 
 
 @pytest.mark.parametrize(

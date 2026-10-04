@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
@@ -222,27 +221,6 @@ async def test_control_run_validates_the_full_address_and_returns_authoritative_
     assert (await call(state, "chat.control_run", **background_params))["ok"] is False
     run.request_cancel()
     assert (await call(state, "chat.control_run", **params))["ok"] is False
-
-
-@pytest.mark.asyncio
-async def test_cancel_process_cancels_as_the_user_for_the_addressed_agent() -> None:
-    calls: list[tuple[str, str, str | None]] = []
-
-    class RecordingProcessManager:
-        async def cancel_for_user(
-            self, process_id: str, agent_id: str, *, project_id: str | None = None
-        ) -> Any:
-            calls.append((process_id, agent_id, project_id))
-            return SimpleNamespace(status="killed", cancelled_by_user=True)
-
-    state = SimpleNamespace(runtime=SimpleNamespace(process_manager=RecordingProcessManager()))
-
-    response = await call(
-        state, "chat.cancel_process", agent_id="builder@project-one", process_id="process-one"
-    )
-
-    assert response == {"ok": True, "result": {"process_id": "process-one", "status": "cancelled"}}
-    assert calls == [("process-one", "builder", "project-one")]
 
 
 @pytest.mark.asyncio

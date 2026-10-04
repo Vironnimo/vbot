@@ -302,17 +302,6 @@ def _unsubscribe() -> None:
     return None
 
 
-class StubProcessManager:
-    async def cancel_scope_async(self, run_id: str) -> None:
-        del run_id
-
-    def release_scope(self, run_id: str) -> None:
-        del run_id
-
-    def add_terminal_callback(self, _callback: Callable[[Any], None]) -> Callable[[], None]:
-        return _unsubscribe
-
-
 class RecordingCompactionService:
     def __init__(self) -> None:
         self.calls = 0
@@ -344,6 +333,15 @@ class StubTerminalManager:
 
     def add_changed_callback(self, _callback: Callable[[str], None]) -> Callable[[], None]:
         return _unsubscribe
+
+    def command_status(self, _terminal_id: str) -> str | None:
+        return None
+
+    async def cancel_run(self, _run_id: str) -> None:
+        return None
+
+    def release_run(self, _run_id: str) -> None:
+        return None
 
 
 class StubJobService:
@@ -491,7 +489,6 @@ class StubRuntime:
         )
         self.chat_runs: ChatRunManager | None = None
         self.extensions: Any = None
-        self.process_manager = StubProcessManager()
         self.terminal_manager = StubTerminalManager()
         self.cron_service: Any = StubJobService()
         self.bootstrap_service: Any = StubJobService()
