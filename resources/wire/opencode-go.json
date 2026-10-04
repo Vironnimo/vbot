@@ -45,13 +45,13 @@
       "note": "Hy and Kimi answer with readable reasoning plus reasoning_details; their history still replays reasoning_content."
     },
     {
-      "when": {"ids": ["deepseek-flash", "glm-5.1", "omen-alpha"]},
+      "when": {"ids": ["deepseek-flash", "deepseek-v4.1-flash", "glm-5.1", "omen-alpha"]},
       "set": {
         "response": {
           "reasoning_fields": ["reasoning_content", "reasoning", "reasoning_text", "thinking"]
         }
       },
-      "note": "These Models answer with readable reasoning_content; the listing carries no response-field hint for them."
+      "note": "These Models answer with readable reasoning_content; the listing carries no response-field hint for most of them. deepseek-flash is the gateway alias of DeepSeek V4.1 Flash, so both ids resolve alike."
     },
     {
       "when": {"ids": ["deepseek-flash", "deepseek-v4.1-flash"]},
