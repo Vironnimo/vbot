@@ -362,38 +362,6 @@ class SessionContinuationState:
     operations: tuple[SessionContinuationOperation, ...]
 
 
-@dataclass(frozen=True)
-class SessionHistoryCheckpoint:
-    ordinal: int
-    sequence: int
-    message_id: str
-    timestamp: str
-    summary: str
-
-
-@dataclass(frozen=True)
-class SessionHistorySnapshot:
-    generation_id: str
-    checkpoints: tuple[SessionHistoryCheckpoint, ...]
-
-    @property
-    def latest(self) -> SessionHistoryCheckpoint:
-        return self.checkpoints[-1]
-
-
-@dataclass(frozen=True)
-class SessionHistoryRecord:
-    sequence: int
-    message: ChatMessage
-
-
-@dataclass(frozen=True)
-class SessionHistorySectionStats:
-    eligible_count: int
-    start_timestamp: str | None
-    end_timestamp: str | None
-
-
 # How Session Recall treats one live Session: an ordinary conversation, a
 # delegated Sub-Agent Session searched only on request, or an internal Session
 # (reflection, system-only) that search never returns.

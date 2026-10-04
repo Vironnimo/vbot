@@ -148,15 +148,15 @@ def test_followed_tool_requires_its_source_and_can_be_denied_independently() -> 
 def test_denials_win_over_memory_activation_and_session_grants() -> None:
     tools = _catalog(
         ("memory", {"activation": "memory_mode", **_IDENTITY}),
-        ("history", {"activation": "session_grant"}),
+        ("inbox", {"activation": "session_grant"}),
     )
 
     resolution = resolve_tool_access(
-        ToolAccess(mode="selected", allowed=(), denied=("memory", "history")),
+        ToolAccess(mode="selected", allowed=(), denied=("memory", "inbox")),
         tools,
         "agent_user",
         workspace="workspace",
-        session_tool_grants=("history",),
+        session_tool_grants=("inbox",),
     )
 
     assert resolution.allowed_tools == ()
@@ -170,7 +170,7 @@ def test_a_fixed_selection_is_the_whole_tool_set() -> None:
         ("skill_manage", {**_IDENTITY}),
         ("skill_audit", {"activation": "follows", "activation_source": "skill"}),
         ("memory", {"activation": "memory_mode", **_IDENTITY}),
-        ("history", {"activation": "session_grant"}),
+        ("inbox", {"activation": "session_grant"}),
     )
     allowed = ("skill", "skill_manage")
 
@@ -180,14 +180,14 @@ def test_a_fixed_selection_is_the_whole_tool_set() -> None:
             tools,
             "agent_user",
             workspace="workspace",
-            session_tool_grants=("history",),
+            session_tool_grants=("inbox",),
         )
         return resolution.allowed_tools, resolution.session_tool_grants
 
     assert resolve(fixed=True) == (allowed, ())
     assert resolve(fixed=False) == (
-        ("history", "memory", "skill", "skill_audit", "skill_manage"),
-        ("history",),
+        ("inbox", "memory", "skill", "skill_audit", "skill_manage"),
+        ("inbox",),
     )
     # The mark is never persisted.
     assert ToolAccess(mode="selected", allowed=allowed, fixed=True).to_dict() == {

@@ -39,7 +39,6 @@ CANONICAL_BUILTIN_TOOLS = [
     "evaluate",
     "generate_music",
     "generate_video",
-    "history",
     "image_generation",
     "memory",
     "process",
@@ -108,7 +107,6 @@ def test_start_registers_each_builtin_tool_once_with_a_result_contract(
     assert not hidden_session_tools & {
         tool.name for tool in tools.list_tools(include_catalog_hidden=False)
     }
-    assert tools.get("history").session_scoped is True
     for tool in tools.list_tools():
         if tool.name in hidden_session_tools:
             continue
@@ -123,9 +121,7 @@ def test_builtin_provider_definitions_expose_model_visible_metadata_only(
         definition["name"]: definition for definition in shared_runtime.tools.provider_definitions()
     }
 
-    assert sorted(definitions) == [
-        name for name in CANONICAL_BUILTIN_TOOLS if name not in {"history", "evaluate"}
-    ]
+    assert sorted(definitions) == [name for name in CANONICAL_BUILTIN_TOOLS if name != "evaluate"]
     for tool_name, definition in definitions.items():
         tool = shared_runtime.tools.get(tool_name)
         assert definition == {

@@ -352,22 +352,6 @@ function plannedToolResponse(prompt, results, offeredTools) {
     return { text: "Missing file error handled." };
   }
 
-  if (prompt.includes("E2E_TOOL_HISTORY")) {
-    if (resultsFor(results, "history").length === 0) {
-      return {
-        calls: [
-          toolCall("history", {
-            action: "search",
-            query: "Archived obsidian record 8642",
-            match: "phrase",
-            limit: 10,
-          }),
-        ],
-      };
-    }
-    return { text: "Compacted Session history recovered." };
-  }
-
   if (prompt.includes("E2E_TOOL_MEDIA")) {
     if (resultsFor(results, "text_to_speech").length === 0) {
       return {
@@ -480,7 +464,7 @@ function responseText(model, prompt, messages = []) {
   if (prompt.includes("E2E_STREAM")) {
     return "Fake provider streaming response.";
   }
-  if (prompt.includes("E2E_HISTORY_SEED")) {
+  if (prompt.includes("E2E_COMPACTION_SEED")) {
     return "Archived obsidian record 8642.";
   }
   if (prompt.includes("E2E_SUBAGENT_CHILD")) {

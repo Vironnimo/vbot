@@ -153,8 +153,7 @@ class ToolContext:
         default=None, repr=False, compare=False
     )
     # Grants for Session-scoped tools whose authority is derived while building
-    # the Session request state. Chat adds ``history`` only after a persisted
-    # Compaction checkpoint.
+    # the Session request state, such as an Extension's Session-private Tools.
     session_tool_grants: Sequence[str] = field(default_factory=tuple)
     nesting_depth: int = 0
     # Exact model-facing contract used for this Provider cycle. Direct callers and

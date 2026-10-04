@@ -19,7 +19,6 @@ from core.chat.continuation import (
 )
 from core.compaction import TOOL_RESULT_COMPACTED_FIELD, CompactionService
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
-from core.tools import HISTORY_TOOL_NAME, register_history_tool
 from core.utils.tokens import estimate_request_input_tokens
 from tests.core.chat.chat_loop_compaction_test_support import (
     CompactOnceService,
@@ -28,6 +27,7 @@ from tests.core.chat.chat_loop_compaction_test_support import (
     auto_compact,
     compaction_runtime,
     real_compaction_runtime,
+    word_count_tools,
 )
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
@@ -228,7 +228,7 @@ async def test_rebuilt_request_restores_each_turns_media_when_tool_call_ids_repe
 
 
 @pytest.mark.asyncio
-async def test_final_answer_checkpoint_grants_history_from_the_next_run(tmp_path: Path) -> None:
+async def test_final_answer_checkpoint_keeps_the_tool_list_of_the_next_run(tmp_path: Path) -> None:
     adapter = StubAdapter(
         [
             {
@@ -240,9 +240,8 @@ async def test_final_answer_checkpoint_grants_history_from_the_next_run(tmp_path
             {"content": "Second answer", "tool_calls": None},
         ]
     )
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[])
-    runtime = compaction_runtime(tmp_path, agent=agent, adapter=adapter)
-    register_history_tool(runtime.tools, runtime.chat_sessions)
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["word_count"])
+    runtime = compaction_runtime(tmp_path, agent=agent, adapter=adapter, tools=word_count_tools())
     loop = build_chat_loop(runtime, compaction_service=cast(Any, CompactOnceService(keep_last=2)))
 
     await loop.send("coder", "First", session_id="session-one")
@@ -262,10 +261,11 @@ async def test_final_answer_checkpoint_grants_history_from_the_next_run(tmp_path
 
     await loop.send("coder", "Second", session_id="session-one")
 
+    # Compaction leaves the Tool list, and with it the Provider prompt cache prefix, unchanged.
     tool_names = [
         [tool["name"] for tool in request["kwargs"]["tools"]] for request in adapter.requests
     ]
-    assert tool_names == [[], [HISTORY_TOOL_NAME]]
+    assert tool_names == [["word_count"], ["word_count"]]
 
 
 @pytest.mark.asyncio

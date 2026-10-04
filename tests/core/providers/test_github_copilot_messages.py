@@ -17,7 +17,6 @@ from core.providers.adapter import (
 from core.providers.errors import ProviderError
 from core.providers.github_copilot import CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT
 from core.providers.openai_compatible import DEFAULT_MAX_OUTPUT_TOKENS
-from core.tools import HISTORY_TOOL_DESCRIPTION, HISTORY_TOOL_NAME, HISTORY_TOOL_PARAMETERS
 from core.utils.tokens import estimate_structured_tokens
 from tests.core.providers.github_copilot_test_support import (
     COPILOT_CONFIG,
@@ -64,12 +63,6 @@ async def test_send_translates_conversation_and_tools_and_drops_unsafe_fields() 
             "name": "search",
             "description": "Search docs",
             "parameters": {"type": "object", "properties": {}},
-        },
-        # The history Tool maps like any other Tool, without a special case.
-        {
-            "name": HISTORY_TOOL_NAME,
-            "description": HISTORY_TOOL_DESCRIPTION,
-            "parameters": HISTORY_TOOL_PARAMETERS,
         },
     ]
     history: list[dict[str, Any]] = [
@@ -134,11 +127,6 @@ async def test_send_translates_conversation_and_tools_and_drops_unsafe_fields() 
                 "name": "search",
                 "description": "Search docs",
                 "input_schema": {"type": "object", "properties": {}},
-            },
-            {
-                "name": HISTORY_TOOL_NAME,
-                "description": HISTORY_TOOL_DESCRIPTION,
-                "input_schema": HISTORY_TOOL_PARAMETERS,
             },
         ],
         "tool_choice": {"type": "tool", "name": "search"},

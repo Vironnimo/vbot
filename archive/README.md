@@ -15,6 +15,12 @@ for the `apply_patch` replacement and restoration boundary.
 and original shared integration/probe files with source commit and SHA-256 hashes.
 See [Archived Write Tool](../.vorch/domain-maps/tools/write.md) for replacement and restoration.
 
+`history.zip` preserves the retired `history` Tool, its focused tests, prior
+documentation, Provider probe scenario and original shared integration files
+(checkpoint grant, store reads, E2E spec) with source commit and SHA-256 hashes.
+See [Archived History Tool](../.vorch/domain-maps/tools/history.md) for the
+`vbot-cli` Session search replacement and restoration.
+
 `quality-gates.zip` preserves the retired `scripts/quality.py` and
 `scripts/quality-frontend.py` runners with their shared helper, documentation,
 tests and the integration files that invoked them, with source commit and SHA-256

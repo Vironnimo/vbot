@@ -63,12 +63,9 @@ COMPACTION_SUMMARY_NOTE_PREFIX = "[compaction-summary] "
 COMPACTION_SKILL_NOTE_PREFIX = "[compaction-skills] "
 COMPACTION_SUMMARY_END_MARKER = "--- END OF CONTEXT SUMMARY ---"
 TOOL_RESULT_COMPACTED_FIELD = "_vbot_compacted_tool_result"
-HISTORY_COMPACTION_GUIDANCE = (
+COMPACTION_CHECKPOINT_GUIDANCE = (
     "This is Compaction checkpoint {ordinal}. Some earlier original messages are no longer "
-    "directly present in active Context. If current work depends on earlier decisions, "
-    "requirements, exact wording, or completed work, use history to verify the relevant "
-    "originals before proceeding. Use checkpoint {ordinal} for the section immediately before "
-    "this checkpoint; omit checkpoint to access all earlier original history."
+    "directly present in active Context; the Session still stores them unchanged."
 )
 REPLY_SURFACE_NOTE_PREFIX = "[reply-surface] "
 WEBUI_REPLY_SURFACE_REMINDER = (

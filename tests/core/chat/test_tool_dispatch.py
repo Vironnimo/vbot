@@ -202,8 +202,8 @@ async def test_a_removed_tool_fails_before_denials_and_lookup_without_running(
 async def test_session_tool_grant_precedes_agent_and_run_dispatch_gates(tmp_path: Path) -> None:
     tools = ToolRegistry()
     tools.register(
-        "history",
-        "Session history",
+        "inbox",
+        "Session inbox",
         {"type": "object"},
         lambda _context, _arguments: tool_success({"ran": True}),
         session_scoped=True,
@@ -213,13 +213,13 @@ async def test_session_tool_grant_precedes_agent_and_run_dispatch_gates(tmp_path
     async def dispatch(**gates: Any) -> JsonObject:
         return (
             await harness.dispatch(
-                [call("history")], run=harness.new_run(), base_allowed_tools=("history",), **gates
+                [call("inbox")], run=harness.new_run(), base_allowed_tools=("inbox",), **gates
             )
         ).results[0]
 
-    assert (await dispatch())["error"]["code"] == "history_unavailable"
-    assert await dispatch(session_tool_grants=("history",)) == tool_success({"ran": True})
-    restricted = await dispatch(session_tool_grants=("history",), tool_restriction=("read",))
+    assert (await dispatch())["error"]["code"] == "inbox_unavailable"
+    assert await dispatch(session_tool_grants=("inbox",)) == tool_success({"ran": True})
+    restricted = await dispatch(session_tool_grants=("inbox",), tool_restriction=("read",))
     assert restricted["error"]["code"] == "tool_not_allowed"
 
 

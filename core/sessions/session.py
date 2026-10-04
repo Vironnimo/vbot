@@ -17,10 +17,6 @@ from core.sessions._types import (
     SessionAddress,
     SessionChatHistorySnapshot,
     SessionContinuationState,
-    SessionHistoryCheckpoint,
-    SessionHistoryRecord,
-    SessionHistorySectionStats,
-    SessionHistorySnapshot,
     SessionReadBatch,
     SessionReadCursor,
     SessionRunAdmission,
@@ -419,122 +415,6 @@ class ChatSession:
 
     async def status_snapshot_async(self) -> SessionStatusSnapshot:
         return await self._store.run_async(self.status_snapshot)
-
-    def resolve_history_snapshot(
-        self,
-        *,
-        snapshot_sequence: int | None = None,
-    ) -> SessionHistorySnapshot | None:
-        resolved = self._store.history_snapshot(
-            self.address,
-            snapshot_sequence=snapshot_sequence,
-        )
-        if resolved is None:
-            return None
-        generation_id, checkpoints = resolved
-        return SessionHistorySnapshot(
-            generation_id=generation_id,
-            checkpoints=tuple(
-                SessionHistoryCheckpoint(
-                    ordinal=ordinal,
-                    sequence=sequence,
-                    message_id=message_id,
-                    timestamp=timestamp,
-                    summary=summary,
-                )
-                for ordinal, (sequence, message_id, timestamp, summary) in enumerate(
-                    checkpoints, start=1
-                )
-            ),
-        )
-
-    def load_history_records(
-        self,
-        snapshot: SessionHistorySnapshot,
-        *,
-        lower_sequence: int,
-        upper_sequence: int,
-        roles: Sequence[str],
-        direction: str,
-        cursor_sequence: int | None,
-        limit: int,
-        excluded_tool_name: str,
-    ) -> tuple[SessionHistoryRecord, ...] | None:
-        records = self._store.history_records(
-            self.address,
-            expected_generation_id=snapshot.generation_id,
-            snapshot_sequence=snapshot.latest.sequence,
-            lower_sequence=lower_sequence,
-            upper_sequence=upper_sequence,
-            roles=roles,
-            direction=direction,
-            cursor_sequence=cursor_sequence,
-            limit=limit,
-            excluded_tool_name=excluded_tool_name,
-        )
-        if records is None:
-            return None
-        return tuple(
-            SessionHistoryRecord(sequence=sequence, message=message)
-            for sequence, message in records
-        )
-
-    def history_section_stats(
-        self,
-        snapshot: SessionHistorySnapshot,
-        *,
-        sections: Sequence[tuple[int, int]],
-        excluded_tool_name: str,
-    ) -> dict[int, SessionHistorySectionStats] | None:
-        stats = self._store.history_section_stats(
-            self.address,
-            expected_generation_id=snapshot.generation_id,
-            snapshot_sequence=snapshot.latest.sequence,
-            sections=sections,
-            excluded_tool_name=excluded_tool_name,
-        )
-        if stats is None:
-            return None
-        return {
-            sequence: SessionHistorySectionStats(
-                eligible_count=count,
-                start_timestamp=start_timestamp,
-                end_timestamp=end_timestamp,
-            )
-            for sequence, (count, start_timestamp, end_timestamp) in stats.items()
-        }
-
-    def load_history_around(
-        self,
-        snapshot: SessionHistorySnapshot,
-        *,
-        lower_sequence: int,
-        upper_sequence: int,
-        roles: Sequence[str],
-        message_id: str,
-        before: int,
-        after: int,
-        excluded_tool_name: str,
-    ) -> tuple[bool, tuple[SessionHistoryRecord, ...]] | None:
-        result = self._store.history_around(
-            self.address,
-            expected_generation_id=snapshot.generation_id,
-            snapshot_sequence=snapshot.latest.sequence,
-            lower_sequence=lower_sequence,
-            upper_sequence=upper_sequence,
-            roles=roles,
-            message_id=message_id,
-            before=before,
-            after=after,
-            excluded_tool_name=excluded_tool_name,
-        )
-        if result is None:
-            return None
-        exists, records = result
-        return exists, tuple(
-            SessionHistoryRecord(sequence=sequence, message=message)
-            for sequence, message in records
-        )
 
     def run_records(
         self, expected_generation_id: str | None = None

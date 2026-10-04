@@ -198,20 +198,20 @@ async def test_unknown_or_disallowed_tool_becomes_a_failed_result(
 async def test_session_scoped_dispatch_checks_grant_before_allowlist() -> None:
     registry = ToolRegistry()
     registry.register(
-        name="history",
-        description="Read this Session's earlier original records.",
+        name="inbox",
+        description="Read this Session's inbox.",
         parameters={"type": "object"},
         handler=lambda _context, _arguments: tool_success({}),
         session_scoped=True,
     )
 
-    unavailable = await _run_one(registry, "history", allowed_tools=[])
-    denied = await _run_one(registry, "history", allowed_tools=[], session_tool_grants=("history",))
+    unavailable = await _run_one(registry, "inbox", allowed_tools=[])
+    denied = await _run_one(registry, "inbox", allowed_tools=[], session_tool_grants=("inbox",))
     granted = await _run_one(
-        registry, "history", allowed_tools=["history"], session_tool_grants=("history",)
+        registry, "inbox", allowed_tools=["inbox"], session_tool_grants=("inbox",)
     )
 
-    assert unavailable["error"]["code"] == "history_unavailable"
+    assert unavailable["error"]["code"] == "inbox_unavailable"
     assert denied["error"]["code"] == "tool_not_allowed"
     assert granted["ok"] is True
 

@@ -35,7 +35,6 @@ from scripts.provider_probe.scenario_files import (
     _read_scenario,
 )
 from scripts.provider_probe.scenario_history import (
-    _history_scenario,
     _memory_scenario,
     _session_search_scenario,
     _status_scenario,
@@ -239,8 +238,6 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _ha_list_entities_scenario(str(args.ha_list_entities_case))
     if name == "ha_list_services":
         return _ha_list_services_scenario(str(args.ha_list_services_case))
-    if name == "history":
-        return _history_scenario(str(args.history_case))
     if name == "image_generation":
         return _image_generation_scenario(str(args.image_generation_case))
     if name == "mcp":

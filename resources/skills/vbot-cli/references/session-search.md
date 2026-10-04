@@ -8,6 +8,8 @@ If the available Tools cannot retrieve missing text, use only the evidence you c
 
 `vbot session list <agent-id> --all` lists an Agent's Sessions; use `<agent-id>@<project-id>` for a Project Agent. For direct reads, run `vbot home` on the server machine and use its exact `data_dir`. The database is `<data_dir>/sessions.db`. Do not infer a remote server's data directory from a local CLI invocation.
 
+For the current Session, read its scope inside the shell Tool command from the environment variables `VBOT_RUN_AGENT_ID`, `VBOT_RUN_SESSION_ID` and `VBOT_RUN_PROJECT_ID`. `VBOT_RUN_PROJECT_ID` is unset in an Identity Session, whose Project id is `""`.
+
 The following Python snippets use only the standard library. Run the setup and the relevant query in one script through the shell Tool. Replace the example path and identifiers with the actual target. Open read-only: never write the database or make a copy just to search it.
 
 ```python

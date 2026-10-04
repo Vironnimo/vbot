@@ -38,7 +38,7 @@ _STUB_TOOLS = (
     ("skill_manage", "Author a skill", "configurable", ("identity_agent",)),
     ("session_read", "Read a Session", "follows", ()),
     ("session_search", "Search Sessions", "configurable", ()),
-    ("history", "Read compacted history", "session_grant", ()),
+    ("session_board", "Post to the Session board", "session_grant", ()),
 )
 
 

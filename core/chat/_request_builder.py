@@ -10,10 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.agents import skill_subject_id
 from core.attachments.images import ImageConverter
-from core.chat._message_history import (
-    finalize_checkpoint_history_guidance,
-    history_available,
-)
+from core.chat._message_history import finalize_checkpoint_guidance
 from core.chat._request_history import (
     _prepare_request_messages,
     _request_content_resolution_inputs,
@@ -69,7 +66,6 @@ from core.sessions import (
 )
 from core.tools import (
     ANALYZE_IMAGE_TOOL_NAME,
-    HISTORY_TOOL_NAME,
     Tool,
     ToolAccess,
     ToolContract,
@@ -94,7 +90,7 @@ def _finalize_compaction_checkpoint(
     session_messages: list[ChatMessage],
 ) -> ChatMessage:
     ordinal = sum(message.role == "compaction_checkpoint" for message in session_messages) + 1
-    return finalize_checkpoint_history_guidance(checkpoint, ordinal=ordinal)
+    return finalize_checkpoint_guidance(checkpoint, ordinal=ordinal)
 
 
 def _resolved_model_reference(
@@ -128,16 +124,9 @@ def _resolve_request_image_limit(adapter: Any, model_id: str) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 
-def _live_session_tool_grants(
-    session_messages: Sequence[ChatMessage], session_capability: Any | None
-) -> tuple[str, ...]:
+def _live_session_tool_grants(session_capability: Any | None) -> tuple[str, ...]:
     """Return the session-scoped Tools the Session grants now."""
-    history_grants: tuple[str, ...] = (
-        (HISTORY_TOOL_NAME,) if history_available(list(session_messages)) else ()
-    )
-    return history_grants + (
-        tuple(session_capability.tool_names) if session_capability is not None else ()
-    )
+    return tuple(session_capability.tool_names) if session_capability is not None else ()
 
 
 def _fold_tool_epoch(
@@ -346,7 +335,7 @@ class RequestBuilder:
             session_capability = extension_registry.session_capability(
                 inputs.temporary_binding, self._dependencies.tools
             )
-        live_tool_grants = _live_session_tool_grants(session_messages, session_capability)
+        live_tool_grants = _live_session_tool_grants(session_capability)
         effective_input_modalities = (
             inputs.input_modalities
             if inputs.input_modalities is not None
@@ -596,9 +585,7 @@ class RequestBuilder:
         target = context.primary_target
         return await self._live_tool_catalog(
             context.agent,
-            session_tool_grants=_live_session_tool_grants(
-                context.session_snapshot.active_messages, capability
-            ),
+            session_tool_grants=_live_session_tool_grants(capability),
             input_modalities=target.input_modalities,
             wire_media_types=target.wire_media_types,
             known=known,

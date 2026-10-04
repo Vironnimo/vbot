@@ -94,7 +94,7 @@ Tools that hand data to each other form a family and are reviewed and changed to
 - Shell: `bash` -> `process` and the automatic completion notification; `terminal` for interactive programs.
 - Delegation: `subagent` plus its System Prompt block and completion delivery; `status`.
 - Web: `web_search` -> `web_fetch`.
-- Knowledge: `memory`, `skill`/`skill_manage` plus the Skills prompt section, `session_search`, `history`.
+- Knowledge: `memory`, `skill`/`skill_manage` plus the Skills prompt section, `session_search`.
 
 Cross-Tool guidance must never point to an unavailable Tool: gate it by availability, or phrase a preference conditionally with a valid fallback.
 

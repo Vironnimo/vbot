@@ -274,7 +274,6 @@ def _session_reads(address: SessionAddress, anchor: str) -> dict[str, Callable[[
         ),
         "latest_note": lambda r: _store_history.latest_note(r, address, content_prefix="x"),
         "skill_activations": lambda r: _store_history.current_skill_activation_messages(r, address),
-        "history_snapshot": lambda r: _store_history.history_snapshot(r, address),
         "run_result": lambda r: _store_history.run_result(r, address, run_id="run-two")(),
         "run_messages": lambda r: _store_history.run_messages(r, address, "run-two"),
         "run_records": lambda r: _store_history.run_records(r, address, None),

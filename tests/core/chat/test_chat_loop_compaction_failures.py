@@ -11,7 +11,7 @@ import pytest
 
 from core.chat import ChatMessage
 from core.chat._message_history import effective_compaction_messages
-from core.chat._run_state import RequestBuildInputs, _RequestState
+from core.chat._run_state import _RequestState
 from core.compaction import CompactionError, CompactionService
 from core.compaction.run_coordination import AUTO_COMPACTION_COMMIT_ATTEMPTS
 from core.prompts.pinned_context import PINNED_SKILL_CATALOG_SLOT, pinned_skill_catalog
@@ -23,7 +23,7 @@ from core.runs import (
     RunCancelledError,
     RunStatus,
 )
-from core.tools import HISTORY_TOOL_NAME, ToolRegistry, register_history_tool, tool_success
+from core.tools import ToolRegistry, tool_success
 from tests.core.chat.chat_loop_compaction_test_support import (
     WAIT_SECONDS,
     CompactionPromptStorage,
@@ -198,7 +198,6 @@ async def test_truncated_summary_leaves_history_skills_and_prompt_epoch_untouche
         models=StubModels({("openai", "gpt-5.2"): 1_000_000}),
     )
     runtime.skills = StubSkills([StubSkill("one", "One.", Path("a"))])
-    register_history_tool(runtime.tools, runtime.chat_sessions)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("OLD CONTEXT " * 8_000))
     session.activate_skill_context("one", {"activation_content": "SKILL SENTINEL"})
@@ -217,13 +216,9 @@ async def test_truncated_summary_leaves_history_skills_and_prompt_epoch_untouche
 
     probe = await auto_compact(loop, agent, session, usage=None)
 
-    request_after = await loop._requests.build_request_state(
-        agent, session, inputs=RequestBuildInputs()
-    )
     catalog_pin = runtime.chat_sessions.prompt_pin(session.address, PINNED_SKILL_CATALOG_SLOT)
     assert probe.rebuilt == probe.request
     assert session.load() == original_history
-    assert HISTORY_TOOL_NAME not in request_after.session_tool_grants
     assert session.activated_skill_contents() == original_skills
     assert catalog_pin is not None and catalog_pin["catalog_text"] == "catalog:1"
     assert runtime.refresh_skills_for_calls == []

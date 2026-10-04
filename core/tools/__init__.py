@@ -38,16 +38,6 @@ from core.tools.file_state import (
     FileReadState,
     StaleReason,
 )
-from core.tools.history import (
-    HISTORY_ACTIONS,
-    HISTORY_DEFAULT_ROLES,
-    HISTORY_RESULT_MAX_BYTES,
-    HISTORY_SUPPORTED_ROLES,
-    HISTORY_TOOL_DESCRIPTION,
-    HISTORY_TOOL_NAME,
-    HISTORY_TOOL_PARAMETERS,
-    register_history_tool,
-)
 from core.tools.image import (
     ANALYZE_IMAGE_TOOL_DESCRIPTION,
     ANALYZE_IMAGE_TOOL_NAME,
@@ -214,13 +204,6 @@ __all__ = [
     "FileReadState",
     "StaleReason",
     "ChangeTracker",
-    "HISTORY_ACTIONS",
-    "HISTORY_DEFAULT_ROLES",
-    "HISTORY_RESULT_MAX_BYTES",
-    "HISTORY_SUPPORTED_ROLES",
-    "HISTORY_TOOL_DESCRIPTION",
-    "HISTORY_TOOL_NAME",
-    "HISTORY_TOOL_PARAMETERS",
     "IMAGE_GENERATION_TOOL_DESCRIPTION",
     "IMAGE_GENERATION_TOOL_NAME",
     "IMAGE_GENERATION_TOOL_PARAMETERS",
@@ -313,7 +296,6 @@ __all__ = [
     "register_analyze_image_tool",
     "register_bash_tool",
     "register_cron_tool",
-    "register_history_tool",
     "register_generate_music_tool",
     "register_generate_video_tool",
     "register_memory_tool",
