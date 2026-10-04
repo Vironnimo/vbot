@@ -628,6 +628,7 @@ class ToolRegistry:
             if not tool.deferred
             and (not tool.session_scoped or tool.name in context.session_tool_grants)
             and (not tool.requires_opt_in or tool.name in (allowed_tools or ()))
+            and context.offers(tool.name)
         ]
         if not available:
             return f"Unknown Tool: {context.tool_name}. No Tools are available in this Run."
