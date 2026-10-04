@@ -15,7 +15,12 @@ from typing import Any
 from core.chat.wire_shaping import model_facing_request
 from core.providers.adapter import terminal_outcome_from_response
 from core.tools.tools import tool_failure
-from scripts.provider_probe.first_use_cases import BASE_FILES, assess, first_use_cases
+from scripts.provider_probe.first_use_cases import (
+    BASE_FILES,
+    assess,
+    first_use_cases,
+    preferred_tools,
+)
 from scripts.provider_probe.first_use_fixture import FirstUseFixture, FixtureBoundaryError
 
 
@@ -89,6 +94,8 @@ async def first_use_trial(
             failed_calls = 0
             expected_rejections = 0
             boundary_failure = False
+            shell_verifications = 0
+            preferred = preferred_tools(case)
             started = time.monotonic()
             async with asyncio.timeout(args.total_timeout):
                 for step in range(8):
@@ -124,7 +131,21 @@ async def first_use_trial(
                             result = await fixture.dispatch(call)
                         except FixtureBoundaryError as error:
                             result = tool_failure("fixture_boundary", str(error))
-                            boundary_failure = True
+                            # A shell check after the preferred Tool already delivered is
+                            # verification, not a bypass: the Model keeps its genuine
+                            # results and finishes, and the refused call still costs it
+                            # the first attempt.
+                            if (
+                                call.get("name") == "bash"
+                                and "bash" not in preferred
+                                and any(
+                                    c["name"] in preferred and c["result"]["ok"]
+                                    for c in record["calls"]
+                                )
+                            ):
+                                shell_verifications += 1
+                            else:
+                                boundary_failure = True
                         except Exception as error:
                             result = tool_failure(
                                 "dispatch_rejected", str(error) or type(error).__name__
@@ -171,6 +192,7 @@ async def first_use_trial(
                 failed_calls=failed_calls,
                 expected_rejections=expected_rejections,
                 boundary_failure=boundary_failure,
+                shell_verifications=shell_verifications,
                 outcome_success=outcome,
                 passed=outcome and not boundary_failure,
                 first_attempt_success=outcome
@@ -210,12 +232,15 @@ async def _probe_first_use(adapter: Any, args: argparse.Namespace) -> dict:
             "planned_trials": len(cases) * args.repetitions,
             "first_attempt_successes": sum(r["first_attempt_success"] for r in results),
             "outcome_successes": sum(r["passed"] for r in results),
+            "shell_verification_trials": sum(bool(r.get("shell_verifications")) for r in results),
             "passed": len(results) == len(cases) * args.repetitions
             and all(r["first_attempt_success"] for r in results),
             "fixture_limits": (
                 "Real search/read/edit/safe-shell dispatch and Sub-Agent lifecycle. Child Model "
                 "work is a deterministic receiver; unexpected shell commands are recorded "
-                "and stopped, never substituted. Final-answer semantics beyond fixture "
+                "and stopped, never substituted; a stopped shell check after the preferred "
+                "Tool succeeded lets the trial finish and costs only the first attempt. "
+                "Final-answer semantics beyond fixture "
                 "facts require review of retained responses. Tool choice and shell bypasses "
                 "are measurements separate from task outcome."
             ),
@@ -262,6 +287,7 @@ async def _probe_first_use(adapter: Any, args: argparse.Namespace) -> dict:
                     "failed_calls",
                     "exception",
                     "boundary_failure",
+                    "shell_verifications",
                 )
                 if k in r
             }

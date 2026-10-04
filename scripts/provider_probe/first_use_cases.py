@@ -436,6 +436,12 @@ def first_use_cases() -> list[dict[str, Any]]:
     ]
 
 
+def preferred_tools(case: dict) -> set[str]:
+    """Tool names whose successful calls carry the task's evidence or effect."""
+    expected_tool = case.get("expected_tool", case["tool"])
+    return {"apply_patch", "edit", "write"} if expected_tool == "file_edit" else {expected_tool}
+
+
 def assess(
     case: dict, fixture: Any, calls: list[dict], final: str, initial_received: int
 ) -> tuple[bool, dict]:
@@ -444,9 +450,7 @@ def assess(
     details: dict[str, Any] = {}
     if case["tool"] == "search_files":
         expected_tool = case.get("expected_tool", "search_files")
-        expected_names = (
-            {"apply_patch", "edit", "write"} if expected_tool == "file_edit" else {expected_tool}
-        )
+        expected_names = preferred_tools(case)
         selected = [c for c in successful if c["name"] in expected_names]
         if "rows" in case:
             actual = set()
