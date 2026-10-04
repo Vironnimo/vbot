@@ -37,7 +37,10 @@
   // member's name opens it elsewhere and only the box toggles. With
   // `onContextMenu(item, event)`, a right click on the row or the context
   // menu key on its controls asks the caller for the member's menu (the
-  // event's default is already prevented).
+  // event's default is already prevented); a member with `menuButton`
+  // (`{ariaLabel, tooltip}`) also gets a "⋯" button at the row end that asks for the
+  // same menu, shown while the row is hovered or focused (always on touch
+  // screens).
   import { isContextMenuKey } from '../ui/contextMenu.js';
   import { tooltip } from '$lib/tooltip.js';
   import Button from '../ui/Button.svelte';
@@ -139,6 +142,32 @@
   >
 {/snippet}
 
+{#snippet memberMenu(item)}
+  {#if onContextMenu && item.menuButton}
+    <Button
+      variant="tertiary"
+      icon
+      class="s-check-item__menu"
+      ariaLabel={item.menuButton.ariaLabel}
+      tooltip={item.menuButton.tooltip}
+      aria-haspopup="menu"
+      onClick={(event) => onContextMenu(item, event)}
+      ><svg
+        width="16"
+        height="16"
+        viewBox="0 0 16 16"
+        fill="currentColor"
+        aria-hidden="true"
+        ><circle cx="3.5" cy="8" r="1.25" /><circle
+          cx="8"
+          cy="8"
+          r="1.25"
+        /><circle cx="12.5" cy="8" r="1.25" /></svg
+      ></Button
+    >
+  {/if}
+{/snippet}
+
 {#snippet memberState(item, index)}
   {#if item.state?.text}
     <span
@@ -225,6 +254,7 @@
               {@render memberName(item)}
             </button>
             {@render memberState(item, index)}
+            {@render memberMenu(item)}
           {:else}
             <Checkbox
               class="s-check-row"
@@ -246,6 +276,7 @@
                 onClick={() => onAction(item)}>{item.action.label}</Button
               >
             {/if}
+            {@render memberMenu(item)}
           {/if}
         </div>
       {/each}

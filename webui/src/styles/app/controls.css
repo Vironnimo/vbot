@@ -229,6 +229,13 @@
   font-size: var(--fs-mono-body);
 }
 
+/* Code text areas in the Agents view (a Skill's SKILL.md editor) keep their
+   monospace face against the `.agents-view textarea` safety net. */
+.agents-view .text-area--code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-body);
+}
+
 .s-input--invalid {
   border-color: var(--red) !important;
 }

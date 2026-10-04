@@ -56,6 +56,8 @@
     onToast = noop,
     onNavigateToSettingsPanel = noop,
     onNavigateToAgentPrompt = noop,
+    // Opens a Skill's page in the Skills manager: (agentId, skillId).
+    onOpenSkill = noop,
     modelsRefreshToken = 0,
     projectsRefreshToken = 0,
     agentsRefreshToken = 0,
@@ -661,6 +663,8 @@
           {onToast}
           onNavigateToSettingsPanel={navigateFromAgent}
           {onNavigateToAgentPrompt}
+          onSkillsChanged={loadSkillCatalog}
+          {onOpenSkill}
           {memoriesRefreshToken}
           onModelDropdownOpenChange={trackModelDropdownOpen}
         />

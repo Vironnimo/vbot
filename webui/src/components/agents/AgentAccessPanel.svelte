@@ -3,8 +3,13 @@
   import ToolAccessEditor from '../tools/ToolAccessEditor.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
+  import ContextMenu from '../ui/ContextMenu.svelte';
+  import { contextMenuAnchor } from '../ui/contextMenu.js';
   import AgentSkillsPanel from '../skills/AgentSkillsPanel.svelte';
+  import SkillDialogs from '../skills/SkillDialogs.svelte';
+  import { createSkillActions } from '../skills/actions.svelte.js';
   import { skillAccessOf } from '../skills/skillAccess.js';
+  import { agentRowMenu } from '../skills/skillMenus.js';
   import AgentSelectionGroup from './AgentSelectionGroup.svelte';
   import {
     withSubagentAllowedAgents,
@@ -18,6 +23,11 @@
     agentTargetCatalogError,
     formValues = $bindable(),
     navigateToExtensions,
+    onToast = () => {},
+    // Reloads `skillCatalog` after a Skill write.
+    onSkillsChanged = async () => {},
+    // Opens a Skill's page in the Skills manager: (agentId, skillId).
+    onOpenSkill = () => {},
   } = $props();
 
   const WILDCARD_ACCESS = '*';
@@ -36,6 +46,48 @@
   let skillAgent = $derived(
     skillCatalog.agents.find((agent) => agent.id === formValues.id) ?? null,
   );
+
+  // A Skill row's menu offers the Skills manager's Agent-row actions in
+  // place: the on/off item edits the draft like the row's checkbox, Edit and
+  // Delete (the Agent's own Skills) and Turn off everywhere write at once,
+  // and Open skill shows the Skill's page in the Skills manager.
+  const skillActions = createSkillActions({
+    get agents() {
+      return skillCatalog.agents;
+    },
+    inspected: null,
+    get onToast() {
+      return onToast;
+    },
+    get loadInventory() {
+      return onSkillsChanged;
+    },
+  });
+  const skillMenuActions = {
+    open: (entry) => onOpenSkill(formValues.id, entry.id),
+    edit: (entry) => void skillActions.startEdit(entry),
+    copyName: (name) => void skillActions.copyName(name),
+    setDisabled: (entry, disabled) => skillActions.setDisabled(entry, disabled),
+    remove: (entry) => skillActions.requestDelete(entry),
+  };
+  let skillMenu = $state(null);
+
+  function openSkillMenu(item, event, toggle) {
+    skillMenu = {
+      ...contextMenuAnchor(event),
+      ...agentRowMenu(
+        item,
+        {
+          agentName: skillAgent?.name || formValues.name || formValues.id,
+          entry:
+            skillCatalog.skills.find((entry) => entry.id === item.packageId) ??
+            null,
+          toggle,
+        },
+        skillMenuActions,
+      ),
+    };
+  }
 
   // Packages this Agent could see that fail to load.
   let invalidSkills = $derived(
@@ -222,6 +274,7 @@
           formValues.allowed_skills = next.allowed;
           formValues.excluded_skills = next.excluded;
         }}
+        onContextMenu={skillAgent ? openSkillMenu : null}
         columns
       />
       {#if invalidSkills.length > 0}
@@ -315,6 +368,11 @@
       </div>
     </section>
   {/if}
+
+  <!-- Inside the part: as direct children of the page's scroll container the
+       dialog overlays would take the page's content measure and spacing. -->
+  <SkillDialogs actions={skillActions} />
+  <ContextMenu menu={skillMenu} onClose={() => (skillMenu = null)} />
 </div>
 
 {#snippet filterToolbar(value, onInput, label, placeholder)}

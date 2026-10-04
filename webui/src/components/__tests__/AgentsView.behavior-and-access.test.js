@@ -794,6 +794,149 @@ describe('AgentsView behavior and access', () => {
     });
   });
 
+  it("edits, deletes and opens the Agent's own Skills from their row menu", async () => {
+    const own = {
+      id: 'pkg-own',
+      name: 'notes',
+      description: '',
+      origin: 'agent',
+      owner_id: 'alpha',
+      project_id: null,
+      editable_scope: 'agent:alpha',
+      shared: false,
+      shared_with: [],
+      disabled: false,
+      status: 'available',
+      missing: [],
+      optional_missing: [],
+      warnings: [],
+    };
+    const global = {
+      ...own,
+      id: 'pkg-sample',
+      name: 'sample-skill',
+      origin: 'global',
+      owner_id: null,
+      editable_scope: 'global',
+    };
+    const grant = (entry, kind) => ({
+      name: entry.name,
+      package_id: entry.id,
+      own: kind === 'own',
+      grant: kind,
+      available: true,
+    });
+    const inventory = {
+      skills: [own, global],
+      agents: [
+        {
+          id: 'alpha',
+          name: 'Alpha',
+          root_project_id: null,
+          allowed_skills: ['*'],
+          excluded_skills: [],
+          mode: 'all',
+          skills: [grant(own, 'own'), grant(global, 'allowed')],
+        },
+      ],
+      projects: [],
+      stale_shared: [],
+      policy_diagnostics: [],
+    };
+    const agentsRpc = createAgentsRpcMock({ skills: inventory });
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'skill.inspect')
+        return { id: params.id, content: 'content-sentinel' };
+      if (method === 'skill.update' || method === 'skill.delete') return {};
+      return agentsRpc(method, params);
+    });
+    const onOpenSkill = vi.fn();
+    const dialogButton = (dialog, label) =>
+      [...dialog.querySelectorAll('button')].find(
+        (item) => item.textContent.trim() === label,
+      );
+    const calls = (method) =>
+      rpcMock.mock.calls.filter(([name]) => name === method).map(([, p]) => p);
+    const menuLabels = () =>
+      [...document.querySelectorAll('.context-menu [role="menuitem"]')].map(
+        (item) => item.querySelector('.context-menu__label').textContent,
+      );
+    const pick = async (label) => {
+      [...document.querySelectorAll('.context-menu [role="menuitem"]')]
+        .find(
+          (item) =>
+            item.querySelector('.context-menu__label').textContent === label,
+        )
+        .click();
+      await flushAsyncUpdates(8);
+    };
+
+    mountedComponent = mount(AgentsView, {
+      target: document.body,
+      props: { onOpenSkill },
+    });
+    flushSync();
+    await waitForText('notes');
+
+    // Only the Agent's own Skill has the "⋯" button; its menu adds Edit and
+    // Delete to the Agent row actions.
+    expect(
+      document.querySelector('button[aria-label="Actions for sample-skill"]'),
+    ).toBeNull();
+    getButtonByAriaLabel('Actions for notes').click();
+    flushSync();
+    expect(menuLabels()).toEqual([
+      'Turn off for Alpha',
+      'Open skill',
+      'Edit instructions',
+      'Copy name',
+      'Turn off everywhere',
+      'Delete…',
+    ]);
+
+    // Edit reads the Skill and saves it at once.
+    await pick('Edit instructions');
+    const editor = getDialog('Edit notes');
+    const textarea = editor.querySelector('textarea');
+    expect(textarea.value).toBe('content-sentinel');
+    textarea.value = 'content-changed';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    dialogButton(editor, 'Save').click();
+    await flushAsyncUpdates(8);
+    expect(calls('skill.update')).toEqual([
+      { scope: 'agent:alpha', name: 'notes', content: 'content-changed' },
+    ]);
+
+    // Turning it off edits the Agent draft like the row's checkbox.
+    getButtonByAriaLabel('Actions for notes').click();
+    flushSync();
+    await pick('Turn off for Alpha');
+    submitAgentForm();
+    await waitForCondition(() => getAgentUpdateCalls().length === 1, 100);
+    expect(getAgentUpdateCalls()[0][1]).toEqual({
+      id: 'alpha',
+      excluded_skills: ['notes'],
+    });
+
+    // Delete asks first.
+    getButtonByAriaLabel('Actions for notes').click();
+    flushSync();
+    await pick('Delete…');
+    expect(calls('skill.delete')).toEqual([]);
+    dialogButton(document.querySelector('[role="dialog"]'), 'Delete').click();
+    await flushAsyncUpdates(8);
+    expect(calls('skill.delete')).toEqual([
+      { scope: 'agent:alpha', name: 'notes' },
+    ]);
+
+    // Open skill leads to the Skill's page in the Skills manager.
+    getButtonByAriaLabel('Actions for notes').click();
+    flushSync();
+    await pick('Open skill');
+    expect(onOpenSkill).toHaveBeenCalledWith('alpha', 'pkg-own');
+  });
+
   it('renders a not-ready tool with a visible status, verbatim hint, and extensions link', async () => {
     const navigateMock = vi.fn();
     rpcMock.mockImplementation(

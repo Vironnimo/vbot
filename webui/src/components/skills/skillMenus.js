@@ -1,6 +1,7 @@
 // Context menus of the Skills manager's rows. Each builder returns the
 // `{ label, items }` part of a ContextMenu value (components/ui/ContextMenu.svelte);
-// SkillsView adds the anchor and supplies the actions:
+// SkillsView (and, for Agent rows, the Agent editor) adds the anchor and
+// supplies the actions:
 //
 //   open(entry), edit(entry), copyName(name), setDisabled(entry, disabled),
 //   remove(entry), restore(item), purge(item)
@@ -71,9 +72,14 @@ export function libraryRowMenu(entry, actions) {
 
 /**
  * A row of an Agent's skill selection: turn it on or off for the Agent (not
- * for a Project grant), Open skill, Copy name | Turn off/on everywhere.
+ * for a Project grant), Open skill, Edit instructions (the Agent's own
+ * Skills), Copy name | Turn off/on everywhere | Delete... (the Agent's own
+ * Skills). Shared and global Skills offer no Edit or Delete here: from an
+ * Agent's perspective they would change another owner's or every Agent's
+ * Skill.
  */
 export function agentRowMenu(item, { agentName, entry, toggle }, actions) {
+  const own = Boolean(item.own && entry?.editable_scope);
   const items = [
     {
       id: 'toggle',
@@ -88,9 +94,24 @@ export function agentRowMenu(item, { agentName, entry, toggle }, actions) {
       onSelect: () => toggle(!item.allowed),
     },
     ...packageItems(entry, actions, t('skills.menu.openSkill')),
-    copyItem(item.name, actions),
   ];
+  if (own)
+    items.push({
+      id: 'edit',
+      label: t('skills.editInstructions'),
+      group: 'package',
+      onSelect: () => actions.edit(entry),
+    });
+  items.push(copyItem(item.name, actions));
   if (entry) items.push(everywhereItem(entry, actions));
+  if (own)
+    items.push({
+      id: 'delete',
+      label: t('skills.menu.delete'),
+      danger: true,
+      group: 'delete',
+      onSelect: () => actions.remove(entry),
+    });
   return { label: t('skills.menu.label', { name: item.name }), items };
 }
 

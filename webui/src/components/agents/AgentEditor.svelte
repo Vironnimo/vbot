@@ -52,6 +52,10 @@
     onModelDropdownOpenChange = () => {},
     onNavigateToSettingsPanel = () => {},
     onNavigateToAgentPrompt = () => {},
+    // Reloads `skillCatalog` after a Skill write from the Skills section.
+    onSkillsChanged = async () => {},
+    // Opens a Skill's page in the Skills manager: (agentId, skillId).
+    onOpenSkill = () => {},
     memoriesRefreshToken = 0,
   } = $props();
 
@@ -566,6 +570,9 @@
       {agentTargetCatalogError}
       bind:formValues
       {navigateToExtensions}
+      {onToast}
+      {onSkillsChanged}
+      {onOpenSkill}
     />
     <AgentDetailsPanel
       {agent}

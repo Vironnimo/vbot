@@ -690,6 +690,10 @@
       ...(agentId ? [`agent:${agentId}`] : []),
     ]);
 
+  // Deep-link to one Skill's page in the Skills manager, seen from an Agent.
+  const navigateToAgentSkill = (agentId, skillId) =>
+    navigator.navigate('skills', [`agent:${agentId}`, skillId]);
+
   const handleDebugEnabledChange = (enabled) => {
     const isEnabled = enabled === true;
     debugEnabled = isEnabled;
@@ -965,6 +969,7 @@
           onToast={desktop.showToast}
           onNavigateToSettingsPanel={navigateToSettingsPanel}
           onNavigateToAgentPrompt={navigateToAgentPromptScope}
+          onOpenSkill={navigateToAgentSkill}
           agentsRefreshToken={selection.agentsRefreshToken}
           {memoriesRefreshToken}
           {modelsRefreshToken}

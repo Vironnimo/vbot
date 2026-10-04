@@ -39,13 +39,17 @@ function isFocusTarget(node) {
  * Anchor for a menu opened by `event`: `{ x, y, returnFocus }` in viewport
  * coordinates. A pointer event opens at the pointer; a keyboard event (or a
  * keyboard-generated `contextmenu` without coordinates) opens below the
- * event target's left edge. `returnFocus` is the element that held focus
+ * event target's left edge, and a menu button (`aria-haspopup="menu"`, such
+ * as a row's "more" button) always opens below its own left edge. `returnFocus` is the element that held focus
  * when the menu opened, falling back to the event's element, so closing the
  * menu returns the user where they were.
  */
 export function contextMenuAnchor(event) {
-  const target = event?.target instanceof Element ? event.target : null;
+  const eventTarget = event?.target instanceof Element ? event.target : null;
+  const menuButton = eventTarget?.closest('[aria-haspopup="menu"]') ?? null;
+  const target = menuButton ?? eventTarget;
   const pointer =
+    !menuButton &&
     event?.type !== 'keydown' &&
     Number.isFinite(event?.clientX) &&
     Number.isFinite(event?.clientY) &&
