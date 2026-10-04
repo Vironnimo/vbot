@@ -286,13 +286,12 @@ class ImageService:
             ),
         )
         try:
-            if input_images:
-                return await provider_client.generate(
-                    request_prompt,
-                    options=merged_options,
-                    input_images=input_images,
-                )
-            return await provider_client.generate(request_prompt, options=merged_options)
+            result = await provider_client.generate(
+                request_prompt,
+                options=merged_options,
+                input_images=input_images,
+            )
+            return _without_unchanged_revision(result, normalized_prompt, request_prompt)
         except ImageError:
             raise
         except ProviderContentRefusedError as exc:
@@ -814,6 +813,20 @@ def _input_filename(path: Path, media_type: str) -> str:
         "image/webp": ".webp",
     }.get(media_type, "")
     return f"{path.name}{extension}"
+
+
+def _without_unchanged_revision(
+    result: ImageGenerationResult, *prompts: str
+) -> ImageGenerationResult:
+    """Keep ``revised_prompt`` only when the provider actually changed the prompt."""
+
+    revised = result.revised_prompt
+    if revised is None:
+        return result
+    key = " ".join(revised.split()).casefold()
+    if any(key == " ".join(prompt.split()).casefold() for prompt in prompts):
+        return replace(result, revised_prompt=None)
+    return result
 
 
 def _write_image_artifact(
