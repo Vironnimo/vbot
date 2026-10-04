@@ -69,11 +69,18 @@ def _codex_websocket_response_head(websocket: Any) -> tuple[int, dict[str, str]]
         else _CODEX_WEBSOCKET_STATUS_CODE
     )
     raw_headers = getattr(response, "headers", None)
+    # websockets' Headers refuses dict() for a repeated name (chatgpt.com sends
+    # several Set-Cookie headers), so read every value and join repeats.
+    raw_items = getattr(raw_headers, "raw_items", None)
     try:
-        headers = dict(raw_headers) if raw_headers is not None else {}
+        items = list(raw_items() if callable(raw_items) else dict(raw_headers or {}).items())
     except TypeError, ValueError:
-        headers = {}
-    return status_code, {str(name): str(value) for name, value in headers.items()}
+        items = []
+    headers: dict[str, str] = {}
+    for name, value in items:
+        key = str(name)
+        headers[key] = f"{headers[key]}, {value}" if key in headers else str(value)
+    return status_code, headers
 
 
 def _codex_responses_error_code(event: Mapping[str, Any]) -> str | None:
