@@ -88,6 +88,16 @@ _POWERSHELL_UTF8_PREFIX = (
 )
 # Statements PowerShell accepts only at the start of a script.
 _POWERSHELL_LEADING_STATEMENTS = ("using ", "param(", "param ", "#requires", "[cmdletbinding")
+# pwsh -Command exits with 1 whenever the last statement failed, also when a native
+# program returned another code; this ending passes that program's code on. The
+# blank line ends a trailing line continuation; $? is read before anything changes it.
+_POWERSHELL_EXIT_STATUS = (
+    "\n\nif ($?) { exit 0 }; "
+    "$__vbotExitCode = Get-Variable LASTEXITCODE -ValueOnly -ErrorAction Ignore; "
+    "if ($__vbotExitCode) { exit $__vbotExitCode }; exit 1"
+)
+# A script made of named blocks accepts no statement after them.
+_POWERSHELL_NAMED_BLOCK = re.compile(r"^\s*(?:begin|process|end|dynamicparam)\s*\{", re.I | re.M)
 
 BACKGROUND_AT_DEPTH_FAILURE_CODE = "background_unavailable_in_subagent"
 
@@ -372,6 +382,8 @@ def _shell_argv(command: str, environment: dict[str, str]) -> list[str]:
             if first.startswith(_POWERSHELL_LEADING_STATEMENTS)
             else _POWERSHELL_UTF8_PREFIX + command
         )
+        if not _POWERSHELL_NAMED_BLOCK.search(command):
+            script += _POWERSHELL_EXIT_STATUS
         argv = [pwsh, "-NoProfile", "-Command", script]
         if len(subprocess.list2cmdline(argv)) > _WINDOWS_COMMAND_LINE_MAX_CHARS:
             raise _not_run(
@@ -450,7 +462,7 @@ class ShellTool:
             report = self._terminals.hand_off_command(terminal_id, deliver=True)
             if report.exited:
                 return self._exited(context, call, report)
-            return await self._running(context, call, terminal_id, reason="background")
+            return await self._running(context, call, terminal_id, reason="requested")
         return await self._wait(context, call, terminal_id)
 
     async def _start(
@@ -539,7 +551,7 @@ class ShellTool:
         error = waiting.exception() if waiting.done() and not waiting.cancelled() else None
         if error is not None:
             raise error
-        outcome = "background" if moved_by_user else waiting.result()
+        outcome = "moved" if moved_by_user else waiting.result()
         report = self._terminals.command_report(terminal_id)
         if report.exited:
             if report.still_running:
@@ -660,7 +672,7 @@ def _running_text(context: ToolContext, terminal_id: str, *, reason: str) -> str
     where = (
         f"in terminal {terminal_id}" if context.can_call(_TERMINAL_TOOL) else "in the background"
     )
-    moved = "The user moved the command to the background. " if reason == "background" else ""
+    moved = "The user moved the command to the background. " if reason == "moved" else ""
     return (
         f"{moved}The command continues {where}.{arrives} Do not poll or start it again; "
         "continue other work or end your turn."

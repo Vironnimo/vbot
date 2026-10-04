@@ -180,7 +180,7 @@ async def test_finished_command_reports_output_exit_code_failed_programs_and_env
         "failed_programs": ["python.exe exited with code 5"],
     }
     argv, cwd, env, _rows, _columns = shell.factory.calls[0]
-    assert argv[-1].endswith("build --all")
+    assert "build --all" in argv[-1]
     assert argv[1:3] == (
         ["-NoProfile", "-Command"] if sys.platform == "win32" else ["-c", argv[-1]]
     )
@@ -327,6 +327,7 @@ async def test_background_mode_returns_at_once_but_not_in_a_subagent(
 
     if depth == 0:
         assert data(result)["status"] == "running"
+        assert data(result)["next"].startswith("The command continues in terminal ")
         assert len(shell.manager.list_terminals()) == 1
     else:
         assert result["error"]["code"] == "background_unavailable_in_subagent"
@@ -479,9 +480,10 @@ async def test_real_shell_reports_exit_code_and_unicode_output(tmp_path: Path) -
     )
     registry = ToolRegistry()
     register_shell_tool(registry, manager)
-    command = (
-        "Write-Output 'Grüße'; exit 3" if sys.platform == "win32" else "printf 'Grüße\\n'; exit 3"
-    )
+    # The exit code of the last program, which pwsh -Command alone reduces to 1.
+    program = f"& '{sys.executable}'" if sys.platform == "win32" else f"'{sys.executable}'"
+    print_text = "Write-Output 'Grüße'" if sys.platform == "win32" else "printf 'Grüße\\n'"
+    command = f'{print_text}; {program} -c "import sys; sys.exit(3)"'
     context = ToolContext(
         agent_id="agent-a",
         session_id="session-a",
