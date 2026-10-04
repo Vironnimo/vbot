@@ -421,6 +421,8 @@ def interpret_search_call(arguments: Any, *, edit_tool: str | None = None) -> Se
 
 
 _GLOB_CHARACTERS = re.compile(r"[*?\[]")
+# A regex that ends in a file extension, such as \.py$ or \.[pP][yY]$, was meant for names.
+_NAME_REGEX = re.compile(r"\\\.(?:\w+|\[[^\]]+\]|\([\w|]+\))+\$$")
 
 
 @dataclass
@@ -928,6 +930,15 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
     elif budget.stopped:
         warnings.append("The Run was cancelled, so results are partial.")
     complete = found.complete and not budget.stopped
+    if (
+        not outcome.total
+        and query.mode in {"content", "files_with_matches", "count"}
+        and any(_NAME_REGEX.search(pattern) for pattern in outcome.patterns)
+    ):
+        query.notes.append(
+            "pattern searches file contents, not file names. To list files by name, omit "
+            'pattern and pass glob, such as "*.py".'
+        )
     if query.mode in {"files_without_match", *LIST_MODES}:
         files = len(found.entries)
     else:
@@ -1081,15 +1092,17 @@ args items, one flag or value per item. Other ripgrep flags work as well:
 
 _STRING_LIST: JsonObject = {"type": "array", "items": {"type": "string"}}
 SEARCH_FILES_TOOL_DESCRIPTION = (
-    "Search file contents with a regular expression, or list files and directories. Use this "
-    "instead of grep, rg, find, or ls in the shell."
+    "Search file contents with a regular expression, or find files and directories by name. "
+    "Use this instead of grep, rg, find, or ls in the shell."
 )
 SEARCH_FILES_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
         "pattern": {
             "type": "string",
-            "description": "Regular expression (ripgrep syntax). Omit to list files.",
+            "description": (
+                "Regular expression (ripgrep syntax) for file contents. Omit to list files."
+            ),
         },
         "path": {
             **_STRING_LIST,
@@ -1097,7 +1110,7 @@ SEARCH_FILES_TOOL_PARAMETERS: JsonObject = {
         },
         "glob": {
             **_STRING_LIST,
-            "description": "Name filters such as *.py; a leading ! excludes.",
+            "description": "Case-insensitive name filters such as *.py; a leading ! excludes.",
         },
         "output": {
             "type": "string",
@@ -1115,7 +1128,8 @@ SEARCH_FILES_TOOL_PARAMETERS: JsonObject = {
             **_STRING_LIST,
             "description": (
                 "More ripgrep arguments, one per item, such as -i, -w, -F, -t py, -u (include "
-                'ignored files), --dirs (list directories). ["--help"] lists all.'
+                "ignored files), --dirs (list directories, empty ones included). "
+                '["--help"] lists all.'
             ),
         },
         "limit": {

@@ -96,6 +96,10 @@ Modes:
   single, non-literal pattern. Glob-shaped means: no whitespace or `()|^$+\`,
   plus a leading `*`, `**` or `/*.`. A pattern that matches every name (`*`,
   `**/*`, ...) lists all files.
+- A regex pattern that ends in a file extension (`\.py$`, `\.[pP][yY]$`,
+  `\.(py|ts)$`) stays a content search, because lines can end that way. When it
+  finds nothing, the `note` says that `pattern` searches contents and names
+  `glob` for listing by name.
 
 The owner normalizer repairs common encodings and wrappers. It also accepts field
 names from other search Tools and command-line habits when their meaning is exact
@@ -334,8 +338,8 @@ remain readable.
 
 ## Agent-facing text
 
-The definition is cut to what the first call needs (285 estimated tokens,
-down from 558). Removed sentences moved to the moment the Agent needs them:
+The definition is cut to what the first call needs (about 300 estimated
+tokens, down from 558). Removed sentences moved to the moment the Agent needs them:
 results state their format, page continuation (`next_offset`) and the paths
 ignore rules skipped (`skipped`); tolerance absorbs unbalanced regex
 characters, plain rg argument lists, single strings for list fields and
@@ -343,14 +347,14 @@ blank placeholders, so no sentence has to warn about them.
 
 | Text | Reason |
 |---|---|
-| `Search file contents with a regular expression, or list files and directories.` | Names every job of the single Tool so Agents pick it for name and content discovery (F1). Without "directories", Agents asked for directories went straight to the shell (first-use probe, 2026-10). |
+| `Search file contents with a regular expression, or find files and directories by name.` | Names every job of the single Tool so Agents pick it for name and content discovery (F1). "find ... by name" matches how Agents phrase the task: with "list files and directories", 6 of 12 directory-name trials went to the shell first, with "find ... by name" 2 of 12 (first-use probe, 2026-10). |
 | `Use this instead of grep, rg, find, or ls in the shell.` | Agents otherwise fall back to the shell for search (F1). Names only Unix commands Models know from training; shell-specific cmdlet names stay out. |
-| pattern: `Regular expression (ripgrep syntax). Omit to list files.` | Pins the regex flavor and the listing default (F2, F3). |
+| pattern: `Regular expression (ripgrep syntax) for file contents. Omit to list files.` | Pins the regex flavor and the listing default (F2, F3). "for file contents" keeps name regexes such as `\.py$` out of `pattern`; a content search that finds nothing for such a regex points to `glob` (first-use probe, 2026-10). |
 | path: `Files or directories to search. Omit for the working directory.` | Weak Models filled `path` with guesses (F2); a relative miss names the working directory in the error. |
-| glob: `Name filters such as *.py; a leading ! excludes.` | Exclusion is the one glob rule Agents need before the call; a `!` value passed as `path` is applied as an exclusion with a note (F3). |
+| glob: `Case-insensitive name filters such as *.py; a leading ! excludes.` | Without "Case-insensitive", Agents asked to ignore extension case wrote `*.[pP][yY]`, `--iglob`, several globs or a shell command (first-use probe, 2026-10). Exclusion is the one other glob rule Agents need before the call; a `!` value passed as `path` is applied as an exclusion with a note (F3). |
 | output: `files lists matching files; count counts matching lines per file, every match with "--count-matches" in args. Omit for matching lines.` | Names the shapes in Agent terms (F2). Agents asked for occurrences per file did not find `--count-matches` (first-use probe, 2026-10). Agents sent `output: "content"` in 1769 calls (Sessions, 2026-09). |
 | context: `Lines around each match. Omit for none.` | Agents set context in 2427 of 4774 calls, which multiplies result size (F6, Sessions, 2026-09). |
-| args: `More ripgrep arguments, one per item, such as -i, -w, -F, -t py, -u (include ignored files), --dirs (list directories).` | One item per argument prevents command-line strings; the examples cover case, word, literal, type, ignored files and directory listing, which Agents otherwise did not find (F2, first-use probe, 2026-10). |
+| args: `More ripgrep arguments, one per item, such as -i, -w, -F, -t py, -u (include ignored files), --dirs (list directories, empty ones included).` | One item per argument prevents command-line strings; the examples cover case, word, literal, type, ignored files and directory listing, which Agents otherwise did not find (F2, first-use probe, 2026-10). "empty ones included" corrects the trained belief that ripgrep cannot list empty directories. |
 | args: `["--help"] lists all.` | Route to the full flag reference instead of guessing (F5). |
 | limit: `Results per page.` plus schema default 100 | Plannable number (F6). |
 | offset: `Pass next_offset to continue.` | Continuation uses the returned value, never a computed one (F4); Agents sent `offset: 0` in 213 of 217 calls that set it (Sessions, 2026-09). |

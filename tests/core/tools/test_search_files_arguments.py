@@ -121,6 +121,20 @@ async def test_a_file_name_glob_in_pattern_lists_matching_files(project: Path, a
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pattern", "hint"),
+    [(r".*\.[pP][yY]$", True), (r"\.(py|ts)$", True), (r"load\.ts$", True), (r"x\.y", False)],
+)
+async def test_a_file_name_regex_without_content_matches_points_to_glob(
+    project: Path, pattern: str, hint: bool
+):
+    result = await dispatch(project, {"pattern": pattern, "output": "files"})
+    assert result["data"]["content"] == ""
+    note = 'To list files by name, omit pattern and pass glob, such as "*.py".'
+    assert (note in result["data"].get("note", "")) is hint
+
+
+@pytest.mark.asyncio
 async def test_a_glob_shaped_literal_search_stays_a_content_search(project: Path) -> None:
     (project / "notes.txt").write_text("match *.py files\n")
     result = await dispatch(project, {"pattern": "*.py", "args": ["-F"]})
