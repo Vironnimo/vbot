@@ -67,19 +67,6 @@ _IO_RETRY_BASE_DELAY_SECONDS = 0.05
 _SETTINGS_LOCKS_GUARD = threading.Lock()
 _SETTINGS_LOCKS: dict[str, threading.RLock] = {}
 
-# The global Live voice hotkey is stored as the browser ``KeyboardEvent.code``
-# plus modifier flags, so the WebUI can capture and show it without a platform
-# key-name table. Which combinations are registrable is owned by
-# ``desktop.hotkey``; this store only guarantees the field shapes.
-DEFAULT_LIVE_HOTKEY_SETTINGS: dict[str, Any] = {
-    "enabled": False,
-    "ctrl": True,
-    "alt": True,
-    "shift": False,
-    "win": False,
-    "key": "Space",
-}
-
 
 def resolve_config_dir(
     os_name: str,
@@ -265,41 +252,6 @@ def write_window_size(width: int, height: int, path: Path | None = None) -> None
     if not _valid_window_dimension(width) or not _valid_window_dimension(height):
         raise ValueError("window width and height must be positive integers")
     _write_section(WINDOW_KEY, {"width": width, "height": height}, path)
-
-
-def read_live_hotkey_settings(path: Path | None = None) -> dict[str, Any]:
-    """Return the stored Live voice hotkey preference merged with defaults.
-
-    Each malformed field falls back to its default independently, so one bad
-    hand edit never discards the rest of the preference.
-    """
-
-    full = read_settings(path)
-    live_voice = full.get(LIVE_VOICE_KEY)
-    hotkey = live_voice.get("hotkey") if isinstance(live_voice, dict) else None
-    if not isinstance(hotkey, dict):
-        hotkey = {}
-    normalized = dict(DEFAULT_LIVE_HOTKEY_SETTINGS)
-    for flag in ("enabled", "ctrl", "alt", "shift", "win"):
-        if isinstance(hotkey.get(flag), bool):
-            normalized[flag] = hotkey[flag]
-    key = hotkey.get("key")
-    if isinstance(key, str) and key.strip():
-        normalized["key"] = key.strip()
-    return normalized
-
-
-def write_live_hotkey_settings(hotkey: dict[str, Any], path: Path | None = None) -> None:
-    """Persist the Live voice hotkey preference, preserving other settings keys."""
-
-    resolved_path = _resolve_settings_path(path)
-    with _settings_lock(resolved_path):
-        full = _read_settings_unlocked(resolved_path)
-        live_voice = full.get(LIVE_VOICE_KEY)
-        section = dict(live_voice) if isinstance(live_voice, dict) else {}
-        section["hotkey"] = dict(hotkey)
-        full[LIVE_VOICE_KEY] = section
-        _write_settings_unlocked(full, resolved_path)
 
 
 def read_section(key: str, path: Path | None = None) -> dict[str, Any]:

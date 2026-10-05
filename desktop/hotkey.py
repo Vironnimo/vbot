@@ -1,17 +1,22 @@
-"""Global Live voice hotkey for the Desktop shell (Windows).
+"""Global hotkeys for the Desktop shell (Windows).
 
-The hotkey is stored as a browser ``KeyboardEvent.code`` plus modifier flags
-(see :mod:`desktop.settings`), so the WebUI can capture and show it without a
-platform key table. This module owns everything after that:
+A hotkey is stored as a browser ``KeyboardEvent.code`` plus modifier flags under
+the ``hotkey`` key of its feature's settings section, so the WebUI can capture
+and show it without a platform key table. This module owns everything after
+that:
 
 - the pure mapping and validation of a stored combination
   (:func:`parse_hotkey`),
+- the stored preference of one hotkey (:class:`HotkeyPreference`,
+  :func:`read_hotkey_setting`),
 - one registration thread per active combination (:class:`_HotkeyThread`):
   Windows delivers ``WM_HOTKEY`` only to the thread that called
-  ``RegisterHotKey``, so that thread runs its own message loop and also
-  unregisters,
-- :class:`LiveHotkeyController`, the small surface the launcher and the bridge
-  use: persisted preference, current registration, and its error state.
+  ``RegisterHotKey``, so that thread runs its own message loop, registers the
+  optional Escape key while its owner asks for it, watches a held combination
+  until its release, and unregisters,
+- :class:`HotkeyController`, the small surface the launcher, the bridge and
+  Desktop dictation use: persisted preference, current registration, and its
+  error state.
 
 The Win32 calls sit behind :class:`HotkeyApi` so the thread logic is testable
 without registering a real system-wide hotkey. Other platforms report the
@@ -28,8 +33,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from desktop import settings as desktop_settings
 from desktop._windows import win32_last_error, win32_library
-from desktop.settings import read_live_hotkey_settings, write_live_hotkey_settings
 
 logger = logging.getLogger("vbot.desktop.hotkey")
 
@@ -42,16 +47,33 @@ MOD_CONTROL = 0x0002
 MOD_SHIFT = 0x0004
 MOD_WIN = 0x0008
 MOD_NOREPEAT = 0x4000
+WM_NULL = 0x0000
+WM_QUIT = 0x0012
 WM_HOTKEY = 0x0312
+WM_APP = 0x8000
 ERROR_HOTKEY_ALREADY_REGISTERED = 1409
 # Reported when RegisterHotKey fails without setting a last-error value.
 HOTKEY_FAILED_WIN32_ERROR = -1
 
-_HOTKEY_ID = 1
+VK_SHIFT = 0x10
+VK_CONTROL = 0x11
+VK_MENU = 0x12
+VK_ESCAPE = 0x1B
+VK_LWIN = 0x5B
+VK_RWIN = 0x5C
+
+HOTKEY_ID = 1
+ESCAPE_HOTKEY_ID = 2
+# Posted to a registration thread: wParam 1 registers Escape, 0 releases it.
+WM_ARM_ESCAPE = WM_APP + 1
+# How often a held combination is checked for its release.
+HOLD_POLL_SECONDS = 0.02
+
 _REGISTER_TIMEOUT_SECONDS = 2.0
 _STOP_TIMEOUT_SECONDS = 2.0
 _MODIFIER_FLAGS = ("ctrl", "alt", "shift", "win")
 _SETTING_FLAGS = ("enabled", *_MODIFIER_FLAGS)
+_SETTING_KEY = "hotkey"
 
 # Physical keys (set-1 scan codes) for the letter and digit codes. Windows maps
 # them through the active keyboard layout at registration, so the hotkey stays
@@ -90,6 +112,74 @@ _VK_SPACE = 0x20
 _VK_F1 = 0x70
 _FUNCTION_KEYS = {f"F{number}": number for number in range(1, 25)}
 _LABELS = (("ctrl", "Ctrl"), ("alt", "Alt"), ("shift", "Shift"), ("win", "Win"))
+# Each held modifier counts as down when any of its virtual keys is down.
+_MODIFIER_KEYS = (
+    ("ctrl", (VK_CONTROL,)),
+    ("alt", (VK_MENU,)),
+    ("shift", (VK_SHIFT,)),
+    ("win", (VK_LWIN, VK_RWIN)),
+)
+
+
+@dataclass(frozen=True)
+class HotkeyPreference:
+    """Where one global hotkey is stored and how its logs and thread are named.
+
+    The hotkey lives at ``settings[section]["hotkey"]``; the rest of the section
+    belongs to the feature that owns it.
+    """
+
+    section: str
+    defaults: Mapping[str, Any]
+    label: str
+    thread_name: str
+
+
+LIVE_VOICE_HOTKEY = HotkeyPreference(
+    section=desktop_settings.LIVE_VOICE_KEY,
+    defaults={
+        "enabled": False,
+        "ctrl": True,
+        "alt": True,
+        "shift": False,
+        "win": False,
+        "key": "Space",
+    },
+    label="Live voice hotkey",
+    thread_name="vbot-live-hotkey",
+)
+
+
+def read_hotkey_setting(preference: HotkeyPreference, path: Path | None) -> dict[str, Any]:
+    """Return the stored hotkey merged with its defaults.
+
+    Each malformed field falls back to its default independently, so one bad
+    hand edit never discards the rest of the preference.
+    """
+
+    stored = desktop_settings.read_section(preference.section, path).get(_SETTING_KEY)
+    if not isinstance(stored, dict):
+        stored = {}
+    normalized = dict(preference.defaults)
+    for flag in _SETTING_FLAGS:
+        if isinstance(stored.get(flag), bool):
+            normalized[flag] = stored[flag]
+    key = stored.get("key")
+    if isinstance(key, str) and key.strip():
+        normalized["key"] = key.strip()
+    return normalized
+
+
+def _write_hotkey_setting(
+    preference: HotkeyPreference, setting: Mapping[str, Any], path: Path | None
+) -> None:
+    """Persist the hotkey, preserving the rest of its section and the file."""
+
+    def mutate(section: dict[str, Any]) -> dict[str, Any]:
+        section[_SETTING_KEY] = dict(setting)
+        return section
+
+    desktop_settings.update_section(preference.section, mutate, path)
 
 
 @dataclass(frozen=True)
@@ -118,6 +208,16 @@ class HotkeySpec:
         if self.win:
             mask |= MOD_WIN
         return mask
+
+    def held_keys(self, virtual_key: int) -> tuple[tuple[int, ...], ...]:
+        """Return the key groups that stay down while the combination is held.
+
+        ``virtual_key`` is the main key as registered (after the layout
+        mapping). A group counts as down when any of its keys is down.
+        """
+
+        groups = [keys for flag, keys in _MODIFIER_KEYS if getattr(self, flag)]
+        return ((virtual_key,), *groups)
 
 
 def _key_codes(key: str) -> tuple[int, int | None] | None:
@@ -189,11 +289,18 @@ class HotkeyApi(Protocol):
     def unregister(self, hotkey_id: int) -> None:
         """Remove the calling thread's registration."""
 
-    def next_message(self) -> tuple[int, int] | None:
-        """Block for the next ``(message, wParam)``; ``None`` once the loop must end."""
+    def next_message(self, timeout: float | None) -> tuple[int, int] | None:
+        """Wait for the next ``(message, wParam)``; ``None`` once the loop must end.
 
-    def wake(self, thread_id: int) -> bool:
-        """Ask the loop of ``thread_id`` to end (posts ``WM_QUIT``)."""
+        With a ``timeout`` (seconds) it returns ``(WM_NULL, 0)`` when nothing
+        arrived in time.
+        """
+
+    def key_down(self, virtual_key: int) -> bool:
+        """Whether the key is physically down right now."""
+
+    def post(self, thread_id: int, message: int, wparam: int) -> bool:
+        """Post a message to the loop of ``thread_id`` (``WM_QUIT`` ends it)."""
 
 
 class _Win32HotkeyApi:
@@ -223,6 +330,15 @@ class _Win32HotkeyApi:
             wintypes.UINT,
         ]
         self._get_message.restype = wintypes.BOOL
+        self._wait_for_messages = user32.MsgWaitForMultipleObjects
+        self._wait_for_messages.argtypes = [
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.BOOL,
+            wintypes.DWORD,
+            wintypes.DWORD,
+        ]
+        self._wait_for_messages.restype = wintypes.DWORD
         self._register_hotkey = user32.RegisterHotKey
         self._register_hotkey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
         self._register_hotkey.restype = wintypes.BOOL
@@ -240,6 +356,9 @@ class _Win32HotkeyApi:
         self._map_virtual_key = user32.MapVirtualKeyW
         self._map_virtual_key.argtypes = [wintypes.UINT, wintypes.UINT]
         self._map_virtual_key.restype = wintypes.UINT
+        self._get_async_key_state = user32.GetAsyncKeyState
+        self._get_async_key_state.argtypes = [ctypes.c_int]
+        self._get_async_key_state.restype = ctypes.c_short
 
     def prepare_thread(self) -> None:
         pm_noremove = 0x0000
@@ -259,23 +378,58 @@ class _Win32HotkeyApi:
 
     def unregister(self, hotkey_id: int) -> None:
         if not self._unregister_hotkey(None, hotkey_id):
-            logger.debug("Live voice hotkey was not registered at unregister time")
+            logger.debug("Hotkey %s was not registered at unregister time", hotkey_id)
 
-    def next_message(self) -> tuple[int, int] | None:
-        result = self._get_message(self._ctypes.byref(self._message), None, 0, 0)
-        if result == 0:
+    def next_message(self, timeout: float | None) -> tuple[int, int] | None:
+        if timeout is None:
+            result = self._get_message(self._ctypes.byref(self._message), None, 0, 0)
+            if result == 0:
+                return None
+            if result == -1:
+                logger.warning("Hotkey message loop failed (error=%s)", win32_last_error())
+                return None
+            return int(self._message.message), int(self._message.wParam)
+        # A message already queued does not wake MsgWaitForMultipleObjects, so
+        # look before waiting and again after.
+        message = self._take_message()
+        if message is None:
+            qs_allinput = 0x04FF
+            self._wait_for_messages(0, None, False, max(0, int(timeout * 1000)), qs_allinput)
+            message = self._take_message()
+        if message is None:
+            return WM_NULL, 0
+        if message[0] == WM_QUIT:
             return None
-        if result == -1:
-            logger.warning(
-                "Live voice hotkey message loop failed (error=%s)",
-                win32_last_error(),
-            )
+        return message
+
+    def _take_message(self) -> tuple[int, int] | None:
+        pm_remove = 0x0001
+        if not self._peek_message(self._ctypes.byref(self._message), None, 0, 0, pm_remove):
             return None
         return int(self._message.message), int(self._message.wParam)
 
-    def wake(self, thread_id: int) -> bool:
-        wm_quit = 0x0012
-        return bool(self._post_thread_message(thread_id, wm_quit, 0, 0))
+    def key_down(self, virtual_key: int) -> bool:
+        return bool(self._get_async_key_state(virtual_key) & 0x8000)
+
+    def post(self, thread_id: int, message: int, wparam: int) -> bool:
+        return bool(self._post_thread_message(thread_id, message, wparam, 0))
+
+
+@dataclass(frozen=True)
+class HotkeyHandlers:
+    """What a registration calls on its own thread; each must return quickly.
+
+    ``on_release`` makes the thread watch every press until a key of the
+    combination is let go (also when the owner ignores releases). While it
+    watches, an Escape press reaches ``on_escape`` as well, because the
+    registered Escape key does not fire while modifiers are held.
+    ``on_escape`` is called for Escape only while the owner armed it
+    (:meth:`HotkeyController.arm_escape`).
+    """
+
+    on_press: Callable[[], None]
+    on_release: Callable[[], None] | None = None
+    on_escape: Callable[[], None] | None = None
 
 
 class _HotkeyThread:
@@ -284,21 +438,27 @@ class _HotkeyThread:
     def __init__(
         self,
         spec: HotkeySpec,
-        on_press: Callable[[], None],
+        handlers: HotkeyHandlers,
         api: HotkeyApi,
+        preference: HotkeyPreference,
+        *,
+        escape_armed: bool,
     ) -> None:
         self._spec = spec
-        self._on_press = on_press
+        self._handlers = handlers
         self._api = api
+        self._label = preference.label
         self._lock = threading.Lock()
         self._ready = threading.Event()
         self._cancelled = False
         self._registered = False
         self._thread_id: int | None = None
         self._error_code: str | None = None
+        self._escape_wanted = escape_armed
+        self._escape_registered = False
         self._thread = threading.Thread(
             target=self._run,
-            name="vbot-live-hotkey",
+            name=preference.thread_name,
             daemon=True,
         )
 
@@ -307,7 +467,7 @@ class _HotkeyThread:
 
         self._thread.start()
         if not self._ready.wait(timeout):
-            logger.warning("Live voice hotkey registration did not finish in time")
+            logger.warning("%s registration did not finish in time", self._label)
             self.stop()
             return HOTKEY_ERROR_FAILED
         return self._error_code
@@ -318,10 +478,18 @@ class _HotkeyThread:
         with self._lock:
             self._cancelled = True
             thread_id = self._thread_id if self._registered else None
-        if thread_id is not None and not self._api.wake(thread_id):
-            logger.warning("Live voice hotkey thread could not be woken for shutdown")
+        if thread_id is not None and not self._api.post(thread_id, WM_QUIT, 0):
+            logger.warning("%s thread could not be woken for shutdown", self._label)
         if self._thread.is_alive() and self._thread is not threading.current_thread():
             self._thread.join(timeout=_STOP_TIMEOUT_SECONDS)
+
+    def arm_escape(self, armed: bool) -> None:
+        """Ask the loop to register (or release) Escape on its own thread."""
+
+        with self._lock:
+            thread_id = self._thread_id if self._registered and not self._cancelled else None
+        if thread_id is not None and not self._api.post(thread_id, WM_ARM_ESCAPE, int(armed)):
+            logger.warning("%s thread could not be asked to arm Escape", self._label)
 
     def _run(self) -> None:
         try:
@@ -330,9 +498,9 @@ class _HotkeyThread:
             virtual_key = self._spec.virtual_key
             if self._spec.scan_code is not None:
                 virtual_key = self._api.layout_virtual_key(self._spec.scan_code) or virtual_key
-            error = self._api.register(_HOTKEY_ID, self._spec.modifiers, virtual_key)
+            error = self._api.register(HOTKEY_ID, self._spec.modifiers, virtual_key)
         except Exception:
-            logger.warning("Live voice hotkey registration failed", exc_info=True)
+            logger.warning("%s registration failed", self._label, exc_info=True)
             self._error_code = HOTKEY_ERROR_FAILED
             self._ready.set()
             return
@@ -343,7 +511,8 @@ class _HotkeyThread:
                 else HOTKEY_ERROR_FAILED
             )
             logger.warning(
-                "Live voice hotkey %s could not be registered (error=%s)",
+                "%s %s could not be registered (error=%s)",
+                self._label,
                 describe_hotkey(self._spec),
                 error,
             )
@@ -354,28 +523,68 @@ class _HotkeyThread:
             self._registered = not cancelled
         if cancelled:
             # The launcher gave up waiting; never keep a system-wide key nobody owns.
-            self._api.unregister(_HOTKEY_ID)
+            self._api.unregister(HOTKEY_ID)
             return
         self._ready.set()
-        logger.info("Live voice hotkey registered: %s", describe_hotkey(self._spec))
+        logger.info("%s registered: %s", self._label, describe_hotkey(self._spec))
         try:
-            self._loop()
+            self._set_escape(self._escape_wanted)
+            self._loop(self._spec.held_keys(virtual_key))
         finally:
-            self._api.unregister(_HOTKEY_ID)
-            logger.info("Live voice hotkey unregistered: %s", describe_hotkey(self._spec))
+            self._set_escape(False)
+            self._api.unregister(HOTKEY_ID)
+            logger.info("%s unregistered: %s", self._label, describe_hotkey(self._spec))
 
-    def _loop(self) -> None:
+    def _loop(self, held_keys: tuple[tuple[int, ...], ...]) -> None:
+        holding = False
+        escape_down = False
         while True:
-            message = self._api.next_message()
+            message = self._api.next_message(HOLD_POLL_SECONDS if holding else None)
             if message is None:
                 return
-            message_id, hotkey_id = message
-            if message_id != WM_HOTKEY or hotkey_id != _HOTKEY_ID:
+            message_id, wparam = message
+            if message_id == WM_HOTKEY and wparam == HOTKEY_ID:
+                self._call(self._handlers.on_press)
+                if self._handlers.on_release is not None:
+                    holding, escape_down = True, False
+            elif message_id == WM_HOTKEY and wparam == ESCAPE_HOTKEY_ID:
+                if self._escape_registered:
+                    self._call(self._handlers.on_escape)
+            elif message_id == WM_ARM_ESCAPE:
+                self._set_escape(bool(wparam))
+            if not holding:
                 continue
-            try:
-                self._on_press()
-            except Exception:
-                logger.warning("Live voice hotkey handler failed", exc_info=True)
+            # Escape with the combination's modifiers held is a different
+            # combination than the registered bare Escape, so watch it here.
+            escape_now = self._api.key_down(VK_ESCAPE)
+            if escape_now and not escape_down:
+                self._call(self._handlers.on_escape)
+            escape_down = escape_now
+            if not all(any(self._api.key_down(key) for key in group) for group in held_keys):
+                holding = False
+                self._call(self._handlers.on_release)
+
+    def _set_escape(self, armed: bool) -> None:
+        self._escape_wanted = armed
+        if armed == self._escape_registered or self._handlers.on_escape is None:
+            return
+        if not armed:
+            self._api.unregister(ESCAPE_HOTKEY_ID)
+            self._escape_registered = False
+            return
+        error = self._api.register(ESCAPE_HOTKEY_ID, MOD_NOREPEAT, VK_ESCAPE)
+        if error:
+            logger.warning("%s could not claim Escape (error=%s)", self._label, error)
+            return
+        self._escape_registered = True
+
+    def _call(self, handler: Callable[[], None] | None) -> None:
+        if handler is None:
+            return
+        try:
+            handler()
+        except Exception:
+            logger.warning("%s handler failed", self._label, exc_info=True)
 
 
 def describe_hotkey(spec: HotkeySpec) -> str:
@@ -385,8 +594,8 @@ def describe_hotkey(spec: HotkeySpec) -> str:
     return "+".join([*parts, spec.key])
 
 
-class LiveHotkeyController:
-    """Persisted Live voice hotkey preference plus its live registration.
+class HotkeyController:
+    """One persisted global hotkey preference plus its live registration.
 
     Registration is only active between :meth:`start` (after the window is
     shown) and :meth:`stop` (on exit). :meth:`stop` is final: the window's start
@@ -399,13 +608,15 @@ class LiveHotkeyController:
     def __init__(
         self,
         *,
+        preference: HotkeyPreference,
         settings_path: Path | None,
-        on_press: Callable[[], None],
+        handlers: HotkeyHandlers,
         supported: bool | None = None,
         api_factory: Callable[[], HotkeyApi] | None = None,
     ) -> None:
+        self._preference = preference
         self._settings_path = settings_path
-        self._on_press = on_press
+        self._handlers = handlers
         self._supported = sys.platform == "win32" if supported is None else supported
         self._api_factory: Callable[[], HotkeyApi] = api_factory or _Win32HotkeyApi
         self._lock = threading.RLock()
@@ -413,6 +624,7 @@ class LiveHotkeyController:
         self._stopped = False
         self._thread: _HotkeyThread | None = None
         self._error_code: str | None = None
+        self._escape_armed = False
 
     @property
     def supported(self) -> bool:
@@ -424,25 +636,26 @@ class LiveHotkeyController:
         """Return ``{supported, enabled, hotkey, error_code}`` for the WebUI."""
 
         with self._lock:
-            return self._status(read_live_hotkey_settings(self._settings_path), self._error_code)
+            return self._status(self._read(), self._error_code)
 
     def update(self, changes: Any) -> dict[str, Any]:
         """Merge a partial preference, persist it when valid, and re-register.
 
         ``changes`` may carry ``enabled``, ``ctrl``, ``alt``, ``shift``, ``win``
-        and ``key``. An invalid combination is reported as ``hotkey_invalid``
-        and not persisted; turning the hotkey off always succeeds.
+        and ``key``; other keys are ignored. An invalid combination is reported
+        as ``hotkey_invalid`` and not persisted; turning the hotkey off always
+        succeeds.
         """
 
         with self._lock:
-            current = read_live_hotkey_settings(self._settings_path)
+            current = self._read()
             merged = _merge_hotkey_changes(current, changes)
             if merged is None:
                 return self._status(current, HOTKEY_ERROR_INVALID)
             combination_changed = any(name in changes for name in (*_MODIFIER_FLAGS, "key"))
             if (merged["enabled"] or combination_changed) and parse_hotkey(merged) is None:
                 return self._status(current, HOTKEY_ERROR_INVALID)
-            write_live_hotkey_settings(merged, self._settings_path)
+            _write_hotkey_setting(self._preference, merged, self._settings_path)
             if self._active:
                 self._apply(merged)
             return self._status(merged, self._error_code)
@@ -454,7 +667,7 @@ class LiveHotkeyController:
             if self._active or self._stopped:
                 return
             self._active = True
-            self._apply(read_live_hotkey_settings(self._settings_path))
+            self._apply(self._read())
 
     def stop(self) -> None:
         """Unregister and stop the registration thread for good."""
@@ -464,6 +677,23 @@ class LiveHotkeyController:
             self._stopped = True
             self._release()
 
+    def arm_escape(self, armed: bool) -> None:
+        """Claim Escape globally (``on_escape``) until disarmed; idempotent.
+
+        Kept across a re-registration; a no-op without ``on_escape`` or while
+        nothing is registered.
+        """
+
+        with self._lock:
+            if armed == self._escape_armed:
+                return
+            self._escape_armed = armed
+            if self._thread is not None:
+                self._thread.arm_escape(armed)
+
+    def _read(self) -> dict[str, Any]:
+        return read_hotkey_setting(self._preference, self._settings_path)
+
     def _apply(self, setting: Mapping[str, Any]) -> None:
         self._release()
         self._error_code = None
@@ -471,16 +701,18 @@ class LiveHotkeyController:
             return
         spec = parse_hotkey(setting)
         if spec is None:
-            logger.warning("Saved Live voice hotkey is not a valid combination")
+            logger.warning("Saved %s is not a valid combination", self._preference.label)
             self._error_code = HOTKEY_ERROR_INVALID
             return
         try:
             api = self._api_factory()
         except Exception:
-            logger.warning("Live voice hotkey support could not be loaded", exc_info=True)
+            logger.warning("%s support could not be loaded", self._preference.label, exc_info=True)
             self._error_code = HOTKEY_ERROR_FAILED
             return
-        thread = _HotkeyThread(spec, self._on_press, api)
+        thread = _HotkeyThread(
+            spec, self._handlers, api, self._preference, escape_armed=self._escape_armed
+        )
         error_code = thread.start()
         if error_code is None:
             self._thread = thread

@@ -511,7 +511,7 @@ def _run_desktop(
 
     from desktop.bridge import DesktopBridge
     from desktop.connection import ConnectionController, build_connection_html
-    from desktop.hotkey import LiveHotkeyController
+    from desktop.hotkey import LIVE_VOICE_HOTKEY, HotkeyController, HotkeyHandlers
     from desktop.page_events import PageEventDispatcher
     from desktop.speech.microphone import MicrophoneService
 
@@ -527,9 +527,10 @@ def _run_desktop(
     # Built first: it moves an older microphone choice out of the Voice
     # settings before Voice reads them.
     microphone = MicrophoneService(settings_path=settings_file)
-    live_hotkey = LiveHotkeyController(
+    live_hotkey = HotkeyController(
+        preference=LIVE_VOICE_HOTKEY,
         settings_path=settings_file,
-        on_press=lambda: page_events.request_live("toggle", "hotkey"),
+        handlers=HotkeyHandlers(on_press=lambda: page_events.request_live("toggle", "hotkey")),
     )
     voice = _create_voice(args, settings_file, microphone, server_url, page_events)
     window_holder: list[Any] = []

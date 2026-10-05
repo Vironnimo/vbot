@@ -14,15 +14,6 @@ import pytest
 
 from desktop import settings as desktop_settings
 
-HOTKEY_DEFAULTS = {
-    "enabled": False,
-    "ctrl": True,
-    "alt": True,
-    "shift": False,
-    "win": False,
-    "key": "Space",
-}
-
 
 def _settings_file(tmp_path: Path, content: Any = None) -> Path:
     settings_file = tmp_path / "settings.json"
@@ -239,14 +230,14 @@ def test_a_section_write_preserves_a_malformed_document(tmp_path: Path, original
             {"width": 1360, "height": 880},
         ),
         (
-            lambda path: desktop_settings.write_live_hotkey_settings(
-                {**HOTKEY_DEFAULTS, "key": "F13"}, path
+            lambda path: desktop_settings.update_section(
+                "live_voice", lambda section: {**section, "hotkey": {"key": "F13"}}, path
             ),
             "live_voice",
-            {"future": {"kept": True}, "hotkey": {**HOTKEY_DEFAULTS, "key": "F13"}},
+            {"future": {"kept": True}, "hotkey": {"key": "F13"}},
         ),
     ],
-    ids=["servers", "last-used", "window", "live-hotkey"],
+    ids=["servers", "last-used", "window", "section"],
 )
 def test_each_section_writer_preserves_the_other_sections(
     tmp_path: Path, write: Callable[[Path], None], key: str, section: Any
@@ -354,43 +345,6 @@ def test_write_window_size_rejects_invalid_dimensions(
 ) -> None:
     with pytest.raises(ValueError):
         desktop_settings.write_window_size(width, height, tmp_path / "settings.json")  # type: ignore[arg-type]
-
-
-@pytest.mark.parametrize(
-    ("live_voice", "expected"),
-    [
-        (None, HOTKEY_DEFAULTS),
-        ([], HOTKEY_DEFAULTS),
-        ({"hotkey": "Ctrl+Alt+Space"}, HOTKEY_DEFAULTS),
-        (
-            {
-                "hotkey": {
-                    "enabled": True,
-                    "ctrl": "yes",
-                    "alt": False,
-                    "shift": True,
-                    "key": " KeyL ",
-                }
-            },
-            {
-                "enabled": True,
-                "ctrl": True,
-                "alt": False,
-                "shift": True,
-                "win": False,
-                "key": "KeyL",
-            },
-        ),
-    ],
-    ids=["unset", "not-an-object", "not-a-hotkey-object", "per-field-fallback"],
-)
-def test_read_live_hotkey_settings_falls_back_to_disabled_ctrl_alt_space(
-    tmp_path: Path, live_voice: object, expected: dict[str, Any]
-) -> None:
-    settings_file = _settings_file(tmp_path, {"live_voice": live_voice})
-
-    assert desktop_settings.read_live_hotkey_settings(settings_file) == expected
-    assert desktop_settings.DEFAULT_LIVE_HOTKEY_SETTINGS == HOTKEY_DEFAULTS
 
 
 # -- Generic section API -------------------------------------------------------------

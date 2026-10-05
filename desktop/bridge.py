@@ -37,7 +37,7 @@ from desktop.wakeword.engine import MAX_CUSTOM_WAKEWORD_MODEL_BYTES, WakewordMod
 
 if TYPE_CHECKING:
     from desktop.connection import PreparedConnection, ServerEntry
-    from desktop.hotkey import LiveHotkeyController
+    from desktop.hotkey import HotkeyController
     from desktop.restart import DesktopRestart
     from desktop.speech.microphone import MicrophoneService
     from desktop.wakeword.controller import VoiceController
@@ -130,7 +130,7 @@ class DesktopBridge:
         microphone: MicrophoneService,
         connection: ConnectionDelegate | None = None,
         system_actions: DesktopSystemActions | None = None,
-        live_hotkey: LiveHotkeyController | None = None,
+        live_hotkey: HotkeyController | None = None,
         secure_origins: tuple[str, ...] = (),
         restart: DesktopRestart | None = None,
     ) -> None:
@@ -322,7 +322,7 @@ class DesktopBridge:
 
     # -- Internals -------------------------------------------------------------
 
-    def _require_live_hotkey(self) -> LiveHotkeyController:
+    def _require_live_hotkey(self) -> HotkeyController:
         if self._live_hotkey is None:
             raise RuntimeError("The Live voice hotkey is not available in this Desktop")
         return self._live_hotkey

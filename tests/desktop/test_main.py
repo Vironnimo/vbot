@@ -54,10 +54,18 @@ class FakeLiveHotkey:
 
     supported = True
 
-    def __init__(self, events: list[str], *, settings_path: Any, on_press: Callable[[], None]):
+    def __init__(
+        self,
+        events: list[str],
+        *,
+        preference: desktop_hotkey.HotkeyPreference,
+        settings_path: Any,
+        handlers: desktop_hotkey.HotkeyHandlers,
+    ):
         self.events = events
+        self.preference = preference
         self.settings_path = settings_path
-        self.on_press = on_press
+        self.on_press = handlers.on_press
 
     def start(self) -> None:
         self.events.append("hotkey.start")
@@ -128,7 +136,7 @@ def launch_seams(monkeypatch: pytest.MonkeyPatch) -> LaunchSeams:
     monkeypatch.setattr(desktop_main._windows, "webview_secure_origins", seams.secure_origins)
     monkeypatch.setattr(desktop_main._windows, "apply_browser_arguments", seams.apply)
     monkeypatch.setattr(desktop_main._windows, "allow_server_microphone", seams.allow_microphone)
-    monkeypatch.setattr(desktop_hotkey, "LiveHotkeyController", seams.hotkey)
+    monkeypatch.setattr(desktop_hotkey, "HotkeyController", seams.hotkey)
     return seams
 
 
