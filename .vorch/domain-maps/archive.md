@@ -89,6 +89,7 @@ How long an `archived` entry rests before the retention sweep purges it: the set
 | `archived` with `cleanup_pending` | the Agent cleanup runs again; with a live Agent of the same id it only clears the flag |
 | `restoring`, payload present or target gone | a moved legacy Workspace placed inside the archive returns to the payload (one already back in its own folder stays there), then `archived` again; with neither payload nor target its restore check names `payload_missing`, and it stays purgeable |
 | `restoring`, files live at the target | a valid Agent or Project there: the restore commits and finishes. Otherwise the files stay live, the entry stays `restoring` with `restore_plan.live_path` and `problem`, its restore check shows both, and a later start settles it again |
+| `restoring`, payload or target cannot be checked | state, member Sessions and `restore_plan` stay unchanged; purge remains blocked, and a later start retries the restore |
 | `restored` | the follow-up runs and deletes the row |
 | `purging` | left; the retention sweep continues it after start, a manual purge at once (each first finishes an Agent cleanup still pending) |
 
