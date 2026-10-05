@@ -30,6 +30,7 @@ const entry = (id, name, extra = {}) => ({
   name,
   description: `Purpose of ${name}`,
   origin: 'agent',
+  source_kind: 'agent',
   owner_id: 'main',
   project_id: null,
   editable_scope: 'agent:main',
@@ -45,6 +46,7 @@ const entry = (id, name, extra = {}) => ({
 const base = () => [
   entry('bundled', 'teach', {
     origin: 'bundled',
+    source_kind: 'bundled',
     owner_id: null,
     editable_scope: null,
   }),
@@ -166,6 +168,16 @@ const menu = () =>
           .filter(Boolean)
           .join(' '),
   );
+// The package items of the bundled fixture, opened with `openLabel`.
+const BUNDLED_PACKAGE_ITEMS = (openLabel) => [
+  openLabel,
+  'Edit instructions Ships with vBot disabled',
+  'Copy name',
+  '|',
+  'Turn off everywhere',
+  '|',
+  'Delete… Ships with vBot disabled',
+];
 const pick = (label) =>
   click(
     [...document.querySelectorAll('.context-menu [role="menuitem"]')].find(
@@ -603,7 +615,7 @@ describe('Skills manager', () => {
     expect(document.querySelector('.skills-content').textContent).not.toContain(
       'stale-sentinel',
     );
-    expect(button('Edit instructions')).toBeUndefined();
+    expect(button('Edit instructions').disabled).toBe(true);
     expect(rpcMock).toHaveBeenCalledWith('skill.inspect', { id: 'second' });
     expect(document.querySelector('.skills-page-note').textContent).toBe(
       'Also exists as Main’s private copy.',
@@ -730,10 +742,11 @@ describe('Skills manager', () => {
       title: 'Copied notes',
       variant: 'success',
     });
-    // The keyboard opens the same menu; read-only packages offer no Edit or
-    // Delete, and a package that is off offers Turn on everywhere.
+    // The keyboard opens the same menu; a read-only package keeps Edit and
+    // Delete disabled with the reason, and a package that is off offers Turn
+    // on everywhere.
     key(document.querySelector('[data-skill-id="bundled"]'), 'ContextMenu');
-    expect(menu()).toEqual(['Open', 'Copy name', '|', 'Turn off everywhere']);
+    expect(menu()).toEqual(BUNDLED_PACKAGE_ITEMS('Open'));
     key(document.querySelector('.context-menu'), 'Escape');
     key(document.querySelector('[data-skill-id="disabled"]'), 'ContextMenu');
     expect(menu()).toContain('Turn on everywhere');
@@ -756,9 +769,9 @@ describe('Skills manager', () => {
     click(button('Back to All skills'));
     await settle();
 
-    // An Agent row turns the Skill on or off for that Agent; the Agent's own
-    // Skills can also be edited and deleted there, also through their "⋯"
-    // button. A Project grant stays fixed and says where it is managed.
+    // An Agent row turns the Skill on or off for that Agent and offers the
+    // package items, also through its "⋯" button. A Project grant stays
+    // fixed and says where it is managed.
     collection('Main');
     rightClick(
       document
@@ -780,7 +793,7 @@ describe('Skills manager', () => {
     expect(calls('agent.update')).toEqual([
       { id: 'main', excluded_skills: ['deploy'] },
     ]);
-    expect(button('Actions for teach')).toBeUndefined();
+    expect(button('Actions for teach')).toBeDefined();
     click(button('Actions for deploy'));
     pick('Delete…');
     click(button('Delete', document.querySelector('[role="dialog"]')));
@@ -795,10 +808,7 @@ describe('Skills manager', () => {
     );
     expect(menu()).toEqual([
       'Turn off for Main',
-      'Open skill',
-      'Copy name',
-      '|',
-      'Turn off everywhere',
+      ...BUNDLED_PACKAGE_ITEMS('Open skill'),
     ]);
     key(document.querySelector('.context-menu'), 'Escape');
     collection('Reviewer');
@@ -807,13 +817,14 @@ describe('Skills manager', () => {
       'Turn off for Reviewer Managed in project Repo disabled',
     );
     key(document.querySelector('.context-menu'), 'Escape');
-    // Shared with Reviewer, notes stays Main's: no Edit or Delete here.
+    // Shared with Reviewer, notes is still Main's package, which Edit and
+    // Delete act on from here too.
     rightClick(
       document
         .querySelector('[data-item-key="notes"]')
         .closest('.s-check-item'),
     );
-    expect(menu()).not.toContain('Delete…');
+    expect(menu()).toContain('Delete…');
     key(document.querySelector('.context-menu'), 'Escape');
 
     collection('Repo');
@@ -822,7 +833,10 @@ describe('Skills manager', () => {
         .querySelector('[data-item-key="teach"]')
         .closest('.s-check-item'),
     );
-    expect(menu()).toEqual(['Activate in Repo', 'Open skill', 'Copy name']);
+    expect(menu()).toEqual([
+      'Activate in Repo',
+      ...BUNDLED_PACKAGE_ITEMS('Open skill'),
+    ]);
     pick('Activate in Repo');
     await settle();
     expect(calls('project.set')).toEqual([

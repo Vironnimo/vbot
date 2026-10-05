@@ -794,7 +794,7 @@ describe('AgentsView behavior and access', () => {
     });
   });
 
-  it("edits, deletes and opens the Agent's own Skills from their row menu", async () => {
+  it('edits, deletes and opens Skills from their row menu', async () => {
     const own = {
       id: 'pkg-own',
       name: 'notes',
@@ -878,11 +878,6 @@ describe('AgentsView behavior and access', () => {
     flushSync();
     await waitForText('notes');
 
-    // Only the Agent's own Skill has the "⋯" button; its menu adds Edit and
-    // Delete to the Agent row actions.
-    expect(
-      document.querySelector('button[aria-label="Actions for sample-skill"]'),
-    ).toBeNull();
     getButtonByAriaLabel('Actions for notes').click();
     flushSync();
     expect(menuLabels()).toEqual([
@@ -935,6 +930,18 @@ describe('AgentsView behavior and access', () => {
     flushSync();
     await pick('Open skill');
     expect(onOpenSkill).toHaveBeenCalledWith('alpha', 'pkg-own');
+
+    // Every row has the "⋯" button, and Edit and Delete act on the package,
+    // so a global Skill is managed here too.
+    getButtonByAriaLabel('Actions for sample-skill').click();
+    flushSync();
+    await pick('Delete…');
+    dialogButton(document.querySelector('[role="dialog"]'), 'Delete').click();
+    await flushAsyncUpdates(8);
+    expect(calls('skill.delete')).toEqual([
+      { scope: 'agent:alpha', name: 'notes' },
+      { scope: 'global', name: 'sample-skill' },
+    ]);
   });
 
   it('renders a not-ready tool with a visible status, verbatim hint, and extensions link', async () => {

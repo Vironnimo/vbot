@@ -156,12 +156,20 @@ export default Object.freeze({
   'skills.readOnlyReason.invalid':
     'This package cannot be loaded, so it cannot be edited here.',
   'skills.readOnlyReason.bundled':
-    'Bundled skills ship with vBot and change only with vBot updates.',
+    'Bundled skills ship with vBot and change only with vBot updates. Turn it off if you do not want it.',
+  'skills.readOnlyReason.extension':
+    'This skill comes with the {name} extension and changes with it. Turn it off here, or disable the extension.',
+  'skills.readOnlyReason.folder':
+    'This skill is loaded from the skill folder {name}; change its files there.',
   'skills.readOnlyReason.project':
     'Project skills belong to the Project’s repository; edit them there.',
-  'skills.readOnlyReason.source':
-    'This skill comes from {name}; change it at its source.',
   'skills.readOnlyReason.other': 'This package cannot be edited here.',
+  'skills.readOnlyHint.invalid': 'Cannot be loaded',
+  'skills.readOnlyHint.bundled': 'Ships with vBot',
+  'skills.readOnlyHint.extension': 'Comes with the {name} extension',
+  'skills.readOnlyHint.folder': 'From skill folder {name}',
+  'skills.readOnlyHint.project': 'Lives in the project repository',
+  'skills.readOnlyHint.other': 'Not editable here',
   'skills.details.source': 'Source',
   'skills.details.access': 'Access',
   'skills.details.notes': 'Requirements',
@@ -249,8 +257,12 @@ export default Object.freeze({
   'skills.contentView': 'Skill content view',
   'skills.copyContent': 'Copy original text',
   'skills.loadingContent': 'Loading instructions…',
-  'skills.deletePackageConfirm':
-    'Delete skill "{name}"? It moves to Archived, where you can restore it. Agents lose access to it until then.',
+  'skills.deleteGlobalConfirm':
+    'Delete the global skill "{name}"? Every Agent and project that uses it loses it. It moves to Archived, where you can restore it.',
+  'skills.deletePrivateConfirm':
+    'Delete "{name}", a private skill of {owner}? {owner} loses it. It moves to Archived, where you can restore it.',
+  'skills.deleteSharedConfirm':
+    'Delete "{name}", a private skill of {owner}? {owner} and the Agents it is shared with lose it. It moves to Archived, where you can restore it.',
   'skills.createGlobalHelp':
     'Stored in the global collection. Each Agent’s Skill selection decides whether it can use this skill.',
   'skills.createPrivateHelp':

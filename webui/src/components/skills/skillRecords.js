@@ -203,7 +203,7 @@ export function archivedSkillDetails(item, agents = []) {
         value: skillActorLabel(item.archived_by),
       },
     ],
-    placement: 'right',
+    placement: 'pointer',
     alignTo: '.skills-row-name',
   };
 }

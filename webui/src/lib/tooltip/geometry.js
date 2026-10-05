@@ -96,6 +96,38 @@ export function positionFloating(anchor, element, placement) {
   element.dataset.floatingSide = side;
 }
 
+// How far below the pointer's hotspot a bubble starts, so the cursor image
+// does not cover its first line, and the gap kept above the hotspot when the
+// bubble flips up.
+const POINTER_CLEARANCE = 20;
+const POINTER_GAP = 8;
+
+/**
+ * Position `element` at the pointer `point` ({x, y} in viewport pixels):
+ * below the cursor and starting at its hotspot, above it when there is no
+ * room below, always clamped to the viewport. Sets `data-floating-side` like
+ * `positionFloating`.
+ */
+export function positionAtPoint(point, element) {
+  const width = element.offsetWidth;
+  const height = element.offsetHeight;
+  const below = point.y + POINTER_CLEARANCE;
+  const side =
+    below + height <= window.innerHeight - EDGE_PADDING ? 'bottom' : 'top';
+  const top =
+    side === 'bottom'
+      ? below
+      : Math.max(EDGE_PADDING, point.y - POINTER_GAP - height);
+  const left = clamp(
+    point.x,
+    EDGE_PADDING,
+    window.innerWidth - width - EDGE_PADDING,
+  );
+  element.style.left = `${left}px`;
+  element.style.top = `${top}px`;
+  element.dataset.floatingSide = side;
+}
+
 function cross(origin, a, b) {
   return (
     (a.x - origin.x) * (b.y - origin.y) - (a.y - origin.y) * (b.x - origin.x)

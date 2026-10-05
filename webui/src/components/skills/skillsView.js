@@ -280,16 +280,67 @@ export function createSkillDocument(name, description, instructions) {
   return `---\nname: ${JSON.stringify(name.trim())}\ndescription: ${JSON.stringify(description.trim())}\n---\n\n${instructions}`;
 }
 
-/** Why a package's page is read only (`editable_scope` is empty). */
+// Why a package without `editable_scope` cannot be edited or deleted, by
+// its kind of source.
+function readOnlyCase(entry) {
+  if (entry.status === 'invalid') return 'invalid';
+  return ['bundled', 'extension', 'folder', 'project'].includes(
+    entry.source_kind,
+  )
+    ? entry.source_kind
+    : 'other';
+}
+
+/** Why a package is read only (`editable_scope` is empty), in full. */
 export function skillReadOnlyReason(entry) {
-  if (entry.status === 'invalid') return t('skills.readOnlyReason.invalid');
-  if (entry.origin === 'bundled') return t('skills.readOnlyReason.bundled');
-  if (entry.origin?.startsWith('project:'))
-    return t('skills.readOnlyReason.project');
-  const label = humanizeSourceLabel(entry.source_label);
-  return label
-    ? t('skills.readOnlyReason.source', { name: label })
-    : t('skills.readOnlyReason.other');
+  const name = humanizeSourceLabel(entry.source_label);
+  switch (readOnlyCase(entry)) {
+    case 'invalid':
+      return t('skills.readOnlyReason.invalid');
+    case 'bundled':
+      return t('skills.readOnlyReason.bundled');
+    case 'extension':
+      return t('skills.readOnlyReason.extension', { name });
+    case 'folder':
+      return t('skills.readOnlyReason.folder', { name });
+    case 'project':
+      return t('skills.readOnlyReason.project');
+    default:
+      return t('skills.readOnlyReason.other');
+  }
+}
+
+/** The same reason as a short hint beside a disabled menu item. */
+export function skillReadOnlyHint(entry) {
+  const name = humanizeSourceLabel(entry.source_label);
+  switch (readOnlyCase(entry)) {
+    case 'invalid':
+      return t('skills.readOnlyHint.invalid');
+    case 'bundled':
+      return t('skills.readOnlyHint.bundled');
+    case 'extension':
+      return t('skills.readOnlyHint.extension', { name });
+    case 'folder':
+      return t('skills.readOnlyHint.folder', { name });
+    case 'project':
+      return t('skills.readOnlyHint.project');
+    default:
+      return t('skills.readOnlyHint.other');
+  }
+}
+
+/**
+ * The delete confirmation of an editable package: who loses it (every Agent
+ * for a global package, the owner and its share receivers for a private one)
+ * and that it moves to Archived.
+ */
+export function skillDeleteConfirmText(entry, agents = []) {
+  if (!entry.owner_id)
+    return t('skills.deleteGlobalConfirm', { name: entry.name });
+  const owner = agentDisplayName(entry.owner_id, agents);
+  return entry.shared_with?.length
+    ? t('skills.deleteSharedConfirm', { name: entry.name, owner })
+    : t('skills.deletePrivateConfirm', { name: entry.name, owner });
 }
 
 /** What a collection's count counts. */

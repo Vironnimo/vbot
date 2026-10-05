@@ -1,7 +1,9 @@
 <script>
   // The page of one Skill package, opened in place of its collection: Back
   // and a breadcrumb to return, a header with where it lives, its status and
-  // actions (Edit, Turn off everywhere / Turn on, Pin, Delete), the
+  // actions (Edit, Turn off everywhere / Turn on, Pin, Delete; Edit and
+  // Delete stay visible but disabled with the reason on a read-only
+  // package), the
   // description as body text (the one place that shows it as content), who
   // created and last changed it and its last use, who gets it (editable),
   // requirement notes, its instructions and, for an editable package, its
@@ -135,13 +137,17 @@
         </p>
       </div>
       <div class="view-header__actions">
-        {#if entry.editable_scope}
-          <Button
-            variant="secondary"
-            disabled={busy || inspectLoading || inspected?.id !== entry.id}
-            onClick={() => onEdit(entry)}>{t('skills.editInstructions')}</Button
-          >
-        {/if}
+        <Button
+          variant="secondary"
+          disabled={!entry.editable_scope ||
+            busy ||
+            inspectLoading ||
+            inspected?.id !== entry.id}
+          disabledReason={entry.editable_scope
+            ? ''
+            : skillReadOnlyReason(entry)}
+          onClick={() => onEdit(entry)}>{t('skills.editInstructions')}</Button
+        >
         {#if entry.disabled}
           <Button
             variant="secondary"
@@ -187,25 +193,28 @@
               /><path d="M6.3 9.7 2 14" /></svg
             >
           </Button>
-          <Button
-            variant="danger"
-            icon
-            disabled={busy}
-            ariaLabel={t('skills.deleteNamed', { name: entry.name })}
-            tooltip={t('common.delete')}
-            onClick={() => onDelete(entry)}
-          >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              aria-hidden="true"
-              ><path d="M2 4h12M6 4V2h4v2M4 4l1 10h6l1-10M7 6v6M9 6v6" /></svg
-            >
-          </Button>
         {/if}
+        <Button
+          variant="danger"
+          icon
+          disabled={!entry.editable_scope || busy}
+          disabledReason={entry.editable_scope
+            ? ''
+            : skillReadOnlyReason(entry)}
+          ariaLabel={t('skills.deleteNamed', { name: entry.name })}
+          tooltip={t('common.delete')}
+          onClick={() => onDelete(entry)}
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            aria-hidden="true"
+            ><path d="M2 4h12M6 4V2h4v2M4 4l1 10h6l1-10M7 6v6M9 6v6" /></svg
+          >
+        </Button>
       </div>
     </header>
     <p

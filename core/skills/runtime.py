@@ -122,12 +122,19 @@ class _ProjectSkillBundle:
 
 @dataclass(frozen=True)
 class _ManagerSource:
-    """One inventoried Skill root: its origin tag and owning Agent or Project."""
+    """One inventoried Skill root: its origin tag, owning Agent or Project, and kind.
+
+    ``kind`` says where the root comes from, so a client can explain why a
+    package is or is not editable: ``home`` (the user's global home), ``folder``
+    (a configured ``skill_directories`` entry), ``extension`` (a loaded
+    Extension's ``skills/``), ``bundled``, ``project`` or ``agent``.
+    """
 
     root: Path
     origin: str | None
     owner_id: str | None
     project_id: str | None
+    kind: str
 
 
 class SkillRuntime:
@@ -431,9 +438,22 @@ class SkillRuntime:
         agents: list[Agent] | None = None,
     ) -> list[_ManagerSource]:
         roots = self._skill_scan_roots(self._storage.load_settings(), self._resources_path)
+        extension_roots = {
+            (record.root_path / _SKILLS_DIRNAME).resolve()
+            for record in (self._extensions.records() if self._extensions is not None else [])
+            if record.status == "loaded"
+        }
+
+        def global_kind(index: int, root: Path) -> str:
+            if index == 0:
+                return "home"
+            if index == len(roots) - 1:
+                return "bundled"
+            return "extension" if root.resolve() in extension_roots else "folder"
+
         sources = [
-            _ManagerSource(root, origin, None, None)
-            for root, origin in zip(roots, _origin_layers(roots), strict=True)
+            _ManagerSource(root, origin, None, None, global_kind(index, root))
+            for index, (root, origin) in enumerate(zip(roots, _origin_layers(roots), strict=True))
         ]
         sources.extend(
             _ManagerSource(
@@ -441,11 +461,14 @@ class SkillRuntime:
                 project_skill_origin(project.display_name),
                 None,
                 project.project_id,
+                "project",
             )
             for project in (self._projects.list() if projects is None else projects)
         )
         sources.extend(
-            _ManagerSource(self.agent_skills_dir(agent.id), SKILL_ORIGIN_AGENT, agent.id, None)
+            _ManagerSource(
+                self.agent_skills_dir(agent.id), SKILL_ORIGIN_AGENT, agent.id, None, "agent"
+            )
             for agent in (self._agents.list() if agents is None else agents)
         )
         unique_sources: dict[tuple[Path, str | None], _ManagerSource] = {}
@@ -567,6 +590,7 @@ class SkillRuntime:
                 {
                     "id": entry_id,
                     "editable_scope": editable_scope,
+                    "source_kind": source.kind,
                     "source_label": (root.parent.name if root.name == "skills" else root.name)
                     if origin == SKILL_ORIGIN_GLOBAL and root.resolve() != global_root
                     else None,

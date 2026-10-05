@@ -153,7 +153,7 @@
 {#if actions.deleteTarget}
   <ConfirmDialog
     title={t('settings.skills.deleteConfirmTitle')}
-    body={t('skills.deletePackageConfirm', { name: actions.deleteTarget.name })}
+    body={actions.deleteTarget.message}
     confirmLabel={t('common.delete')}
     onConfirm={actions.confirmDelete}
     onCancel={actions.cancelDelete}

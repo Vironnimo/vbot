@@ -95,7 +95,7 @@
     return `${uid}-state-${index}`;
   }
 
-  // Beside the name: a card headed by the member's complete name (or its
+  // At the cursor: a card headed by the member's complete name (or its
   // display name) with the description, detail rows and why a locked member
   // cannot change; a member without details shows only a clipped name.
   function rowTooltip(item) {
@@ -106,7 +106,7 @@
         ? [{ value: item.lockedReason }]
         : []),
     ];
-    const placement = { placement: 'right', alignTo: '.s-check-row__name' };
+    const placement = { placement: 'pointer', alignTo: '.s-check-row__name' };
     if (!item.detailTitle && !text && rows.length === 0) {
       return {
         text: item.name,

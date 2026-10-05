@@ -693,6 +693,9 @@
   const navigateToAgentSkill = (agentId, skillId) =>
     navigator.navigate('skills', [`agent:${agentId}`, skillId]);
 
+  const navigateToProjectSkill = (projectId, skillId) =>
+    navigator.navigate('skills', [`project:${projectId}`, skillId]);
+
   const handleDebugEnabledChange = (enabled) => {
     const isEnabled = enabled === true;
     debugEnabled = isEnabled;
@@ -992,8 +995,11 @@
           onProjectSelected={selection.selectManagedProject}
           onToast={desktop.showToast}
           onNavigateToSettingsPanel={navigateToSettingsPanel}
+          onOpenSkill={navigateToProjectSkill}
+          agentsRefreshToken={selection.agentsRefreshToken}
           {modelsRefreshToken}
           {projectsRefreshToken}
+          {skillsRefreshToken}
         />
       {:else if activeViewId === 'jev'}
         <JevView

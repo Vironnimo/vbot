@@ -309,6 +309,16 @@ def test_global_skill_sources_follow_the_documented_precedence(
             ("shared", (extension_skills / "shared" / "SKILL.md").resolve()),
             ("mine", (extension_skills / "mine" / "SKILL.md").resolve()),
         } <= rejected
+        # The manager inventory names each package's kind of source, so the
+        # WebUI can say why a global package is not editable.
+        inventory = runtime.skill_inventory()["skills"]
+        kinds = {(entry["name"], entry["description"]): entry["source_kind"] for entry in inventory}
+        assert kinds[("mine", "My own global skill.")] == "home"
+        assert kinds[("weather", "From skill_directories.")] == "folder"
+        assert kinds[("ext-skill", "From an extension.")] == "extension"
+        assert {entry["source_kind"] for entry in inventory if entry["origin"] == "bundled"} == {
+            "bundled"
+        }
 
         # Live-disabling the Extension refreshes the registry without a restart.
         asyncio.run(runtime.apply_extension_disabled_change({"ext-a"}))

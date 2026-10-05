@@ -1,5 +1,5 @@
 import { t } from '$lib/i18n.js';
-import { createSkillDocument } from './skillsView.js';
+import { createSkillDocument, skillDeleteConfirmText } from './skillsView.js';
 import {
   accessPatch,
   projectSkillPatch,
@@ -44,7 +44,8 @@ export function createSkillActions(context) {
   let editing = $state(null);
   let editContent = $state('');
 
-  // The package awaiting delete confirmation (null = dialog closed).
+  // The package awaiting delete confirmation (null = dialog closed), with
+  // the confirmation text that says who loses it.
   let deleteTarget = $state(null);
 
   // The revert awaiting confirmation: `{ scope, name, revisions, later,
@@ -343,7 +344,11 @@ export function createSkillActions(context) {
 
   function requestDelete(entry) {
     if (busy || !entry.editable_scope) return;
-    deleteTarget = { scope: entry.editable_scope, name: entry.name };
+    deleteTarget = {
+      scope: entry.editable_scope,
+      name: entry.name,
+      message: skillDeleteConfirmText(entry, context.agents),
+    };
   }
 
   function cancelDelete() {

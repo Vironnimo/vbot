@@ -900,6 +900,97 @@ describe('ProjectsView Tool and Skill whitelists', () => {
     });
   });
 
+  it("offers a listed Skill's package actions from its row menu", async () => {
+    serveProject({}, { skills: { bundled: ['pdf'], global: ['deploy'] } });
+    const pkg = (id, name, extra) => ({
+      id,
+      name,
+      description: '',
+      owner_id: null,
+      project_id: null,
+      shared: false,
+      shared_with: [],
+      disabled: false,
+      status: 'available',
+      missing: [],
+      optional_missing: [],
+      warnings: [],
+      ...extra,
+    });
+    const catalogRpc = rpcMock.getMockImplementation();
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'skill.inventory')
+        return Promise.resolve({
+          skills: [
+            pkg('pkg-deploy', 'deploy', {
+              origin: 'global',
+              source_kind: 'home',
+              editable_scope: 'global',
+            }),
+            pkg('pkg-pdf', 'pdf', {
+              origin: 'bundled',
+              source_kind: 'bundled',
+              editable_scope: null,
+            }),
+          ],
+          agents: [],
+          projects: [
+            {
+              project_id: 'demo',
+              skills: [
+                { name: 'pdf', source: 'bundled', package_id: 'pkg-pdf' },
+                { name: 'deploy', source: 'global', package_id: 'pkg-deploy' },
+              ],
+            },
+          ],
+        });
+      if (method === 'skill.delete') return Promise.resolve({});
+      return catalogRpc(method, params);
+    });
+    view.mount();
+    await selectDemo();
+    await waitForCondition(() =>
+      document.querySelector('button[aria-label="Actions for deploy"]'),
+    );
+    const menuItem = (label) =>
+      [...document.querySelectorAll('.context-menu [role="menuitem"]')].find(
+        (item) =>
+          item.querySelector('.context-menu__label').textContent === label,
+      );
+    const openMenu = async (name) => {
+      document
+        .querySelector(`button[aria-label="Actions for ${name}"]`)
+        .click();
+      await waitForCondition(() => menuItem('Copy name'));
+    };
+
+    // A bundled Skill names why it cannot be edited or deleted.
+    await openMenu('pdf');
+    expect(menuItem('Activate in Demo')).toBeTruthy();
+    expect(menuItem('Edit instructions').disabled).toBe(true);
+    expect(menuItem('Delete…').disabled).toBe(true);
+    document.body.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+    );
+    flushSync();
+
+    // A global Skill is deleted from here after confirmation.
+    await openMenu('deploy');
+    expect(menuItem('Edit instructions').disabled).toBe(false);
+    menuItem('Delete…').click();
+    flushSync();
+    const dialog = document.querySelector('[role="dialog"]');
+    [...dialog.querySelectorAll('button')]
+      .find((item) => item.textContent.trim() === 'Delete')
+      .click();
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(([method]) => method === 'skill.delete'),
+    );
+    expect(
+      rpcMock.mock.calls.find(([method]) => method === 'skill.delete')[1],
+    ).toEqual({ scope: 'global', name: 'deploy' });
+  });
+
   it('re-scans Team and Skills through the single repository action', async () => {
     serveProject({}, { skills: {} });
     view.mount();
