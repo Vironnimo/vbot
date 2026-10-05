@@ -7,7 +7,7 @@ import {
   runToolScenario,
 } from "./chat-tool-support.js";
 
-test("status, bash, and process tools complete through the Agentic Loop", async ({
+test("status, bash, and terminal tools complete through the Agentic Loop", async ({
   page,
 }) => {
   const chat = await startIsolatedChat(page);
@@ -19,7 +19,7 @@ test("status, bash, and process tools complete through the Agentic Loop", async 
 
   await expectToolSucceeded(page, chat, "status");
   const bash = await expectToolSucceeded(page, chat, "bash");
-  await expectToolSucceeded(page, chat, "process");
+  await expectToolSucceeded(page, chat, "terminal");
   await openToolRow(bash);
   await expect(bash).toContainText("e2e-shell-output");
 });
