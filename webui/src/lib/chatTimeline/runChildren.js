@@ -334,17 +334,21 @@ export function mergeToolResult(assistantRun, event) {
     normalizedTiming(event.payload?.timing ?? event.payload?.message?.timing) ??
     tool.timing;
   tool.durationMs = timingDurationMs(tool.timing) ?? tool.durationMs;
-  tool.status = toolStatusFromResultEvent(event);
+  tool.status = toolStatusFromResultEvent(event, tool.name);
   tool.events = [...tool.events, event];
   syncAssistantRunCollections(assistantRun);
 }
 
 // A per-tool-call user cancel returns the stable `cancelled_by_user` failure
-// envelope; the row renders as "cancelled" — the user's own action — instead
-// of a red failure. Any other failure envelope stays "failed".
-function toolStatusFromResultEvent(event) {
+// envelope, and a shell command vBot stopped returns a stopped result; both
+// rows render as "cancelled" — a stop, not a red failure and never done. Any
+// other failure envelope stays "failed".
+function toolStatusFromResultEvent(event, toolName) {
   const result = event.payload?.result ?? event.payload?.message?.content;
-  if (toolResultCancelledByUser(result)) {
+  if (
+    toolResultCancelledByUser(result) ||
+    shellCommandStopped(toolName, result)
+  ) {
     return CHAT_STATUS_CANCELLED;
   }
   if (hasToolResultFailure(event)) {
@@ -458,13 +462,30 @@ export function markPendingToolsCancelled(assistantRun, event) {
   }
 }
 
-// Failure code the per-tool-call user cancel produces (the bash tool's
-// `tool_failure("cancelled_by_user", …)` envelope).
+// Failure code a per-tool-call user cancel produces (for example
+// `search_files`' `tool_failure("cancelled_by_user", …)` envelope).
 const USER_CANCELLED_TOOL_RESULT_CODE = 'cancelled_by_user';
 
 export function toolResultCancelledByUser(result) {
   const normalizedResult = parseResult(result);
   return normalizedResult?.error?.code === USER_CANCELLED_TOOL_RESULT_CODE;
+}
+
+// The shell Tool (registry name `bash` on every host) reports a command vBot
+// stopped before it ended - the user cancelled the call, the Run was
+// cancelled, its timeout or shutdown - as a successful envelope with
+// `data.status: "stopped"`, so the Agent still reads its output. The row reads
+// like a stopped handed-off command: cancelled. Other Tools that return the
+// shell result shape (a `terminal` kill or wait) did what they were asked.
+function shellCommandStopped(toolName, result) {
+  if (toolName !== 'bash') {
+    return false;
+  }
+  const normalizedResult = parseResult(result);
+  return (
+    normalizedResult?.ok === true &&
+    normalizedResult?.data?.status === 'stopped'
+  );
 }
 
 function hasToolResultFailure(event) {

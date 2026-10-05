@@ -730,11 +730,25 @@ describe('Run status projection', () => {
     expect(run.iterationCount).toBe(2);
   });
 
+  const STOPPED_COMMAND = {
+    ok: true,
+    error: null,
+    data: {
+      status: 'stopped',
+      exit_code: 1,
+      stopped_because: 'the user stopped it.',
+      output: 'started',
+    },
+  };
+
   it.each([
     [
       'cancelled',
       { ok: false, error: { code: 'cancelled_by_user', message: 'aborted' } },
     ],
+    ['cancelled', STOPPED_COMMAND],
+    // A terminal kill returns the stopped command's result: the kill succeeded.
+    ['success', STOPPED_COMMAND, 'terminal'],
     [
       'failed',
       { ok: false, error: { code: 'process_timeout', message: 'timed out' } },
@@ -749,10 +763,10 @@ describe('Run status projection', () => {
     ],
   ])(
     'settles a live Tool row as %s from its result envelope',
-    (status, result) => {
+    (status, result, name = 'bash') => {
       const state = session();
       start(state, 'run-1');
-      const toolCall = { id: 'call-bash', index: 0, name: 'bash' };
+      const toolCall = { id: 'call-tool', index: 0, name };
       append(state, 'run-1', 1, 'tool_call_started', {
         tool_call: { ...toolCall, arguments: { command: 'sleep 600' } },
       });
@@ -767,41 +781,50 @@ describe('Run status projection', () => {
     },
   );
 
-  it('keeps a reloaded user-cancelled Tool result cancelled without failing the Run', () => {
-    const state = session();
-    loadHistory(state, [
-      { id: 'user-1', role: 'user', content: 'Run it' },
+  it.each([
+    [
+      'a cancelled_by_user failure',
       {
-        id: 'assistant-tool',
-        role: 'assistant',
-        content: null,
-        tool_calls: [
-          {
-            id: 'call-bash',
-            name: 'bash',
-            arguments: { command: 'sleep 600' },
-          },
-        ],
+        ok: false,
+        error: { code: 'cancelled_by_user', message: 'aborted' },
+        data: null,
+        artifacts: [],
       },
-      {
-        id: 'tool-bash',
-        role: 'tool',
-        tool_call_id: 'call-bash',
-        name: 'bash',
-        content: JSON.stringify({
-          ok: false,
-          error: { code: 'cancelled_by_user', message: 'aborted' },
-          data: null,
-          artifacts: [],
-        }),
-        timing: { duration_ms: 1200 },
-      },
-    ]);
+    ],
+    ['a stopped command', { ...STOPPED_COMMAND, artifacts: [] }],
+  ])(
+    'keeps a reloaded user-cancelled Tool result (%s) cancelled without failing the Run',
+    (_case, envelope) => {
+      const state = session();
+      loadHistory(state, [
+        { id: 'user-1', role: 'user', content: 'Run it' },
+        {
+          id: 'assistant-tool',
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            {
+              id: 'call-bash',
+              name: 'bash',
+              arguments: { command: 'sleep 600' },
+            },
+          ],
+        },
+        {
+          id: 'tool-bash',
+          role: 'tool',
+          tool_call_id: 'call-bash',
+          name: 'bash',
+          content: JSON.stringify(envelope),
+          timing: { duration_ms: 1200 },
+        },
+      ]);
 
-    const run = assistantRun(state);
-    expect(run.tools.map((tool) => tool.status)).toEqual(['cancelled']);
-    expect(run.status).not.toBe('failed');
-  });
+      const run = assistantRun(state);
+      expect(run.tools.map((tool) => tool.status)).toEqual(['cancelled']);
+      expect(run.status).not.toBe('failed');
+    },
+  );
 
   it('settles only pending Tool rows when a cancelled Run reloads from History', () => {
     const state = session();
