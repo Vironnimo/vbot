@@ -151,14 +151,19 @@ def test_estimate_structured_tokens_counts_items_with_array_framing():
     assert is_estimate is True
 
 
-def test_estimate_structured_tokens_reserves_native_media_without_counting_base64():
+@pytest.mark.parametrize("shape", ["responses", "gemini-audio", "gemini-video"])
+def test_estimate_structured_tokens_reserves_native_media_without_counting_base64(shape):
     """Encoded media uses the fixed semantic reserve, not transport-byte size."""
     # Arrange
     value = [
         {
-            "type": "input_image",
-            "image_url": f"data:image/png;base64,{'A' * 100_000}",
-        }
+            "responses": {
+                "type": "input_image",
+                "image_url": f"data:image/png;base64,{'A' * 100_000}",
+            },
+            "gemini-audio": {"inlineData": {"mimeType": "audio/ogg", "data": "A" * 100_000}},
+            "gemini-video": {"inlineData": {"mimeType": "video/mp4", "data": "A" * 100_000}},
+        }[shape]
     ]
 
     # Act
@@ -296,8 +301,16 @@ def _reasoning_details_message(details: list[dict[str, Any]]) -> dict[str, Any]:
             estimate_structured_tokens,
             [{"type": "reasoning", "id": "rs_1", "encrypted_content": "X" * 5_000}],
         ),
+        (
+            estimate_structured_tokens,
+            [{"text": "ok", "thought": True, "thoughtSignature": "X" * 5_000}],
+        ),
+        (
+            estimate_structured_tokens,
+            [{"text": "ok", "thought": True, "thought_signature": "X" * 5_000}],
+        ),
     ],
-    ids=["reasoning-details", "reasoning-meta-list", "structured-item"],
+    ids=["reasoning-details", "reasoning-meta-list", "structured-item", "gemini", "gemini-snake"],
 )
 def test_opaque_reasoning_blobs_count_as_one_fixed_reserve(estimate: Any, value: Any):
     """An oversized non-text blob counts as one fixed reservation, not as prose."""
@@ -581,7 +594,7 @@ def test_documented_image_token_examples(model, width, height, detail, expected)
     )
 
 
-@pytest.mark.parametrize("shape", ["chat", "responses", "messages", "canonical"])
+@pytest.mark.parametrize("shape", ["chat", "responses", "messages", "canonical", "gemini"])
 def test_image_wrappers_preserve_size_detail_and_count_once(shape):
     payload = _image_payload(512, 512)
     url = f"data:image/png;base64,{payload}"
@@ -593,6 +606,7 @@ def test_image_wrappers_preserve_size_detail_and_count_once(shape):
             "source": {"type": "base64", "media_type": "image/png", "data": payload},
         },
         "canonical": {"type": "media", "media_type": "image/png", "base64": payload},
+        "gemini": {"inlineData": {"mimeType": "image/png", "data": payload}},
     }[shape]
     import copy
 

@@ -15,11 +15,13 @@ from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.errors import NetworkError, ProviderError, ProviderRequestTooLargeError
 from core.tools import tool_failure, tool_success
 from core.utils.retry import caller_owns_retries
+from core.utils.tokens import NATIVE_MEDIA_TOKEN_RESERVE, estimate_structured_tokens
 
 from .opencode_zen_test_support import (
     GEMINI_MODEL,
     GEMINI_STREAM_URL,
     GEMINI_URL,
+    gemini_sse,
     gemini_stream,
     zen_adapter,
 )
@@ -39,6 +41,51 @@ def _accumulate(deltas: list[dict[str, Any]]) -> Any:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("media_type", ["audio/wav", "audio/ogg", "video/mp4"])
+@pytest.mark.parametrize("streaming", [False, True], ids=["send", "stream"])
+@pytest.mark.asyncio
+async def test_gemini_native_media_passes_wire_estimation_and_request_rendering(
+    media_type: str,
+    streaming: bool,
+) -> None:
+    adapter = zen_adapter()
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "media", "base64": "YWJj" * 10_000, "media_type": media_type},
+            ],
+        }
+    ]
+    original = json.dumps(messages)
+    estimated = adapter.estimate_request_input_tokens(messages, model_id=GEMINI_MODEL)
+    # Encoded transport bytes are media, not prose tokens.
+    assert NATIVE_MEDIA_TOKEN_RESERVE <= estimated < NATIVE_MEDIA_TOKEN_RESERVE + 100
+    with respx.mock:
+        route = respx.post(GEMINI_STREAM_URL if streaming else GEMINI_URL).mock(
+            return_value=httpx.Response(200, text=gemini_sse(_DONE))
+            if streaming
+            else httpx.Response(200, json=_DONE)
+        )
+        if streaming:
+            deltas = [delta async for delta in adapter.stream(messages, model_id=GEMINI_MODEL)]
+            assert _accumulate(deltas).content == "done"
+        else:
+            await adapter.send(messages, model_id=GEMINI_MODEL)
+    payload = json.loads(route.calls.last.request.content)
+    assert payload["contents"] == [
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "inlineData": {"mimeType": media_type, "data": "YWJj" * 10_000},
+                }
+            ],
+        }
+    ]
+    assert json.dumps(messages) == original
+
+
 @pytest.mark.asyncio
 async def test_gemini_request_preserves_native_tools_media_thinking_and_replay() -> None:
     adapter = zen_adapter()
@@ -49,43 +96,44 @@ async def test_gemini_request_preserves_native_tools_media_thinking_and_replay()
         {"functionCall": {"id": "call_1", "name": "weather", "args": {"city": "Berlin"}}},
     ]
 
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": "Be exact"},
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_meta": {"gemini_parts": replay_parts},
+            "tool_calls": [{"id": "call_1", "name": "weather", "arguments": {"city": "Berlin"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": '{"temperature":21}'},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "continue"},
+                {"type": "media", "base64": "aW1hZ2U=", "media_type": "image/png"},
+            ],
+        },
+    ]
+    tools = [
+        {
+            "name": "weather",
+            "description": "Get weather",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        }
+    ]
+
     with respx.mock:
         route = respx.post(GEMINI_URL).mock(return_value=httpx.Response(200, json=_DONE))
         response = await adapter.send(
-            [
-                {"role": "system", "content": "Be exact"},
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "reasoning_meta": {"gemini_parts": replay_parts},
-                    "tool_calls": [
-                        {"id": "call_1", "name": "weather", "arguments": {"city": "Berlin"}}
-                    ],
-                },
-                {"role": "tool", "tool_call_id": "call_1", "content": '{"temperature":21}'},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "continue"},
-                        {"type": "media", "base64": "aW1hZ2U=", "media_type": "image/png"},
-                    ],
-                },
-            ],
+            messages,
             model_id=GEMINI_MODEL,
             thinking_effort="high",
             max_output_tokens=70_000,
             temperature=1.2,
-            tools=[
-                {
-                    "name": "weather",
-                    "description": "Get weather",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"city": {"type": "string"}},
-                        "required": ["city"],
-                    },
-                }
-            ],
+            tools=tools,
             tool_choice="required",
         )
 
@@ -117,6 +165,22 @@ async def test_gemini_request_preserves_native_tools_media_thinking_and_replay()
     }
     assert payload["toolConfig"]["functionCallingConfig"] == {"mode": "ANY"}
     assert payload["tools"][0]["functionDeclarations"][0]["name"] == "weather"
+    native_input = {key: payload[key] for key in ("systemInstruction", "tools")}
+    expected = (
+        estimate_structured_tokens(payload["contents"], model_id=GEMINI_MODEL)[0]
+        + estimate_structured_tokens(native_input, model_id=GEMINI_MODEL)[0]
+    )
+    # Redundant canonical copies do not add to the native replay input.
+    messages[1]["content"] = "ignored canonical copy"
+    messages[1]["reasoning"] = "ignored" * 1000
+    assert (
+        adapter.estimate_request_input_tokens(
+            messages,
+            model_id=GEMINI_MODEL,
+            tools=tools,
+        )
+        == expected
+    )
     assert adapter.normalize_response(response, model_id=GEMINI_MODEL)["content"] == "done"
 
 
@@ -190,6 +254,16 @@ async def test_gemini_tool_results_keep_literal_json_and_failure_classification(
             {},
             id="unknown-content-block",
         ),
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "media", "base64": "YWJj", "media_type": "audio/unknown"}],
+                }
+            ],
+            {},
+            id="unsupported-media-type",
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -209,19 +283,36 @@ async def test_gemini_rejects_invalid_requests_before_network(
     assert not route.called
 
 
+@pytest.mark.parametrize("media_type", [None, "audio/ogg", "video/mp4"])
+@pytest.mark.parametrize("streaming", [False, True], ids=["send", "stream"])
 @pytest.mark.asyncio
 async def test_gemini_enforces_the_inline_request_size_limit(
     monkeypatch: pytest.MonkeyPatch,
+    media_type: str | None,
+    streaming: bool,
 ) -> None:
     adapter = zen_adapter()
     # Zen documents a 20 MB inline request body; a small limit keeps the test fast.
     assert adapter.request_body_limit(GEMINI_MODEL) == 20_000_000
     monkeypatch.setattr(adapter, "request_body_limit", lambda _model_id: 100)
+    messages = [
+        {
+            "role": "user",
+            "content": "x" * 200
+            if media_type is None
+            else [
+                {"type": "media", "media_type": media_type, "base64": "YWJj" * 100},
+            ],
+        }
+    ]
 
     with respx.mock:
         route = respx.route(method="POST")
         with pytest.raises(ProviderRequestTooLargeError) as caught:
-            await adapter.send([{"role": "user", "content": "x" * 200}], model_id=GEMINI_MODEL)
+            if streaming:
+                _ = [delta async for delta in adapter.stream(messages, model_id=GEMINI_MODEL)]
+            else:
+                await adapter.send(messages, model_id=GEMINI_MODEL)
 
     assert caught.value.retryable is False
     assert caught.value.max_bytes == 100

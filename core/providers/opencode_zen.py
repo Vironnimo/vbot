@@ -19,15 +19,13 @@ from core.providers._http_shared import (
     wrap_network_error,
 )
 from core.providers._opencode_zen_gemini import (
-    ZEN_MAX_IMAGES_PER_REQUEST,
     _apply_gemini_response_format,
-    _content_text,
     _gemini_tool_choice,
     _move_integer,
     _move_number,
     _normalize_gemini_response,
     _normalize_gemini_stream_chunk,
-    _to_gemini_content,
+    gemini_input_payload,
     gemini_returned_reasoning,
 )
 from core.providers._responses_profile import take_reasoning_renderer
@@ -37,7 +35,6 @@ from core.providers._wire_learning import (
 )
 from core.providers.adapter import (
     ModelLookup,
-    project_tool_result_content_fallbacks,
 )
 from core.providers.anthropic_compatible import (
     ANTHROPIC_OVERLOADED_STATUS,
@@ -54,10 +51,10 @@ from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.token_getter import OAuthRequestRecovery, TokenGetter
-from core.providers.tool_schema import render_tool_definitions
 from core.providers.wire_profile import Protocol
 from core.providers.wire_profiles import WireBinding
 from core.utils.retry import retry_async
+from core.utils.tokens import estimate_structured_tokens
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
@@ -254,6 +251,29 @@ class OpenCodeZenAdapter(OpenAIAdapter):
     ) -> dict[str, Any]:
         del agent_id, session_id, project_id, prompt_cache_affinity_id
         return {}
+
+    @override
+    def estimate_request_input_tokens(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        model_id: str,
+        tools: Sequence[Mapping[str, Any]] | None = None,
+    ) -> int:
+        """Estimate the same native input that the selected Zen wire sends."""
+        profile = self.wire_profile(model_id)
+        if profile.protocol == "messages":
+            return self._messages.estimate_request_input_tokens(
+                messages,
+                model_id=model_id,
+                tools=tools,
+            )
+        if profile.protocol == "gemini":
+            self._refuse_unadmitted_model(model_id)
+            payload = gemini_input_payload(messages, media_types=profile.media.types, tools=tools)
+            history = estimate_structured_tokens(payload.pop("contents"), model_id=model_id)[0]
+            return history + estimate_structured_tokens(payload, model_id=model_id)[0]
+        return super().estimate_request_input_tokens(messages, model_id=model_id, tools=tools)
 
     @override
     async def send(
@@ -486,41 +506,11 @@ class OpenCodeZenAdapter(OpenAIAdapter):
                 value = request.get(output_key)
                 if isinstance(value, int) and not isinstance(value, bool):
                     request[output_key] = min(value, model_ceiling)
-        projected = project_tool_result_content_fallbacks(messages)
-        system_parts: list[dict[str, str]] = []
-        contents: list[dict[str, Any]] = []
-        tool_names: dict[str, str] = {}
-        image_count = 0
-        for message in projected:
-            if message.get("role") == "system":
-                system_parts.append({"text": _content_text(message.get("content"))})
-                continue
-            if message.get("role") == "assistant":
-                for tool_call in message.get("tool_calls") or []:
-                    if not isinstance(tool_call, Mapping):
-                        continue
-                    call_id = tool_call.get("id")
-                    name = tool_call.get("name")
-                    if isinstance(call_id, str) and isinstance(name, str):
-                        tool_names[call_id] = name
-            projected_message = message
-            if message.get("role") == "tool" and not message.get("name"):
-                call_id = message.get("tool_call_id")
-                if isinstance(call_id, str) and call_id in tool_names:
-                    projected_message = {**message, "name": tool_names[call_id]}
-            content, added_images = _to_gemini_content(projected_message, profile.media.types)
-            image_count += added_images
-            if content is not None:
-                contents.append(content)
-        if image_count > ZEN_MAX_IMAGES_PER_REQUEST:
-            raise ProviderError(
-                f"Gemini accepts at most {ZEN_MAX_IMAGES_PER_REQUEST} images per request",
-                retryable=False,
-            )
-
-        payload: dict[str, Any] = {"contents": contents}
-        if system_parts:
-            payload["systemInstruction"] = {"parts": system_parts}
+        payload = gemini_input_payload(
+            messages,
+            media_types=profile.media.types,
+            tools=request.pop("tools", None),
+        )
 
         generation: dict[str, Any] = {}
         output_limits = [
@@ -552,12 +542,6 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         if response_format is not None:
             _apply_gemini_response_format(generation, response_format)
 
-        tools = request.pop("tools", None)
-        if tools:
-            if not isinstance(tools, Sequence) or isinstance(tools, str | bytes):
-                raise ProviderError("Gemini tools must be a list", retryable=False)
-            rendered = render_tool_definitions(tools, profile="omit_strict")
-            payload["tools"] = [{"functionDeclarations": rendered}]
         tool_choice = request.pop("tool_choice", None)
         if tool_choice is not None:
             payload["toolConfig"] = {"functionCallingConfig": _gemini_tool_choice(tool_choice)}
