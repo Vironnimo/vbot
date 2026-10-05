@@ -325,16 +325,9 @@ def test_callbacks_use_one_worker_and_recover_after_a_facade_exception():
     release_start = threading.Event()
     logs_entered = threading.Event()
     release_logs = threading.Event()
-    recovery_polled = threading.Event()
     callback_threads: list[int] = []
 
     class ControlledActions(Actions):
-        @override
-        def state(self) -> TrayState:
-            if logs_entered.is_set() and release_logs.is_set():
-                recovery_polled.set()
-            return super().state()
-
         @override
         def start_server(self) -> None:
             callback_threads.append(threading.get_ident())
@@ -367,8 +360,8 @@ def test_callbacks_use_one_worker_and_recover_after_a_facade_exception():
         assert callback_threads[0] == callback_threads[1] != threading.get_ident()
 
         release_logs.set()
-        assert recovery_polled.wait(timeout=5)
-        assert controller.menu_items()[0].label == normal_status
+        # A state poll can precede the action worker clearing its error.
+        _wait_until(lambda: controller.menu_items()[0].label == normal_status)
     finally:
         release_start.set()
         release_logs.set()
