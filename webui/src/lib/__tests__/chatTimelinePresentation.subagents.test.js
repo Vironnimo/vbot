@@ -6,6 +6,7 @@ import {
   resolveSubAgentCancelPlan,
   subAgentAction,
   subAgentAgentId,
+  subAgentDescription,
   subAgentDotStatus,
   subAgentEffectiveRunId,
   subAgentLastToolName,
@@ -173,6 +174,27 @@ describe('Sub-Agent rows', () => {
     );
   });
 
+  it.each([
+    [
+      'its description',
+      runningSubAgentTool({
+        arguments: { content: 'Inspect', description: 'Module check' },
+      }),
+      'Module check',
+    ],
+    [
+      'another spelling of the description',
+      runningSubAgentTool({
+        arguments: { content: 'Inspect', label: 'Labelled check' },
+      }),
+      'Labelled check',
+    ],
+    ['nothing for a call without one', runningSubAgentTool(), ''],
+    ['nothing for a message to an existing Sub-Agent', sendSubAgentTool(), ''],
+  ])('titles a Sub-Agent row with %s', (_case, tool, description) => {
+    expect(subAgentDescription(tool)).toBe(description);
+  });
+
   it('keeps the complete task behind a shortened preview', () => {
     const task = `Review ${'every module '.repeat(12)}`.trim();
     const tool = runningSubAgentTool({ arguments: { content: task } });
@@ -190,6 +212,7 @@ describe('Sub-Agent rows', () => {
         action: 'run',
         agent_id: 'reviewer',
         content: 'Review the implementation',
+        description: 'Review pass',
       },
       subAgentSession: {
         id: 'sub_completed',
@@ -261,7 +284,7 @@ describe('Sub-Agent rows', () => {
       expect.objectContaining({
         kind: 'subagent',
         agentId: 'reviewer',
-        preview: 'Review the implementation',
+        description: 'Review pass',
         target: { agentId: 'reviewer', sessionId: 'session-reviewer' },
       }),
     );

@@ -31,6 +31,7 @@
     runFooterParts,
     speechArtifactFromTool,
     subAgentAgentId,
+    subAgentDescription,
     subAgentDotStatus,
     subAgentLastToolName,
     subAgentNavigationTarget,
@@ -288,6 +289,7 @@
               Date.now(),
             )}
           {@const task = subAgentTask(child)}
+          {@const description = subAgentDescription(child)}
           <details
             class="tool-event run-tool-event subagent-tool-event"
             open={viewState.isOpen(toolDisclosureKey(child))}
@@ -312,16 +314,17 @@
               <span class="subagent-agent">
                 {t('agents.form.id')}: {subAgentAgentId(child)}
               </span>
-              {#if lastToolName}
+              {#if description}
                 <span
-                  class="te-arg subagent-preview subagent-activity"
-                  use:tooltip={statusDetails}
+                  class="te-arg subagent-preview"
+                  use:tooltip={{ text: description, whenTruncated: true }}
                 >
-                  {lastToolName}
+                  {description}
                 </span>
-              {:else if subAgentPreview(child)}
-                <!-- The preview must receive focus so the complete task and
-                     its Copy action reach keyboard users. -->
+              {:else if !lastToolName && subAgentPreview(child)}
+                <!-- A call from before titles were required: the preview
+                     must receive focus so the complete task and its Copy
+                     action reach keyboard users. -->
                 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
                 <span
                   class="te-arg subagent-preview"
@@ -334,6 +337,14 @@
                     whenTruncated={subAgentPreview(child) === task}
                     showDelayMs={INTENTIONAL_HOVER_SHOW_DELAY_MS}
                   />
+                </span>
+              {/if}
+              {#if lastToolName}
+                <span
+                  class="te-arg subagent-activity"
+                  use:tooltip={statusDetails}
+                >
+                  {lastToolName}
                 </span>
               {/if}
               {#if subAgentNavigationTarget(child)}

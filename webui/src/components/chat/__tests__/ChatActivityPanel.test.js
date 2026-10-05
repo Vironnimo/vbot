@@ -16,7 +16,13 @@ vi.mock('svelte/reactivity', async () => {
 const { default: ChatActivityPanel } =
   await import('../ChatActivityPanel.svelte');
 
-function subAgentTask({ id, agentId, content = 'Review', status }) {
+function subAgentTask({
+  id,
+  agentId,
+  content = 'Review',
+  description = '',
+  status,
+}) {
   const data = {
     id: `sub-${id}`,
     agent_id: agentId,
@@ -28,7 +34,12 @@ function subAgentTask({ id, agentId, content = 'Review', status }) {
     id,
     name: 'subagent',
     status: 'success',
-    arguments: { action: 'run', agent_id: agentId, content },
+    arguments: {
+      action: 'run',
+      agent_id: agentId,
+      content,
+      ...(description ? { description } : {}),
+    },
     subAgentSession: { ...data, run_id: `run-${id}` },
     result: { ok: true, error: null, data, artifacts: [] },
   };
@@ -215,6 +226,7 @@ describe('ChatActivityPanel', () => {
         id: 'running',
         agentId: 'builder',
         content: 'Implement the sidebar',
+        description: 'Sidebar work',
         status: 'running',
       }),
       failedBash: backgroundCommandTask({
@@ -301,14 +313,21 @@ describe('ChatActivityPanel', () => {
         ]),
       ),
     );
+    // A Sub-Agent shows its title, never its task.
     expect(
-      rowContaining('builder').querySelector('.chat-activity__task-preview')
+      rowContaining('builder').querySelector('.chat-activity__task-description')
         .textContent,
-    ).toBe('Implement the sidebar');
+    ).toBe('Sidebar work');
+    expect(
+      rowContaining('reviewer').querySelector(
+        '.chat-activity__task-description',
+      ),
+    ).toBeNull();
+    expect(document.body.textContent).not.toContain('Implement the sidebar');
     expect(
       subagents.querySelector('.chat-activity__running-count').textContent,
     ).toBe(t('chat.activity.runningCount', { count: 1 }));
-    // The complete task and each complete command sit in copy cards.
+    // Each complete command sits in a copy card.
     const cards = Object.fromEntries(
       [...document.querySelectorAll('.copyable-value-card')].map((card) => [
         card.querySelector('.copyable-value-card__value').textContent,
@@ -316,7 +335,6 @@ describe('ChatActivityPanel', () => {
       ]),
     );
     expect(cards).toMatchObject({
-      'Implement the sidebar': t('chat.subagent.copyTask'),
       'npm run dev': t('chat.copyCommand'),
       'npm test': t('chat.copyCommand'),
     });

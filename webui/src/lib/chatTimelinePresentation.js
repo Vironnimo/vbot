@@ -16,6 +16,7 @@ export {
   subAgentAgentId,
   subAgentEffectiveRunId,
   resolveSubAgentCancelPlan,
+  subAgentDescription,
   subAgentPreview,
   subAgentTask,
   subAgentStatusDetails,

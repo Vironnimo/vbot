@@ -139,33 +139,38 @@ describe('ChatAssistantRun', () => {
 
   it.each([
     [
-      "the Child Run's last Tool while running",
+      "the title and the Child Run's last Tool while running",
       subAgentChild(),
       { 'runTool:run-child': 'bash' },
-      ['bash', true],
+      ['Module check', 'bash'],
     ],
     [
-      'the prompt until the Child Run makes a Tool call',
+      'the title until the Child Run makes a Tool call',
       subAgentChild(),
       {},
-      ['Inspect', false],
+      ['Module check', null],
     ],
     [
-      'the prompt once the Child Run settled despite a leftover Tool entry',
+      'the title once the Child Run settled despite a leftover Tool entry',
       subAgentChild({ status: 'success', runStatus: 'completed' }),
       { 'runTool:run-child': 'bash' },
-      ['Inspect', false],
+      ['Module check', null],
     ],
-  ])('previews %s on a sub-agent row', (_case, child, statuses, expected) => {
+    [
+      'the task of a call without a title',
+      subAgentChild({ description: '' }),
+      {},
+      ['Inspect', null],
+    ],
+  ])('shows %s on a sub-agent row', (_case, child, statuses, expected) => {
     run.mount({
       item: assistantRun({ items: [child] }),
       subAgentStatuses: statuses,
     });
 
-    const preview = document.querySelector('.subagent-preview');
     expect([
-      preview.textContent.trim(),
-      preview.classList.contains('subagent-activity'),
+      document.querySelector('.subagent-preview').textContent.trim(),
+      document.querySelector('.subagent-activity')?.textContent.trim() ?? null,
     ]).toEqual(expected);
   });
 

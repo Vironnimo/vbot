@@ -24,9 +24,8 @@ import {
   subAgentLastToolName,
   subAgentToolStatusLabel,
   subAgentAgentId,
-  subAgentPreview,
+  subAgentDescription,
   subAgentResultData,
-  subAgentTask,
   subAgentNavigationTarget,
 } from './subagents.js';
 
@@ -296,8 +295,7 @@ export const backgroundTasks = (
           dotStatus,
           label: subAgentAgentId(child),
           agentId: subAgentAgentId(child),
-          preview: subAgentPreview(child),
-          taskText: subAgentTask(child),
+          description: subAgentDescription(child),
           target: subAgentNavigationTarget(child),
           lastToolName:
             dotStatus === 'running'

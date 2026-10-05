@@ -42,6 +42,21 @@ const subAgentTaskText = (args) =>
   SUBAGENT_TASK_FIELDS.map((key) => trimmedString(args[key])).find(Boolean) ??
   '';
 
+// The short title a `run` gives its Sub-Agent, under the spellings the server
+// accepts for `description`.
+const SUBAGENT_DESCRIPTION_FIELDS = [
+  'description',
+  'title',
+  'label',
+  'summary',
+  'task_name',
+];
+
+const subAgentDescriptionText = (args) =>
+  SUBAGENT_DESCRIPTION_FIELDS.map((key) => trimmedString(args[key])).find(
+    Boolean,
+  ) ?? '';
+
 /**
  * The action a `subagent` Tool row performed: 'run', 'send', 'list',
  * 'cancel', or '' when it cannot be told (another Tool, or a call the server
@@ -338,6 +353,16 @@ export const subAgentTask = (tool) =>
 export const subAgentPreview = (tool) =>
   truncateToolLabel(subAgentTask(tool), MAX_SUBAGENT_PREVIEW_LENGTH);
 
+// The title a new Sub-Agent got from its `run` call; '' for other rows and
+// for calls made before the title was required.
+export const subAgentDescription = (tool) =>
+  isSubAgentSpawnTool(tool)
+    ? truncateToolLabel(
+        subAgentDescriptionText(subAgentArguments(tool)),
+        MAX_SUBAGENT_PREVIEW_LENGTH,
+      )
+    : '';
+
 export const subAgentDotStatus = (tool, subAgentStatuses = {}) => {
   const parentStatus = toolStatus(tool);
   if (
@@ -438,7 +463,7 @@ export function subAgentToolLabel(toolName, args) {
   }
   const agentId = trimmedString(args.agent_id);
   const preview = truncateToolLabel(
-    subAgentTaskText(args),
+    subAgentDescriptionText(args) || subAgentTaskText(args),
     MAX_SUBAGENT_PREVIEW_LENGTH,
   );
   return [agentId, preview].filter(Boolean).join(' · ');

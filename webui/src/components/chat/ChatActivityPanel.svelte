@@ -369,42 +369,31 @@
     </div>
   {:else}
     <div class="chat-activity__task-row">
-      <!-- The complete task and its Copy action live in a card beside the
-           link; a card cannot sit inside a button. -->
-      <span class="chat-activity__task-anchor">
-        <Button
-          variant="tertiary"
-          class="chat-activity__task-link"
-          ariaLabel={taskLabel(task)}
-          aria-describedby={task.preview
-            ? `${panelId}-${task.id}-preview`
-            : undefined}
-          disabled={!task.target}
-          onClick={() => task.target && onNavigateToSubAgent(task.target)}
-        >
-          <span class="chat-activity__task-copy">
-            <span class="chat-activity__task-name">
-              {task.agentId}
-              {#if task.timeLabel}
-                <span class="chat-activity__task-time">· {task.timeLabel}</span>
-              {/if}
-            </span>
-            {#if task.preview}
-              <span
-                id={`${panelId}-${task.id}-preview`}
-                class="chat-activity__task-preview">{task.preview}</span
-              >
+      <Button
+        variant="tertiary"
+        class="chat-activity__task-link"
+        ariaLabel={taskLabel(task)}
+        aria-describedby={task.description
+          ? `${panelId}-${task.id}-description`
+          : undefined}
+        disabled={!task.target}
+        onClick={() => task.target && onNavigateToSubAgent(task.target)}
+      >
+        <span class="chat-activity__task-copy">
+          <span class="chat-activity__task-name">
+            {task.agentId}
+            {#if task.timeLabel}
+              <span class="chat-activity__task-time">· {task.timeLabel}</span>
             {/if}
           </span>
-        </Button>
-        <CopyableValueCard
-          value={task.taskText}
-          copyLabel={t('chat.subagent.copyTask')}
-          copiedLabel={t('chat.subagent.taskCopied')}
-          whenTruncated={task.preview === task.taskText}
-          placement="left"
-        />
-      </span>
+          {#if task.description}
+            <span
+              id={`${panelId}-${task.id}-description`}
+              class="chat-activity__task-description">{task.description}</span
+            >
+          {/if}
+        </span>
+      </Button>
       {@render statusIcon(task)}
       {@render cancelButton(task)}
     </div>
@@ -962,11 +951,6 @@
   :global(.chat-activity__task-link.btn-tertiary:hover) {
     background: transparent;
   }
-  .chat-activity__task-anchor {
-    display: flex;
-    min-width: 0;
-    flex: 1;
-  }
   .chat-activity__task-copy {
     display: flex;
     min-width: 0;
@@ -982,7 +966,7 @@
     font-size: var(--fs-body-sm);
     font-weight: 500;
   }
-  .chat-activity__task-preview {
+  .chat-activity__task-description {
     display: -webkit-box;
     overflow: hidden;
     -webkit-box-orient: vertical;
