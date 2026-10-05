@@ -292,6 +292,7 @@ async def _sse_run_events(
     run: Any,
     *,
     after_sequence: int = 0,
+    shutdown_event: asyncio.Event | None = None,
     heartbeat_interval_seconds: float = SSE_HEARTBEAT_INTERVAL_SECONDS,
     file_delivery: FileDelivery | None = None,
     include_file_urls: bool = False,
@@ -299,17 +300,27 @@ async def _sse_run_events(
     async with aclosing(run.subscribe(after_sequence=after_sequence)) as events:
         event_iterator = events.__aiter__()
         event_task: asyncio.Task[Any] | None = None
+        shutdown_task = (
+            asyncio.create_task(shutdown_event.wait(), name=f"sse-shutdown:{run.id}")
+            if shutdown_event is not None
+            else None
+        )
         try:
-            while True:
+            while shutdown_event is None or not shutdown_event.is_set():
                 if event_task is None:
                     event_task = asyncio.create_task(
                         anext(event_iterator), name=f"sse-next:{run.id}"
                     )
+                waiting = {event_task}
+                if shutdown_task is not None:
+                    waiting.add(shutdown_task)
                 done, _pending = await asyncio.wait(
-                    {event_task},
+                    waiting,
                     timeout=heartbeat_interval_seconds,
                     return_when=asyncio.FIRST_COMPLETED,
                 )
+                if shutdown_task in done:
+                    break
                 if not done:
                     # A named transport-only event keeps quiet Tool calls from
                     # looking like a dead connection. It has no Run sequence and
@@ -343,7 +354,10 @@ async def _sse_run_events(
                     f"data: {json.dumps(data, separators=(',', ':'))}\n\n"
                 )
         finally:
-            if event_task is not None and not event_task.done():
-                event_task.cancel()
+            tasks = [task for task in (event_task, shutdown_task) if task is not None]
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            for task in tasks:
                 with suppress(asyncio.CancelledError, StopAsyncIteration):
-                    await event_task
+                    await task

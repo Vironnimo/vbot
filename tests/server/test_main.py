@@ -127,12 +127,15 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, ac
             assert instance.data_dir == tmp_path / "data"
             assert schedule.call_args.kwargs == {"wait_pid": server_main.os.getpid()}
             assert not server.should_exit
+            assert not app["shutdown_event"].is_set()
             delay, callback = loop.call_later.call_args.args
             assert delay > 0
             callback()
             assert server.should_exit
+            assert app["shutdown_event"].is_set()
         app["request_shutdown"]()
         assert server.should_exit is True
+        assert app["shutdown_event"].is_set()
 
     calls = _patch_serving(monkeypatch, run)
     heap: list[str] = []
@@ -146,6 +149,7 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch, ac
     assert calls[0]["host"] == "127.0.0.1"
     assert calls[0]["port"] == 8765
     assert calls[0]["ws_per_message_deflate"] is False
+    assert calls[0]["timeout_graceful_shutdown"] == 5
     assert calls[0]["log_level"] == "info"
     assert calls[0]["access_log"] is False
     assert calls[0]["log_config"]["handlers"]["vbot_proxy"] == {
@@ -222,6 +226,7 @@ def _serve_until(cause: str) -> Callable[[Any], None]:
         else:
             app["request_shutdown"]("tray_quit")
         assert server.should_exit
+        assert app["shutdown_event"].is_set()
         app["on_stopped"](cause != "shutdown_failed")
 
     return run

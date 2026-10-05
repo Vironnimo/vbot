@@ -250,9 +250,17 @@ def test_sse_endpoint_replays_a_finished_run_ending_after_the_requested_sequence
 
 
 @pytest.mark.asyncio
-async def test_sse_stream_close_removes_run_subscriber() -> None:
+@pytest.mark.parametrize("ending", ["close", "cancel", "shutdown", "already_stopping"])
+async def test_sse_stream_close_removes_run_subscriber(ending: str) -> None:
     run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
-    stream = _sse_run_events(run)
+    shutdown = asyncio.Event()
+    stream = _sse_run_events(run, shutdown_event=shutdown)
+    if ending == "already_stopping":
+        shutdown.set()
+        with pytest.raises(StopAsyncIteration):
+            await anext(stream)
+        assert run.subscriber_count == 0
+        return
     next_event = asyncio.create_task(_read_next_sse_event(stream))
 
     # The heartbeat-capable stream owns the blocking event read in a child
@@ -264,14 +272,23 @@ async def test_sse_stream_close_removes_run_subscriber() -> None:
         await asyncio.sleep(0)
     assert run.subscriber_count == 1
 
-    run.emit("visible", {"content": "hello"})
-    rendered_event = await next_event
-    assert "event: visible" in rendered_event
-    assert run.subscriber_count == 1
-
-    await stream.aclose()
+    if ending == "close":
+        run.emit("visible", {"content": "hello"})
+        rendered_event = await next_event
+        assert "event: visible" in rendered_event
+        assert run.subscriber_count == 1
+        await stream.aclose()
+    elif ending == "cancel":
+        next_event.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await next_event
+    else:
+        shutdown.set()
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(next_event, timeout=1)
 
     assert run.subscriber_count == 0
+    assert run.status.value == "running"
 
 
 @pytest.mark.asyncio
