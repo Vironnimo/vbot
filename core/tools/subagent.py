@@ -36,6 +36,9 @@ SUBAGENT_TOOL_DESCRIPTION = (
 SUBAGENT_PROMPT_BLOCK_TEMPLATE = (
     "## Sub-Agents\n\n"
     "{target_choices}\n\n"
+    "When the user asks for an Agent that is not among these choices, tell the user that this "
+    "Agent is not available to you, then delegate to a copy of yourself or ask the user. Call "
+    "a copy your Sub-Agent, never by the name of the Agent the user asked for.\n\n"
     "Delegate bounded work that another Agent can finish independently. Start independent "
     "Sub-Agents with sibling calls in the same turn so they run concurrently, and give "
     "Sub-Agents that edit files non-overlapping ownership. You remain responsible for "
