@@ -656,7 +656,7 @@ describe('RPC wrappers', () => {
     ],
     [
       'a non-boolean Skill disabled flag',
-      () => api.setSkillDisabled('review', 'yes'),
+      () => api.setSkillDisabled('review-id', 'yes'),
       'skill.set_disabled',
     ],
     [

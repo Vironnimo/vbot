@@ -885,7 +885,7 @@ describe('AgentsView behavior and access', () => {
       'Open skill',
       'Edit instructions',
       'Copy name',
-      'Turn off everywhere',
+      'Turn this skill off',
       'Delete…',
     ]);
 

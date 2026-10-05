@@ -33,18 +33,19 @@ function copyItem(name, actions) {
   };
 }
 
-function everywhereItem(entry, actions) {
+// The package's own off switch, for every Agent and Project.
+function switchItem(entry, actions) {
   return entry.disabled
     ? {
-        id: 'turn-on-everywhere',
-        label: t('skills.menu.turnOnEverywhere'),
-        group: 'everywhere',
+        id: 'turn-on',
+        label: t('skills.menu.turnOn'),
+        group: 'switch',
         onSelect: () => actions.setDisabled(entry, false),
       }
     : {
-        id: 'turn-off-everywhere',
+        id: 'turn-off',
         label: t('skills.detail.turnOff'),
-        group: 'everywhere',
+        group: 'switch',
         onSelect: () => actions.setDisabled(entry, true),
       };
 }
@@ -77,19 +78,19 @@ function deleteItem(entry, actions) {
 }
 
 // The package part shared by every row with a package: Open, Edit, Copy
-// name | Turn off/on everywhere | Delete...
+// name | Turn this skill off/on | Delete...
 function packageMenuItems(entry, name, actions, openLabel) {
   if (!entry) return [copyItem(name, actions)];
   return [
     ...packageItems(entry, actions, openLabel),
     editItem(entry, actions),
     copyItem(name, actions),
-    everywhereItem(entry, actions),
+    switchItem(entry, actions),
     deleteItem(entry, actions),
   ];
 }
 
-/** A library row: Open, Edit, Copy name | Turn off/on everywhere | Delete. */
+/** A library row: Open, Edit, Copy name | Turn this skill off/on | Delete. */
 export function libraryRowMenu(entry, actions) {
   return {
     label: t('skills.menu.label', { name: entry.name }),

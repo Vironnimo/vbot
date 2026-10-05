@@ -15,6 +15,7 @@ import pytest
 import yaml
 
 from core.runtime.runtime import Runtime
+from core.skills.policy import SkillPackageRef
 from core.skills.skills import SKILL_ORIGIN_AGENT, SkillRegistry, project_skills_dir
 from core.tools import ToolContext
 from core.utils.config import Config
@@ -271,7 +272,9 @@ def test_unsharing_or_disabling_removes_a_shared_skill_from_receivers_live(
     runtime.skill_policy.set_shared("main", "deploy", shared=True, receivers=["two"])
     runtime.invalidate_agent_skills(None)
     assert "deploy" in _names(runtime.skills_for(None, "two"))
-    runtime.skill_policy.set_disabled("deploy", disabled=True)
+    runtime.skill_policy.set_package_disabled(
+        SkillPackageRef("agent", "deploy", "main"), disabled=True
+    )
     runtime.reload_skills()
     assert "deploy" not in _names(runtime.skills_for(None, "two"))
 
@@ -439,9 +442,10 @@ def test_manager_lists_inspects_and_evaluates_each_same_name_package(
             assert f"description: {label}" in inspection["content"]
         assert runtime.skills_for(None, "main").availability_for("duplicate").state == "available"
 
-        # The disable switch outranks every other state but keeps the details;
-        # ids are stable across inventory passes.
-        runtime.skill_policy.set_disabled("duplicate", disabled=True)
+        # Turning each package off outranks every other state but keeps the
+        # details; ids are stable across inventory passes.
+        for entry in entries.values():
+            runtime.set_skill_package_disabled(entry["id"], disabled=True)
         disabled = duplicates()
         assert {label: entry["id"] for label, entry in disabled.items()} == {
             label: entry["id"] for label, entry in entries.items()

@@ -677,6 +677,9 @@ class Runtime:
     def skill_inventory(self) -> dict[str, Any]:
         return self._skill_operations().skill_inventory()
 
+    def set_skill_package_disabled(self, entry_id: str, *, disabled: bool) -> dict[str, Any]:
+        return self._skill_operations().set_package_disabled(entry_id, disabled=disabled)
+
     def project_skill_names(self, project_id: str | None) -> frozenset[str]:
         return self._skill_operations().project_skill_names(project_id)
 

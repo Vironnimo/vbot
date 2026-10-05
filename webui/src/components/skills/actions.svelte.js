@@ -189,10 +189,10 @@ export function createSkillActions(context) {
     }
   }
 
-  // The global off switch for every package with this name.
+  // The off switch of this one package, for every Agent and Project.
   function setDisabled(entry, disabled) {
     return run(
-      () => setSkillDisabled(entry.name, disabled),
+      () => setSkillDisabled(entry.id, disabled),
       () => t('skills.toggleError'),
       () =>
         disabled

@@ -63,7 +63,6 @@ from core.runtime._agent_rename import complete_pending_rename
 from core.runtime._configuration import (
     _SKILLS_DIRNAME,
     _VBOT_ROOT,
-    _disabled_skill_names,
     _extension_load_options,
     _extra_extension_directories,
     _global_agent_defaults,
@@ -391,7 +390,7 @@ def bootstrap(runtime: Runtime) -> None:
             archive_uninstalled_groups=runtime._archive_uninstalled_extension_groups,
         )
         # Skills load after extensions: a loaded extension may bundle its own skills
-        # under ``<extension>/skills/``, which ``_skill_scan_roots`` folds into the
+        # under ``<extension>/skills/``, which ``_global_roots`` folds into the
         # global pool, so the extension layer must be in place first.
         runtime._skill_policy = SkillPolicyService(runtime._storage)
         runtime._skills = load_global_skill_registry(
@@ -400,7 +399,7 @@ def bootstrap(runtime: Runtime) -> None:
             settings=settings,
             fallback_environment=data_dir_credentials,
             extensions=runtime._extensions,
-            excluded_names=_disabled_skill_names(runtime._skill_policy),
+            disabled_packages=runtime._skill_policy.load().disabled_packages,
             logger=runtime.logger,
         )
         invalid_skill_count = len(runtime._skills.invalid_diagnostics())

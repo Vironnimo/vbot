@@ -153,7 +153,7 @@ export default Object.freeze({
   'skills.menu.copyName': 'Copy name',
   'skills.menu.nameCopied': 'Copied {name}',
   'skills.menu.copyFailed': 'The name could not be copied.',
-  'skills.menu.turnOnEverywhere': 'Turn on everywhere',
+  'skills.menu.turnOn': 'Turn this skill on',
   'skills.menu.delete': 'Delete…',
   'skills.menu.turnOnFor': 'Turn on for {name}',
   'skills.menu.turnOffFor': 'Turn off for {name}',
@@ -211,7 +211,7 @@ export default Object.freeze({
   'skills.access.allowFor': 'Allow {skill} for {name}',
   'skills.access.requirementsMissing': 'Requirements not met',
   'skills.access.missingMore': '{first} (+{count} more)',
-  'skills.summary.off': 'Off everywhere',
+  'skills.summary.off': 'Turned off',
   'skills.summary.invalid': 'Not loadable',
   'skills.summary.ownerOnly': '{name} only',
   'skills.summary.ownerShared': '{name} + {count} shared',
@@ -226,12 +226,12 @@ export default Object.freeze({
   'skills.summary.agents': '{count} of {total} Agents',
   'skills.summary.agentsOfOne': '{count} of 1 Agent',
   'skills.summary.noAgents': 'No Agents',
-  'skills.detail.turnOff': 'Turn off everywhere',
+  'skills.detail.turnOff': 'Turn this skill off',
   'skills.detail.turnOffHelp':
-    'Stops every skill with this name for all Agents and projects, including private copies. Instructions are kept.',
+    'Stops this skill for all Agents and projects. Skills with the same name from other sources are not affected. Instructions are kept.',
   'skills.detail.turnOn': 'Turn on',
   'skills.detail.offBanner':
-    'Turned off everywhere. No Agent or project can use a skill with this name, including private copies. Instructions, sharing and every Agent and project selection are kept and apply again when you turn it on.',
+    'Turned off. No Agent or project uses this skill; where another source has a skill with the same name, that one is used instead. Instructions, sharing and every Agent and project selection are kept and apply again when you turn it on.',
   'skills.detail.duplicate': 'Also exists as {copy}.',
   'skills.detail.duplicateWinsIn':
     'Also exists as {copy}; that copy wins in {projects}.',
@@ -256,7 +256,7 @@ export default Object.freeze({
   'skills.panel.projectPoolGroup': 'Project skills',
   'skills.panel.savedGroup': 'Saved but not found',
   'skills.panel.savedDetail':
-    'Not installed, turned off everywhere, or not visible to this Agent.',
+    'Not installed, turned off, or not visible to this Agent.',
   'skills.panel.sharedBy': 'From {name}',
   'skills.panel.lockedByProject':
     'Granted by project {name}. Change it in that project’s skills.',
@@ -986,7 +986,7 @@ export default Object.freeze({
   'skills.status.disabled': 'Disabled',
   'skills.status.invalid': 'Invalid',
   'skills.enabledToast': 'Skill “{name}” turned on.',
-  'skills.disabledToast': 'Skill “{name}” turned off everywhere.',
+  'skills.disabledToast': 'Skill “{name}” turned off.',
   'skills.toggleError': 'The skill could not be changed.',
   'skills.readError': 'The skill could not be read.',
   'skills.shareError': 'Sharing could not be changed.',

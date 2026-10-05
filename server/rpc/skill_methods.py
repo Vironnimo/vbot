@@ -17,17 +17,21 @@ revisions, ``skill.revert`` undoes some (a conflict is a ``domain_error`` whose
 against background changes.
 
 The manager surface (``skill.inventory`` / ``skill.set_disabled`` / ``skill.share``)
-reads every source without exclusions and mutates the Skills domain's policy file;
-both mutations invalidate live and publish the generic resource-changed event with
-the ``skills`` kind. The inventory adds each package's Skill use from Statistics.
+reads every source without exclusions and mutates the Skills domain's policy file
+(``skill.set_disabled`` turns one inventoried package off, a Project's own Skill in
+its Project); both mutations invalidate live and publish the generic
+resource-changed event with the ``skills`` kind. The inventory adds each package's
+Skill use from Statistics.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
+from core.projects import ProjectError
 from core.settings import is_valid_agent_id
 from core.skills import (
     HUMAN_WRITER,
@@ -40,7 +44,7 @@ from core.skills import (
 from core.statistics import SkillUse
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
-from server.events import RESOURCE_KIND_SKILLS
+from server.events import RESOURCE_KIND_PROJECTS, RESOURCE_KIND_SKILLS
 from server.rpc._mutations import MutationHandler, serialized_mutation
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
@@ -505,23 +509,25 @@ def _required_bool(params: JsonObject, key: str) -> bool:
 
 
 async def _skill_set_disabled(state: Any, params: JsonObject) -> JsonObject:
-    """Toggle the policy disable switch for one Skill name (master switch)."""
-    name = _required_string(params, "name")
+    """Turn one inventoried Skill package off, or on again (``id`` from the inventory)."""
+    entry_id = _required_string(params, "id")
     disabled = _required_bool(params, "disabled")
-    inventory = await _SKILL_READ_WORKERS.run(state.runtime.skill_inventory)
-    if not any(entry["name"] == name for entry in inventory["skills"]):
-        raise RpcError(RPC_ERROR_SKILL_NOT_FOUND, f"unknown skill: {name!r}")
     try:
-        await _SKILL_READ_WORKERS.run(
-            state.runtime.skill_policy.set_disabled, name, disabled=disabled
+        result = await _SKILL_READ_WORKERS.run(
+            partial(state.runtime.set_skill_package_disabled, entry_id, disabled=disabled)
         )
-    except SkillPolicyError as exc:
+    except ValueError as exc:
+        raise RpcError(RPC_ERROR_SKILL_NOT_FOUND, str(exc)) from exc
+    except (SkillPolicyError, ProjectError) as exc:
         # An unreadable or invalid policy document is refused rather than
         # overwritten; report it as an expected domain failure.
         raise RpcError(RPC_ERROR_DOMAIN, str(exc)) from exc
-    await state.runtime.reload_skills_async()
+    if result["project_id"] is None:
+        await state.runtime.reload_skills_async()
+    else:
+        publish_resource_changed(state, RESOURCE_KIND_PROJECTS)
     publish_resource_changed(state, RESOURCE_KIND_SKILLS)
-    return {"name": name, "disabled": disabled}
+    return cast(JsonObject, result)
 
 
 async def _skill_share(state: Any, params: JsonObject) -> JsonObject:

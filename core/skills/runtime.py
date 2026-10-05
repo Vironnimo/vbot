@@ -20,7 +20,7 @@ from core.projects import (
     effective_project_allowed_skills,
 )
 from core.skills.authoring import ArchivedSkill, SkillAuthoringService, SkillRecord
-from core.skills.policy import SkillPolicyService
+from core.skills.policy import SkillPackageRef, SkillPolicyService
 from core.skills.skills import (
     SKILL_ORIGIN_AGENT,
     SKILL_ORIGIN_BUNDLED,
@@ -43,13 +43,27 @@ _SKILLS_DIRNAME = "skills"
 _AGENTS_DIRNAME = "agents"
 
 
-def _scan_roots(
+@dataclass(frozen=True)
+class _GlobalRoot:
+    """One global Skill scan root and the package source it represents.
+
+    ``kind`` is a Skill Policy package source (``home``, ``folder``,
+    ``extension`` or ``bundled``); ``location`` names the configured folder (as
+    written) or the Extension, ``None`` for the home and the bundled root.
+    """
+
+    root: Path
+    kind: str
+    location: str | None = None
+
+
+def _global_roots(
     storage: StorageManager,
     resources_path: Path,
     settings: dict[str, object],
     extensions: ExtensionRegistry | None,
     logger: Any,
-) -> list[Path]:
+) -> list[_GlobalRoot]:
     """Return the global Skill scan roots in first-found-wins precedence order.
 
     Every global source outranks the bundled Skills: the user's own global home
@@ -59,7 +73,7 @@ def _scan_roots(
     root being the final entry.
     """
     raw_directories = settings.get("skill_directories", [])
-    extra_directories: list[Path] = []
+    folders: list[_GlobalRoot] = []
     if not isinstance(raw_directories, list):
         logger.warning("settings.skill_directories must be a list; ignoring value")
     else:
@@ -67,10 +81,10 @@ def _scan_roots(
             if not isinstance(raw_directory, str) or not raw_directory.strip():
                 logger.warning("Ignoring invalid skill directory setting: %r", raw_directory)
                 continue
-            extra_directories.append(Path(raw_directory).expanduser())
-    extension_directories = (
+            folders.append(_GlobalRoot(Path(raw_directory).expanduser(), "folder", raw_directory))
+    extension_roots = (
         [
-            record.root_path / _SKILLS_DIRNAME
+            _GlobalRoot(record.root_path / _SKILLS_DIRNAME, "extension", record.name)
             for record in extensions.records()
             if record.status == "loaded"
         ]
@@ -78,15 +92,37 @@ def _scan_roots(
         else []
     )
     return [
-        storage.data_dir / _SKILLS_DIRNAME,
-        *extra_directories,
-        *extension_directories,
-        resources_path / _SKILLS_DIRNAME,
+        _GlobalRoot(storage.data_dir / _SKILLS_DIRNAME, "home"),
+        *folders,
+        *extension_roots,
+        _GlobalRoot(resources_path / _SKILLS_DIRNAME, "bundled"),
     ]
 
 
+def _package_exclusions(
+    roots: list[_GlobalRoot],
+    agent_home: Callable[[str], Path],
+    refs: Iterable[SkillPackageRef],
+) -> frozenset[tuple[Path, str]]:
+    """Map turned-off packages to the (resolved Skill home, name) pairs a load skips.
+
+    A package whose source is not scanned (an unloaded Extension, a folder no
+    longer configured) maps to nothing; its policy entry waits until it returns.
+    """
+    excluded: set[tuple[Path, str]] = set()
+    for ref in refs:
+        if ref.source == "agent" and ref.location is not None:
+            excluded.add((agent_home(ref.location).resolve(), ref.name))
+            continue
+        for root in roots:
+            if root.kind == ref.source and root.location == ref.location:
+                excluded.add((root.root.resolve(), ref.name))
+                break
+    return frozenset(excluded)
+
+
 def _origin_layers(scan_roots: list[Path]) -> list[str | None]:
-    """Return the origin tags parallel to :func:`_scan_roots` (bundled last)."""
+    """Return the origin tags parallel to :func:`_global_roots` (bundled last)."""
     origins: list[str | None] = [SKILL_ORIGIN_GLOBAL for _ in scan_roots[:-1]]
     origins.append(SKILL_ORIGIN_BUNDLED)
     return origins
@@ -99,18 +135,23 @@ def load_global_skill_registry(
     settings: dict[str, object],
     fallback_environment: dict[str, str],
     extensions: ExtensionRegistry | None,
-    excluded_names: frozenset[str],
+    disabled_packages: Iterable[SkillPackageRef],
     logger: Any,
 ) -> SkillRegistry:
     environment = dict(fallback_environment)
     environment.update(os.environ)
-    roots = _scan_roots(storage, resources_path, settings, extensions, logger)
+    global_roots = _global_roots(storage, resources_path, settings, extensions, logger)
+    roots = [root.root for root in global_roots]
     return SkillRegistry.load(
         roots[0],
         extra_dirs=roots[1:],
         environment=environment,
         origins=_origin_layers(roots),
-        excluded_names=excluded_names,
+        excluded_packages=_package_exclusions(
+            global_roots,
+            lambda agent_id: storage.data_dir / _AGENTS_DIRNAME / agent_id / _SKILLS_DIRNAME,
+            disabled_packages,
+        ),
     )
 
 
@@ -128,6 +169,7 @@ class _ManagerSource:
     package is or is not editable: ``home`` (the user's global home), ``folder``
     (a configured ``skill_directories`` entry), ``extension`` (a loaded
     Extension's ``skills/``), ``bundled``, ``project`` or ``agent``.
+    ``location`` names the folder (as configured) or the Extension.
     """
 
     root: Path
@@ -135,6 +177,18 @@ class _ManagerSource:
     owner_id: str | None
     project_id: str | None
     kind: str
+    location: str | None = None
+
+    def package_ref(self, name: str) -> SkillPackageRef | None:
+        """The Skill Policy entry that turns this root's package ``name`` off.
+
+        ``None`` for a Project's own Skill, which its Project turns off.
+        """
+        if self.kind == "project":
+            return None
+        if self.kind == "agent":
+            return SkillPackageRef("agent", name, self.owner_id)
+        return SkillPackageRef(self.kind, name, self.location)
 
 
 class SkillRuntime:
@@ -251,20 +305,25 @@ class SkillRuntime:
             settings=self._storage.load_settings(),
             fallback_environment=self._storage.load_environment(),
             extensions=self._extensions,
-            excluded_names=self._disabled_skill_names(),
+            disabled_packages=self._policy.load().disabled_packages,
             logger=self._logger,
         )
 
-    def _disabled_skill_names(self) -> frozenset[str]:
-        return self._policy.load().disabled
+    def _disabled_packages(self, global_roots: list[_GlobalRoot]) -> frozenset[tuple[Path, str]]:
+        """The (Skill home, name) pairs of every package the Skill Policy turns off."""
+        return _package_exclusions(
+            global_roots, self.agent_skills_dir, self._policy.load().disabled_packages
+        )
 
     def _skill_environment(self, fallback_environment: dict[str, str]) -> dict[str, str]:
         environment = dict(fallback_environment)
         environment.update(os.environ)
         return environment
 
-    def _skill_scan_roots(self, settings: dict[str, object], resources_path: Path) -> list[Path]:
-        return _scan_roots(self._storage, resources_path, settings, self._extensions, self._logger)
+    def _global_roots(self, settings: dict[str, object]) -> list[_GlobalRoot]:
+        return _global_roots(
+            self._storage, self._resources_path, settings, self._extensions, self._logger
+        )
 
     def agent_skills_dir(self, agent_id: str) -> Path:
         """Return an agent's private skill home (``<data_dir>/agents/<id>/skills``)."""
@@ -415,7 +474,6 @@ class SkillRuntime:
         registry = SkillRegistry.load(
             project_skills_dir(Path(project.cwd), project.source_format),
             environment=environment,
-            excluded_names=self._disabled_skill_names(),
         )
         return registry.list_all()
 
@@ -437,23 +495,11 @@ class SkillRuntime:
         projects: list[Project] | None = None,
         agents: list[Agent] | None = None,
     ) -> list[_ManagerSource]:
-        roots = self._skill_scan_roots(self._storage.load_settings(), self._resources_path)
-        extension_roots = {
-            (record.root_path / _SKILLS_DIRNAME).resolve()
-            for record in (self._extensions.records() if self._extensions is not None else [])
-            if record.status == "loaded"
-        }
-
-        def global_kind(index: int, root: Path) -> str:
-            if index == 0:
-                return "home"
-            if index == len(roots) - 1:
-                return "bundled"
-            return "extension" if root.resolve() in extension_roots else "folder"
-
+        global_roots = self._global_roots(self._storage.load_settings())
+        origins = _origin_layers([root.root for root in global_roots])
         sources = [
-            _ManagerSource(root, origin, None, None, global_kind(index, root))
-            for index, (root, origin) in enumerate(zip(roots, _origin_layers(roots), strict=True))
+            _ManagerSource(root.root, origin, None, None, root.kind, root.location)
+            for root, origin in zip(global_roots, origins, strict=True)
         ]
         sources.extend(
             _ManagerSource(
@@ -481,17 +527,56 @@ class SkillRuntime:
         identity = f"{root.resolve().as_posix()}\0{path.resolve().as_posix()}\0{owner_id or ''}"
         return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
-    def inspect_skill(self, entry_id: str) -> dict[str, Any]:
-        """Read exactly one currently inventoried package without activating it."""
+    def _inventoried_package(
+        self, entry_id: str, *, loadable_only: bool = False
+    ) -> tuple[_ManagerSource, Path, str]:
+        """Find one inventoried package: its source, ``SKILL.md`` path and name.
+
+        Raises ``ValueError`` when no current package has that inventory id.
+        """
         environment = self._skill_environment(self._storage.load_environment())
         for source in self._manager_sources():
             registry = SkillRegistry.load(source.root, environment=environment)
-            paths = [skill.path for skill in registry.list_all()]
-            paths.extend(diagnostic.path for diagnostic in registry.invalid_diagnostics())
-            for path in paths:
+            packages = [(skill.path, skill.name) for skill in registry.list_all()]
+            if not loadable_only:
+                packages.extend(
+                    (diagnostic.path, diagnostic.name)
+                    for diagnostic in registry.invalid_diagnostics()
+                )
+            for path, name in packages:
                 if self._manager_entry_id(source.root, path, source.owner_id) == entry_id:
-                    return {"id": entry_id, "content": path.read_text(encoding="utf-8")}
+                    return source, path, name
         raise ValueError("Skill is no longer present in the inventory")
+
+    def inspect_skill(self, entry_id: str) -> dict[str, Any]:
+        """Read exactly one currently inventoried package without activating it."""
+        _, path, _ = self._inventoried_package(entry_id)
+        return {"id": entry_id, "content": path.read_text(encoding="utf-8")}
+
+    def set_package_disabled(self, entry_id: str, *, disabled: bool) -> dict[str, Any]:
+        """Turn the inventoried package ``entry_id`` off, or on again.
+
+        Only that package changes: a same-named package of another source stays
+        as it is, and one that this package hid from the same pool loads again.
+        A Project's own Skill is turned off in its Project
+        (``skills_project_disabled``); every other package in the Skill Policy.
+        Returns ``name``, ``disabled`` and the ``project_id`` of a Project Skill
+        (``None`` otherwise). The caller reloads the global registry for a policy
+        change. Raises ``ValueError`` for an unknown or unloadable package, and
+        ``SkillPolicyError`` or ``ProjectError`` when the change cannot be saved.
+        """
+        source, _, name = self._inventoried_package(entry_id, loadable_only=True)
+        ref = source.package_ref(name)
+        if ref is None and source.project_id is not None:
+            project = self._projects.get(source.project_id)
+            names = [entry for entry in project.skills_project_disabled if entry != name]
+            if disabled:
+                names.append(name)
+            self._projects.update(project.project_id, skills_project_disabled=names)
+            self.invalidate_project_skills(project.project_id)
+        elif ref is not None:
+            self._policy.set_package_disabled(ref, disabled=disabled)
+        return {"name": name, "disabled": disabled, "project_id": source.project_id}
 
     def skill_inventory(self) -> dict[str, Any]:
         """One pass over every Skill source for the human manager (no exclusions).
@@ -518,6 +603,9 @@ class SkillRuntime:
         environment = self._skill_environment(self._storage.load_environment())
         policy = self._policy.load()
         projects = self._projects.list()
+        project_disabled = {
+            project.project_id: frozenset(project.skills_project_disabled) for project in projects
+        }
         agents = self._agents.list()
 
         # (metadata, source, warnings, loadable) per scanned package.
@@ -561,9 +649,14 @@ class SkillRuntime:
                 missing = []
                 optional_missing = []
                 status = "invalid"
-            disabled = skill.name in policy.disabled
+            ref = source.package_ref(skill.name)
+            disabled = (
+                ref in policy.disabled_packages
+                if ref is not None
+                else skill.name in project_disabled.get(source.project_id or "", frozenset())
+            )
             if disabled:
-                # The master switch outranks every other state in display.
+                # A package turned off outranks every other state in display.
                 status = "disabled"
             owner_shared = policy.shared.get(owner_id, {}) if owner_id else {}
             shared_receivers = owner_shared.get(skill.name, frozenset())
@@ -858,7 +951,8 @@ class SkillRuntime:
         settings = self._storage.load_settings()
         environment = self._skill_environment(self._storage.load_environment())
         agent_root = self.agent_skills_dir(agent_id)
-        scan_roots = self._skill_scan_roots(settings, self._resources_path)
+        global_roots = self._global_roots(settings)
+        scan_roots = [root.root for root in global_roots]
         roots: list[Path] = [agent_root]
         origins: list[str | None] = [SKILL_ORIGIN_AGENT]
         project_allowed_names: set[str] = set()
@@ -899,7 +993,7 @@ class SkillRuntime:
             environment=environment,
             always_allowed=(agent_own_names - exclusions) | project_allowed_names,
             origins=origins,
-            excluded_names=self._disabled_skill_names(),
+            excluded_packages=self._disabled_packages(global_roots),
             allowlist_exclusions=exclusions,
         )
 
@@ -1029,9 +1123,9 @@ class SkillRuntime:
         project = self._projects.get(project_id)
         project_cwd = Path(project.cwd)
         settings = self._storage.load_settings()
-        scan_roots = self._skill_scan_roots(settings, self._resources_path)
+        global_roots = self._global_roots(settings)
+        scan_roots = [root.root for root in global_roots]
         environment = self._skill_environment(self._storage.load_environment())
-        disabled = self._disabled_skill_names()
         registry = load_project_skill_registry(
             project_cwd,
             project.source_format,
@@ -1039,12 +1133,12 @@ class SkillRuntime:
             environment,
             project_origin=project_skill_origin(project.display_name),
             bundled_origins=_origin_layers(scan_roots),
-            excluded_names=disabled,
+            excluded_packages=self._disabled_packages(global_roots),
         )
-        # The resolver's config-agent input must be clean of disabled names too —
-        # a disabled project skill is invisible everywhere, including opt-ins.
+        # A Project's own Skills are turned off by the Project itself
+        # (``skills_project_disabled``), never by the Skill Policy.
         names = scan_project_skill_names(project_cwd, project.source_format, environment)
-        return _ProjectSkillBundle(registry=registry, names=names - disabled)
+        return _ProjectSkillBundle(registry=registry, names=names)
 
 
 def _record_fields(record: SkillRecord | None) -> dict[str, Any]:

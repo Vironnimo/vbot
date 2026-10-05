@@ -414,7 +414,7 @@ describe('skillAccessView', () => {
     });
   });
 
-  it('locks every row of a Skill turned off everywhere', () => {
+  it('locks every row of a Skill package turned off', () => {
     const off = { ...byId('g-deploy'), disabled: true, status: 'disabled' };
     const view = skillAccessView(off, context);
     expect(
@@ -435,7 +435,7 @@ describe('library summaries', () => {
     ['own-notes', { shared_with: [] }, [mainOff], 'Off for Main'],
     ['own-notes', {}, [mainOff, allowingReviewer], 'Off for Main, 1 shared'],
     ['p-lint', {}, agents, 'Active in Repo'],
-    ['g-deploy', { disabled: true }, agents, 'Off everywhere'],
+    ['g-deploy', { disabled: true }, agents, 'Turned off'],
     ['g-deploy', { status: 'invalid' }, agents, 'Not loadable'],
   ])('summarizes %s %j', (id, extra, agentList, text) => {
     expect(

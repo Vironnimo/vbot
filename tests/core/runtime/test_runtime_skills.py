@@ -42,6 +42,16 @@ def _bundled_names(runtime: Runtime) -> list[str]:
     return [skill.name for skill in runtime.skills.list_all() if skill.origin == "bundled"]
 
 
+def _package_id(runtime: Runtime, name: str, description: str) -> str:
+    """The inventory id of the package ``name`` with ``description``."""
+    [entry_id] = [
+        entry["id"]
+        for entry in runtime.skill_inventory()["skills"]
+        if (entry["name"], entry["description"]) == (name, description)
+    ]
+    return str(entry_id)
+
+
 def test_identity_skills_layer_the_owners_private_home_over_the_global_pool(
     runtime: Runtime,
 ) -> None:
@@ -320,6 +330,18 @@ def test_global_skill_sources_follow_the_documented_precedence(
             "bundled"
         }
 
+        # A package turned off gives its name to the next source that has one.
+        for name, description in (
+            ("shared", "From skill_directories."),
+            ("pdf", "From the extension."),
+        ):
+            runtime.set_skill_package_disabled(
+                _package_id(runtime, name, description), disabled=True
+            )
+        runtime.reload_skills()
+        assert runtime.skills.get("shared").description == "Ext."
+        assert runtime.skills.get("pdf").origin == "bundled"
+
         # Live-disabling the Extension refreshes the registry without a restart.
         asyncio.run(runtime.apply_extension_disabled_change({"ext-a"}))
         with pytest.raises(KeyError):
@@ -420,45 +442,68 @@ def test_skill_tools_in_a_session_of_a_missing_project_refuse_or_miss(
     assert result["error"]["code"] == "skill_not_found"
 
 
-def test_disabled_skills_leave_every_scope_until_re_enabled(
+def test_a_package_turned_off_leaves_every_scope_but_spares_same_named_packages(
     runtime: Runtime, tmp_path: Path
 ) -> None:
-    name = runtime.skills.list_all()[0].name
+    bundled = _bundled_names(runtime)[0]
+    bundled_id = _package_id(runtime, bundled, runtime.skills.get(bundled).description)
     repo = tmp_path / "repo"
     repo.mkdir()
-    write_project_skill(repo, "proj-only-skill", "A project playbook.")
+    write_project_skill(repo, "deploy", "A project playbook.")
     project = runtime.projects.create("p", "P", repo)
-    write_agent_skill(runtime.storage.data_dir, "main", "private-deploy", "Owner's own playbook.")
-    assert "private-deploy" in {
-        skill.name for skill in runtime.skills_for(None, "main").filter_allowed([])
+    write_agent_skill(runtime.storage.data_dir, "main", "deploy", "Owner's own playbook.")
+    write_skill(runtime.storage.data_dir / "skills", "deploy", "The global playbook.")
+    runtime.reload_skills()
+
+    for name, entry_id in (
+        (bundled, bundled_id),
+        ("deploy", _package_id(runtime, "deploy", "The global playbook.")),
+    ):
+        result = runtime.set_skill_package_disabled(entry_id, disabled=True)
+        assert result == {"name": name, "disabled": True, "project_id": None}
+    runtime.reload_skills()
+
+    assert {bundled, "deploy"}.isdisjoint(_names(runtime.skills))
+    assert runtime.skills.availability_for(bundled, ["*"]).state == "invalid"
+    assert sorted(skill.name for skill in runtime.skills.excluded_skills()) == sorted(
+        [bundled, "deploy"]
+    )
+    # Same-named packages of other sources stay: the Project's and the private one.
+    assert runtime.skills_for(project.project_id).get("deploy").description == (
+        "A project playbook."
+    )
+    assert runtime.skills_for(None, "main").get("deploy").description == "Owner's own playbook."
+
+    # A private package turned off leaves its owner's always-allowed set.
+    runtime.set_skill_package_disabled(
+        _package_id(runtime, "deploy", "Owner's own playbook."), disabled=True
+    )
+    runtime.reload_skills()
+    owner_skills = runtime.skills_for(None, "main")
+    assert "deploy" not in {skill.name for skill in owner_skills.filter_allowed([])}
+
+    # A Project's own Skill is turned off in its Project.
+    project_deploy = _package_id(runtime, "deploy", "A project playbook.")
+    result = runtime.set_skill_package_disabled(project_deploy, disabled=True)
+    assert result == {"name": "deploy", "disabled": True, "project_id": project.project_id}
+    assert runtime.projects.get(project.project_id).skills_project_disabled == ["deploy"]
+    assert "deploy" not in {skill.name for skill in runtime.project_context_skills("p")}
+    states = {
+        entry["description"]: entry["disabled"]
+        for entry in runtime.skill_inventory()["skills"]
+        if entry["name"] == "deploy"
+    }
+    assert states == {
+        "A project playbook.": True,
+        "Owner's own playbook.": True,
+        "The global playbook.": True,
     }
 
-    # The explicit Project Context listing reads the policy without a reload.
-    runtime.skill_policy.set_disabled("proj-only-skill", disabled=True)
-    assert runtime.project_own_skills(project.project_id) == []
-
-    runtime.skill_policy.set_disabled(name, disabled=True)
-    runtime.skill_policy.set_disabled("private-deploy", disabled=True)
+    runtime.set_skill_package_disabled(bundled_id, disabled=False)
     runtime.reload_skills()
-
-    assert name not in _names(runtime.skills)
-    with pytest.raises(KeyError):
-        runtime.skills.get(name)
-    assert name not in {skill.name for skill in runtime.skills.filter_allowed(["*"])}
-    assert runtime.skills.availability_for(name, ["*"]).state == "invalid"
-    # The manager-facing excluded bucket still sees exactly what was disabled.
-    assert [skill.name for skill in runtime.skills.excluded_skills()] == [name]
-    # The config-Agent resolver input subtracts the disabled set too.
-    assert "proj-only-skill" not in _names(runtime.skills_for(project.project_id))
-    assert runtime.project_skill_names(project.project_id) == frozenset()
-    # Disable beats the owner's always-allowed private Skill.
-    owner_skills = runtime.skills_for(None, "main")
-    assert "private-deploy" not in _names(owner_skills)
-    assert "private-deploy" not in {skill.name for skill in owner_skills.filter_allowed([])}
-
-    runtime.skill_policy.set_disabled(name, disabled=False)
-    runtime.reload_skills()
-    assert name in _names(runtime.skills)
+    assert bundled in _names(runtime.skills)
+    with pytest.raises(ValueError):
+        runtime.set_skill_package_disabled("no-such-package", disabled=True)
 
 
 def test_malformed_skill_policy_does_not_break_startup(config: Config) -> None:
