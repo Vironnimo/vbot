@@ -412,6 +412,30 @@ async def test_limits_refuse_another_subagent(
     assert [turn.content for turn in harness.loop.turns] == ["first"]
 
 
+async def test_send_counts_against_the_limit_only_when_it_starts_an_idle_subagent(
+    harness: SubAgentHarness,
+) -> None:
+    harness.storage.settings = {"max_active_subagents": 1}
+    idle = await harness.spawn("idle")
+    await harness.settle()
+    gate = harness.loop.hold("busy")
+    busy = await harness.spawn("busy")
+
+    refused = await harness.call(
+        {"action": "send", "id": idle["id"], "content": "more", "model": "acme/other"}
+    )
+    steered = await harness.call({"action": "send", "id": busy["id"], "content": "also"})
+
+    assert refused["error"]["code"] == "subagent_limit_exceeded"
+    stored = await harness.resolver.session_overrides_async(harness.subagent_session(idle["id"]))
+    assert stored.model != "acme/other"
+    assert steered["data"]["status"] == "steered"
+    gate.set()
+    await harness.settle()
+    started = await harness.call({"action": "send", "id": idle["id"], "content": "more"})
+    assert started["data"]["status"] == "started"
+
+
 async def test_parallel_starts_respect_the_active_limit_with_a_stale_tree_read(
     harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:

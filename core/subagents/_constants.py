@@ -62,6 +62,11 @@ SUBAGENT_ACTIVE_LIMIT_MESSAGE_TEMPLATE = (
     "started. Wait for their answers or stop one with action cancel, then delegate again, or "
     "do this task yourself."
 )
+SUBAGENT_SEND_LIMIT_MESSAGE_TEMPLATE = (
+    "{limit} Sub-Agents of your Agent tree are already working, the limit, and Sub-Agent {id} "
+    "is idle, so your message would start it; nothing was sent. Wait for their answers or "
+    "stop one with action cancel, then send again, or do this task yourself."
+)
 # ``target`` is the address the Tool accepts; ``reason`` is the resolver's explanation.
 SUBAGENT_TARGET_UNAVAILABLE_MESSAGE_TEMPLATE = (
     "Agent {target} cannot run: {reason}. Repeating this call fails the same way until "

@@ -60,6 +60,7 @@ from core.subagents._constants import (
     SUBAGENT_NOT_DIRECT_CHILD_MESSAGE_TEMPLATE,
     SUBAGENT_NOT_FOUND_MESSAGE_TEMPLATE,
     SUBAGENT_NOTHING_TO_CANCEL_MESSAGE_TEMPLATE,
+    SUBAGENT_SEND_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_SEND_QUEUED_NOTE,
     SUBAGENT_SEND_STARTED_NOTE,
     SUBAGENT_SEND_STEERED_NOTE,
@@ -157,6 +158,15 @@ class SubAgentCoordinator:
             entry.users -= 1
             if entry.users == 0:
                 self._start_locks.pop(root, None)
+
+    async def _tree_at_limit(self, root: SessionAddress, limit: int) -> bool:
+        """Return whether the tree below *root* already has *limit* working Sub-Agents.
+
+        Call it under the root's start lock, so no start of this tree runs meanwhile.
+        """
+        sessions = self._runtime.chat_sessions
+        tree = await sessions.run_async(descendants, sessions, root)
+        return sum(1 for link in tree if is_working(self._runtime, link.session)) >= limit
 
     def install(self, run_manager: ChatRunManager) -> None:
         """Start following the Runs *run_manager* starts in Sub-Agent Sessions.
@@ -397,8 +407,7 @@ class SubAgentCoordinator:
         root = chain[-1] if chain else caller
         limit = settings["max_active_subagents"]
         async with self._start_lock(root):
-            tree = await sessions.run_async(descendants, sessions, root)
-            if sum(1 for link in tree if is_working(runtime, link.session)) >= limit:
+            if await self._tree_at_limit(root, limit):
                 return tool_failure(
                     "subagent_limit_exceeded",
                     SUBAGENT_ACTIVE_LIMIT_MESSAGE_TEMPLATE.format(limit=limit),
@@ -495,9 +504,10 @@ class SubAgentCoordinator:
     ) -> JsonObject:
         runtime, caller = self._runtime, _caller(context)
         sessions = runtime.chat_sessions
-        if link is None or caller not in await sessions.run_async(
-            ancestors, sessions, link.session
-        ):
+        chain = (
+            await sessions.run_async(ancestors, sessions, link.session) if link is not None else []
+        )
+        if link is None or caller not in chain:
             own = await sessions.run_async(children, sessions, caller)
             return _not_found(subagent_id, own)
         if link.parent != caller:
@@ -530,24 +540,32 @@ class SubAgentCoordinator:
         failure = await _validate_continued_session(runtime, link, model=overrides.get("model"))
         if failure is not None:
             return failure
-        if overrides:
-            await sessions.run_async(
-                runtime.agent_resolver.update_session_overrides, address, overrides
-            )
         content = cast(str, arguments["content"])
-        executor = runtime.streaming_chat_loop.run_executor(
-            content, parent_agent_input=True, temporary_parent_binding=temporary_parent
-        )
-        target_agent = await _resolve_child_agent(runtime, address, temporary_parent)
         steerable = context.execution_owner is None and temporary_parent is None
         manager = runtime.chat_run_manager
-        item = await manager.enqueue(
-            address,
-            executor,
-            display_content=content,
-            steerable=steerable,
-            admission=_admission(context, target_agent, address, link.id),
-        )
+        # A message to an idle Sub-Agent starts its next Run, which counts against the limit.
+        limit = _load_subagent_settings(runtime)["max_active_subagents"]
+        async with self._start_lock(chain[-1]):
+            if not is_working(runtime, address) and await self._tree_at_limit(chain[-1], limit):
+                return tool_failure(
+                    "subagent_limit_exceeded",
+                    SUBAGENT_SEND_LIMIT_MESSAGE_TEMPLATE.format(limit=limit, id=link.id),
+                )
+            if overrides:
+                await sessions.run_async(
+                    runtime.agent_resolver.update_session_overrides, address, overrides
+                )
+            executor = runtime.streaming_chat_loop.run_executor(
+                content, parent_agent_input=True, temporary_parent_binding=temporary_parent
+            )
+            target_agent = await _resolve_child_agent(runtime, address, temporary_parent)
+            item = await manager.enqueue(
+                address,
+                executor,
+                display_content=content,
+                steerable=steerable,
+                admission=_admission(context, target_agent, address, link.id),
+            )
         status, note = "queued", SUBAGENT_SEND_QUEUED_NOTE
         if item.future.done() and not item.future.cancelled():
             status, note = "started", SUBAGENT_SEND_STARTED_NOTE
