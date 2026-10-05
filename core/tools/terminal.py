@@ -1172,7 +1172,9 @@ def _closed_message(
     )
     ended = "has ended"
     if info is not None and info.exit_code is not None:
-        ended = f"has ended ({_agent_state(info)}, exit code {info.exit_code})"
+        # A command's shell can end before processes it started, which keep its terminal live.
+        state = _state_text("error" if info.state == "error" else "exited", stopped=info.stopped)
+        ended = f"has ended ({state}, exit code {info.exit_code})"
     done = "the input was not sent" if action == "input" else f"{action} was not done"
     message = (
         f"The program in {terminal_id} {ended}, so {done}. To read its last screen or output, "

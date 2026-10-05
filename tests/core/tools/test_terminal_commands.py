@@ -182,9 +182,12 @@ async def test_handed_off_command_is_listed_and_delivers_its_result_unless_the_a
     assert harness.bodies() == expected
 
 
+@pytest.mark.parametrize(
+    "survivors", [(), (RunningProcess(42, "server.exe"),)], ids=["alone", "survivors"]
+)
 @pytest.mark.asyncio
 async def test_timeout_interrupts_the_command_and_reports_why_it_stopped(
-    harness: Harness,
+    harness: Harness, survivors: tuple[RunningProcess, ...]
 ) -> None:
     terminal_id, adapter, tree = await harness.start(timeout=600)
     waiting = asyncio.create_task(
@@ -194,16 +197,20 @@ async def test_timeout_interrupts_the_command_and_reports_why_it_stopped(
     await eventually(lambda: harness.clock.sleeping)
     await harness.clock.advance(600)
     await eventually(lambda: "\x03" in adapter.writes)
-    # The shell honours Ctrl+C: nothing has to be killed. A child ending from
-    # the Ctrl+C is no failure of the command.
+    # The shell honours Ctrl+C. A child ending from the Ctrl+C is no failure
+    # of the command.
     tree.exits = (*tree.exits, ProgramExit("python.exe", 0xC000013A))
-    tree.shell_exits(1)
+    tree.shell_exits(1, survivors=survivors)
 
     assert await waiting == "exited"
     report = harness.manager.command_report(terminal_id)
     assert (report.exit_code, report.stop_reason) == (1, "timeout")
     assert report.nonzero_exits == ("lint.exe exited with code 2",)
-    assert tree.terminated == 0 or tree.running == ()
+    if survivors:
+        # Processes the shell left running are killed at once.
+        await eventually(lambda: tree.terminated == 1)
+    await harness.manager.wait_finished(terminal_id)
+    assert tree.running == ()
 
 
 async def run_clock(harness: Harness, task: asyncio.Task[object], *, until: float) -> None:
@@ -237,24 +244,32 @@ async def test_command_is_idle_after_quiet_output_and_cpu_but_not_while_working(
     assert "Name:" in await harness.manager.command_screen(terminal_id, 5)
 
 
+@pytest.mark.parametrize("stop", ["kill", "timeout"])
 @pytest.mark.asyncio
 async def test_survivors_keep_a_finished_command_live_until_they_are_killed(
-    harness: Harness,
+    harness: Harness, stop: str
 ) -> None:
-    terminal_id, _adapter, tree = await harness.start()
+    terminal_id, _adapter, tree = await harness.start(timeout=600)
     survivor = RunningProcess(42, "server.exe")
     tree.shell_exits(0, survivors=(survivor,))
 
     await harness.manager.wait_command(terminal_id, seconds=None, idle_seconds=None)
     report = harness.manager.command_report(terminal_id)
     assert (report.exit_code, report.still_running) == (0, (survivor,))
+    assert report.timeout_remaining_seconds == 600
     session = harness.manager._get(terminal_id)
     assert not session.finished
 
-    await harness.manager.kill(terminal_id, owner())
-    assert tree.terminated == 1
+    if stop == "kill":
+        await harness.manager.kill(terminal_id, owner())
+    else:
+        # The shell's exit leaves the timeout armed for the processes it left.
+        await eventually(lambda: harness.clock.sleeping)
+        await harness.clock.advance(600)
     await eventually(lambda: session.finished)
-    assert harness.manager.command_report(terminal_id).still_running == ()
+    assert tree.terminated == 1
+    report = harness.manager.command_report(terminal_id)
+    assert (report.still_running, report.stop_reason) == ((), None)
 
 
 @pytest.mark.asyncio

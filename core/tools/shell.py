@@ -795,15 +795,33 @@ def _terminal_call(action: str, terminal_id: str) -> str:
 
 def _still_running_text(context: ToolContext, report: CommandReport) -> str:
     names = ", ".join(_process_text(process) for process in report.still_running)
+    limit = _leftover_limit_text(report)
     if context.offers(_TERMINAL_TOOL):
+        until = f"; {limit}" if limit else ""
         return (
-            f"The shell exited, but processes the command started still run: {names}. Stop "
-            f"them with {_terminal_call('kill', report.terminal_id)} when they are no longer "
-            "needed."
+            f"The shell exited, but processes the command started still run: {names}{until}. "
+            f"Stop them with {_terminal_call('kill', report.terminal_id)} when they are no "
+            "longer needed."
+        )
+    if limit:
+        return (
+            f"The shell exited, but processes the command started still run: {names}. They "
+            f"keep running until they exit, vBot stops, or {limit}."
         )
     return (
         f"The shell exited, but processes the command started still run: {names}. They "
         "keep running until they exit or vBot stops."
+    )
+
+
+def _leftover_limit_text(report: CommandReport) -> str:
+    """When the command's timeout stops the processes its shell left running, as a clause."""
+    remaining = report.timeout_remaining_seconds
+    if remaining is None:
+        return ""
+    return (
+        f"the command's {report.timeout_seconds:g}-second timeout stops them in "
+        f"{remaining:.0f} seconds"
     )
 
 
@@ -813,9 +831,9 @@ _RESULT_ARRIVES = "Its result arrives as a new message when it exits."
 
 def _limit_text(report: CommandReport) -> str:
     """The time limit of a running command, as a clause."""
-    if not report.timeout_seconds:
+    remaining = report.timeout_remaining_seconds
+    if remaining is None:
         return "it has no timeout"
-    remaining = max(0.0, report.timeout_seconds - report.duration_seconds)
     return f"its {report.timeout_seconds:g}-second timeout stops it in {remaining:.0f} seconds"
 
 
@@ -963,7 +981,9 @@ def format_command_delivery(
             if offers(_TERMINAL_TOOL)
             else ""
         )
-        lines.append(f"Processes it started still run: {names}.{stop}")
+        limit = _leftover_limit_text(report)
+        until = f"; {limit}" if limit else ""
+        lines.append(f"Processes it started still run: {names}{until}.{stop}")
     if truncated and report.transcript.log_path is not None:
         lines.append(f"Full output: {model_path(report.transcript.log_path)}")
     lines.append("Output:" if output else "Output: (none)")

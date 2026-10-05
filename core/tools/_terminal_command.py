@@ -39,7 +39,8 @@ COMMAND_STOP_GRACE_SECONDS = 3.0
 COMMAND_IDLE_SECONDS = 15.0
 # CPU time the whole tree may use within the idle window and still count as idle.
 COMMAND_IDLE_CPU_SECONDS = 0.15
-# How often a command whose shell exited checks whether its other processes ended.
+# How often a session whose output ended - a command's after its shell exited -
+# checks whether its processes ended.
 COMMAND_TREE_POLL_SECONDS = 1.0
 
 StopReason = Literal["timeout", "user", "agent", "run_cancelled", "shutdown"]
@@ -73,10 +74,12 @@ class CommandReport:
     nonzero_exits: tuple[str, ...]
     # Processes the command started that still run after its shell exited.
     still_running: tuple[RunningProcess, ...]
-    duration_seconds: float
     timeout_seconds: float | None
     # The result is delivered automatically when the command ends.
     delivers_result: bool
+    # Until the timeout stops every process of the command still running, the
+    # ones its exited shell left behind included; None without a timeout.
+    timeout_remaining_seconds: float | None
 
 
 CommandReportFormatter = Callable[[CommandReport], str]
@@ -104,7 +107,6 @@ class CommandState:
         self.timeout_seconds = timeout_seconds
         self.formatter = formatter
         self.started_at = started_at
-        self.ended_at: float | None = None
         self.exit_code: int | None = None
         self.stop_reason: StopReason | None = None
         # Failed children recorded before vBot stopped the command; later ones
@@ -154,15 +156,12 @@ class CommandState:
                 self._tail.append(kept)
         self._total_lines += len(lines)
 
-    def record_exit(
-        self, exit_code: int | None, facts: ProcessTreeFacts | None, now: float
-    ) -> None:
+    def record_exit(self, exit_code: int | None, facts: ProcessTreeFacts | None) -> None:
         """The shell exited: fix the outcome the report shows."""
         if self.shell_exited:
             return
         self.exit_code = exit_code
         self._facts = facts
-        self.ended_at = now
         self.exited.set()
 
     def tree_ended(self) -> None:
@@ -189,7 +188,6 @@ class CommandState:
 
     def report(self, terminal_id: str, now: float) -> CommandReport:
         facts = self._facts
-        ended = self.ended_at if self.ended_at is not None else now
         return CommandReport(
             terminal_id=terminal_id,
             command=self.command,
@@ -201,9 +199,13 @@ class CommandState:
             transcript=self.transcript(),
             nonzero_exits=tuple(exit.describe() for exit in self._failed_exits(facts)),
             still_running=facts.running if facts else (),
-            duration_seconds=max(0.0, ended - self.started_at),
             timeout_seconds=self.timeout_seconds,
             delivers_result=self.delivers_result,
+            timeout_remaining_seconds=(
+                max(0.0, self.timeout_seconds - (now - self.started_at))
+                if self.timeout_seconds
+                else None
+            ),
         )
 
     def _failed_exits(self, facts: ProcessTreeFacts | None) -> tuple[ProgramExit, ...]:

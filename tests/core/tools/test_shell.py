@@ -430,6 +430,11 @@ async def test_processes_left_running_are_reported_and_listed(shell: Shell) -> N
 
     result = data(await call)
     assert result["still_running"] == ["server.exe (pid 42)"]
+    # The foreground's default timeout still stops them.
+    assert result["next"].startswith(
+        "The shell exited, but processes the command started still run: server.exe (pid 42); "
+        "the command's 600-second timeout stops them in 600 seconds. Stop them with "
+    )
     assert terminal_calls(result["next"]) == [
         {"action": "kill", "terminal_id": result["terminal_id"]}
     ]
@@ -437,13 +442,20 @@ async def test_processes_left_running_are_reported_and_listed(shell: Shell) -> N
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("terminal", [True, False])
+@pytest.mark.parametrize(
+    ("terminal", "timeout", "until"),
+    [
+        (True, None, "."),
+        (False, 60, "; the command's 60-second timeout stops them in 60 seconds."),
+    ],
+)
 async def test_delivery_names_processes_left_running_and_how_to_stop_them(
-    shell: Shell, terminal: bool
+    shell: Shell, terminal: bool, timeout: int | None, until: str
 ) -> None:
-    running = data(
-        await shell.call({"command": "start-server", "mode": "background"}, terminal=terminal)
-    )
+    arguments: JsonObject = {"command": "start-server", "mode": "background"}
+    if timeout is not None:
+        arguments["timeout"] = timeout
+    running = data(await shell.call(arguments, terminal=terminal))
     _adapter, tree = await shell.started()
     tree.shell_exits(0, survivors=(RunningProcess(42, "server.exe"),))
     await eventually(lambda: bool(shell.bodies()))
@@ -451,7 +463,7 @@ async def test_delivery_names_processes_left_running_and_how_to_stop_them(
     line = next(
         line for line in shell.bodies()[0].splitlines() if line.startswith("Processes it started")
     )
-    assert line.startswith("Processes it started still run: server.exe (pid 42).")
+    assert line.startswith(f"Processes it started still run: server.exe (pid 42){until}")
     kill = {"action": "kill", "terminal_id": running["terminal_id"]}
     assert terminal_calls(line) == ([kill] if terminal else [])
     # The processes stay listed, so the call the delivery names finds them.
