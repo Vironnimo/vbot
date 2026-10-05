@@ -239,8 +239,6 @@ class DictationController:
                 return
             self._running = True
         self._hotkey.start()
-        if self._hotkey.status()["enabled"]:
-            self._microphone.prepare_echo()
 
     def stop(self) -> None:
         """Unregister the shortcut and cancel a running take for good."""
@@ -297,8 +295,6 @@ class DictationController:
                     self._settings_path,
                 )
                 logger.info("Dictation mode set to %s", mode)
-        if hotkey_status["enabled"] and hotkey_changes.get("enabled") is True:
-            self._microphone.prepare_echo()
         return self._compose(hotkey_status)
 
     def _read_mode(self) -> str:
@@ -437,7 +433,12 @@ class DictationController:
         )
 
         stop = threading.Event()
-        capture = self._microphone.create_capture(on_status=lambda _status: None, stop_event=stop)
+        # Without echo cancellation: a take starts a new canceller, which needs
+        # 10-20 s of playback to learn that no echo returns (a headset) and
+        # until then removes the user's speech along with whatever plays.
+        capture = self._microphone.create_capture(
+            on_status=lambda _status: None, stop_event=stop, echo_cancellation=False
+        )
         subscription = capture.subscribe(max_seconds=_SUBSCRIPTION_SECONDS)
         capture.start()
         cutter = PieceCutter(
