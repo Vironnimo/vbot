@@ -617,7 +617,9 @@ def _finalize_compaction(
     plan = prepared.plan
     summary = plan.summary_text
     if response is not None:
-        summary = _extract_summary_text(response)
+        summary = _summary_body(_extract_summary_text(response))
+        if not summary:
+            raise CompactionError("Summary response contained no summary text")
     if summary and prepared.strategy_id == STRATEGY_SUMMARY_TAIL:
         summary = _reference_summary(summary)
     projection = [*plan.before_summary]
@@ -1019,15 +1021,20 @@ def _system_reminder_request_message(content: str) -> JsonObject:
     return rendered[0]
 
 
-def _reference_summary(summary: str) -> str:
-    """Frame the cutoff and continuation semantics of one historical summary."""
+def _summary_body(summary: str) -> str:
+    """Return the Model's summary without framing or delimiters it copied from its request."""
 
     body = _strip_outer_system_reminder_tags(summary)
     if body.startswith(COMPACTION_REFERENCE_PREFIX):
         body = body.removeprefix(COMPACTION_REFERENCE_PREFIX).lstrip()
     if body.endswith(COMPACTION_SUMMARY_END_MARKER):
         body = body.removesuffix(COMPACTION_SUMMARY_END_MARKER).rstrip()
-    body = _strip_outer_system_reminder_tags(body)
+    return _strip_outer_system_reminder_tags(body)
+
+
+def _reference_summary(body: str) -> str:
+    """Frame the cutoff and continuation semantics of one historical summary."""
+
     return f"{COMPACTION_REFERENCE_PREFIX}\n{body}\n{COMPACTION_SUMMARY_END_MARKER}"
 
 

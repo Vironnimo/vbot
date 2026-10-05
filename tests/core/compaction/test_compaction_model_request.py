@@ -16,6 +16,7 @@ from core.chat.streaming import (
 )
 from core.compaction import CompactionError, CompactionService, CompactionSettings
 from core.compaction._model_request import _send_streaming_model_request
+from core.compaction.compaction import COMPACTION_REFERENCE_PREFIX, COMPACTION_SUMMARY_END_MARKER
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.errors import NetworkError
 from core.providers.ollama import OllamaAdapter
@@ -79,6 +80,13 @@ async def test_compaction_consumes_canonical_stream_without_raw_wire_normalizati
     assert len(requests) == 1
 
 
+_PARTIAL = "Partial summary"
+# Delimiters and framing copied from the request, without any summary between them.
+_MARKERS_ONLY = (
+    f"<system-reminder>\n{COMPACTION_REFERENCE_PREFIX}\n{COMPACTION_SUMMARY_END_MARKER}\n"
+    "</system-reminder>"
+)
+
 _TOOL_CALL = {
     "type": "tool_call_delta",
     "id": "call-1",
@@ -89,18 +97,28 @@ _TOOL_CALL = {
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("strategy", "tool_call", "finish"),
+    ("strategy", "text", "tool_call", "finish"),
     [
-        ("summary_tail", False, "output_truncated"),
-        ("continuation", False, "content_filtered"),
-        ("summary_tail", False, None),
-        ("continuation", False, "tool_calls"),
-        ("summary_tail", True, "stop"),
+        ("summary_tail", _PARTIAL, False, "output_truncated"),
+        ("continuation", _PARTIAL, False, "content_filtered"),
+        ("summary_tail", _PARTIAL, False, None),
+        ("continuation", _PARTIAL, False, "tool_calls"),
+        ("summary_tail", _PARTIAL, True, "stop"),
+        ("summary_tail", _MARKERS_ONLY, False, "stop"),
+        ("continuation", _MARKERS_ONLY, False, "stop"),
     ],
-    ids=["truncated", "filtered", "missing-finish", "tool-calls-finish", "tool-attempt-with-stop"],
+    ids=[
+        "truncated",
+        "filtered",
+        "missing-finish",
+        "tool-calls-finish",
+        "tool-attempt-with-stop",
+        "summary-tail-markers-only",
+        "continuation-markers-only",
+    ],
 )
 async def test_compaction_accepts_only_a_completed_text_summary(
-    strategy: str, tool_call: bool, finish: str | None
+    strategy: str, text: str, tool_call: bool, finish: str | None
 ) -> None:
     class IncompleteAdapter(StubAdapter):
         @override
@@ -108,7 +126,7 @@ async def test_compaction_accepts_only_a_completed_text_summary(
             self, messages: list[dict], **kwargs: Any
         ) -> AsyncIterator[dict[str, Any]]:
             self.requests.append({"messages": messages, **kwargs})
-            yield {"type": "content_delta", "text": "Partial summary"}
+            yield {"type": "content_delta", "text": text}
             if tool_call:
                 yield _TOOL_CALL
             if finish is not None:
