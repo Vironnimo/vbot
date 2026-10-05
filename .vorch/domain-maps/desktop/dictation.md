@@ -56,9 +56,15 @@ Desktop settings section `dictation` (`desktop/settings.py`):
 
 ## Live hold
 
-From the start of a take until its recording ends, the controller publishes `vbot-desktop-dictation` `{recording: true}`, then `{recording: false}` (again when the take ends, so a missed push cannot leave the call held), so the page holds a running Live voice call and the assistant does not hear or talk over the dictation.
+From the start of a take until its recording ends, the controller publishes `vbot-desktop-dictation` `{recording: true}`, then `{recording: false}` (again when the take ends, so a missed push cannot leave the call held), so the page holds a running Live voice call and the assistant does not hear or talk over the dictation. The WebUI (`app/desktop.svelte.js`, `followDesktopDictation`) holds one `claimMicrophone()` claim (`lib/microphoneUse.js`) while `recording` is true, which makes `LiveVoice.svelte` hold the call with reason `recording` like a page recording does (`model_tasks/live.md`); the claim ends with `recording: false` or when the page tears down. A page loaded while a take records holds nothing until the next push.
+
+## WebUI
+
+- `webui/src/lib/desktopBridge.js`: `getDesktopDictation`, `setDesktopDictation` (normalized answers; a non-object answer throws), `onDesktopDictationRecording`.
+- `webui/src/components/settings/DesktopDictationSettings.svelte` (Settings -> Voice -> Dictation, `desktop_dictation`, `webui/settings.md`): enable, key combination (`ShortcutCombination.svelte`), mode, error banners, and the latest failure ("Last problem"); it re-reads the status every second until the state is `idle`, because the push reports only `recording`.
 
 ## Tests
 
 - `tests/desktop/dictation/test_controller.py` (toggle and hold takes, tap, Escape while recording and transcribing, failure codes and cues, takes that cannot run, length limit and server follow, settings, stop), `test_insertion.py` (paste and clipboard restore, every fallback to the clipboard, unwritable clipboard), `test_cues.py` (rendering, ordered playback on its thread).
 - Shared: `tests/desktop/hotkey_test_support.py` (`FakeHotkeyApi`), `tests/desktop/test_hotkey.py` (hold release, Escape arming), `test_page_events.py` (dictation push), `test_bridge.py` (dictation methods and capability), `test_main.py` (wiring, startup without the audio stack).
+- WebUI: `webui/src/components/__tests__/DesktopDictationSettings.test.js`, `webui/src/lib/__tests__/desktopBridge.test.js` (dictation wrappers and push), `webui/src/__tests__/App.desktop-voice.test.js` (the microphone counts as in use while a dictation records).
