@@ -37,6 +37,7 @@ function subagents(depth) {
     subagents: {
       max_subagent_depth: depth,
       max_active_subagents: 8,
+      max_active_subagents_total: 50,
     },
   };
 }
@@ -120,7 +121,11 @@ describe('SettingsView editor saving', () => {
     const inputs = document.querySelectorAll(
       '[data-settings-section="subagents"] input.s-input',
     );
-    expect(Array.from(inputs, (input) => input.value)).toEqual(['4', '8']);
+    expect(Array.from(inputs, (input) => input.value)).toEqual([
+      '4',
+      '8',
+      '50',
+    ]);
     const saveState = inputs[0]
       .closest('.settings-editor')
       .querySelector('.save-status');
@@ -144,6 +149,7 @@ describe('SettingsView editor saving', () => {
           subagents: {
             max_subagent_depth: 5,
             max_active_subagents: 12,
+            max_active_subagents_total: 50,
           },
           base: subagents(4),
         },
@@ -241,18 +247,24 @@ describe('SettingsView editor saving', () => {
       subagents: {
         max_subagent_depth: 6,
         max_active_subagents: 10,
+        max_active_subagents_total: 50,
       },
       base: {
         subagents: {
           max_subagent_depth: 4,
           max_active_subagents: 10,
+          max_active_subagents_total: 50,
         },
       },
     });
     const inputs = document.querySelectorAll(
       '[data-settings-section="subagents"] input.s-input',
     );
-    expect(Array.from(inputs, (input) => input.value)).toEqual(['6', '10']);
+    expect(Array.from(inputs, (input) => input.value)).toEqual([
+      '6',
+      '10',
+      '50',
+    ]);
   });
 
   // A cleared number field falls back to its default. It writes only when the
@@ -266,7 +278,7 @@ describe('SettingsView editor saving', () => {
         settings.subagents.max_subagent_depth = value;
       },
       saved: (write) => write.subagents.max_subagent_depth,
-      fallback: 4,
+      fallback: 2,
     },
     'Web Search result count': {
       open: openWebSearchPanel,
@@ -281,7 +293,7 @@ describe('SettingsView editor saving', () => {
 
   it.each([
     ['sub-agent depth', 6, 1],
-    ['sub-agent depth', 4, 0],
+    ['sub-agent depth', 2, 0],
     ['Web Search result count', 7, 1],
     ['Web Search result count', 12, 0],
   ])(

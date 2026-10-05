@@ -65,11 +65,8 @@
     const normalizedLeft = normalizeSubAgentSettings({ subagents: left });
     const normalizedRight = normalizeSubAgentSettings({ subagents: right });
 
-    return (
-      normalizedLeft.max_subagent_depth ===
-        normalizedRight.max_subagent_depth &&
-      normalizedLeft.max_active_subagents ===
-        normalizedRight.max_active_subagents
+    return Object.keys(normalizedLeft).every(
+      (field) => normalizedLeft[field] === normalizedRight[field],
     );
   }
 
@@ -145,6 +142,27 @@
         ariaLabel={t('settings.subagents.maxActive')}
         onInput={(_next, event) =>
           handleSubAgentSettingChange('max_active_subagents', event)}
+      />
+    </div>
+  </div>
+
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.subagents.maxActiveTotal')}
+        <InfoHint text={t('settings.subagents.maxActiveTotalHelp')} />
+      </div>
+    </div>
+    <div class="s-row-control s-row-control--number">
+      <TextField
+        id="settings-subagents-max-active-total"
+        type="number"
+        min="1"
+        step="1"
+        value={subAgentSettings.max_active_subagents_total}
+        ariaLabel={t('settings.subagents.maxActiveTotal')}
+        onInput={(_next, event) =>
+          handleSubAgentSettingChange('max_active_subagents_total', event)}
       />
     </div>
   </div>

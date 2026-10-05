@@ -647,11 +647,13 @@ describe('App navigation', () => {
         subagents: {
           max_subagent_depth: 5,
           max_active_subagents: 8,
+          max_active_subagents_total: 50,
         },
         base: {
           subagents: {
             max_subagent_depth: 4,
             max_active_subagents: 8,
+            max_active_subagents_total: 50,
           },
         },
       });

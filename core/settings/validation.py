@@ -109,6 +109,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "librarian",
         "local_models",
         "max_active_subagents",
+        "max_active_subagents_total",
         "max_subagent_depth",
         "model_tasks",
         "notifications",
@@ -130,6 +131,7 @@ PORT_SETTING_KEYS = frozenset({"PORT", "SERVER_PORT", "port", "server_port"})
 SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",
     "max_active_subagents",
+    "max_active_subagents_total",
 )
 APPEARANCE_FIELDS = frozenset({"language", "chat_width", "chat_working_mode"})
 ARCHIVE_FIELDS = frozenset({"retention_days"})

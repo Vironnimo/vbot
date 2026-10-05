@@ -537,21 +537,35 @@ describe('agent defaults, sub-agents and session titles', () => {
 
   it('normalizes sub-agent limits to positive integers', () => {
     expect(normalizeSubAgentSettings({})).toEqual({
-      max_subagent_depth: 4,
+      max_subagent_depth: 2,
       max_active_subagents: 8,
+      max_active_subagents_total: 50,
     });
     expect(
       normalizeSubAgentSettings({
-        subagents: { max_subagent_depth: '6', max_active_subagents: 0 },
+        subagents: {
+          max_subagent_depth: '6',
+          max_active_subagents: 0,
+          max_active_subagents_total: -1,
+        },
       }),
-    ).toEqual({ max_subagent_depth: 6, max_active_subagents: 8 });
+    ).toEqual({
+      max_subagent_depth: 6,
+      max_active_subagents: 8,
+      max_active_subagents_total: 50,
+    });
     expect(
       buildSubAgentSettingsPayload({
         max_subagent_depth: '7',
         max_active_subagents: '9',
+        max_active_subagents_total: '30',
       }),
     ).toEqual({
-      subagents: { max_subagent_depth: 7, max_active_subagents: 9 },
+      subagents: {
+        max_subagent_depth: 7,
+        max_active_subagents: 9,
+        max_active_subagents_total: 30,
+      },
     });
   });
 

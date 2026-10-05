@@ -303,10 +303,13 @@ export default Object.freeze({
   'settings.skills.deleteConfirmTitle': 'Delete skill',
   'settings.subagents.maxDepth': 'Maximum nesting depth',
   'settings.subagents.maxDepthHelp':
-    'Sub-Agents can start Sub-Agents of their own. This sets how many levels deep that can go; at the limit, a Sub-Agent has to do the work itself. Default: 4.',
-  'settings.subagents.maxActive': 'Maximum working Sub-Agents',
+    'Sub-Agents can start Sub-Agents of their own. This sets how many levels deep that can go; at the limit, a Sub-Agent has to do the work itself. Default: 2.',
+  'settings.subagents.maxActive': 'Working Sub-Agents per conversation',
   'settings.subagents.maxActiveHelp':
-    'The most Sub-Agents that may work at the same time for one conversation: the Sub-Agents its Agent started, plus the Sub-Agents those started in turn. While the limit is reached, further requests are refused, and the Agent is told to wait for results, stop a Sub-Agent, or do the work itself. Default: 8.',
+    'The most Sub-Agents one conversation can have working at the same time. Only the Sub-Agents it started count, not the ones they started in turn. At the limit, the Agent is told to wait for a result, stop a Sub-Agent, or do the work itself. Default: 8.',
+  'settings.subagents.maxActiveTotal': 'Working Sub-Agents in total',
+  'settings.subagents.maxActiveTotalHelp':
+    'The most Sub-Agents working at the same time across the whole app. At the limit, no Agent can start another one until one finishes, and the Agent is told to do the work itself or wait for its own Sub-Agents. Default: 50.',
   'settings.reflection.title': 'Reflection',
   'settings.reflection.enabled': 'Background reflection',
   'settings.reflection.enabledDescription':

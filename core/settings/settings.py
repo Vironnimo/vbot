@@ -139,6 +139,7 @@ LIBRARIAN_DAYS_RULE = f"must be an integer from 1 to {MAX_LIBRARIAN_DAYS}"
 SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",
     "max_active_subagents",
+    "max_active_subagents_total",
 )
 # How many days an archive entry rests before vBot deletes it permanently;
 # ``None`` keeps archived items until they are deleted by hand. The default lives

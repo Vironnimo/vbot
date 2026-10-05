@@ -147,7 +147,11 @@ _COMPACTION: JsonObject = {
     "trigger": {"type": "context_ratio", "threshold": 0.9},
     "strategy": {"type": "summary_tail", "tail_tokens": 12000, "summary_model": "openai/gpt-5.2"},
 }
-_SUBAGENTS: JsonObject = {"max_subagent_depth": 6, "max_active_subagents": 12}
+_SUBAGENTS: JsonObject = {
+    "max_subagent_depth": 6,
+    "max_active_subagents": 12,
+    "max_active_subagents_total": 40,
+}
 
 
 @pytest.mark.asyncio

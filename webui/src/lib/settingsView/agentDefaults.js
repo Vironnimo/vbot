@@ -1,8 +1,9 @@
 import { textOrEmpty, positiveIntegerOrDefault } from './values.js';
 
 const SUBAGENT_SETTINGS_DEFAULTS = Object.freeze({
-  max_subagent_depth: 4,
+  max_subagent_depth: 2,
   max_active_subagents: 8,
+  max_active_subagents_total: 50,
 });
 
 const AGENT_DEFAULTS_FIELDS = Object.freeze([
@@ -90,16 +91,12 @@ export function buildSessionTitleSettingsPayload(formValues) {
 export function normalizeSubAgentSettings(rawSettings) {
   const subagents = rawSettings?.subagents ?? {};
 
-  return {
-    max_subagent_depth: positiveIntegerOrDefault(
-      subagents.max_subagent_depth,
-      SUBAGENT_SETTINGS_DEFAULTS.max_subagent_depth,
-    ),
-    max_active_subagents: positiveIntegerOrDefault(
-      subagents.max_active_subagents,
-      SUBAGENT_SETTINGS_DEFAULTS.max_active_subagents,
-    ),
-  };
+  return Object.fromEntries(
+    Object.entries(SUBAGENT_SETTINGS_DEFAULTS).map(([field, fallback]) => [
+      field,
+      positiveIntegerOrDefault(subagents[field], fallback),
+    ]),
+  );
 }
 
 export function buildSubAgentSettingsPayload(formValues) {

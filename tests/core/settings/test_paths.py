@@ -449,7 +449,11 @@ def test_public_document_hides_flat_storage_keys() -> None:
     assert effective["server"]["keep_awake"] is False
     assert isinstance(effective["server"]["timezone"], str)
     assert effective["skills"] == {"directories": ["~/skills"]}
-    assert effective["subagents"] == {"max_subagent_depth": 2, "max_active_subagents": 8}
+    assert effective["subagents"] == {
+        "max_subagent_depth": 2,
+        "max_active_subagents": 8,
+        "max_active_subagents_total": 50,
+    }
     assert "server_port" not in effective
     assert "skill_directories" not in effective
     # Live voice is a Task Model binding; its old opt-in is not a setting.

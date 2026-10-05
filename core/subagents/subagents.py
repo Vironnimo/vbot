@@ -10,9 +10,7 @@ Answers reach the Parent through :mod:`core.subagents.forwarding`.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, cast
 
 from core.agents import is_librarian
@@ -38,6 +36,7 @@ from core.sessions import SessionAddress, TemporarySessionBinding
 from core.settings import SettingsValidationError, validate_thinking_effort
 from core.subagents._constants import (
     DEFAULT_MAX_ACTIVE_SUBAGENTS,
+    DEFAULT_MAX_ACTIVE_SUBAGENTS_TOTAL,
     DEFAULT_MAX_SUBAGENT_DEPTH,
     MESSAGE_PARENT_NOT_SUBAGENT_MESSAGE,
     MESSAGE_PARENT_PARENT_GONE_MESSAGE,
@@ -47,6 +46,7 @@ from core.subagents._constants import (
     PARENT_MESSAGE_SECTION_TEMPLATE,
     SUBAGENT_ACTIVE_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_ACTIVITY_NOTE_TEMPLATE,
+    SUBAGENT_APP_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_BACKGROUND_IGNORED_NOTE,
     SUBAGENT_CANCEL_WITHOUT_ID_MESSAGE_TEMPLATE,
     SUBAGENT_CANCELLED_NOTE,
@@ -60,6 +60,7 @@ from core.subagents._constants import (
     SUBAGENT_NOT_DIRECT_CHILD_MESSAGE_TEMPLATE,
     SUBAGENT_NOT_FOUND_MESSAGE_TEMPLATE,
     SUBAGENT_NOTHING_TO_CANCEL_MESSAGE_TEMPLATE,
+    SUBAGENT_SEND_APP_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_SEND_LIMIT_MESSAGE_TEMPLATE,
     SUBAGENT_SEND_QUEUED_NOTE,
     SUBAGENT_SEND_STARTED_NOTE,
@@ -140,12 +141,6 @@ _INSPECTED_WORK_KINDS = {
 }
 
 
-@dataclass
-class _StartLock:
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    users: int = 0
-
-
 class SubAgentCoordinator:
     """Run the Sub-Agent Tools and forward Sub-Agent answers to their Parents."""
 
@@ -154,31 +149,51 @@ class SubAgentCoordinator:
         self._trigger_service = trigger_service
         self._activities = SubAgentActivities(runtime)
         self._forwarding = SubAgentForwarding(runtime, trigger_service, self._activities)
-        # One start at a time per tree root: the limit check reads the tree, which
-        # is stale once another start of the same tree has finished meanwhile.
-        self._start_locks: dict[SessionAddress, _StartLock] = {}
+        # One Sub-Agent start at a time: the limit checks count working Sub-Agents,
+        # a count that is stale once another start has finished meanwhile.
+        self._admission_lock = asyncio.Lock()
 
-    @asynccontextmanager
-    async def _start_lock(self, root: SessionAddress) -> AsyncIterator[None]:
-        """Hold the start lock of one tree root; drop it once no start uses it."""
-        entry = self._start_locks.setdefault(root, _StartLock())
-        entry.users += 1
-        try:
-            async with entry.lock:
-                yield
-        finally:
-            entry.users -= 1
-            if entry.users == 0:
-                self._start_locks.pop(root, None)
+    async def _limit_refusal(
+        self, parent: SessionAddress, settings: dict[str, int], idle_id: str | None = None
+    ) -> JsonObject | None:
+        """Refuse a start when *parent* or the whole app has its limit of working Sub-Agents.
 
-    async def _tree_at_limit(self, root: SessionAddress, limit: int) -> bool:
-        """Return whether the tree below *root* already has *limit* working Sub-Agents.
-
-        Call it under the root's start lock, so no start of this tree runs meanwhile.
+        *idle_id* names the idle Sub-Agent a ``send`` would start; omitted for ``run``.
+        Taken-over Sub-Agents count for neither limit. Call it under the admission lock.
         """
-        sessions = self._runtime.chat_sessions
-        tree = await sessions.run_async(descendants, sessions, root)
-        return sum(1 for link in tree if is_working(self._runtime, link.session)) >= limit
+        runtime, sessions = self._runtime, self._runtime.chat_sessions
+        own = await sessions.run_async(children, sessions, parent)
+        limit = settings["max_active_subagents"]
+        if sum(1 for link in own if _counts_as_working(runtime, link)) >= limit:
+            template = (
+                SUBAGENT_ACTIVE_LIMIT_MESSAGE_TEMPLATE
+                if idle_id is None
+                else SUBAGENT_SEND_LIMIT_MESSAGE_TEMPLATE
+            )
+            return tool_failure(
+                "subagent_limit_exceeded",
+                template.format(count=_subagent_count(limit), id=idle_id),
+            )
+        manager = runtime.chat_run_manager
+        busy = {
+            SessionAddress(
+                project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
+            )
+            for run in manager.active_runs()
+        }
+        busy.update(address for address, _item in manager.all_queued())
+        limit = settings["max_active_subagents_total"]
+        if await sessions.run_async(_working_subagent_count, runtime, busy) >= limit:
+            template = (
+                SUBAGENT_APP_LIMIT_MESSAGE_TEMPLATE
+                if idle_id is None
+                else SUBAGENT_SEND_APP_LIMIT_MESSAGE_TEMPLATE
+            )
+            return tool_failure(
+                "subagent_app_limit_exceeded",
+                template.format(count=_subagent_count(limit), id=idle_id),
+            )
+        return None
 
     def install(self, run_manager: ChatRunManager) -> None:
         """Start following the Runs *run_manager* starts in Sub-Agent Sessions.
@@ -428,14 +443,10 @@ class SubAgentCoordinator:
                 "subagent_depth_exceeded",
                 SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE.format(limit=settings["max_subagent_depth"]),
             )
-        root = chain[-1] if chain else caller
-        limit = settings["max_active_subagents"]
-        async with self._start_lock(root):
-            if await self._tree_at_limit(root, limit):
-                return tool_failure(
-                    "subagent_limit_exceeded",
-                    SUBAGENT_ACTIVE_LIMIT_MESSAGE_TEMPLATE.format(count=_subagent_count(limit)),
-                )
+        async with self._admission_lock:
+            refusal = await self._limit_refusal(caller, settings)
+            if refusal is not None:
+                return refusal
             if context.is_cancelled():
                 return tool_failure(
                     "run_cancelled", "Your Run was cancelled before the Sub-Agent started."
@@ -567,16 +578,14 @@ class SubAgentCoordinator:
         content = cast(str, arguments["content"])
         steerable = context.execution_owner is None and temporary_parent is None
         manager = runtime.chat_run_manager
-        # A message to an idle Sub-Agent starts its next Run, which counts against the limit.
-        limit = _load_subagent_settings(runtime)["max_active_subagents"]
-        async with self._start_lock(chain[-1]):
-            if not is_working(runtime, address) and await self._tree_at_limit(chain[-1], limit):
-                return tool_failure(
-                    "subagent_limit_exceeded",
-                    SUBAGENT_SEND_LIMIT_MESSAGE_TEMPLATE.format(
-                        count=_subagent_count(limit), id=link.id
-                    ),
+        # A message to an idle Sub-Agent starts its next Run, which counts against the limits.
+        async with self._admission_lock:
+            if not is_working(runtime, address):
+                refusal = await self._limit_refusal(
+                    caller, _load_subagent_settings(runtime), idle_id=link.id
                 )
+                if refusal is not None:
+                    return refusal
             if overrides:
                 await sessions.run_async(
                     runtime.agent_resolver.update_session_overrides, address, overrides
@@ -990,7 +999,22 @@ def _load_subagent_settings(runtime: RuntimeServices) -> dict[str, int]:
         "max_active_subagents": _positive_int(
             settings.get("max_active_subagents"), DEFAULT_MAX_ACTIVE_SUBAGENTS
         ),
+        "max_active_subagents_total": _positive_int(
+            settings.get("max_active_subagents_total"), DEFAULT_MAX_ACTIVE_SUBAGENTS_TOTAL
+        ),
     }
+
+
+def _counts_as_working(runtime: RuntimeServices, link: SubAgentLink) -> bool:
+    """Whether *link* takes a place under the limits: working and not taken over."""
+    return link.taken_over_at is None and is_working(runtime, link.session)
+
+
+def _working_subagent_count(runtime: RuntimeServices, busy: Iterable[SessionAddress]) -> int:
+    """Count the Sub-Agent Sessions among *busy* that are not taken over."""
+    sessions = runtime.chat_sessions
+    links = (read_link(sessions, address) for address in busy)
+    return sum(1 for link in links if link is not None and link.taken_over_at is None)
 
 
 def _positive_int(value: Any, default: int) -> int:

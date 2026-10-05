@@ -27,7 +27,11 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
         {
             "appearance": {"language": "en", "chat_width": "wide", "chat_working_mode": "compact"},
             "skills": {"directories": ["~/skills", " C:/skills/team "]},
-            "subagents": {"max_subagent_depth": 6, "max_active_subagents": 12},
+            "subagents": {
+                "max_subagent_depth": 6,
+                "max_active_subagents": 12,
+                "max_active_subagents_total": 40,
+            },
             "compaction": {
                 "enabled": False,
                 "trigger": {"type": "context_ratio", "threshold": 1, "tokens": 200_000},
@@ -94,7 +98,11 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
     assert parsed == {
         "appearance": {"language": "en", "chat_width": "wide", "chat_working_mode": "compact"},
         "skills": {"directories": ["~/skills", " C:/skills/team "]},
-        "subagents": {"max_subagent_depth": 6, "max_active_subagents": 12},
+        "subagents": {
+            "max_subagent_depth": 6,
+            "max_active_subagents": 12,
+            "max_active_subagents_total": 40,
+        },
         "compaction": {
             "enabled": False,
             "trigger": {"type": "context_ratio", "threshold": 1.0, "tokens": 200_000},
@@ -302,12 +310,18 @@ def _compaction_threshold(threshold: object) -> dict[str, Any]:
         ({"subagents": []}, "params.subagents must be an object"),
         ({"subagents": {"extra": 1}}, "unsupported sub-agent settings: extra"),
         (
-            {"subagents": {"max_subagent_depth": 0, "max_active_subagents": 8}},
+            {
+                "subagents": {
+                    "max_subagent_depth": 0,
+                    "max_active_subagents": 8,
+                    "max_active_subagents_total": 50,
+                }
+            },
             "params.subagents.max_subagent_depth must be a positive integer",
         ),
         (
             {"subagents": {"max_subagent_depth": 4}},
-            "missing sub-agent settings: max_active_subagents",
+            "missing sub-agent settings: max_active_subagents, max_active_subagents_total",
         ),
         (_compaction_threshold(1.5), "params.compaction.trigger.threshold must be in (0, 1]"),
         # Bounds are checked before float conversion; NaN never compares in range.
