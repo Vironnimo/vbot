@@ -89,6 +89,8 @@ A message can carry an inline keyboard; tapping produces a tap event normally ro
 
 ## Constraints & Gotchas
 
+Text/media ingress reports acceptance for context-only observations too, so socket adapters can receipt accepted Notes without receipting capacity-rejected messages. All contextual Notes from one observed media message share one waiting-work reservation; replay cannot duplicate a partially admitted batch (`test_network_ingress.py`).
+
 Channel updates persist validated configuration before stopping the existing adapter; a failed save leaves it running. Restart backoff caps its exponent before numeric conversion, including arbitrarily large failure counts. A removed queued Run admission ends only that inbound turn; the Channel worker continues with its followers and releases their waiting-work reservations.
 
 Telegram chat-id migrations share the service's per-Channel config lease with public changes: a migration waits for an ongoing change, while a public change refuses an ongoing migration without blocking the Event Loop. Platform changes release that lease before draining the old adapter; its late Telegram migrations leave the replacement platform untouched but retain their id rewrites for a failed or cancelled switch's Telegram rollback. Rollback replays group-access migration too, preserving access when cancellation occurs before the platform reset. Deferred starts reload persisted config after shutdown, preserving migrations completed by drained handlers. Repeated start/restart requests during one shutdown coalesce into one replacement.

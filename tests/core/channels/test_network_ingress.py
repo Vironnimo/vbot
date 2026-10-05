@@ -15,6 +15,7 @@ import pytest
 from core.attachments import AttachmentStore, AttachmentTooLargeError
 from core.channels.config import ChannelError
 from core.chat.content_blocks import TextBlock
+from core.runs import WaitingWorkLimitError
 
 from .engine_test_support import channel_state
 from .network_test_support import event, make_adapter
@@ -112,16 +113,41 @@ async def test_mattermost_requires_websocket_authentication(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("platform", ["slack", "mattermost"])
-async def test_inbound_uses_real_engine_and_persists_dedup(tmp_path: Path, platform: str) -> None:
+@pytest.mark.parametrize("media", [False, True], ids=["text", "media"])
+@pytest.mark.parametrize("observe", [False, True], ids=["reply", "observe"])
+async def test_inbound_uses_real_engine_and_persists_dedup(
+    tmp_path: Path, platform: str, media: bool, observe: bool
+) -> None:
     h = make_adapter(tmp_path, platform)
-    incoming = event(platform)
+    h.adapter._config.observe_unaddressed = observe
+    incoming = event(platform, direct=not observe)
+    if media:
+        h.adapter.build_media_blocks = AsyncMock(return_value=[TextBlock(type="text", text="file")])
+        if platform == "slack":
+            incoming["files"] = [{"id": "F1"}]
+        else:
+            post = json.loads(incoming["post"])
+            post["file_ids"] = ["F1"]
+            incoming["post"] = json.dumps(post)
     try:
+        h.reserve_waiting_work.side_effect = WaitingWorkLimitError("full")
+        await h.adapter.handle_event(incoming)
+        h.trigger.assert_not_awaited()
+        if media:
+            h.adapter.build_media_blocks.assert_not_awaited()
+        h.reserve_waiting_work.side_effect = None
         await h.adapter.handle_event(incoming)
         await h.drain()
-        h.trigger.assert_awaited_once()
-        assert h.posted_texts() == ["reply"]
+        if observe:
+            h.trigger.assert_not_awaited()
+            if media:
+                h.adapter.build_media_blocks.assert_not_awaited()
+        else:
+            h.trigger.assert_awaited_once()
+            assert h.posted_texts()[-1] == "reply"
+        reservations = h.reserve_waiting_work.call_count
         await h.adapter.handle_event(incoming)
-        h.trigger.assert_awaited_once()
+        assert h.reserve_waiting_work.call_count == reservations
     finally:
         await h.adapter.stop()
     # A restarted adapter still recognizes the redelivered event.
