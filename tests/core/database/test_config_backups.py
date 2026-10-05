@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -145,6 +146,13 @@ def test_retention_keeps_the_newest_backups_and_the_newest_of_each_hour_day_and_
     for label, age in sorted(ages.items(), key=lambda item: item[1], reverse=True):
         _write(data_dir, "settings.json", _settings(label))
         ids[label] = _backup(data_dir, now=NOW - age)
+    # A newer vBot backed up a file this vBot does not know; its content must stay.
+    manifest = config_backup_root(data_dir) / "backups" / f"{ids['latest, second']}.json"
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    future = hashlib.sha256(b"future").hexdigest()
+    payload["files"]["future/config.json"] = {"sha256": future, "file_size": 6, "mode": 0o600}
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    write_document(config_backup_root(data_dir), f"objects/{future[:2]}/{future}", "future")
     _write(data_dir, "settings.json", _settings("latest"))
     ids["latest"] = _backup(data_dir, now=NOW)
 
@@ -156,8 +164,9 @@ def test_retention_keeps_the_newest_backups_and_the_newest_of_each_hour_day_and_
     }
     # Contents only dropped backups held are removed with them.
     assert _objects(data_dir) == {
-        item.sha256 for backup in list_config_backups(data_dir) for item in backup.files.values()
+        digest for backup in list_config_backups(data_dir) for digest in backup.objects()
     }
+    assert future in _objects(data_dir)
 
 
 def test_a_restore_replaces_the_named_files_after_backing_up_the_state_it_replaces(
@@ -230,20 +239,26 @@ def test_a_restore_verifies_every_copy_before_it_changes_anything(data_dir: Path
     assert len(list_config_backups(data_dir)) == 1
 
 
+@pytest.mark.parametrize("wrote_every_file", [False, True], ids=["mid-write", "after writing"])
 def test_an_interrupted_restore_holds_the_maintenance_guard_until_it_is_repeated(
-    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, wrote_every_file: bool
 ) -> None:
     _write(data_dir, "settings.json", _settings("Europe/Berlin"))
     _write(data_dir, ".env", "KEY=one\n")
     backup_id = _backup(data_dir)
+    _write(data_dir, "settings.json", _settings("Asia/Tokyo"))
+    other_id = _backup(data_dir, now=NOW + timedelta(minutes=5))
     _write(data_dir, "settings.json", _settings("UTC"))
     _write(data_dir, ".env", "KEY=two\n")
     real_write = config_backups_module.atomic_write_bytes
 
     def fail_on_settings(target: Path, *args: object, **kwargs: object) -> None:
-        if target.name == "settings.json":
+        if target.name == "settings.json" and not wrote_every_file:
             raise OSError("injected write failure")
         real_write(target, *args, **kwargs)  # type: ignore[arg-type]
+        if target.name == "settings.json":
+            # The last file is written; the restore fails before it ends the guard.
+            raise OSError("injected failure")
 
     with monkeypatch.context() as patched:
         patched.setattr(config_backups_module, "atomic_write_bytes", fail_on_settings)
@@ -254,11 +269,14 @@ def test_an_interrupted_restore_holds_the_maintenance_guard_until_it_is_repeated
     assert read_maintenance(data_dir) is not None
     with pytest.raises(DatabaseFormatError, match="maintenance"):
         capture_config_backup(data_dir, reason="test")
+    with pytest.raises(DatabaseFormatError, match=f"backup {backup_id} did not finish"):
+        restore_config_backup(data_dir, other_id, check_only=True)
+    assert restore_config_backup(data_dir, backup_id, check_only=True).interrupted
 
     repeated = restore_config_backup(data_dir, backup_id)
 
     assert read_maintenance(data_dir) is None
-    assert repeated.restored == ("settings.json",)
+    assert repeated.restored == (() if wrote_every_file else ("settings.json",))
     assert repeated.before_restore == first_before.backup_id
     assert _read(data_dir, ".env") == "KEY=one\n"
     assert _read(data_dir, "settings.json") == _settings("Europe/Berlin")

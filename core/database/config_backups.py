@@ -74,7 +74,7 @@ _LOGGER = logging.getLogger("vbot.database")
 
 CONFIG_BACKUP_ROOT_NAME = "config-backups"
 CONFIG_BACKUP_MANIFEST_VERSION = 1
-#: The maintenance operation a configuration restore holds.
+#: The maintenance operation a configuration restore holds, followed by the backup id.
 CONFIG_RESTORE_OPERATION = "config restore"
 #: Configuration files beside the JSON document set, relative to the data directory.
 CONFIGURATION_FILE_PATTERNS: tuple[str, ...] = (
@@ -119,13 +119,23 @@ class ConfigFile:
 
 @dataclass(frozen=True)
 class ConfigBackup:
-    """One configuration backup, read from its manifest."""
+    """One configuration backup, read from its manifest.
+
+    ``files`` holds only the files this vBot backs up; ``other_objects`` are the
+    contents of further files a newer vBot recorded in the manifest, which this
+    vBot neither shows nor restores but must keep.
+    """
 
     backup_id: str
     created_at: str
     reason: str
     vbot_version: str
     files: Mapping[str, ConfigFile]
+    other_objects: frozenset[str] = frozenset()
+
+    def objects(self) -> frozenset[str]:
+        """Every stored content the manifest references."""
+        return frozenset(item.sha256 for item in self.files.values()) | self.other_objects
 
     def created_instant(self) -> datetime:
         return parse_canonical_timestamp(self.created_at)
@@ -152,7 +162,8 @@ class ConfigRestore:
     ``created_after`` lists current configuration files the backup does not
     hold, which a restore never removes. ``before_restore`` is the backup that
     holds the state before the restore (``None`` for a plan or when nothing
-    changed).
+    changed). ``interrupted`` says that an earlier restore of this backup did
+    not finish; the restore finishes it even when no file differs any more.
     """
 
     backup_id: str
@@ -161,6 +172,7 @@ class ConfigRestore:
     skipped: Mapping[str, str] = field(default_factory=dict)
     created_after: tuple[str, ...] = ()
     before_restore: str | None = None
+    interrupted: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +249,8 @@ def _parse_manifest(raw: bytes, backup_id: str) -> ConfigBackup:
     """Parse one manifest; malformed is corrupt.
 
     Unknown fields are ignored, and so is a well-formed path that this vBot does
-    not back up (a newer vBot added it): this vBot neither shows nor restores it.
+    not back up (a newer vBot added it): this vBot neither shows nor restores it,
+    but keeps its content (``other_objects``).
     """
     try:
         payload = json.loads(raw.decode("utf-8"))
@@ -260,6 +273,7 @@ def _parse_manifest(raw: bytes, backup_id: str) -> ConfigBackup:
     if not isinstance(entries, dict):
         raise DatabaseCorruptError(f"configuration backup {backup_id} has an invalid file list")
     files: dict[str, ConfigFile] = {}
+    other_objects: set[str] = set()
     for path, entry in entries.items():
         if not isinstance(entry, dict) or not set(entry) >= _FILE_KEYS:
             raise DatabaseCorruptError(f"configuration backup {backup_id}: {path} is malformed")
@@ -275,7 +289,9 @@ def _parse_manifest(raw: bytes, backup_id: str) -> ConfigBackup:
             raise DatabaseCorruptError(f"configuration backup {backup_id}: {path} is malformed")
         if is_configuration_path(path):
             files[path] = ConfigFile(path, digest, size, mode, damaged)
-    return ConfigBackup(backup_id, created_at, reason, version, files)
+        else:
+            other_objects.add(digest)
+    return ConfigBackup(backup_id, created_at, reason, version, files, frozenset(other_objects))
 
 
 def _is_count(value: object) -> bool:
@@ -570,10 +586,7 @@ def _prune(root: Path, backups: list[ConfigBackup], *, unreadable: int, now: dat
     if unreadable:
         return
     referenced = {
-        item.sha256
-        for backup in backups
-        if backup.backup_id in keep
-        for item in backup.files.values()
+        digest for backup in backups if backup.backup_id in keep for digest in backup.objects()
     }
     try:
         with os.scandir(root / _OBJECTS_DIRECTORY) as listing:
@@ -610,10 +623,13 @@ def restore_config_backup(
     altered one raises ``DatabaseCorruptError``. Files created after the backup
     stay. Before the first change the current state is backed up and the
     maintenance guard held, so an interrupted restore keeps Runtime from
-    starting until it is repeated.
+    starting until it is repeated; while it is incomplete, any other restore
+    raises ``DatabaseFormatError``.
     """
     data_dir = Path(data_dir)
     backup = read_config_backup(data_dir, backup_id)
+    operation = _restore_operation(backup_id)
+    interrupted = _interrupted_restore(data_dir, operation)
     explicit = paths is not None
     selected = (
         sorted(backup.files)
@@ -646,11 +662,14 @@ def restore_config_backup(
         unchanged=tuple(unchanged),
         skipped=skipped,
         created_after=tuple(sorted(path for path in current if path not in backup.files)),
+        interrupted=interrupted,
     )
-    if check_only or not restored:
+    if check_only or not (restored or interrupted):
         return plan
-    before = _before_restore_backup(data_dir, backup_id, now)
-    with maintenance(data_dir, CONFIG_RESTORE_OPERATION, resume=True):
+    before = _before_restore_backup(data_dir, backup_id, interrupted=interrupted, now=now)
+    # An interrupted attempt may have written every file already: entering and
+    # leaving the guard finishes it.
+    with maintenance(data_dir, operation, resume=True):
         for path, (content, item) in restored.items():
             atomic_write_bytes(
                 _data_path(data_dir, path),
@@ -671,7 +690,29 @@ def restore_config_backup(
         skipped=skipped,
         created_after=plan.created_after,
         before_restore=before,
+        interrupted=interrupted,
     )
+
+
+def _restore_operation(backup_id: str) -> str:
+    return f"{CONFIG_RESTORE_OPERATION} {backup_id}"
+
+
+def _interrupted_restore(data_dir: Path, operation: str) -> bool:
+    """Whether a restore of this backup is incomplete; refuse any other incomplete operation."""
+    guard = read_maintenance(data_dir)
+    if guard is None:
+        return False
+    if guard.operation == operation:
+        return True
+    pending = guard.operation.removeprefix(f"{CONFIG_RESTORE_OPERATION} ")
+    if pending != guard.operation:
+        raise DatabaseFormatError(
+            f"the restore of configuration backup {pending} did not finish; "
+            "repeat that restore first"
+        )
+    require_no_maintenance(data_dir)
+    return False
 
 
 def _restore_problem(data_dir: Path, item: ConfigFile) -> str | None:
@@ -704,14 +745,12 @@ def _verified_object(root: Path, backup_id: str, item: ConfigFile) -> bytes:
     return content
 
 
-def _before_restore_backup(data_dir: Path, backup_id: str, now: datetime | None) -> str | None:
+def _before_restore_backup(
+    data_dir: Path, backup_id: str, *, interrupted: bool, now: datetime | None
+) -> str | None:
     """The backup of the state a restore replaces; taken once, also across a repeated restore."""
     reason = f"before restore {backup_id}"
-    guard = read_maintenance(data_dir)
-    if guard is not None:
-        if guard.operation != CONFIG_RESTORE_OPERATION:
-            require_no_maintenance(data_dir)
-            raise DatabaseFormatError(f"data maintenance is incomplete ({guard.operation})")
+    if interrupted:
         # A repeated restore: the interrupted attempt took the backup already.
         earlier = [backup for backup in list_config_backups(data_dir) if backup.reason == reason]
         return earlier[0].backup_id if earlier else None

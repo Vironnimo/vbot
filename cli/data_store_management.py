@@ -329,7 +329,8 @@ def data_store_config_backup_restore(
             message=f"configuration backup cannot be restored: {backup_id}: {exc}",
             instance=instance,
         )
-    if not plan.restored:
+    # An interrupted restore of this backup still has to finish, even with every file equal.
+    if not plan.restored and not plan.interrupted:
         return CommandResult(
             ok=True,
             message=f"nothing to restore from configuration backup {backup_id} ("
@@ -352,6 +353,8 @@ def _describe_config_restore(restored: ConfigRestore) -> str:
     parts.extend(f"{path} left alone: {reason}" for path, reason in restored.skipped.items())
     if restored.created_after:
         parts.append("created after the backup and kept: " + ", ".join(restored.created_after))
+    if restored.interrupted:
+        parts.append("the interrupted restore of this backup is finished")
     if restored.before_restore is not None:
         parts.append(
             f"the replaced state is configuration backup {restored.before_restore}; "

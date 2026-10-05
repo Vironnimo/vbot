@@ -22,6 +22,7 @@ from core.database import (
     read_marker,
     write_bootstrap_marker,
 )
+from core.database.marker import begin_maintenance, read_maintenance
 from core.database.recovery import incident_path
 from core.sessions import ChatSessionManager, SessionAddress
 from tests.core.database.database_test_support import notes_spec
@@ -612,6 +613,19 @@ def test_config_backup_restore_stops_restores_and_restarts_the_running_server(
     assert before["reason"] == f"before restore {backup.backup_id}"
     assert before["backup_id"] in result.message
     assert "restarted the server" in result.message
+
+    # An interrupted restore that wrote every file still finishes when it is repeated.
+    begin_maintenance(tmp_path, f"config restore {backup.backup_id}")
+    _classified(monkeypatch, "absent")
+
+    repeated = data_store_management.data_store_config_backup_restore(
+        instance, backup.backup_id, True, ["settings.json"]
+    )
+
+    assert repeated.ok, repeated.message
+    assert "interrupted restore of this backup is finished" in repeated.message
+    assert calls == ["stop", "start", "stop"]
+    assert read_maintenance(tmp_path) is None
 
 
 @pytest.mark.parametrize(
