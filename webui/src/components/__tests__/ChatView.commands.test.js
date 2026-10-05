@@ -22,6 +22,7 @@ import {
   setupChatViewTestSuite,
   streamResponses,
   subscribeRunEventsMock,
+  testChatStateRefs,
   waitForCondition,
   waitForText,
 } from './ChatView.support.js';
@@ -163,11 +164,6 @@ describe('ChatView slash commands', () => {
   describe('navigation commands', () => {
     it.each([
       [
-        '/new',
-        { command: 'new', session_id: 'session-new' },
-        ['alpha', 'Alpha'],
-      ],
-      [
         '/handoff',
         {
           command: 'handoff',
@@ -203,7 +199,6 @@ describe('ChatView slash commands', () => {
           createChatRpcMock({
             agents,
             sessionMessages: {
-              'session-new': [],
               'session-handoff': [message('handoff-reply', 'Handoff reply')],
               'beta-current': [message('beta-reply', 'Beta current reply')],
             },
@@ -243,6 +238,48 @@ describe('ChatView slash commands', () => {
         expect(subscribeRunEventsMock).not.toHaveBeenCalled();
       },
     );
+
+    it('shows a draft for /new, keeps it for a command without a Session and creates the Session with the next message', async () => {
+      rpcMock.mockImplementation(
+        createChatRpcMock({
+          streamHandler: streamResponses({
+            '/new': handledCommand('', { data: { command: 'new' } }),
+            '/status': handledCommand('Draft status', {
+              output: 'transient',
+              data: { command: 'status', session_id: null },
+            }),
+            'First draft message': {
+              ...runningRun('run-new'),
+              session_id: 'created-alpha',
+            },
+          }),
+        }),
+      );
+      await chat.mountChat();
+      const alphaSessionId = () =>
+        testChatStateRefs[0].agents[0].current_session_id;
+
+      sendComposerMessage('/new');
+      await waitForCondition(() => alphaSessionId() === '');
+      expect(document.body.textContent).not.toContain('Hello');
+      expect(toastText()).toBeUndefined();
+
+      sendComposerMessage('/status');
+      await waitForCondition(() =>
+        document
+          .querySelector('.transient-card')
+          ?.textContent.includes('Draft status'),
+      );
+      expect(alphaSessionId()).toBe('');
+
+      sendComposerMessage('First draft message');
+      await waitForCondition(() => alphaSessionId() === 'created-alpha');
+      expect(rpcCalls('chat.stream')).toEqual([
+        { agent_id: 'alpha', session_id: 'session-1', content: '/new' },
+        { agent_id: 'alpha', new_session: {}, content: '/status' },
+        { agent_id: 'alpha', new_session: {}, content: 'First draft message' },
+      ]);
+    });
 
     it('does not apply stale command navigation after the user selects another Agent', async () => {
       const [moveResponse, resolveMove] = deferred();

@@ -153,8 +153,6 @@ def test_chat_starts_a_session_and_prints_the_answer(
     flags: tuple[str, ...],
     overrides: dict[str, Any] | None,
 ) -> None:
-    created = {"agent_id": "main", "session_id": "s-new"}
-    rpc.reply("session.create", created | ({"agent_overrides": overrides} if overrides else {}))
     reply_run(rpc, "s-new")
     run_stream.connection(*TOOL_RUN)
 
@@ -162,10 +160,13 @@ def test_chat_starts_a_session_and_prints_the_answer(
 
     assert code == 0
     assert out == "The answer.\n"
-    expected_create = {"agent_id": "main"} | ({"agent_overrides": overrides} if overrides else {})
+    # The server creates the Session with the accepted message; none is created up front.
+    new_session = {"agent_overrides": overrides} if overrides else {}
     assert rpc.calls == [
-        ("session.create", expected_create),
-        ("chat.stream", {"agent_id": "main", "session_id": "s-new", "content": "What is vBot?"}),
+        (
+            "chat.stream",
+            {"agent_id": "main", "content": "What is vBot?", "new_session": new_session},
+        ),
     ]
     # Events the chat.stream reply already carried are not requested again.
     assert run_stream.queries == [{"after_sequence": 2}]
@@ -217,18 +218,24 @@ def test_chat_continue_uses_the_latest_session_and_saves_only_given_overrides(
     assert rpc.params("chat.stream")["session_id"] == "s-latest"
 
 
-def test_chat_continue_without_a_conversation_fails_before_sending(
-    rpc: FakeRpc, run_cli: RunCli
+def test_chat_continue_without_a_conversation_starts_a_new_session(
+    rpc: FakeRpc, run_stream: FakeRunStream, run_cli: RunCli
 ) -> None:
     rpc.reply("session.list", {"sessions": []})
+    reply_run(rpc, "s-new")
+    run_stream.connection(answer(3, "Started."), completed(4))
 
     code, out, err = run_cli("chat", "--agent", "coder@vbot", "-c", "Go on")
 
-    assert code == 1
-    assert out == ""
-    assert rpc.methods == ["session.list"]
-    assert "coder@vbot has no conversation Session to continue" in err
-    assert "Next: vbot session list coder@vbot" in err
+    assert code == 0
+    assert out == "Started.\n"
+    assert rpc.methods == ["session.list", "chat.stream"]
+    assert rpc.params("chat.stream") == {
+        "agent_id": "coder@vbot",
+        "content": "Go on",
+        "new_session": {},
+    }
+    assert "s-new" in err
 
 
 @pytest.mark.parametrize("argv", [("chat",), ("chat", "-")], ids=["omitted", "dash"])
@@ -288,7 +295,6 @@ def test_chat_reports_an_unsuccessful_run_on_stderr_with_a_failure_exit(
     terminal: dict[str, Any],
     expected: str,
 ) -> None:
-    rpc.reply("session.create", {"agent_id": "main", "session_id": "s-new"})
     reply_run(rpc, "s-new")
     run_stream.connection(
         event(3, "provider_request_status", {"state": "waiting", "model": MODEL}), terminal
@@ -316,34 +322,50 @@ def test_chat_reports_a_queued_message_without_waiting(
     assert "queued as queue-7" in err
 
 
+@pytest.mark.parametrize(
+    ("flags", "session", "outcome"),
+    [
+        pytest.param(
+            ("--session", "s-given"),
+            {"session_id": "s-given"},
+            "status handled in Session s-given",
+            id="existing-session",
+        ),
+        # A session-less command for a new Session creates none, so none is named.
+        pytest.param((), {}, "status handled without a Session", id="new-session"),
+    ],
+)
 def test_chat_prints_a_slash_command_reply(
-    rpc: FakeRpc, run_stream: FakeRunStream, run_cli: RunCli
+    rpc: FakeRpc,
+    run_stream: FakeRunStream,
+    run_cli: RunCli,
+    flags: tuple[str, ...],
+    session: dict[str, str],
+    outcome: str,
 ) -> None:
     rpc.reply(
         "chat.stream",
         {
             "command_handled": True,
-            "reply": "Session s-given: 12 messages",
+            "reply": "Agent main: idle",
             "output": "toast",
             "data": {"command": "status"},
-        },
+        }
+        | session,
     )
 
-    code, out, err = run_cli("chat", "--session", "s-given", "/status")
+    code, out, err = run_cli("chat", *flags, "/status")
 
     assert code == 0
-    assert out == "Session s-given: 12 messages\n"
+    assert out == "Agent main: idle\n"
     assert run_stream.queries == []
-    assert "status handled in Session s-given" in err
+    assert outcome in err
+    assert ("Continue:" in err) is bool(session)
 
 
 def test_chat_json_reports_the_run_as_one_object(
     rpc: FakeRpc, run_stream: FakeRunStream, run_cli: RunCli
 ) -> None:
-    rpc.reply(
-        "session.create",
-        {"agent_id": "main", "session_id": "s-new", "agent_overrides": {"model": MODEL}},
-    )
     reply_run(rpc, "s-new")
     run_stream.connection(*TOOL_RUN)
 
@@ -379,7 +401,6 @@ def test_chat_json_reports_the_run_as_one_object(
 def test_chat_reports_tool_calls_errors_and_retries_as_progress_on_stderr(
     rpc: FakeRpc, run_stream: FakeRunStream, run_cli: RunCli
 ) -> None:
-    rpc.reply("session.create", {"agent_id": "main", "session_id": "s-new"})
     reply_run(rpc, "s-new")
     retry = {
         "state": "retrying",
@@ -425,7 +446,6 @@ def test_chat_streams_answer_text_on_a_terminal_without_repeating_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
-    rpc.reply("session.create", {"agent_id": "main", "session_id": "s-new"})
     reply_run(rpc, "s-new")
     run_stream.connection(
         event(3, "assistant_output_delta", {"content_delta": "Let me "}),
@@ -445,7 +465,6 @@ def test_chat_streams_answer_text_on_a_terminal_without_repeating_it(
 def test_chat_reconnects_to_the_run_after_the_stream_closes_early(
     rpc: FakeRpc, run_stream: FakeRunStream, run_cli: RunCli
 ) -> None:
-    rpc.reply("session.create", {"agent_id": "main", "session_id": "s-new"})
     reply_run(rpc, "s-new")
     run_stream.connection(answer(3, "Part"))
     # The replayed event 3 is applied once; the answer continues from event 4.
@@ -474,7 +493,6 @@ def test_chat_reports_a_lost_run_stream_without_resending(
     script: Callable[[FakeRunStream], object],
     connections: int,
 ) -> None:
-    rpc.reply("session.create", {"agent_id": "main", "session_id": "s-new"})
     reply_run(rpc, "s-new")
     script(run_stream)
 
@@ -483,7 +501,7 @@ def test_chat_reports_a_lost_run_stream_without_resending(
     assert code == 1
     assert out == ""
     assert run_stream.queries == [{"after_sequence": 2}] * connections
-    assert rpc.methods == ["session.create", "chat.stream"]
+    assert rpc.methods == ["chat.stream"]
     assert f"lost the event stream of Run {RUN_ID}" in err
     assert "check it with vbot chat --session s-new /status" in err
 
@@ -491,7 +509,6 @@ def test_chat_reports_a_lost_run_stream_without_resending(
 def test_chat_ctrl_c_cancels_the_run_and_exits_130(
     rpc: FakeRpc, run_stream: FakeRunStream, run_cli: RunCli
 ) -> None:
-    rpc.reply("session.create", {"agent_id": "main", "session_id": "s-new"})
     reply_run(rpc, "s-new")
     rpc.reply("chat.cancel", {"run_id": RUN_ID, "status": "cancelled"})
     run_stream.connection(

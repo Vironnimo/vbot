@@ -34,7 +34,11 @@ from core.sessions import (
     SessionAddress,
 )
 from core.utils.timestamps import format_canonical_timestamp, utc_now_timestamp
-from tests.core.archive.archive_test_support import ArchiveWorld, legacy_agent_entry
+from tests.core.archive.archive_test_support import (
+    ArchiveWorld,
+    agent_with_session,
+    legacy_agent_entry,
+)
 from tests.core.archive.archive_test_support import world as world
 
 
@@ -50,7 +54,7 @@ async def test_an_archived_agent_returns_with_its_sessions_grants_and_roster_pos
 ) -> None:
     agents, sessions = world.agents, world.sessions
     agents.create("manager", "Manager", tools={"subagent": {"allowed_agents": ["x", "coder"]}})
-    coder = agents.create("coder", "Coder")
+    coder = agent_with_session(world, "coder", "Coder")
     agents.create("beta", "Beta")
     second = sessions.create("coder", session_id="second").address
     agents.reorder(
@@ -271,7 +275,7 @@ async def test_a_failed_project_archive_leaves_the_project_its_agents_and_no_ent
 async def test_a_session_archive_moves_the_current_pointer_and_restore_as_avoids_a_taken_address(
     world: ArchiveWorld,
 ) -> None:
-    coder = world.agents.create("coder")
+    coder = agent_with_session(world, "coder")
     current = SessionAddress(None, "coder", coder.current_session_id)
     world.sessions.create("coder", session_id="other")
     world.sessions.set_title(current, "Planning")
@@ -390,7 +394,7 @@ async def test_a_session_scope_blocker_names_the_entry_that_restores_its_agent(
 async def test_purge_deletes_the_sessions_payload_and_entry_after_importing_usage(
     world: ArchiveWorld,
 ) -> None:
-    coder = world.agents.create("coder")
+    coder = agent_with_session(world, "coder")
     archived = await world.service.archive_agent("coder")
     assert world.session_rows("coder") == [(coder.current_session_id, "archived")]
 
@@ -470,7 +474,7 @@ async def test_purging_an_agent_whose_cleanup_did_not_finish_completes_it_first(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("refusal", ["unknown-entry", "busy-entry", "usage-import-fails"])
 async def test_a_refused_purge_deletes_nothing(world: ArchiveWorld, refusal: str) -> None:
-    coder = world.agents.create("coder")
+    coder = agent_with_session(world, "coder")
     archived = await world.service.archive_agent("coder")
 
     if refusal == "unknown-entry":
@@ -503,7 +507,7 @@ async def test_a_refused_purge_deletes_nothing(world: ArchiveWorld, refusal: str
 async def test_an_entry_taken_before_the_claim_is_skipped_or_gone(
     world: ArchiveWorld, monkeypatch: pytest.MonkeyPatch, taken_by: str
 ) -> None:
-    coder = world.agents.create("coder")
+    coder = agent_with_session(world, "coder")
     entry_id = (await world.service.archive_agent("coder")).entry_id
     ledger = world.sessions.archive_ledger
     begin_purge = ledger.begin_purge
@@ -541,7 +545,7 @@ async def test_entries_list_with_labels_and_show_their_sessions_files_and_restor
     world: ArchiveWorld,
 ) -> None:
     world.agents.create("manager")
-    coder = world.agents.create("coder", "Coder Agent")
+    coder = agent_with_session(world, "coder", "Coder Agent")
     notes = world.sessions.create("manager", session_id="notes").address
     world.sessions.set_title(notes, "Notes")
     agent_entry = await world.service.archive_agent("coder")

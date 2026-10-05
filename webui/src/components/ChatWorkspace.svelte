@@ -616,6 +616,7 @@
               interactive={focusedPane === index}
               composerAvailable={!sameSession || editorPane === index}
               preserveSessionSelection
+              draftScope={index}
               siblingSessionDeletion={siblingDeletions[index]}
               onSessionDeleted={(deletion) =>
                 forwardSessionDeletion(index, deletion)}
@@ -636,6 +637,7 @@
               interactive={focusedPane === index}
               composerAvailable={!sameSession || editorPane === index}
               preserveSessionSelection
+              draftScope={index}
               siblingSessionDeletion={siblingDeletions[index]}
               onSessionDeleted={(deletion) =>
                 forwardSessionDeletion(index, deletion)}

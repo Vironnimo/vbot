@@ -10,6 +10,7 @@ import {
 import {
   buttonLabelled,
   composerInput,
+  deferred,
   getDraft,
   getHistory,
   pressKey,
@@ -452,6 +453,41 @@ describe('ChatComposer', () => {
       expect(getDraft('agent::one')).toBe('keep this');
       expect(attachments()).toHaveLength(1);
       expect(getHistory('agent')).toEqual([]);
+    });
+
+    it('continues what a draft gained during its first send in the created Session', async () => {
+      const send = deferred();
+      const onSendMessage = vi.fn(() => send.promise);
+      uploadAttachment.mockResolvedValue(
+        uploaded('attachment-file-2', 'later.pdf', 'application/pdf'),
+      );
+      const draft = { draftKey: 'agent::~draft-0', historyKey: 'agent' };
+      composer.mount({ ...draft, onSendMessage });
+
+      typeInComposer('first message');
+      submitComposer();
+      await settle();
+      typeInComposer('follow-up');
+      await selectFilesFromPicker(
+        new File(['pdf-content'], 'later.pdf', { type: 'application/pdf' }),
+      );
+      send.resolve({ draftKey: 'agent::created' });
+      await settle();
+
+      expect(onSendMessage).toHaveBeenCalledWith('first message');
+      expect(getHistory('agent')).toEqual(['first message']);
+      expect(getDraft('agent::~draft-0')).toBe('');
+      expect(getDraft('agent::created')).toBe('follow-up');
+
+      await composer.unmount();
+      composer.mount({ ...draft, onSendMessage });
+      expect(composerInput().value).toBe('');
+      expect(attachments()).toHaveLength(0);
+
+      await composer.unmount();
+      composer.mount({ draftKey: 'agent::created', historyKey: 'agent' });
+      expect(composerInput().value).toBe('follow-up');
+      expect(attachments()).toHaveLength(1);
     });
 
     it('keeps completed attachments with their original Session across composer mounts', async () => {

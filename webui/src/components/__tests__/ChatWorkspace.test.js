@@ -306,8 +306,8 @@ describe('ChatWorkspace', () => {
     expect(testChatStateRefs).toHaveLength(2);
     // A new Session in the second pane cannot re-aim the first pane's landing.
     button(pane(1), 'New session').click();
-    await waitForCondition(() =>
-      rpcMock.mock.calls.some(([method]) => method === 'session.create'),
+    await waitForCondition(
+      () => testChatStateRefs[1].agents[0].current_session_id === '',
     );
     expect(testChatStateRefs[0].agents[0].current_session_id).toBe('session-1');
     expect(leftInput.value).toBe('Left draft sentinel');
@@ -370,23 +370,38 @@ describe('ChatWorkspace', () => {
     expect(pane(1).querySelector('.msg-input')).toBeNull();
   });
 
-  it('can create a second Session even when the first Session is empty', async () => {
-    rpcMock.mockImplementation(
-      createChatRpcMock({
-        sessionMessages: { 'session-1': [], 'created-alpha': [] },
-      }),
-    );
-    harness.mount({ target: document.body }, ChatWorkspace);
-    await waitForCondition(() => pane(0)?.querySelector('.msg-input'));
-    action(0, 'Split view');
-    await waitForCondition(() => pane(1)?.querySelector('.chat-view'));
-    await waitForCondition(() => button(pane(1), 'New session'));
+  it("keeps each area's draft of the same Agent apart and across navigation", async () => {
+    await start();
+    action(1, 'Sessions');
     button(pane(1), 'New session').click();
-    await waitForCondition(() => pane(1).querySelector('.msg-input'));
-    expect(testChatStateRefs[0].agents[0].current_session_id).toBe('session-1');
-    expect(testChatStateRefs[1].agents[0].current_session_id).toBe(
-      'created-alpha',
+    action(0, 'New session');
+    await waitForCondition(() =>
+      [0, 1].every(
+        (index) =>
+          testChatStateRefs[index].agents[0].current_session_id === '' &&
+          pane(index).querySelector('.msg-input'),
+      ),
     );
+    const leftInput = pane(0).querySelector('.msg-input');
+    const rightInput = pane(1).querySelector('.msg-input');
+    setInputValue(leftInput, 'Left draft sentinel');
+    setInputValue(rightInput, 'Right draft sentinel');
+    flushSync();
+
+    // The second area leaves its draft for a Session and comes back to it.
+    action(1, 'Sessions');
+    await waitForCondition(() => pane(1)?.textContent.includes('Second topic'));
+    Array.from(pane(1).querySelectorAll('button'))
+      .find((el) => el.textContent.includes('Second topic'))
+      .click();
+    await waitForCondition(() => rightInput.value === '');
+    button(pane(1), 'New session').click();
+    await waitForCondition(() => rightInput.value === 'Right draft sentinel');
+
+    expect(leftInput.value).toBe('Left draft sentinel');
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'chat.stream'),
+    ).toEqual([]);
   });
 
   it('starts a newly opened Chat area from the current Run state, not stale App buffers', async () => {
@@ -487,7 +502,10 @@ describe('ChatWorkspace', () => {
       nextSessionId: 'session-2',
     });
 
-    function mountDeletableWorkspace({ beforeDeleteResponse } = {}) {
+    function mountDeletableWorkspace({
+      beforeDeleteResponse,
+      landing = 'session-2',
+    } = {}) {
       deleted = false;
       const baseRpc = createChatRpcMock({
         sessionMessages: {
@@ -504,13 +522,13 @@ describe('ChatWorkspace', () => {
         if (method === 'session.delete') {
           deleted = true;
           await beforeDeleteResponse?.();
-          return { ...params, next_session_id: 'session-2' };
+          return { ...params, next_session_id: landing };
         }
         if (method === 'agent.list') {
           return {
             agents: [
               createAgent({
-                current_session_id: deleted ? 'session-2' : 'session-1',
+                current_session_id: deleted ? (landing ?? '') : 'session-1',
               }),
             ],
           };
@@ -525,9 +543,12 @@ describe('ChatWorkspace', () => {
         return baseRpc(method, params);
       });
       listSessionsMock.mockImplementation(async () => ({
-        sessions: deleted
-          ? [rows['session-2']]
-          : [rows['session-1'], rows['session-2']],
+        sessions:
+          deleted && !landing
+            ? []
+            : deleted
+              ? [rows['session-2']]
+              : [rows['session-1'], rows['session-2']],
       }));
       const props = reactiveProps({
         sharedAgents: [createAgent()],
@@ -596,37 +617,50 @@ describe('ChatWorkspace', () => {
           method === 'chat.history' && params.session_id === 'session-1',
       ).length;
 
-    it('lands on the server landing and never reopens the deleted Session', async () => {
-      const props = mountDeletableWorkspace();
-      await waitForCondition(() => deletedHistoryReads() > 0);
-      await deleteFromDrawer(0, 'First topic');
-      await waitForCondition(() =>
-        pane(0).textContent.includes('Second conversation sentinel'),
-      );
-      const readsAtDeletion = deletedHistoryReads();
+    it.each([
+      ['the server landing', 'session-2'],
+      ['a draft without a landing', null],
+    ])(
+      'lands on %s and never reopens the deleted Session',
+      async (_case, landing) => {
+        const props = mountDeletableWorkspace({ landing });
+        const landed = () =>
+          landing
+            ? pane(0).textContent.includes('Second conversation sentinel')
+            : testChatStateRefs[0].agents[0].current_session_id === '' &&
+              !pane(0).textContent.includes('Hello');
+        await waitForCondition(() => deletedHistoryReads() > 0);
+        await deleteFromDrawer(0, 'First topic');
+        await waitForCondition(landed);
+        const readsAtDeletion = deletedHistoryReads();
 
-      // App publishes rosters (refreshed and still-stale) and bumps the token.
-      props.sharedAgents = [createAgent({ current_session_id: 'session-2' })];
-      props.agentsRefreshToken = 1;
-      flushSync();
-      await waitForCondition(
-        () =>
-          rpcMock.mock.calls.filter(([method]) => method === 'agent.list')
-            .length >= 2,
-      );
-      props.sharedAgents = [createAgent()];
-      flushSync();
+        // App publishes rosters (refreshed and still-stale) and bumps the
+        // token.
+        props.sharedAgents = [
+          createAgent({ current_session_id: landing ?? '' }),
+        ];
+        props.agentsRefreshToken = 1;
+        flushSync();
+        await waitForCondition(
+          () =>
+            rpcMock.mock.calls.filter(([method]) => method === 'agent.list')
+              .length >= 2,
+        );
+        props.sharedAgents = [createAgent()];
+        flushSync();
 
-      // Selecting the same Agent returns to its current Session.
-      await selectAgentFromPicker('Alpha', pane(0));
-      await settle();
+        // Selecting the same Agent returns to its current Session.
+        await selectAgentFromPicker('Alpha', pane(0));
+        await settle();
 
-      expect(testChatStateRefs[0].agents[0].current_session_id).toBe(
-        'session-2',
-      );
-      expect(deletedHistoryReads()).toBe(readsAtDeletion);
-      expect(pane(0).textContent).toContain('Second conversation sentinel');
-    });
+        expect(testChatStateRefs[0].agents[0].current_session_id).toBe(
+          landing ?? '',
+        );
+        expect(deletedHistoryReads()).toBe(readsAtDeletion);
+        expect(landed()).toBe(true);
+        expect(pane(0).querySelector('.msg-input').disabled).toBe(false);
+      },
+    );
 
     it('releases the deleted Session in the other Chat area too', async () => {
       mountDeletableWorkspace();

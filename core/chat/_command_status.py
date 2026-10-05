@@ -14,6 +14,7 @@ from core.chat.commands import (
     CommandExecutionContext,
     CommandFeedback,
     CommandOutcome,
+    NewSessionCommandContext,
     _command_session_io,
     _has_exception_name,
     _require_dependency,
@@ -22,6 +23,7 @@ from core.chat.messages import ChatMessage
 from core.chat.status_report import (
     STATUS_PLACEHOLDER,
     ReasoningRenderDescriber,
+    StatusActivity,
     StatusSessionFacts,
     WireProfileDescriber,
     build_status_reply,
@@ -32,7 +34,7 @@ from core.chat.status_report import (
     resolve_status_sampling,
     resolve_status_wire_profile,
 )
-from core.projects import format_agent_address
+from core.projects import AgentOverrides, format_agent_address
 from core.runs import ChatRunManager
 from core.sessions import SessionAddress
 from core.settings.settings import effective_timezone_name
@@ -96,18 +98,89 @@ async def _execute_model(
     projects: ProjectStore | None,
 ) -> CommandOutcome:
     if argument is None:
-        return CommandOutcome(
-            command="model",
-            feedback=CommandFeedback(
-                kind="detail",
-                text=await _COMMAND_WORKERS.run(
-                    partial(_build_model_summary, agent_resolver=agent_resolver),
-                    context.agent_id,
-                    context.project_id,
-                    context.session_id,
-                ),
-            ),
+        return await _model_summary_outcome(
+            context.agent_id,
+            context.project_id,
+            agent_resolver=agent_resolver,
+            session_id=context.session_id,
         )
+    outcome = await _set_model(
+        context.agent_id,
+        context.project_id,
+        argument,
+        agent_resolver=agent_resolver,
+        agents=agents,
+        projects=projects,
+    )
+    # The Agent's Model is what this Session runs next, so a Session Model
+    # override stops shadowing it.
+    await _require_dependency(agent_resolver, "AgentResolver").update_session_overrides_async(
+        SessionAddress(context.project_id, context.agent_id, context.session_id), {"model": None}
+    )
+    return outcome
+
+
+async def _execute_model_without_session(
+    context: NewSessionCommandContext,
+    argument: str | None,
+    *,
+    agent_resolver: AgentResolver | None,
+    agents: AgentStore | None,
+    projects: ProjectStore | None,
+) -> CommandOutcome:
+    """``/model`` for a new Session: the Model its first Run would use, or the Agent's."""
+    if argument is None:
+        return await _model_summary_outcome(
+            context.agent_id,
+            context.project_id,
+            agent_resolver=agent_resolver,
+            new_session_overrides=context.agent_overrides,
+        )
+    return await _set_model(
+        context.agent_id,
+        context.project_id,
+        argument,
+        agent_resolver=agent_resolver,
+        agents=agents,
+        projects=projects,
+    )
+
+
+async def _model_summary_outcome(
+    agent_id: str,
+    project_id: str | None,
+    *,
+    agent_resolver: AgentResolver | None,
+    session_id: str | None = None,
+    new_session_overrides: AgentOverrides | None = None,
+) -> CommandOutcome:
+    return CommandOutcome(
+        command="model",
+        feedback=CommandFeedback(
+            kind="detail",
+            text=await _COMMAND_WORKERS.run(
+                partial(
+                    _build_model_summary,
+                    agent_resolver=agent_resolver,
+                    new_session_overrides=new_session_overrides,
+                ),
+                agent_id,
+                project_id,
+                session_id,
+            ),
+        ),
+    )
+
+
+async def _set_model(
+    agent_id: str,
+    project_id: str | None,
+    argument: str,
+    *,
+    agent_resolver: AgentResolver | None,
+    agents: AgentStore | None,
+    projects: ProjectStore | None,
+) -> CommandOutcome:
     raw = argument.strip()
     is_reset = raw.lower() == MODEL_RESET_TOKEN
     model = "" if is_reset else raw
@@ -115,28 +188,23 @@ async def _execute_model(
         partial(
             _apply_model_setting, agent_resolver=agent_resolver, agents=agents, projects=projects
         ),
-        context.agent_id,
-        context.project_id,
+        agent_id,
+        project_id,
         model,
         is_reset,
-    )
-    # The Agent's Model is what this Session runs next, so a Session Model
-    # override stops shadowing it.
-    await _require_dependency(agent_resolver, "AgentResolver").update_session_overrides_async(
-        SessionAddress(context.project_id, context.agent_id, context.session_id), {"model": None}
     )
     if changed:
         _LOGGER.info(
             "Agent model configuration %s (agent=%s field=model)",
             "reset" if is_reset else "updated",
-            format_agent_address(context.agent_id, context.project_id),
+            format_agent_address(agent_id, project_id),
         )
     return CommandOutcome(
         command="model",
         feedback=CommandFeedback(
             kind="notice", text="Model reset." if is_reset else f"Model set to {model}."
         ),
-        facts={"agent_id": context.agent_id, "model": model},
+        facts={"agent_id": agent_id, "model": model},
     )
 
 
@@ -185,24 +253,10 @@ async def _execute_status(
     storage: Any | None,
     wire_profile_describer: WireProfileDescriber | None,
 ) -> CommandOutcome:
-    agent: RuntimeAgent | None = None
+    agent = await _status_agent(
+        agent_resolver, context.agent_id, context.project_id, session_id=context.session_id
+    )
     status_session: list[ChatMessage] | StatusSessionFacts = []
-    try:
-        if agent_resolver is not None:
-            agent = await agent_resolver.resolve_agent_async(
-                context.project_id,
-                context.agent_id,
-                session_id=context.session_id,
-            )
-    except Exception as error:
-        log = (
-            _LOGGER.warning if _has_exception_name(error, "AgentResolutionError") else _LOGGER.error
-        )
-        log(
-            "Failed to resolve agent %r while building /status reply",
-            context.agent_id,
-            exc_info=True,
-        )
     try:
         if sessions is not None:
             session = await _command_session_io(
@@ -235,6 +289,110 @@ async def _execute_status(
             context.agent_id,
             exc_info=True,
         )
+    return await _status_outcome(
+        agent,
+        status_session,
+        resolve_status_activity(
+            chat_runs,
+            context.agent_id,
+            context.session_id,
+            context.project_id,
+        ),
+        context.project_id,
+        local_context_windows_loader=local_context_windows_loader,
+        models=models,
+        projects=projects,
+        providers=providers,
+        reasoning_render_describer=reasoning_render_describer,
+        started_at=started_at,
+        storage=storage,
+        wire_profile_describer=wire_profile_describer,
+    )
+
+
+async def _execute_status_without_session(
+    context: NewSessionCommandContext,
+    argument: str | None,
+    *,
+    agent_resolver: AgentResolver | None,
+    local_context_windows_loader: Callable[[], Mapping[str, Any]] | None,
+    models: ModelRegistry | None,
+    projects: ProjectStore | None,
+    providers: ProviderRegistry | None,
+    reasoning_render_describer: ReasoningRenderDescriber | None,
+    started_at: datetime | None,
+    storage: Any | None,
+    wire_profile_describer: WireProfileDescriber | None,
+) -> CommandOutcome:
+    """``/status`` for a new Session: the Agent as its first Run would run, no History."""
+    agent = await _status_agent(
+        agent_resolver,
+        context.agent_id,
+        context.project_id,
+        new_session_overrides=context.agent_overrides,
+    )
+    return await _status_outcome(
+        agent,
+        [],
+        StatusActivity(activity="idle", run_id=None, created_at=None, updated_at=None),
+        context.project_id,
+        local_context_windows_loader=local_context_windows_loader,
+        models=models,
+        projects=projects,
+        providers=providers,
+        reasoning_render_describer=reasoning_render_describer,
+        started_at=started_at,
+        storage=storage,
+        wire_profile_describer=wire_profile_describer,
+    )
+
+
+async def _status_agent(
+    agent_resolver: AgentResolver | None,
+    agent_id: str,
+    project_id: str | None,
+    *,
+    session_id: str | None = None,
+    new_session_overrides: AgentOverrides | None = None,
+) -> RuntimeAgent | None:
+    """Resolve the Agent a ``/status`` reply describes; a failure degrades to ``None``."""
+    if agent_resolver is None:
+        return None
+    try:
+        if session_id is not None:
+            return await agent_resolver.resolve_agent_async(
+                project_id, agent_id, session_id=session_id
+            )
+        return await agent_resolver.resolve_agent_async(
+            project_id, agent_id, new_session_overrides=new_session_overrides
+        )
+    except Exception as error:
+        log = (
+            _LOGGER.warning if _has_exception_name(error, "AgentResolutionError") else _LOGGER.error
+        )
+        log(
+            "Failed to resolve agent %r while building /status reply",
+            agent_id,
+            exc_info=True,
+        )
+        return None
+
+
+async def _status_outcome(
+    agent: RuntimeAgent | None,
+    status_session: list[ChatMessage] | StatusSessionFacts,
+    activity: StatusActivity,
+    project_id: str | None,
+    *,
+    local_context_windows_loader: Callable[[], Mapping[str, Any]] | None,
+    models: ModelRegistry | None,
+    projects: ProjectStore | None,
+    providers: ProviderRegistry | None,
+    reasoning_render_describer: ReasoningRenderDescriber | None,
+    started_at: datetime | None,
+    storage: Any | None,
+    wire_profile_describer: WireProfileDescriber | None,
+) -> CommandOutcome:
     model_details = resolve_status_model_details(
         agent,
         models,
@@ -242,12 +400,6 @@ async def _execute_status(
         local_context_windows=_load_local_context_windows(
             local_context_windows_loader=local_context_windows_loader
         ),
-    )
-    activity = resolve_status_activity(
-        chat_runs,
-        context.agent_id,
-        context.session_id,
-        context.project_id,
     )
     # Resolving the Connection reads credential state, so it runs off the loop.
     wire_profile = await _COMMAND_WORKERS.run(
@@ -268,7 +420,7 @@ async def _execute_status(
         model_details.display_name,
         activity,
         actual_thinking_effort=actual_thinking_effort,
-        project_label=resolve_status_project_label(projects, context.project_id),
+        project_label=resolve_status_project_label(projects, project_id),
         sampling_status=resolve_status_sampling(agent, model_details),
         timezone=_status_timezone(storage=storage),
         wire_profile=wire_profile,
@@ -282,23 +434,28 @@ async def _execute_status(
 def _build_model_summary(
     agent_id: str,
     project_id: str | None,
-    session_id: str,
+    session_id: str | None,
     *,
     agent_resolver: AgentResolver | None,
+    new_session_overrides: AgentOverrides | None = None,
 ) -> str:
     """Describe the session's current model and where it resolves from.
 
     Reads the resolver's provenance seam once (``effective_config``): the model
     value is what the next run would use (already post-override), and its source names
-    the winning tier. None-guarded like ``/status`` so a minimally constructed
-    dispatcher degrades to a placeholder instead of crashing; a resolver error is
-    logged and degrades to placeholder + "not configured".
+    the winning tier. Without ``session_id`` it describes a new Session, whose
+    ``new_session_overrides`` Model counts as its own. None-guarded like
+    ``/status`` so a minimally constructed dispatcher degrades to a placeholder
+    instead of crashing; a resolver error is logged and degrades to placeholder +
+    "not configured".
     """
     model = STATUS_PLACEHOLDER
     source: str | None = None
     if agent_resolver is not None:
         try:
             effective = agent_resolver.effective_config(project_id, agent_id, session_id=session_id)
+            if new_session_overrides is not None and new_session_overrides.model is not None:
+                effective["model"] = {"value": new_session_overrides.model, "source": "session"}
             model_field = effective.get("model", {})
             value = model_field.get("value")
             model = (value or "").strip() or STATUS_PLACEHOLDER

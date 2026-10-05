@@ -65,15 +65,6 @@ export function inspectSubAgentWork(params = {}, options = {}) {
   return rpc('subagent.inspect', params, options);
 }
 
-export function createSession(params = {}, options = {}) {
-  requirePlainObject(
-    params,
-    'Session create request must be an object',
-    'session.create',
-  );
-  return rpc('session.create', params, options);
-}
-
 export function startChatRun(params = {}, options = {}) {
   requirePlainObject(params, 'Chat request must be an object', 'chat.stream');
   return rpc('chat.stream', params, options);

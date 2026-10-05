@@ -753,7 +753,8 @@ def _add_chat_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         help=AREA_HELP["chat"],
         description=(
             f"{AREA_HELP['chat']}. Without -c or --session the message starts a new "
-            "Session. --model, --thinking-effort, --temperature and --top-p are saved on the "
+            "Session; the server creates it only for a message it accepts. "
+            "--model, --thinking-effort, --temperature and --top-p are saved on the "
             "Session and apply to its later messages too. The answer goes to stdout; "
             "Tool calls and retries are reported on stderr. "
             'Example: vbot chat --agent coder@vbot -c "Continue with the next step"'
@@ -777,7 +778,10 @@ def _add_chat_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         "--continue",
         dest="continue_latest",
         action="store_true",
-        help="Continue the Agent's most recently active conversation Session",
+        help=(
+            "Continue the Agent's most recently active conversation Session "
+            "(a new Session when it has none)"
+        ),
     )
     session_choice.add_argument(
         "--session", metavar="<session-id>", help="Continue this Session of the Agent"

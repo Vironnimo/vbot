@@ -219,10 +219,6 @@ def test_runtime_start_is_idempotent_and_restart_rebuilds_services(config: Confi
         # Persisted Agents survive a restart; no default main Agent is added.
         agents = runtime.agents.list()
         assert [agent.id for agent in agents] == ["coder"]
-        address = SessionAddress(
-            project_id=None, agent_id="coder", session_id=agents[0].current_session_id
-        )
-        assert runtime.chat_sessions.get(address).load() == []
     finally:
         runtime.stop()
 

@@ -8,13 +8,16 @@ these codes:
 
 - ``target_agent_unavailable``: an unknown Agent or any other ``agent.get``
   refusal; any RPC refusal with ``agent_not_found`` maps to it as well.
-- ``session_resolution_failed``: ``session.list`` or ``session.create`` failed.
+- ``session_resolution_failed``: ``session.list`` failed.
 - ``send_failed``: ``chat.stream`` refused the command.
 
+A command for a new Session is sent with ``new_session``: the server creates
+the Session together with the command's Run, so a refused command leaves no
+empty Session behind.
+
 Retries: ``agent.get`` and ``session.list`` are idempotent reads and make up to
-:data:`MAX_ATTEMPTS` attempts. Mutations (``session.create``, ``chat.stream``)
-make exactly one attempt: after a lost response the server may already have
-committed a Session or Run.
+:data:`MAX_ATTEMPTS` attempts. ``chat.stream`` makes exactly one attempt: after
+a lost response the server may already have committed a Session or Run.
 """
 
 from __future__ import annotations
@@ -54,18 +57,19 @@ class VoiceServerClient(SpeechServerClient):
             attempts=MAX_ATTEMPTS,
         )
 
-    def resolve_session(self, agent_id: str, session_behavior: str) -> str:
-        """Return the Session a command for ``agent_id`` is sent to.
+    def resolve_session(self, agent_id: str, session_behavior: str) -> str | None:
+        """Return the Session a command for ``agent_id`` is sent to; ``None`` is a new one.
 
-        ``new`` creates a Session and makes it the Agent's current one.
-        ``active`` uses the Agent's current Session; an Agent without one uses
-        its most recently active conversation Session (subagent, reflection
-        and scheduled Sessions excluded), and a new Session when it has none.
+        ``new`` always starts a new Session. ``active`` uses the Agent's current
+        Session; an Agent without one uses its most recently active
+        conversation Session (subagent, reflection and scheduled Sessions
+        excluded), and a new Session when it has none. A new Session is created
+        by :meth:`send_command`, not here.
         """
         if session_behavior not in SESSION_BEHAVIORS:
             raise ValueError(f"Unknown Session behavior: {session_behavior}")
         if session_behavior == SESSION_BEHAVIOR_NEW:
-            return self._create_session(agent_id)
+            return None
         current_session_id = _non_empty_string(self.get_agent(agent_id).get("current_session_id"))
         if current_session_id is not None:
             return current_session_id
@@ -88,24 +92,34 @@ class VoiceServerClient(SpeechServerClient):
             raise SpeechServerInvalidResponse(
                 ERROR_SESSION_RESOLUTION_FAILED, "session.list returned no Session list"
             )
-        newest_session_id = _newest_session_id(sessions)
-        if newest_session_id is not None:
-            return newest_session_id
-        return self._create_session(agent_id)
+        return _newest_session_id(sessions)
 
-    def send_command(self, agent_id: str, session_id: str, text: str) -> None:
-        """Send the command text to the Session as a spoken Chat message (one attempt)."""
-        self._rpc(
+    def send_command(self, agent_id: str, session_id: str | None, text: str) -> str:
+        """Send the command text as a spoken Chat message (one attempt); return its Session.
+
+        ``session_id`` ``None`` sends it for a new Session, which the server
+        creates with the message and, for an Identity Agent, makes current.
+        """
+        target: dict[str, Any] = (
+            {"new_session": {}} if session_id is None else {"session_id": session_id}
+        )
+        result = self._rpc(
             "chat.stream",
             {
                 "agent_id": agent_id,
-                "session_id": session_id,
+                **target,
                 "content": text,
                 "input_origin": _SPEECH_INPUT_ORIGIN,
             },
             error_code=ERROR_SEND_FAILED,
             attempts=1,
         )
+        sent_to = _non_empty_string(result.get("session_id")) or session_id
+        if sent_to is None:
+            raise SpeechServerInvalidResponse(
+                ERROR_SEND_FAILED, "chat.stream returned no Session id for the new Session"
+            )
+        return sent_to
 
     @override
     def _rpc(
@@ -129,20 +143,6 @@ class VoiceServerClient(SpeechServerClient):
                 status_code=exc.status_code,
                 rpc_code=exc.rpc_code,
             ) from exc
-
-    def _create_session(self, agent_id: str) -> str:
-        result = self._rpc(
-            "session.create",
-            {"agent_id": agent_id, "make_current": True},
-            error_code=ERROR_SESSION_RESOLUTION_FAILED,
-            attempts=1,
-        )
-        session_id = _non_empty_string(result.get("session_id"))
-        if session_id is None:
-            raise SpeechServerInvalidResponse(
-                ERROR_SESSION_RESOLUTION_FAILED, "session.create returned no Session id"
-            )
-        return session_id
 
 
 def _newest_session_id(sessions: list[Any]) -> str | None:

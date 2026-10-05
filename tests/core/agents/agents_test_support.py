@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from core.agents import AgentStore
+from core.agents import Agent, AgentStore
 from core.database import write_bootstrap_marker
 
 # The agent domain seeds only SOUL.md; USER.md/MEMORY.md are the memory system's and
@@ -48,3 +48,16 @@ def rewrite(store: AgentStore, agent_id: str, *removed: str, **changes: Any) -> 
         data.pop(key)
     data.update(changes)
     agent_path(store, agent_id).write_text(json.dumps(data), encoding="utf-8")
+
+
+def create_with_session(
+    store: AgentStore, agent_id: str, name: str | None = None, *, session_id: str = "first"
+) -> Agent:
+    """Create an Agent plus one Session and point the Agent at it.
+
+    Agent creation itself creates no Session; tests that need a current Session
+    create it the way a first message does.
+    """
+    store.create(agent_id, name)
+    store._session_manager().create(agent_id, session_id=session_id)
+    return store.update(agent_id, current_session_id=session_id)

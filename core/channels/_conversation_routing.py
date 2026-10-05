@@ -3,7 +3,8 @@
 A conversation's derived anchor Session id is stable. ``/new``, origin-bound
 Run taps and platform chat-id migrations move the conversation to another
 Session by storing a pointer in the Channel state (the "Wegweiser"); without a
-pointer the anchor itself is the active Session. Session metadata carries only
+pointer the anchor itself is the active Session. ``/new`` points at a fresh
+Session id that the conversation's next message creates. Session metadata carries only
 the Channel context of each Session.
 
 The async entry points take one worker hop per database: pointer work runs on
@@ -22,7 +23,7 @@ from core.channels.adapter import (
     RouteFacts,
     main_conversation_id,
 )
-from core.sessions import SessionAddress
+from core.sessions import SessionAddress, new_session_id
 
 if TYPE_CHECKING:
     from core.channels.config import ChannelConfig
@@ -237,6 +238,22 @@ class ChannelSessionRouting:
             conversation_key,
             conversation.kind,
             route.session_id,
+        )
+
+    async def _move_to_new_session_async(
+        self, conversation: ConversationFacts, conversation_key: str
+    ) -> None:
+        """Point the conversation at a Session that does not exist yet.
+
+        No Session is created now: routing creates it, with its channel context,
+        from the conversation's next message (see :meth:`_resolve_active_session_id`).
+        """
+        await self._pointers.run_async(
+            self._pointers.point_conversation,
+            self._config.id,
+            conversation_key,
+            conversation.kind,
+            new_session_id(),
         )
 
     def _point_conversation_at_session(

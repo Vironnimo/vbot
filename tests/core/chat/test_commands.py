@@ -65,22 +65,24 @@ class _StubTeamResolver:
         return _StubScanReport(self._team)
 
 
-def test_built_in_commands_declare_their_argument_and_result_kind() -> None:
+def test_built_in_commands_declare_their_argument_result_kind_and_new_session_mode() -> None:
+    # The mode says how a command sent for a new Session runs
+    # (tests/core/chat/test_commands_new_session.py).
     assert {
-        name: (spec.argument, spec.catalog_result)
+        name: (spec.argument, spec.catalog_result, spec.new_session_mode)
         for name, spec in CommandDispatcher.BUILT_IN_COMMANDS.items()
     } == {
-        "agent": ("optional", "state_change"),
-        "compact": ("optional", "notice"),
-        "handoff": ("optional", "state_change"),
-        "help": ("none", "detail"),
-        "learn": ("optional", "state_change"),
-        "model": ("optional", "state_change"),
-        "new": ("none", "state_change"),
-        "reflect": ("optional", "state_change"),
-        "rename": ("optional", "notice"),
-        "status": ("none", "detail"),
-        "stop": ("optional", "notice"),
+        "agent": ("optional", "state_change", "needs_session"),
+        "compact": ("optional", "notice", "needs_session"),
+        "handoff": ("optional", "state_change", "needs_session"),
+        "help": ("none", "detail", "session_less"),
+        "learn": ("optional", "state_change", "create_session"),
+        "model": ("optional", "state_change", "session_less"),
+        "new": ("none", "state_change", "session_less"),
+        "reflect": ("optional", "state_change", "needs_session"),
+        "rename": ("optional", "notice", "needs_session"),
+        "status": ("none", "detail", "session_less"),
+        "stop": ("optional", "notice", "needs_session"),
     }
 
 

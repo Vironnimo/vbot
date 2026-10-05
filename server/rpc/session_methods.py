@@ -47,6 +47,7 @@ from server.rpc.errors import (
 from server.rpc.event_bridge import publish_resource_changed, publish_session_changed
 from server.rpc.payloads import _global_compaction_policy_loader
 from server.rpc.validation import (
+    _optional_agent_overrides,
     _optional_bool,
     _optional_positive_integer,
     _optional_string,
@@ -74,42 +75,11 @@ def _session_address(
     return SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
 
 
-def _agent_overrides_param(params: JsonObject, *, allow_clear: bool) -> JsonObject | None:
-    """Read ``params.agent_overrides``: a map of Agent override fields to values.
-
-    With *allow_clear* a ``null`` value clears that field; otherwise every value
-    must be set. Values are validated here, the Model's usability by the resolver.
-    """
-    if "agent_overrides" not in params or params["agent_overrides"] is None:
-        return None
-    raw = params["agent_overrides"]
-    if not isinstance(raw, dict):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.agent_overrides must be an object")
-    unknown = sorted(set(raw) - set(AGENT_OVERRIDE_FIELDS))
-    if unknown:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            "params.agent_overrides has unsupported fields: "
-            + ", ".join(unknown)
-            + "; supported: "
-            + ", ".join(AGENT_OVERRIDE_FIELDS),
-        )
-    if not allow_clear and any(value is None for value in raw.values()):
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST, "params.agent_overrides values must not be null here"
-        )
-    try:
-        AgentOverrides(**{name: value for name, value in raw.items() if value is not None})
-    except ValueError as exc:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.agent_overrides: {exc}") from exc
-    return dict(raw)
-
-
 async def _create_session(state: Any, params: JsonObject) -> JsonObject:
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _optional_string(params, "session_id")
     make_current = _optional_bool(params, "make_current", default=False)
-    overrides = _agent_overrides_param(params, allow_clear=False)
+    overrides = _optional_agent_overrides(params, allow_clear=False)
     chat_sessions = state.runtime.chat_sessions
     resolver = state.runtime.agent_resolver
 
@@ -155,7 +125,7 @@ async def _set_session_agent_overrides(state: Any, params: JsonObject) -> JsonOb
     )
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
-    changes = _agent_overrides_param(params, allow_clear=True)
+    changes = _optional_agent_overrides(params, allow_clear=True)
     if not changes:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
@@ -266,19 +236,17 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     }
 
 
-def _project_agent_landing(state: Any, agent_id: str, project_id: str) -> str:
+def _project_agent_landing(state: Any, agent_id: str, project_id: str) -> str | None:
     """Return the session a viewing accessor of a Project Agent switches to after a delete (#2).
 
     A Project Agent has no server-side current pointer: the landing is its most
-    recently active remaining session, or a fresh empty one when none remain.
-    (An Identity Agent's landing is its resulting current Session, which the
+    recently active remaining session, or ``None`` when none remain (the
+    accessor opens a new conversation; no Session is created for it). (An
+    Identity Agent's landing is its resulting current Session, which the
     archive re-aims.)
     """
-    chat_sessions = state.runtime.chat_sessions
-    newest_session_id = chat_sessions.newest_session_id(agent_id, project_id)
-    if newest_session_id is not None:
-        return str(newest_session_id)
-    return str(chat_sessions.create(agent_id, project_id=project_id).id)
+    newest_session_id = state.runtime.chat_sessions.newest_session_id(agent_id, project_id)
+    return None if newest_session_id is None else str(newest_session_id)
 
 
 async def _list_sessions(state: Any, params: JsonObject) -> JsonObject:

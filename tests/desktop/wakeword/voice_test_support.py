@@ -139,8 +139,6 @@ class FakeVoiceServer:
             if agent is None:
                 return _rpc_error("not_found")
             return _ok(agent)
-        if method == "session.create":
-            return _ok({"session_id": "s-new"})
         if method == "session.list":
             return _ok({"sessions": []})
         if method == "settings.get_path":
@@ -150,7 +148,8 @@ class FakeVoiceServer:
         if method == "chat.stream":
             with self.lock:
                 self.sent.append(params)
-            return _ok({"run_id": "r1"})
+            # A message for a new Session gets the Session the server created for it.
+            return _ok({"run_id": "r1", "session_id": params.get("session_id", "s-new")})
         raise AssertionError(f"unexpected RPC method {method}")
 
 

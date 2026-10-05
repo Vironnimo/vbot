@@ -379,7 +379,12 @@ class StubAgentResolver:
         self._project_agents[(project_id, agent.id)] = agent
 
     def resolve_agent(
-        self, project_id: str | None, agent_id: str, *, session_id: str | None = None
+        self,
+        project_id: str | None,
+        agent_id: str,
+        *,
+        session_id: str | None = None,
+        new_session_overrides: AgentOverrides | None = None,
     ) -> StubAgent | ConfigAgent:
         agent: StubAgent | ConfigAgent
         if project_id is None:
@@ -395,8 +400,11 @@ class StubAgentResolver:
                     f"agent '{agent_id}' is not on project '{project_id}' team"
                 ) from error
         if session_id is None:
-            return agent
-        overrides = self.session_overrides(SessionAddress(project_id, agent_id, session_id))
+            overrides = new_session_overrides or AgentOverrides()
+            if overrides.model is not None:
+                self.models.require_configured(overrides.model)
+        else:
+            overrides = self.session_overrides(SessionAddress(project_id, agent_id, session_id))
         return replace(agent, **overrides.agent_changes())
 
     async def resolve_agent_async(

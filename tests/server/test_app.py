@@ -99,11 +99,12 @@ def test_real_runtime_serves_a_fresh_data_directory_and_stops_with_the_app(
         deleted = rpc("agent.delete", id="researcher")
 
     assert (bootstrap_agent["id"], bootstrap_agent["name"]) == ("main", "Main")
-    assert history["session_id"] == bootstrap_agent["current_session_id"]
-    assert history["messages"] == []
+    # A fresh Agent has no Session yet: its History is the empty new conversation.
+    assert bootstrap_agent["current_session_id"] is None
+    assert (history["session_id"], history["messages"]) == (None, [])
     assert last_delete["error"]["code"] == "last_agent"
     assert created["result"]["name"] == "coder"
-    assert created["result"]["current_session_id"]
+    assert created["result"]["current_session_id"] is None
     # A workspace is chosen by updating an existing Agent, never at creation.
     assert created_with_workspace["error"]["code"] == "invalid_request"
     assert moved["result"]["workspace"] == str(workspace.resolve())

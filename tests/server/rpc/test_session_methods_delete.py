@@ -77,11 +77,11 @@ async def test_delete_identity_session_archives_and_lands_on_the_reaimed_current
             "recent",
             id="most-recent-remaining",
         ),
-        pytest.param([], "new-session", id="fresh-when-none-remain"),
+        pytest.param([], None, id="nothing-when-none-remain"),
     ],
 )
 async def test_delete_project_session_lands_without_a_current_pointer(
-    remaining: list[JsonObject], landing: str
+    remaining: list[JsonObject], landing: str | None
 ) -> None:
     state, _resolver, sessions = stub_session_state()
     sessions.metadata_rows = remaining
@@ -90,9 +90,8 @@ async def test_delete_project_session_lands_without_a_current_pointer(
 
     assert result["next_session_id"] == landing
     assert sessions.archived == [("builder", "s1", "vbot")]
-    assert [created["project_id"] for created in sessions.created] == (
-        ["vbot"] if not remaining else []
-    )
+    # The landing never creates a Session: without one the accessor opens a new conversation.
+    assert sessions.created == []
     # A Project Agent has no identity current pointer to re-aim.
     assert state._resets == []
     assert state._recall_removals == [("builder", "s1", "vbot")]
@@ -221,7 +220,7 @@ async def test_a_refused_delete_is_a_domain_error_without_a_refresh(
 async def test_delete_permanent_leaves_no_session_or_entry(tmp_path: Path) -> None:
     # The real stores: the permanent delete archives the Session, then purges its entry.
     state = _make_state(tmp_path)
-    current = state.runtime.agents.create("builder").current_session_id
+    state.runtime.agents.create("builder")
     state.runtime.sessions.create("builder", session_id="s1")
 
     result = await rpc_result(
@@ -231,7 +230,8 @@ async def test_delete_permanent_leaves_no_session_or_entry(tmp_path: Path) -> No
     assert result == {
         "agent_id": "builder",
         "session_id": "s1",
-        "next_session_id": current,
+        # The Agent has no current Session left, and none is created to land on.
+        "next_session_id": None,
         "archive_entry_id": result["archive_entry_id"],
         "purged": True,
         "purge_pending": False,

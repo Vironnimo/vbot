@@ -90,11 +90,13 @@ export function setAgents(
   agents,
   { preserveSessionSelection = false } = {},
 ) {
+  // A preserved selection keeps this Chat area's current Session per Agent,
+  // including an empty one: the Agent then shows an unsaved draft.
   const previous = new Map(
-    state.agents.map((agent) => [agent.id, agent.current_session_id]),
+    state.agents.map((agent) => [agent.id, agent.current_session_id ?? '']),
   );
   state.agents = (Array.isArray(agents) ? agents : []).map((agent) =>
-    preserveSessionSelection && previous.get(agent.id)
+    preserveSessionSelection && previous.has(agent.id)
       ? { ...agent, current_session_id: previous.get(agent.id) }
       : agent,
   );

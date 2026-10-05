@@ -8,7 +8,12 @@ from typing import Any, Literal, cast
 from core.chat import ChatError
 from core.chat.content_blocks import ContentBlock, ContentBlockError, content_block_from_dict
 from core.chat.model_resolution import parse_model_with_connection
-from core.projects import InvalidAgentAddressError, parse_agent_address
+from core.projects import (
+    AGENT_OVERRIDE_FIELDS,
+    AgentOverrides,
+    InvalidAgentAddressError,
+    parse_agent_address,
+)
 from core.settings import is_valid_agent_id
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 
@@ -218,3 +223,35 @@ def _validate_string_list(key: str, value: Any) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a list of strings")
     return list(value)
+
+
+def _optional_agent_overrides(
+    container: JsonObject, *, allow_clear: bool, label: str = "params"
+) -> JsonObject | None:
+    """Read ``<label>.agent_overrides``: a map of Agent override fields to values.
+
+    With *allow_clear* a ``null`` value clears that field; otherwise every value
+    must be set. Values are validated here, the Model's usability by the resolver.
+    """
+    if "agent_overrides" not in container or container["agent_overrides"] is None:
+        return None
+    raw = container["agent_overrides"]
+    key = f"{label}.agent_overrides"
+    if not isinstance(raw, dict):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{key} must be an object")
+    unknown = sorted(set(raw) - set(AGENT_OVERRIDE_FIELDS))
+    if unknown:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"{key} has unsupported fields: "
+            + ", ".join(unknown)
+            + "; supported: "
+            + ", ".join(AGENT_OVERRIDE_FIELDS),
+        )
+    if not allow_clear and any(value is None for value in raw.values()):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{key} values must not be null here")
+    try:
+        AgentOverrides(**{name: value for name, value in raw.items() if value is not None})
+    except ValueError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{key}: {exc}") from exc
+    return dict(raw)

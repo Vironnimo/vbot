@@ -15,7 +15,7 @@ from core.agents import agents as agents_module
 from core.chat import ChatMessage
 from core.sessions import ChatSessionManager, SessionAddress
 from core.tools.availability import ToolAccess
-from tests.core.agents.agents_test_support import persisted
+from tests.core.agents.agents_test_support import create_with_session, persisted
 from tests.core.agents.agents_test_support import store as store
 from tests.core.agents.agents_test_support import template_dir as template_dir
 from tests.core.database.database_test_support import frozen_members
@@ -28,7 +28,7 @@ LATE_TIMESTAMP = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 def test_concurrent_updates_and_current_session_repairs_do_not_lose_state(
     store: AgentStore, monkeypatch: pytest.MonkeyPatch, repair: bool
 ) -> None:
-    agent = store.create("coder", "Original")
+    agent = create_with_session(store, "coder", "Original")
     if repair:
         store._session_manager().delete(SessionAddress(None, "coder", agent.current_session_id))
     first_write = Event()
@@ -73,34 +73,20 @@ def test_concurrent_updates_and_current_session_repairs_do_not_lose_state(
         following.result(timeout=5)
 
     if repair:
-        sessions = store._session_manager().list_summaries("coder")
-        assert [session["id"] for session in sessions] == [store.get("coder").current_session_id]
+        # Both reads clear the dangling pointer; neither creates a Session.
+        assert store._session_manager().list_summaries("coder") == []
+        assert persisted(store, "coder")["current_session_id"] == ""
+        assert store.get("coder").name == "Original"
     else:
-        persisted = store.get("coder")
-        assert (persisted.name, persisted.model) == ("Changed", "other/model")
-
-
-def test_failed_current_session_reset_removes_new_session(
-    store: AgentStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    agent = store.create("coder")
-    store._session_manager().delete(SessionAddress(None, "coder", agent.current_session_id))
-
-    def fail_write(_agent):
-        raise OSError("config unavailable")
-
-    monkeypatch.setattr(store, "_write_agent", fail_write)
-    with pytest.raises(OSError, match="config unavailable"):
-        store.reset_current_after_session_removed("coder", agent.current_session_id)
-
-    assert store._session_manager().list_summaries("coder") == []
+        updated = store.get("coder")
+        assert (updated.name, updated.model) == ("Changed", "other/model")
 
 
 def test_roster_verifies_every_current_session_in_one_read(
     store: AgentStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     for agent_id in ("alpha", "beta", "gamma"):
-        store.create(agent_id)
+        create_with_session(store, agent_id)
     manager = store._session_manager()
     dangling = store.get("beta").current_session_id
     manager.delete(SessionAddress(None, "beta", dangling))
@@ -119,10 +105,11 @@ def test_roster_verifies_every_current_session_in_one_read(
 
     assert probes == [3]
     assert point_probes == []
-    # The dangling pointer self-heals to a fresh live Session.
-    healed = SessionAddress(None, "beta", agents["beta"].current_session_id)
-    assert healed.session_id != dangling
-    assert original([healed]) == {healed}
+    # The dangling pointer is cleared, not replaced by a new Session.
+    assert agents["beta"].current_session_id == ""
+    assert persisted(store, "beta")["current_session_id"] == ""
+    assert manager.list_addresses(None, agent_id="beta") == []
+    assert agents["gamma"].current_session_id == "first"
 
     # Provenance reads return the stored pointer without verifying it.
     alpha = SessionAddress(None, "alpha", agents["alpha"].current_session_id)
@@ -130,7 +117,7 @@ def test_roster_verifies_every_current_session_in_one_read(
     probes.clear()
     assert store.get_raw("alpha").current_session_id == alpha.session_id
     assert probes == []
-    assert store.get("alpha").current_session_id != alpha.session_id
+    assert store.get("alpha").current_session_id == ""
     assert probes == [1]
 
 
@@ -138,7 +125,7 @@ def test_a_change_waiting_for_a_data_snapshot_never_holds_up_agent_reads(
     store: AgentStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store.create("coder", "Original")
-    dangling = store.create("dangling").current_session_id
+    dangling = create_with_session(store, "dangling").current_session_id
     store._session_manager().delete(SessionAddress(None, "dangling", dangling))
 
     with ThreadPoolExecutor(max_workers=4) as executor:
@@ -160,9 +147,9 @@ def test_a_change_waiting_for_a_data_snapshot_never_holds_up_agent_reads(
 
     assert gate.capture is not None
     assert (gate.capture.attempts, gate.capture.waited_changes) == (1, 2)
-    # The repair the snapshot deferred created one Session, after the thaw.
-    sessions = store._session_manager().list_summaries("dangling")
-    assert [session["id"] for session in sessions] == [repaired]
+    # The repair the snapshot deferred cleared the pointer after the thaw.
+    assert repaired == ""
+    assert persisted(store, "dangling")["current_session_id"] == ""
 
 
 def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> None:
@@ -349,20 +336,27 @@ def test_update_rejects_invalid_changes_and_keeps_the_agent(
     assert store.get("coder") == created
 
 
-def test_update_can_set_current_session_id_to_existing_session(store: AgentStore) -> None:
-    original = store.create("coder", "Coder Agent")
-    store._session_manager().create("coder", session_id="session-two")
-
-    updated = store.update("coder", current_session_id="session-two")
-
-    assert updated.current_session_id == "session-two"
-    assert updated.current_session_id != original.current_session_id
-
-
-def test_reset_current_after_session_removed_lands_on_newest_or_a_fresh_session(
+def test_update_points_current_session_id_at_an_existing_session_or_clears_it(
     store: AgentStore,
 ) -> None:
-    first = store.create("alpha", "Alpha").current_session_id
+    store.create("coder", "Coder Agent")
+    store._session_manager().create("coder", session_id="session-two")
+
+    assert store.update("coder", current_session_id="session-two").current_session_id == (
+        "session-two"
+    )
+    assert persisted(store, "coder")["current_session_id"] == "session-two"
+
+    # An empty pointer clears it: the Agent's next message starts a new Session.
+    assert store.update("coder", current_session_id="").current_session_id == ""
+    assert persisted(store, "coder")["current_session_id"] == ""
+    assert store._session_manager().exists(SessionAddress(None, "coder", "session-two"))
+
+
+def test_reset_current_after_session_removed_lands_on_newest_or_clears(
+    store: AgentStore,
+) -> None:
+    first = create_with_session(store, "alpha", "Alpha").current_session_id
     manager = ChatSessionManager(store.data_dir)
 
     # A removed non-current Session leaves the pointer alone.
@@ -384,9 +378,9 @@ def test_reset_current_after_session_removed_lands_on_newest_or_a_fresh_session(
         "newer"
     )
 
-    # Without a remaining Session it creates a fresh one.
+    # Without a remaining Session it clears the pointer and creates none.
     manager.delete(SessionAddress(None, "alpha", first))
     manager.delete(SessionAddress(None, "alpha", "newer"))
-    fresh = store.reset_current_after_session_removed("alpha", "newer").current_session_id
-    assert fresh not in {first, "newer"}
-    assert [session.id for session in manager.list("alpha")] == [fresh]
+    assert store.reset_current_after_session_removed("alpha", "newer").current_session_id == ""
+    assert persisted(store, "alpha")["current_session_id"] == ""
+    assert manager.list("alpha") == []

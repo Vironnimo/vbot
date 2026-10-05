@@ -903,6 +903,43 @@ describe('App navigation', () => {
     await waitForCondition(parentShown);
   });
 
+  it('records New session as a step to a draft place that Back and Forward restore', async () => {
+    rpcMock.mockImplementation(
+      createAppRpcMock({
+        agents: [
+          { id: 'alpha', name: 'Alpha', current_session_id: 'session-one' },
+        ],
+        history: (params) => ({
+          messages:
+            params.session_id === 'session-one'
+              ? [{ id: 'reply', role: 'assistant', content: 'First reply' }]
+              : [],
+        }),
+      }),
+    );
+    mountApp();
+    const sessionShown = (shown) => {
+      expect(window.location.hash).toBe(
+        shown ? '#chat/alpha/session-one' : '#chat/alpha',
+      );
+      expect(document.body.textContent.includes('First reply')).toBe(shown);
+    };
+    await waitForCondition(() => sessionShown(true));
+
+    labelledButton('chat.newSession').click();
+    flushSync();
+    await waitForCondition(() => sessionShown(false));
+
+    window.history.back();
+    await waitForCondition(() => sessionShown(true));
+
+    window.history.forward();
+    await waitForCondition(() => sessionShown(false));
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'session.create'),
+    ).toEqual([]);
+  });
+
   it('restores the selected Agent together with the Session override on browser back', async () => {
     rpcMock.mockImplementation(
       createSubAgentNavigationRpcMock([

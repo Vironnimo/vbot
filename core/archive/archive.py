@@ -237,7 +237,8 @@ class ArchiveService:
         """Move one live Session into a new entry.
 
         For an Identity Agent whose current Session it was, the current Session
-        moves to the most recently active remaining one, or a new empty one.
+        moves to the most recently active remaining one; with none left the
+        pointer is cleared and ``next_session_id`` is ``None``.
         Refuses with :class:`ArchiveSubjectInUseError` while a live automation
         runs in the Session and with ``RunAdmissionBlockedError`` while it has Runs.
         """
@@ -274,7 +275,7 @@ class ArchiveService:
                         address.agent_id,
                         address.session_id,
                     )
-                    next_session_id = agent.current_session_id
+                    next_session_id = agent.current_session_id or None
             await services.remove_session_from_recall(
                 address.agent_id, address.session_id, address.project_id
             )

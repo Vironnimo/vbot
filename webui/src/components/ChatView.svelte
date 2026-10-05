@@ -50,6 +50,9 @@
     interactive = true,
     composerAvailable = true,
     preserveSessionSelection = false,
+    // Keeps this Chat area's unsaved drafts apart from another area's: each
+    // area remembers its own draft per Agent.
+    draftScope = 0,
     initialSessionFilters = null,
     onSessionFiltersChange,
     onDisplayedSession = () => {},
@@ -130,6 +133,9 @@
   const target = createChatViewTarget({
     get selectedProjectId() {
       return selectedProjectId;
+    },
+    get draftScope() {
+      return draftScope;
     },
     get projects() {
       return projects;
@@ -287,6 +293,9 @@
   });
 
   let showSessionDrawer = $state(false);
+  // Counts the Sessions this area's drafts created; each one refreshes the
+  // Session list.
+  let createdSessions = $state(0);
   const componentId = $props.id();
   const chatTitleId = `${componentId}-title`;
 
@@ -351,12 +360,8 @@
     })),
   );
 
-  // While New session is pending, the displayed Session is about to be
-  // replaced; a message sent now would land in the Session being left.
   let composerDisabled = $derived(
-    !target.activeAgent ||
-      chatState.loadingHistory ||
-      navigation.creatingDisplayedSession,
+    !target.activeAgent || chatState.loadingHistory,
   );
   // Provider availability is the first prerequisite for every current Agent.
   // Do not infer it from Models: App supplies Settings' authoritative usable-
@@ -373,10 +378,11 @@
       hasConnectedProvider === true &&
       agentNeedsModel(target.activeAgent),
   );
-  // The composer's per-session draft is keyed by the full displayed-session key;
-  // its per-agent input history is keyed by the agent part alone (bare id for an
-  // identity agent, `agent@projekt` for a project agent), so sessions of the
-  // same agent share one history.
+  // The composer's per-session draft is keyed by the full displayed-session key
+  // (a draft's own key while no Session exists); its per-agent input history is
+  // keyed by the agent part alone (bare id for an identity agent,
+  // `agent@projekt` for a project agent), so sessions of the same agent share
+  // one history.
   let composerDraftKey = $derived(target.displayedSessionKey());
   let composerHistoryKey = $derived.by(() => {
     const separator = composerDraftKey.indexOf('::');
@@ -387,15 +393,26 @@
   // @-mention lookup, so navigation cannot redirect an older submit.
   let composerSendMessage = $derived.by(() => {
     const agent = target.activeAgent;
+    if (!agent) {
+      return null;
+    }
+    const draft = target.activeDraft();
+    if (draft) {
+      return async (content, options = {}) =>
+        await actions.sendDraft(agent, draft, content, options);
+    }
     const sessionState = target.activeSessionState;
-    if (!agent || !sessionState) {
+    if (!sessionState) {
       return null;
     }
     return async (content, options = {}) =>
       await actions.sendStream(agent, sessionState, content, options);
   });
   let composerListFiles = $derived.by(() => {
-    const agentId = target.activeSessionState?.agentId ?? '';
+    const agentId =
+      target.activeSessionState?.agentId ??
+      target.activeDraft()?.agentAddress ??
+      '';
     if (!agentId) {
       return null;
     }
@@ -635,6 +652,13 @@
       !navigation.viewingSessionId && !target.projectAgentActive,
     onAgentsChanged: (agents) => onAgentsChanged?.(agents),
     onAgentSelected: reportAgentSelected,
+    onSessionCreated: (sessionState) => {
+      navigation.adoptCreatedSession(
+        sessionState.agentId,
+        sessionState.sessionId,
+      );
+      createdSessions += 1;
+    },
     onRestartQueueDiscarded: (count) => {
       actions.showChatToast(
         count === 1
@@ -809,8 +833,7 @@
             class="chat-view__new-session-fab"
             ariaLabel={t('chat.newSession')}
             tooltip={t('chat.newSession')}
-            disabled={chatState.loadingHistory || !target.activeSessionState}
-            loading={navigation.creatingSession}
+            disabled={chatState.loadingHistory}
             onClick={navigation.handleNewSession}
           >
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
@@ -832,7 +855,7 @@
             agentId={target.activeAgentAddress}
             currentSessionId={navigation.viewingSessionId ||
               target.activeAgent.current_session_id}
-            reloadToken={sessionsRefreshToken}
+            reloadToken={`${sessionsRefreshToken}:${createdSessions}`}
             invalidations={sessionInvalidations}
             agents={target.sessionDrawerAgents}
             liveActivity={sessionDrawerActivity}
@@ -1010,7 +1033,8 @@
                 focusRequest={layout.composerFocusRequest}
                 availableSkills={chatState.availableSkills}
                 contextUsage={target.activeSessionState?.contextUsage}
-                compactionState={composerSendMessage
+                compactionState={composerSendMessage &&
+                target.activeSessionState
                   ? contextCompactionState(target.activeSessionState)
                   : 'unavailable'}
                 compactionSubmitting={actions.isCompactionSubmitting(

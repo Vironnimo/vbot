@@ -31,29 +31,20 @@ export async function ensureEmptyChat(chat) {
     await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
   }
   await expect(sessionDrawer).toBeVisible();
-  const emptySessions = sessionDrawer.getByText("No sessions yet", {
-    exact: true,
-  });
   const selectedSession = sessionDrawer.locator(
     "button.session-row__select--active",
   );
-  await expect(async () => {
-    expect(
-      (await emptySessions.isVisible()) || (await selectedSession.isVisible()),
-    ).toBe(true);
-  }).toPass();
   const newSessionButton = chat.getByRole("button", {
     exact: true,
     name: "New session",
   });
   await expect(newSessionButton).toBeEnabled();
 
-  // New session reuses a displayed empty Session and otherwise creates and
-  // opens a fresh one; either way the button stays busy until that Session is
-  // displayed and ready for input.
+  // New session opens an unsaved draft without creating a Session; the
+  // Session exists only once the first message is sent. A displayed draft is
+  // reused.
   await newSessionButton.click();
-  await expect(newSessionButton).toBeEnabled();
-  await expect(selectedSession).toHaveCount(1);
+  await expect(selectedSession).toHaveCount(0);
   await expect(
     chat.getByText("No messages yet", { exact: true }).first(),
   ).toBeVisible();

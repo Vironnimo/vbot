@@ -28,7 +28,11 @@ from core.archive import (
 )
 from core.sessions import ARCHIVE_KIND_FILES, ARCHIVE_TREE_FILES, ArchiveEntryFilter, ArchiveTree
 from core.utils.timestamps import format_canonical_timestamp
-from tests.core.archive.archive_test_support import ArchiveWorld, legacy_agent_entry
+from tests.core.archive.archive_test_support import (
+    ArchiveWorld,
+    agent_with_session,
+    legacy_agent_entry,
+)
 from tests.core.archive.archive_test_support import world as world
 
 _NOW = datetime(2026, 10, 1, 12, tzinfo=UTC)
@@ -105,7 +109,7 @@ def _set_origin(world: ArchiveWorld, entry_id: str, origin: str) -> None:
 
 
 async def _archived_agent(world: ArchiveWorld, agent_id: str, *, days: float) -> str:
-    world.agents.create(agent_id)
+    agent_with_session(world, agent_id)
     entry_id = (await world.service.archive_agent(agent_id)).entry_id
     _rest(world, entry_id, days)
     return entry_id
@@ -319,7 +323,7 @@ async def test_without_a_retention_period_only_interrupted_purges_continue(
 async def test_stopping_ends_a_purge_partway_and_the_next_start_finishes_it(
     world: ArchiveWorld, timer: _Timer, during: str
 ) -> None:
-    world.agents.create("coder")
+    agent_with_session(world, "coder")
     for session_id in ("two", "three"):
         world.sessions.create("coder", session_id=session_id)
     entry_id = (await world.service.archive_agent("coder")).entry_id

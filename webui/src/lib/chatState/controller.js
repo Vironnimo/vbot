@@ -2,7 +2,6 @@ import {
   cancelRun as requestCancelRun,
   cancelToolCall as requestCancelToolCall,
   controlRun as requestControlRun,
-  createSession as requestCreateSession,
   editChatMessage as requestEditChatMessage,
   getSession as requestGetSession,
   getSessionChangeStats as requestGetSessionChangeStats,
@@ -95,7 +94,6 @@ function defaultChatOperations() {
     cancelRun: (...args) => requestCancelRun(...args),
     cancelToolCall: (...args) => requestCancelToolCall(...args),
     controlRun: (...args) => requestControlRun(...args),
-    createSession: (...args) => requestCreateSession(...args),
     editChatMessage: (...args) => requestEditChatMessage(...args),
     inspectSubAgentWork: (...args) => requestInspectSubAgentWork(...args),
     killTerminal: (...args) => requestKillTerminal(...args),
@@ -134,6 +132,7 @@ export function createChatController({
   onAgentsChanged = () => {},
   preserveSessionSelection = false,
   onAgentSelected = () => {},
+  onSessionCreated = () => {},
   onRestartQueueDiscarded = () => {},
 }) {
   let handledConnectionSnapshot = null;
@@ -545,74 +544,91 @@ export function createChatController({
     sessionState.actionError = '';
     const previousRunId = sessionState.currentRun?.runId;
     try {
-      const params = {
+      const run = await operations.startChatRun({
         agent_id: sessionState.agentId,
         session_id: sessionState.sessionId,
-        content,
-      };
-      if (options.inputOrigin) {
-        params.input_origin = options.inputOrigin;
-      }
-      if (
-        Array.isArray(options.fileMentions) &&
-        options.fileMentions.length > 0
-      ) {
-        params.file_mentions = options.fileMentions;
-      }
-      const run = await operations.startChatRun(params);
+        ...messageParams(content, options),
+      });
       if (run?.command_handled) {
-        const navigation = run?.data?.navigation;
-        if (
-          run.output === 'action' &&
-          navigation?.kind === 'open_extension_page' &&
-          typeof navigation.extension === 'string' &&
-          typeof navigation.page === 'string' &&
-          typeof navigation.route === 'string'
-        ) {
-          return { kind: 'extension_page', navigation };
-        }
-        const move = resolveMoveActionFromResponse(run);
-        if (move) {
-          return { kind: 'move', move };
-        }
-        const sessionSwitch = commandSwitchFromResponse(run);
-        const { projectId } = parseAgentAddress(sessionState.agentId);
-        if (sessionSwitch && !projectId) {
-          return { kind: 'switch', sessionSwitch };
-        }
-        if (run.output === 'transient') {
-          return { kind: 'transient', reply: run.reply };
-        }
-        return {
-          kind: 'toast',
-          reply: run.reply,
-        };
+        return commandOutcome(run, sessionState.agentId);
       }
-      if (run?.queued === true) {
-        invalidateQueueSync(sessionState);
-        addServerQueuedMessage(sessionState, run.item);
-        return { kind: 'queued' };
-      }
-      // Live admission may already have moved on to a successor Run.
-      const currentRunId = sessionState.currentRun?.runId;
-      if (
-        currentRunId &&
-        currentRunId !== run.run_id &&
-        currentRunId !== previousRunId
-      ) {
-        return { kind: 'started', runId: run.run_id ?? '' };
-      }
-      startRun(sessionState, run);
-      if (isDisplayedSession(sessionState.agentId, sessionState.sessionId)) {
-        runStream.subscribeToRun(sessionState, run.sse_url, {
-          afterSequence: 0,
-        });
-      }
-      return { kind: 'started', runId: run.run_id ?? '' };
+      return admitSend(sessionState, run, previousRunId);
     } catch (error) {
       sessionState.actionError = `${t('chat.sendError')} ${errorMessage(error)}`;
       return { kind: 'failed' };
     }
+  }
+
+  // The first send from a draft (an Agent shown without a Session) creates
+  // its Session: `new_session` asks the server to create it, make it an
+  // Identity Agent's current Session, and handle the message there. This is
+  // the one place a draft becomes request parameters. The created Session is
+  // announced through `onSessionCreated` before its Run attaches, so the view
+  // can show it in the draft's place. A response without a Session id (a
+  // command that needs no Session) leaves the draft in place.
+  async function sendToNewSession(draft, content, options = {}) {
+    const agentAddress = draft?.agentAddress ?? '';
+    if (!agentAddress) {
+      return { kind: 'ignored' };
+    }
+    chatState.actionError = '';
+    try {
+      const response = await operations.startChatRun({
+        agent_id: agentAddress,
+        new_session: {},
+        ...messageParams(content, options),
+      });
+      const sessionId = createdSessionId(response);
+      const sessionState = sessionId
+        ? ensureSessionState(chatState, agentAddress, sessionId)
+        : null;
+      if (sessionState) {
+        onSessionCreated(sessionState);
+      }
+      if (response?.command_handled) {
+        if (sessionState && isDisplayedSession(agentAddress, sessionId)) {
+          void loadHistoryForSession(agentAddress, sessionId);
+        }
+        return {
+          ...commandOutcome(response, agentAddress, { navigation: false }),
+          sessionState,
+        };
+      }
+      if (!sessionState) {
+        chatState.actionError = t('chat.sendError');
+        return { kind: 'failed' };
+      }
+      return { ...admitSend(sessionState, response), sessionState };
+    } catch (error) {
+      chatState.actionError = `${t('chat.sendError')} ${errorMessage(error)}`;
+      return { kind: 'failed' };
+    }
+  }
+
+  // Apply an accepted message to its Session: a queued item joins the Queue,
+  // a started Run attaches while the Session is displayed.
+  function admitSend(sessionState, run, previousRunId = undefined) {
+    if (run?.queued === true) {
+      invalidateQueueSync(sessionState);
+      addServerQueuedMessage(sessionState, run.item);
+      return { kind: 'queued' };
+    }
+    // Live admission may already have moved on to a successor Run.
+    const currentRunId = sessionState.currentRun?.runId;
+    if (
+      currentRunId &&
+      currentRunId !== run.run_id &&
+      currentRunId !== previousRunId
+    ) {
+      return { kind: 'started', runId: run.run_id ?? '' };
+    }
+    startRun(sessionState, run);
+    if (isDisplayedSession(sessionState.agentId, sessionState.sessionId)) {
+      runStream.subscribeToRun(sessionState, run.sse_url, {
+        afterSequence: 0,
+      });
+    }
+    return { kind: 'started', runId: run.run_id ?? '' };
   }
 
   async function editMessage(sessionState, messageId, content) {
@@ -960,7 +976,6 @@ export function createChatController({
     cancelSubAgent,
     cancelTool,
     controlRun,
-    createSession: (agentAddress) => operations.createSession(agentAddress),
     destroy,
     editMessage,
     handleServerEvents,
@@ -987,6 +1002,7 @@ export function createChatController({
     removeQueued,
     steerQueued,
     sendMessage,
+    sendToNewSession,
     stopAll,
     syncAgentActivity,
     syncSessionQueue,
@@ -1002,16 +1018,79 @@ function normalizeBuiltInCommandName(value) {
   return value.trim().replace(/^\/+/, '').toLowerCase();
 }
 
+function messageParams(content, options = {}) {
+  const params = { content };
+  if (options.inputOrigin) {
+    params.input_origin = options.inputOrigin;
+  }
+  if (Array.isArray(options.fileMentions) && options.fileMentions.length > 0) {
+    params.file_mentions = options.fileMentions;
+  }
+  return params;
+}
+
+// The outcome a handled slash command asks Chat to present. Only a command
+// sent in an existing Session can navigate: from a draft, the server answers
+// navigation commands with a notice.
+function commandOutcome(response, agentAddress, { navigation = true } = {}) {
+  const extensionNavigation = response?.data?.navigation;
+  if (
+    response.output === 'action' &&
+    extensionNavigation?.kind === 'open_extension_page' &&
+    typeof extensionNavigation.extension === 'string' &&
+    typeof extensionNavigation.page === 'string' &&
+    typeof extensionNavigation.route === 'string'
+  ) {
+    return { kind: 'extension_page', navigation: extensionNavigation };
+  }
+  if (navigation) {
+    const move = resolveMoveActionFromResponse(response);
+    if (move) {
+      return { kind: 'move', move };
+    }
+    const sessionSwitch = commandSwitchFromResponse(response);
+    const { projectId } = parseAgentAddress(agentAddress);
+    if (sessionSwitch && !projectId) {
+      return { kind: 'switch', sessionSwitch };
+    }
+    // `/new` names no Session: the next conversation starts as a draft.
+    if (
+      response.data?.command === 'new' &&
+      !trimmedText(response.data.session_id)
+    ) {
+      return { kind: 'draft', agentAddress, reply: response.reply };
+    }
+  }
+  if (response.output === 'transient') {
+    return { kind: 'transient', reply: response.reply };
+  }
+  return { kind: 'toast', reply: response.reply };
+}
+
+function trimmedText(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+// The Session a draft's send created: a Run or queued response names it at
+// its top level, a handled command at its top level or in its data.
+function createdSessionId(response) {
+  if (!isRecord(response)) {
+    return '';
+  }
+  return (
+    trimmedText(response.session_id) ||
+    (response.command_handled === true
+      ? trimmedText(response.data?.session_id)
+      : trimmedText(response.item?.session_id))
+  );
+}
+
 function commandSwitchFromResponse(response) {
   const data = response?.data;
-  if (!data || typeof data.session_id !== 'string') {
+  const sessionId = trimmedText(data?.session_id);
+  if (!sessionId || data.command !== 'handoff') {
     return null;
   }
-  const sessionId = data.session_id.trim();
-  if (!sessionId || (data.command !== 'new' && data.command !== 'handoff')) {
-    return null;
-  }
-  const targetAgentId =
-    typeof data.agent_id === 'string' ? data.agent_id.trim() : '';
+  const targetAgentId = trimmedText(data.agent_id);
   return { sessionId, targetAgentId };
 }

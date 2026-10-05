@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
 from core.chat._agentic_progression import AgenticProgression
@@ -35,7 +36,7 @@ from core.chat.model_resolution import (
 )
 from core.chat.request_runner import WireRequestRunner
 from core.compaction.run_coordination import CompactionRunCoordinator
-from core.projects import resolve_working_project_id
+from core.projects import AgentOverrides, resolve_working_project_id
 from core.runs import (
     ActiveRunError,
     QueuedRunItem,
@@ -52,10 +53,27 @@ from core.sessions import (
     editable_session_message_index,
 )
 from core.sessions.errors import SessionNotFoundError
+from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.chat._run_state import ChatLoopDependencies, ReflectionNotifier, SessionTitleNotifier
     from core.compaction import CompactionService
+
+_LOGGER = get_logger("chat")
+
+
+@dataclass(frozen=True)
+class _NewSession:
+    """The Session a Run start creates once its target validated.
+
+    ``session_id`` is the id it gets (the store allocates one when ``None``),
+    ``agent_overrides`` are stored with it in the creating write, and ``actor``
+    names who asked for it (see ``ChatSessionManager.create``).
+    """
+
+    session_id: str | None = None
+    agent_overrides: AgentOverrides = field(default_factory=AgentOverrides)
+    actor: str | None = None
 
 
 class ChatLoop:
@@ -245,6 +263,9 @@ class ChatLoop:
         agent_id: str,
         content: str | list[ContentBlock],
         *,
+        session_id: str | None = None,
+        agent_overrides: AgentOverrides | None = None,
+        actor: str | None = None,
         internal: bool = False,
         input_origin: InputOrigin | None = None,
         sender: MessageSender | None = None,
@@ -259,16 +280,28 @@ class ChatLoop:
     ) -> Run:
         """Validate a target, create its Session, and start one Run.
 
-        Automation entry points use this instead of creating a Session before
-        target/model/provider validation. A rejected trigger therefore leaves no
-        empty Session behind, while the server-facing :meth:`start_run` contract
-        still requires an explicitly existing Session.
+        A new conversation and automation entry points use this instead of
+        creating a Session before target/model/provider validation: the Agent,
+        its Model (including an override Model) and Provider are checked first,
+        then the Session is created with ``agent_overrides`` in the same write,
+        so the first Run already runs with them. A rejected start leaves no
+        Session behind: a start the Run manager refuses after the creation
+        removes the Session again. ``session_id`` is the id the new Session gets
+        (an existing Session at that id fails the start); ``actor`` names who
+        asked for the Session (``rpc``, ``command``) and makes its creation log
+        at INFO. The server-facing :meth:`start_run` contract still requires an
+        explicitly existing Session.
         """
         return await self._start_run(
             agent_id,
             content,
             session_id=None,
             create_missing=True,
+            new_session=_NewSession(
+                session_id=session_id,
+                agent_overrides=agent_overrides or AgentOverrides(),
+                actor=actor,
+            ),
             internal=internal,
             input_origin=input_origin,
             sender=sender,
@@ -441,6 +474,7 @@ class ChatLoop:
         *,
         session_id: str | None,
         create_missing: bool,
+        new_session: _NewSession | None = None,
         internal: bool = False,
         input_origin: InputOrigin | None = None,
         sender: MessageSender | None = None,
@@ -456,17 +490,32 @@ class ChatLoop:
         source_session_id: str | None = None,
     ) -> Run:
         _validate_run_tool_iteration_limit(max_tool_iterations)
+        if session_id is None and create_missing and new_session is None:
+            new_session = _NewSession()
         if session_id is not None:
             await self._reject_owner_managed_session(project_id, agent_id, session_id)
-        agent = await self._dependencies.agent_resolver.resolve_agent_async(
-            project_id, agent_id, session_id=session_id
-        )
+        resolver = self._dependencies.agent_resolver
+        if new_session is None:
+            agent = await resolver.resolve_agent_async(project_id, agent_id, session_id=session_id)
+        else:
+            agent = await resolver.resolve_agent_async(
+                project_id, agent_id, new_session_overrides=new_session.agent_overrides
+            )
         working_project_id = resolve_working_project_id(project_id, agent)
         provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
         _ensure_provider_exists(self._dependencies.providers, provider_id)
-        session = await self._get_session_async(
-            agent_id, session_id, create_missing=create_missing, project_id=project_id
-        )
+        if new_session is not None:
+            session = await self._dependencies.sessions.create_async(
+                agent_id,
+                session_id=new_session.session_id,
+                project_id=project_id,
+                actor=new_session.actor,
+                metadata=new_session.agent_overrides.session_metadata() or None,
+            )
+        else:
+            session = await self._get_session_async(
+                agent_id, session_id, create_missing=create_missing, project_id=project_id
+            )
         if edit_message_id is not None:
             if internal or not isinstance(content, str):
                 raise ChatError("history edits require visible plain-text content")
@@ -484,19 +533,39 @@ class ChatLoop:
             input_persisted_hook=input_persisted_hook,
             edit_message_id=edit_message_id,
         )
-        return await manager.start(
-            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id),
-            lambda run: self._execution._execute_run(run, request),
-            admission=RunAdmission(
-                working_project_id=working_project_id,
-                run_kind=run_kind,
-                contributes_to_agent_activity=contributes_to_agent_activity,
-                source_session_id=source_session_id,
-                expected_session_generation_id=(
-                    session.generation_id if not create_missing else None
+        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id)
+        try:
+            return await manager.start(
+                address,
+                lambda run: self._execution._execute_run(run, request),
+                admission=RunAdmission(
+                    working_project_id=working_project_id,
+                    run_kind=run_kind,
+                    contributes_to_agent_activity=contributes_to_agent_activity,
+                    source_session_id=source_session_id,
+                    expected_session_generation_id=(
+                        session.generation_id if not create_missing else None
+                    ),
                 ),
-            ),
-        )
+            )
+        except BaseException:
+            # The Run manager admits nothing when it raises, so the new Session is unused.
+            if new_session is not None:
+                await self._discard_new_session(address)
+            raise
+
+    async def _discard_new_session(self, address: SessionAddress) -> None:
+        """Remove a Session this start created for a Run it could not start (best effort)."""
+        sessions = self._dependencies.sessions
+        try:
+            await sessions.run_async(sessions.delete, address)
+        except Exception:
+            _LOGGER.warning(
+                "Could not remove the unused new Session (agent=%s session=%s)",
+                address.agent_id,
+                address.session_id,
+                exc_info=True,
+            )
 
     async def start_temporary_run(
         self,
@@ -625,9 +694,7 @@ class ChatLoop:
     ) -> ChatSession:
         session_manager = self._dependencies.sessions
         if session_id is None:
-            if not create_missing:
-                raise ChatSessionError("session id is required")
-            return await session_manager.create_async(agent_id, project_id=project_id)
+            raise ChatSessionError("session id is required")
         try:
             return await session_manager.get_async(
                 SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)

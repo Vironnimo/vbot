@@ -127,7 +127,6 @@ export default Object.freeze({
     'Later messages will be removed from the active conversation.',
   'chat.skillsLoadError': 'Skill suggestions could not be loaded.',
   'chat.cancelError': 'Run could not be cancelled.',
-  'chat.sessionCreateError': 'New session could not be created.',
   'chat.noProvider.title': 'Connect a provider to start',
   'chat.noProvider.action': 'Connect a provider',
   'chat.noModel.title': 'Pick a model to start',

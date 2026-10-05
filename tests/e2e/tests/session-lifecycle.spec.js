@@ -22,28 +22,28 @@ test("Sessions can be selected and continued without a past-session warning", as
   const selectedSession = sessionDrawer.locator(
     "button.session-row__select--active",
   );
-  await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
-  await expect(selectedSession).toHaveCount(1);
-
-  await sendChatMessage(chat, `/rename ${EARLIER_SESSION_TITLE}`);
-  const earlierSession = sessionList
-    .getByRole("listitem")
-    .filter({ hasText: EARLIER_SESSION_TITLE });
-  await expect(earlierSession).toBeVisible();
+  // The isolated chat is an unsaved draft: the seed message creates the
+  // Session, which can then be renamed.
   await sendChatMessage(chat, EARLIER_SESSION_SEED_MESSAGE);
   await expect(
     chatTimeline(chat).getByText("Fake provider streaming response.", {
       exact: true,
     }),
   ).toBeVisible();
+  await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
+  await expect(selectedSession).toHaveCount(1);
+  await sendChatMessage(chat, `/rename ${EARLIER_SESSION_TITLE}`);
+  const earlierSession = sessionList
+    .getByRole("listitem")
+    .filter({ hasText: EARLIER_SESSION_TITLE });
+  await expect(earlierSession).toBeVisible();
   const previousCount = await sessionList.getByRole("listitem").count();
 
+  // New session opens a draft; no Session row appears until it is used.
   await chat.getByRole("button", { exact: true, name: "New session" }).click();
 
-  await expect(sessionList.getByRole("listitem")).toHaveCount(
-    previousCount + 1,
-  );
-  await expect(selectedSession).toHaveCount(1);
+  await expect(selectedSession).toHaveCount(0);
+  await expect(sessionList.getByRole("listitem")).toHaveCount(previousCount);
   await expect(
     chat.getByText("No messages yet", { exact: true }).first(),
   ).toBeVisible();

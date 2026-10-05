@@ -43,12 +43,13 @@ export function resolveAgentAddressing(agentId, projectId, isProjectAgent) {
 // Pick the project-agent session to open from a `session.list` result.
 //
 // A project (config) agent has NO server-tracked `current_session_id` (trap 1):
-// `session.create` only sets make-current for identity. So the accessor chooses
-// the session itself — the most recently active user-facing one from
+// only an Identity Agent has a server-side current pointer. So the accessor
+// chooses the session itself — the most recently active user-facing one from
 // `session.list`, by `last_active_at` (falling back to `created_at`, then list
 // order). Sub-agent Sessions are execution artifacts rather than an Agent-bar
 // landing target. Returns the session id string, or '' when there are no
-// user-facing sessions (the caller then creates one via `session.create`).
+// user-facing sessions (the caller then shows an unsaved draft, whose first
+// send creates the Session).
 export function pickProjectAgentSessionId(sessions) {
   const list = Array.isArray(sessions) ? sessions : [];
   let best = null;

@@ -46,6 +46,9 @@
     draftKey = '',
     historyKey = '',
     focusRequest = 0,
+    // Resolves true when the message was accepted, false otherwise. A send
+    // that created the Session of an unsaved draft resolves `{ draftKey }`,
+    // the key the composer continues in.
     onSendMessage,
     onCancelRun = () => {},
     // Known work of this Session that outlives its Run (a running Sub-Agent
@@ -413,16 +416,17 @@
       return false;
     }
 
-    let sent;
+    let result;
     try {
-      sent =
-        (sendOptions
-          ? await snapshot.sendMessage(outgoingContent, sendOptions)
-          : await snapshot.sendMessage(outgoingContent)) === true;
+      result = sendOptions
+        ? await snapshot.sendMessage(outgoingContent, sendOptions)
+        : await snapshot.sendMessage(outgoingContent);
     } catch {
-      sent = false;
+      result = false;
     }
-    if (!sent) {
+    const continuedDraftKey =
+      typeof result?.draftKey === 'string' ? result.draftKey : '';
+    if (result !== true && !continuedDraftKey) {
       return false;
     }
 
@@ -461,7 +465,47 @@
       navWorkingCopies = {};
       resetInputHeight();
     }
+    if (continuedDraftKey && continuedDraftKey !== snapshot.draftKey) {
+      continueDraft(snapshot.draftKey, continuedDraftKey);
+    }
     return true;
+  };
+
+  // The send created the Session of the draft it came from. What the draft
+  // still holds (text typed meanwhile, attachments added meanwhile) moves to
+  // that Session, as it would have stayed in a Session's composer.
+  const continueDraft = (fromKey, toKey) => {
+    const remainingText = getDraft(fromKey);
+    if (remainingText && !getDraft(toKey)) {
+      setDraft(toKey, remainingText);
+      clearDraft(fromKey);
+    }
+    const fromScope = media.attachmentScopeForDraftKey(fromKey);
+    const movedAttachments = media
+      .attachmentsForScope(fromScope)
+      .filter((attachment) => !attachment.uploading);
+    if (
+      movedAttachments.length > 0 &&
+      media.attachmentsForScope(media.attachmentScopeForDraftKey(toKey))
+        .length === 0
+    ) {
+      media.updateAttachmentsForDraftKey(toKey, () => movedAttachments);
+      media.updateAttachmentsForDraftKey(fromKey, (attachments) =>
+        attachments.filter(
+          (attachment) => !movedAttachments.includes(attachment),
+        ),
+      );
+    }
+    // A composer already showing the Session shows what moved there; one
+    // that has not switched yet loads it when it does.
+    if (
+      draftKey === toKey &&
+      lastDraftKey === toKey &&
+      content !== getDraft(toKey)
+    ) {
+      content = getDraft(toKey);
+      tick().then(resizeInput);
+    }
   };
 
   const focusInputFromWrap = (event) => {

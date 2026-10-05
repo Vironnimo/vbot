@@ -177,18 +177,36 @@ class LiveSessions:
         started: list[str] = []
         queued: list[str] = []
         for _ in range(count):
+            # The server creates each Session together with its task's Run, so a
+            # refused task leaves no empty Session behind.
             try:
                 self._ctx.ensure_active()
-                created = await self._ctx.call("session.create", {"agent_id": agent.address})
+                result = await self._ctx.call(
+                    "chat.stream",
+                    {
+                        "agent_id": agent.address,
+                        "new_session": {},
+                        "content": task,
+                        "input_origin": CHAT_INPUT_ORIGIN_LIVE_VOICE,
+                    },
+                )
             except Exception as exc:
-                return self._start_failure(agent, count, started, exc, created_ref=None)
-            key = SessionKey(address=agent.address, session_id=str(created["session_id"]))
+                return self._start_failure(agent, count, started, exc)
+            session_id = result.get("session_id")
+            if not isinstance(session_id, str) or not session_id:
+                # A task starting with "/" runs as a slash command, which may start no Session.
+                return self._start_failure(
+                    agent,
+                    count,
+                    started,
+                    LiveToolError(
+                        "start_failed",
+                        "The task ran as a slash command and started no Session. "
+                        "To start a Session with it, send the task without the leading slash.",
+                    ),
+                )
+            key = SessionKey(address=agent.address, session_id=session_id)
             ref = self._refs.touch(key, session_title(agent.label))
-            try:
-                self._ctx.ensure_active()
-                result = await self._send(key, task)
-            except Exception as exc:
-                return self._start_failure(agent, count, started, exc, created_ref=ref)
             started.append(ref)
             if result.get("queued") is True:
                 queued.append(ref)
@@ -216,8 +234,6 @@ class LiveSessions:
         count: int,
         started: list[str],
         exc: Exception,
-        *,
-        created_ref: str | None,
     ) -> JsonObject:
         uncertain = not isinstance(exc, LiveToolError | RpcError)
         if uncertain:
@@ -229,12 +245,7 @@ class LiveSessions:
                 f"Started {len(started)} of {count} Sessions at {agent.label}: "
                 f"{join_words(started)}."
             )
-        if created_ref is not None:
-            parts.append(
-                f"{created_ref} was created, but the task was not delivered to it: {reason}"
-            )
-        else:
-            parts.append(f"Starting Session {len(started) + 1} of {count} failed: {reason}")
+        parts.append(f"Starting Session {len(started) + 1} of {count} failed: {reason}")
         parts.append("Nothing was retried.")
         if uncertain:
             parts.append(UNCERTAIN_DELIVERY)

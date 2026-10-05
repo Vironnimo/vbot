@@ -135,27 +135,31 @@ async def test_starts_several_sessions_at_an_agent_as_speech(fx: Fixture) -> Non
         "Started 3 Sessions at Coder with the task: s1, s2, s3. They work in the background; "
         "an update follows when each finishes."
     )
-    assert fx.app.params("session.create") == [{"agent_id": "coder"}] * 3
-    assert fx.app.params("chat.stream") == [
-        {
-            "agent_id": "coder",
-            "session_id": f"ses_new{index}",
-            "content": "Fix the tests",
-            "input_origin": "live_voice",
-        }
-        for index in (1, 2, 3)
-    ]
+    # Each task creates its Session on the server; none is created up front.
+    assert fx.app.count("session.create") == 0
+    assert (
+        fx.app.params("chat.stream")
+        == [
+            {
+                "agent_id": "coder",
+                "new_session": {},
+                "content": "Fix the tests",
+                "input_origin": "live_voice",
+            }
+        ]
+        * 3
+    )
 
 
 @pytest.mark.asyncio
 async def test_starts_a_team_agent_of_the_selected_or_named_project(fx: Fixture) -> None:
     text = await fx.ok("start_agent_session", agent="Reviewer", task="Review it")
     assert text.startswith("Started a Session at Reviewer (vBot team) with the task: s1.")
-    assert fx.app.params("session.create") == [{"agent_id": "reviewer@vbot"}]
+    assert [params["agent_id"] for params in fx.app.params("chat.stream")] == ["reviewer@vbot"]
     assert fx.context is not None
     fx.context["selected_project_id"] = None
     await fx.ok("start_agent_session", agent="reviewer", project="vBot", task="Again")
-    assert fx.app.params("session.create")[-1] == {"agent_id": "reviewer@vbot"}
+    assert fx.app.params("chat.stream")[-1]["agent_id"] == "reviewer@vbot"
     # Reading a team rescans its Project, so the call reuses it for a while.
     assert fx.app.params("project.show") == [{"project_id": "vbot"}]
 
@@ -178,32 +182,52 @@ async def test_does_not_guess_an_unknown_or_ambiguous_agent(fx: Fixture) -> None
     assert fx.app.count("chat.stream") == 1
     # The id the failure lists selects that Agent.
     await fx.ok("start_agent_session", agent="coder@vbot", task="x")
-    assert fx.app.params("session.create")[-1] == {"agent_id": "coder@vbot"}
+    assert fx.app.params("chat.stream")[-1]["agent_id"] == "coder@vbot"
 
 
 @pytest.mark.asyncio
 async def test_reports_started_sessions_when_a_later_start_fails_without_retrying(
     fx: Fixture,
 ) -> None:
-    fx.app.fail("session.create", None, RpcError("queue_full", "The Queue is full."))
+    fx.app.fail("chat.stream", None, RpcError("invalid_request", "The Model is not configured."))
     code, message = await fx.failed("start_agent_session", agent="Coder", task="x", count=3)
     assert code == "partial"
     assert message == (
-        "Started 1 of 3 Sessions at Coder: s1. Starting Session 2 of 3 failed: The Queue is "
-        "full. Nothing was retried."
+        "Started 1 of 3 Sessions at Coder: s1. Starting Session 2 of 3 failed: The Model is "
+        "not configured. Nothing was retried."
     )
-    assert fx.app.count("session.create") == 2
+    assert fx.app.count("chat.stream") == 2
 
 
 @pytest.mark.asyncio
-async def test_reports_a_created_session_whose_task_may_not_have_arrived(fx: Fixture) -> None:
-    fx.app.fail("chat.stream", RuntimeError("socket closed"))
-    code, message = await fx.failed("start_agent_session", agent="Coder", task="x")
+@pytest.mark.parametrize(
+    ("task", "failure", "expected"),
+    [
+        pytest.param(
+            "x",
+            RuntimeError("socket closed"),
+            "Starting Session 1 of 1 failed: It failed. Nothing was retried. "
+            "It may or may not have been delivered; do not send it again.",
+            id="unknown-delivery",
+        ),
+        pytest.param(
+            "/help",
+            None,
+            "Starting Session 1 of 1 failed: The task ran as a slash command and started no "
+            "Session. To start a Session with it, send the task without the leading slash. "
+            "Nothing was retried.",
+            id="slash-command",
+        ),
+    ],
+)
+async def test_reports_a_start_whose_task_started_no_known_session(
+    fx: Fixture, task: str, failure: Exception | None, expected: str
+) -> None:
+    if failure is not None:
+        fx.app.fail("chat.stream", failure)
+    code, message = await fx.failed("start_agent_session", agent="Coder", task=task)
     assert code == "start_failed"
-    assert message == (
-        "s1 was created, but the task was not delivered to it: It failed. Nothing was retried. "
-        "It may or may not have been delivered; do not send it again."
-    )
+    assert message == expected
 
 
 # -- send_message to Sessions ------------------------------------------------------------

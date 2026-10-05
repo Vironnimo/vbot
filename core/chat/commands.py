@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -17,9 +17,11 @@ from core.chat.status_report import (
 )
 from core.database import SnapshotBarrier
 from core.extensions.extensions import invoke_extension_handler
+from core.projects import AgentOverrides
 from core.runs import (
     ChatRunManager,
     Run,
+    RunAdmissionBlockedError,
     RunNotFoundError,
 )
 from core.sessions import SessionAddress
@@ -51,7 +53,14 @@ CommandArgumentMode = Literal["none", "optional", "required"]
 CommandCatalogResult = Literal["notice", "detail", "state_change"]
 CommandExecutionMode = Literal["immediate", "serialized"]
 CommandFeedbackKind = Literal["notice", "detail"]
-CommandNavigationKind = Literal["continue_in_session", "offer_session", "open_extension_page"]
+CommandNavigationKind = Literal[
+    "continue_in_session", "offer_session", "open_extension_page", "new_session"
+]
+# How a command sent for a new Session (one the conversation has not created yet)
+# runs: ``session_less`` runs without a Session; ``create_session`` creates the
+# Session first and then runs as usual; ``needs_session`` is refused until a
+# message has created the Session.
+CommandNewSessionMode = Literal["session_less", "create_session", "needs_session"]
 CommandRunRole = Literal["primary", "follow_up"]
 CommandSurfaceKind = Literal["webui", "channel"]
 
@@ -82,7 +91,8 @@ class CommandSpec:
 
     The spec stays surface-neutral. Accessors project ``catalog_result`` into
     their own presentation vocabulary and honor availability/mode without
-    branching on the command name.
+    branching on the command name. ``new_session_mode`` decides how the
+    command runs for a new Session (:meth:`CommandDispatcher.execute_for_new_session`).
     """
 
     name: str
@@ -91,8 +101,8 @@ class CommandSpec:
     catalog_result: CommandCatalogResult
     execution_mode: CommandExecutionMode
     argument_execution_mode: CommandExecutionMode | None = None
-    accepts_preferred_session_id: bool = False
     unavailable_surfaces: frozenset[CommandSurfaceKind] = frozenset()
+    new_session_mode: CommandNewSessionMode = "needs_session"
 
 
 @dataclass(frozen=True)
@@ -102,7 +112,6 @@ class PreparedCommand:
     name: str
     argument: str | None
     execution_mode: CommandExecutionMode
-    accepts_preferred_session_id: bool = False
     registration_id: int | None = None
 
 
@@ -128,7 +137,11 @@ class CommandFeedback:
 
 @dataclass(frozen=True)
 class CommandNavigation:
-    """A neutral Session or registered Extension page destination."""
+    """A neutral Session or registered Extension page destination.
+
+    ``new_session`` names no Session: the surface opens a new conversation with
+    the Agent, and its next message creates the Session.
+    """
 
     kind: CommandNavigationKind
     agent_id: str = ""
@@ -167,7 +180,24 @@ class CommandExecutionContext:
     project_id: str | None
     reply_surface: ReplySurface
     on_change: CommandChangeObserver | None = None
-    preferred_new_session_id: str | None = None
+
+    def report_change(self, change: CommandResourceChange) -> None:
+        if self.on_change is not None:
+            self.on_change(change)
+
+
+@dataclass(frozen=True)
+class NewSessionCommandContext:
+    """Addressing of a command sent for a new Session, which does not exist yet.
+
+    ``agent_overrides`` are the Agent overrides the new Session starts with.
+    """
+
+    agent_id: str
+    project_id: str | None
+    reply_surface: ReplySurface
+    agent_overrides: AgentOverrides = field(default_factory=AgentOverrides)
+    on_change: CommandChangeObserver | None = None
 
     def report_change(self, change: CommandResourceChange) -> None:
         if self.on_change is not None:
@@ -215,7 +245,18 @@ class CommandOutcome:
     resource_changes: tuple[CommandResourceChange, ...] = ()
 
 
+@dataclass(frozen=True)
+class NewSessionCommandResult:
+    """A command run for a new Session; ``session_id`` names the Session it created."""
+
+    outcome: CommandOutcome
+    session_id: str | None = None
+
+
 CommandExecutionHandler = Callable[[CommandExecutionContext, str | None], Awaitable[CommandOutcome]]
+SessionLessCommandHandler = Callable[
+    [NewSessionCommandContext, str | None], Awaitable[CommandOutcome]
+]
 ExtensionCommandHandler = Callable[[ExtensionCommandContext, str | None], Any]
 
 
@@ -336,6 +377,7 @@ class CommandDispatcher:
             argument="none",
             catalog_result="detail",
             execution_mode="immediate",
+            new_session_mode="session_less",
         ),
         "learn": CommandSpec(
             "learn",
@@ -343,6 +385,7 @@ class CommandDispatcher:
             argument="optional",
             catalog_result="state_change",
             execution_mode="serialized",
+            new_session_mode="create_session",
         ),
         "model": CommandSpec(
             "model",
@@ -351,6 +394,7 @@ class CommandDispatcher:
             catalog_result="state_change",
             execution_mode="immediate",
             argument_execution_mode="serialized",
+            new_session_mode="session_less",
         ),
         "new": CommandSpec(
             "new",
@@ -358,7 +402,7 @@ class CommandDispatcher:
             argument="none",
             catalog_result="state_change",
             execution_mode="serialized",
-            accepts_preferred_session_id=True,
+            new_session_mode="session_less",
         ),
         "reflect": CommandSpec(
             "reflect",
@@ -380,6 +424,7 @@ class CommandDispatcher:
             argument="none",
             catalog_result="detail",
             execution_mode="immediate",
+            new_session_mode="session_less",
         ),
         "stop": CommandSpec(
             "stop",
@@ -415,6 +460,8 @@ class CommandDispatcher:
         from core.chat import _command_builtin, _command_status
 
         self._chat_runs = chat_runs
+        self._agent_resolver = agent_resolver
+        self._sessions = sessions
         self._stop_all = stop_all
         self._trigger_service = trigger_service
         self._execution_commands: dict[str, CommandExecutionHandler] = {
@@ -461,7 +508,6 @@ class CommandDispatcher:
                 agent_resolver=agent_resolver,
                 agents=agents,
                 chat_runs=chat_runs,
-                sessions=sessions,
             ),
             "reflect": partial(
                 _command_builtin._execute_reflect,
@@ -486,6 +532,35 @@ class CommandDispatcher:
             ),
             "stop": self._execute_stop,
         }
+        self._session_less_commands: dict[str, SessionLessCommandHandler] = {
+            "help": self._execute_help,
+            "model": partial(
+                _command_status._execute_model_without_session,
+                agent_resolver=agent_resolver,
+                agents=agents,
+                projects=projects,
+            ),
+            "new": _command_builtin._execute_new_without_session,
+            "status": partial(
+                _command_status._execute_status_without_session,
+                agent_resolver=agent_resolver,
+                local_context_windows_loader=local_context_windows_loader,
+                models=models,
+                projects=projects,
+                providers=providers,
+                reasoning_render_describer=reasoning_render_describer,
+                started_at=started_at,
+                storage=storage,
+                wire_profile_describer=wire_profile_describer,
+            ),
+        }
+        session_less = {
+            name
+            for name, spec in self.BUILT_IN_COMMANDS.items()
+            if spec.new_session_mode == "session_less"
+        }
+        if session_less != set(self._session_less_commands):
+            raise RuntimeError("every session-less Built-in Command needs a session-less handler")
         self._extension_commands: dict[str, _RegisteredExtensionCommand] = {}
         self._next_extension_registration_id = 1
 
@@ -596,6 +671,8 @@ class CommandDispatcher:
                 execution_mode=cast(CommandExecutionMode, execution_mode),
                 argument_execution_mode=cast(CommandExecutionMode | None, argument_execution_mode),
                 unavailable_surfaces=cast(frozenset[CommandSurfaceKind], normalized_surfaces),
+                # Extension commands work on a Session: a new one is created for them.
+                new_session_mode="create_session",
             ),
             extension_name=extension_name,
             handler=handler,
@@ -636,7 +713,6 @@ class CommandDispatcher:
             name=spec.name,
             argument=argument,
             execution_mode=execution_mode,
-            accepts_preferred_session_id=spec.accepts_preferred_session_id,
             registration_id=registration_id,
         )
 
@@ -673,6 +749,108 @@ class CommandDispatcher:
             return await handler(context, prepared.argument)
         registered = self._extension_commands[prepared.name]
         return await self._execute_extension_command(registered, context, prepared.argument)
+
+    async def execute_for_new_session(
+        self, prepared: PreparedCommand, context: NewSessionCommandContext
+    ) -> NewSessionCommandResult:
+        """Execute one prepared command sent for a new Session, as its spec's mode says.
+
+        A ``session_less`` command runs without a Session and creates none. A
+        ``create_session`` command first checks the Agent and an override Model,
+        then creates the Session with the context's Agent overrides and runs as
+        :meth:`execute` would; when it left that Session unused (no History, no
+        active or queued Run) the Session is removed again and the result names
+        none. A ``needs_session`` command is refused with a notice.
+        """
+        spec = self._prepared_spec(prepared)
+        if spec is None:
+            return NewSessionCommandResult(
+                _notice(
+                    prepared.name,
+                    f"The /{prepared.name} command is no longer available. Please send it again.",
+                )
+            )
+        unavailable = self.unavailability(prepared, context.reply_surface)
+        if unavailable is not None:
+            raise ValueError(
+                f"{unavailable.command} is unavailable on {unavailable.surface} surfaces"
+            )
+        if spec.new_session_mode == "session_less":
+            handler = self._session_less_commands[prepared.name]
+            return NewSessionCommandResult(await handler(context, prepared.argument))
+        if spec.new_session_mode == "needs_session":
+            return NewSessionCommandResult(
+                _notice(
+                    prepared.name,
+                    f"/{prepared.name} works on an existing session. "
+                    "Send a message first to start this one.",
+                )
+            )
+        return await self._execute_in_created_session(prepared, context)
+
+    async def _execute_in_created_session(
+        self, prepared: PreparedCommand, context: NewSessionCommandContext
+    ) -> NewSessionCommandResult:
+        resolver = _require_dependency(self._agent_resolver, "AgentResolver")
+        sessions = _require_dependency(self._sessions, "ChatSessionManager")
+        # The Agent and an override Model must be usable before the Session exists.
+        await resolver.resolve_agent_async(
+            context.project_id,
+            context.agent_id,
+            new_session_overrides=context.agent_overrides,
+        )
+        session = await sessions.create_async(
+            context.agent_id,
+            project_id=context.project_id,
+            actor="command",
+            metadata=context.agent_overrides.session_metadata() or None,
+        )
+        address = SessionAddress(context.project_id, context.agent_id, session.id)
+        try:
+            outcome = await self.execute(
+                prepared,
+                CommandExecutionContext(
+                    agent_id=context.agent_id,
+                    session_id=session.id,
+                    project_id=context.project_id,
+                    reply_surface=context.reply_surface,
+                    on_change=context.on_change,
+                ),
+            )
+        except BaseException:
+            await self._remove_unused_session(address)
+            raise
+        if await self._remove_unused_session(address):
+            return NewSessionCommandResult(outcome)
+        scope = {"agent_id": context.agent_id, "session_id": session.id}
+        if context.project_id is not None:
+            scope["project_id"] = context.project_id
+        created = CommandResourceChange(kind="sessions", scope=scope)
+        return NewSessionCommandResult(
+            replace(outcome, resource_changes=(created, *outcome.resource_changes)),
+            session_id=session.id,
+        )
+
+    async def _remove_unused_session(self, address: SessionAddress) -> bool:
+        """Remove a Session a command created and left without History or Runs."""
+        sessions = _require_dependency(self._sessions, "ChatSessionManager")
+        try:
+            async with self._chat_runs.session_admission_guard(address):
+                versions = await sessions.run_async(sessions.list_history_versions, [address])
+                if address in versions and versions[address][1] != 0:
+                    return False
+                await sessions.run_async(sessions.delete, address)
+        except RunAdmissionBlockedError:
+            return False
+        except Exception:
+            _LOGGER.warning(
+                "Could not remove an unused command Session (agent=%s session=%s)",
+                address.agent_id,
+                address.session_id,
+                exc_info=True,
+            )
+            return False
+        return True
 
     def _prepared_spec(self, prepared: PreparedCommand) -> CommandSpec | None:
         if prepared.registration_id is None:
@@ -862,7 +1040,7 @@ class CommandDispatcher:
         )
 
     async def _execute_help(
-        self, context: CommandExecutionContext, argument: str | None
+        self, context: CommandExecutionContext | NewSessionCommandContext, argument: str | None
     ) -> CommandOutcome:
         lines = ["Slash commands:"]
         lines.extend(f"/{spec.name} - {spec.description}" for spec in self.catalog())

@@ -10,6 +10,7 @@ export function setupController({
   operationOverrides = {},
   isDisplayedSession = () => false,
   shouldLoadCurrentHistory = () => true,
+  onSessionCreated = () => {},
 } = {}) {
   const chatState = createChatState();
   const runStream = {
@@ -41,6 +42,7 @@ export function setupController({
     onRestartQueueDiscarded,
     onAgentsChanged,
     onAgentSelected,
+    onSessionCreated,
   });
   return {
     chatState,

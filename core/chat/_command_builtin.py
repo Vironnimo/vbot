@@ -16,6 +16,7 @@ from core.chat.commands import (
     CommandOutcome,
     CommandResourceChange,
     CommandRun,
+    NewSessionCommandContext,
     _command_session_io,
     _extract_text,
     _notice,
@@ -561,10 +562,13 @@ async def _execute_new(
     agent_resolver: AgentResolver | None,
     agents: AgentStore | None,
     chat_runs: ChatRunManager,
-    sessions: ChatSessionManager | None,
 ) -> CommandOutcome:
+    """Open a new conversation with the Agent; its next message creates the Session.
+
+    No Session is created here. An Identity Agent's current-Session pointer is
+    cleared, so the Agent opens the new conversation too.
+    """
     resolver = _require_dependency(agent_resolver, "AgentResolver")
-    sessions = _require_dependency(sessions, "ChatSessionManager")
     if (
         chat_runs.active_run(
             agent_id=context.agent_id,
@@ -574,39 +578,29 @@ async def _execute_new(
         is not None
     ):
         return _notice("new", "A new session can be started after the current run finishes.")
-    await _COMMAND_WORKERS.run(
-        resolver.resolve_agent,
-        context.project_id,
-        context.agent_id,
-    )
-    session = await _command_session_io(
-        sessions,
-        "create_async",
-        "create",
-        context.agent_id,
-        session_id=context.preferred_new_session_id,
-        project_id=context.project_id,
-        actor="command",
-    )
-    if context.project_id is None:
+    agent = await resolver.resolve_agent_async(context.project_id, context.agent_id)
+    changes: tuple[CommandResourceChange, ...] = ()
+    if context.project_id is None and agent.current_session_id:
         agents = _require_dependency(agents, "AgentStore")
-        await _COMMAND_WORKERS.run(
-            agents.update,
-            context.agent_id,
-            current_session_id=session.id,
-        )
+        await _COMMAND_WORKERS.run(agents.update, context.agent_id, current_session_id="")
+        changes = (CommandResourceChange(kind="agents"),)
     return CommandOutcome(
         command="new",
-        feedback=CommandFeedback(kind="notice", text=f"New session started: {session.id}"),
-        facts={"session_id": session.id},
-        navigation=CommandNavigation(
-            kind="continue_in_session",
-            agent_id=context.agent_id,
-            session_id=session.id,
-            project_id=context.project_id,
+        feedback=CommandFeedback(
+            kind="notice", text="New session: it starts with your next message."
         ),
-        resource_changes=(_session_change(context.project_id, context.agent_id, session.id),),
+        navigation=CommandNavigation(
+            kind="new_session", agent_id=context.agent_id, project_id=context.project_id
+        ),
+        resource_changes=changes,
     )
+
+
+async def _execute_new_without_session(
+    context: NewSessionCommandContext, argument: str | None
+) -> CommandOutcome:
+    """``/new`` in a conversation that has no Session yet changes nothing."""
+    return _notice("new", "This is already a new session: it starts with your first message.")
 
 
 async def _execute_rename(

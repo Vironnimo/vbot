@@ -658,6 +658,8 @@ def test_a_routing_change_applies_without_reopening_the_microphone(
     sent = rig.sink.wait_for_event("sent")
 
     assert status["default_session_behavior"] == "new"
+    # The command goes out for a new Session, which the server creates with it.
+    assert "new_session" in rig.server.sent[-1]
     assert sent["session_id"] == "s-new"
     assert len(rig.sd.streams) == 1
     assert len(rig.engines) == 1

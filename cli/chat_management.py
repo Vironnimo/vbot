@@ -1,7 +1,9 @@
 """``vbot chat``: send one message to an Agent Session and follow its Run to the end.
 
 The command talks to the server only through RPC (``session.*``, ``chat.stream``,
-``chat.cancel``) and the Run's SSE stream. It writes the answer to stdout itself,
+``chat.cancel``) and the Run's SSE stream. A message for a new Session is sent
+with ``new_session``, so the server creates the Session only for a message it
+accepts. It writes the answer to stdout itself,
 because streamed text cannot wait for the end of the Run; the outcome line and
 recovery guidance stay with the shared CLI output owner.
 """
@@ -68,7 +70,7 @@ class ChatRequest:
 
 
 def chat(instance: ServerInstance, request: ChatRequest) -> CommandResult:
-    """Select or create the Session, send the message and report the Run's outcome.
+    """Select the Session (or a new one), send the message and report the Run's outcome.
 
     The answer (or JSON report) is written to stdout here; the returned result
     carries the outcome sentence for stderr and any RPC failure evidence.
@@ -77,16 +79,25 @@ def chat(instance: ServerInstance, request: ChatRequest) -> CommandResult:
     if isinstance(selected, CommandResult):
         return selected
     session_id, stored_overrides = selected
-    report = _Report(request.agent, session_id, stored_overrides)
 
-    payload = _rpc_call(
-        instance,
-        "chat.stream",
-        {"agent_id": request.agent, "session_id": session_id, "content": request.prompt},
-    )
+    params: JsonObject = {"agent_id": request.agent, "content": request.prompt}
+    if session_id is None:
+        # The new Session starts with the overrides and exists only once accepted.
+        params["new_session"] = (
+            {"agent_overrides": dict(request.overrides)} if request.overrides else {}
+        )
+    else:
+        params["session_id"] = session_id
+    payload = _rpc_call(instance, "chat.stream", params)
     if not payload.ok:
         return payload.to_command_result()
     data = payload.data
+    if session_id is None:
+        # A command can run without creating the Session; then none is named.
+        session_id = _text(data.get("session_id"))
+        if session_id is not None and request.overrides:
+            stored_overrides = dict(request.overrides)
+    report = _Report(request.agent, session_id, stored_overrides)
     if data.get("queued") is True:
         return _queued(instance, request, report, data.get("item"))
     if data.get("command_handled") is True:
@@ -94,7 +105,7 @@ def chat(instance: ServerInstance, request: ChatRequest) -> CommandResult:
 
     run_id = data.get("run_id")
     sse_path = data.get("sse_url")
-    if not isinstance(run_id, str) or not isinstance(sse_path, str):
+    if not isinstance(run_id, str) or not isinstance(sse_path, str) or report.session_id is None:
         return CommandResult(
             ok=False,
             message="chat.stream result names no Run, queued item or command reply",
@@ -113,32 +124,27 @@ def chat(instance: ServerInstance, request: ChatRequest) -> CommandResult:
     except KeyboardInterrupt:
         _cancel_after_interrupt(instance, run_id, timeline)
         raise
-    return _run_outcome(instance, request, report, run_id, timeline, lost)
+    return _run_outcome(instance, request, report, report.session_id, run_id, timeline, lost)
 
 
 def _select_session(
     instance: ServerInstance, request: ChatRequest
-) -> tuple[str, JsonObject | None] | CommandResult:
-    """Return the target Session id and, when this call saved overrides, the stored ones."""
-    if request.session_id is None and not request.continue_latest:
-        params: JsonObject = {"agent_id": request.agent}
-        if request.overrides:
-            params["agent_overrides"] = dict(request.overrides)
-        payload = _rpc_call(instance, "session.create", params)
-        if not payload.ok:
-            return payload.to_command_result()
-        created = payload.data.get("session_id")
-        if not isinstance(created, str) or not created:
-            return CommandResult(
-                ok=False, message="session.create result is missing session_id", instance=instance
-            )
-        return created, _object_or_none(payload.data.get("agent_overrides"))
+) -> tuple[str | None, JsonObject | None] | CommandResult:
+    """Return the target Session id (``None`` for a new one) and the overrides saved here.
 
+    Without ``--session`` or ``-c`` the message starts a new Session. ``-c``
+    continues the latest conversation, or starts a new one when the Agent has
+    none yet.
+    """
     session_id = request.session_id
     if session_id is None:
+        if not request.continue_latest:
+            return None, None
         latest = _latest_session(instance, request.agent)
         if isinstance(latest, CommandResult):
             return latest
+        if latest is None:
+            return None, None
         session_id = latest
     if not request.overrides:
         return session_id, None
@@ -156,7 +162,7 @@ def _select_session(
     return session_id, _object_or_none(payload.data.get("agent_overrides"))
 
 
-def _latest_session(instance: ServerInstance, agent: str) -> str | CommandResult:
+def _latest_session(instance: ServerInstance, agent: str) -> str | None | CommandResult:
     """The Agent's most recently active conversation, skipping automated Sessions."""
     payload = _rpc_call(
         instance,
@@ -179,14 +185,7 @@ def _latest_session(instance: ServerInstance, agent: str) -> str | CommandResult
             ok=False, message="RPC result missing sessions list", instance=instance
         )
     if not sessions:
-        return CommandResult(
-            ok=False,
-            message=(
-                f"{agent} has no conversation Session to continue; "
-                "send the message without -c to start one"
-            ),
-            instance=instance,
-        )
+        return None
     first = sessions[0]
     session_id = first.get("id") if isinstance(first, dict) else None
     if not isinstance(session_id, str) or not session_id:
@@ -201,7 +200,8 @@ class _Report:
     """Facts every outcome shares; rendered as the ``--json`` object."""
 
     agent: str
-    session_id: str
+    # ``None`` when a command ran without creating the new Session.
+    session_id: str | None
     agent_overrides: JsonObject | None
 
     def json_object(self, **fields: Any) -> JsonObject:
@@ -259,8 +259,12 @@ def _command_handled(
     # A command can move the conversation, for example to another Session.
     agent = _text(facts.get("agent_id")) or request.agent
     session_id = _text(facts.get("session_id")) or report.session_id
-    lines = [f"{command} handled in Session {report.session_id} (Agent {request.agent})"]
-    lines.append(_continue_line(agent, session_id))
+    if report.session_id is None:
+        lines = [f"{command} handled without a Session (Agent {request.agent})"]
+    else:
+        lines = [f"{command} handled in Session {report.session_id} (Agent {request.agent})"]
+    if session_id is not None:
+        lines.append(_continue_line(agent, session_id))
     return CommandResult(ok=True, message="\n".join(lines), instance=instance)
 
 
@@ -268,6 +272,7 @@ def _run_outcome(
     instance: ServerInstance,
     request: ChatRequest,
     report: _Report,
+    session_id: str,
     run_id: str,
     timeline: _RunTimeline,
     lost: str | None,
@@ -292,9 +297,9 @@ def _run_outcome(
         print(timeline.message, flush=True)
 
     model = timeline.model or "unknown"
-    where = f"in Session {report.session_id} (Agent {request.agent}, Model {model})"
+    where = f"in Session {session_id} (Agent {request.agent}, Model {model})"
     if lost is not None:
-        status_command = _chat_command(request.agent, report.session_id, "/status")
+        status_command = _chat_command(request.agent, session_id, "/status")
         return CommandResult(
             ok=False,
             message=(
@@ -308,7 +313,7 @@ def _run_outcome(
         if report.agent_overrides:
             saved = ", ".join(f"{key}={value}" for key, value in report.agent_overrides.items())
             lines.append(f"Session overrides: {saved} (kept for later messages in this Session)")
-        lines.append(_continue_line(request.agent, report.session_id))
+        lines.append(_continue_line(request.agent, session_id))
         return CommandResult(ok=True, message="\n".join(lines), instance=instance)
     if status == "cancelled":
         detail = f"Run {run_id} was cancelled {where}"

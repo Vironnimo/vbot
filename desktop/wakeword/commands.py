@@ -441,8 +441,8 @@ class CommandPipeline:
             if self._stop.is_set():
                 return None
             self._on_stage(command.command_id, STAGE_SENDING)
-            session_id = self._client.resolve_session(command.agent_id, command.session_behavior)
-            self._client.send_command(command.agent_id, session_id, transcript)
+            target = self._client.resolve_session(command.agent_id, command.session_behavior)
+            session_id = self._client.send_command(command.agent_id, target, transcript)
         except SpeechRequestCancelled:
             logger.debug("Voice command stopped with its listener")
             return None

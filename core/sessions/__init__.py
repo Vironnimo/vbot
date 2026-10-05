@@ -104,7 +104,7 @@ from core.sessions.history import (
     skill_tool_activation_name,
 )
 from core.sessions.session import ChatSession
-from core.sessions.sessions import ChatSessionManager
+from core.sessions.sessions import ChatSessionManager, new_session_id
 
 __all__ = [
     "ARCHIVE_ENTRIES_DIR",
@@ -190,6 +190,7 @@ __all__ = [
     "ToolResultFacts",
     "ToolResultPayload",
     "recall_visibilities",
+    "new_session_id",
     "is_channel_message_note",
     "editable_session_message_index",
     "is_skill_available_note",

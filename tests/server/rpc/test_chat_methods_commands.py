@@ -108,7 +108,12 @@ async def test_slash_command_is_executed_instead_of_starting_a_run(method: str) 
 
     assert response == {
         "ok": True,
-        "result": {"command_handled": True, "reply": "Run cancelled.", "output": "toast"},
+        "result": {
+            "command_handled": True,
+            "reply": "Run cancelled.",
+            "output": "toast",
+            "session_id": "session-1",
+        },
     }
     assert state.command_dispatcher.calls == [("agent-1", "session-1", "/stop", WEBUI)]
     assert loop.start_calls == []
@@ -154,7 +159,12 @@ async def _detail_outcome(context: ExtensionCommandContext, argument: str | None
     [
         pytest.param(
             _detail_outcome,
-            {"command_handled": True, "reply": "Workflow review ready.", "output": "transient"},
+            {
+                "command_handled": True,
+                "reply": "Workflow review ready.",
+                "output": "transient",
+                "session_id": "session-1",
+            },
             [{"kind": "commands"}],
             id="detail",
         ),
@@ -164,6 +174,7 @@ async def _detail_outcome(context: ExtensionCommandContext, argument: str | None
                 "command_handled": True,
                 "reply": "Workflow is ready.",
                 "output": "action",
+                "session_id": "session-1",
                 "data": {
                     "command": "workflow",
                     "navigation": {
@@ -183,6 +194,7 @@ async def _detail_outcome(context: ExtensionCommandContext, argument: str | None
                 "command_handled": True,
                 "reply": "Session is ready.",
                 "output": "action",
+                "session_id": "session-1",
                 "data": {
                     "command": "workflow",
                     "session_id": "session-two",
@@ -238,22 +250,67 @@ async def _occupy(state: SimpleNamespace, session_id: str = "session-one") -> An
 
 
 @pytest.mark.asyncio
-async def test_new_command_opens_and_selects_a_fresh_session(tmp_path: Path) -> None:
+async def test_new_command_creates_no_session_and_clears_the_current_one(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
     state.runtime.chat_sessions.create("coder", session_id="session-one")
+    state.runtime.agents.update("coder", current_session_id="session-one")
 
     response = await call(
         state, "chat.send", agent_id="coder", session_id="session-one", content="/new"
     )
 
+    # The accessor opens a new conversation; its first message creates the Session.
     result = response["result"]
     assert result["command_handled"] is True
-    assert result["data"]["command"] == "new"
-    new_session_id = result["data"]["session_id"]
-    assert new_session_id != "session-one"
-    assert state.runtime.agents.get("coder").current_session_id == new_session_id
-    address = SessionAddress(project_id=None, agent_id="coder", session_id=new_session_id)
-    assert state.runtime.chat_sessions.get(address).load() == []
+    assert result["data"] == {
+        "command": "new",
+        "navigation": {"kind": "new_session", "agent_id": "coder"},
+    }
+    assert state.runtime.agents.get("coder").current_session_id == ""
+    assert [session.id for session in state.runtime.chat_sessions.list("coder")] == ["session-one"]
+    assert resource_changes(state, "agents") == [{"kind": "agents"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "creates"),
+    [
+        pytest.param("/help", False, id="session-less"),
+        pytest.param("/rename Release", False, id="needs-a-session"),
+        pytest.param("/workflow", True, id="creates-the-session"),
+    ],
+)
+async def test_command_for_a_new_session_names_a_session_only_when_it_created_one(
+    tmp_path: Path, content: str, creates: bool
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    sessions = state.runtime.chat_sessions
+
+    def workflow(context: ExtensionCommandContext, argument: str | None) -> CommandOutcome:
+        address = SessionAddress(context.project_id, context.agent_id, context.session_id)
+        sessions.get(address).append(ChatMessage.user("Workflow brief"))
+        return CommandOutcome(
+            command="workflow", feedback=CommandFeedback(kind="notice", text="Started.")
+        )
+
+    state.command_dispatcher.register_extension_command(
+        "fixture", name="workflow", description="Start the workflow.", handler=workflow
+    )
+
+    response = await call(state, "chat.stream", agent_id="coder", new_session={}, content=content)
+
+    result = response["result"]
+    assert result["command_handled"] is True
+    listed = [session.id for session in sessions.list("coder")]
+    if creates:
+        assert listed == [result["session_id"]]
+        # The Identity Agent's new Session becomes its current one, as after a message.
+        assert state.runtime.agents.get("coder").current_session_id == result["session_id"]
+        assert [change["kind"] for change in resource_changes(state)] == ["sessions", "agents"]
+    else:
+        assert "session_id" not in result
+        assert listed == []
+        assert state.runtime.agents.get("coder").current_session_id == ""
 
 
 @pytest.mark.asyncio

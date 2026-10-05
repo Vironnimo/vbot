@@ -22,7 +22,7 @@ from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.projects import AgentOverrides, AgentResolutionError, ConfigAgent
 from core.providers.accounts import ConnectionRef
 from core.runs import PROVIDER_REQUEST_STATUS_EVENT, ChatRunManager, Run
-from core.sessions import ChatSession, SessionAddress
+from core.sessions import ChatSession, SessionAddress, SessionNotFoundError
 from core.tools import (
     ToolRegistry,
 )
@@ -214,8 +214,10 @@ class StubAgentResolver:
     identity agent so a project run still resolves something runnable; an
     ``(project_id, agent_id)`` in ``unresolvable`` raises
     :class:`AgentResolutionError`, modelling an off-Team target or a model chain
-    that fell through. Session Agent overrides live in memory, keyed by Session
-    address, and apply whenever a resolution names its Session.
+    that fell through. Session Agent overrides a test sets live in memory, keyed
+    by Session address; without them, the overrides stored on the Session (as a
+    new Session stores them) apply. Either applies whenever a resolution names
+    its Session.
     """
 
     def __init__(
@@ -223,8 +225,10 @@ class StubAgentResolver:
         agents: StubAgents,
         project_agents: dict[tuple[str, str], StubAgent | ConfigAgent] | None = None,
         unresolvable: set[tuple[str, str]] | None = None,
+        sessions: ChatSessionManager | None = None,
     ) -> None:
         self._agents = agents
+        self._sessions = sessions
         self._project_agents = dict(project_agents or {})
         self._unresolvable = set(unresolvable or set())
         self._session_overrides: dict[SessionAddress, dict[str, Any]] = {}
@@ -237,6 +241,7 @@ class StubAgentResolver:
         agent_id: str,
         *,
         session_id: str | None = None,
+        new_session_overrides: AgentOverrides | None = None,
     ) -> StubAgent | ConfigAgent:
         self.calls.append((project_id, agent_id))
         if project_id is None:
@@ -249,6 +254,8 @@ class StubAgentResolver:
             agent = self._project_agents.get((project_id, agent_id)) or self._agents.get(agent_id)
         if session_id is not None:
             agent = self._with_overrides(agent, SessionAddress(project_id, agent_id, session_id))
+        elif new_session_overrides is not None and not new_session_overrides.is_empty:
+            agent = replace(agent, **new_session_overrides.agent_changes())
         return agent
 
     def resolve_temporary_agent(
@@ -277,7 +284,14 @@ class StubAgentResolver:
         del model  # Every Model can run.
 
     def session_overrides(self, address: SessionAddress) -> AgentOverrides:
-        return AgentOverrides.from_stored(self._session_overrides.get(address))
+        if address in self._session_overrides or self._sessions is None:
+            return AgentOverrides.from_stored(self._session_overrides.get(address))
+        try:
+            # The Session metadata key the real resolver stores overrides under.
+            stored = self._sessions.metadata_value(address, "agent_overrides")
+        except SessionNotFoundError:
+            stored = None
+        return AgentOverrides.from_stored(stored)
 
     async def session_overrides_async(self, address: SessionAddress) -> AgentOverrides:
         return self.session_overrides(address)
@@ -624,9 +638,11 @@ class StubRuntime:
     ) -> None:
         _prepare_session_store(data_dir)
         self.agents = StubAgents(agent)
-        self.agent_resolver = StubAgentResolver(self.agents, project_agents, unresolvable_agents)
-        self.projects = projects if projects is not None else StubProjects({})
         self.chat_sessions = ChatSessionManager(data_dir)
+        self.agent_resolver = StubAgentResolver(
+            self.agents, project_agents, unresolvable_agents, sessions=self.chat_sessions
+        )
+        self.projects = projects if projects is not None else StubProjects({})
         # Real guard instance so tests can assert auto-injected prompt files are
         # stamped as read-before-write for the session.
         self.file_read_state = FileReadState()

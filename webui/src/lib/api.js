@@ -169,7 +169,6 @@ export {
   loadLearningChanges,
   undoLearningChanges,
   inspectSubAgentWork,
-  createSession,
   startChatRun,
   editChatMessage,
   listSessions,

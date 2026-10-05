@@ -98,6 +98,8 @@ class RuntimeAgent(Protocol):
 
 
 AGENT_OVERRIDE_FIELDS = ("model", "thinking_effort", "temperature", "top_p")
+# The Session metadata key holding a Session's Agent overrides.
+AGENT_OVERRIDES_META_KEY = "agent_overrides"
 
 
 @dataclass(frozen=True)
@@ -160,6 +162,10 @@ class AgentOverrides:
     def agent_changes(self) -> dict[str, Any]:
         """Return the runtime Agent fields these overrides replace, keyed by field name."""
         return self.as_dict()
+
+    def session_metadata(self) -> dict[str, Any]:
+        """Return the Session metadata that stores these overrides (empty for none)."""
+        return {} if self.is_empty else {AGENT_OVERRIDES_META_KEY: self.as_dict()}
 
 
 @dataclass(frozen=True)

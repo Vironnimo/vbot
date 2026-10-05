@@ -17,7 +17,7 @@ from typing import Any, cast
 
 import pytest
 
-from core.agents import AGENT_FORMAT_VERSION, AgentStore
+from core.agents import AGENT_FORMAT_VERSION, Agent, AgentStore
 from core.archive import ArchiveService, ArchiveServices
 from core.automation import AutomationReferences
 from core.database import SnapshotBarrier
@@ -91,6 +91,19 @@ class ArchiveWorld:
                     "SELECT session_id, state FROM sessions WHERE agent_id = ?", (agent_id,)
                 )
             )
+
+
+def agent_with_session(
+    world: ArchiveWorld, agent_id: str, name: str | None = None, **settings: Any
+) -> Agent:
+    """Create an Agent with one Session, its current one, as its first message would.
+
+    Agent creation itself creates no Session.
+    """
+    session_id = f"{agent_id}-first"
+    world.agents.create(agent_id, name, **settings)
+    world.sessions.create(agent_id, session_id=session_id)
+    return world.agents.update(agent_id, current_session_id=session_id)
 
 
 def legacy_agent_entry(world: ArchiveWorld, folder: Path) -> str:

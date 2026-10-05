@@ -92,7 +92,6 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     listChatCommands: (params = {}) => call('chat.commands', params),
     loadChatHistory: (params) => call('chat.history', params),
     loadReflectionRuns: (params) => call('chat.reflections', params),
-    createSession: (params) => call('session.create', params),
     deleteSession: (agentId, sessionId, { permanent = false } = {}) =>
       call('session.delete', {
         agent_id: agentId,

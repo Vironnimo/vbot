@@ -356,7 +356,7 @@ class FakeClient:
         self.lock = threading.Lock()
         self.transcribing = 0
         self.uploads: list[bytes] = []
-        self.sent: list[tuple[str, str, str]] = []
+        self.sent: list[tuple[str, str | None, str]] = []
 
     def transcribe(self, audio: bytes) -> str:
         with self.lock:
@@ -377,9 +377,10 @@ class FakeClient:
             raise self.resolve_error
         return f"s-{agent_id}-{session_behavior}"
 
-    def send_command(self, agent_id: str, session_id: str, text: str) -> None:
+    def send_command(self, agent_id: str, session_id: str | None, text: str) -> str:
         with self.lock:
             self.sent.append((agent_id, session_id, text))
+        return session_id or f"s-{agent_id}-created"
 
 
 @dataclass

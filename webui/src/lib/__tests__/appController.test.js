@@ -134,12 +134,13 @@ describe('App controller', () => {
       nextSessionId: 'session-two',
     });
 
-    // Each event is a fresh deletion, even for the same identity Session.
+    // Each event is a fresh deletion, even for the same identity Session. A
+    // deletion without a landing leaves the Agent without a Session.
     const identityScope = {
       agent_id: 'alpha',
       project_id: null,
       deleted_session_id: 'session-three',
-      next_session_id: 'session-four',
+      next_session_id: null,
     };
     await controller.handleServerEvent(deletionEvent(identityScope));
     const first = state.sessionDeletion;
@@ -147,7 +148,7 @@ describe('App controller', () => {
     expect(first).toEqual({
       agentAddress: 'alpha',
       deletedSessionId: 'session-three',
-      nextSessionId: 'session-four',
+      nextSessionId: '',
     });
     expect(state.sessionDeletion).not.toBe(first);
   });

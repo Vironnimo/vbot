@@ -307,6 +307,7 @@ async def test_agent_delete_takes_the_agent_out_of_every_delegation_list(
     state.runtime.agents = agents
     monkeypatch.setattr(state.runtime.agent_resolver, "_agents", agents)
     agents.create("coder")
+    state.runtime.chat_sessions.create("coder", session_id="work")
     agents.create(
         "manager", "Manager", tools={"subagent": {"allowed_agents": ["coder", "coder@vbot"]}}
     )
@@ -411,7 +412,7 @@ async def test_agent_delete_permanent_leaves_no_agent_session_entry_or_payload(
         False,
         None,
     )
-    assert result["session_count"] == 2
+    assert result["session_count"] == 1
     assert not state.runtime.chat_sessions.archive_ledger.page(ArchiveEntryFilter()).entries
     with sqlite3.connect(tmp_path / "sessions.db") as connection:
         rows = connection.execute("SELECT 1 FROM sessions WHERE agent_id = 'coder'").fetchall()

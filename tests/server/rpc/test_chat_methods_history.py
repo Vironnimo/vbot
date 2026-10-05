@@ -170,6 +170,12 @@ async def test_history_defaults_to_the_current_session_and_strips_opaque_metadat
     assert result["messages"][0]["reasoning"] == "visible"
     assert "reasoning_meta" not in result["messages"][0]
 
+    # Without a current Session the Agent is in a new conversation: an empty page.
+    history.agents.current_session_id = ""
+    empty = await history.read()
+    assert empty["session_id"] is None
+    assert (empty["messages"], empty["runs"], empty["has_more"]) == ([], [], False)
+
 
 @pytest.mark.asyncio
 async def test_history_hides_notes(history: _History) -> None:

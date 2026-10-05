@@ -35,7 +35,8 @@ export function createChatViewTarget(context) {
   // The active project agent's bare id, '' when chatting an identity agent.
   let selectedProjectAgentId = $state('');
 
-  // address (`agent@projekt`) -> locally chosen session id (trap 1).
+  // address (`agent@projekt`) -> locally chosen session id (trap 1). An empty
+  // id holds a draft; an absent address is not resolved yet.
   let projectAgentSessions = $state({});
 
   // Guards repeated project-show side effects for the same chosen project.
@@ -206,6 +207,27 @@ export function createChatViewTarget(context) {
     };
   }
 
+  // The draft the active Agent shows instead of a Session, or null. A draft
+  // is an Agent's next conversation before it exists: an Identity Agent
+  // without a current Session in this area, or a Project Agent holding no
+  // Session. Its first send creates the Session. The key names it like a
+  // Session key, per Chat area, so each area keeps its own composer draft;
+  // `~` never starts a Session id.
+  function activeDraft() {
+    if (context.navigation.viewingSessionId) {
+      return null;
+    }
+    const agentAddress = projectAgentActive
+      ? currentProjectAgentAddress()
+      : (selectedAgent(context.chatState)?.id ?? '');
+    const sessionId = projectAgentActive
+      ? projectAgentSessions[agentAddress]
+      : selectedAgent(context.chatState)?.current_session_id || '';
+    return agentAddress && sessionId === ''
+      ? { agentAddress, key: `${agentAddress}::~draft-${context.draftScope}` }
+      : null;
+  }
+
   function getActiveAgent() {
     if (context.navigation.viewingSessionId) {
       if (!context.navigation.viewingSessionAgentId) {
@@ -299,6 +321,10 @@ export function createChatViewTarget(context) {
       return agentAddress
         ? `${agentAddress}::${context.navigation.viewingSessionId}`
         : '';
+    }
+    const draft = activeDraft();
+    if (draft) {
+      return draft.key;
     }
     if (projectAgentActive) {
       const { agentAddress, sessionId } = activeAddressing();
@@ -473,8 +499,8 @@ export function createChatViewTarget(context) {
   // Switch the chat to a project team agent. Clears any identity-side session
   // override and resolves the project agent's session locally (trap 1): on an
   // explicit Team-bar click (`preferUnread`) its newest unread session first,
-  // else the already held one, else the most recent from `session.list`, else
-  // a fresh `session.create`. The session is held in `projectAgentSessions`
+  // else the already held one (or draft), else the most recent from
+  // `session.list`, else a draft. The choice is held in `projectAgentSessions`
   // keyed by the agent's full address.
   const openProjectAgent = async (
     agentId,
@@ -493,9 +519,10 @@ export function createChatViewTarget(context) {
     await ensureProjectAgentSession(addressing, { preferUnread });
   };
 
-  // Choose (and if needed create) the local session for a project agent, then
-  // load its history. `session.list`/`session.create`/`chat.history` all take
-  // the FULL address (`agent@projekt`) — trap 2. The chosen session is held in
+  // Choose the local session for a project agent, then load its history. A
+  // project agent without any Session shows a draft; its first send creates
+  // the Session. `session.list`/`chat.history` take the FULL address
+  // (`agent@projekt`) — trap 2. The chosen session is held in
   // `projectAgentSessions` before its history loads: a project agent displays
   // only its held session, so loading any other one (e.g. its newest unread
   // session) would fetch history the chat never shows and never marks read.
@@ -512,10 +539,8 @@ export function createChatViewTarget(context) {
         ? newestUnreadSessionForAgent(context.chatState, agentAddress)
         : null;
       let sessionId =
-        newestUnreadSession?.sessionId ??
-        projectAgentSessions[agentAddress] ??
-        '';
-      if (!sessionId) {
+        newestUnreadSession?.sessionId ?? projectAgentSessions[agentAddress];
+      if (sessionId === undefined) {
         const listed = await context.chatController.listSessions(agentAddress, {
           limit: 1,
           includeSubagents: false,
@@ -528,24 +553,15 @@ export function createChatViewTarget(context) {
           return;
         }
         sessionId = pickProjectAgentSessionId(listed?.sessions);
-        if (!sessionId) {
-          const created = await context.chatController.createSession({
-            agent_id: agentAddress,
-          });
-          if (currentProjectAgentAddress() !== agentAddress) {
-            return;
-          }
-          sessionId = created?.session_id ?? '';
-        }
-        if (!sessionId) {
-          return;
-        }
       }
       if (projectAgentSessions[agentAddress] !== sessionId) {
         projectAgentSessions = {
           ...projectAgentSessions,
           [agentAddress]: sessionId,
         };
+      }
+      if (!sessionId) {
+        return;
       }
       await context.loadHistoryForSession(agentAddress, sessionId);
     } catch (error) {
@@ -690,6 +706,7 @@ export function createChatViewTarget(context) {
     },
     activeOwnAgentAddress,
     activeAddressing,
+    activeDraft,
     agentById,
     displayedSessionKey,
     displayedSessionProjectId,

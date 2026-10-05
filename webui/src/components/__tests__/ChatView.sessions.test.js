@@ -27,7 +27,6 @@ import {
   setupChatViewTestSuite,
   subscribeRunEventsMock,
   testChatStateRefs,
-  teamTab,
   tick,
   waitForCondition,
   waitForText,
@@ -110,135 +109,137 @@ describe('ChatView Sessions', () => {
   });
 
   describe('New session', () => {
+    const alphaSessionId = () =>
+      testChatStateRefs[0].agents.find((agent) => agent.id === 'alpha')
+        .current_session_id;
+
     it.each([
-      ['reuses an already empty Session', { 'session-1': [] }, 0],
-      ['creates one Session from a non-empty Session', {}, 1],
-      ['creates one Project Agent Session', {}, 1, true],
+      ['keeps an already empty Session', { 'session-1': [] }, false],
+      ['shows a draft in place of a Session', {}, true],
+      ['shows a Project Agent draft in place of its Session', {}, true, true],
     ])(
-      '%s for repeated clicks and focuses its composer',
-      async (_case, sessionMessages, creates, project) => {
-        const agentAddress = project ? 'builder@vbot' : 'alpha';
-        const createdSessionId = `created-${agentAddress}`;
+      '%s on repeated clicks without a request and focuses its composer',
+      async (_case, sessionMessages, draft, project) => {
         if (project) {
           serveProject();
           listedSessions('session-1');
         }
-        rpcMock.mockImplementation(
-          createChatRpcMock({
-            sessionMessages: { ...sessionMessages, [createdSessionId]: [] },
-          }),
-        );
+        rpcMock.mockImplementation(createChatRpcMock({ sessionMessages }));
         await chat.mountChat(project ? projectChatProps() : {}, {
           ready: null,
         });
         await waitForCondition(() => historyReads('session-1') > 0);
+        await settle(2);
+        const requests = rpcMock.mock.calls.length;
 
         findNewSessionButton().focus();
         findNewSessionButton().click();
         findNewSessionButton().click();
 
         await waitForCondition(
-          () =>
-            document.activeElement === composerInput() &&
-            historyReads(createdSessionId) === creates,
+          () => document.activeElement === composerInput(),
         );
-        expect(rpcCalls('session.create')).toHaveLength(creates);
-        if (creates) {
-          expect(rpcCalls('session.create')).toEqual([
-            project
-              ? { agent_id: agentAddress }
-              : { agent_id: agentAddress, make_current: true },
-          ]);
+        await settle();
+        expect(rpcMock.mock.calls).toHaveLength(requests);
+        expect(composerInput().disabled).toBe(false);
+        expect(document.body.textContent).not.toContain('Hello');
+        if (!project) {
+          expect(alphaSessionId()).toBe(draft ? '' : 'session-1');
         }
       },
     );
 
-    it('creates a new Session when the empty transcript has a draft and preserves that draft', async () => {
+    it('creates the Session with the first draft send and continues there', async () => {
       rpcMock.mockImplementation(
         createChatRpcMock({
-          sessionMessages: { 'session-1': [], 'created-alpha': [] },
+          streamHandler: (params) => ({
+            ...runningRun(params.new_session ? 'run-one' : 'run-two'),
+            session_id: params.session_id ?? 'created-alpha',
+          }),
         }),
       );
-      listedSessions(
-        {
-          id: 'created-alpha',
-          created_at: '2026-05-10T00:00:00+00:00',
-          last_active_at: '2026-05-10T00:00:00+00:00',
-        },
-        {
-          id: 'session-1',
-          title: 'Draft home',
-          created_at: '2026-05-09T00:00:00+00:00',
-          last_active_at: '2026-05-09T00:00:00+00:00',
-        },
+      const parent = createChatViewParentHarness();
+      const onSessionNavigation = vi.fn();
+      const onAgentsChanged = vi.fn();
+      await chat.mountChat(
+        parent.props(['navigation'], { onSessionNavigation, onAgentsChanged }),
       );
+
+      findNewSessionButton().click();
+      await waitForCondition(() => alphaSessionId() === '');
+      expect(onSessionNavigation).toHaveBeenLastCalledWith(
+        { agentId: 'alpha', sessionId: '', subAgent: false },
+        { replace: false },
+      );
+      sendComposerMessage('First message');
+
+      await waitForCondition(() => alphaSessionId() === 'created-alpha');
+      expect(rpcCalls('chat.stream')).toEqual([
+        { agent_id: 'alpha', new_session: {}, content: 'First message' },
+      ]);
+      // The created Session replaces the draft's history entry.
+      expect(onSessionNavigation).toHaveBeenLastCalledWith(
+        { agentId: 'alpha', sessionId: 'created-alpha', subAgent: false },
+        { replace: true },
+      );
+      expect(
+        onAgentsChanged.mock.calls
+          .at(-1)[0]
+          .find((agent) => agent.id === 'alpha').current_session_id,
+      ).toBe('created-alpha');
+      expect(subscribeRunEventsMock).toHaveBeenCalledWith(
+        '/api/runs/run-one/events',
+        expect.any(Object),
+        { afterSequence: 0 },
+      );
+      await waitForCondition(() => composerInput().value === '');
+
+      sendComposerMessage('Second message');
+      await waitForCondition(() => rpcCalls('chat.stream').length === 2);
+      expect(rpcCalls('chat.stream')[1]).toEqual({
+        agent_id: 'alpha',
+        session_id: 'created-alpha',
+        content: 'Second message',
+      });
+    });
+
+    it('keeps the composer text of a left empty Session and of the draft', async () => {
+      rpcMock.mockImplementation(
+        createChatRpcMock({ sessionMessages: { 'session-1': [] } }),
+      );
+      listedSessions({
+        id: 'session-1',
+        title: 'Draft home',
+        created_at: '2026-05-09T00:00:00+00:00',
+        last_active_at: '2026-05-09T00:00:00+00:00',
+      });
       await chat.mountChat({}, { ready: null });
       await waitForCondition(() => historyReads('session-1') > 0);
 
       const input = composerInput();
-      setInputValue(input, 'unfinished draft');
+      setInputValue(input, 'unfinished Session text');
       flushSync();
       findNewSessionButton().click();
-      await waitForCondition(() => historyReads('created-alpha') > 0);
+      await waitForCondition(() => alphaSessionId() === '');
       expect(input.value).toBe('');
+      setInputValue(input, 'unfinished draft text');
+      flushSync();
 
       await openFromDrawer('Draft home');
-      await waitForCondition(() => input.value === 'unfinished draft');
-      expect(rpcCalls('session.create')).toHaveLength(1);
+      await waitForCondition(() => input.value === 'unfinished Session text');
+      findNewSessionButton().click();
+      await waitForCondition(() => input.value === 'unfinished draft text');
+      expect(rpcCalls('chat.stream')).toEqual([]);
       setInputValue(input, '');
       flushSync();
-    });
-
-    it('blocks sending while New session is pending so no message reaches the Session being left', async () => {
-      const baseRpc = createChatRpcMock({
-        sessionMessages: { 'created-alpha': [] },
-      });
-      let resolveCreate = null;
-      rpcMock.mockImplementation((method, params) =>
-        method === 'session.create'
-          ? new Promise((resolve) => {
-              resolveCreate = () => resolve(baseRpc(method, params));
-            })
-          : baseRpc(method, params),
-      );
-      await chat.mountChat();
-      expect(composerInput().disabled).toBe(false);
-
-      findNewSessionButton().click();
-      await waitForCondition(() => resolveCreate !== null);
-      expect(composerInput().disabled).toBe(true);
-      sendComposerMessage('Sent during the switch');
-      composerInput().dispatchEvent(
-        new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }),
-      );
-      flushSync();
-
-      resolveCreate();
-      await waitForCondition(
-        () =>
-          historyReads('created-alpha') > 0 &&
-          composerInput().disabled === false,
-      );
-      expect(rpcCalls('chat.stream')).toHaveLength(0);
     });
 
     it.each([
       ['an Agent switch', 'agent'],
       ['a same-Agent drawer Session', 'session'],
-      ['the same displayed Session chosen again', 'same-session'],
-      ['a history restore of the displayed Session', 'restore'],
-      ['leaving and revisiting the same Agent', 'revisit'],
-      ['leaving Chat', 'hidden'],
-      ['leaving and returning to Chat', 'shown-again'],
-      ['leaving and revisiting a Project Agent', 'project-revisit'],
-      ['a Project Agent drawer Session', 'project-session'],
-      ['navigation during the created Session History load', 'history'],
     ])(
-      'reconciles a delayed New session without replacing %s or its focus',
+      'adopts a delayed first draft send without replacing %s or its focus',
       async (_case, scenario) => {
-        const project = scenario.startsWith('project');
-        const agentAddress = project ? 'builder@vbot' : 'alpha';
-        const createdSessionId = `created-${agentAddress}`;
         const agents = [
           createAgent(),
           createAgent({
@@ -247,167 +248,74 @@ describe('ChatView Sessions', () => {
             current_session_id: 'session-beta',
           }),
         ];
-        if (project) serveProject();
-        listedSessions(
-          {
-            id: 'session-1',
-            title: 'Current topic',
-            created_at: '2026-05-10T00:00:00+00:00',
-            last_active_at: '2026-05-10T00:00:00+00:00',
-          },
-          {
-            id: 'session-2',
-            title: 'Older topic',
-            created_at: '2026-05-09T00:00:00+00:00',
-            last_active_at: '2026-05-09T00:00:00+00:00',
-          },
+        listedSessions({
+          id: 'session-2',
+          title: 'Older topic',
+          created_at: '2026-05-09T00:00:00+00:00',
+          last_active_at: '2026-05-09T00:00:00+00:00',
+        });
+        let resolveSend;
+        rpcMock.mockImplementation(
+          createChatRpcMock({
+            agents,
+            sessionMessages: {
+              'session-beta': [message('beta-reply', 'Beta session reply')],
+              'session-2': [message('older-reply', 'Older session reply')],
+              'created-alpha': [
+                message('created-reply', 'Created session reply'),
+              ],
+            },
+            streamHandler: () =>
+              new Promise((resolve) => {
+                resolveSend = () =>
+                  resolve({
+                    ...runningRun('run-new'),
+                    session_id: 'created-alpha',
+                  });
+              }),
+          }),
         );
-        const baseRpc = createChatRpcMock({
-          agents,
-          sessionMessages: {
-            'session-beta': [message('beta-reply', 'Beta session reply')],
-            'session-2': [message('older-reply', 'Older session reply')],
-            [createdSessionId]: [
-              message('created-reply', 'Created session reply'),
-            ],
-          },
-        });
-        let resolveCreate;
-        let resolveHistory;
-        rpcMock.mockImplementation((method, params) => {
-          if (method === 'session.create') {
-            return new Promise((resolve) => {
-              resolveCreate = () => resolve(baseRpc(method, params));
-            });
-          }
-          if (
-            scenario === 'history' &&
-            method === 'chat.history' &&
-            params.session_id === createdSessionId
-          ) {
-            return new Promise((resolve) => {
-              resolveHistory = () => resolve(baseRpc(method, params));
-            });
-          }
-          return baseRpc(method, params);
-        });
         const parent = createChatViewParentHarness();
-        if (project) parent.setSelectedProjectId('vbot');
-        const visibility = reactiveProps({ active: true });
-        const onAgentsChanged = vi.fn();
-        const props = parent.props(['agent', 'project', 'navigation'], {
-          sharedAgents: agents,
-          projects: [{ project_id: 'vbot', display_name: 'vBot' }],
-          onAgentsChanged,
-        });
-        Object.defineProperty(props, 'active', {
-          get: () => visibility.active,
-          enumerable: true,
-        });
-        await chat.mountChat(props);
+        await chat.mountChat(parent.props(['agent'], { sharedAgents: agents }));
 
         findNewSessionButton().click();
-        await waitForCondition(() => Boolean(resolveCreate));
-        if (scenario === 'history') {
-          resolveCreate();
-          await waitForCondition(() => Boolean(resolveHistory));
-        }
-        let expectedText = 'Hello';
-        let expectedAgent = project ? '' : 'Alpha';
-        if (scenario === 'agent' || scenario === 'history') {
+        await waitForCondition(() => alphaSessionId() === '');
+        sendComposerMessage('Delayed message');
+        await waitForCondition(() => Boolean(resolveSend));
+        const expectedText =
+          scenario === 'agent' ? 'Beta session reply' : 'Older session reply';
+        if (scenario === 'agent') {
           await selectAgentFromPicker('Beta');
-          expectedText = 'Beta session reply';
-          expectedAgent = 'Beta';
-        } else if (scenario === 'same-session') {
-          await openFromDrawer('Current topic');
-        } else if (scenario === 'restore') {
-          parent.setPendingSessionNavigation({
-            agentId: agentAddress,
-            sessionId: 'session-1',
-            requestId: 1,
-          });
-          flushSync();
-        } else if (scenario.endsWith('session')) {
-          await openFromDrawer('Older topic');
-          expectedText = 'Older session reply';
-        } else if (scenario === 'revisit') {
-          await selectAgentFromPicker('Beta');
-          await waitForText('Beta session reply');
-          await selectAgentFromPicker('Alpha');
-        } else if (scenario === 'project-revisit') {
-          await selectAgentFromPicker('Alpha');
-          await waitForCondition(() => selectedPersonalAgentName() === 'Alpha');
-          teamTab('Builder').click();
-          flushSync();
         } else {
-          visibility.active = false;
-          flushSync();
-          if (scenario === 'shown-again') {
-            visibility.active = true;
-            flushSync();
-          }
+          await openFromDrawer('Older topic');
         }
         await waitForText(expectedText);
-        await settle(2);
-        if (scenario !== 'hidden') {
-          expect(composerInput().disabled).toBe(false);
-        }
         const focusTarget = document.createElement('button');
         document.body.append(focusTarget);
         focusTarget.focus();
 
-        if (scenario === 'history') resolveHistory();
-        else resolveCreate();
-        await waitForCondition(() => !findNewSessionButton().disabled);
-        await settle();
+        resolveSend();
+        await waitForCondition(() => alphaSessionId() === 'created-alpha');
+        await settle(2);
 
         expect(document.body.textContent).toContain(expectedText);
-        expect(document.body.textContent).not.toContain(
-          'Created session reply',
-        );
-        expect(selectedPersonalAgentName()).toBe(expectedAgent);
-        expect(parent.selectedAgentId).toBe(
-          expectedAgent === 'Beta' ? 'beta' : 'alpha',
-        );
         expect(document.activeElement).toBe(focusTarget);
-        expect(historyReads(createdSessionId)).toBe(
-          scenario === 'history' ? 1 : 0,
-        );
-        if (!project) {
-          expect(
-            onAgentsChanged.mock.calls
-              .at(-1)[0]
-              .find((agent) => agent.id === 'alpha').current_session_id,
-          ).toBe(createdSessionId);
-        }
+        expect(historyReads('created-alpha')).toBe(0);
+        expect(subscribeRunEventsMock).not.toHaveBeenCalled();
 
-        // A later deliberate return opens the new current Session; retaining
-        // the superseding view must not trap subsequent navigation there.
-        visibility.active = true;
-        flushSync();
+        // A later return to Alpha opens the created Session.
         await selectAgentFromPicker('Alpha');
-        if (project) {
-          teamTab('Builder').click();
-          flushSync();
-        }
-        // The delayed History case gates each read, including this return.
-        if (scenario === 'history') {
-          await waitForCondition(() => historyReads(createdSessionId) > 1);
-          resolveHistory();
-        }
         await waitForText('Created session reply');
-        expect(rpcCalls('session.create')).toHaveLength(1);
       },
     );
 
     it('starts a Run in a new Session while the previous Session Run remains active', async () => {
       rpcMock.mockImplementation(
         createChatRpcMock({
-          sessionMessages: { 'created-alpha': [] },
           activeRuns: { 'session-1': runningRun('run-one') },
-          streamHandler: (params) => ({
+          streamHandler: () => ({
             ...runningRun('run-two'),
-            session_id: params.session_id,
+            session_id: 'created-alpha',
           }),
         }),
       );
@@ -416,13 +324,9 @@ describe('ChatView Sessions', () => {
 
       expect(findNewSessionButton().disabled).toBe(false);
       findNewSessionButton().click();
-      await waitForCondition(() => historyReads('created-alpha') > 0);
+      await waitForCondition(() => !findCancelRunButton());
       sendComposerMessage('Run in parallel');
-      await waitForCondition(() =>
-        rpcCalls('chat.stream').some(
-          (params) => params.session_id === 'created-alpha',
-        ),
-      );
+      await waitForCondition(() => alphaSessionId() === 'created-alpha');
 
       const sessions = testChatStateRefs[0].sessions;
       expect(sessions['alpha::session-1'].currentRun?.runId).toBe('run-one');
@@ -432,38 +336,6 @@ describe('ChatView Sessions', () => {
       for (const key of ['alpha::session-1', 'alpha::created-alpha']) {
         expect(sessions[key].status).toBe('running');
       }
-    });
-
-    it('blocks New session before the selected Agent has an active Session projection', async () => {
-      const beta = createAgent({
-        id: 'beta',
-        name: 'Beta',
-        current_session_id: 'session-beta',
-      });
-      rpcMock.mockImplementation(
-        createChatRpcMock({ agents: [createAgent(), beta] }),
-      );
-      const props = reactiveProps({
-        active: true,
-        sharedAgents: [createAgent(), beta],
-        sharedSelectedAgentId: 'alpha',
-      });
-      await chat.mountChat(props);
-
-      props.sharedSelectedAgentId = 'beta';
-      const chatState = testChatStateRefs.at(-1);
-      chatState.selectedAgentId = 'beta';
-      chatState.loadingHistory = false;
-      flushSync();
-
-      const newSessionButton = findNewSessionButton();
-      expect(newSessionButton.disabled).toBe(true);
-      // Exercise the handler guard as well as the rendered disabled state by
-      // simulating a stale click that bypasses native disabling.
-      newSessionButton.disabled = false;
-      newSessionButton.click();
-      await Promise.resolve();
-      expect(rpcCalls('session.create')).toEqual([]);
     });
   });
 
@@ -481,7 +353,6 @@ describe('ChatView Sessions', () => {
             createChatRpcMock({
               sessionMessages: {
                 'session-2': [message('assistant-two', 'Second session reply')],
-                'created-alpha': [],
               },
             }),
           );
@@ -505,9 +376,10 @@ describe('ChatView Sessions', () => {
           });
 
           findNewSessionButton().click();
-          await waitForCondition(() => historyReads('created-alpha') > 0);
           await waitForCondition(
-            () => document.activeElement === composerInput(),
+            () =>
+              document.activeElement === composerInput() &&
+              !document.body.textContent.includes('Second session reply'),
           );
         } finally {
           window.matchMedia = originalMatchMedia;

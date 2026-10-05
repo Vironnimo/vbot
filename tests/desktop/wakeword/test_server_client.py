@@ -117,60 +117,23 @@ def test_active_session_falls_back_to_the_newest_conversation(
     ]
 
 
-def test_active_session_creates_one_when_the_agent_has_none(
+def test_active_session_is_a_new_one_when_the_agent_has_none(
     make_client: Callable[..., Any],
 ) -> None:
-    server = ScriptedServer(
-        rpc_ok({"current_session_id": ""}),
-        rpc_ok({"sessions": []}),
-        rpc_ok({"agent_id": "main", "session_id": "fresh"}),
-    )
+    server = ScriptedServer(rpc_ok({"current_session_id": None}), rpc_ok({"sessions": []}))
 
-    assert make_client(server).resolve_session("main", "active") == "fresh"
-    assert server.rpc_calls[-1] == ("session.create", {"agent_id": "main", "make_current": True})
+    # ``None`` names a new Session; resolving it creates nothing.
+    assert make_client(server).resolve_session("main", "active") is None
+    assert [method for method, _params in server.rpc_calls] == ["agent.get", "session.list"]
 
 
-def test_new_session_is_created_and_made_current(make_client: Callable[..., Any]) -> None:
-    server = ScriptedServer(rpc_ok({"agent_id": "main", "session_id": "fresh"}))
-
-    assert make_client(server).resolve_session("main", "new") == "fresh"
-    assert server.rpc_calls == [("session.create", {"agent_id": "main", "make_current": True})]
-
-
-def test_session_creation_is_never_repeated_after_a_transport_failure(
+def test_new_behavior_resolves_a_new_session_without_a_call(
     make_client: Callable[..., Any],
 ) -> None:
-    server = ScriptedServer(httpx.ReadTimeout("response lost"))
+    server = ScriptedServer()
 
-    with pytest.raises(SpeechServerUnreachable) as raised:
-        make_client(server).resolve_session("main", "new")
-
-    assert raised.value.error_code == "server_unreachable"
-    assert len(server.requests) == 1
-
-
-@pytest.mark.parametrize(
-    ("replies", "error_type", "error_code"),
-    [
-        ([rpc_error("invalid_request")], SpeechServerRejected, "session_resolution_failed"),
-        ([rpc_error("agent_not_found")], SpeechServerRejected, "target_agent_unavailable"),
-        ([rpc_ok({"agent_id": "main"})], SpeechServerInvalidResponse, "session_resolution_failed"),
-        ([httpx.Response(503)], SpeechServerUnreachable, "server_unreachable"),
-    ],
-)
-def test_new_session_failures_carry_stable_codes(
-    make_client: Callable[..., Any],
-    replies: list[httpx.Response],
-    error_type: type[Exception],
-    error_code: str,
-) -> None:
-    server = ScriptedServer(*replies)
-
-    with pytest.raises(error_type) as raised:
-        make_client(server).resolve_session("main", "new")
-
-    assert getattr(raised.value, "error_code", None) == error_code
-    assert len(server.requests) == 1
+    assert make_client(server).resolve_session("main", "new") is None
+    assert server.requests == []
 
 
 def test_active_session_rejects_a_malformed_session_list(make_client: Callable[..., Any]) -> None:
@@ -207,17 +170,39 @@ def test_reads_report_an_unreachable_server_when_retries_run_out(
 # -- Sending ---------------------------------------------------------------------
 
 
-def test_send_command_streams_the_text_as_spoken_input(make_client: Callable[..., Any]) -> None:
-    server = ScriptedServer(rpc_ok({"run_id": "run-one", "sse_url": "/api/runs/run-one/events"}))
+@pytest.mark.parametrize(
+    ("session_id", "target", "reply_session_id"),
+    [
+        pytest.param("session-one", {"session_id": "session-one"}, "session-one", id="existing"),
+        # The server creates the new Session with the accepted command and names it.
+        pytest.param(None, {"new_session": {}}, "fresh", id="new"),
+    ],
+)
+def test_send_command_streams_the_text_as_spoken_input(
+    make_client: Callable[..., Any],
+    session_id: str | None,
+    target: dict[str, Any],
+    reply_session_id: str,
+) -> None:
+    server = ScriptedServer(
+        rpc_ok(
+            {
+                "run_id": "run-one",
+                "session_id": reply_session_id,
+                "sse_url": "/api/runs/run-one/events",
+            }
+        )
+    )
 
-    make_client(server).send_command("main", "session-one", "hello")
+    sent_to = make_client(server).send_command("main", session_id, "hello")
 
+    assert sent_to == reply_session_id
     assert server.rpc_calls == [
         (
             "chat.stream",
             {
                 "agent_id": "main",
-                "session_id": "session-one",
+                **target,
                 "content": "hello",
                 "input_origin": "speech_transcription",
             },
@@ -245,6 +230,30 @@ def test_send_command_is_attempted_once(
 
     with pytest.raises(error_type) as raised:
         make_client(server).send_command("main", "session-one", "hello")
+
+    assert getattr(raised.value, "error_code", None) == error_code
+    assert len(server.requests) == 1
+
+
+@pytest.mark.parametrize(
+    ("reply", "error_type", "error_code"),
+    [
+        (rpc_error("agent_not_found"), SpeechServerRejected, "target_agent_unavailable"),
+        # A command that ran without creating the Session names none.
+        (rpc_ok({"command_handled": True}), SpeechServerInvalidResponse, "send_failed"),
+        (httpx.ReadTimeout("response lost"), SpeechServerUnreachable, "server_unreachable"),
+    ],
+)
+def test_sending_for_a_new_session_fails_with_stable_codes_after_one_attempt(
+    make_client: Callable[..., Any],
+    reply: Reply,
+    error_type: type[Exception],
+    error_code: str,
+) -> None:
+    server = ScriptedServer(reply)
+
+    with pytest.raises(error_type) as raised:
+        make_client(server).send_command("main", None, "hello")
 
     assert getattr(raised.value, "error_code", None) == error_code
     assert len(server.requests) == 1

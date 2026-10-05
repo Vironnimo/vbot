@@ -52,6 +52,7 @@ from core.sessions.errors import FtsHealth, SessionNotFoundError
 from core.sessions.session import ChatSession
 from core.sessions.store import SessionStore
 from core.settings import is_valid_project_id
+from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -60,6 +61,17 @@ if TYPE_CHECKING:
     from core.runs import Run
 
 _LOGGER = get_logger("sessions")
+
+
+def new_session_id() -> str:
+    """Return a fresh id for a Session that is created later, under that id.
+
+    Without a store claim the id carries 80 random bits, so it is unused in
+    practice; creating a Session at an id that does exist fails instead of
+    reusing it. A caller names the Session before it exists: a Channel
+    conversation that ``/new`` moves to a Session its next message creates.
+    """
+    return new_id("ses")
 
 
 class ChatSessionManager:

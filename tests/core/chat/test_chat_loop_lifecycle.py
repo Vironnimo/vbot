@@ -17,6 +17,7 @@ from core.providers.errors import NetworkError, ProviderError, ProviderTimeoutEr
 from core.runs import (
     PROVIDER_REQUEST_STATUS_EVENT,
     RunAdmission,
+    RunAdmissionBlockedError,
     RunCancelledError,
     RunExecutionOwner,
     RunStatus,
@@ -130,6 +131,25 @@ async def test_run_end_notifies_the_reflection_service(tmp_path: Path, origin: s
     assert call["iteration_count"] == 1
     assert call["internal"] is (origin == "internal")
     assert call["outcome"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_a_new_session_whose_run_is_not_admitted_is_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = _runtime(tmp_path, [_answer()])
+
+    async def refuse(*_args: Any, **_kwargs: Any) -> Any:
+        raise RunAdmissionBlockedError("Session is being archived")
+
+    monkeypatch.setattr(runtime.chat_runs, "start", refuse)
+
+    with pytest.raises(RunAdmissionBlockedError):
+        await build_chat_loop(runtime).start_run_in_new_session("coder", "Hi")
+
+    # The Session created for the refused message is compensated; others stay.
+    assert [session.id for session in runtime.chat_sessions.list("coder")] == ["session-one"]
+    assert runtime.adapter.requests == []
 
 
 @pytest.mark.asyncio
