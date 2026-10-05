@@ -135,7 +135,7 @@ export default Object.freeze({
     'The chosen microphone is not connected. Wakeword listening and Desktop dictation cannot record until you connect it again or choose another one.',
   'settings.microphone.echoCancellation': 'Echo cancellation',
   'settings.microphone.echoCancellationHelp':
-    'Removes speaker output, such as Live voice or read-aloud replies, from the microphone signal before wake phrases are detected and commands or dictations are recorded.',
+    'Removes speaker output, such as Live voice or read-aloud replies, from the microphone signal before wake phrases are detected and commands are recorded. Desktop dictation records without it, because it would remove your speech while other audio plays.',
   'settings.microphone.echoCancellationHelpAria': 'About echo cancellation',
   'settings.microphone.echoCancellationAria': 'Use echo cancellation',
   'settings.microphone.loadError':

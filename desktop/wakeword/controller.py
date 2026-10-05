@@ -295,6 +295,8 @@ class VoiceController:
         self._command_ids = itertools.count(1)
         # Runtime state of the current generation (see _reset_runtime_locked).
         self._recording: _Recording | None = None
+        # While set (a Desktop dictation records), detections are ignored.
+        self._wake_phrases_paused = False
         self._commands: dict[str, dict[str, Any]] = {}
         self._fatal_error: str | None = None
         self._capture_state: str | None = None
@@ -366,6 +368,18 @@ class VoiceController:
         self._ensure_labels()
         with self._lock:
             return self._status_locked()
+
+    def pause_wake_phrases(self, paused: bool) -> None:
+        """Ignore wake phrases while ``paused`` (a Desktop dictation records).
+
+        The listener keeps running, so wake phrases work again right away; a
+        command recording that already runs is not affected.
+        """
+        with self._lock:
+            if self._wake_phrases_paused == paused:
+                return
+            self._wake_phrases_paused = paused
+        logger.info("Wake phrases %s", "paused for a dictation" if paused else "resumed")
 
     def is_busy(self) -> bool:
         """Whether a command recording or a calibration is running right now."""
@@ -837,6 +851,9 @@ class VoiceController:
             if generation != self._generation or session is None:
                 return
             model_id = detection.model_id
+            if self._wake_phrases_paused:
+                logger.info("Wake phrase ignored during a dictation (model=%s)", model_id)
+                return
             action = self._config.effective_action(model_id, self._server_url)
             if isinstance(action, LiveVoiceAction):
                 self._emit_locked(EVENT_DETECTED, model_id=model_id)

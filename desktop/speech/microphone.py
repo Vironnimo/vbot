@@ -297,30 +297,29 @@ class MicrophoneService:
 
         return refresh_microphone_devices(self._audio_backend)
 
-    def prepare_echo(self) -> None:
-        """Start creating the echo canceller in the background when it is enabled."""
-        if self.settings.echo_cancellation:
-            self._echo_stage_pool().prepare()
-
     def create_capture(
         self,
         *,
         on_status: Callable[[CaptureStatus], None],
         stop_event: threading.Event,
+        echo_cancellation: bool = True,
     ) -> AudioCapture:
         """Return a new, not yet started capture of the current microphone settings.
 
         ``stop_event`` ends it; see :class:`~desktop.speech.capture.AudioCapture`.
+        ``echo_cancellation=False`` records without echo cancellation whatever
+        the setting says.
         """
         from desktop.speech.capture import ECHO_STAGE_WAIT_SECONDS, AudioCapture
 
         settings = self.settings
+        echo = settings.echo_cancellation and echo_cancellation
         echo_stages = self._echo_stage_pool()
-        if settings.echo_cancellation:
+        if echo:
             echo_stages.prepare()  # the canceller loads while the consumer gets ready
         return AudioCapture(
             microphone=settings.device,
-            echo_cancellation=settings.echo_cancellation,
+            echo_cancellation=echo,
             echo_stages=echo_stages,
             on_status=on_status,
             stop_event=stop_event,

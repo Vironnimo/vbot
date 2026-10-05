@@ -105,10 +105,16 @@ class FakeCues:
 
 @dataclass
 class FakePage:
+    """The page and the Voice controller: both learn when a take records."""
+
     recording: list[bool] = field(default_factory=list)
+    wake_phrases_paused: list[bool] = field(default_factory=list)
 
     def publish_dictation(self, recording: bool) -> None:
         self.recording.append(recording)
+
+    def pause_wake_phrases(self, paused: bool) -> None:
+        self.wake_phrases_paused.append(paused)
 
 
 @dataclass
@@ -121,6 +127,7 @@ class Rig:
     page: FakePage
     apis: list[FakeHotkeyApi]
     path: Path
+    echo_stages: list[str]
 
     def inserted_text(self) -> str:
         assert len(self.inserter.inserted) == 1
@@ -157,7 +164,8 @@ def make_rig(tmp_path: Path) -> Iterator[Any]:
         path.write_text(
             json.dumps(
                 {
-                    "microphone": {"echo_cancellation": False},
+                    # Enabled: a take records without it all the same.
+                    "microphone": {"echo_cancellation": True},
                     "dictation": {"hotkey": {"enabled": True}, "mode": mode},
                 }
             ),
@@ -166,6 +174,7 @@ def make_rig(tmp_path: Path) -> Iterator[Any]:
         sd = FakeSoundDevice(pace=0.0025)
         server, inserter, cues, page = FakeServer(), FakeInserter(), FakeCues(), FakePage()
         apis: list[FakeHotkeyApi] = []
+        echo_stages: list[str] = []
 
         def api_factory() -> FakeHotkeyApi:
             apis.append(FakeHotkeyApi())
@@ -173,9 +182,14 @@ def make_rig(tmp_path: Path) -> Iterator[Any]:
 
         controller = DictationController(
             settings_path=path,
-            microphone=MicrophoneService(settings_path=path, audio_backend=sd),
+            microphone=MicrophoneService(
+                settings_path=path,
+                audio_backend=sd,
+                echo_stage_factory=lambda: echo_stages.append("created"),
+            ),
             server_url=server_url,
             page=page,
+            wake_phrases=page,
             cues=cues,  # type: ignore[arg-type]
             inserter=inserter,
             client_factory=server.client,
@@ -184,7 +198,7 @@ def make_rig(tmp_path: Path) -> Iterator[Any]:
             **options,
         )
         controller.start()
-        rig = Rig(controller, sd, server, inserter, cues, page, apis, path)
+        rig = Rig(controller, sd, server, inserter, cues, page, apis, path, echo_stages)
         rigs.append(rig)
         return rig
 
@@ -224,6 +238,9 @@ def test_a_toggle_take_records_until_the_second_press_and_types_the_stripped_tra
     assert rig.cues.played == ["start", "stop"]
     assert rig.page.recording[0] is True
     assert rig.page.recording[-1] is False
+    assert rig.page.wake_phrases_paused == rig.page.recording
+    # Echo cancellation stays out of a take although the setting enables it.
+    assert rig.echo_stages == []
     assert len(rig.server.uploads) == 1
     assert _wav_seconds(rig.server.uploads[0]) >= 0.3
     assert rig.server.urls == [SERVER_URL]

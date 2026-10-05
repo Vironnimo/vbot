@@ -130,6 +130,12 @@ class DictationPage(Protocol):
     def publish_dictation(self, recording: bool) -> None: ...
 
 
+class WakePhrases(Protocol):
+    """Desktop Voice, which must not act on wake phrases spoken into a dictation."""
+
+    def pause_wake_phrases(self, paused: bool) -> None: ...
+
+
 SpeechClientFactory = Callable[[str, threading.Event], SpeechServerClient]
 
 
@@ -179,6 +185,7 @@ class DictationController:
         microphone: MicrophoneService,
         server_url: str,
         page: DictationPage,
+        wake_phrases: WakePhrases | None = None,
         cues: CuePlayer | None = None,
         inserter: TextInserter | None = None,
         client_factory: SpeechClientFactory | None = None,
@@ -191,6 +198,7 @@ class DictationController:
         self._settings_path = settings_path
         self._microphone = microphone
         self._page = page
+        self._wake_phrases = wake_phrases
         self._cues = cues or CuePlayer()
         self._inserter_instance = inserter
         self._client_factory = client_factory or _create_client
@@ -231,8 +239,6 @@ class DictationController:
                 return
             self._running = True
         self._hotkey.start()
-        if self._hotkey.status()["enabled"]:
-            self._microphone.prepare_echo()
 
     def stop(self) -> None:
         """Unregister the shortcut and cancel a running take for good."""
@@ -289,8 +295,6 @@ class DictationController:
                     self._settings_path,
                 )
                 logger.info("Dictation mode set to %s", mode)
-        if hotkey_status["enabled"] and hotkey_changes.get("enabled") is True:
-            self._microphone.prepare_echo()
         return self._compose(hotkey_status)
 
     def _read_mode(self) -> str:
@@ -365,7 +369,7 @@ class DictationController:
             failure = ERROR_DICTATION_FAILED
         finally:
             self._hotkey.arm_escape(False)
-            self._page.publish_dictation(False)
+            self._announce_recording(False)
             if failure is not None:
                 logger.warning("Dictation ended without inserting text: %s", failure)
                 self._cues.play(CUE_ERROR)
@@ -392,11 +396,11 @@ class DictationController:
             preparation.start()
             transcriber = _Transcriber(take, client, preparation)
             try:
-                self._page.publish_dictation(True)
+                self._announce_recording(True)
                 try:
                     self._record(take, transcriber)
                 finally:
-                    self._page.publish_dictation(False)
+                    self._announce_recording(False)
                 with self._lock:
                     self._state = STATE_TRANSCRIBING
                 self._cues.play(CUE_STOP)
@@ -409,6 +413,15 @@ class DictationController:
             raise _Cancelled
         self._insert(take, text)
 
+    def _announce_recording(self, recording: bool) -> None:
+        """While a take records, the page holds a Live call and wake phrases pause."""
+        self._page.publish_dictation(recording)
+        if self._wake_phrases is not None:
+            try:
+                self._wake_phrases.pause_wake_phrases(recording)
+            except Exception:
+                logger.warning("Dictation could not pause the wake phrases", exc_info=True)
+
     def _record(self, take: _Take, transcriber: _Transcriber) -> None:
         """Record until the take ends, handing each finished piece to ``transcriber``."""
         # Imported per take: the capture stack (numpy) stays out of Desktop startup.
@@ -420,7 +433,12 @@ class DictationController:
         )
 
         stop = threading.Event()
-        capture = self._microphone.create_capture(on_status=lambda _status: None, stop_event=stop)
+        # Without echo cancellation: a take starts a new canceller, which needs
+        # 10-20 s of playback to learn that no echo returns (a headset) and
+        # until then removes the user's speech along with whatever plays.
+        capture = self._microphone.create_capture(
+            on_status=lambda _status: None, stop_event=stop, echo_cancellation=False
+        )
         subscription = capture.subscribe(max_seconds=_SUBSCRIPTION_SECONDS)
         capture.start()
         cutter = PieceCutter(
