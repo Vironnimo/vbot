@@ -5,8 +5,7 @@
   // are reported as the next pair, so the Skills manager can save it at once
   // and the Agent editor can keep it as a draft. `onContextMenu(item, event,
   // toggle)` offers a row's context menu; `toggle(on)` applies the same rule
-  // as the row's checkbox. The Agent's own Skills, which the menu can edit and
-  // delete, also open it from a "⋯" button.
+  // as the row's checkbox.
   import { t } from '$lib/i18n.js';
   import SkillSelectionPanel from './SkillSelectionPanel.svelte';
   import {
@@ -43,25 +42,6 @@
     }),
   );
 
-  let groups = $derived(
-    onContextMenu
-      ? view.groups.map((group) => ({
-          ...group,
-          items: group.items.map((item) =>
-            item.own
-              ? {
-                  ...item,
-                  menuButton: {
-                    ariaLabel: t('skills.menu.label', { name: item.name }),
-                    tooltip: t('skills.menu.more'),
-                  },
-                }
-              : item,
-          ),
-        }))
-      : view.groups,
-  );
-
   function setGroup(groupId, on) {
     const group = view.groups.find((item) => item.id === groupId);
     const names = (group?.items ?? [])
@@ -73,7 +53,7 @@
 </script>
 
 <SkillSelectionPanel
-  {groups}
+  groups={view.groups}
   active={view.active}
   total={view.total}
   {query}

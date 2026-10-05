@@ -1,7 +1,7 @@
 // Context menus of the Skills manager's rows. Each builder returns the
 // `{ label, items }` part of a ContextMenu value (components/ui/ContextMenu.svelte);
-// SkillsView (and, for Agent rows, the Agent editor) adds the anchor and
-// supplies the actions:
+// SkillsView (and, for their rows, the Agent and Project editors) adds the
+// anchor and supplies the actions:
 //
 //   open(entry), edit(entry), copyName(name), setDisabled(entry, disabled),
 //   remove(entry), restore(item), purge(item)
@@ -10,6 +10,7 @@
 // packages. Agent and Project rows pass the package they list (null for a
 // saved name without one) and a `toggle(on)` that applies the row's own rule.
 import { t } from '$lib/i18n.js';
+import { skillReadOnlyHint } from './skillsView.js';
 
 function packageItems(entry, actions, openLabel) {
   const items = [];
@@ -48,74 +49,87 @@ function everywhereItem(entry, actions) {
       };
 }
 
+// Edit and Delete are offered for every package wherever it is listed, so a
+// Skill can be managed where it is seen. A package that cannot be edited
+// (bundled, from an Extension or skill folder, in a Project repository, or
+// unloadable) keeps both items disabled with the reason as their hint.
+function editItem(entry, actions) {
+  return {
+    id: 'edit',
+    label: t('skills.editInstructions'),
+    group: 'package',
+    disabled: !entry.editable_scope,
+    hint: entry.editable_scope ? undefined : skillReadOnlyHint(entry),
+    onSelect: () => actions.edit(entry),
+  };
+}
+
+function deleteItem(entry, actions) {
+  return {
+    id: 'delete',
+    label: t('skills.menu.delete'),
+    danger: true,
+    group: 'delete',
+    disabled: !entry.editable_scope,
+    hint: entry.editable_scope ? undefined : skillReadOnlyHint(entry),
+    onSelect: () => actions.remove(entry),
+  };
+}
+
+// The package part shared by every row with a package: Open, Edit, Copy
+// name | Turn off/on everywhere | Delete...
+function packageMenuItems(entry, name, actions, openLabel) {
+  if (!entry) return [copyItem(name, actions)];
+  return [
+    ...packageItems(entry, actions, openLabel),
+    editItem(entry, actions),
+    copyItem(name, actions),
+    everywhereItem(entry, actions),
+    deleteItem(entry, actions),
+  ];
+}
+
 /** A library row: Open, Edit, Copy name | Turn off/on everywhere | Delete. */
 export function libraryRowMenu(entry, actions) {
-  const items = packageItems(entry, actions, t('skills.menu.open'));
-  if (entry.editable_scope)
-    items.push({
-      id: 'edit',
-      label: t('skills.editInstructions'),
-      group: 'package',
-      onSelect: () => actions.edit(entry),
-    });
-  items.push(copyItem(entry.name, actions), everywhereItem(entry, actions));
-  if (entry.editable_scope)
-    items.push({
-      id: 'delete',
-      label: t('skills.menu.delete'),
-      danger: true,
-      group: 'delete',
-      onSelect: () => actions.remove(entry),
-    });
-  return { label: t('skills.menu.label', { name: entry.name }), items };
+  return {
+    label: t('skills.menu.label', { name: entry.name }),
+    items: packageMenuItems(entry, entry.name, actions, t('skills.menu.open')),
+  };
 }
 
 /**
  * A row of an Agent's skill selection: turn it on or off for the Agent (not
- * for a Project grant), Open skill, Edit instructions (the Agent's own
- * Skills), Copy name | Turn off/on everywhere | Delete... (the Agent's own
- * Skills). Shared and global Skills offer no Edit or Delete here: from an
- * Agent's perspective they would change another owner's or every Agent's
- * Skill.
+ * for a Project grant), then the package items. Edit and Delete act on the
+ * package itself, also for a global or shared Skill; the delete confirmation
+ * says who loses it.
  */
 export function agentRowMenu(item, { agentName, entry, toggle }, actions) {
-  const own = Boolean(item.own && entry?.editable_scope);
-  const items = [
-    {
-      id: 'toggle',
-      label: item.allowed
-        ? t('skills.menu.turnOffFor', { name: agentName })
-        : t('skills.menu.turnOnFor', { name: agentName }),
-      group: 'package',
-      disabled: item.locked,
-      hint: item.locked
-        ? t('skills.menu.managedIn', { name: item.lockedBy })
-        : undefined,
-      onSelect: () => toggle(!item.allowed),
-    },
-    ...packageItems(entry, actions, t('skills.menu.openSkill')),
-  ];
-  if (own)
-    items.push({
-      id: 'edit',
-      label: t('skills.editInstructions'),
-      group: 'package',
-      onSelect: () => actions.edit(entry),
-    });
-  items.push(copyItem(item.name, actions));
-  if (entry) items.push(everywhereItem(entry, actions));
-  if (own)
-    items.push({
-      id: 'delete',
-      label: t('skills.menu.delete'),
-      danger: true,
-      group: 'delete',
-      onSelect: () => actions.remove(entry),
-    });
-  return { label: t('skills.menu.label', { name: item.name }), items };
+  return {
+    label: t('skills.menu.label', { name: item.name }),
+    items: [
+      {
+        id: 'toggle',
+        label: item.allowed
+          ? t('skills.menu.turnOffFor', { name: agentName })
+          : t('skills.menu.turnOnFor', { name: agentName }),
+        group: 'package',
+        disabled: item.locked,
+        hint: item.locked
+          ? t('skills.menu.managedIn', { name: item.lockedBy })
+          : undefined,
+        onSelect: () => toggle(!item.allowed),
+      },
+      ...packageMenuItems(
+        entry,
+        item.name,
+        actions,
+        t('skills.menu.openSkill'),
+      ),
+    ],
+  };
 }
 
-/** A row of a Project's skill selection: (de)activate, Open skill, Copy name. */
+/** A row of a Project's skill selection: (de)activate, then the package items. */
 export function projectRowMenu(item, { projectName, entry, toggle }, actions) {
   return {
     label: t('skills.menu.label', { name: item.name }),
@@ -128,8 +142,12 @@ export function projectRowMenu(item, { projectName, entry, toggle }, actions) {
         group: 'package',
         onSelect: () => toggle(!item.allowed),
       },
-      ...packageItems(entry, actions, t('skills.menu.openSkill')),
-      copyItem(item.name, actions),
+      ...packageMenuItems(
+        entry,
+        item.name,
+        actions,
+        t('skills.menu.openSkill'),
+      ),
     ],
   };
 }

@@ -4,7 +4,9 @@
   // optional "add new skills automatically" switch and an optional filter.
   // Callers own what toggling means; the Skills manager, the Agent editor and
   // the Project editor share this one presentation. `onContextMenu(groupId,
-  // item, event)` offers a row's context menu (see AgentSelectionGroup).
+  // item, event)` offers a row's context menu (see AgentSelectionGroup), also
+  // from a "⋯" button on every row, so a Skill's actions are found where it
+  // is seen.
   import { t } from '$lib/i18n.js';
   import AgentSelectionGroup, {
     filterSelectionItems,
@@ -35,12 +37,27 @@
     class: className = '',
   } = $props();
 
+  let menuGroups = $derived(
+    onContextMenu
+      ? groups.map((group) => ({
+          ...group,
+          items: group.items.map((item) => ({
+            ...item,
+            menuButton: {
+              ariaLabel: t('skills.menu.label', { name: item.name }),
+              tooltip: t('skills.menu.more'),
+            },
+          })),
+        }))
+      : groups,
+  );
+
   let visibleGroups = $derived(
     query.trim()
-      ? groups.filter(
+      ? menuGroups.filter(
           (group) => filterSelectionItems(group.items, query).length > 0,
         )
-      : groups,
+      : menuGroups,
   );
 </script>
 

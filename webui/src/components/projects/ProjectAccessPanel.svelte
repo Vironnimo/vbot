@@ -1,17 +1,77 @@
 <script>
+  import { onDestroy } from 'svelte';
   import { t } from '$lib/i18n.js';
+  import { skillInventory } from '$lib/api.js';
+  import SkillDialogs from '../skills/SkillDialogs.svelte';
   import SkillSelectionPanel from '../skills/SkillSelectionPanel.svelte';
+  import { createSkillActions } from '../skills/actions.svelte.js';
   import {
     projectSkillPatch,
     projectSkillView,
   } from '../skills/skillAccess.js';
+  import { projectRowMenu } from '../skills/skillMenus.js';
   import ToolCatalogEditor from '../tools/ToolCatalogEditor.svelte';
   import Button from '../ui/Button.svelte';
+  import ContextMenu from '../ui/ContextMenu.svelte';
+  import { contextMenuAnchor } from '../ui/contextMenu.js';
   import {
     buildToolToggleList,
     buildSkillToggleSections,
   } from '$lib/projectsView.js';
-  let { projectsState, projectsController, navigateToExtensions } = $props();
+
+  const noop = () => {};
+
+  let {
+    projectsState,
+    projectsController,
+    navigateToExtensions,
+    onToast = noop,
+    // Opens a Skill's page in the Skills manager: (projectId, skillId).
+    onOpenSkill = noop,
+    skillsRefreshToken = 0,
+    agentsRefreshToken = 0,
+    projectsRefreshToken = 0,
+  } = $props();
+
+  // The Skill inventory behind the rows' menus: each row's package, so a
+  // Skill can be opened, edited, turned off or deleted where it is listed.
+  let skillCatalog = $state({ skills: [], agents: [], projects: [] });
+  let skillCatalogRequest = 0;
+  let destroyed = false;
+  onDestroy(() => (destroyed = true));
+
+  async function loadSkillCatalog() {
+    const request = ++skillCatalogRequest;
+    try {
+      const result = await skillInventory();
+      if (destroyed || request !== skillCatalogRequest) return;
+      skillCatalog = {
+        skills: Array.isArray(result?.skills) ? result.skills : [],
+        agents: Array.isArray(result?.agents) ? result.agents : [],
+        projects: Array.isArray(result?.projects) ? result.projects : [],
+      };
+    } catch {
+      // Without the inventory the rows keep their toggles; menus offer only
+      // the Project switch and Copy name.
+    }
+  }
+
+  // Loads once and again on every Skill, Agent or Project change.
+  $effect(() => {
+    void [skillsRefreshToken, agentsRefreshToken, projectsRefreshToken];
+    void loadSkillCatalog();
+  });
+
+  const skillActions = createSkillActions({
+    get agents() {
+      return skillCatalog.agents;
+    },
+    inspected: null,
+    get onToast() {
+      return onToast;
+    },
+    loadInventory: loadSkillCatalog,
+  });
 
   let toolToggleRows = $derived(
     buildToolToggleList({
@@ -46,16 +106,66 @@
   // Project view; toggles edit the draft's Project Skill lists.
   let skillView = $derived(
     projectSkillView({
-      project: skillToggleSections.project.map(activeRow),
-      bundled: skillToggleSections.bundled.map(activeRow),
-      global: skillToggleSections.global.map(activeRow),
+      project: skillToggleSections.project.map((row) =>
+        activeRow(row, 'project'),
+      ),
+      bundled: skillToggleSections.bundled.map((row) =>
+        activeRow(row, 'bundled'),
+      ),
+      global: skillToggleSections.global.map((row) => activeRow(row, 'global')),
     }),
   );
 
   let skillQuery = $state('');
 
-  function activeRow(skill) {
-    return { ...skill, active: skill.enabled };
+  // The package each row's name resolves to in this Project (the inventory's
+  // Project pool), so the row menu acts on the copy the Project uses.
+  let packageIds = $derived(
+    new Map(
+      (
+        skillCatalog.projects.find(
+          (project) => project.project_id === projectsState.selectedProjectId,
+        )?.skills ?? []
+      ).map((row) => [`${row.source}:${row.name}`, row.package_id]),
+    ),
+  );
+
+  function activeRow(skill, source) {
+    return {
+      ...skill,
+      active: skill.enabled,
+      packageId: packageIds.get(`${source}:${skill.name}`) ?? null,
+    };
+  }
+
+  let skillMenu = $state(null);
+
+  function openSkillMenu(source, item, event) {
+    const projectId = projectsState.selectedProjectId;
+    skillMenu = {
+      ...contextMenuAnchor(event),
+      ...projectRowMenu(
+        item,
+        {
+          projectName:
+            projectsState.editForm.display_name ||
+            projectsController.selectedProject()?.display_name ||
+            projectId,
+          entry:
+            skillCatalog.skills.find((entry) => entry.id === item.packageId) ??
+            null,
+          toggle: (on) => setProjectSkills(source, [item.name], on),
+        },
+        {
+          open: (entry) => onOpenSkill(projectId, entry.id),
+          edit: (entry) => void skillActions.startEdit(entry),
+          copyName: (name) => void skillActions.copyName(name),
+          setDisabled: (entry, disabled) =>
+            skillActions.setDisabled(entry, disabled),
+          remove: (entry) => skillActions.requestDelete(entry),
+        },
+      ),
+    };
   }
 
   function setProjectSkills(source, names, active) {
@@ -173,6 +283,7 @@
         onToggle={(source, name, active) =>
           setProjectSkills(source, [name], active)}
         onSetAll={setSkillGroup}
+        onContextMenu={openSkillMenu}
         columns
         emptyTitle={t('skills.empty.project')}
         emptyHelp={t('skills.empty.projectHelp')}
@@ -180,3 +291,6 @@
     </div>
   </section>
 </div>
+
+<SkillDialogs actions={skillActions} />
+<ContextMenu menu={skillMenu} onClose={() => (skillMenu = null)} />

@@ -41,6 +41,10 @@
     onNavigateToSettingsPanel = noop,
     modelsRefreshToken = 0,
     projectsRefreshToken = 0,
+    skillsRefreshToken = 0,
+    agentsRefreshToken = 0,
+    // Opens a Skill's page in the Skills manager: (projectId, skillId).
+    onOpenSkill = noop,
   } = $props();
 
   let projectsState = $state(createProjectsState());
@@ -456,6 +460,11 @@
               {projectsState}
               {projectsController}
               {navigateToExtensions}
+              {onToast}
+              {onOpenSkill}
+              {skillsRefreshToken}
+              {agentsRefreshToken}
+              {projectsRefreshToken}
             />
             <div class="management-footer">
               <SaveStatus
