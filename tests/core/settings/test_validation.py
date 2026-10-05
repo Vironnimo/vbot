@@ -262,8 +262,7 @@ def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> N
                     }
                 },
                 "max_subagent_depth": 4,
-                "max_subagents_per_turn": 8,
-                "subagent_timeout_minutes": 60,
+                "max_active_subagents": 8,
                 "compaction": {
                     "enabled": True,
                     "trigger": {"type": "context_ratio", "threshold": 0.8},
@@ -605,6 +604,23 @@ def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> N
             {"live_voice": {"enabled": True}},
             [("warning", "$.live_voice", "unknown settings key: live_voice")],
             id="removed-live-voice",
+        ),
+        # The per-turn Sub-Agent limit and the nested Sub-Agent timeout were removed.
+        pytest.param(
+            {"max_subagents_per_turn": 8, "subagent_timeout_minutes": 60},
+            [
+                (
+                    "warning",
+                    "$.max_subagents_per_turn",
+                    "unknown settings key: max_subagents_per_turn",
+                ),
+                (
+                    "warning",
+                    "$.subagent_timeout_minutes",
+                    "unknown settings key: subagent_timeout_minutes",
+                ),
+            ],
+            id="removed-subagent-limits",
         ),
         # A Custom Provider record never carries a secret, even inside its URL.
         pytest.param(

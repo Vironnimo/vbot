@@ -77,6 +77,7 @@ from core.sessions import (
 )
 from core.tools import (
     ANALYZE_IMAGE_TOOL_NAME,
+    SUBAGENT_SESSION_TOOL_NAMES,
     EditDialect,
     Tool,
     ToolAccess,
@@ -140,9 +141,18 @@ def _resolve_request_image_limit(adapter: Any, model_id: str) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 
-def _live_session_tool_grants(session_capability: Any | None) -> tuple[str, ...]:
-    """Return the session-scoped Tools the Session grants now."""
-    return tuple(session_capability.tool_names) if session_capability is not None else ()
+def _live_session_tool_grants(
+    session_capability: Any | None, *, subagent_session: bool
+) -> tuple[str, ...]:
+    """Return the session-scoped Tools the Session grants now.
+
+    A temporary Session grants its capability's Tools; a Sub-Agent Session grants
+    the Tools a Sub-Agent uses to reach its Parent Agent.
+    """
+    grants = tuple(session_capability.tool_names) if session_capability is not None else ()
+    if subagent_session:
+        grants = (*grants, *SUBAGENT_SESSION_TOOL_NAMES)
+    return grants
 
 
 def _fold_prompt_epoch(
@@ -186,7 +196,6 @@ class RequestBuilder:
         self._wire_requests = wire_requests
         self._attachment_resolver = attachment_resolver
         self._tool_image_converter = ImageConverter()
-        self.nesting_depth = 0
 
     async def _apply_project_skill_context(
         self,
@@ -367,7 +376,7 @@ class RequestBuilder:
             "soul_context": inputs.soul_context,
             "memory_files_context": inputs.memory_files_context,
             "agent_project_id": inputs.agent_project_id,
-            "nesting_depth": self.nesting_depth,
+            "subagent_session": inputs.subagent_session,
             "effective_tool_definitions": tool_definitions,
         }
 
@@ -431,7 +440,9 @@ class RequestBuilder:
             session_capability = extension_registry.session_capability(
                 inputs.temporary_binding, self._dependencies.tools
             )
-        live_tool_grants = _live_session_tool_grants(session_capability)
+        live_tool_grants = _live_session_tool_grants(
+            session_capability, subagent_session=inputs.subagent_session
+        )
         effective_input_modalities = (
             inputs.input_modalities
             if inputs.input_modalities is not None
@@ -689,7 +700,9 @@ class RequestBuilder:
         target = context.primary_target
         return await self._live_tool_catalog(
             context.agent,
-            session_tool_grants=_live_session_tool_grants(capability),
+            session_tool_grants=_live_session_tool_grants(
+                capability, subagent_session=context.subagent_session
+            ),
             input_modalities=target.input_modalities,
             wire_media_types=target.wire_media_types,
             model_family=target.model_family,
@@ -875,8 +888,8 @@ class RequestBuilder:
         """
 
         tools = offer_edit_dialect(tools, edit_dialect)
-        tools = project_shell_tool_definitions(tools, nesting_depth=self.nesting_depth)
-        tools = project_terminal_tool_definitions(tools, nesting_depth=self.nesting_depth)
+        tools = project_shell_tool_definitions(tools)
+        tools = project_terminal_tool_definitions(tools)
         if not any(definition.get("name") == ANALYZE_IMAGE_TOOL_NAME for definition in tools):
             return tools
         route_can_view_images = "image" in input_modalities and any(

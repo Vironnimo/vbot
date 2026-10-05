@@ -16,6 +16,8 @@ from core.chat._run_state import (
     RequestBuildInputs,
     _SessionSnapshot,
     create_run_execution_context,
+    record_subagent_takeover,
+    takes_over_subagent_session,
 )
 from core.chat._skill_activation import _activate_triggered_skills
 from core.chat._step_outcomes import OUTPUT_INTEGRITY_RECOVERY_NOTE
@@ -30,7 +32,12 @@ from core.chat.events import (
     _emit_message_event,
     _persist_run_error,
 )
-from core.chat.messages import ChatMessage, ModelFallback
+from core.chat.messages import (
+    PARENT_AGENT_INPUT_SYSTEM_REMINDER,
+    SUBAGENT_TAKEN_OVER_SYSTEM_REMINDER,
+    ChatMessage,
+    ModelFallback,
+)
 from core.chat.model_resolution import (
     _resolve_fallback_chain,
     _split_agent_model,
@@ -250,6 +257,12 @@ class RunExecution:
                         editable_session_message_index(
                             context.session_snapshot.active_lineage, request.edit_message_id
                         )
+                    takeover = (
+                        not request.input_already_persisted
+                        and await takes_over_subagent_session(
+                            context, request, self._dependencies.sessions
+                        )
+                    )
                     if internal:
                         if not isinstance(request.content, str):
                             raise ChatError("internal runs require string content")
@@ -266,6 +279,10 @@ class RunExecution:
                         if request.content is None:
                             raise ChatError("content is required for non-retry runs")
                         _append_input_origin_note(session, request.input_origin)
+                        if request.parent_agent_input:
+                            session.add_note(PARENT_AGENT_INPUT_SYSTEM_REMINDER)
+                        if takeover:
+                            session.add_note(SUBAGENT_TAKEN_OVER_SYSTEM_REMINDER)
                         _append_reply_surface_note(
                             session,
                             request.reply_surface,
@@ -304,6 +321,8 @@ class RunExecution:
                     record_seen_skills = None
                     if not persisted_messages:
                         await context.session_snapshot.refresh(session)
+                    if takeover:
+                        await record_subagent_takeover(self._dependencies, session_address)
                     if not internal and not request.input_already_persisted:
                         _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
                     if request.input_persisted_hook is not None:

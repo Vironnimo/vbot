@@ -1,14 +1,18 @@
-"""Sub-Agent admission, target resolution and child Run construction."""
+"""The ``subagent`` and ``message_parent`` Tools over the durable Sub-Agent tree.
+
+A Sub-Agent is a Session linked to the Parent Session that started it, with one
+public id for its whole life. ``run`` starts a new Sub-Agent in the background,
+``send`` gives one of the caller's Sub-Agents another message, ``list`` shows
+the caller's whole tree, and ``cancel`` stops any Sub-Agent below the caller.
+Answers reach the Parent through :mod:`core.subagents.forwarding`.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import json
-import weakref
 from typing import TYPE_CHECKING, Any, cast
 
 from core.agents import is_librarian
-from core.chat import ChatSessionError
 from core.projects import (
     AgentResolutionError,
     InvalidAgentAddressError,
@@ -21,808 +25,893 @@ from core.projects import (
 )
 from core.runs import (
     ActiveRunError,
+    ChatRunManager,
     Run,
     RunAdmission,
-    RunExecutor,
     RunKind,
     RunNotFoundError,
-    RunStatus,
 )
 from core.sessions import SessionAddress, TemporarySessionBinding
 from core.settings import SettingsValidationError, validate_thinking_effort
-from core.subagents._completion import (
-    _activity_file,
-    _attach_parent_cancellation,
-    _cancel_subagent_child,
-    _continuation_call,
-    _public_subagent_result,
-    _register_result_acknowledgement_after_parent_persistence,
-    _result_dict,
-    _started_run_from_queue_item,
-    _track_queued_subagent_completion,
-    _track_subagent_completion,
-    _wait_for_subagent_result,
-    _with_activity_note,
-)
 from core.subagents._constants import (
-    CASCADE_BACKGROUND_CHILDREN,
+    DEFAULT_MAX_ACTIVE_SUBAGENTS,
     DEFAULT_MAX_SUBAGENT_DEPTH,
-    DEFAULT_MAX_SUBAGENTS_PER_TURN,
-    DEFAULT_SUBAGENT_TIMEOUT_MINUTES,
-    SECONDS_PER_MINUTE,
-    SUBAGENT_BACKGROUND_UNAVAILABLE_NOTE,
+    MESSAGE_PARENT_NOT_SUBAGENT_MESSAGE,
+    MESSAGE_PARENT_PARENT_GONE_MESSAGE,
+    MESSAGE_PARENT_SENT_NOTE,
+    MESSAGE_PARENT_TAKEN_OVER_MESSAGE,
+    PARENT_AGENT_CANCEL_REASON,
+    PARENT_MESSAGE_SECTION_TEMPLATE,
+    SUBAGENT_ACTIVE_LIMIT_MESSAGE_TEMPLATE,
+    SUBAGENT_ACTIVITY_NOTE_TEMPLATE,
+    SUBAGENT_BACKGROUND_IGNORED_NOTE,
+    SUBAGENT_CANCEL_WITHOUT_ID_MESSAGE_TEMPLATE,
+    SUBAGENT_CANCELLED_NOTE,
     SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE,
-    SUBAGENT_FOREGROUND_ONLY_NOTE,
+    SUBAGENT_GENERIC_TARGET_NOTE_TEMPLATE,
+    SUBAGENT_ID_WITHOUT_ACTION_MESSAGE_TEMPLATE,
+    SUBAGENT_IGNORED_LABEL_NOTE_TEMPLATE,
+    SUBAGENT_LIST_NOTE,
+    SUBAGENT_MISSING_DESCRIPTION_MESSAGE_TEMPLATE,
     SUBAGENT_MISSING_TASK_MESSAGE,
-    SUBAGENT_PARENT_METADATA_KEY,
-    SUBAGENT_QUEUED_TIMEOUT_MESSAGE_TEMPLATE,
-    SUBAGENT_REMOVED_FROM_QUEUE_MESSAGE,
-    SUBAGENT_SESSION_METADATA_FLAG,
+    SUBAGENT_NOT_DIRECT_CHILD_MESSAGE_TEMPLATE,
+    SUBAGENT_NOT_FOUND_MESSAGE_TEMPLATE,
+    SUBAGENT_NOTHING_TO_CANCEL_MESSAGE_TEMPLATE,
+    SUBAGENT_SEND_QUEUED_NOTE,
+    SUBAGENT_SEND_STARTED_NOTE,
+    SUBAGENT_SEND_STEERED_NOTE,
+    SUBAGENT_SEND_WITHOUT_CONTENT_MESSAGE_TEMPLATE,
+    SUBAGENT_SEND_WITHOUT_ID_MESSAGE_TEMPLATE,
     SUBAGENT_SESSION_MODEL_UNUSABLE_MESSAGE_TEMPLATE,
-    SUBAGENT_SESSION_NOT_FOUND_MESSAGE_TEMPLATE,
-    SUBAGENT_SESSION_OWNER_HINT,
+    SUBAGENT_SESSION_NOT_SUBAGENT_MESSAGE_TEMPLATE,
     SUBAGENT_SESSION_SETTINGS_UNREADABLE_MESSAGE_TEMPLATE,
     SUBAGENT_SESSION_STARTED_EVENT,
     SUBAGENT_SESSION_TITLE_MAX_CHARACTERS,
     SUBAGENT_STAND_IN_SESSION_NOTE_TEMPLATE,
-    SUBAGENT_START_FAILED_MESSAGE_TEMPLATE,
-    SUBAGENT_STATUS_QUEUED,
+    SUBAGENT_STARTED_NOTE,
+    SUBAGENT_STATUS_CHANGED_EVENT,
+    SUBAGENT_TAKEN_OVER_MESSAGE_TEMPLATE,
     SUBAGENT_TARGET_NOT_ALLOWED_MESSAGE_TEMPLATE,
     SUBAGENT_TARGET_UNAVAILABLE_MESSAGE_TEMPLATE,
-    SUBAGENT_TIMEOUT_MESSAGE_TEMPLATE,
-    SUBAGENT_TURN_LIMIT_MESSAGE_TEMPLATE,
-    TOP_LEVEL_BACKGROUND_NOTE,
-    TOP_LEVEL_QUEUED_BACKGROUND_NOTE,
+    USER_CANCEL_REASON,
 )
 from core.subagents._interpretation import (
-    RunTarget,
-    has_task,
-    implied_action,
-    interpret_run,
+    SUBAGENT_ID_PATTERN,
+    call_text,
+    has_text,
+    is_generic_target,
+    optional_text,
+    quoted,
     reads_as_new_session,
+    subagent_address,
     target_choices,
-    tracked_work_text,
+    yours_text,
 )
-from core.subagents._status import (
-    _handle_subagent_cancel,
-    _handle_subagent_status,
-    _inspect_subagent_work,
-)
-from core.subagents.activity import SubAgentActivity
 from core.subagents.catalog import SubAgentPromptTarget, build_subagent_prompt_targets
-from core.subagents.tracker import (
-    ParentKey,
-    SubAgentBatchTracker,
+from core.subagents.forwarding import (
+    SubAgentActivities,
+    SubAgentForwarding,
+    is_working,
+    running_entries,
 )
-from core.tools.arguments import optional_string
+from core.subagents.links import (
+    SubAgentLink,
+    ancestors,
+    children,
+    descendants,
+    find_link,
+    link_session,
+    read_link,
+)
 from core.tools.availability import subagent_allowed_agents
 from core.tools.contracts import ToolContractError
+from core.tools.terminal_manager import TerminalOwner
 from core.tools.tools import (
     JsonObject,
     ToolContext,
     tool_failure,
     tool_success,
 )
+from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from core.chat import ChatLoop
     from core.projects import RuntimeAgent
     from core.runtime.interfaces import RuntimeServices
     from core.sessions.session import ChatSession
 
 _LOGGER = get_logger("subagents")
-
-
-def _joined_note(notes: list[str], state_note: str | None) -> str | None:
-    """Put the call's interpretation notes before the note about the work's state."""
-    parts = [*notes, state_note] if state_note else notes
-    return " ".join(parts) or None
-
-
-def _log_subagent_spawned(
-    context: ToolContext,
-    work_id: str,
-    agent_id: str,
-    project_id: str | None,
-    session_id: str,
-    *,
-    background: bool,
-    run_id: str | None = None,
-    queue_item_id: str | None = None,
-) -> None:
-    """Write the one INFO line of an admitted child Run or queued child work."""
-    admitted = f"run={run_id}" if run_id is not None else f"queue_item={queue_item_id}"
-    project = f" project={project_id}" if project_id is not None else ""
-    _LOGGER.info(
-        "Sub-agent spawned (work=%s parent_run=%s parent_session=%s child_session=%s agent=%s"
-        "%s %s delivery=%s)",
-        work_id,
-        context.run_id,
-        context.session_id,
-        session_id,
-        agent_id,
-        project,
-        admitted,
-        "automatic" if background else "inline",
-    )
-
-
-def _should_register_parent_cascade(background: bool) -> bool:
-    """Return whether a spawn should register a parent-cancel cascade callback.
-
-    The cascade policy is a single flip point: see ``CASCADE_BACKGROUND_CHILDREN``.
-    """
-    return (not background) or CASCADE_BACKGROUND_CHILDREN
+_FOLLOW_UP_PLACEHOLDER = "<message>"
 
 
 class SubAgentCoordinator:
-    """Coordinate sub-agent Run lifecycle, result lookup, and parent linkage."""
+    """Run the Sub-Agent Tools and forward Sub-Agent answers to their Parents."""
 
-    def __init__(
-        self,
-        runtime: RuntimeServices,
-        trigger_service: Any,
-        *,
-        batch_tracker: SubAgentBatchTracker | None = None,
-        sessions: Any | None = None,
-    ) -> None:
+    def __init__(self, runtime: RuntimeServices, trigger_service: Any) -> None:
         self._runtime = runtime
-        self._batch_tracker = batch_tracker or SubAgentBatchTracker(
-            trigger_service,
-            sessions=sessions,
-        )
-        # Activity files still in use; each leaves once nothing references it.
-        self._activities: weakref.WeakSet[SubAgentActivity] = weakref.WeakSet()
+        self._trigger_service = trigger_service
+        self._activities = SubAgentActivities(runtime)
+        self._forwarding = SubAgentForwarding(runtime, trigger_service, self._activities)
+        # New Sub-Agents being started per tree root, counted against the limit
+        # until their Run is active.
+        self._starting: dict[SessionAddress, int] = {}
 
-    @property
-    def batch_tracker(self) -> SubAgentBatchTracker:
-        """Return the in-memory tracker used for this runtime instance."""
-        return self._batch_tracker
+    def install(self, run_manager: ChatRunManager) -> None:
+        """Start following the Runs *run_manager* starts in Sub-Agent Sessions.
 
-    def prompt_targets(
-        self,
-        agent: Any,
-        project_id: str | None,
-    ) -> list[SubAgentPromptTarget]:
+        Called while the runtime is being built, before its services count as
+        started, so the Run manager is passed in.
+        """
+        self._forwarding.install(run_manager)
+
+    def prompt_targets(self, agent: Any, project_id: str | None) -> list[SubAgentPromptTarget]:
         """Return additional targets for the Tool-owned System Prompt block."""
         return build_subagent_prompt_targets(self._runtime, agent, project_id)
 
-    def foreground_timeout_minutes(self) -> int:
-        """Return the configured bound on a nested caller's foreground work, queue included."""
-        return _load_subagent_settings(self._runtime)["subagent_timeout_minutes"]
+    def subagent_taken_over(self, address: SessionAddress) -> None:
+        """Handle the user's first message in a Sub-Agent Session."""
+        self._forwarding.taken_over(address)
 
     async def spawn(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
-        """Handle a public Sub-Agent lifecycle operation."""
-        return await _handle_subagent(
-            context,
-            arguments,
-            runtime=self._runtime,
-            batch_tracker=self._batch_tracker,
-            activities=self._activities,
+        """Handle one ``subagent`` call."""
+        try:
+            action = arguments.get("action")
+            if action is None:
+                implied = _implied_action(arguments)
+                if not isinstance(implied, str):
+                    return implied
+                action = implied
+            if action == "status":
+                action = "list"
+            if action == "run":
+                return await self._run(context, arguments)
+            if action == "send":
+                return await self._send_call(context, arguments)
+            if action == "list":
+                return await self._list(context, arguments)
+            if action == "cancel":
+                return await self._cancel(context, arguments)
+        except (ToolContractError, InvalidAgentAddressError, SettingsValidationError) as error:
+            return tool_failure("invalid_arguments", str(error))
+        return tool_failure("invalid_arguments", "action must be one of: run, send, list, cancel")
+
+    async def message_parent(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
+        """Handle one ``message_parent`` call from a Sub-Agent."""
+        if not has_text(arguments, "content"):
+            return tool_failure(
+                "invalid_arguments", '"content" must carry the message for your Parent Agent.'
+            )
+        sessions = self._runtime.chat_sessions
+        link = await sessions.run_async(read_link, sessions, _caller(context))
+        if link is None:
+            return tool_failure("not_a_subagent", MESSAGE_PARENT_NOT_SUBAGENT_MESSAGE)
+        if link.taken_over_at is not None:
+            return tool_failure("subagent_taken_over", MESSAGE_PARENT_TAKEN_OVER_MESSAGE)
+        if not await sessions.run_async(sessions.exists, link.parent):
+            return tool_failure("parent_not_found", MESSAGE_PARENT_PARENT_GONE_MESSAGE)
+        parent = link.parent
+        delivery = self._trigger_service.submit_completion(
+            parent.agent_id,
+            parent.session_id,
+            notice_id=new_id("subagent-message"),
+            origin_run_id=context.run_id,
+            body=PARENT_MESSAGE_SECTION_TEMPLATE.format(
+                id=link.id,
+                title=link.title or link.id,
+                content=cast(str, arguments["content"]).strip(),
+            ),
+            project_id=parent.project_id,
+            execution_owner=context.execution_owner,
         )
-
-    async def drain_activity(self) -> None:
-        """Wait until the activity files' text so far is on disk.
-
-        For every followed Run that has ended this includes its outcome, so
-        Runtime shutdown calls it once the Run manager has closed.
-        """
-        await asyncio.gather(*(activity.drain() for activity in list(self._activities)))
+        delivery.add_done_callback(_log_message_delivery)
+        return tool_success({"status": "sent", "note": MESSAGE_PARENT_SENT_NOTE})
 
     async def inspect(
         self,
         agent_id: str,
         session_id: str,
-        work_id: str,
+        subagent_id: str,
         *,
         project_id: str | None = None,
     ) -> JsonObject | None:
-        """Return the exact UI projection for one durable Sub-Agent work id."""
-        return await _inspect_subagent_work(
-            self._runtime,
-            agent_id,
-            session_id,
-            work_id,
-            project_id=project_id,
+        """Return the WebUI projection of one Sub-Agent Session's current state."""
+        address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+        session = await self._runtime.chat_sessions.get_async(address)
+        manager = self._runtime.chat_run_manager
+        projection: JsonObject = {"id": subagent_id, "agent_id": agent_id, "session_id": session_id}
+        if project_id is not None:
+            projection["project_id"] = project_id
+        active = manager.active_run(agent_id=agent_id, session_id=session_id, project_id=project_id)
+        if active is not None:
+            return {
+                **projection,
+                "run_id": active.id,
+                "status": active.status.value,
+                "result": None,
+                "usage": None,
+                "timing": None,
+                "started_at": active.created_at,
+                "tool_name": _latest_tool_name(active),
+            }
+        if manager.list_queued(agent_id, session_id, project_id=project_id):
+            return {**projection, "run_id": None, "status": "queued", "result": None}
+        result = await session.load_run_result_async()
+        if result is None or result.summary.run_id is None or result.summary.status is None:
+            return None
+        assistant, summary = result.assistant, result.summary
+        return {
+            **projection,
+            "run_id": summary.run_id,
+            "status": summary.status,
+            "result": assistant.content if assistant is not None else None,
+            "usage": assistant.usage if assistant is not None else None,
+            "timing": summary.timing,
+            "started_at": None,
+            "tool_name": result.latest_tool_name,
+        }
+
+    async def stop_tree(self, address: SessionAddress) -> int:
+        """Stop a Session's current Run, its background work and every Sub-Agent below it.
+
+        The user's "Stop all"; returns how many Runs, queued messages, commands and
+        terminals were stopped. The Session keeps its own queued messages. Answers of
+        the stopped Sub-Agents are not forwarded, so they do not wake the Sessions
+        above them that are stopped too.
+        """
+        sessions = self._runtime.chat_sessions
+        below = await sessions.run_async(descendants, sessions, address)
+        stopped = await self._stop_sessions(
+            [address],
+            reason=USER_CANCEL_REASON,
+            initiator="user_stop_all",
+            silence=False,
+            clear_queue=False,
+        )
+        return stopped + await self._stop_sessions(
+            [link.session for link in below],
+            reason=USER_CANCEL_REASON,
+            initiator="user_stop_all",
+            silence=True,
+            clear_queue=True,
         )
 
+    async def drain_activity(self) -> None:
+        """Wait until the activity files' text so far is on disk."""
+        await self._activities.drain()
 
-async def _handle_subagent(
-    context: ToolContext,
-    arguments: JsonObject,
-    *,
-    runtime: RuntimeServices,
-    batch_tracker: SubAgentBatchTracker,
-    activities: weakref.WeakSet[SubAgentActivity],
-) -> JsonObject:
-    action = arguments.get("action")
-    if action is None:
-        implied = implied_action(arguments)
-        if not isinstance(implied, str):
-            return implied
-        action = implied
-
-    if action == "cancel":
-        return await _handle_subagent_cancel(
-            context,
-            arguments,
-            runtime=runtime,
-            batch_tracker=batch_tracker,
-        )
-    if action == "status":
-        return await _handle_subagent_status(
-            context,
-            arguments,
-            runtime=runtime,
-            batch_tracker=batch_tracker,
-        )
-    if action != "run":
-        return tool_failure(
-            "invalid_arguments",
-            "action must be one of: run, status, cancel",
+    def references_identity_agent(self, agent_id: str) -> bool:
+        """Return whether a followed Run in an Identity Agent's Session is still forwarding."""
+        return any(
+            run.project_id is None and run.agent_id == agent_id
+            for run in self._forwarding.followed_runs()
         )
 
-    if not has_task(arguments):
-        return tool_failure("invalid_arguments", SUBAGENT_MISSING_TASK_MESSAGE)
-    content = cast(str, arguments["content"])
+    # run
 
-    try:
-        description = optional_string(arguments.get("description"), field_name="description")
-        run_target = interpret_run(context, arguments, runtime=runtime, batch_tracker=batch_tracker)
-        if not isinstance(run_target, RunTarget):
-            return run_target
-        session_id = run_target.session_id
-        if run_target.tracked_target is not None:
-            target_agent_id, target_project_id = run_target.tracked_target
-        else:
-            target_agent_id, target_project_id = _resolve_target_address(
-                run_target.agent_address or context.agent_id, context.project_id
+    async def _run(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
+        if not has_text(arguments, "content"):
+            return tool_failure("invalid_arguments", SUBAGENT_MISSING_TASK_MESSAGE)
+        runtime, caller = self._runtime, _caller(context)
+        sessions = runtime.chat_sessions
+        notes: list[str] = []
+
+        subagent_id = optional_text(arguments, "id")
+        if subagent_id is not None:
+            link = await sessions.run_async(find_link, sessions, subagent_id)
+            if link is not None or SUBAGENT_ID_PATTERN.fullmatch(subagent_id):
+                return await self._send(context, arguments, subagent_id, link)
+            notes.append(SUBAGENT_IGNORED_LABEL_NOTE_TEMPLATE.format(label=quoted(subagent_id)))
+
+        session_id = optional_text(arguments, "session_id")
+        if session_id is not None:
+            own = await sessions.run_async(children, sessions, caller)
+            continued = next((link for link in own if link.session.session_id == session_id), None)
+            if continued is not None:
+                return await self._send(context, arguments, continued.id, continued)
+            if not reads_as_new_session(session_id):
+                return tool_failure(
+                    "invalid_arguments",
+                    SUBAGENT_SESSION_NOT_SUBAGENT_MESSAGE_TEMPLATE.format(
+                        session_id=quoted(session_id), yours=yours_text(own)
+                    ),
+                )
+            notes.append(
+                SUBAGENT_STAND_IN_SESSION_NOTE_TEMPLATE.format(session_id=quoted(session_id))
             )
-        session_overrides = _parse_session_overrides(arguments)
-    except (ToolContractError, InvalidAgentAddressError, SettingsValidationError) as error:
-        return tool_failure("invalid_arguments", str(error))
-    notes = run_target.notes
-    target_address = run_target.agent_address or format_agent_address(
-        target_agent_id, target_project_id
-    )
 
-    background = context.nesting_depth == 0
-    requested_background = arguments.get("background")
-    if isinstance(requested_background, bool) and requested_background != background:
-        notes.append(
-            SUBAGENT_BACKGROUND_UNAVAILABLE_NOTE if background else SUBAGENT_FOREGROUND_ONLY_NOTE
+        description = optional_text(arguments, "description")
+        if description is None:
+            corrected = {
+                key: value for key, value in arguments.items() if key not in {"id", "session_id"}
+            }
+            corrected = {"description": "<3-5 word title>", **corrected}
+            if isinstance(corrected.get("content"), str) and len(corrected["content"]) > 60:
+                corrected["content"] = "<the same task>"
+            return tool_failure(
+                "invalid_arguments",
+                SUBAGENT_MISSING_DESCRIPTION_MESSAGE_TEMPLATE.format(call=call_text(corrected)),
+            )
+
+        if arguments.get("background") is False:
+            notes.append(SUBAGENT_BACKGROUND_IGNORED_NOTE)
+        agent_address = optional_text(arguments, "agent_id")
+        if agent_address is not None and is_generic_target(runtime, context, agent_address):
+            notes.append(SUBAGENT_GENERIC_TARGET_NOTE_TEMPLATE.format(name=quoted(agent_address)))
+            agent_address = None
+        target_agent_id, target_project_id = _resolve_target_address(
+            agent_address or context.agent_id, context.project_id
         )
-    if not _target_is_allowed(context, target_agent_id, target_project_id):
-        return tool_failure(
-            "agent_not_allowed",
-            SUBAGENT_TARGET_NOT_ALLOWED_MESSAGE_TEMPLATE.format(
-                target=target_address, choices=target_choices(runtime, context)
+        target_address = agent_address or format_agent_address(target_agent_id, target_project_id)
+        overrides = _parse_session_overrides(arguments)
+        if not _target_is_allowed(context, target_agent_id, target_project_id):
+            return tool_failure(
+                "agent_not_allowed",
+                SUBAGENT_TARGET_NOT_ALLOWED_MESSAGE_TEMPLATE.format(
+                    target=target_address, choices=target_choices(runtime, context)
+                ),
+            )
+        temporary_parent = await self._temporary_parent(context, target_agent_id, target_project_id)
+        failure = await _validate_target_agent(
+            runtime,
+            target_agent_id,
+            target_project_id,
+            model=overrides.get("model"),
+            temporary_parent_binding=temporary_parent,
+        )
+        if failure is not None:
+            error = failure["error"]
+            if error["code"] in {"agent_not_found", "project_not_found"}:
+                reason = str(error["message"]).rstrip(".")
+                return tool_failure(error["code"], f"{reason}. {target_choices(runtime, context)}")
+            return failure
+
+        settings = _load_subagent_settings(runtime)
+        chain = await sessions.run_async(ancestors, sessions, caller)
+        if len(chain) >= settings["max_subagent_depth"]:
+            return tool_failure(
+                "subagent_depth_exceeded",
+                SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE.format(limit=settings["max_subagent_depth"]),
+            )
+        root = chain[-1] if chain else caller
+        limit = settings["max_active_subagents"]
+        tree = await sessions.run_async(descendants, sessions, root)
+        active = sum(1 for link in tree if is_working(runtime, link.session))
+        if active + self._starting.get(root, 0) >= limit:
+            return tool_failure(
+                "subagent_limit_exceeded",
+                SUBAGENT_ACTIVE_LIMIT_MESSAGE_TEMPLATE.format(limit=limit),
+            )
+
+        self._starting[root] = self._starting.get(root, 0) + 1
+        try:
+            if context.is_cancelled():
+                return tool_failure(
+                    "run_cancelled", "Your Run was cancelled before the Sub-Agent started."
+                )
+            new_subagent_id = new_id("sub")
+            session = await sessions.run_async(
+                _open_subagent_session,
+                runtime,
+                target_agent_id,
+                target_project_id,
+                _session_title(description),
+                new_subagent_id,
+                context,
+                overrides,
+            )
+            address = session.address
+            activity = await self._activities.ensure(address)
+            executor = runtime.streaming_chat_loop.run_executor(
+                cast(str, arguments["content"]),
+                parent_agent_input=True,
+                temporary_parent_binding=temporary_parent,
+            )
+            target_agent = await _resolve_child_agent(runtime, address, temporary_parent)
+            run = await runtime.chat_run_manager.start(
+                address,
+                executor,
+                admission=_admission(context, target_agent, address, new_subagent_id),
+            )
+        finally:
+            remaining = self._starting.get(root, 1) - 1
+            if remaining > 0:
+                self._starting[root] = remaining
+            else:
+                self._starting.pop(root, None)
+
+        activity_file = self._activities.path(address)
+        _LOGGER.info(
+            "Sub-agent started (subagent=%s parent_run=%s parent_session=%s child_session=%s "
+            "agent=%s run=%s)",
+            new_subagent_id,
+            context.run_id,
+            context.session_id,
+            address.session_id,
+            target_agent_id,
+            run.id,
+        )
+        await _emit(
+            context,
+            SUBAGENT_SESSION_STARTED_EVENT,
+            _event_data(
+                new_subagent_id,
+                address,
+                status="running",
+                run_id=run.id,
+                activity_file=activity_file,
             ),
         )
+        result = _public_identity(new_subagent_id, address)
+        result["status"] = "running"
+        result["note"] = " ".join([*notes, SUBAGENT_STARTED_NOTE])
+        if activity is not None and activity_file is not None:
+            result["activity_note"] = SUBAGENT_ACTIVITY_NOTE_TEMPLATE.format(path=activity_file)
+        return tool_success(result)
 
-    if (
-        session_id is not None
-        and target_agent_id == context.agent_id
-        and target_project_id == context.project_id
-        and session_id == context.session_id
-    ):
-        return tool_failure(
-            "invalid_arguments",
-            "session_id is your own active Session; a Sub-Agent needs another Session. "
-            'Repeat this call without "session_id" to start a new one.',
+    # send
+
+    async def _send_call(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
+        sessions = self._runtime.chat_sessions
+        subagent_id = optional_text(arguments, "id")
+        if subagent_id is None:
+            session_id = optional_text(arguments, "session_id")
+            own = await sessions.run_async(children, sessions, _caller(context))
+            continued = next(
+                (link for link in own if session_id and link.session.session_id == session_id),
+                None,
+            )
+            if continued is None:
+                example = {"action": "send", "id": own[0].id if own else "<id>"}
+                return tool_failure(
+                    "invalid_arguments",
+                    SUBAGENT_SEND_WITHOUT_ID_MESSAGE_TEMPLATE.format(
+                        yours=yours_text(own),
+                        call=call_text({**example, "content": _FOLLOW_UP_PLACEHOLDER}),
+                    ),
+                )
+            return await self._send(context, arguments, continued.id, continued)
+        link = await sessions.run_async(find_link, sessions, subagent_id)
+        return await self._send(context, arguments, subagent_id, link)
+
+    async def _send(
+        self,
+        context: ToolContext,
+        arguments: JsonObject,
+        subagent_id: str,
+        link: SubAgentLink | None,
+    ) -> JsonObject:
+        runtime, caller = self._runtime, _caller(context)
+        sessions = runtime.chat_sessions
+        if link is None or caller not in await sessions.run_async(
+            ancestors, sessions, link.session
+        ):
+            own = await sessions.run_async(children, sessions, caller)
+            return _not_found(subagent_id, own)
+        if link.parent != caller:
+            parent_link = await sessions.run_async(read_link, sessions, link.parent)
+            return tool_failure(
+                "subagent_not_direct",
+                SUBAGENT_NOT_DIRECT_CHILD_MESSAGE_TEMPLATE.format(
+                    id=link.id, parent_id=parent_link.id if parent_link is not None else "?"
+                ),
+            )
+        if link.taken_over_at is not None:
+            return tool_failure(
+                "subagent_taken_over", SUBAGENT_TAKEN_OVER_MESSAGE_TEMPLATE.format(id=link.id)
+            )
+        if not has_text(arguments, "content"):
+            return tool_failure(
+                "invalid_arguments",
+                SUBAGENT_SEND_WITHOUT_CONTENT_MESSAGE_TEMPLATE.format(
+                    id=link.id,
+                    call=call_text(
+                        {"action": "send", "id": link.id, "content": _FOLLOW_UP_PLACEHOLDER}
+                    ),
+                ),
+            )
+        address = link.session
+        overrides = _parse_session_overrides(arguments)
+        temporary_parent = await self._temporary_parent(
+            context, address.agent_id, address.project_id
         )
+        failure = await _validate_continued_session(runtime, link, model=overrides.get("model"))
+        if failure is not None:
+            return failure
+        if overrides:
+            await sessions.run_async(
+                runtime.agent_resolver.update_session_overrides, address, overrides
+            )
+        content = cast(str, arguments["content"])
+        executor = runtime.streaming_chat_loop.run_executor(
+            content, parent_agent_input=True, temporary_parent_binding=temporary_parent
+        )
+        target_agent = await _resolve_child_agent(runtime, address, temporary_parent)
+        steerable = context.execution_owner is None and temporary_parent is None
+        manager = runtime.chat_run_manager
+        item = await manager.enqueue(
+            address,
+            executor,
+            display_content=content,
+            steerable=steerable,
+            admission=_admission(context, target_agent, address, link.id),
+        )
+        status, note = "queued", SUBAGENT_SEND_QUEUED_NOTE
+        if item.future.done() and not item.future.cancelled():
+            status, note = "started", SUBAGENT_SEND_STARTED_NOTE
+        elif steerable:
+            try:
+                manager.steer_queued(
+                    address.agent_id,
+                    address.session_id,
+                    item.item_id,
+                    project_id=address.project_id,
+                )
+            except ActiveRunError, RunNotFoundError:
+                pass
+            else:
+                status, note = "steered", SUBAGENT_SEND_STEERED_NOTE
+        await self._activities.ensure(address)
+        await _emit(
+            context,
+            SUBAGENT_SESSION_STARTED_EVENT,
+            _event_data(
+                link.id,
+                address,
+                status="running" if status != "queued" else "queued",
+                activity_file=self._activities.path(address),
+            ),
+        )
+        result = _public_identity(link.id, address)
+        result["status"] = status
+        result["note"] = note
+        return tool_success(result)
 
-    temporary_parent = None
-    if (
-        context.execution_owner is not None
-        and target_agent_id == context.agent_id
-        and target_project_id == context.project_id
-    ):
+    # list
+
+    async def _list(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
+        runtime, caller = self._runtime, _caller(context)
+        sessions = runtime.chat_sessions
+        tree = await sessions.run_async(descendants, sessions, caller)
+        subagent_id = optional_text(arguments, "id")
+        if subagent_id is not None:
+            selected = [link for link in tree if link.id == subagent_id]
+            if not selected:
+                own = [link for link in tree if link.parent == caller]
+                return _not_found(subagent_id, own)
+            tree = selected
+        ids = {link.session: link.id for link in tree}
+        entries: list[JsonObject] = []
+        working = False
+        for link in tree:
+            entry: JsonObject = {
+                "id": link.id,
+                "title": link.title,
+                "agent_id": subagent_address(link),
+                "session_id": link.session.session_id,
+            }
+            if link.parent != caller and link.parent in ids:
+                entry["parent_id"] = ids[link.parent]
+            address = link.session
+            run = runtime.chat_run_manager.active_run(
+                agent_id=address.agent_id,
+                session_id=address.session_id,
+                project_id=address.project_id,
+            )
+            if link.taken_over_at is not None:
+                entry["state"] = "taken over by the user"
+            elif run is not None:
+                entry["state"] = "working"
+                working = True
+                tool_name = _latest_tool_name(run)
+                if tool_name is not None:
+                    entry["last_tool"] = tool_name
+            elif is_working(runtime, address):
+                entry["state"] = "queued"
+                working = True
+            else:
+                entry["state"] = "idle"
+            running = [
+                item.describe()
+                for item in await running_entries(runtime, address)
+                if item.kind != "Sub-Agent"
+            ]
+            if running:
+                entry["running"] = running
+            activity_file = self._activities.path(address)
+            if activity_file is not None:
+                entry["activity_file"] = activity_file
+            entries.append(entry)
+        listing: JsonObject = {"subagents": entries}
+        if working:
+            listing["note"] = SUBAGENT_LIST_NOTE
+        return tool_success(listing)
+
+    # cancel
+
+    async def _cancel(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
+        runtime, caller = self._runtime, _caller(context)
+        sessions = runtime.chat_sessions
+        subagent_id = optional_text(arguments, "id")
+        if subagent_id is None:
+            tree = await sessions.run_async(descendants, sessions, caller)
+            working = [link for link in tree if is_working(runtime, link.session)]
+            example = working[0].id if working else tree[0].id if tree else "<id>"
+            return tool_failure(
+                "invalid_arguments",
+                SUBAGENT_CANCEL_WITHOUT_ID_MESSAGE_TEMPLATE.format(
+                    yours=yours_text(working or tree),
+                    call=call_text({"action": "cancel", "id": example}),
+                ),
+            )
+        link = await sessions.run_async(find_link, sessions, subagent_id)
+        if link is None or caller not in await sessions.run_async(
+            ancestors, sessions, link.session
+        ):
+            own = await sessions.run_async(children, sessions, caller)
+            return _not_found(subagent_id, own)
+        below = await sessions.run_async(descendants, sessions, link.session)
+        initiator = f"parent_run:{context.run_id}"
+        stopped = await self._stop_sessions(
+            [link.session],
+            reason=PARENT_AGENT_CANCEL_REASON,
+            initiator=initiator,
+            silence=link.parent == caller,
+            clear_queue=True,
+        )
+        stopped += await self._stop_sessions(
+            [item.session for item in below],
+            reason=PARENT_AGENT_CANCEL_REASON,
+            initiator=initiator,
+            silence=True,
+            clear_queue=True,
+        )
+        if not stopped:
+            return tool_failure(
+                "subagent_not_running",
+                SUBAGENT_NOTHING_TO_CANCEL_MESSAGE_TEMPLATE.format(id=link.id),
+            )
+        await _emit(
+            context,
+            SUBAGENT_STATUS_CHANGED_EVENT,
+            _event_data(link.id, link.session, status="cancelled"),
+        )
+        result = _public_identity(link.id, link.session)
+        result["status"] = "cancelled"
+        result["note"] = SUBAGENT_CANCELLED_NOTE
+        return tool_success(result)
+
+    async def _stop_sessions(
+        self,
+        addresses: list[SessionAddress],
+        *,
+        reason: str,
+        initiator: str,
+        silence: bool,
+        clear_queue: bool,
+    ) -> int:
+        """Stop the Runs, queued input and terminals of *addresses*; return how many stopped."""
+        manager = self._runtime.chat_run_manager
+        terminals = self._runtime.terminal_manager
+        stopped = 0
+        runs: list[Run] = []
+        for address in addresses:
+            if clear_queue:
+                for item in manager.list_queued(
+                    address.agent_id, address.session_id, project_id=address.project_id
+                ):
+                    if manager.remove_queued(
+                        address.agent_id,
+                        address.session_id,
+                        item.item_id,
+                        project_id=address.project_id,
+                    ):
+                        stopped += 1
+            run = manager.active_run(
+                agent_id=address.agent_id,
+                session_id=address.session_id,
+                project_id=address.project_id,
+            )
+            if run is not None:
+                if silence:
+                    self._forwarding.silence(run.id)
+                run.request_cancel(reason=reason, initiator=initiator)
+                runs.append(run)
+                stopped += 1
+            if terminals is not None:
+                owner = TerminalOwner(
+                    project_id=address.project_id,
+                    agent_id=address.agent_id,
+                    session_id=address.session_id,
+                )
+                running = [
+                    info
+                    for info in terminals.list_terminals()
+                    if info.finished_at is None and owner in (info.lifecycle_owner, info.attachment)
+                ]
+                if running:
+                    stopped += len(running)
+                    await terminals.close_scope(owner)
+        if runs:
+            await asyncio.gather(*(_run_end(run) for run in runs))
+        return stopped
+
+    async def _temporary_parent(
+        self, context: ToolContext, target_agent_id: str, target_project_id: str | None
+    ) -> TemporarySessionBinding | None:
+        """Return the temporary Agent binding a copy of a temporary caller runs under."""
         owner = context.execution_owner
-        temporary_parent = await runtime.chat_sessions.run_async(
-            runtime.chat_sessions.temporary_binding_by_participant,
+        if owner is None or (target_agent_id, target_project_id) != (
+            context.agent_id,
+            context.project_id,
+        ):
+            return None
+        sessions = self._runtime.chat_sessions
+        binding = await sessions.run_async(
+            sessions.temporary_binding_by_participant,
             owner_name=owner.extension,
             group_id=owner.group_id,
             participant_id=owner.participant_id,
         )
-        if temporary_parent is not None and (
-            temporary_parent.generation_id != owner.generation_id
-            or temporary_parent.address.agent_id != target_agent_id
-            or temporary_parent.address.project_id != target_project_id
+        if binding is None or (
+            binding.generation_id != owner.generation_id
+            or binding.address.agent_id != target_agent_id
+            or binding.address.project_id != target_project_id
         ):
-            temporary_parent = None
-    validation_error = await _validate_target_agent(
-        runtime,
-        target_agent_id,
-        target_project_id,
-        model=session_overrides.get("model"),
-        session_id=session_id,
-        temporary_parent_binding=temporary_parent,
+            return None
+        return cast(TemporarySessionBinding, binding)
+
+
+def _implied_action(arguments: JsonObject) -> str | JsonObject:
+    """Return the action a call without ``action`` clearly means, or its refusal."""
+    subagent_id = arguments.get("id")
+    if isinstance(subagent_id, str) and subagent_id.strip():
+        if has_text(arguments, "content"):
+            return "send"
+        return tool_failure(
+            "invalid_arguments",
+            SUBAGENT_ID_WITHOUT_ACTION_MESSAGE_TEMPLATE.format(
+                id=subagent_id,
+                send_call=call_text(
+                    {"action": "send", "id": subagent_id, "content": _FOLLOW_UP_PLACEHOLDER}
+                ),
+                cancel_call=call_text({"action": "cancel", "id": subagent_id}),
+            ),
+        )
+    return "run"
+
+
+def _not_found(subagent_id: str, own: list[SubAgentLink]) -> JsonObject:
+    message = SUBAGENT_NOT_FOUND_MESSAGE_TEMPLATE.format(id=subagent_id, yours=yours_text(own))
+    return tool_failure("subagent_not_found", message.rstrip())
+
+
+def _caller(context: ToolContext) -> SessionAddress:
+    return SessionAddress(
+        project_id=context.project_id, agent_id=context.agent_id, session_id=context.session_id
     )
-    if validation_error is not None:
-        failure = validation_error["error"]
-        if failure["code"] in {"agent_not_found", "project_not_found"}:
-            reason = str(failure["message"]).rstrip(".")
-            return tool_failure(failure["code"], f"{reason}. {target_choices(runtime, context)}")
-        return validation_error
-
-    settings = _load_subagent_settings(runtime)
-    parent_key = _parent_key(context)
-    if context.nesting_depth >= settings["max_subagent_depth"]:
-        return tool_failure(
-            "subagent_depth_exceeded",
-            SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE.format(limit=settings["max_subagent_depth"]),
-        )
-    try:
-        parent_run = runtime.chat_run_manager.get(context.run_id)
-    except RunNotFoundError:
-        parent_run = None
-    if not batch_tracker.reserve_slot(
-        parent_key,
-        settings["max_subagents_per_turn"],
-        context.project_id,
-        execution_owner=context.execution_owner,
-        parent_run=parent_run,
-    ):
-        return tool_failure(
-            "subagent_limit_exceeded",
-            SUBAGENT_TURN_LIMIT_MESSAGE_TEMPLATE.format(limit=settings["max_subagents_per_turn"]),
-        )
-
-    slot_registered = False
-    work_id = batch_tracker.allocate_work_id(parent_key)
-    activity: SubAgentActivity | None = None
-    activity_handed_off = False
-    try:
-        if context.is_cancelled():
-            return tool_failure("run_cancelled", "Parent run was cancelled before sub-agent spawn")
-
-        title = _subagent_session_title(description, content)
-        try:
-            session = await runtime.chat_sessions.run_async(
-                _open_subagent_session,
-                runtime,
-                target_agent_id,
-                target_project_id,
-                session_id,
-                title,
-                work_id,
-                context,
-                session_overrides,
-            )
-        except ChatSessionError:
-            if session_id is None or not reads_as_new_session(session_id):
-                owner_unnamed = "agent_id" not in arguments and run_target.tracked_target is None
-                return tool_failure(
-                    "session_not_found",
-                    SUBAGENT_SESSION_NOT_FOUND_MESSAGE_TEMPLATE.format(
-                        session_id=session_id,
-                        target=target_address,
-                        tracked=(SUBAGENT_SESSION_OWNER_HINT if owner_unnamed else "")
-                        + tracked_work_text(batch_tracker, context),
-                    ),
-                )
-            notes.append(
-                SUBAGENT_STAND_IN_SESSION_NOTE_TEMPLATE.format(
-                    session_id=json.dumps(session_id, ensure_ascii=False)
-                )
-            )
-            session = await runtime.chat_sessions.run_async(
-                _open_subagent_session,
-                runtime,
-                target_agent_id,
-                target_project_id,
-                None,
-                title,
-                work_id,
-                context,
-                session_overrides,
-            )
-
-        activity = await SubAgentActivity.create(
-            runtime.storage.temporary_files,
-            agent_id=target_agent_id,
-            session_id=session.id,
-        )
-        if activity is not None:
-            activities.add(activity)
-        activity_file = _activity_file(activity)
-        await _emit_subagent_session_started(
-            context,
-            work_id,
-            target_agent_id,
-            target_project_id,
-            session.id,
-            status=RunStatus.RUNNING.value,
-            delivery="automatic" if background else "inline",
-            activity_file=activity_file,
-        )
-
-        # One foreground bound covers both waiting in a busy Session's Queue and
-        # the child's execution, so the Parent never blocks longer than the limit.
-        loop = asyncio.get_running_loop()
-        foreground_deadline = (
-            loop.time() + settings["subagent_timeout_minutes"] * SECONDS_PER_MINUTE
-        )
-        try:
-            sub_run = await _start_subagent_run(
-                runtime,
-                target_agent_id,
-                target_project_id,
-                session.id,
-                content,
-                context,
-                work_id,
-                temporary_parent_binding=temporary_parent,
-            )
-        except ActiveRunError:
-            if session_id is None:
-                return tool_failure(
-                    "session_busy",
-                    f"session already has an active run: {session.id}",
-                )
-
-            _, executor = _make_subagent_executor(
-                runtime,
-                content,
-                context,
-                temporary_parent_binding=temporary_parent,
-            )
-            target_agent = await _resolve_child_agent(
-                runtime,
-                SessionAddress(
-                    project_id=target_project_id,
-                    agent_id=target_agent_id,
-                    session_id=session.id,
-                ),
-                temporary_parent,
-            )
-            item = await runtime.chat_run_manager.enqueue(
-                SessionAddress(
-                    project_id=target_project_id,
-                    agent_id=target_agent_id,
-                    session_id=session.id,
-                ),
-                executor,
-                display_content=content,
-                admission=RunAdmission(
-                    working_project_id=resolve_working_project_id(target_project_id, target_agent),
-                    run_kind=RunKind.SUBAGENT,
-                    work_id=work_id,
-                    owner=context.execution_owner,
-                    contributes_to_agent_activity=context.execution_owner is None,
-                ),
-            )
-            if activity is not None:
-                activity.mark_queued()
-            # Admission already accepted this work. Install ownership and its
-            # watcher before notification can suspend or fail, even when enqueue
-            # started the Run immediately after the previous busy check.
-            batch_tracker.register_queued(
-                parent_key,
-                target_agent_id,
-                session.id,
-                item.item_id,
-                target_project_id,
-                activity_file,
-                work_id=work_id,
-            )
-            slot_registered = True
-            if _should_register_parent_cascade(background=background):
-                _attach_parent_cancellation(
-                    runtime,
-                    context.run_id,
-                    queued_item=item,
-                    queued_agent_id=target_agent_id,
-                    queued_session_id=session.id,
-                    queued_project_id=target_project_id,
-                    batch_tracker=batch_tracker,
-                    parent_key=parent_key,
-                )
-            _track_queued_subagent_completion(
-                batch_tracker, parent_key, item, activity, activity_file, background=background
-            )
-            activity_handed_off = activity is not None
-            _log_subagent_spawned(
-                context,
-                work_id,
-                target_agent_id,
-                target_project_id,
-                session.id,
-                background=background,
-                queue_item_id=item.item_id,
-            )
-            try:
-                await _emit_subagent_session_started(
-                    context,
-                    work_id,
-                    target_agent_id,
-                    target_project_id,
-                    session.id,
-                    queue_item_id=item.item_id,
-                    status=SUBAGENT_STATUS_QUEUED,
-                    delivery="automatic" if background else "inline",
-                    activity_file=activity_file,
-                )
-                if background:
-                    queued_run = _started_run_from_queue_item(item)
-                    if queued_run is None:
-                        return tool_success(
-                            _with_activity_note(
-                                _public_subagent_result(
-                                    work_id,
-                                    target_agent_id,
-                                    target_project_id,
-                                    session.id,
-                                    {"status": SUBAGENT_STATUS_QUEUED},
-                                    delivery="automatic",
-                                    note=_joined_note(notes, TOP_LEVEL_QUEUED_BACKGROUND_NOTE),
-                                ),
-                                activity_file,
-                            )
-                        )
-                    sub_run = queued_run
-                else:
-                    queued_outcome = await _await_queued_foreground_start(
-                        runtime,
-                        item,
-                        context=context,
-                        parent_run=parent_run,
-                        batch_tracker=batch_tracker,
-                        parent_key=parent_key,
-                        agent_id=target_agent_id,
-                        project_id=target_project_id,
-                        session_id=session.id,
-                        timeout_seconds=max(0.0, foreground_deadline - loop.time()),
-                        timeout_minutes=settings["subagent_timeout_minutes"],
-                    )
-                    if not isinstance(queued_outcome, Run):
-                        return queued_outcome
-                    sub_run = queued_outcome
-            except BaseException:
-                if not background:
-                    _cancel_subagent_child(
-                        runtime,
-                        sub_run=None,
-                        queued_item=item,
-                        queued_agent_id=target_agent_id,
-                        queued_session_id=session.id,
-                        queued_project_id=target_project_id,
-                        batch_tracker=batch_tracker,
-                        parent_key=parent_key,
-                        parent_reason=parent_run.cancel_reason if parent_run is not None else None,
-                        initiator=f"parent_run:{context.run_id}",
-                    )
-                raise
-
-        if not slot_registered:
-            if activity is not None:
-                activity.attach(sub_run)
-                activity_handed_off = True
-            # Register tracking, parent-cancel cascade, and completion watcher
-            # synchronously - before the next await. The child Run is already live,
-            # so every await below is an orphan window: a parent cancel landing
-            # there must still cascade to and track this child.
-            batch_tracker.register_reserved(
-                parent_key,
-                target_agent_id,
-                session.id,
-                sub_run.id,
-                target_project_id,
-                activity_file,
-                work_id=work_id,
-            )
-            slot_registered = True
-            if _should_register_parent_cascade(background=background):
-                _attach_parent_cancellation(
-                    runtime,
-                    context.run_id,
-                    sub_run=sub_run,
-                    batch_tracker=batch_tracker,
-                    parent_key=parent_key,
-                )
-
-            _track_subagent_completion(batch_tracker, parent_key, sub_run, activity_file)
-            _log_subagent_spawned(
-                context,
-                work_id,
-                target_agent_id,
-                target_project_id,
-                session.id,
-                background=background,
-                run_id=sub_run.id,
-            )
-        await _emit_subagent_session_started(
-            context,
-            work_id,
-            target_agent_id,
-            target_project_id,
-            session.id,
-            run_id=sub_run.id,
-            status=RunStatus.RUNNING.value,
-            delivery="automatic" if background else "inline",
-            activity_file=activity_file,
-        )
-        if background:
-            return tool_success(
-                _with_activity_note(
-                    _public_subagent_result(
-                        work_id,
-                        target_agent_id,
-                        target_project_id,
-                        session.id,
-                        {"status": RunStatus.RUNNING.value},
-                        delivery="automatic",
-                        note=_joined_note(notes, TOP_LEVEL_BACKGROUND_NOTE),
-                    ),
-                    activity_file,
-                )
-            )
-
-        try:
-            result = await asyncio.wait_for(
-                _wait_for_subagent_result(sub_run, activity_file),
-                timeout=max(0.0, foreground_deadline - loop.time()),
-            )
-        except TimeoutError:
-            sub_run.request_cancel(initiator="subagent_timeout")
-            timeout_message = (
-                f"Sub-agent run timed out after {settings['subagent_timeout_minutes']} minutes"
-            )
-            result = _result_dict(
-                sub_run,
-                status=RunStatus.FAILED.value,
-                message=timeout_message,
-                activity_file=activity_file,
-            )
-            _register_result_acknowledgement_after_parent_persistence(
-                context,
-                runtime,
-                batch_tracker,
-                parent_key,
-                target_agent_id,
-                session.id,
-                sub_run.id,
-                target_project_id,
-            )
-            batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
-            return tool_failure(
-                "subagent_timeout",
-                SUBAGENT_TIMEOUT_MESSAGE_TEMPLATE.format(
-                    minutes=settings["subagent_timeout_minutes"],
-                    continuation=_continuation_call(target_agent_id, target_project_id, session.id),
-                ),
-            )
-
-        _register_result_acknowledgement_after_parent_persistence(
-            context,
-            runtime,
-            batch_tracker,
-            parent_key,
-            target_agent_id,
-            session.id,
-            sub_run.id,
-            target_project_id,
-        )
-        batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
-        public_result = _public_subagent_result(
-            work_id,
-            target_agent_id,
-            target_project_id,
-            session.id,
-            result,
-            delivery="inline",
-        )
-        if notes:
-            public_result["note"] = _joined_note(notes, public_result.get("note"))
-        return tool_success(_with_activity_note(public_result, activity_file))
-    finally:
-        if activity is not None and not activity_handed_off:
-            activity.finish_unstarted()
-        if not slot_registered:
-            batch_tracker.release_slot(parent_key)
 
 
-async def _await_queued_foreground_start(
-    runtime: RuntimeServices,
-    item: Any,
+def _admission(
+    context: ToolContext, target_agent: RuntimeAgent, address: SessionAddress, subagent_id: str
+) -> RunAdmission:
+    return RunAdmission(
+        working_project_id=resolve_working_project_id(address.project_id, target_agent),
+        run_kind=RunKind.SUBAGENT,
+        work_id=subagent_id,
+        owner=context.execution_owner,
+        contributes_to_agent_activity=context.execution_owner is None,
+    )
+
+
+def _public_identity(subagent_id: str, address: SessionAddress) -> JsonObject:
+    """Identify a Sub-Agent for the calling Agent; ``agent_id`` is what the Tool accepts."""
+    data: JsonObject = {
+        "id": subagent_id,
+        "agent_id": format_agent_address(address.agent_id, address.project_id),
+        "session_id": address.session_id,
+    }
+    if address.project_id is not None:
+        data["project_id"] = address.project_id
+    return data
+
+
+def _event_data(
+    subagent_id: str,
+    address: SessionAddress,
     *,
-    context: ToolContext,
-    parent_run: Run | None,
-    batch_tracker: SubAgentBatchTracker,
-    parent_key: ParentKey,
+    status: str,
+    run_id: str | None = None,
+    activity_file: str | None = None,
+) -> JsonObject:
+    """Describe a Sub-Agent for WebUI events, with bare ids."""
+    data: JsonObject = {
+        "id": subagent_id,
+        "agent_id": address.agent_id,
+        "session_id": address.session_id,
+        "status": status,
+        "delivery": "automatic",
+        "activity_file": activity_file,
+    }
+    if address.project_id is not None:
+        data["project_id"] = address.project_id
+    if run_id is not None:
+        data["run_id"] = run_id
+    return data
+
+
+async def _emit(context: ToolContext, event: str, data: JsonObject) -> None:
+    await context.emit(
+        event,
+        {
+            "tool_call": {
+                "id": context.tool_call_id,
+                "index": context.tool_call_index,
+                "name": context.tool_name,
+            },
+            "data": data,
+        },
+    )
+
+
+async def _run_end(run: Run) -> None:
+    try:
+        await run.wait()
+    except Exception:
+        return
+
+
+def _latest_tool_name(run: Run) -> str | None:
+    for event in reversed(run.events):
+        if event.type != "tool_call_started":
+            continue
+        tool_call = event.payload.get("tool_call")
+        if isinstance(tool_call, dict):
+            name = tool_call.get("name")
+            if isinstance(name, str) and name:
+                return name
+    return None
+
+
+def _log_message_delivery(delivery: asyncio.Future[None]) -> None:
+    if delivery.cancelled() or delivery.exception() is None:
+        return
+    _LOGGER.warning("Sub-Agent message to its Parent failed: %s", delivery.exception())
+
+
+def _session_title(description: str) -> str:
+    return " ".join(description.split())[:SUBAGENT_SESSION_TITLE_MAX_CHARACTERS]
+
+
+def _open_subagent_session(
+    runtime: RuntimeServices,
     agent_id: str,
     project_id: str | None,
-    session_id: str,
-    timeout_seconds: float,
-    timeout_minutes: int,
-) -> Run | JsonObject:
-    """Wait inline for a queued foreground child to start, or explain why it never will.
+    title: str,
+    subagent_id: str,
+    context: ToolContext,
+    overrides: dict[str, str],
+) -> ChatSession:
+    """Create the Sub-Agent Session, title it, link it to its Parent and store *overrides*.
 
-    The shield keeps Parent cancellation from cancelling the Queue item directly
-    (the Parent cascade owns that). The item's own future is cancelled only when
-    the item is removed from the Queue; that is an ordinary Tool outcome for the
-    Parent, while a cancellation of the Parent itself keeps propagating.
+    Blocking. One unit of Session work, so a cancelled Parent never leaves a
+    created Sub-Agent Session without its Parent link.
     """
-    try:
-        return cast(
-            Run, await asyncio.wait_for(asyncio.shield(item.future), timeout=timeout_seconds)
-        )
-    except asyncio.CancelledError:
-        if not item.future.cancelled() or _parent_cancellation_requested(context, parent_run):
-            raise
-        batch_tracker.remove_queued(parent_key, item.item_id)
-        return tool_failure("subagent_removed", SUBAGENT_REMOVED_FROM_QUEUE_MESSAGE)
-    except TimeoutError:
-        runtime.chat_run_manager.remove_queued(
-            agent_id, session_id, item.item_id, project_id=project_id
-        )
-        if not item.future.done():
-            item.future.cancel()
-        if item.future.cancelled():
-            batch_tracker.remove_queued(parent_key, item.item_id)
-            return tool_failure(
-                "subagent_timeout",
-                SUBAGENT_QUEUED_TIMEOUT_MESSAGE_TEMPLATE.format(minutes=timeout_minutes),
-            )
-        if item.future.exception() is None:
-            # The child started just as the bound expired; the caller's run wait
-            # has no time left and cancels it through the ordinary timeout path.
-            return cast(Run, item.future.result())
-        error = item.future.exception()
-        batch_tracker.remove_queued(parent_key, item.item_id)
-        return tool_failure(
-            "subagent_start_failed",
-            SUBAGENT_START_FAILED_MESSAGE_TEMPLATE.format(error=error),
-        )
-    except Exception as error:
-        batch_tracker.remove_queued(parent_key, item.item_id)
-        return tool_failure(
-            "subagent_start_failed",
-            SUBAGENT_START_FAILED_MESSAGE_TEMPLATE.format(error=error),
-        )
-
-
-def _parent_cancellation_requested(context: ToolContext, parent_run: Run | None) -> bool:
-    task = asyncio.current_task()
-    return (
-        (task is not None and task.cancelling() > 0)
-        or context.is_cancelled()
-        or (parent_run is not None and parent_run.cancel_requested)
-    )
-
-
-async def _start_subagent_run(
-    runtime: RuntimeServices,
-    agent_id: str,
-    project_id: str | None,
-    session_id: str,
-    content: str,
-    context: ToolContext,
-    work_id: str,
-    *,
-    temporary_parent_binding: TemporarySessionBinding | None = None,
-) -> Run:
-    _, executor = _make_subagent_executor(
-        runtime,
-        content,
-        context,
-        temporary_parent_binding=temporary_parent_binding,
-    )
-    address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
-    target_agent = await _resolve_child_agent(runtime, address, temporary_parent_binding)
-    return await runtime.chat_run_manager.start(
+    sessions = runtime.chat_sessions
+    session = sessions.create(agent_id, project_id=project_id)
+    address = session.address
+    sessions.set_auto_title(address, title)
+    link_session(
+        sessions,
         address,
-        executor,
-        admission=RunAdmission(
-            working_project_id=resolve_working_project_id(project_id, target_agent),
-            run_kind=RunKind.SUBAGENT,
-            work_id=work_id,
-            owner=context.execution_owner,
-            contributes_to_agent_activity=context.execution_owner is None,
-        ),
+        subagent_id=subagent_id,
+        parent=_caller(context),
+        run_id=context.run_id,
+        tool_call_id=context.tool_call_id,
+        tool_call_index=context.tool_call_index,
     )
+    if overrides:
+        runtime.agent_resolver.update_session_overrides(address, overrides)
+    return session
 
 
 async def _resolve_child_agent(
@@ -830,7 +919,7 @@ async def _resolve_child_agent(
     address: SessionAddress,
     temporary_parent_binding: TemporarySessionBinding | None,
 ) -> RuntimeAgent:
-    """Resolve the target Agent as the child Session runs it."""
+    """Resolve the target Agent as the Sub-Agent Session runs it."""
     if temporary_parent_binding is not None:
         return await runtime.agent_resolver.resolve_temporary_agent_async(
             temporary_parent_binding.address,
@@ -842,41 +931,14 @@ async def _resolve_child_agent(
     )
 
 
-def _make_subagent_executor(
-    runtime: RuntimeServices,
-    content: str,
-    context: ToolContext,
-    *,
-    temporary_parent_binding: TemporarySessionBinding | None = None,
-) -> tuple[ChatLoop, RunExecutor]:
-    # Child Runs must match normal live Runs: the parent streaming loop
-    # carries its attachment resolver and compaction service into the
-    # child; only the nesting depth differs. The target project rides
-    # ``run.project_id`` (set when the child run is started/enqueued), so the
-    # child executes under its own addressed scope without the executor closure
-    # carrying it.
-    sub_loop = runtime.streaming_chat_loop.child_loop(
-        nesting_depth=context.nesting_depth + 1,
-    )
-    if temporary_parent_binding is not None:
-        return sub_loop, sub_loop.run_executor(
-            content,
-            temporary_parent_binding=temporary_parent_binding,
-        )
-    return sub_loop, sub_loop.run_executor(content)
-
-
 def _load_subagent_settings(runtime: RuntimeServices) -> dict[str, int]:
     settings = runtime.storage.load_subagent_settings()
     return {
         "max_subagent_depth": _positive_int(
             settings.get("max_subagent_depth"), DEFAULT_MAX_SUBAGENT_DEPTH
         ),
-        "max_subagents_per_turn": _positive_int(
-            settings.get("max_subagents_per_turn"), DEFAULT_MAX_SUBAGENTS_PER_TURN
-        ),
-        "subagent_timeout_minutes": _positive_int(
-            settings.get("subagent_timeout_minutes"), DEFAULT_SUBAGENT_TIMEOUT_MINUTES
+        "max_active_subagents": _positive_int(
+            settings.get("max_active_subagents"), DEFAULT_MAX_ACTIVE_SUBAGENTS
         ),
     }
 
@@ -888,27 +950,19 @@ def _positive_int(value: Any, default: int) -> int:
 
 
 def _parse_session_overrides(arguments: JsonObject) -> dict[str, str]:
-    """Parse the child Session's Agent overrides the call sets.
+    """Parse the Sub-Agent Session's Agent overrides the call sets.
 
-    An omitted field keeps the child Session's current value: the Agent's own
-    for a new Session, the stored override for a continued one. An empty
-    ``thinking_effort`` string is the internal ``provider default`` sentinel of
-    the Agent configuration chain; as a Tool value it is meaningless and counts
-    as omitted.
+    An omitted field keeps the Session's current value: the Agent's own for a
+    new Sub-Agent, the stored override for an existing one. An empty
+    ``thinking_effort`` string counts as omitted.
     """
-    model = optional_string(arguments.get("model"), field_name="model")
+    model = optional_text(arguments, "model")
     thinking_effort: str | None = None
-    if "thinking_effort" in arguments:
-        raw = arguments["thinking_effort"]
-        if isinstance(raw, str) and raw:
-            thinking_effort = cast(
-                str,
-                validate_thinking_effort(
-                    raw,
-                    label="thinking_effort",
-                    allow_none=False,
-                ),
-            )
+    raw = arguments.get("thinking_effort")
+    if isinstance(raw, str) and raw:
+        thinking_effort = cast(
+            str, validate_thinking_effort(raw, label="thinking_effort", allow_none=False)
+        )
     overrides: dict[str, str] = {}
     if model is not None:
         overrides["model"] = model
@@ -923,25 +977,14 @@ async def _validate_target_agent(
     project_id: str | None,
     *,
     model: str | None = None,
-    session_id: str | None = None,
     temporary_parent_binding: TemporarySessionBinding | None = None,
 ) -> JsonObject | None:
-    """Validate the spawn target resolves under its addressed project.
+    """Validate that the target resolves under its addressed Project and can run.
 
-    Routes through the one resolver seam: ``project_id=None`` resolves the store
-    identity agent, while a set ``project_id`` requires the target to be on that
-    project's Team with a usable model. Every resolver failure becomes a failure
-    envelope instead of escaping the tool boundary: only a missing Agent (unknown,
-    off-Team or the built-in Librarian) or Project reports ``agent_not_found`` /
-    ``project_not_found``;
-    a target that cannot run (for example, a model chain that fell through)
-    reports ``agent_unavailable`` with the resolver's reason. A requested *model*
-    that cannot run reports ``invalid_arguments`` before any Session work.
-
-    A continued *session_id* is checked as its child Run resolves it: stored
-    Agent overrides that cannot be read, or a stored Model the call does not
-    replace and that cannot run, report ``invalid_arguments`` before the Session
-    is linked to its Parent.
+    Only a missing Agent (unknown, off-Team or the built-in Librarian) or
+    Project reports ``agent_not_found`` / ``project_not_found``; a target that
+    cannot run reports ``agent_unavailable`` with the resolver's reason, and a
+    requested *model* that cannot run reports ``invalid_arguments``.
     """
     try:
         if temporary_parent_binding is not None:
@@ -970,189 +1013,47 @@ async def _validate_target_agent(
         )
     except ModelConfigurationError as error:
         return tool_failure("invalid_arguments", str(error))
-    if session_id is None:
-        return None
-    return await _validate_continued_session(
-        runtime,
-        SessionAddress(project_id=project_id, agent_id=target_agent_id, session_id=session_id),
-        replaces_model=model is not None,
-    )
+    return None
 
 
 async def _validate_continued_session(
-    runtime: RuntimeServices, session: SessionAddress, *, replaces_model: bool
+    runtime: RuntimeServices, link: SubAgentLink, *, model: str | None
 ) -> JsonObject | None:
-    """Refuse a continued Session whose stored Agent overrides stop its child Run.
-
-    A Session that does not exist stores none; its call fails or starts a new
-    Session later, without linking it.
-    """
-    target = format_agent_address(session.agent_id, session.project_id)
+    """Refuse a message to a Sub-Agent whose stored Agent settings stop its next Run."""
+    resolver = runtime.agent_resolver
     try:
-        stored = await runtime.agent_resolver.session_overrides_async(session)
+        if model is not None:
+            await resolver.require_model_configured_async(model)
+        stored = await resolver.session_overrides_async(link.session)
+    except ModelConfigurationError as error:
+        return tool_failure("invalid_arguments", str(error))
     except ValueError as error:
         return tool_failure(
             "invalid_arguments",
-            SUBAGENT_SESSION_SETTINGS_UNREADABLE_MESSAGE_TEMPLATE.format(
-                session_id=session.session_id, target=target, reason=error
-            ),
+            SUBAGENT_SESSION_SETTINGS_UNREADABLE_MESSAGE_TEMPLATE.format(id=link.id, reason=error),
         )
-    if replaces_model or stored.model is None:
+    if model is not None or stored.model is None:
         return None
     try:
-        await runtime.agent_resolver.require_model_configured_async(stored.model)
+        await resolver.require_model_configured_async(stored.model)
     except ModelConfigurationError as error:
         return tool_failure(
             "invalid_arguments",
-            SUBAGENT_SESSION_MODEL_UNUSABLE_MESSAGE_TEMPLATE.format(
-                session_id=session.session_id, target=target, reason=error
-            ),
+            SUBAGENT_SESSION_MODEL_UNUSABLE_MESSAGE_TEMPLATE.format(id=link.id, reason=error),
         )
     return None
 
 
-def _open_subagent_session(
-    runtime: RuntimeServices,
-    agent_id: str,
-    project_id: str | None,
-    session_id: str | None,
-    title: str,
-    work_id: str,
-    context: ToolContext,
-    overrides: dict[str, str],
-) -> ChatSession:
-    """Create or load the child Session, link it to its Parent and store *overrides*.
-
-    Blocking. One unit of Session work on the Session database's pool, so a
-    cancelled Parent never leaves a created child Session without its Parent
-    link or the Agent overrides the call asked for.
-    """
-    sessions = runtime.chat_sessions
-    if session_id is None:
-        session = sessions.create(agent_id, project_id=project_id)
-        sessions.set_auto_title(
-            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id),
-            title,
-        )
-    else:
-        # Raises ChatSessionError for an unknown Session; nothing is linked then.
-        session = sessions.get(
-            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
-        )
-    _mark_subagent_session(runtime, agent_id, project_id, session.id, work_id, context)
-    if overrides:
-        runtime.agent_resolver.update_session_overrides(
-            SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id),
-            overrides,
-        )
-    return session
-
-
-def _mark_subagent_session(
-    runtime: RuntimeServices,
-    sub_agent_id: str,
-    sub_project_id: str | None,
-    sub_session_id: str,
-    work_id: str,
-    context: ToolContext,
-) -> None:
-    # The child session's metadata is the durable side of the parent→child link.
-    # It is addressed under the target project anchor so a
-    # project-scoped child's sidecar lives next to its session, and the link
-    # records ``project_id`` so the child session is fully addressable after a
-    # restart (its anchor cannot be derived from the parent ids alone).
-    session_manager = runtime.chat_sessions
-    address = SessionAddress(
-        project_id=sub_project_id, agent_id=sub_agent_id, session_id=sub_session_id
-    )
-
-    def update(metadata: JsonObject) -> None:
-        metadata[SUBAGENT_SESSION_METADATA_FLAG] = True
-        metadata[SUBAGENT_PARENT_METADATA_KEY] = {
-            "id": work_id,
-            "agent_id": context.agent_id,
-            "session_id": context.session_id,
-            "run_id": context.run_id,
-            "tool_call_id": context.tool_call_id,
-            "tool_call_index": context.tool_call_index,
-            "project_id": context.project_id,
-        }
-
-    session_manager.mutate_metadata(address, update)
-
-
-def _subagent_session_title(description: str | None, content: str) -> str:
-    """Build the stable child Session title from the parent-authored task identity."""
-
-    source = description if description else content
-    return " ".join(source.split())[:SUBAGENT_SESSION_TITLE_MAX_CHARACTERS]
-
-
-async def _emit_subagent_session_started(
-    context: ToolContext,
-    work_id: str,
-    sub_agent_id: str,
-    sub_project_id: str | None,
-    sub_session_id: str,
-    *,
-    run_id: str | None = None,
-    queue_item_id: str | None = None,
-    activity_file: str | None = None,
-    status: str,
-    delivery: str,
-) -> None:
-    data: JsonObject = {
-        "id": work_id,
-        "agent_id": sub_agent_id,
-        "session_id": sub_session_id,
-        "status": status,
-        "delivery": delivery,
-        "activity_file": activity_file,
-    }
-    if sub_project_id is not None:
-        data["project_id"] = sub_project_id
-    if run_id:
-        data["run_id"] = run_id
-    if queue_item_id:
-        data["queue_item_id"] = queue_item_id
-
-    await context.emit(
-        SUBAGENT_SESSION_STARTED_EVENT,
-        {
-            "tool_call": {
-                "id": context.tool_call_id,
-                "index": context.tool_call_index,
-                "name": context.tool_name,
-            },
-            "data": data,
-        },
-    )
-
-
-def _parent_key(context: ToolContext) -> ParentKey:
-    return (context.agent_id, context.session_id, context.run_id)
-
-
-def _resolve_target_address(
-    address: str,
-    caller_project_id: str | None,
-) -> tuple[str, str | None]:
-    """Resolve the tool's address while preserving bare-target inheritance.
-
-    A qualified address explicitly supplies the target project. A bare address
-    keeps the subagent tool's existing behavior by inheriting the caller's
-    project scope (or remaining identity-scoped when the caller has none).
-    """
+def _resolve_target_address(address: str, caller_project_id: str | None) -> tuple[str, str | None]:
+    """Resolve the Tool's address; a bare address inherits the caller's Project scope."""
     agent_id, addressed_project_id = parse_agent_address(address)
     return agent_id, addressed_project_id or caller_project_id
 
 
 def _target_is_allowed(
-    context: ToolContext,
-    target_agent_id: str,
-    target_project_id: str | None,
+    context: ToolContext, target_agent_id: str, target_project_id: str | None
 ) -> bool:
-    """Check the parent snapshot and enforce the Project boundary independently."""
+    """Check the caller's Tool settings and enforce the Project boundary independently."""
     if context.project_id is not None and target_project_id != context.project_id:
         return False
     if target_agent_id == context.agent_id and target_project_id == context.project_id:
@@ -1166,3 +1067,6 @@ def _target_is_allowed(
         else format_agent_address(target_agent_id, target_project_id)
     )
     return address in allowed
+
+
+__all__ = ["SubAgentCoordinator"]

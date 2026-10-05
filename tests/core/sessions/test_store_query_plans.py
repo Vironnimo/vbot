@@ -330,6 +330,20 @@ def test_existing_addresses_probe_the_live_address_index_in_one_statement(histor
     assert any("sessions_one_live_address" in detail for detail in _plans(connection, statements))
 
 
+@pytest.mark.parametrize("project_id", [None, "project"])
+def test_subagent_link_reads_probe_their_partial_indexes(history, project_id) -> None:
+    _address, _anchor, connection = history
+    recorder, statements = _recording(connection)
+    assert _store_queries.subagent_children(recorder, SessionAddress(project_id, "a", "s")) == []
+    assert _store_queries.subagent_session(recorder, "sa_missing") is None
+    _assert_indexed(connection, statements)
+    children_plan, session_plan = (
+        " ".join(_plan(connection, sql, params)) for sql, params in statements
+    )
+    assert "sessions_by_subagent_parent" in children_plan, children_plan
+    assert "sessions_by_subagent_id" in session_plan, session_plan
+
+
 def test_session_point_reads_probe_the_live_address_index(history) -> None:
     address, _anchor, connection = history
     missing = SessionAddress("project", "agent", "missing")

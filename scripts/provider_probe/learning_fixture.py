@@ -169,7 +169,7 @@ class EvalWorker:
         from core.tools.shell import project_shell_tool_definitions
 
         definitions = self.runtime.system_prompts.provider_tool_definitions(agent)
-        definitions = project_shell_tool_definitions(definitions, nesting_depth=0)
+        definitions = project_shell_tool_definitions(definitions)
         return [
             dict(definition)
             for definition in definitions

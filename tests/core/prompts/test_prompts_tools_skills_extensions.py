@@ -265,6 +265,9 @@ def test_subagent_block_renders_only_with_tool_and_lists_additional_targets(
         async def spawn(self, _context: Any, _arguments: Any) -> Any:
             return tool_success({})
 
+        async def message_parent(self, _context: Any, _arguments: Any) -> Any:
+            return tool_success({})
+
         def prompt_targets(self, _agent: Any, project_id: str | None) -> Any:
             assert project_id == "vbot"
             return [
@@ -274,9 +277,6 @@ def test_subagent_block_renders_only_with_tool_and_lists_additional_targets(
                     description="Reviews completed work.",
                 )
             ]
-
-        def foreground_timeout_minutes(self) -> int:
-            return 17
 
     tools = ToolRegistry()
     prompt_blocks = ToolPromptBlockRegistry()
@@ -289,31 +289,11 @@ def test_subagent_block_renders_only_with_tool_and_lists_additional_targets(
     allowed = _agent(workspace, allowed_tools=["subagent"])
     denied = _agent(workspace, allowed_tools=[])
 
-    top_level_blocks: list[dict[str, Any]] = []
-    nested_blocks: list[dict[str, Any]] = []
-    prompt = manager.build_system_prompt(
-        allowed, agent_project_id="vbot", block_details=top_level_blocks
-    )
-    nested_prompt = manager.build_system_prompt(
-        allowed,
-        agent_project_id="vbot",
-        nesting_depth=1,
-        block_details=nested_blocks,
-    )
-
-    denied_prompt = manager.build_system_prompt(
-        denied,
-        agent_project_id="vbot",
-    )
+    prompt = manager.build_system_prompt(allowed, agent_project_id="vbot")
+    denied_prompt = manager.build_system_prompt(denied, agent_project_id="vbot")
     for value in ("reviewer", "Reviewer", "Reviews completed work."):
         assert value in prompt
-        assert value in nested_prompt
         assert value not in denied_prompt
-    assert prompt != nested_prompt
-    top_level_block = next(block for block in top_level_blocks if block["id"] == "tool:subagent")
-    nested_block = next(block for block in nested_blocks if block["id"] == "tool:subagent")
-    assert "17" in nested_block["text"]
-    assert "17" not in top_level_block["text"]
 
 
 def test_subagent_block_stays_visible_without_additional_targets(
@@ -321,6 +301,7 @@ def test_subagent_block_stays_visible_without_additional_targets(
 ) -> None:
     coordinator = SimpleNamespace(
         spawn=lambda _context, _arguments: tool_success({}),
+        message_parent=lambda _context, _arguments: tool_success({}),
         prompt_targets=lambda _agent, _project_id: [],
     )
     tools = ToolRegistry()

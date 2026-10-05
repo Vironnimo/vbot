@@ -8,10 +8,10 @@ programs that failed inside the command, processes it left running, why vBot
 stopped it when vBot did, and a hint for well-known failures.
 
 A command that is still running after the hand-off time, waits for input, or
-is moved to the background by the user continues as a listed terminal. At
-Session depth 0 its result arrives as a new message when it exits; the Agent
-can wait for it, answer it or stop it with the terminal Tool, whose results for
-a command terminal come from ``command_terminal_result`` in the same shape.
+is moved to the background by the user continues as a listed terminal. Its
+result arrives as a new message when it exits; the Agent can wait for it,
+answer it or stop it with the terminal Tool, whose results for a command
+terminal come from ``command_terminal_result`` in the same shape.
 """
 
 from __future__ import annotations
@@ -64,7 +64,6 @@ from core.tools.tools import (
     ToolDisplay,
     ToolPromptBlockRegistry,
     ToolRegistry,
-    tool_failure,
     tool_success,
 )
 from core.tools.update_handoff import UpdateHandoffGrant, UpdateHandoffs
@@ -76,7 +75,7 @@ _LOGGER = get_logger("tools.shell")
 CredentialResolver = Callable[[str], str]
 
 SHELL_TOOL_NAME = BASH_TOOL_NAME
-# The Tool waits this long at Session depth 0 before the command continues as a terminal.
+# The Tool waits this long before the command continues as a terminal.
 SHELL_HANDOFF_SECONDS = 90.0
 # The timeout of a foreground command that names none; a background command has none.
 SHELL_DEFAULT_TIMEOUT_SECONDS = 600.0
@@ -91,8 +90,6 @@ _SCREEN_ROWS = TERMINAL_MAX_ROWS
 _WINDOWS_COMMAND_LINE_MAX_CHARS = 32_000
 _TERMINAL_TOOL = "terminal"
 _WEB_FETCH_TOOL = "web_fetch"
-
-BACKGROUND_AT_DEPTH_FAILURE_CODE = "background_unavailable_in_subagent"
 
 
 # Definition
@@ -152,30 +149,23 @@ def _neighbor_sentence(offered: frozenset[str]) -> str:
     return f" {sentence[0].upper()}{sentence[1:]}."
 
 
-def _shell_description(offered: frozenset[str] | None, *, nesting_depth: int) -> str:
-    """The description for the Tools offered with the shell, at this Session depth.
+def _shell_description(offered: frozenset[str] | None) -> str:
+    """The description for the Tools offered with the shell.
 
     *offered* None stands for the usual set (``_USUAL_TOOLS``).
     """
     offered = _USUAL_TOOLS if offered is None else offered
     terminal = _TERMINAL_TOOL in offered
-    if nesting_depth < 1 and terminal:
+    if terminal:
         continuation = (
             f" A command still running after {SHELL_HANDOFF_SECONDS:g} seconds, or waiting for "
             "input, keeps running in a terminal, and the result says how to follow it up."
         )
-    elif nesting_depth < 1:
+    else:
         continuation = (
             f" A command still running after {SHELL_HANDOFF_SECONDS:g} seconds keeps running "
             "in the background, and its result arrives as a new message when it exits."
         )
-    elif terminal:
-        continuation = (
-            " A command waiting for input keeps running in a terminal, and the result says "
-            "how to follow it up."
-        )
-    else:
-        continuation = ""
     boundary = (
         " For programs you operate by typing into them, such as REPLs, TUIs and coding-agent "
         f"CLIs, use {_TERMINAL_TOOL}."
@@ -189,7 +179,7 @@ def _shell_description(offered: frozenset[str] | None, *, nesting_depth: int) ->
     )
 
 
-SHELL_TOOL_DESCRIPTION = _shell_description(None, nesting_depth=0)
+SHELL_TOOL_DESCRIPTION = _shell_description(None)
 
 _COMMAND_PARAMETER: JsonObject = {
     "type": "string",
@@ -219,6 +209,17 @@ _ENV_KEYS_PARAMETER: JsonObject = {
     "minItems": 1,
     "uniqueItems": True,
 }
+# The handler's defaults: SHELL_DEFAULT_TIMEOUT_SECONDS in the foreground, none in
+# the background.
+_TIMEOUT_PARAMETER: JsonObject = {
+    "type": "number",
+    "minimum": 0,
+    "description": (
+        "Seconds before the command is stopped, counted from its start; 0 for no limit. "
+        f"Omitted, it is {SHELL_DEFAULT_TIMEOUT_SECONDS:g} in foreground and no limit in "
+        "background."
+    ),
+}
 _MODE_PARAMETER: JsonObject = {
     "type": "string",
     "enum": ["foreground", "background"],
@@ -230,50 +231,25 @@ _MODE_PARAMETER: JsonObject = {
     ),
 }
 
-
-def _timeout_parameter(*, subagent: bool) -> JsonObject:
-    # The handler's defaults: SHELL_DEFAULT_TIMEOUT_SECONDS in the foreground, none
-    # in the background, which a Sub-Agent cannot choose.
-    omitted = (
-        f"Omitted, it is {SHELL_DEFAULT_TIMEOUT_SECONDS:g}."
-        if subagent
-        else f"Omitted, it is {SHELL_DEFAULT_TIMEOUT_SECONDS:g} in foreground and no limit in "
-        "background."
-    )
-    return {
-        "type": "number",
-        "minimum": 0,
-        "description": (
-            "Seconds before the command is stopped, counted from its start; 0 for no limit. "
-            f"{omitted}"
-        ),
-    }
-
-
-def _shell_parameters(*, subagent: bool) -> JsonObject:
-    properties: JsonObject = {
+SHELL_TOOL_PARAMETERS: JsonObject = {
+    "type": "object",
+    "properties": {
         "command": _COMMAND_PARAMETER,
         "description": _DESCRIPTION_PARAMETER,
         "workdir": _WORKDIR_PARAMETER,
-        "timeout": _timeout_parameter(subagent=subagent),
+        "timeout": _TIMEOUT_PARAMETER,
         "env_keys": _ENV_KEYS_PARAMETER,
-    }
-    if not subagent:
-        properties["mode"] = _MODE_PARAMETER
-    return {"type": "object", "properties": properties, "required": ["command"]}
+        "mode": _MODE_PARAMETER,
+    },
+    "required": ["command"],
+}
 
 
-SHELL_TOOL_PARAMETERS = _shell_parameters(subagent=False)
-_SUBAGENT_SHELL_TOOL_PARAMETERS = _shell_parameters(subagent=True)
-
-
-def project_shell_tool_definitions(
-    definitions: list[JsonObject], *, nesting_depth: int
-) -> list[JsonObject]:
-    """Fit the shell definition to one request: its Session depth and the Tools offered."""
+def project_shell_tool_definitions(definitions: list[JsonObject]) -> list[JsonObject]:
+    """Fit the shell definition to one request: the Tools offered with it."""
     offered = frozenset(str(definition.get("name")) for definition in definitions)
-    description = _shell_description(offered, nesting_depth=nesting_depth)
-    if nesting_depth < 1 and description == SHELL_TOOL_DESCRIPTION:
+    description = _shell_description(offered)
+    if description == SHELL_TOOL_DESCRIPTION:
         return definitions
     projected: list[JsonObject] = []
     for definition in definitions:
@@ -282,8 +258,6 @@ def project_shell_tool_definitions(
             continue
         fitted = deepcopy(definition)
         fitted["description"] = description
-        if nesting_depth >= 1:
-            fitted["parameters"] = deepcopy(_SUBAGENT_SHELL_TOOL_PARAMETERS)
         projected.append(fitted)
     return projected
 
@@ -506,12 +480,6 @@ class ShellTool:
 
     async def __call__(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         call = _parse_call(context, arguments, self._projects)
-        if call.background and context.nesting_depth >= 1:
-            return tool_failure(
-                BACKGROUND_AT_DEPTH_FAILURE_CODE,
-                "Background execution is unavailable inside a Sub-Agent. Use foreground or "
-                "omit mode.",
-            )
         handoff = _issue_update_handoff(self._update_handoffs, context)
         try:
             terminal_id = await self._start(context, call, handoff)
@@ -563,7 +531,6 @@ class ShellTool:
             raise _not_run(f"the shell could not be started: {error}") from error
 
     async def _wait(self, context: ToolContext, call: _ShellCall, terminal_id: str) -> JsonObject:
-        depth = context.nesting_depth
         interrupt = asyncio.Event()
         moved_by_user = False
 
@@ -579,7 +546,7 @@ class ShellTool:
             reason: StopReason = "run_cancelled" if context.is_cancelled() else "user"
             return self._keep(self._terminals.stop_command(terminal_id, reason))
 
-        if depth < 1 and context.background_registration_hook is not None:
+        if context.background_registration_hook is not None:
             context.background_registration_hook(move_to_background)
         context.on_cancel(cancel)
 
@@ -596,7 +563,7 @@ class ShellTool:
         waiting = asyncio.ensure_future(
             self._terminals.wait_command(
                 terminal_id,
-                seconds=SHELL_HANDOFF_SECONDS if depth < 1 else None,
+                seconds=SHELL_HANDOFF_SECONDS,
                 # Idleness hands a command off only to an Agent that can answer it.
                 idle_seconds=COMMAND_IDLE_SECONDS if context.offers(_TERMINAL_TOOL) else None,
                 progress=progress,
@@ -624,7 +591,7 @@ class ShellTool:
                 # Listed, so the user and the Agent can see and stop what remains.
                 self._terminals.hand_off_command(terminal_id, deliver=False)
         else:
-            self._terminals.hand_off_command(terminal_id, deliver=depth < 1)
+            self._terminals.hand_off_command(terminal_id, deliver=True)
         return await self._result(context, call, terminal_id, reason=outcome)
 
     async def _result(
@@ -753,7 +720,7 @@ def _result_data(
     if report.exit_code is not None:
         data["exit_code"] = report.exit_code
     if report.stop_reason is not None:
-        data["stopped_because"] = _stop_text(report, mode=context.nesting_depth < 1)
+        data["stopped_because"] = _stop_text(report)
     output, truncated = command_output_text(report)
     data["output"] = output
     if truncated and report.transcript.log_path is not None:
@@ -795,8 +762,8 @@ def _failure_hint(report: CommandReport, output: str, offers: Callable[[str], bo
     )
 
 
-def _stop_text(report: CommandReport, *, mode: bool) -> str:
-    """Why vBot stopped the command; *mode* when the Agent can choose background mode."""
+def _stop_text(report: CommandReport) -> str:
+    """Why vBot stopped the command."""
     reason = report.stop_reason
     if reason == "timeout":
         limit = (
@@ -804,10 +771,9 @@ def _stop_text(report: CommandReport, *, mode: bool) -> str:
             if report.timeout_seconds
             else "its timeout"
         )
-        servers = "; run servers and watchers with mode background" if mode else ""
         return (
             f"it was still running at {limit}. To let it finish, run it again with a larger "
-            f"timeout, or 0 for no limit{servers}."
+            "timeout, or 0 for no limit; run servers and watchers with mode background."
         )
     if reason == "user":
         return "the user stopped it."
@@ -841,6 +807,10 @@ def _still_running_text(context: ToolContext, report: CommandReport) -> str:
     )
 
 
+# Every command handed off while its shell runs delivers its result when it ends.
+_RESULT_ARRIVES = "Its result arrives as a new message when it exits."
+
+
 def _limit_text(report: CommandReport) -> str:
     """The time limit of a running command, as a clause."""
     if not report.timeout_seconds:
@@ -867,11 +837,6 @@ def _running_text(
     terminal_id = report.terminal_id
     limit = _limit_text(report)
     follow_up = context.offers(_TERMINAL_TOOL)
-    delivered = (
-        "Its result arrives as a new message when it exits."
-        if report.delivers_result
-        else "Its result does not arrive on its own."
-    )
     if reason == "idle" and follow_up:
         silent = COMMAND_IDLE_SECONDS if idle_seconds is None else idle_seconds
         return (
@@ -880,27 +845,21 @@ def _running_text(
             f'a question or prompt, answer it with terminal action "input", terminal_id '
             f'"{terminal_id}", your answer as text, and key "enter". Otherwise it is waiting '
             f"for something else: wait for it with {_terminal_call('wait', terminal_id)}, or "
-            f"stop it with {_terminal_call('kill', terminal_id)} if it hangs. {delivered}"
+            f"stop it with {_terminal_call('kill', terminal_id)} if it hangs. {_RESULT_ARRIVES}"
         )
     if reason in {"matched", "waited", "following"} and follow_up:
         return _followed_text(report, limit, matched=reason == "matched", waited=reason == "waited")
     moved = "The user moved the command to the background. " if reason == "moved" else ""
     if not follow_up:
-        text = f"{moved}The command keeps running in the background; {limit}."
-        if report.delivers_result:
-            text += f" {delivered} Continue other work or end your turn; do not start it again."
-        return text
-    wait = _terminal_call("wait", terminal_id)
-    pattern = "add pattern to wait for a line it prints, such as a server's ready line"
-    if report.delivers_result:
         return (
-            f"{moved}The command keeps running in terminal {terminal_id}; {limit}. {delivered} "
-            f"To wait for it now, call {wait}; {pattern}. Otherwise continue other work or end "
-            "your turn; do not start it again."
+            f"{moved}The command keeps running in the background; {limit}. {_RESULT_ARRIVES} "
+            "Continue other work or end your turn; do not start it again."
         )
     return (
-        f"{moved}The command keeps running in terminal {terminal_id}; {limit}. {delivered[:-1]}"
-        f": wait for it with {wait}; {pattern}. Do not start it again."
+        f"{moved}The command keeps running in terminal {terminal_id}; {limit}. {_RESULT_ARRIVES} "
+        f"To wait for it now, call {_terminal_call('wait', terminal_id)}; add pattern to wait "
+        "for a line it prints, such as a server's ready line. Otherwise continue other work or "
+        "end your turn; do not start it again."
     )
 
 
@@ -909,26 +868,17 @@ def _followed_text(report: CommandReport, limit: str, *, matched: bool, waited: 
 
     After a match the Agent continues; otherwise it waits again or stops it.
     """
-    wait = _terminal_call("wait", report.terminal_id)
     if matched:
-        arrival = (
-            "Its result arrives as a new message when it exits."
-            if report.delivers_result
-            else f"Its result does not arrive on its own; to get it, call {wait}."
-        )
         return (
-            f"The command keeps running; {limit}. {arrival} Continue with your next step; do "
-            "not start it again."
+            f"The command keeps running; {limit}. {_RESULT_ARRIVES} Continue with your next "
+            "step; do not start it again."
         )
-    arrival = (
-        "its result arrives as a new message when it exits"
-        if report.delivers_result
-        else "its result does not arrive on its own"
-    )
     again = "Wait again" if waited else "Wait for it"
     return (
-        f"The command keeps running; {limit}. {again} with {wait}, or stop it with "
-        f"{_terminal_call('kill', report.terminal_id)}; {arrival}."
+        f"The command keeps running; {limit}. {again} with "
+        f"{_terminal_call('wait', report.terminal_id)}, or stop it with "
+        f"{_terminal_call('kill', report.terminal_id)}; its result arrives as a new message "
+        "when it exits."
     )
 
 
@@ -993,8 +943,7 @@ def format_command_delivery(
     """
     subject = report.description or _first_line(report.command)
     if report.stop_reason is not None:
-        # Only depth 0 delivers, where background mode exists.
-        status = f"was stopped: {_stop_text(report, mode=True)}"
+        status = f"was stopped: {_stop_text(report)}"
     else:
         status = f"exited with code {report.exit_code}."
     lines = [f"The command in terminal {report.terminal_id} ({subject}) {status}"]

@@ -62,7 +62,7 @@ ACCESSOR_DEFAULTS: list[tuple[Read, dict[str, Any], Any]] = [
     (
         StorageManager.load_subagent_settings,
         {"max_subagent_depth": "deep"},
-        {"max_subagent_depth": 4, "max_subagents_per_turn": 8, "subagent_timeout_minutes": 60},
+        {"max_subagent_depth": 4, "max_active_subagents": 8},
     ),
     (StorageManager.load_skill_directory_settings, {"skill_directories": "~/skills"}, []),
     (
@@ -223,18 +223,12 @@ SECTION_UPDATES: dict[str, tuple[dict[str, Any], dict[str, Any], Read, Any]] = {
     ),
     "subagents-persist-flat-keys": (
         {},
-        {
-            "subagents": {
-                "max_subagent_depth": 6,
-                "max_subagents_per_turn": 12,
-                "subagent_timeout_minutes": 90,
-            }
-        },
+        {"subagents": {"max_subagent_depth": 6, "max_active_subagents": 12}},
         lambda storage: {
             key: storage.load_settings()[key]
-            for key in ("max_subagent_depth", "max_subagents_per_turn", "subagent_timeout_minutes")
+            for key in ("max_subagent_depth", "max_active_subagents")
         },
-        {"max_subagent_depth": 6, "max_subagents_per_turn": 12, "subagent_timeout_minutes": 90},
+        {"max_subagent_depth": 6, "max_active_subagents": 12},
     ),
     "compaction-merges-into-stored-section": (
         {
@@ -636,11 +630,7 @@ def test_multiple_sections_update_in_one_write(
     updated = storage.update_settings_sections(
         {
             "appearance": {"language": "en"},
-            "subagents": {
-                "max_subagent_depth": 6,
-                "max_subagents_per_turn": 12,
-                "subagent_timeout_minutes": 90,
-            },
+            "subagents": {"max_subagent_depth": 6, "max_active_subagents": 12},
             "recall": {"backend": "sqlite_fts"},
             "debug": {"enabled": True, "trace_limit": 200},
         }
@@ -651,9 +641,8 @@ def test_multiple_sections_update_in_one_write(
     assert storage.load_settings() == {
         "appearance": APPEARANCE_DEFAULTS,
         "debug": {"enabled": True, "trace_limit": 200},
+        "max_active_subagents": 12,
         "max_subagent_depth": 6,
-        "max_subagents_per_turn": 12,
         "recall": {"backend": "sqlite_fts"},
         "server_port": 8500,
-        "subagent_timeout_minutes": 90,
     }

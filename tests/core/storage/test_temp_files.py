@@ -107,6 +107,69 @@ def test_finish_is_idempotent_and_restarts_retention_clock(tmp_path: Path) -> No
     assert lease.path.stat().st_mtime == first_finished_mtime
 
 
+@pytest.mark.parametrize("removed", [False, True], ids=["kept", "removed"])
+def test_reopen_protects_a_finished_file_until_its_new_lease_finishes(
+    tmp_path: Path, removed: bool
+) -> None:
+    manager = TemporaryFileManager(tmp_path, retention={"subagents": timedelta(seconds=1)})
+    first = manager.create("subagents", ".md")
+    first.path.write_text("first period", encoding="utf-8")
+    first.finish()
+    if removed:
+        first.path.unlink()
+    else:
+        _age(first.path, seconds=60)
+
+    lease = manager.reopen(first.path)
+    _age(lease.path, seconds=60)
+    manager.sweep()
+
+    assert lease.path == first.path
+    assert lease.path.read_text(encoding="utf-8") == ("" if removed else "first period")
+    # Retention counts from the end of the latest period.
+    lease.finish()
+    manager.sweep()
+    assert lease.path.exists()
+    _age(lease.path, seconds=60)
+    manager.sweep()
+    assert not lease.path.exists()
+
+
+def test_reopen_rejects_paths_outside_the_category_folders(tmp_path: Path) -> None:
+    manager = TemporaryFileManager(tmp_path, retention={"subagents": timedelta(seconds=1)})
+    rejected = [
+        manager.root / "unknown" / "tmp_1.md",
+        manager.root / "subagents" / "nested" / "tmp_1.md",
+        manager.root / "tmp_1.md",
+        tmp_path / "elsewhere" / "subagents" / "tmp_1.md",
+    ]
+
+    for path in rejected:
+        with pytest.raises(ValueError):
+            manager.reopen(path)
+        assert not path.exists()
+
+
+def test_reopen_that_cannot_touch_the_file_leaves_it_unprotected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = TemporaryFileManager(tmp_path, retention={"subagents": timedelta(seconds=1)})
+    lease = manager.create("subagents", ".md")
+    lease.finish()
+    _age(lease.path, seconds=60)
+
+    def fail_touch(_path: Path, mode: int = 0o666, exist_ok: bool = True) -> None:
+        raise OSError("read-only")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "touch", fail_touch)
+        with pytest.raises(OSError, match="read-only"):
+            manager.reopen(lease.path)
+    manager.sweep()
+
+    assert not lease.path.exists()
+
+
 def test_start_sweeps_expired_crash_leftovers(tmp_path: Path) -> None:
     stale_dir = DataDirectoryLayout(tmp_path).subagent_temporary
     stale_dir.mkdir(parents=True)

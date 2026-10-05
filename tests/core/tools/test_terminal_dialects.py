@@ -250,22 +250,14 @@ async def test_input_types_text_keys_and_exact_data_against_the_current_screen(
         [{"type": "text", "label": "input", "text": "\\x1b[200~more\\r\n\\x1b[201~"}, screen],
     ]
     assert adapter.writes == ["answer", "submit", "\r", "\x1b[24~", raw]
-    # When the reply wait ends before the output settles, next says how to see the reply;
-    # a Sub-Agent's Run sees it only by waiting for it.
-    wait = "call terminal " + json.dumps({"action": "wait", "terminal_id": terminal_id}) + "."
-    for depth, pending in (
-        (
-            0,
-            "Its screen arrives as a new message when its output settles; continue other work "
-            f"or end your turn. To wait for it now instead, {wait}",
-        ),
-        (1, f"To see its reply, {wait}"),
-    ):
-        unsettled = await terminal(
-            {"action": "input", "terminal_id": terminal_id, "key": "enter", "timeout": 0.01},
-            make_context(terminal.tmp_path, nesting_depth=depth),
-        )
-        assert unsettled["data"]["next"] == pending
+    # When the reply wait ends before the output settles, next says how the reply arrives.
+    unsettled = await send(key="enter", timeout=0.01)
+    assert unsettled["data"]["next"] == (
+        "Its screen arrives as a new message when its output settles; continue other work or "
+        "end your turn. To wait for it now instead, call terminal "
+        + json.dumps({"action": "wait", "terminal_id": terminal_id})
+        + "."
+    )
 
     multiline = "first\n  second"
     await render("\x1b[?2004h")

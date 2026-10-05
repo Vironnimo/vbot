@@ -16,6 +16,7 @@ from core.prompts._types import (
     BLOCK_OWNER_CHANNEL,
     BLOCK_OWNER_IDENTITY,
     BLOCK_OWNER_SKILL_MANAGE,
+    BLOCK_OWNER_SUBAGENT_SESSION,
     CORE_AGENT_BODY_BLOCK_ID,
     CORE_CHANNELS_BLOCK_ID,
     CORE_IDENTITY_RUNTIME_BLOCK_ID,
@@ -23,6 +24,7 @@ from core.prompts._types import (
     CORE_SKILL_MAINTENANCE_BLOCK_ID,
     CORE_SKILLS_BLOCK_ID,
     CORE_SOUL_BLOCK_ID,
+    CORE_SUBAGENT_ROLE_BLOCK_ID,
     CORE_SYSTEM_REMINDERS_BLOCK_ID,
     CORE_TOOLS_BLOCK_ID,
     CORE_TOOLS_LIST_BLOCK_ID,
@@ -346,6 +348,13 @@ class PromptBlockCatalog:
                 # vBot's reminders, and custom-prompt Agent copies predate it.
                 # A scope still edits or disables it like any other block.
                 default_text=self._storage.read_prompt_fragment("system_reminders.md"),
+            ),
+            BlockDefinition(
+                id=CORE_SUBAGENT_ROLE_BLOCK_ID,
+                owner=BLOCK_OWNER_SUBAGENT_SESSION,
+                # Every scope reads the bundled text, like the System reminders
+                # block: custom-prompt Agent copies predate it.
+                default_text=self._storage.read_prompt_fragment("subagent_role.md"),
             ),
             BlockDefinition(
                 id=CORE_TOOLS_LIST_BLOCK_ID,

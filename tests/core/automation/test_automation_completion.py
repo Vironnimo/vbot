@@ -25,7 +25,6 @@ from core.runs import (
     RunKind,
 )
 from core.sessions import SessionAddress
-from core.subagents import SubAgentBatchTracker
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("current_format_data_directory")]
 
@@ -702,41 +701,6 @@ async def test_completion_fallback_retries_transient_persistence_failure(
     notes = _notes(sessions.get(_ADDRESS))
     assert len(notes) == 1
     assert "retry this result" in notes[0]
-
-
-async def test_completion_fallback_prunes_persisted_subagent_batch(tmp_path: Path) -> None:
-    run_manager = ChatRunManager()
-    sessions = ChatSessionManager(tmp_path)
-    sessions.create("parent", session_id="parent-session")
-    completion_loop = SimpleNamespace(
-        start_run=AsyncMock(side_effect=RuntimeError("provider unavailable"))
-    )
-    trigger_service = TriggerService(
-        cast(Any, completion_loop),
-        run_manager,
-        cast(Any, Mock()),
-        trigger_chat_loop=cast(Any, completion_loop),
-        sessions=sessions,
-    )
-    tracker = SubAgentBatchTracker(trigger_service)
-    parent_key = ("parent", "parent-session", "parent-run")
-    tracker.register_reserved(parent_key, "worker", "child-session", "child-run")
-
-    tracker.on_sub_agent_complete(parent_key, "child-run", {"result": "finished work"})
-    # The fallback note is persisted on a Session worker, off the Event Loop.
-    for _ in range(500):
-        if not tracker.references_identity_agent("parent"):
-            break
-        await asyncio.sleep(0.01)
-
-    assert tracker.references_identity_agent("parent") is False
-    notes = _notes(
-        sessions.get(
-            SessionAddress(project_id=None, agent_id="parent", session_id="parent-session")
-        )
-    )
-    assert len(notes) == 1
-    assert "finished work" in notes[0]
 
 
 async def test_results_ready_at_run_end_coalesce_and_later_ones_get_a_new_delivery(

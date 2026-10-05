@@ -1,4 +1,4 @@
-"""Run controls over RPC: cancel, per-tool cancel, controls, Process cancel, Run result."""
+"""Run controls over RPC: cancel, stop all, tool cancel, controls, Process cancel, Run result."""
 
 from __future__ import annotations
 
@@ -166,6 +166,22 @@ async def test_cancel_tool_call_reports_an_unknown_run_or_tool_call(
 
 
 @pytest.mark.asyncio
+async def test_stop_all_stops_the_session_tree_and_reports_how_much_it_stopped() -> None:
+    stopped: list[SessionAddress] = []
+
+    async def stop_tree(address: SessionAddress) -> int:
+        stopped.append(address)
+        return 3
+
+    state = SimpleNamespace(runtime=SimpleNamespace(subagents=SimpleNamespace(stop_tree=stop_tree)))
+
+    response = await call(state, "chat.stop_all", agent_id="builder@vbot", session_id="s1")
+
+    assert response == {"ok": True, "result": {"ok": True, "stopped": 3}}
+    assert stopped == [SessionAddress(project_id="vbot", agent_id="builder", session_id="s1")]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method", "params", "unsupported"),
     [
@@ -175,6 +191,7 @@ async def test_cancel_tool_call_reports_an_unknown_run_or_tool_call(
             {"agent_id": "coder", "run_id": "any", "tool_call_id": "tool-1", "extra": True},
             "extra",
         ),
+        ("chat.stop_all", {"agent_id": "coder", "session_id": "s1", "run_id": "any"}, "run_id"),
     ],
 )
 async def test_run_controls_reject_unsupported_params(

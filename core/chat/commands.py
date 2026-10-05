@@ -22,6 +22,7 @@ from core.runs import (
     Run,
     RunNotFoundError,
 )
+from core.sessions import SessionAddress
 from core.skills.skill_validator import SKILL_NAME_TRIGGER_PATTERN
 from core.tools.terminal_manager import TerminalManager
 from core.utils.logging import get_logger
@@ -382,8 +383,9 @@ class CommandDispatcher:
         ),
         "stop": CommandSpec(
             "stop",
-            "Cancel the active run for this session.",
-            argument="none",
+            "Stop the active run; /stop all also stops background commands, terminals and "
+            "sub-agents.",
+            argument="optional",
             catalog_result="notice",
             execution_mode="immediate",
         ),
@@ -408,10 +410,12 @@ class CommandDispatcher:
         wire_profile_describer: WireProfileDescriber | None = None,
         automation_references: AutomationReferences | None = None,
         snapshot_barrier: SnapshotBarrier | None = None,
+        stop_all: Callable[[SessionAddress], Awaitable[int]] | None = None,
     ) -> None:
         from core.chat import _command_builtin, _command_status
 
         self._chat_runs = chat_runs
+        self._stop_all = stop_all
         self._trigger_service = trigger_service
         self._execution_commands: dict[str, CommandExecutionHandler] = {
             "agent": partial(
@@ -883,6 +887,21 @@ class CommandDispatcher:
             if surface.kind == "channel"
             else "webui_command"
         )
+        if argument is not None:
+            if argument.strip().casefold() != "all" or self._stop_all is None:
+                return _notice("stop", "Use /stop or /stop all.")
+            stopped = await self._stop_all(
+                SessionAddress(
+                    project_id=context.project_id,
+                    agent_id=context.agent_id,
+                    session_id=context.session_id,
+                )
+            )
+            if not stopped:
+                return _notice("stop", "Nothing is running in this session.")
+            return _notice(
+                "stop", "Stopped the run, its background commands, terminals and sub-agents."
+            )
         try:
             self._chat_runs.cancel_by_session(
                 context.agent_id,

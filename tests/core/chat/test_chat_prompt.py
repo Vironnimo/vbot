@@ -394,8 +394,8 @@ async def test_dynamic_blocks_stay_pinned_and_each_change_is_announced_once(
             Any,
             SimpleNamespace(
                 spawn=lambda _context, _arguments: tool_success({}),
+                message_parent=lambda _context, _arguments: tool_success({}),
                 prompt_targets=lambda _agent, _project_id: list(targets),
-                foreground_timeout_minutes=lambda: 5,
             ),
         ),
         prompt_blocks,

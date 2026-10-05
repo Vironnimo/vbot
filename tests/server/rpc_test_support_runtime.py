@@ -89,7 +89,7 @@ class StubPrompts:
         soul_context: str | None = None,
         memory_files_context: str | None = None,
         agent_project_id: str | None = None,
-        nesting_depth: int = 0,
+        subagent_session: bool = False,
         skill_registry: object = None,
         skill_catalog: object = None,
         read_paths: list[Path] | None = None,
@@ -499,9 +499,7 @@ class StubRuntime:
             calendar=cast(Any, self.calendar_service),
         )
         self.channel_service: Any = StubChannelService()
-        self.subagents: Any = SimpleNamespace(
-            batch_tracker=SimpleNamespace(references_identity_agent=lambda _agent_id: False)
-        )
+        self.subagents: Any = SimpleNamespace(references_identity_agent=lambda _agent_id: False)
         self.speech: Any = SimpleNamespace(preload_configured=_unsubscribe)
         self.statistics_index: Any = StubStatisticsIndex()
         self.usage_recorder: Any = None

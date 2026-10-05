@@ -330,7 +330,7 @@ async def test_temporary_self_delegation_uses_parent_configuration_without_priva
     tmp_path: Path,
 ) -> None:
     """A self-delegated child is a normal child Session under its parent's temporary config."""
-    from core.subagents import SubAgentBatchTracker, SubAgentCoordinator
+    from core.subagents import SUBAGENT_SESSION_STARTED_EVENT, SubAgentCoordinator
     from core.tools import tool_success
     from core.tools.tools import ToolContext
 
@@ -362,9 +362,12 @@ async def test_temporary_self_delegation_uses_parent_configuration_without_priva
             delivered.set_result(None)
             return delivered
 
-    coordinator = SubAgentCoordinator(
-        runtime_any, TriggerService(), batch_tracker=SubAgentBatchTracker(TriggerService())
-    )
+    events: list[tuple[str, dict[str, Any]]] = []
+
+    def record_event(event_type: str, payload: dict[str, Any]) -> None:
+        events.append((event_type, payload))
+
+    coordinator = SubAgentCoordinator(runtime_any, TriggerService())
     try:
         result = await coordinator.spawn(
             ToolContext(
@@ -378,10 +381,11 @@ async def test_temporary_self_delegation_uses_parent_configuration_without_priva
                 vbot_root=tmp_path,
                 data_root=tmp_path,
                 execution_owner=owner,
-                nesting_depth=1,
+                emit_hook=record_event,
             ),
             {
                 "action": "run",
+                "description": "Delegate to yourself",
                 "content": "delegate to yourself",
                 "model": "openai/gpt-override",
                 "thinking_effort": "low",
@@ -393,13 +397,19 @@ async def test_temporary_self_delegation_uses_parent_configuration_without_priva
         assert child_id != binding.address.session_id
         child_address = SessionAddress(None, binding.address.agent_id, child_id)
         assert runtime.chat_sessions.exists(child_address)
+        # The child runs in the background; wait for the Run the started event names.
+        [started] = [
+            payload["data"]
+            for event_type, payload in events
+            if event_type == SUBAGENT_SESSION_STARTED_EVENT
+        ]
+        child_run = runtime.chat_runs.get(started["run_id"])
+        await child_run.wait()
         run_result = runtime.chat_sessions.get(child_address).load_run_result(
             work_id=result["data"]["id"]
         )
         assert run_result is not None
-        assert run_result.summary.run_id is not None
-        child_run_id = run_result.summary.run_id
-        child_run = runtime.chat_runs.get(child_run_id)
+        assert run_result.summary.run_id == child_run.id
         assert child_run.execution_owner == owner
         assert child_run.agent_id == binding.address.agent_id
         assert child_run.session_id == child_id

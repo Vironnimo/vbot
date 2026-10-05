@@ -28,9 +28,13 @@ from core.tools.contracts import ToolContract, ToolContractError
 from core.tools.tools import JsonObject
 
 BACKGROUND_FIELD = "background"
-# Accepted so a requested delivery mode reaches the handler, which states in the
-# result when vBot's fixed mode differs. Never advertised.
-UNADVERTISED_PARAMETERS: JsonObject = {BACKGROUND_FIELD: {"type": "boolean"}}
+# Accepted, never advertised: a requested delivery mode reaches the handler, which
+# states in the result when vBot's fixed mode differs, and a ``session_id`` from a
+# result names the Sub-Agent of that Session.
+UNADVERTISED_PARAMETERS: JsonObject = {
+    BACKGROUND_FIELD: {"type": "boolean"},
+    "session_id": {"type": "string"},
+}
 
 _FIELD_ALIASES = SpellingAliases(
     {
@@ -62,13 +66,23 @@ _FIELD_ALIASES = SpellingAliases(
         BACKGROUND_FIELD: ("run_in_background", "in_background", "non_blocking"),
     }
 )
-# Continue a Sub-Agent Session: a run that needs the Session it continues.
-_CONTINUE_WORDS = frozenset({"continue", "resume", "followup"})
 _ACTION_SYNONYMS = SpellingAliases(
     {
         "run": ("spawn", "delegate", "start", "create", "launch", "dispatch", "execute"),
-        "status": (
-            "list",
+        "send": (
+            "message",
+            "steer",
+            "tell",
+            "continue",
+            "resume",
+            "followup",
+            "reply",
+            "answer",
+            "instruct",
+        ),
+        "list": (
+            "status",
+            "ls",
             "check",
             "get",
             "inspect",
@@ -107,11 +121,6 @@ _TASKS_MESSAGE = (
     'own subagent call, with that task as "content", all in the same turn so they run '
     "concurrently."
 )
-_CONTINUE_WITHOUT_SESSION_MESSAGE = (
-    "subagent was not run: continuing a Sub-Agent needs its Session. Send the agent_id and "
-    'session_id from that Sub-Agent\'s result with the follow-up as "content", or omit '
-    '"action" to start new work.'
-)
 _BOOLEAN_WORDS = {"true": True, "false": False}
 
 
@@ -122,24 +131,15 @@ def normalize_subagent_arguments(
     """Return the canonical ``subagent`` arguments for one Model call."""
     if isinstance(arguments, dict):
         arguments = _task_text_request(arguments)
-    continues: list[bool] = []
     normalized = normalize_call_arguments(
         contract,
         arguments,
         enum_fields=("action", "thinking_effort"),
         field_aliases=_FIELD_ALIASES,
-        field_normalizers={"action": lambda value: _action_word(value, continues)},
+        field_normalizers={"action": _action_word},
     )
     if not isinstance(normalized, dict):
         return normalized
-    # Without a Session, "continue" could mean any earlier Sub-Agent or new work.
-    # A work id is settled later, against tracked work.
-    if (
-        any(continues)
-        and is_placeholder(normalized.get("session_id"), _PLACEHOLDERS["session_id"])
-        and is_placeholder(normalized.get("id"), _PLACEHOLDERS["id"])
-    ):
-        raise ToolContractError(_CONTINUE_WITHOUT_SESSION_MESSAGE)
     if _field(normalized, "toolsets") is not None:
         raise ToolContractError(_TOOLSETS_MESSAGE)
     if _field(normalized, "tasks") is not None:
@@ -171,13 +171,8 @@ def _is_json_object(text: str) -> bool:
         return False
 
 
-def _action_word(value: Any, continues: list[bool]) -> Any:
-    if not isinstance(value, str):
-        return value
-    if spelling(value) in _CONTINUE_WORDS:
-        continues.append(True)
-        return "run"
-    return _ACTION_SYNONYMS.get(value, value)
+def _action_word(value: Any) -> Any:
+    return _ACTION_SYNONYMS.get(value, value) if isinstance(value, str) else value
 
 
 def _field(arguments: dict[str, Any], name: str) -> str | None:

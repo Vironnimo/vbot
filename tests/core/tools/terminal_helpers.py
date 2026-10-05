@@ -35,7 +35,6 @@ def make_context(
     *,
     session_id: str = "session-a",
     result_persisted_hook: Callable[[Callable[[], None]], None] | None = None,
-    nesting_depth: int = 0,
     offered_tools: Collection[str] | None = None,
 ) -> ToolContext:
     """A terminal call's context; *offered_tools* are the Tools the Model was shown."""
@@ -52,7 +51,6 @@ def make_context(
         cwd=tmp_path,
         project_id="project-a",
         result_persisted_hook=result_persisted_hook,
-        nesting_depth=nesting_depth,
         offered_tools=offered_tools,
     )
 

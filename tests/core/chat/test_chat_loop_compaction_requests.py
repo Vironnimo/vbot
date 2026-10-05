@@ -92,9 +92,7 @@ async def test_compaction_routes_session_context_through_selected_adapter(
     session.append(ChatMessage.user("recent request"))
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="recent answer"))
     affinity = runtime.chat_sessions.prompt_cache_affinity_id(session.address)
-    loop = build_chat_loop(runtime, compaction_service=CompactionService()).child_loop(
-        nesting_depth=1
-    )
+    loop = build_chat_loop(runtime, compaction_service=CompactionService())
 
     if manual:
         run = await loop.start_compaction_run("coder", session.id)

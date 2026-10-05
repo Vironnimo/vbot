@@ -52,6 +52,8 @@ from core.providers.reasoning import (
 )
 from core.runs import Run, RunStatus
 from core.sessions import (
+    SUBAGENT_PARENT_META_KEY,
+    SUBAGENT_TAKEN_OVER_AT_META_KEY,
     ChatSession,
     PromptEpoch,
     SeenSkillsUpdate,
@@ -64,6 +66,7 @@ from core.sessions import (
     latest_project_tool_context_id,
 )
 from core.tools import ToolContract
+from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.chat._request_builder import RequestBuilder
@@ -83,6 +86,8 @@ if TYPE_CHECKING:
     from core.tools.terminal_manager import TerminalManager
     from core.tools.tools import ToolRegistry
     from core.usage import UsageRecorder
+
+_LOGGER = get_logger("chat")
 
 
 @dataclass(frozen=True)
@@ -152,6 +157,39 @@ class ChatLoopDependencies:
     # The Terminal Sessions of shell commands; created after the Chat Loop.
     get_terminal_manager: Callable[[], TerminalManager | None]
     usage_recorder: UsageRecorder | None = None
+    # Called once the user's first message in a Sub-Agent Session is persisted.
+    subagent_taken_over: Callable[[SessionAddress], None] | None = None
+
+
+def is_subagent_session(sessions: ChatSessionManager, address: SessionAddress) -> bool:
+    """Return whether *address* is linked to a Parent Agent. Blocking."""
+    return isinstance(sessions.metadata_value(address, SUBAGENT_PARENT_META_KEY), dict)
+
+
+async def takes_over_subagent_session(
+    context: _RunExecutionContext, request: _RunRequest, sessions: ChatSessionManager
+) -> bool:
+    """Return whether persisting *request* is the user's takeover of a Sub-Agent Session."""
+    if not context.subagent_session or request.parent_agent_input or request.internal:
+        return False
+    taken_over_at = await _CHAT_TRANSFORM_WORKERS.run(
+        sessions.metadata_value, context.session.address, SUBAGENT_TAKEN_OVER_AT_META_KEY
+    )
+    return taken_over_at is None
+
+
+async def record_subagent_takeover(
+    dependencies: ChatLoopDependencies, address: SessionAddress
+) -> None:
+    """Store the takeover after the user's message is persisted and report it once."""
+    recorded = await _CHAT_TRANSFORM_WORKERS.run(
+        dependencies.sessions.mark_subagent_taken_over, address
+    )
+    if recorded and dependencies.subagent_taken_over is not None:
+        try:
+            dependencies.subagent_taken_over(address)
+        except Exception:
+            _LOGGER.warning("Sub-Agent takeover report failed for %s", address, exc_info=True)
 
 
 @dataclass(frozen=True)
@@ -172,6 +210,8 @@ class _RunRequest:
     temporary_binding: TemporarySessionBinding | None = None
     input_already_persisted: bool = False
     temporary_parent_binding: TemporarySessionBinding | None = None
+    # Input the Parent Agent of this Sub-Agent Session wrote, not the user.
+    parent_agent_input: bool = False
 
     @property
     def supports_steering(self) -> bool:
@@ -237,6 +277,8 @@ class _RunExecutionContext:
     skill_catalog: PinnedSkillCatalog
     prompt_cache_affinity_id: str
     session_snapshot: _SessionSnapshot
+    # The Session is linked to a Parent Agent (a Sub-Agent Session).
+    subagent_session: bool = False
     request_state: _RequestState | None = None
     image_budget: RequestImageBudget = field(default_factory=RequestImageBudget)
     context_usage: RequestContextUsage = field(default_factory=RequestContextUsage)
@@ -455,6 +497,9 @@ class RequestBuildInputs:
     session_messages_override: list[ChatMessage] | None = None
     image_budget: RequestImageBudget | None = None
     temporary_binding: TemporarySessionBinding | None = None
+    # The Session is linked to a Parent Agent: the System Prompt shows the
+    # Sub-Agent role and the Session grants the Sub-Agent's own Tools.
+    subagent_session: bool = False
     # Start a new prompt epoch's Tool pin and dynamic block pin from the current
     # Tools and blocks instead of reading the Session's pins; the caller persists
     # them (Compaction commit).
@@ -494,6 +539,7 @@ class RequestBuildInputs:
             skill_catalog=context.skill_catalog,
             image_budget=context.image_budget,
             temporary_binding=context.request.temporary_binding,
+            subagent_session=context.subagent_session,
             list_announced_tools=(
                 target is not context.primary_target or not target.unlisted_tool_calls
             ),
@@ -732,9 +778,14 @@ async def create_run_execution_context(
             project_id,
             skill_project_id=skill_project_id,
         )
+        session_address = SessionAddress(
+            project_id=project_id, agent_id=run.agent_id, session_id=run.session_id
+        )
         prompt_cache_affinity_id = await _CHAT_TRANSFORM_WORKERS.run(
-            dependencies.sessions.prompt_cache_affinity_id,
-            SessionAddress(project_id=project_id, agent_id=run.agent_id, session_id=run.session_id),
+            dependencies.sessions.prompt_cache_affinity_id, session_address
+        )
+        subagent_session = await _CHAT_TRANSFORM_WORKERS.run(
+            is_subagent_session, dependencies.sessions, session_address
         )
         session.activated_skill_contents(session_snapshot.active_messages)
         context = _RunExecutionContext(
@@ -755,6 +806,7 @@ async def create_run_execution_context(
             skill_catalog=skill_catalog,
             prompt_cache_affinity_id=prompt_cache_affinity_id,
             session_snapshot=session_snapshot,
+            subagent_session=subagent_session,
         )
         if project_id is None and temporary_source is None:
             loaded_project_id = latest_project_tool_context_id(session_snapshot.active_messages)

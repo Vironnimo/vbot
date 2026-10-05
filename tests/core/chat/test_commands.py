@@ -80,7 +80,7 @@ def test_built_in_commands_declare_their_argument_and_result_kind() -> None:
         "reflect": ("optional", "state_change"),
         "rename": ("optional", "notice"),
         "status": ("none", "detail"),
-        "stop": ("none", "notice"),
+        "stop": ("optional", "notice"),
     }
 
 
@@ -92,7 +92,7 @@ def test_built_in_commands_declare_their_argument_and_result_kind() -> None:
         ("/handoff a b", True),
         ("/rename Release planning", True),
         ("/bogus", False),
-        ("/stop now", False),
+        ("/stop all", True),
         ("/status now", False),
         ("hello", False),
     ],
@@ -160,6 +160,46 @@ async def test_stop_cancels_the_active_run_only_when_executed() -> None:
     release.set()
     with pytest.raises(RunCancelledError):
         await run.wait()
+
+
+@pytest.mark.asyncio
+async def test_stop_all_hands_the_session_to_stop_all_and_other_arguments_stop_nothing() -> None:
+    manager = ChatRunManager()
+    release = asyncio.Event()
+
+    async def execute(_run: Run) -> str:
+        await release.wait()
+        return "done"
+
+    run = await manager.start(
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one"), execute
+    )
+    stopped: list[SessionAddress] = []
+    counts = iter([0, 4])
+
+    async def stop_all(address: SessionAddress) -> int:
+        stopped.append(address)
+        return next(counts)
+
+    dispatcher = CommandDispatcher(manager, stop_all=stop_all)
+    nothing = await _execute(dispatcher, "/stop ALL", project_id="vbot")
+    some = await _execute(dispatcher, "/stop all", project_id="vbot")
+    unknown = await _execute(dispatcher, "/stop now")
+    unwired = await _execute(CommandDispatcher(manager), "/stop all")
+
+    tree = SessionAddress(project_id="vbot", agent_id="coder", session_id="session-one")
+    assert stopped == [tree, tree]
+    replies = [outcome.feedback for outcome in (nothing, some, unknown, unwired)]
+    assert [reply.kind if reply else None for reply in replies] == ["notice"] * 4
+    texts = [reply.text for reply in replies if reply is not None]
+    # Nothing stopped, something stopped and the usage hint are three different answers;
+    # without a stop_all owner "/stop all" gets the usage hint too.
+    assert len(set(texts[:3])) == 3
+    assert texts[3] == texts[2]
+    # Only the Session tree owner stops anything: the active Run is untouched here.
+    assert run.cancel_requested is False
+    release.set()
+    assert await run.wait() == "done"
 
 
 def test_stop_without_an_active_run_still_replies_with_a_notice() -> None:

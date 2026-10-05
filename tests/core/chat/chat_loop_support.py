@@ -100,6 +100,7 @@ def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
             )(run, session)
         ),
         usage_recorder=getattr(runtime, "usage_recorder", None),
+        subagent_taken_over=getattr(runtime, "subagent_taken_over", None),
     )
     return ChatLoop(dependencies, **kwargs)
 
@@ -357,7 +358,7 @@ class StubPrompts:
         soul_context: str | None = None,
         memory_files_context: str | None = None,
         agent_project_id: str | None = None,
-        nesting_depth: int = 0,
+        subagent_session: bool = False,
         skill_registry: Any = None,
         skill_catalog: Any = None,
         read_paths: list[Path] | None = None,

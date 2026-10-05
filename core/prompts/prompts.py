@@ -31,6 +31,7 @@ from core.prompts._types import (
     BLOCK_OWNER_CHANNEL,
     BLOCK_OWNER_IDENTITY,
     BLOCK_OWNER_SKILL_MANAGE,
+    BLOCK_OWNER_SUBAGENT_SESSION,
     CORE_AGENT_BODY_BLOCK_ID,
     CORE_CHANNELS_BLOCK_ID,
     CORE_IDENTITY_RUNTIME_BLOCK_ID,
@@ -38,6 +39,7 @@ from core.prompts._types import (
     CORE_SKILL_MAINTENANCE_BLOCK_ID,
     CORE_SKILLS_BLOCK_ID,
     CORE_SOUL_BLOCK_ID,
+    CORE_SUBAGENT_ROLE_BLOCK_ID,
     CORE_SYSTEM_REMINDERS_BLOCK_ID,
     CORE_TOOLS_BLOCK_ID,
     CORE_TOOLS_LIST_BLOCK_ID,
@@ -105,6 +107,7 @@ __all__ = [
     "BLOCK_OWNER_ALWAYS",
     "BLOCK_OWNER_CHANNEL",
     "BLOCK_OWNER_IDENTITY",
+    "BLOCK_OWNER_SUBAGENT_SESSION",
     "BLOCK_OWNER_SKILL_MANAGE",
     "CORE_AGENT_BODY_BLOCK_ID",
     "CORE_CHANNELS_BLOCK_ID",
@@ -113,6 +116,7 @@ __all__ = [
     "CORE_SKILLS_BLOCK_ID",
     "CORE_SKILL_MAINTENANCE_BLOCK_ID",
     "CORE_SOUL_BLOCK_ID",
+    "CORE_SUBAGENT_ROLE_BLOCK_ID",
     "CORE_SYSTEM_REMINDERS_BLOCK_ID",
     "CORE_TOOLS_BLOCK_ID",
     "CORE_TOOLS_LIST_BLOCK_ID",
@@ -237,7 +241,7 @@ class SystemPromptManager:
         soul_context: str | None = None,
         memory_files_context: str | None = None,
         agent_project_id: str | None = None,
-        nesting_depth: int = 0,
+        subagent_session: bool = False,
         skill_registry: SkillPromptRegistry | None = None,
         skill_catalog: PinnedSkillCatalog | None = None,
         read_paths: list[Path] | None = None,
@@ -310,7 +314,7 @@ class SystemPromptManager:
             soul_context=soul_context,
             memory_files_context=memory_files_context,
             agent_project_id=agent_project_id,
-            nesting_depth=nesting_depth,
+            subagent_session=subagent_session,
             effective_tool_names=effective_tool_names,
             session_tool_grants=session_tool_grants,
             read_observer=read_paths.append if read_paths is not None else None,
@@ -335,7 +339,9 @@ class SystemPromptManager:
             definitions,
             _selected_layout(agent, definitions, layout),
             context,
-            owner_activity=self._owner_activity(effective_tool_names, session_tool_grants),
+            owner_activity=self._owner_activity(
+                effective_tool_names, session_tool_grants, subagent_session=subagent_session
+            ),
             override_resolver=self._catalog.override_resolver(prompt_scope),
             producers=producers,
             replacements=self._runtime_replacements(agent),
@@ -354,7 +360,7 @@ class SystemPromptManager:
         soul_context: str | None = None,
         memory_files_context: str | None = None,
         agent_project_id: str | None = None,
-        nesting_depth: int = 0,
+        subagent_session: bool = False,
         effective_tool_definitions: Sequence[Mapping[str, Any]] | None = None,
         session_tool_grants: Sequence[str] = (),
     ) -> dict[str, RenderedBlock]:
@@ -379,11 +385,13 @@ class SystemPromptManager:
             soul_context=soul_context,
             memory_files_context=memory_files_context,
             agent_project_id=agent_project_id,
-            nesting_depth=nesting_depth,
+            subagent_session=subagent_session,
             effective_tool_names=effective_tool_names,
             session_tool_grants=session_tool_grants,
         )
-        owner_activity = self._owner_activity(effective_tool_names, session_tool_grants)
+        owner_activity = self._owner_activity(
+            effective_tool_names, session_tool_grants, subagent_session=subagent_session
+        )
         dynamic = [definition for definition in self._catalog.definitions if definition.render]
         layout = _selected_layout(agent, dynamic, self._catalog.resolve_layout(scope_key))
         rendered: dict[str, RenderedBlock] = {}
@@ -411,7 +419,7 @@ class SystemPromptManager:
         soul_context: str | None,
         memory_files_context: str | None,
         agent_project_id: str | None,
-        nesting_depth: int,
+        subagent_session: bool,
         effective_tool_names: frozenset[str] | None,
         session_tool_grants: Sequence[str],
         read_observer: Callable[[Path], None] | None = None,
@@ -423,7 +431,7 @@ class SystemPromptManager:
             soul_context=soul_context,
             memory_files_context=memory_files_context,
             agent_project_id=agent_project_id,
-            nesting_depth=nesting_depth,
+            subagent_session=subagent_session,
             scope=scope_key,
             read_observer=read_observer,
             tool_available=self._tool_availability(
@@ -434,7 +442,11 @@ class SystemPromptManager:
         )
 
     def _owner_activity(
-        self, effective_tool_names: frozenset[str] | None, session_tool_grants: Sequence[str]
+        self,
+        effective_tool_names: frozenset[str] | None,
+        session_tool_grants: Sequence[str],
+        *,
+        subagent_session: bool = False,
     ) -> OwnerActivity:
         return CallableOwnerActivity(
             lambda owner, owner_agent: self._is_owner_active(
@@ -442,6 +454,7 @@ class SystemPromptManager:
                 owner_agent,
                 effective_tool_names=effective_tool_names,
                 session_tool_grants=session_tool_grants,
+                subagent_session=subagent_session,
             )
         )
 
@@ -932,6 +945,7 @@ class SystemPromptManager:
         *,
         effective_tool_names: Collection[str] | None = None,
         session_tool_grants: Sequence[str] = (),
+        subagent_session: bool = False,
     ) -> bool:
         """Return whether a block's owner is active for *agent* (gate 2, D5).
 
@@ -945,6 +959,8 @@ class SystemPromptManager:
           else in the agent's effective allowed tools. A trailing ``*`` matches
           any listed Tool whose name starts with the text before it.
         - ``channel`` → the agent has at least one enabled Channel config.
+        - ``subagent_session`` → the prompt is built for a Session linked to a
+          Parent Agent (a Sub-Agent Session).
         - ``extension:<name>`` → the extension is in the loaded-extension set the
           runtime rebuilds and injects on every extension (re)load.
         """
@@ -957,6 +973,8 @@ class SystemPromptManager:
             return bool(agent.workspace) and memory_tool_enabled(mode)
         if owner == "channel":
             return bool(self._agent_enabled_channels(agent))
+        if owner == BLOCK_OWNER_SUBAGENT_SESSION:
+            return subagent_session
         tool_prefix = "tool:"
         if owner.startswith(tool_prefix):
             tool_name = owner[len(tool_prefix) :]

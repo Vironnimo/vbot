@@ -13,6 +13,8 @@ from core.chat import ChatMessage
 from core.prompts.pinned_context import PINNED_MEMORY_FILES_SLOT, PINNED_SKILL_CATALOG_SLOT
 from core.runs import Run, RunKind
 from core.sessions import (
+    SUBAGENT_PARENT_META_KEY,
+    SUBAGENT_SESSION_META_KEY,
     SessionAddress,
     SessionListFilters,
 )
@@ -456,6 +458,44 @@ def test_history_versions_report_live_sessions_across_scopes(manager) -> None:
     generation_id, revision = versions[live.address]
     assert isinstance(generation_id, str) and generation_id
     assert revision >= 1
+
+
+def test_subagent_links_find_live_children_of_a_parent_and_a_session_by_its_id(manager) -> None:
+    parent = _address("parent", "root")
+    project_parent = _address("parent", "root", "alpha")
+
+    def child(session_id: str, subagent_id: str, linked_to: SessionAddress) -> SessionAddress:
+        address: SessionAddress = manager.create("worker", session_id=session_id).address
+        manager.set_metadata(
+            address,
+            {
+                SUBAGENT_SESSION_META_KEY: True,
+                SUBAGENT_PARENT_META_KEY: {
+                    "id": subagent_id,
+                    "agent_id": linked_to.agent_id,
+                    "session_id": linked_to.session_id,
+                    "project_id": linked_to.project_id,
+                },
+            },
+        )
+        return address
+
+    # Created out of name order: children are listed oldest first.
+    second = child("b-first", "sa_b", parent)
+    first = child("a-second", "sa_a", parent)
+    in_project = child("project-child", "sa_p", project_parent)
+    child("other-child", "sa_o", _address("parent", "other"))
+    gone = child("gone-child", "sa_gone", parent)
+    manager.create("worker", session_id="unlinked")
+    manager.get(gone).delete()
+
+    assert manager.subagent_children(parent) == [second, first]
+    assert manager.subagent_children(project_parent) == [in_project]
+    assert manager.subagent_children(_address("parent", "childless")) == []
+    assert manager.subagent_session("sa_a") == first
+    assert manager.subagent_session("sa_p") == in_project
+    assert manager.subagent_session("sa_gone") is None
+    assert manager.subagent_session("sa_missing") is None
 
 
 def test_live_scopes_name_each_scope_that_still_has_a_live_session(manager) -> None:

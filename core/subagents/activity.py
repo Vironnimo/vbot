@@ -1,4 +1,8 @@
-"""Live, non-canonical activity transcripts for Sub-Agent Runs.
+"""Live, non-canonical activity transcripts for Sub-Agent Sessions.
+
+Each Sub-Agent Session has one Markdown file that receives the visible activity
+of all its followed Runs in start order. The file is protected from cleanup
+while a Run is followed; retention counts from the end of the latest one.
 
 The Event Loop only builds each file's Markdown text. One process-wide ordered
 writer thread creates, appends to and completes every activity file, so a slow
@@ -59,21 +63,28 @@ _DROPPED_TEXT_NOTE = _SECTION_END + _MISSING_ACTIVITY_NOTE
 
 
 class SubAgentActivity:
-    """Own one Sub-Agent Run's temporary Markdown activity file.
+    """Own one Sub-Agent Session's temporary Markdown activity file.
 
     Only the writer thread touches the file and its lease; every other method
     runs on the Event Loop and never waits for the disk.
     """
 
-    def __init__(self, lease: TemporaryFileLease, path: Path) -> None:
-        self._lease = lease
+    def __init__(
+        self, temporary_files: TemporaryFileManager, lease: TemporaryFileLease, path: Path
+    ) -> None:
+        self._temporary_files = temporary_files
+        # Writer thread only: the lease protecting the file, while one is held.
+        self._lease: TemporaryFileLease | None = lease
+        self._lease_path = lease.path
         self._path = path
-        self._run: Run | None = None
+        # Followed Runs whose watch has not finished, in start order.
+        self._watches: list[tuple[Run, asyncio.Task[None]]] = []
         # Strong reference: the event loop keeps only weak references to tasks,
-        # so an unsaved watch task may be garbage-collected mid-execution.
+        # so an unsaved watch task may be garbage-collected mid-execution. Each
+        # watch waits for the one before it, so Runs appear in start order.
         self._watch_task: asyncio.Task[None] | None = None
-        # Set once the final text and the lease completion are handed off.
-        self._closed = False
+        # Whether text is accepted: from a watch's start until its outcome.
+        self._open = False
         self._buffer: list[str] = []
         # Whether the buffer holds text that must never be dropped.
         self._buffer_kept = False
@@ -100,8 +111,9 @@ class SubAgentActivity:
     ) -> SubAgentActivity | None:
         """Allocate the file and write non-sensitive identity metadata.
 
-        The file is created on the writer thread; ``None`` means it is
-        unavailable, which affects observability only.
+        The file is created on the writer thread and stays protected until its
+        first followed Run ends; ``None`` means it is unavailable, which affects
+        observability only.
         """
         header = (
             "# Sub-Agent activity\n\n"
@@ -121,7 +133,7 @@ class SubAgentActivity:
         except asyncio.CancelledError:
             # The file exists but nobody will follow it: start its retention.
             for activity in created:
-                activity._close()
+                activity.release()
             raise
         return created[0] if created else None
 
@@ -148,43 +160,40 @@ class SubAgentActivity:
                 error,
             )
             return None
-        return cls(lease, path)
+        return cls(temporary_files, lease, path)
 
-    def mark_queued(self) -> None:
-        """Record that the admitted Run is waiting for its Session turn."""
-        self._write(_status_text(_utc_timestamp(), "queued"), kept=True)
+    def follow(self, run: Run) -> None:
+        """Append one Run's visible activity once the Runs followed before it are written."""
+        previous = self._watch_task
+        task = asyncio.create_task(self._watch(run, previous), name=f"subagent-activity:{run.id}")
+        self._watch_task = task
+        entry = (run, task)
+        self._watches.append(entry)
+        task.add_done_callback(lambda _done: self._watches.remove(entry))
 
-    def attach(self, run: Run) -> None:
-        """Start replaying and following one Run's visible activity events."""
-        if self._run is not None or self._closed:
-            return
-        self._run = run
-        self._watch_task = asyncio.create_task(
-            self._watch(run),
-            name=f"subagent-activity:{run.id}",
-        )
-
-    def finish_unstarted(self, status: str = "cancelled before start") -> None:
-        """Finalize a queued activity file whose Run will never start."""
-        if self._run is not None or self._closed:
-            return
-        self._write(_status_text(_utc_timestamp(), status), kept=True)
-        self._close()
+    def release(self) -> None:
+        """Start the retention of a file whose first Run never started."""
+        if self._watch_task is None:
+            _WRITER.hand_off(self._finish_lease, limit=_NO_LIMIT)
 
     async def drain(self) -> None:
         """Wait until the text produced so far is on disk.
 
-        Once the followed Run has ended this includes its outcome: the watcher
+        Once a followed Run has ended this includes its outcome: its watcher
         finishes first. A Run still working is not waited for.
         """
-        run, task = self._run, self._watch_task
-        if run is not None and task is not None and run.status is not RunStatus.RUNNING:
-            await asyncio.wait({task})
-        if not self._closed:
+        ended = [task for run, task in self._watches if run.status is not RunStatus.RUNNING]
+        if ended:
+            await asyncio.wait(ended)
+        if self._open:
             self._flush()
         await _WRITER.drain()
 
-    async def _watch(self, run: Run) -> None:
+    async def _watch(self, run: Run, previous: asyncio.Task[None] | None) -> None:
+        if previous is not None:
+            await asyncio.wait({previous})
+        self._open = True
+        _WRITER.hand_off(self._reopen_lease, limit=_NO_LIMIT)
         assistant_open = False
         assistant_streamed = False
         outcome: tuple[str, str] | None = None
@@ -256,7 +265,7 @@ class SubAgentActivity:
 
     def _write(self, text: str, *, kept: bool) -> None:
         """Buffer text for the writer; it is handed off within the flush interval."""
-        if self._closed:
+        if not self._open:
             return
         self._buffer.append(text)
         self._buffer_kept = self._buffer_kept or kept
@@ -291,11 +300,26 @@ class SubAgentActivity:
 
     def _close(self) -> None:
         """Hand off the remaining text and the lease completion; ignore later text."""
-        if self._closed:
+        if not self._open:
             return
         self._flush()
-        self._closed = True
-        _WRITER.hand_off(self._lease.finish, limit=_NO_LIMIT)
+        self._open = False
+        _WRITER.hand_off(self._finish_lease, limit=_NO_LIMIT)
+
+    def _reopen_lease(self) -> None:
+        """Protect the file again for the next followed Run, on the writer thread."""
+        if self._lease is not None:
+            return
+        try:
+            self._lease = self._temporary_files.reopen(self._lease_path)
+        except (OSError, ValueError) as error:
+            _LOGGER.warning("Sub-agent activity file unavailable (path=%s): %s", self._path, error)
+
+    def _finish_lease(self) -> None:
+        """Start the file's retention, on the writer thread."""
+        if self._lease is not None:
+            self._lease.finish()
+            self._lease = None
 
     def _append(self, text: str) -> None:
         """Append one chunk on the writer thread; the close flushes it."""

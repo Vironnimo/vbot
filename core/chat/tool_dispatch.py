@@ -65,7 +65,6 @@ class ToolDispatchContext:
     agent: Any
     session: ChatSession
     run: Run
-    nesting_depth: int
     vbot_root: Path
     data_root: Path
     project_cwd: Path | None = None
@@ -789,7 +788,6 @@ async def _dispatch_tool_calls(
                 context.request_turn_end if context.allow_owned_effects else None
             ),
             tool_result_payload_registrar=context.stage_result_payload,
-            nesting_depth=context.nesting_depth,
             input_contracts=context.tool_contracts,
             change_tracker=context.change_tracker,
         ),

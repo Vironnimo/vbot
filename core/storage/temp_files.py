@@ -96,6 +96,26 @@ class TemporaryFileManager:
             self._active.add(path)
         return TemporaryFileLease(path=path, _manager=self)
 
+    def reopen(self, path: Path) -> TemporaryFileLease:
+        """Protect a file created by :meth:`create` again, recreating it if it was removed.
+
+        A producer that writes one file across several active periods finishes
+        its lease after each period and reopens it for the next, so retention
+        counts from the end of the latest period. Blocking.
+        """
+        if path.parent.parent != self.root or path.parent.name not in self._retention:
+            raise ValueError(f"Not a temporary file of this manager: {path}")
+        with self._lock:
+            self._active.add(path)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch(exist_ok=True)
+        except OSError:
+            with self._lock:
+                self._active.discard(path)
+            raise
+        return TemporaryFileLease(path=path, _manager=self)
+
     def start(self) -> None:
         """Sweep crash leftovers and start periodic cleanup when possible.
 

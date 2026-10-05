@@ -7,6 +7,7 @@ import json
 import logging
 import threading
 from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -23,6 +24,8 @@ from core.sessions._types import (
     SESSION_AUTO_TITLE_INITIALIZED_KEY,
     SESSION_AUTO_TITLE_KEY,
     SESSION_TITLE_KEY,
+    SUBAGENT_PARENT_META_KEY,
+    SUBAGENT_TAKEN_OVER_AT_META_KEY,
     DeliveryReceipt,
     JsonObject,
     OwnedRunRecord,
@@ -205,6 +208,14 @@ class ChatSessionManager:
         """Return which *addresses* name live Sessions, in one set-oriented read."""
         return self._store.existing_addresses(addresses)
 
+    def subagent_children(self, parent: SessionAddress) -> list[SessionAddress]:
+        """Return the live Sub-Agent Sessions linked to *parent*, oldest first."""
+        return self._store.subagent_children(parent)
+
+    def subagent_session(self, subagent_id: str) -> SessionAddress | None:
+        """Return the live Sub-Agent Session with this public Sub-Agent id, if any."""
+        return self._store.subagent_session(subagent_id)
+
     def get(self, address: SessionAddress) -> ChatSession:
         """Resolve a live Session and capture its generation for later Run admission."""
         _validate_session_id(address.session_id)
@@ -383,6 +394,24 @@ class ChatSessionManager:
         if previous != normalized:
             self._notify_callbacks("title_changed", self._title_changed_callbacks, address)
         return normalized
+
+    def mark_subagent_taken_over(self, address: SessionAddress) -> bool:
+        """Record that the user took over a Sub-Agent Session; return whether this call did.
+
+        Only a Session with a Parent link records it, once; the timestamp is
+        ISO 8601 UTC.
+        """
+        stamp = datetime.now(UTC).isoformat()
+
+        def update(metadata: JsonObject) -> None:
+            if isinstance(metadata.get(SUBAGENT_PARENT_META_KEY), dict):
+                metadata.setdefault(SUBAGENT_TAKEN_OVER_AT_META_KEY, stamp)
+
+        previous, updated = self._store.mutate_metadata(address, update)
+        return (
+            SUBAGENT_TAKEN_OVER_AT_META_KEY not in previous
+            and SUBAGENT_TAKEN_OVER_AT_META_KEY in updated
+        )
 
     def mark_auto_title_initialized(self, address: SessionAddress) -> None:
         self._store.mutate_metadata(

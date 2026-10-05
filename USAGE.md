@@ -684,16 +684,16 @@ vbot prompt preview coder
 
 The CLI Skill manager authors only global and private Identity Agent scopes; `inventory` exposes package ids and editable scopes; `inspect <inventory-id>` reads the complete original Skill even for read-only sources. It supports `install`, `read`, `create`, `update`, `delete`, `file write`, and `file remove`. Project Skills stay repository-owned and bundled Skills stay read-only. The Prompt manager likewise supports default and `agent:<id>` scopes, custom user blocks, and complete layout order/enabled-state updates. Use `prompt show <block-id>` to read the full content before an update.
 
-The `subagent` Tool delegates a bounded task to an authorized Identity or Project Agent in a child Session. Identity Agents may be allowed to target all Agents or an explicit list; Project Agents remain confined to their own Team. Foreground work returns directly, while top-level background work completes asynchronously and wakes the parent with the finished results. Nested Sub-Agents run in the foreground, and background Bash is unavailable inside a Sub-Agent so work cannot be stranded after the child Session ends.
+The `subagent` Tool delegates a bounded task to an authorized Identity or Project Agent in a child Session. Identity Agents may be allowed to target all Agents or an explicit list; Project Agents remain confined to their own Team. Every Sub-Agent works in the background: the call returns its id at once, and each answer the Sub-Agent gives reaches the parent automatically, waking it when idle, together with a line naming what the Sub-Agent still has running. The parent can message a Sub-Agent (`send`), list its whole tree, and stop any Sub-Agent below it with everything that Sub-Agent started. Sub-Agents can ask their parent questions with `message_parent`, and shell commands, Terminals and nested Sub-Agents work the same at every depth. When you write in a Sub-Agent's Session yourself, you take it over: its answers then go to you and no longer to the parent. Stop ends only the current Run; `/stop all` (and Stop all in the WebUI) also stops the Session's background commands, Terminals and Sub-Agents.
 
-Default limits are four levels of nesting, eight Sub-Agents per model turn, and a 60-minute foreground timeout. These are configurable in Settings. Each admitted child Run gets a supplemental activity file under `<data-dir>/artifacts/temp/subagents/`, retained for 24 hours after completion; canonical child history remains in its Session.
+Default limits are four levels of nesting and eight Sub-Agents working at the same time in one Agent tree (a top-level Session plus all Sub-Agents below it). Both are configurable in Settings. Each Sub-Agent Session gets one supplemental activity file under `<data-dir>/artifacts/temp/subagents/` that records all its turns, retained for 24 hours after the latest one ends; canonical child history remains in its Session.
 
 ## Settings and specialized Models
 
 Settings centralizes validated runtime policy. Major areas include:
 
 - Agent defaults for Model, fallback Model, temperature, thinking effort, Tools, and Skills
-- Sub-Agent authorization and depth, per-turn, and timeout limits
+- Sub-Agent authorization, nesting depth, and the number of Sub-Agents working at the same time
 - Reflection cadence and review behavior for Identity Agents
 - Compaction strategy, trigger, Model selection, and Agent, Project, or Session overrides
 - Conversation search (Recall): keyword search, optional search by meaning with its embedding Model, and the search index status with a rebuild

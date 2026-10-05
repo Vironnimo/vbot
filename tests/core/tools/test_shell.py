@@ -113,7 +113,7 @@ class Shell:
         self.trees.append(tree)
         return tree
 
-    def context(self, *, depth: int = 0) -> ToolContext:
+    def context(self) -> ToolContext:
         return ToolContext(
             agent_id="agent-a",
             session_id="session-a",
@@ -126,21 +126,16 @@ class Shell:
             data_root=self.tmp_path,
             cwd=self.tmp_path,
             project_id="project-a",
-            nesting_depth=depth,
             tool_settings={"bash": {"allowed_env": ["API_TOKEN"]}},
             cancel_registration_hook=self.cancel_callbacks.append,
             background_registration_hook=self.background_callbacks.append,
             result_persisted_hook=self.persisted.append,
         )
 
-    def call(
-        self, arguments: JsonObject, *, depth: int = 0, terminal: bool = True
-    ) -> asyncio.Task[JsonObject]:
+    def call(self, arguments: JsonObject, *, terminal: bool = True) -> asyncio.Task[JsonObject]:
         """Call the shell as the executor does, for an Agent with or without the terminal Tool."""
         allowed = [SHELL_TOOL_NAME, "terminal"] if terminal else [SHELL_TOOL_NAME]
-        return asyncio.ensure_future(
-            dispatch(self.registry, self.context(depth=depth), arguments, allowed)
-        )
+        return asyncio.ensure_future(dispatch(self.registry, self.context(), arguments, allowed))
 
     async def started(self) -> tuple[FakeTerminalAdapter, FakeTree]:
         await eventually(lambda: bool(self.trees))
@@ -287,12 +282,11 @@ async def test_running_output_is_the_whole_transcript_and_screen(shell: Shell) -
     assert result["output"].splitlines() == [f"row {number}" for number in range(1, 121)]
 
 
-@pytest.mark.parametrize("depth", [0, 1])
 @pytest.mark.asyncio
-async def test_idle_command_continues_as_terminal_and_only_depth_zero_gets_its_result(
-    shell: Shell, depth: int
+async def test_idle_command_continues_as_terminal_and_its_result_is_delivered(
+    shell: Shell,
 ) -> None:
-    call = shell.call({"command": "read-name"}, depth=depth)
+    call = shell.call({"command": "read-name"})
     adapter, tree = await shell.started()
     adapter.emit("Name: ")
     await shell.run_clock(call, until=SHELL_HANDOFF_SECONDS)
@@ -310,14 +304,13 @@ async def test_idle_command_continues_as_terminal_and_only_depth_zero_gets_its_r
         {"action": "wait", "terminal_id": terminal_id},
         {"action": "kill", "terminal_id": terminal_id},
     ]
-    assert ("Its result arrives as a new message when it exits." in next_text) is (depth == 0)
-    assert ("Its result does not arrive on its own." in next_text) is (depth == 1)
+    assert next_text.endswith("Its result arrives as a new message when it exits.")
     assert terminal_id in [info.terminal_id for info in shell.manager.list_terminals()]
 
     tree.shell_exits(0)
     await eventually(lambda: shell.manager.command_report(result["terminal_id"]).exited)
     await asyncio.sleep(0)
-    assert len(shell.bodies()) == (1 if depth == 0 else 0)
+    assert len(shell.bodies()) == 1
 
 
 @pytest.mark.parametrize(
@@ -329,7 +322,7 @@ async def test_idle_command_continues_as_terminal_and_only_depth_zero_gets_its_r
     ],
 )
 @pytest.mark.asyncio
-async def test_long_command_is_handed_off_at_depth_zero_and_its_result_delivered(
+async def test_long_command_is_handed_off_and_its_result_delivered(
     shell: Shell, timeout: int | None, limit: str
 ) -> None:
     arguments: JsonObject = {"command": "sleep"}
@@ -356,22 +349,8 @@ async def test_long_command_is_handed_off_at_depth_zero_and_its_result_delivered
 
 
 @pytest.mark.asyncio
-async def test_subagent_without_terminal_waits_until_the_command_exits(shell: Shell) -> None:
-    call = shell.call({"command": "slow"}, depth=1, terminal=False)
-    _adapter, tree = await shell.started()
-    await shell.run_clock(call, until=SHELL_HANDOFF_SECONDS * 2)
-    assert not call.done()
-
-    tree.shell_exits(0)
-    assert data(await call)["status"] == "exited"
-
-
-@pytest.mark.parametrize("depth", [0, 1])
-@pytest.mark.asyncio
-async def test_timeout_stops_the_command_and_says_how_to_let_it_finish(
-    shell: Shell, depth: int
-) -> None:
-    call = shell.call({"command": "hang", "timeout": 5}, depth=depth)
+async def test_timeout_stops_the_command_and_says_how_to_let_it_finish(shell: Shell) -> None:
+    call = shell.call({"command": "hang", "timeout": 5})
     adapter, tree = await shell.started()
     await shell.run_clock(call, until=5)
     await eventually(lambda: "\x03" in adapter.writes)
@@ -380,11 +359,8 @@ async def test_timeout_stops_the_command_and_says_how_to_let_it_finish(
     result = data(await call)
     assert result["status"] == "stopped"
     assert result["stopped_because"].startswith("it was still running at the 5-second timeout")
-    # Only where mode exists does the text point servers to it.
     assert result["stopped_because"].endswith(
         "or 0 for no limit; run servers and watchers with mode background."
-        if depth == 0
-        else "or 0 for no limit."
     )
     assert result["exit_code"] == 1
 
@@ -418,28 +394,21 @@ async def test_user_can_stop_the_command_or_move_it_to_the_background(
 
 
 @pytest.mark.parametrize(
-    ("depth", "timeout", "limit"),
+    ("timeout", "limit"),
     [
         # A server runs until it exits: background mode has no default timeout.
-        (0, None, "it has no timeout"),
-        (0, 30, "its 30-second timeout stops it in 30 seconds"),
-        (1, None, None),
+        (None, "it has no timeout"),
+        (30, "its 30-second timeout stops it in 30 seconds"),
     ],
 )
 @pytest.mark.asyncio
-async def test_background_mode_returns_at_once_but_not_in_a_subagent(
-    shell: Shell, depth: int, timeout: int | None, limit: str | None
+async def test_background_mode_returns_at_once(
+    shell: Shell, timeout: int | None, limit: str
 ) -> None:
     arguments: JsonObject = {"command": "serve", "mode": "background"}
     if timeout is not None:
         arguments["timeout"] = timeout
-    result = await shell.call(arguments, depth=depth)
-
-    if limit is None:
-        assert result["error"]["code"] == "background_unavailable_in_subagent"
-        assert shell.factory.calls == []
-        return
-    running = data(result)
+    running = data(await shell.call(arguments))
     terminal_id = running["terminal_id"]
     assert running["status"] == "running"
     assert running["next"].startswith(
@@ -677,7 +646,7 @@ async def test_update_handoff_token_is_claimable_exactly_while_the_command_runs(
 async def test_statuses_of_handed_off_commands_fold_from_results_and_deliveries(
     shell: Shell,
 ) -> None:
-    call = shell.call({"command": "serve", "description": "Serve (dev)"}, depth=0)
+    call = shell.call({"command": "serve", "description": "Serve (dev)"})
     _adapter, tree = await shell.started()
     await shell.run_clock(call, until=SHELL_HANDOFF_SECONDS + 1)
     running = await call
@@ -704,35 +673,21 @@ async def test_statuses_of_handed_off_commands_fold_from_results_and_deliveries(
 
 
 @pytest.mark.parametrize(
-    ("depth", "offered", "continuation", "has_mode"),
+    ("offered", "continuation"),
     [
         (
-            0,
             {"terminal"},
             "A command still running after 90 seconds, or waiting for input, keeps running in "
             "a terminal, and the result says how to follow it up.",
-            True,
         ),
         (
-            0,
             set(),
             "A command still running after 90 seconds keeps running in the background, and its "
             "result arrives as a new message when it exits.",
-            True,
         ),
-        (
-            1,
-            {"terminal"},
-            "A command waiting for input keeps running in a terminal, and the result says how "
-            "to follow it up.",
-            False,
-        ),
-        (1, set(), None, False),
     ],
 )
-def test_definition_fits_the_session_depth_and_offered_tools(
-    depth: int, offered: set[str], continuation: str | None, has_mode: bool
-) -> None:
+def test_definition_fits_the_offered_terminal_tool(offered: set[str], continuation: str) -> None:
     definitions: list[JsonObject] = [
         {
             "name": SHELL_TOOL_NAME,
@@ -742,27 +697,15 @@ def test_definition_fits_the_session_depth_and_offered_tools(
         *({"name": name} for name in sorted(offered)),
     ]
 
-    projected = project_shell_tool_definitions(definitions, nesting_depth=depth)[0]
+    projected = project_shell_tool_definitions(definitions)[0]
 
     description = projected["description"]
-    if continuation is None:
-        assert "keeps running" not in description
-    else:
-        assert continuation in description
+    assert continuation in description
     # The boundary to the terminal Tool appears only where that Tool is offered.
     assert ("such as REPLs, TUIs and coding-agent CLIs, use terminal." in description) is (
         "terminal" in offered
     )
-    properties = projected["parameters"]["properties"]
-    assert ("mode" in properties) is has_mode
-    assert properties["timeout"]["description"] == (
-        "Seconds before the command is stopped, counted from its start; 0 for no limit. "
-        + (
-            "Omitted, it is 600 in foreground and no limit in background."
-            if has_mode
-            else "Omitted, it is 600."
-        )
-    )
+    assert projected["parameters"] == SHELL_TOOL_PARAMETERS
 
 
 @pytest.mark.parametrize(
@@ -795,7 +738,7 @@ def test_definition_names_only_the_offered_file_and_web_tools(
         *({"name": name} for name in sorted({"terminal", *offered})),
     ]
 
-    description = project_shell_tool_definitions(definitions, nesting_depth=0)[0]["description"]
+    description = project_shell_tool_definitions(definitions)[0]["description"]
 
     if sentence is not None:
         assert sentence in description

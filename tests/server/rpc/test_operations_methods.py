@@ -369,6 +369,7 @@ def test_list_returns_blocks_in_layout_order_with_scopes(tmp_path: Path) -> None
         "core:identity_runtime",
         "core:tools",
         "core:system_reminders",
+        "core:subagent_role",
         "core:tools_list",
         "core:channels",
         "core:skills",

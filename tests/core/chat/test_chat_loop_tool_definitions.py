@@ -141,7 +141,7 @@ async def test_ambiguous_tool_spelling_never_dispatches_a_harness_alias(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_shell_definition_fits_the_run_depth_and_offered_tools(tmp_path: Path) -> None:
+async def test_shell_definition_fits_the_offered_tools(tmp_path: Path) -> None:
     tools = ToolRegistry()
     tools.register(
         SHELL_TOOL_NAME,
@@ -150,28 +150,18 @@ async def test_shell_definition_fits_the_run_depth_and_offered_tools(tmp_path: P
         lambda _context, _arguments: tool_success({"status": "exited"}),
         open_input_schema=True,
     )
-    runtime = tool_runtime(
-        tmp_path,
-        tools,
-        [final("top-level done"), final("nested done")],
-        allowed_tools=[SHELL_TOOL_NAME],
-    )
-    parent = build_chat_loop(runtime)
+    runtime = tool_runtime(tmp_path, tools, [final("done")], allowed_tools=[SHELL_TOOL_NAME])
 
-    await parent.send("coder", "Top-level", session_id="top-level")
-    await parent.child_loop(nesting_depth=1).send("coder", "Nested", session_id="nested")
+    await build_chat_loop(runtime).send("coder", "Run it", session_id="session-one")
 
-    top_level, nested = (request["kwargs"]["tools"][0] for request in runtime.adapter.requests)
+    shell = runtime.adapter.requests[0]["kwargs"]["tools"][0]
     # The Provider request carries the name the Model knows on this host; this
     # Agent is offered neither file Tools nor the terminal Tool.
-    assert top_level["name"] == nested["name"] == model_tool_name(SHELL_TOOL_NAME)
-    for definition in (top_level, nested):
-        assert "read" not in definition["description"]
-        assert "terminal;" not in definition["description"]
-    assert "keeps running in the background" in top_level["description"]
-    assert "mode" in top_level["parameters"]["properties"]
-    assert "continues" not in nested["description"]
-    assert "mode" not in nested["parameters"]["properties"]
+    assert shell["name"] == model_tool_name(SHELL_TOOL_NAME)
+    assert "read" not in shell["description"]
+    assert "use terminal" not in shell["description"]
+    assert "keeps running in the background" in shell["description"]
+    assert shell["parameters"]["properties"]["mode"]["enum"] == ["foreground", "background"]
 
 
 def _tools_sent(runtime: Any) -> list[list[JsonObject]]:

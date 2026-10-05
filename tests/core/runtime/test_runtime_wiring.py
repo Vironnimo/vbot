@@ -64,8 +64,13 @@ HOME_ASSISTANT_TOOLS = ["ha_call_service", "ha_get_state", "ha_list_entities", "
 
 COMPUTER_USE_TOOLS = ["computer", "computer_apps", "computer_batch"]
 
+# Built-in Tools that only a Session grant offers; they stay out of the catalog.
+SESSION_GRANTED_BUILTIN_TOOLS = ["message_parent"]
 CANONICAL_REGISTERED_TOOLS = sorted(
-    CANONICAL_BUILTIN_TOOLS + HOME_ASSISTANT_TOOLS + COMPUTER_USE_TOOLS
+    CANONICAL_BUILTIN_TOOLS
+    + SESSION_GRANTED_BUILTIN_TOOLS
+    + HOME_ASSISTANT_TOOLS
+    + COMPUTER_USE_TOOLS
 )
 
 BUNDLED_SKILLS = [
@@ -103,8 +108,8 @@ def test_start_registers_each_builtin_tool_once_with_a_result_contract(
         CANONICAL_REGISTERED_TOOLS
     )
     assert hidden_session_tools <= set(registered)
-    # Session-scoped Extension Tools stay out of the catalog.
-    assert not hidden_session_tools & {
+    # Session-scoped Tools stay out of the catalog.
+    assert not (hidden_session_tools | set(SESSION_GRANTED_BUILTIN_TOOLS)) & {
         tool.name for tool in tools.list_tools(include_catalog_hidden=False)
     }
     for tool in tools.list_tools():

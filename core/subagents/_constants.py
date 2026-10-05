@@ -1,138 +1,72 @@
-"""Sub-Agent lifecycle policy defaults, event names and response wording."""
+"""Sub-Agent policy defaults, event names and Agent-facing wording."""
 
 DEFAULT_MAX_SUBAGENT_DEPTH = 4
-DEFAULT_MAX_SUBAGENTS_PER_TURN = 8
-DEFAULT_SUBAGENT_TIMEOUT_MINUTES = 60
-SECONDS_PER_MINUTE = 60
-SESSION_RESULT_RETRY_ATTEMPTS = 3
-SESSION_RESULT_RETRY_DELAY_SECONDS = 0.05
-SUBAGENT_STATUS_QUEUED = "queued"
+DEFAULT_MAX_ACTIVE_SUBAGENTS = 8
 SUBAGENT_SESSION_STARTED_EVENT = "subagent_session_started"
 SUBAGENT_STATUS_CHANGED_EVENT = "subagent_status_changed"
-SUBAGENT_SESSION_METADATA_FLAG = "is_subagent_session"
-SUBAGENT_PARENT_METADATA_KEY = "subagent_parent"
 USER_CANCEL_REASON = "user"
 PARENT_AGENT_CANCEL_REASON = "parent_agent"
-SUBAGENT_USER_CANCEL_MESSAGE = "Cancelled by the user"
 SUBAGENT_SESSION_TITLE_MAX_CHARACTERS = 48
+# Run kinds whose final answer reaches the Parent: Runs the Parent started and
+# Runs started by deliveries (background commands, terminals, nested Sub-Agents).
+FORWARDED_RUN_KINDS = frozenset({"subagent", "system"})
+
+# Results of the ``subagent`` Tool.
+SUBAGENT_STARTED_NOTE = (
+    "The Sub-Agent works in the background. vBot sends you each of its answers "
+    "automatically: at your next step while you are working, otherwise in a new turn. "
+    "Continue other work, or end your turn to wait. To give it more instructions, call "
+    'subagent with action "send" and this id.'
+)
+SUBAGENT_SEND_STEERED_NOTE = (
+    "The Sub-Agent is working; vBot gives it your message at its next step. Its answer "
+    "reaches you automatically."
+)
+SUBAGENT_SEND_STARTED_NOTE = (
+    "The Sub-Agent was idle and started a new turn with your message. Its answer reaches you "
+    "automatically."
+)
+SUBAGENT_SEND_QUEUED_NOTE = (
+    "The Sub-Agent is busy; your message starts its next turn when the current one ends. Its "
+    "answer reaches you automatically."
+)
+SUBAGENT_LIST_NOTE = (
+    "vBot sends you each answer of a working Sub-Agent automatically; calling list again does "
+    "not make it finish faster."
+)
+SUBAGENT_CANCELLED_NOTE = (
+    "Stopped: its current turn, its queued messages, its background commands and terminals, "
+    "and its own Sub-Agents. Its Session keeps the history; send it a message to continue."
+)
 SUBAGENT_ACTIVITY_NOTE_TEMPLATE = (
-    "Activity log: {path}. Read it only if the Sub-Agent's progress matters."
+    "Activity log of this Sub-Agent: {path}. Read it only if its progress matters."
 )
-TOP_LEVEL_BACKGROUND_NOTE = (
-    "Running in the background. vBot delivers the result to you automatically when it "
-    "finishes, so there is no need to check status. Continue other work, or end your "
-    "turn to wait for it."
+
+# Refusals of the ``subagent`` Tool. ``{call}`` placeholders receive compact JSON.
+SUBAGENT_MISSING_TASK_MESSAGE = (
+    'subagent was not run: "content" must carry the task for the Sub-Agent. Call '
+    '{"description": "<3-5 word title>", "content": "<self-contained task: goal, relevant '
+    'context, scope, constraints, expected result>"}. To see your Sub-Agents instead, call '
+    '{"action": "list"}.'
 )
-TOP_LEVEL_QUEUED_BACKGROUND_NOTE = (
-    "This Sub-Agent is queued because its Session is busy with another task; vBot "
-    "starts it automatically when the Session is free and notifies you with the "
-    "result once it finishes. Continue other work, or finish your turn to wait for a "
-    "result."
-)
-SUBAGENT_REMOVED_FROM_QUEUE_MESSAGE = (
-    "The queued Sub-Agent work was removed from its Session's Queue before it started, "
-    "so it did not run. Call subagent again if the work is still needed."
-)
-SUBAGENT_QUEUED_TIMEOUT_MESSAGE_TEMPLATE = (
-    "Sub-agent run timed out after {minutes} minutes while waiting in its busy Session's "
-    "Queue; it was removed before it started and did not run."
-)
-SUBAGENT_START_FAILED_MESSAGE_TEMPLATE = "The queued Sub-Agent work could not start: {error}"
-SUBAGENT_TIMEOUT_MESSAGE_TEMPLATE = (
-    "The Sub-Agent did not finish within {minutes} minutes, so vBot cancelled it. Its "
-    "Session keeps the work done so far; to resume it, {continuation}. Otherwise do the "
-    "task yourself."
+SUBAGENT_MISSING_DESCRIPTION_MESSAGE_TEMPLATE = (
+    'subagent was not run: a new Sub-Agent needs "description", a 3-5 word title that the '
+    "user sees. Repeat the call with it: {call}."
 )
 SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE = (
     "Sub-Agents cannot be nested more than {limit} levels deep, so you cannot start "
     "another Sub-Agent; nothing was started. Do this task yourself."
 )
-SUBAGENT_TURN_LIMIT_MESSAGE_TEMPLATE = (
-    "You already started {limit} Sub-Agents in this turn, the limit; nothing was "
-    "started. Delegate more after their results arrive, or do this task yourself."
+SUBAGENT_ACTIVE_LIMIT_MESSAGE_TEMPLATE = (
+    "{limit} Sub-Agents of your Agent tree are already working, the limit; nothing was "
+    "started. Wait for their answers or stop one with action cancel, then delegate again, or "
+    "do this task yourself."
 )
 # ``target`` is the address the Tool accepts; ``reason`` is the resolver's explanation.
 SUBAGENT_TARGET_UNAVAILABLE_MESSAGE_TEMPLATE = (
     "Agent {target} cannot run: {reason}. Repeating this call fails the same way until "
     "that is fixed. Delegate to another Agent you are allowed to use instead, or tell "
     "the user that {target} cannot run and why."
-)
-# ``agent_id`` is the address the Tool accepts: ``agent@project`` for a Project Agent.
-SUBAGENT_CONTINUATION_CALL_TEMPLATE = (
-    "call subagent with agent_id `{agent_id}`, session_id `{session_id}` and a "
-    "continuation message as content"
-)
-SUBAGENT_INTERRUPTED_WITHOUT_OUTPUT_NOTE_TEMPLATE = (
-    "The Sub-Agent Run was interrupted before it produced Assistant output. To continue "
-    "the same Session, {continuation}."
-)
-SUBAGENT_PARTIAL_RESULT_NOTE_TEMPLATE = (
-    "Result is partial: the Sub-Agent Run was interrupted{cause}. To continue the same "
-    "Session, {continuation}."
-)
-SUBAGENT_CANCELLED_NOTE_TEMPLATE = (
-    "The Sub-Agent Run was cancelled; its Session keeps its history. To resume this work, "
-    "{continuation} instead of starting a new Session."
-)
-SUBAGENT_STATUS_RUNNING_NOTE = (
-    "Still running; the result is delivered automatically. Continue other work, or "
-    "finish your turn to wait for it. Repeated status calls do not make it finish "
-    "faster."
-)
-SUBAGENT_STATUS_QUEUED_NOTE = (
-    "Queued: the Sub-Agent's Session is busy with another task; vBot starts this "
-    "work automatically when the Session is free. The result is delivered "
-    "automatically. Continue other work, or finish your turn to wait for it."
-)
-SUBAGENT_STATUS_LIST_NOTE = (
-    "Unfinished work delivers its result to you automatically. Continue other work, or "
-    "finish your turn to wait for it. Repeated status calls do not make it finish faster."
-)
-
-# Call interpretation. ``{call}`` placeholders receive compact JSON argument objects.
-SUBAGENT_MISSING_TASK_MESSAGE = (
-    'subagent was not run: "content" must carry the task for the Sub-Agent. Call '
-    '{"content": "<self-contained task: goal, relevant context, scope, constraints, '
-    'expected result>"}. To check delegated work instead, call {"action": "status"}.'
-)
-SUBAGENT_ID_WITHOUT_ACTION_MESSAGE_TEMPLATE = (
-    "subagent was not run: it received work id {work_id} but no action. To inspect that "
-    "work, call {status_call}; to stop it, call {cancel_call}. To delegate new work, send "
-    'the task as "content" without "id".'
-)
-SUBAGENT_RUN_WITH_WORK_ID_MESSAGE_TEMPLATE = (
-    'subagent was not run: "id" names Sub-Agent work {work_id}, so it is unclear whether '
-    "to continue that Sub-Agent or to start new work. {continuation} To start new work, "
-    'repeat this call without "id".'
-)
-SUBAGENT_CONTINUE_TRACKED_WORK_TEMPLATE = "To continue its Session, call {call}."
-SUBAGENT_CONTINUE_UNTRACKED_WORK_TEXT = (
-    "To continue that Sub-Agent's Session, pass the agent_id and session_id from its "
-    'result instead of "id".'
-)
-SUBAGENT_WORK_SESSION_CONFLICT_MESSAGE_TEMPLATE = (
-    "subagent was not run: work {work_id} belongs to Session {work_session_id}, but "
-    "session_id is {session_id}. To continue work {work_id}, call {call}; to continue "
-    'Session {session_id}, repeat this call without "id".'
-)
-SUBAGENT_IGNORED_WORK_LABEL_NOTE_TEMPLATE = (
-    "id {label} was ignored: run assigns the work id above; use that id with status or cancel."
-)
-SUBAGENT_GENERIC_TARGET_NOTE_TEMPLATE = (
-    "agent_id {name} is not an Agent id, so a copy of you runs this task, as when "
-    "agent_id is omitted."
-)
-# ``session_id`` is the JSON-quoted value the call sent.
-SUBAGENT_STAND_IN_SESSION_NOTE_TEMPLATE = (
-    "No Session {session_id} exists and that value reads as a stand-in, so this task started "
-    "a new Session. Continue it with the session_id of this result."
-)
-SUBAGENT_BACKGROUND_UNAVAILABLE_NOTE = (
-    "This call cannot wait for the result: your Sub-Agents always run in the background."
-)
-SUBAGENT_FOREGROUND_ONLY_NOTE = (
-    "This call waited for the result: Sub-Agents started by a Sub-Agent always run in "
-    "the foreground."
 )
 SUBAGENT_TARGET_CHOICES_TEMPLATE = (
     "Omit agent_id to delegate to a copy of yourself, or use one of these Agent ids "
@@ -144,50 +78,99 @@ SUBAGENT_NO_TARGET_CHOICES_TEXT = (
 SUBAGENT_TARGET_NOT_ALLOWED_MESSAGE_TEMPLATE = (
     "Agent {target} is not available to you as a Sub-Agent. {choices}"
 )
-SUBAGENT_SESSION_NOT_FOUND_MESSAGE_TEMPLATE = (
-    "No Session {session_id} exists for Agent {target}; nothing was started. {tracked}"
-    'To start a new Session, repeat this call without "session_id".'
+SUBAGENT_GENERIC_TARGET_NOTE_TEMPLATE = (
+    "agent_id {name} is not an Agent id, so a copy of you runs this task, as when "
+    "agent_id is omitted."
 )
-# ``reason`` is the Model check's or the stored value's explanation.
-SUBAGENT_SESSION_MODEL_UNUSABLE_MESSAGE_TEMPLATE = (
-    "subagent was not run: Session {session_id} of Agent {target} is set to a Model that "
-    'cannot run: {reason}. To continue this Session, repeat this call with "model" set to '
-    'a Model that can run. To start a new Session instead, repeat it without "session_id".'
+SUBAGENT_BACKGROUND_IGNORED_NOTE = (
+    "background false was ignored: every Sub-Agent works in the background."
 )
-SUBAGENT_SESSION_SETTINGS_UNREADABLE_MESSAGE_TEMPLATE = (
-    "subagent was not run: Session {session_id} of Agent {target} has Agent settings that "
-    "cannot be read ({reason}), so it cannot be continued. To start a new Session, repeat "
-    'this call without "session_id".'
+SUBAGENT_IGNORED_LABEL_NOTE_TEMPLATE = (
+    "id {label} was ignored: vBot assigns each new Sub-Agent its id, shown above."
 )
-SUBAGENT_SESSION_OWNER_HINT = (
-    "If that Session belongs to another Agent, repeat the call with that Agent's agent_id. "
+# ``session_id`` is the JSON-quoted value the call sent.
+SUBAGENT_STAND_IN_SESSION_NOTE_TEMPLATE = (
+    "No Session {session_id} exists and that value reads as a stand-in, so this task started "
+    "a new Sub-Agent."
 )
-SUBAGENT_TRACKED_WORK_TEMPLATE = "Tracked work: {entries}. "
-SUBAGENT_NOT_FOUND_TRACKED_MESSAGE_TEMPLATE = (
-    "No Sub-Agent work with id {work_id} is tracked for this Session; work stops being "
-    "tracked once its result was delivered to you, or when vBot restarts. {tracked}"
+SUBAGENT_SESSION_NOT_SUBAGENT_MESSAGE_TEMPLATE = (
+    "subagent was not run: Session {session_id} is not one of your Sub-Agents. {yours}To "
+    'start a new Sub-Agent, repeat this call without "session_id".'
 )
-SUBAGENT_NOT_FOUND_STATUS_MESSAGE_TEMPLATE = (
-    "No Sub-Agent work is tracked for this Session, so id {work_id} was not found. Work "
-    "stops being tracked once its result was delivered to you, or when vBot restarts; use "
-    "the delivered result."
+SUBAGENT_NOT_FOUND_MESSAGE_TEMPLATE = "No Sub-Agent with id {id} belongs to you. {yours}"
+SUBAGENT_YOURS_TEMPLATE = "Your Sub-Agents: {entries}. "
+SUBAGENT_NONE_YOURS_TEXT = "You have no Sub-Agents. "
+SUBAGENT_NOT_DIRECT_CHILD_MESSAGE_TEMPLATE = (
+    "Sub-Agent {id} was started by your Sub-Agent {parent_id}, so only {parent_id} can send "
+    "it messages; nothing was sent. Send your message to {parent_id}, or stop {id} with "
+    "action cancel."
 )
-SUBAGENT_NOT_FOUND_CANCEL_MESSAGE_TEMPLATE = (
-    "No Sub-Agent work is tracked for this Session, so id {work_id} was not found and "
-    "nothing was cancelled. Work stops being tracked once it finished and its result was "
-    "delivered to you, or when vBot restarts."
+SUBAGENT_TAKEN_OVER_MESSAGE_TEMPLATE = (
+    "The user took over Sub-Agent {id} by writing in its Session; it works for the user and "
+    "takes no messages from you, so nothing was sent. Delegate the work to a new Sub-Agent "
+    "instead."
+)
+SUBAGENT_SEND_WITHOUT_ID_MESSAGE_TEMPLATE = (
+    'send needs "id", the Sub-Agent to message; nothing was sent. {yours}Call {call}.'
+)
+SUBAGENT_SEND_WITHOUT_CONTENT_MESSAGE_TEMPLATE = (
+    'send needs "content", the message for Sub-Agent {id}; nothing was sent. Call {call}.'
+)
+SUBAGENT_ID_WITHOUT_ACTION_MESSAGE_TEMPLATE = (
+    "subagent was not run: it received Sub-Agent id {id} but no action. To message that "
+    "Sub-Agent, call {send_call}; to stop it, call {cancel_call}."
 )
 SUBAGENT_CANCEL_WITHOUT_ID_MESSAGE_TEMPLATE = (
-    'cancel needs "id", the work to stop; nothing was cancelled. {tracked}Call {call}.'
+    'cancel needs "id", the Sub-Agent to stop; nothing was stopped. {yours}Call {call}.'
 )
-SUBAGENT_CANCEL_NOTHING_TRACKED_MESSAGE = (
-    'cancel needs "id", the work to stop, but no unfinished Sub-Agent work is tracked for '
-    "this Session, so there is nothing to cancel."
+SUBAGENT_NOTHING_TO_CANCEL_MESSAGE_TEMPLATE = (
+    "Sub-Agent {id} and its own Sub-Agents are idle and run no background commands or "
+    "terminals, so nothing was stopped."
+)
+SUBAGENT_SESSION_MODEL_UNUSABLE_MESSAGE_TEMPLATE = (
+    "subagent was not run: Sub-Agent {id} is set to a Model that cannot run: {reason}. "
+    'Repeat this call with "model" set to a Model that can run.'
+)
+SUBAGENT_SESSION_SETTINGS_UNREADABLE_MESSAGE_TEMPLATE = (
+    "subagent was not run: Sub-Agent {id} has Agent settings that cannot be read ({reason}), "
+    "so it cannot continue. Delegate the work to a new Sub-Agent instead."
 )
 
-# Cascade policy switch: when True, a parent Run cancellation cascades to every
-# sub-agent child including background ones (legacy behaviour). When False,
-# only foreground sub-agent spawns (and queued-then-started foreground waits) get
-# the cascade; background spawns survive the parent cancel.
-# FLIP-BACK: set CASCADE_BACKGROUND_CHILDREN = True to restore the old behaviour.
-CASCADE_BACKGROUND_CHILDREN = False
+# Sections vBot delivers to the Parent Agent.
+FORWARDED_SECTION_TEMPLATE = (
+    "### Sub-Agent {id} — {title}\n"
+    "agent_id {agent_id}, session_id {session_id}. Its turn {outcome}.\n\n"
+    "{answer}\n\n"
+    "{facts}"
+)
+FORWARDED_NO_ANSWER_TEXT = "(The turn ended without an answer.)"
+FORWARDED_FAILURE_TEXT_TEMPLATE = "(The turn failed: {error})"
+FACTS_RUNNING_TEMPLATE = "Still running for this Sub-Agent: {entries}."
+FACTS_NOTHING_RUNNING_TEXT = "Nothing is still running for this Sub-Agent."
+TAKEN_OVER_NOTICE_TEMPLATE = (
+    "### Sub-Agent {id} — {title}\n"
+    "The user took over this Sub-Agent by writing in its Session. vBot no longer sends you its "
+    'answers, and subagent action "send" to it is refused. Its earlier answers stay valid.'
+)
+PARENT_MESSAGE_SECTION_TEMPLATE = (
+    "### Message from Sub-Agent {id} — {title}\n"
+    "{content}\n\n"
+    "The Sub-Agent continues working; its answer arrives separately."
+)
+
+# The ``message_parent`` Tool.
+MESSAGE_PARENT_SENT_NOTE = (
+    "Sent. Your Parent Agent reads it at its next step, or in a new turn if it is idle. "
+    "Continue your work."
+)
+MESSAGE_PARENT_NOT_SUBAGENT_MESSAGE = (
+    "message_parent was not sent: this Session has no Parent Agent. Reply to the user instead."
+)
+MESSAGE_PARENT_TAKEN_OVER_MESSAGE = (
+    "message_parent was not sent: the user took over this Session, so you work for the user "
+    "and your Parent Agent no longer reads your messages. Reply to the user instead."
+)
+MESSAGE_PARENT_PARENT_GONE_MESSAGE = (
+    "message_parent was not sent: your Parent Agent's Session no longer exists. Finish the "
+    "task and end your turn with the result."
+)

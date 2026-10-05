@@ -6,17 +6,13 @@ import asyncio
 import logging
 import threading
 from pathlib import Path
-from typing import Any, override
+from typing import Any
 
 import pytest
 
 import core.tools.change_tracker as change_tracker_module
-from core.attachments import AttachmentStore
 from core.chat import ChatMessage, ChatSessionError
-from core.chat.block_resolver import ContentBlockResolver
-from core.chat.content_blocks import TextBlock
 from core.chat.streaming import StreamingChunkTimeoutError
-from core.compaction import CompactionService
 from core.providers.errors import NetworkError, ProviderError, ProviderTimeoutError
 from core.runs import (
     PROVIDER_REQUEST_STATUS_EVENT,
@@ -134,56 +130,6 @@ async def test_run_end_notifies_the_reflection_service(tmp_path: Path, origin: s
     assert call["iteration_count"] == 1
     assert call["internal"] is (origin == "internal")
     assert call["outcome"] == "success"
-
-
-class _RecordingResolver(ContentBlockResolver):
-    def __init__(self, store: AttachmentStore) -> None:
-        super().__init__(store)
-        self.current_turns: list[str] = []
-
-    @override
-    async def resolve_messages(
-        self, messages: list[dict[str, Any]], *, current_user_message_id: str, **kwargs: Any
-    ) -> list[dict[str, Any]]:
-        self.current_turns.append(current_user_message_id)
-        return await super().resolve_messages(
-            messages, current_user_message_id=current_user_message_id, **kwargs
-        )
-
-
-@pytest.mark.asyncio
-async def test_child_loop_runs_like_a_live_run_of_its_parent(tmp_path: Path) -> None:
-    # A sub-agent's child loop keeps its parent's wiring: it streams like the
-    # parent, resolves content blocks with the parent's attachment resolver,
-    # compacts with the parent's Compaction service and reports its run end to the
-    # parent's reflection service. Only the nesting depth differs (its effect on the
-    # offered Tools: test_chat_loop_tool_definitions.py).
-    stream = [{"type": "content_delta", "text": "Hello"}, {"type": "finish", "reason": "stop"}]
-    runtime = _runtime(tmp_path, [], stream_responses=[stream])
-    resolver = _RecordingResolver(AttachmentStore(tmp_path))
-    compaction = CompactionService()
-    reflection = RecordingReflection()
-    parent = build_chat_loop(
-        runtime,
-        streaming=True,
-        attachment_resolver=resolver,
-        compaction_service=compaction,
-        reflection_service=reflection,
-    )
-
-    child = parent.child_loop(nesting_depth=2)
-    answer = await child.send(
-        "coder", [TextBlock(type="text", text="Hi")], session_id="session-one"
-    )
-
-    assert answer.content == "Hello"
-    assert (len(runtime.adapter.stream_requests), runtime.adapter.requests) == (1, [])
-    [user] = [message for message in history(runtime) if message.role == "user"]
-    assert resolver.current_turns == [user.id]
-    assert child.compaction_service is compaction
-    assert [(call["session_id"], call["outcome"]) for call in reflection.calls] == [
-        ("session-one", "success")
-    ]
 
 
 @pytest.mark.asyncio

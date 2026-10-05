@@ -185,6 +185,14 @@ class SessionStore:
             lambda connection: _store_queries.existing_addresses(connection, addresses)
         )
 
+    def subagent_children(self, parent: SessionAddress) -> list[SessionAddress]:
+        return self._read(lambda connection: _store_queries.subagent_children(connection, parent))
+
+    def subagent_session(self, subagent_id: str) -> SessionAddress | None:
+        return self._read(
+            lambda connection: _store_queries.subagent_session(connection, subagent_id)
+        )
+
     def require_live(self, address: SessionAddress) -> str:
         """Return the live generation id, or raise ``SessionNotFoundError``."""
         return self._read(

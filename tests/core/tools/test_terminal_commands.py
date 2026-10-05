@@ -16,7 +16,7 @@ from core.projects import ProjectStore
 from core.tools._terminal_command import CommandReport
 from core.tools._terminal_process_tree import ProgramExit, RunningProcess
 from core.tools.model_names import SHELL_MODEL_NAME
-from core.tools.shell import SHELL_HANDOFF_SECONDS, SHELL_TOOL_NAME, register_shell_tool
+from core.tools.shell import SHELL_TOOL_NAME, register_shell_tool
 from core.tools.terminal import TERMINAL_TOOL_NAME, register_terminal_tool
 from core.tools.terminal_manager import (
     TerminalClosedError,
@@ -258,16 +258,26 @@ async def test_survivors_keep_a_finished_command_live_until_they_are_killed(
 
 
 @pytest.mark.asyncio
-async def test_cancelled_run_kills_its_commands_and_starts_no_new_ones(harness: Harness) -> None:
-    terminal_id, _adapter, tree = await harness.start(run="run-x")
-    harness.manager.hand_off_command(terminal_id, deliver=True)
+async def test_cancelled_run_kills_its_foreground_commands_and_starts_no_new_ones(
+    harness: Harness,
+) -> None:
+    foreground, _adapter, tree = await harness.start(run="run-x")
+    handed_off, _other, handed_off_tree = await harness.start(run="run-x")
+    harness.manager.hand_off_command(handed_off, deliver=True)
 
     await harness.manager.cancel_run("run-x")
     assert tree.terminated == 1
-    assert harness.manager.command_report(terminal_id).stop_reason == "run_cancelled"
+    assert harness.manager.command_report(foreground).stop_reason == "run_cancelled"
     with pytest.raises(TerminalClosedError):
         await harness.start(run="run-x")
     assert harness.bodies() == []
+    # A command handed off to the background outlives the Run and still delivers.
+    assert handed_off_tree.terminated == 0
+    assert harness.manager.command_status(handed_off) == "running"
+    handed_off_tree.shell_exits(0)
+    await harness.manager.wait_finished(handed_off)
+    await asyncio.sleep(0)
+    assert harness.bodies() == [f"{handed_off} exit=0 stop=None lines=0"]
 
     harness.manager.release_run("run-x")
     await harness.start(run="run-x")
@@ -310,7 +320,7 @@ class Tools(Harness):
             await self.clock.advance(0.5)
 
     async def call(
-        self, tool: str, arguments: JsonObject, *, depth: int = 0, session: str = "session-a"
+        self, tool: str, arguments: JsonObject, *, session: str = "session-a"
     ) -> JsonObject:
         context = ToolContext(
             agent_id="agent-a",
@@ -324,7 +334,6 @@ class Tools(Harness):
             data_root=self.tmp_path,
             cwd=self.tmp_path,
             project_id="project-a",
-            nesting_depth=depth,
             result_persisted_hook=self.persisted.append,
         )
         try:
@@ -580,40 +589,6 @@ async def test_command_wait_ends_only_at_exit_match_or_timeout(tools: Tools, wor
             f"The command in terminal {terminal_id} has printed nothing for 75 seconds and uses "
             "no CPU; it has no timeout."
         )
-
-
-@pytest.mark.parametrize("depth", [0, 1])
-@pytest.mark.asyncio
-async def test_input_to_a_command_says_whether_its_result_arrives_on_its_own(
-    tools: Tools, depth: int
-) -> None:
-    call: asyncio.Task[object] = asyncio.ensure_future(
-        tools.call(SHELL_TOOL_NAME, {"command": "read-name"}, depth=depth)
-    )
-    await eventually(lambda: bool(tools.trees))
-    tools.factory.adapters[-1].emit("Name: ")
-    await tools.run_clock(call, until=SHELL_HANDOFF_SECONDS)
-    terminal_id = cast(JsonObject, call.result())["data"]["terminal_id"]
-
-    typing = asyncio.ensure_future(
-        tools.terminal(
-            {"action": "input", "terminal_id": terminal_id, "text": "Ada", "key": "enter"},
-            depth=depth,
-        )
-    )
-    await eventually(lambda: tools.factory.adapters[-1].writes[-2:] == ["Ada", "\r"])
-    await tools.run_clock(typing, until=tools.clock.now + 5)
-
-    typed = cast(JsonObject, typing.result())
-    arrival = (
-        "its result arrives as a new message when it exits."
-        if depth == 0
-        else "its result does not arrive on its own."
-    )
-    assert typed["next"].endswith(
-        f"Wait for it with {terminal_call('wait', terminal_id)}, or stop it with "
-        f"{terminal_call('kill', terminal_id)}; {arrival}"
-    )
 
 
 async def shows(tools: Tools, terminal_id: str, text: str) -> bool:

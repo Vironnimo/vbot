@@ -958,7 +958,6 @@ class ToolExecutor:
                 skill_env_keys=config.skill_env_keys,
                 tool_settings=config.tool_settings,
                 session_tool_grants=config.session_tool_grants,
-                nesting_depth=config.nesting_depth,
                 input_contract=config.input_contracts.get(tool_call.name),
                 offered_tools=frozenset(config.input_contracts) or None,
                 change_tracker=config.change_tracker,

@@ -18,6 +18,7 @@ from core.chat._run_state import (
     RequestBuildInputs,
     RequestState,
     _CompactionPromptRefresh,
+    is_subagent_session,
 )
 from core.chat.events import _close_adapter
 from core.chat.messages import ChatMessage, JsonObject
@@ -255,6 +256,9 @@ class ChatCompactionHost:
                 skill_registry=skill_registry,
                 skill_catalog=skill_catalog,
                 session_messages_override=messages,
+                subagent_session=await self.run_transform(
+                    is_subagent_session, self._dependencies.sessions, session.address
+                ),
                 list_announced_tools=adapter.list_announced_tools(model_id),
             )
             state = await self._requests.build_request_state(agent, session, inputs=inputs)
