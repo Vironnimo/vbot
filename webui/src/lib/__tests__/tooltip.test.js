@@ -635,6 +635,46 @@ describe('tooltip placement', () => {
     expect(element.dataset.floatingSide).toBe('right');
   });
 
+  it('sticks a pointer placement to the cursor and falls back below the aligned element on keyboard focus', () => {
+    tooltipSize = { width: 100, height: 24 };
+    const row = button('');
+    placeAt(row, { left: 0, top: 300, width: 1200, height: 40 });
+    const name = document.createElement('span');
+    name.className = 'row-name';
+    row.append(name);
+    placeAt(name, { left: 20, top: 310, width: 60, height: 20 });
+    actions.push(
+      tooltip(row, {
+        text: 'Hint',
+        placement: 'pointer',
+        alignTo: '.row-name',
+      }),
+    );
+    row.dispatchEvent(pointerAt('pointerenter', 400, 320));
+    row.dispatchEvent(pointerAt('pointermove', 420, 318));
+    vi.advanceTimersByTime(SHOW_DELAY_MS);
+    const element = tooltipElement();
+
+    // the latest position before showing; below the cursor: 318 + 20.
+    expect(element.style.left).toBe('420px');
+    expect(element.style.top).toBe('338px');
+    expect(element.dataset.floatingSide).toBe('bottom');
+
+    row.dispatchEvent(pointerAt('pointermove', 1150, 790));
+    // clamped to the right edge, flipped above the cursor: 790 - 8 - 24.
+    expect(element.style.left).toBe(`${1200 - 100 - 8}px`);
+    expect(element.style.top).toBe('758px');
+    expect(element.dataset.floatingSide).toBe('top');
+
+    row.dispatchEvent(pointerAt('pointerleave', 1150, 900));
+    vi.runAllTimers();
+    pressKey(document.body, 'Tab');
+    row.focus();
+    // below the name, centered on it: 20 + 30 - 50 = 0 -> 8; 330 + 6.
+    expect(element.style.left).toBe('8px');
+    expect(element.style.top).toBe('336px');
+  });
+
   it('falls back to above when neither side fits or the placement is unknown', () => {
     let element = showFor(
       { left: 500, top: 300, width: 40, height: 20 },

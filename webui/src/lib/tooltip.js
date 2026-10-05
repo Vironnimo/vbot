@@ -16,11 +16,15 @@
 //   `title` and `rows` render a compact details card (a heading and aligned
 //   label/value pairs, e.g. a Session's Agent and last activity); `mono` sets
 //   code-like values (paths, commands, ids) in the mono face. `placement`
-//   ('top' default, 'right', 'bottom', 'left') is the preferred side; rows of
-//   a vertically swept list use a side placement so the bubble never covers
-//   the neighbouring rows. `alignTo` (a selector inside the anchor) places
-//   the bubble against that element instead of the whole anchor, so a wide
-//   list row that owns hover and focus can put its bubble beside its name.
+//   ('top' default, 'right', 'bottom', 'left') is the preferred side;
+//   'pointer' sticks the bubble to the cursor below it while the pointer
+//   moves over the anchor (rows of content lists, whose wide anchors have no
+//   good side) and falls back to below the anchor on keyboard focus. The
+//   side placements are for the few navigation lists and panels that keep
+//   their bubbles beside them (webui/design.md -> Tooltips). `alignTo` (a
+//   selector inside the anchor) places the bubble against that element
+//   instead of the whole anchor: a master-list row puts its bubble beside
+//   its name, a content row its keyboard-focus bubble below its name.
 //   `whenTruncated` shows the tooltip only while the
 //   anchor clips its own text, for tooltips that merely repeat it in full.
 //   It opens after TOOLTIP_SHOW_DELAY_MS of hover, instantly while another

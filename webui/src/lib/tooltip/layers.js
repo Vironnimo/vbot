@@ -5,6 +5,7 @@ import {
   normalizePlacement,
   pointInCorridor,
   pointerCorridor,
+  positionAtPoint,
   positionFloating,
 } from './geometry.js';
 
@@ -190,7 +191,9 @@ function anchorInViewport(anchor) {
  * (content that grows while shown), and is dismissed by an outside press or
  * Escape. `anchor`/`element` return the current nodes; `positionAnchor`
  * (default `anchor`) returns the node the layer is placed against when that
- * differs from the node that owns it. `onDismiss()` must
+ * differs from the node that owns it. A `placement()` of 'pointer' places the
+ * layer at the point `pointer()` returns (the cursor), or below the position
+ * anchor while it returns null. `onDismiss()` must
  * close the owner's state and call `hide()`. `onEscape(event)` defaults to
  * `onDismiss`; an owner consumes Escape with `event.preventDefault()` when the
  * layer should absorb it (e.g. a pinned popover inside a dialog).
@@ -201,6 +204,7 @@ export function createFloatingLayer({
   positionAnchor = anchor,
   element,
   placement = () => 'top',
+  pointer = () => null,
   onDismiss,
   onEscape = onDismiss,
 }) {
@@ -224,11 +228,20 @@ export function createFloatingLayer({
   function position() {
     const anchorNode = positionAnchor();
     const elementNode = element();
-    if (anchorNode && elementNode) {
+    if (!anchorNode || !elementNode) {
+      return;
+    }
+    const side = placement();
+    const point = side === 'pointer' ? pointer() : null;
+    if (point) {
+      positionAtPoint(point, elementNode);
+    } else {
+      // Without a pointer position (keyboard focus) a pointer placement
+      // falls back to below its anchor.
       positionFloating(
         anchorNode,
         elementNode,
-        normalizePlacement(placement()),
+        side === 'pointer' ? 'bottom' : normalizePlacement(side),
       );
     }
   }

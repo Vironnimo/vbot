@@ -66,7 +66,10 @@ export function normalizeTooltipContent(value) {
     title: normalizeText(value.title),
     rows: normalizeRows(value.rows),
     mono: value.mono === true,
-    placement: normalizePlacement(value.placement),
+    placement:
+      value.placement === 'pointer'
+        ? 'pointer'
+        : normalizePlacement(value.placement),
     selectable: value.selectable === true,
     whenTruncated: value.whenTruncated === true,
     alignTo: typeof value.alignTo === 'string' ? value.alignTo.trim() : '',
@@ -140,6 +143,9 @@ let showTimer = null;
 let showTimerOwner = null;
 let labelCloseTimer = null;
 let lastPointerLeavePosition = null;
+// The latest pointer position over a tooltip anchor, for the 'pointer'
+// placement; null while the tooltip shows for keyboard focus.
+let pointerPosition = null;
 let lastHiddenAt = null;
 // The innermost anchor handles a bubbling focusin; enclosing anchors skip it.
 const handledFocusEvents = new WeakSet();
@@ -162,6 +168,7 @@ const tooltipLayer = createFloatingLayer({
   positionAnchor,
   element: () => tooltipElement,
   placement: () => activeContent.placement,
+  pointer: () => pointerPosition,
   onDismiss: () => hideTooltip(),
 });
 
@@ -345,6 +352,13 @@ export function tooltip(node, content = '') {
     showTooltip(node, currentContent, options);
   }
 
+  function trackPointer(event) {
+    pointerPosition =
+      typeof event?.clientX === 'number' && typeof event.clientY === 'number'
+        ? { x: event.clientX, y: event.clientY }
+        : null;
+  }
+
   // Streaming re-renders swap the hovered node for an identical replacement:
   // the browser fires leave + enter at the same pointer position without any
   // pointer movement. That re-entry is not a new hover intent, so the tooltip
@@ -362,6 +376,7 @@ export function tooltip(node, content = '') {
     if (!available()) {
       return;
     }
+    trackPointer(event);
     if (activeAnchor === node) {
       cancelClose();
       return;
@@ -385,6 +400,24 @@ export function tooltip(node, content = '') {
       return;
     }
     beginHover(event);
+  }
+
+  // A 'pointer' tooltip sticks to the cursor while it moves over the anchor;
+  // a selectable one stays put so the pointer can travel onto it.
+  function handlePointerMove(event) {
+    if (event.pointerType === 'touch' || event.buttons) {
+      return;
+    }
+    if (showTimerOwner === node) {
+      trackPointer(event);
+    } else if (
+      activeAnchor === node &&
+      activeContent.placement === 'pointer' &&
+      !activeContent.selectable
+    ) {
+      trackPointer(event);
+      tooltipLayer.position();
+    }
   }
 
   function handlePointerLeave(event) {
@@ -420,6 +453,7 @@ export function tooltip(node, content = '') {
       if (activeAnchor === node) {
         hideTooltip();
       } else {
+        trackPointer(event);
         show();
       }
       return;
@@ -436,6 +470,7 @@ export function tooltip(node, content = '') {
     }
     handledFocusEvents.add(event);
     if (isKeyboardModality()) {
+      pointerPosition = null;
       show();
     }
   }
@@ -452,6 +487,7 @@ export function tooltip(node, content = '') {
 
   anchorEntries.set(node, { beginHover });
   node.addEventListener('pointerenter', handlePointerEnter);
+  node.addEventListener('pointermove', handlePointerMove);
   node.addEventListener('pointerleave', handlePointerLeave);
   node.addEventListener('pointerdown', handlePointerDown);
   node.addEventListener('focusin', handleFocusIn);
@@ -481,6 +517,7 @@ export function tooltip(node, content = '') {
       }
       anchorEntries.delete(node);
       node.removeEventListener('pointerenter', handlePointerEnter);
+      node.removeEventListener('pointermove', handlePointerMove);
       node.removeEventListener('pointerleave', handlePointerLeave);
       node.removeEventListener('pointerdown', handlePointerDown);
       node.removeEventListener('focusin', handleFocusIn);

@@ -723,7 +723,7 @@ export function skillRowDetails(entry, agents = [], projects = []) {
         tone: 'warning',
       },
     ],
-    placement: 'right',
+    placement: 'pointer',
     alignTo: '.skills-row-name',
   };
 }
