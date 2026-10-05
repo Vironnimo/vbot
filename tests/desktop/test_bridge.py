@@ -97,6 +97,8 @@ def test_pywebview_sees_only_the_bridge_methods() -> None:
         "openExternalUrl",
         "getLiveHotkey",
         "setLiveHotkey",
+        "getDictation",
+        "setDictation",
         "connect",
         "listServers",
         "addServer",
@@ -182,15 +184,17 @@ def test_an_unexpected_failure_logs_its_traceback_and_rejects_without_an_error_c
 
 
 @pytest.mark.parametrize(
-    ("hotkey", "live_hotkey"),
+    ("hotkey", "available"),
     [(FakeHotkey(), True), (None, False), (FakeHotkey(supported=False), False)],
-    ids=["supported-hotkey", "no-hotkey", "unsupported-hotkey"],
+    ids=["supported-shortcuts", "no-shortcuts", "unsupported-shortcuts"],
 )
 def test_capabilities_announce_the_voice_bridge_version_and_optional_services(
-    hotkey: FakeHotkey | None, live_hotkey: bool
+    hotkey: FakeHotkey | None, available: bool
 ) -> None:
     bridge, _ = _bridge(
-        live_hotkey=hotkey, secure_origins=("http://a.lan:8420", "http://pi.lan:9000")
+        live_hotkey=hotkey,
+        dictation=hotkey,
+        secure_origins=("http://a.lan:8420", "http://pi.lan:9000"),
     )
 
     assert bridge.getDesktopCapabilities() == {
@@ -199,7 +203,8 @@ def test_capabilities_announce_the_voice_bridge_version_and_optional_services(
         "serverSelection": True,
         "contextMenu": True,
         "microphone": True,
-        "liveHotkey": live_hotkey,
+        "liveHotkey": available,
+        "dictation": available,
         "secureOrigins": ["http://a.lan:8420", "http://pi.lan:9000"],
         "restart": False,
     }
@@ -365,15 +370,22 @@ def test_voice_methods_reach_a_real_controller(tmp_path: Path) -> None:
         page_events.close()
 
 
-# -- Live voice hotkey ---------------------------------------------------------------
+# -- Live voice hotkey and Desktop dictation -----------------------------------------
 
 
-def test_live_hotkey_methods_delegate() -> None:
+@pytest.mark.parametrize(
+    ("owner", "get", "set"),
+    [
+        ("live_hotkey", "getLiveHotkey", "setLiveHotkey"),
+        ("dictation", "getDictation", "setDictation"),
+    ],
+)
+def test_shortcut_methods_delegate(owner: str, get: str, set: str) -> None:
     hotkey = FakeHotkey()
-    bridge, _ = _bridge(live_hotkey=hotkey)
+    bridge, _ = _bridge(**{owner: cast(Any, hotkey)})
 
-    assert bridge.getLiveHotkey()["supported"] is True
-    assert bridge.setLiveHotkey({"enabled": True})["enabled"] is True
+    assert getattr(bridge, get)()["supported"] is True
+    assert getattr(bridge, set)({"enabled": True})["enabled"] is True
     assert hotkey.updates == [{"enabled": True}]
 
 
@@ -469,9 +481,11 @@ def test_optional_services_raise_without_their_owner() -> None:
     hotkey_calls: tuple[Callable[[], object], ...] = (
         bridge.getLiveHotkey,
         lambda: bridge.setLiveHotkey({"enabled": True}),
+        bridge.getDictation,
+        lambda: bridge.setDictation({"enabled": True}),
     )
     for call in hotkey_calls:
-        with pytest.raises(RuntimeError, match="hotkey is not available"):
+        with pytest.raises(RuntimeError, match="is not available in this Desktop"):
             call()
     server_calls: tuple[Callable[[], object], ...] = (
         lambda: bridge.connect("pi.lan", 9000),

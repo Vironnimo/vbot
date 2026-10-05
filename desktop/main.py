@@ -511,6 +511,7 @@ def _run_desktop(
 
     from desktop.bridge import DesktopBridge
     from desktop.connection import ConnectionController, build_connection_html
+    from desktop.dictation.controller import DictationController
     from desktop.hotkey import LIVE_VOICE_HOTKEY, HotkeyController, HotkeyHandlers
     from desktop.page_events import PageEventDispatcher
     from desktop.speech.microphone import MicrophoneService
@@ -533,6 +534,12 @@ def _run_desktop(
         handlers=HotkeyHandlers(on_press=lambda: page_events.request_live("toggle", "hotkey")),
     )
     voice = _create_voice(args, settings_file, microphone, server_url, page_events)
+    dictation = DictationController(
+        settings_path=settings_file,
+        microphone=microphone,
+        server_url=server_url,
+        page=page_events,
+    )
     window_holder: list[Any] = []
     window_state = _WindowState()
     desktop_restart = (
@@ -545,7 +552,7 @@ def _run_desktop(
             placement=lambda: (
                 window_state.placement(window_holder[0], settings_file) if window_holder else None
             ),
-            shell_busy=voice.is_busy,
+            shell_busy=lambda: voice.is_busy() or dictation.is_busy(),
             close_window=lambda: window_holder[0].destroy(),
         )
         if contract is not None
@@ -556,13 +563,19 @@ def _run_desktop(
         microphone=microphone,
         connection=controller,
         live_hotkey=live_hotkey,
+        dictation=dictation,
         secure_origins=secure_origins,
         restart=desktop_restart,
     )
-    # Voice follows the window: every successful in-window connect retargets
-    # it, so first-run connect and runtime server switches never leave Voice
-    # pointed at the launch-time (or empty) server.
-    controller.set_active_server_listener(voice.set_server_url)
+
+    # Voice and dictation follow the window: every successful in-window connect
+    # retargets them, so first-run connect and runtime server switches never
+    # leave them pointed at the launch-time (or empty) server.
+    def follow_server(url: str) -> None:
+        voice.set_server_url(url)
+        dictation.set_server_url(url)
+
+    controller.set_active_server_listener(follow_server)
 
     # The window must be created with initial content before the GUI loop; the
     # connection screen is a safe neutral page that the post-loop entry callable
@@ -641,6 +654,7 @@ def _run_desktop(
         connection_entry()
         voice.start()
         live_hotkey.start()
+        dictation.start()
         if desktop_restart is not None:
             desktop_restart.start()
 
@@ -666,6 +680,7 @@ def _run_desktop(
         if desktop_restart is not None:
             desktop_restart.close()
         live_hotkey.stop()
+        dictation.stop()
         voice.close()
         page_events.close()
 

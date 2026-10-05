@@ -12,9 +12,11 @@ looks like a code, and is logged with its traceback.
 The same instance stays the window's ``js_api`` across navigation, so it
 serves both the shell connection screen (server selection) and the remote
 WebUI (capabilities, clipboard and browser, the microphone, the Live voice
-hotkey, Voice, the update restart). The facade holds no state of its own:
-microphone methods delegate to :class:`desktop.speech.microphone.MicrophoneService`,
-Voice methods to :class:`desktop.wakeword.controller.VoiceController`, server
+hotkey, Voice, Desktop dictation, the update restart). The facade holds no
+state of its own: microphone methods delegate to
+:class:`desktop.speech.microphone.MicrophoneService`, Voice methods to
+:class:`desktop.wakeword.controller.VoiceController`, dictation methods to
+:class:`desktop.dictation.controller.DictationController`, server
 selection to the connection controller, the update restart to
 :class:`desktop.restart.DesktopRestart`.
 """
@@ -37,6 +39,7 @@ from desktop.wakeword.engine import MAX_CUSTOM_WAKEWORD_MODEL_BYTES, WakewordMod
 
 if TYPE_CHECKING:
     from desktop.connection import PreparedConnection, ServerEntry
+    from desktop.dictation.controller import DictationController
     from desktop.hotkey import HotkeyController
     from desktop.restart import DesktopRestart
     from desktop.speech.microphone import MicrophoneService
@@ -131,6 +134,7 @@ class DesktopBridge:
         connection: ConnectionDelegate | None = None,
         system_actions: DesktopSystemActions | None = None,
         live_hotkey: HotkeyController | None = None,
+        dictation: DictationController | None = None,
         secure_origins: tuple[str, ...] = (),
         restart: DesktopRestart | None = None,
     ) -> None:
@@ -139,6 +143,7 @@ class DesktopBridge:
         self._connection = connection
         self._system_actions = system_actions or DesktopSystemActions()
         self._live_hotkey = live_hotkey
+        self._dictation = dictation
         self._restart = restart
         # Remote HTTP origins WebView2 treats as secure for this process. A
         # server added later needs a Desktop restart before its microphone works.
@@ -158,6 +163,7 @@ class DesktopBridge:
             "contextMenu": True,
             "microphone": True,
             "liveHotkey": self._live_hotkey is not None and self._live_hotkey.supported,
+            "dictation": self._dictation is not None and self._dictation.supported,
             "secureOrigins": list(self._secure_origins),
             "restart": self._restart is not None,
         }
@@ -256,6 +262,16 @@ class DesktopBridge:
         """Merge, persist, and re-register the Live voice hotkey; returns its status."""
         return self._require_live_hotkey().update(changes)
 
+    # -- Desktop dictation -----------------------------------------------------
+
+    def getDictation(self) -> dict[str, Any]:  # noqa: N802
+        """Return the dictation shortcut, mode, state and last failure."""
+        return self._require_dictation().status()
+
+    def setDictation(self, changes: Any) -> dict[str, Any]:  # noqa: N802
+        """Apply a partial shortcut or mode change; returns the dictation status."""
+        return self._require_dictation().update(changes)
+
     # -- Update restart --------------------------------------------------------
 
     def getDesktopUpdate(self) -> dict[str, bool]:  # noqa: N802
@@ -326,6 +342,11 @@ class DesktopBridge:
         if self._live_hotkey is None:
             raise RuntimeError("The Live voice hotkey is not available in this Desktop")
         return self._live_hotkey
+
+    def _require_dictation(self) -> DictationController:
+        if self._dictation is None:
+            raise RuntimeError("Desktop dictation is not available in this Desktop")
+        return self._dictation
 
     def _require_connection(self) -> ConnectionDelegate:
         if self._connection is None:

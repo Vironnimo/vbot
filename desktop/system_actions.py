@@ -95,7 +95,7 @@ def _open_external_url(url: str) -> bool:
 def _write_system_clipboard(text: str) -> None:
     """Write host clipboard text without relying on the page's origin policy."""
     if sys.platform == "win32":
-        _write_windows_clipboard(text)
+        write_windows_clipboard(text)
         return
     command = _clipboard_command(write=True)
     subprocess.run(
@@ -112,7 +112,7 @@ def _write_system_clipboard(text: str) -> None:
 def _read_system_clipboard() -> str:
     """Read host clipboard text without relying on the page's origin policy."""
     if sys.platform == "win32":
-        return _read_windows_clipboard()
+        return read_windows_clipboard()
     command = _clipboard_command(write=False)
     result = subprocess.run(
         command,
@@ -183,7 +183,7 @@ def _open_windows_clipboard(ctypes: Any, user32: Any) -> None:
     raise ctypes.WinError(ctypes.get_last_error())
 
 
-def _write_windows_clipboard(text: str) -> None:
+def write_windows_clipboard(text: str) -> None:
     """Publish UTF-16 text through the native Windows clipboard API."""
     ctypes, user32, kernel32 = _windows_clipboard_libraries()
     clipboard_format_unicode_text = 13
@@ -217,7 +217,7 @@ def _write_windows_clipboard(text: str) -> None:
             kernel32.GlobalFree(handle)
 
 
-def _read_windows_clipboard() -> str:
+def read_windows_clipboard() -> str:
     """Read UTF-16 text through the native Windows clipboard API."""
     ctypes, user32, kernel32 = _windows_clipboard_libraries()
     clipboard_format_unicode_text = 13
