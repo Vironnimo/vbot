@@ -58,13 +58,14 @@ SkillRevisionKind = Literal[
     "baseline", "create", "change", "external", "archive", "restore", "revert", "pin", "unpin"
 ]
 SkillFileChangeKind = Literal["created", "updated", "deleted"]
-SkillArchiveReason = Literal["deleted", "absorbed", "inactive"]
+# ``published``: the Skill moved into another home, such as a private Skill made global.
+SkillArchiveReason = Literal["deleted", "absorbed", "inactive", "published"]
 
 SKILL_ACTORS: tuple[SkillActor, ...] = ("human", "agent", "reflection", "librarian")
 # Actors that write without a person attending: they never change a Skill the
 # user pinned.
 BACKGROUND_ACTORS: frozenset[str] = frozenset({"reflection", "librarian"})
-ARCHIVE_REASONS: tuple[SkillArchiveReason, ...] = ("deleted", "absorbed", "inactive")
+ARCHIVE_REASONS: tuple[SkillArchiveReason, ...] = ("deleted", "absorbed", "inactive", "published")
 # ``baseline`` and ``external`` revisions are written by nobody vBot knows.
 EXTERNAL_ACTOR = "external"
 

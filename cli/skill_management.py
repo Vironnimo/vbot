@@ -375,16 +375,45 @@ def skill_inventory(instance: ServerInstance) -> CommandResult:
     )
 
 
-def skill_set_disabled(instance: ServerInstance, name: str, disabled: bool) -> CommandResult:
-    """Toggle the policy disable switch for one skill name."""
+def skill_set_disabled(instance: ServerInstance, target: str, disabled: bool) -> CommandResult:
+    """Turn one skill package off, or on again, by its name or inventory id.
 
-    payload = _rpc_call(instance, "skill.set_disabled", {"name": name, "disabled": disabled})
+    Only that package changes; a same-named package from another source stays as
+    it is. A name several packages share is refused with each package's id and
+    source, so the caller can repeat the command with one id.
+    """
+
+    inventory = _rpc_call(instance, "skill.inventory", {})
+    if not inventory.ok:
+        return inventory.to_command_result()
+    raw_skills = inventory.data.get("skills")
+    skills = (
+        [skill for skill in raw_skills if isinstance(skill, dict)]
+        if isinstance(raw_skills, list)
+        else []
+    )
+    matches = [skill for skill in skills if skill.get("id") == target] or [
+        skill
+        for skill in skills
+        if skill.get("name") == target and skill.get("status") != "invalid"
+    ]
+    if len(matches) > 1:
+        lines = [f"several skill packages are named {target}; repeat with one id:"]
+        lines.extend(
+            f"- {skill.get('id')}  [{_string_or_default(skill.get('origin'), '-')}"
+            f"{' of ' + str(skill['owner_id']) if skill.get('owner_id') else ''}]"
+            for skill in matches
+        )
+        return CommandResult(ok=False, message="\n".join(lines), instance=instance)
+    entry_id = str(matches[0].get("id")) if matches else target
+    payload = _rpc_call(instance, "skill.set_disabled", {"id": entry_id, "disabled": disabled})
     if not payload.ok:
         failed = payload.to_command_result()
         if _failure_code(failed) == _SKILL_NOT_FOUND:
-            return _skill_name_suggestions(instance, name, failed)
+            return _skill_name_suggestions(instance, target, failed)
         return failed
     state = "disabled" if disabled else "enabled"
+    name = _string_or_default(payload.data.get("name"), target)
     return CommandResult(ok=True, message=f"{state} skill {name}", instance=instance)
 
 
@@ -568,7 +597,11 @@ _REVISION_KIND_TEXT = {
     "pin": "pinned",
     "unpin": "unpinned",
 }
-_ARCHIVE_REASON_TEXT = {"deleted": "deleted", "inactive": "retired after long disuse"}
+_ARCHIVE_REASON_TEXT = {
+    "deleted": "deleted",
+    "inactive": "retired after long disuse",
+    "published": "made global",
+}
 # What moved to the Skill that absorbed a merged one.
 _FOLLOWED_TEXT = {
     "shared": "share with Agent {name}",

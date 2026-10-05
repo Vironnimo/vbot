@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import shutil
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from html import escape
 from pathlib import Path
@@ -233,10 +233,10 @@ class SkillRegistry:
         # ``always_allowed`` name, and an excluded Skill stays loaded, so a
         # dependency on it reports "not allowed" like any other unallowed Skill.
         self._allowlist_exclusions = frozenset(allowlist_exclusions or ())
-        # Skills hidden by the policy disable switch: loaded, then moved out of the
-        # effective pool. They are invisible to every read answer (get/list_all/
-        # filter_allowed/availability) but stay reachable for the human manager via
-        # ``excluded_skills()``; editor-scope loads simply never exclude anything.
+        # Packages turned off by the Skill Policy: read, then kept out of the
+        # effective pool before they could claim their name. They are invisible to
+        # every read answer (get/list_all/filter_allowed/availability) but stay
+        # reachable via ``excluded_skills()``; editor-scope loads never exclude.
         self._excluded_skills = dict(excluded_skills or {})
 
     @classmethod
@@ -247,7 +247,7 @@ class SkillRegistry:
         environment: Mapping[str, str] | None = None,
         always_allowed: Iterable[str] | None = None,
         origins: Sequence[str | None] | None = None,
-        excluded_names: Iterable[str] | None = None,
+        excluded_packages: Collection[tuple[Path, str]] | None = None,
         allowlist_exclusions: Iterable[str] | None = None,
     ) -> SkillRegistry:
         """Load all valid skills from immediate subdirectories of scan roots.
@@ -261,11 +261,12 @@ class SkillRegistry:
         ``origins`` is a parallel sequence of origin tags for ``[skills_dir,
         *extra_dirs]``; each loaded skill records the tag of the root it came from
         (missing/short → ``None``), so the catalog can group by scope.
-        ``excluded_names`` (the Skill Policy disable switch) removes matching
-        skills from the effective pool entirely — first-found-wins still applies
-        before exclusion, so one disabled name hides every origin's copy. Runtime
-        consumers pass the policy's disabled set; editor-scope loads omit it so
-        disabled skills stay visible and editable for the human manager.
+        ``excluded_packages`` (the packages the Skill Policy turns off) names
+        packages by the resolved Skill home directory that contains them and their
+        Skill name. Such a package is skipped before it claims its name, so a
+        same-named package from a later root still loads. Runtime consumers pass
+        the policy's turned-off packages; editor-scope loads omit them so those
+        packages stay visible and editable for the human manager.
         ``allowlist_exclusions`` (an Identity Agent's ``excluded_skills``) keeps
         matching skills loaded but removes them from every allowlist grant; it
         never overrides ``always_allowed``.
@@ -274,15 +275,12 @@ class SkillRegistry:
         diagnostics: list[SkillDiagnostic] = []
         scan_roots = [skills_dir, *(extra_dirs or [])]
         origin_tags = list(origins) if origins is not None else []
-        excluded = frozenset(excluded_names or ())
+        exclusion = _PackageExclusion(frozenset(excluded_packages or ()))
         for index, scan_root in enumerate(scan_roots):
             origin = origin_tags[index] if index < len(origin_tags) else None
-            _load_skill_root(scan_root, skills, diagnostics, origin)
+            _load_skill_root(scan_root, skills, diagnostics, origin, exclusion)
 
-        if excluded:
-            excluded_skills = {name: skills.pop(name) for name in excluded if name in skills}
-        else:
-            excluded_skills = {}
+        excluded_skills = exclusion.skipped
         return cls(
             skills,
             diagnostics,
@@ -322,7 +320,7 @@ class SkillRegistry:
         return [self._skills[name] for name in sorted(self._skills)]
 
     def excluded_skills(self) -> list[SkillMetadata]:
-        """Return skills hidden by this registry's exclusion set, sorted by name.
+        """Return the turned-off packages this registry skipped, sorted by name.
 
         Only the human-facing manager consumes these; every runtime answer
         (``get``/``list_all``/``filter_allowed``/availability) treats a disabled
@@ -508,11 +506,30 @@ class SkillRegistry:
         return RequirementEvaluation(False, (f"requires one of: {alternatives}",))
 
 
+@dataclass
+class _PackageExclusion:
+    """The packages a load skips, and the first skipped package of each name."""
+
+    packages: frozenset[tuple[Path, str]]
+    skipped: dict[str, SkillMetadata] = field(default_factory=dict)
+
+    def skips(self, skill: SkillMetadata, skill_dir: Path) -> bool:
+        # The home is the directory the package was scanned in (also for a
+        # package-root scan), so a linked package directory still matches.
+        if not self.packages:
+            return False
+        if (skill_dir.parent.resolve(), skill.name) not in self.packages:
+            return False
+        self.skipped.setdefault(skill.name, skill)
+        return True
+
+
 def _load_skill_root(
     skills_dir: Path,
     skills: dict[str, SkillMetadata],
     diagnostics: list[SkillDiagnostic],
     origin: str | None = None,
+    exclusion: _PackageExclusion | None = None,
 ) -> None:
     if not skills_dir.is_dir():
         return
@@ -522,7 +539,7 @@ def _load_skill_root(
     # the runtime inserts individually resolved package directories — never an
     # owner's whole skills home — so unshared neighbours cannot leak.
     if (skills_dir / SKILL_FILENAME).is_file():
-        _load_skill_directory(skills_dir, skills, diagnostics, origin)
+        _load_skill_directory(skills_dir, skills, diagnostics, origin, exclusion)
         return
 
     try:
@@ -546,7 +563,7 @@ def _load_skill_root(
             continue
         if not (skill_dir / SKILL_FILENAME).is_file():
             continue
-        _load_skill_directory(skill_dir, skills, diagnostics, origin)
+        _load_skill_directory(skill_dir, skills, diagnostics, origin, exclusion)
 
 
 def _load_skill_directory(
@@ -554,6 +571,7 @@ def _load_skill_directory(
     skills: dict[str, SkillMetadata],
     diagnostics: list[SkillDiagnostic],
     origin: str | None = None,
+    exclusion: _PackageExclusion | None = None,
 ) -> None:
     """Read one skill package directory into the accumulated load state."""
     skill_file = skill_dir / SKILL_FILENAME
@@ -602,6 +620,8 @@ def _load_skill_directory(
         return
 
     skill = replace(skill, origin=origin)
+    if exclusion is not None and exclusion.skips(skill, skill_dir):
+        return
     if skill.name in skills:
         warnings = [
             *result.warnings,
@@ -743,7 +763,7 @@ def load_project_skill_registry(
     *,
     project_origin: str | None = None,
     bundled_origins: Sequence[str | None] | None = None,
-    excluded_names: Iterable[str] | None = None,
+    excluded_packages: Collection[tuple[Path, str]] | None = None,
 ) -> SkillRegistry:
     """Build a project-scoped registry: the project's own skills, then the bundled ones.
 
@@ -756,7 +776,7 @@ def load_project_skill_registry(
     so a project without one simply gets the bundled pool.
     ``project_origin``/``bundled_origins`` tag the loaded skills with their scope
     for catalog grouping (the project root then the bundled roots).
-    ``excluded_names`` forwards the Skill Policy disable switch to the merge.
+    ``excluded_packages`` forwards the packages the Skill Policy turns off.
     """
     origins: list[str | None] | None = None
     if project_origin is not None or bundled_origins is not None:
@@ -771,7 +791,7 @@ def load_project_skill_registry(
         extra_dirs=list(bundled_scan_roots),
         environment=environment,
         origins=origins,
-        excluded_names=excluded_names,
+        excluded_packages=excluded_packages,
     )
 
 

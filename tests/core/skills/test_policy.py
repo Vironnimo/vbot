@@ -9,12 +9,15 @@ import pytest
 from core.database import older_format_hint
 from core.skills.policy import (
     POLICY_FORMAT_VERSION,
+    SkillPackageRef,
     SkillPolicy,
     SkillPolicyError,
     SkillPolicyService,
     validate_skill_policy_file,
 )
 from core.storage.storage import StorageManager
+
+DEPLOY = SkillPackageRef("home", "deploy")
 
 
 @pytest.fixture
@@ -50,7 +53,13 @@ class TestLoad:
             storage,
             {
                 "format_version": POLICY_FORMAT_VERSION,
-                "disabled": ["deploy"],
+                "disabled_packages": {
+                    "home": ["deploy"],
+                    "bundled": ["pdf"],
+                    "extensions": {"computer-use": ["computer-use"]},
+                    "folders": {"~/team-skills": ["review"]},
+                    "agents": {"ghost-agent": ["notes"]},
+                },
                 "shared": {
                     "ghost-agent": {"deploy": ["two"]},
                     "main": {"vanished-skill": ["two"], "review": ["two", "three"]},
@@ -61,7 +70,13 @@ class TestLoad:
 
         policy = service.load()
 
-        assert policy.disabled == frozenset({"deploy"})
+        assert policy.disabled_packages == {
+            DEPLOY,
+            SkillPackageRef("bundled", "pdf"),
+            SkillPackageRef("extension", "computer-use", "computer-use"),
+            SkillPackageRef("folder", "review", "~/team-skills"),
+            SkillPackageRef("agent", "notes", "ghost-agent"),
+        }
         assert policy.shared == {
             "ghost-agent": {"deploy": frozenset({"two"})},
             "main": {
@@ -82,11 +97,18 @@ class TestLoad:
             pytest.param(
                 {
                     "format_version": POLICY_FORMAT_VERSION,
-                    "disabled": ["deploy"],
                     "shared": {"owner": {"deploy": [42]}},
                 },
                 "must be a string",
                 id="non-string-receiver",
+            ),
+            pytest.param(
+                {
+                    "format_version": POLICY_FORMAT_VERSION,
+                    "disabled_packages": {"agents": ["main"]},
+                },
+                "must be an object keyed by agent",
+                id="unkeyed-private-packages",
             ),
         ],
     )
@@ -139,7 +161,10 @@ class TestLoad:
             storage,
             {
                 "format_version": POLICY_FORMAT_VERSION,
-                "disabled": ["bad name!", "good-name"],
+                "disabled_packages": {
+                    "home": ["bad name!", "good-name"],
+                    "agents": {"Not An Id": ["notes"]},
+                },
                 "shared": {"owner": {"also bad!": ["two"], "deploy": ["Not An Id"]}},
             },
         )
@@ -148,7 +173,7 @@ class TestLoad:
         policy = service.load()
 
         # Unusable entries drop out of the effective sets; their siblings load.
-        assert policy.disabled == frozenset({"good-name"})
+        assert policy.disabled_packages == {SkillPackageRef("home", "good-name")}
         assert policy.shared == {}
         messages = service.validation_diagnostics()
         assert sum("ignoring unusable skill name" in message for message in messages) == 2
@@ -156,7 +181,8 @@ class TestLoad:
         report = validate_skill_policy_file(path)
         assert report.ok
         assert [diagnostic.path for diagnostic in report.diagnostics] == [
-            "$.disabled[0]",
+            "$.disabled_packages.home[0]",
+            "$.disabled_packages.agents['Not An Id']",
             "$.shared.owner['also bad!']",
             "$.shared.owner.deploy[0]",
         ]
@@ -176,7 +202,7 @@ class TestMutations:
         assert service.load() == SkillPolicy()
         with pytest.raises(SkillPolicyError):
             if operation == "disable":
-                service.set_disabled("deploy", disabled=True)
+                service.set_package_disabled(DEPLOY, disabled=True)
             else:
                 service.set_shared("main", "deploy", shared=True, receivers=["two"])
         assert path.read_bytes() == original
@@ -187,9 +213,26 @@ class TestMutations:
     ) -> None:
         service = SkillPolicyService(storage)
         with pytest.raises(SkillPolicyError):
-            service.set_disabled(name, disabled=True)
+            service.set_package_disabled(SkillPackageRef("home", name), disabled=True)
         with pytest.raises(SkillPolicyError):
             service.set_shared("main", name, shared=True, receivers=["two"])
+        assert not policy_path(storage).exists()
+
+    @pytest.mark.parametrize(
+        "ref",
+        [
+            SkillPackageRef("project", "deploy", "repo"),
+            SkillPackageRef("home", "deploy", "elsewhere"),
+            SkillPackageRef("extension", "deploy"),
+            SkillPackageRef("agent", "deploy", "Not An Id"),
+        ],
+    )
+    def test_disable_refuses_a_package_without_a_valid_source(
+        self, storage: StorageManager, ref: SkillPackageRef
+    ) -> None:
+        # Project Skills are turned off in their Project, not here.
+        with pytest.raises(SkillPolicyError):
+            SkillPolicyService(storage).set_package_disabled(ref, disabled=True)
         assert not policy_path(storage).exists()
 
     @pytest.mark.parametrize("receivers", [[], ["bad name"], ["two\n"], ["main"]])
@@ -201,24 +244,39 @@ class TestMutations:
             service.set_shared("main", "deploy", shared=True, receivers=receivers)
         assert not policy_path(storage).exists()
 
-    def test_set_disabled_persists_and_toggles(self, storage: StorageManager) -> None:
+    def test_disabled_packages_persist_by_source_and_toggle(self, storage: StorageManager) -> None:
         service = SkillPolicyService(storage)
+        refs = {
+            DEPLOY,
+            SkillPackageRef("bundled", "deploy"),
+            SkillPackageRef("extension", "computer-use", "computer-use"),
+            SkillPackageRef("folder", "review", "~/team-skills"),
+            SkillPackageRef("agent", "deploy", "main"),
+        }
 
-        service.set_disabled("deploy", disabled=True)
+        for ref in refs:
+            service.set_package_disabled(ref, disabled=True)
 
+        # The same name stays apart per source.
         document = json.loads(policy_path(storage).read_text(encoding="utf-8"))
         assert document == {
             "format_version": POLICY_FORMAT_VERSION,
-            "disabled": ["deploy"],
+            "disabled_packages": {
+                "home": ["deploy"],
+                "bundled": ["deploy"],
+                "extensions": {"computer-use": ["computer-use"]},
+                "folders": {"~/team-skills": ["review"]},
+                "agents": {"main": ["deploy"]},
+            },
             "shared": {},
         }
-        assert service.load().disabled == frozenset({"deploy"})
+        assert service.load().disabled_packages == refs
 
-        service.set_disabled("deploy", disabled=False)
+        service.set_package_disabled(DEPLOY, disabled=False)
 
         document = json.loads(policy_path(storage).read_text(encoding="utf-8"))
-        assert document["disabled"] == []
-        assert service.load() == SkillPolicy()
+        assert document["disabled_packages"]["home"] == []
+        assert service.load().disabled_packages == refs - {DEPLOY}
 
     def test_mutations_write_unknown_fields_and_unusable_entries_back_unchanged(
         self, storage: StorageManager
@@ -228,7 +286,7 @@ class TestMutations:
             {
                 "format_version": POLICY_FORMAT_VERSION,
                 "future": {"kept": True},
-                "disabled": ["bad name!", "old"],
+                "disabled_packages": {"home": ["bad name!", "old"], "future_source": ["x"]},
                 "shared": {
                     "main": {"also bad!": ["two"], "notes": ["Not An Id", "two"]},
                     "other": {"deploy": []},
@@ -237,13 +295,14 @@ class TestMutations:
         )
         service = SkillPolicyService(storage)
 
-        service.set_disabled("deploy", disabled=True)
-        service.set_disabled("old", disabled=False)
+        service.set_package_disabled(DEPLOY, disabled=True)
+        service.set_package_disabled(SkillPackageRef("home", "old"), disabled=False)
         service.set_shared("main", "review", shared=True, receivers=["two"])
 
         document = json.loads(path.read_text(encoding="utf-8"))
         assert document["future"] == {"kept": True}
-        assert document["disabled"] == ["bad name!", "deploy"]
+        assert document["disabled_packages"]["home"] == ["bad name!", "deploy"]
+        assert document["disabled_packages"]["future_source"] == ["x"]
         assert document["shared"] == {
             "main": {
                 "also bad!": ["two"],
@@ -254,19 +313,21 @@ class TestMutations:
         }
         # The effective policy still leaves the unusable entries out.
         assert service.load() == SkillPolicy(
-            disabled=frozenset({"deploy"}),
+            disabled_packages=frozenset({DEPLOY}),
             shared={"main": {"notes": frozenset({"two"}), "review": frozenset({"two"})}},
         )
 
-    def test_sharing_groups_by_owner_beside_disabled_names(self, storage: StorageManager) -> None:
+    def test_sharing_groups_by_owner_beside_disabled_packages(
+        self, storage: StorageManager
+    ) -> None:
         service = SkillPolicyService(storage)
 
         service.set_shared("main", "notes", shared=True, receivers=["two"])
         service.set_shared("two", "deploy", shared=True, receivers=["main"])
-        service.set_disabled("other", disabled=True)
+        service.set_package_disabled(SkillPackageRef("bundled", "other"), disabled=True)
 
         policy = service.load()
-        assert policy.disabled == frozenset({"other"})
+        assert policy.disabled_packages == {SkillPackageRef("bundled", "other")}
         assert policy.shared == {
             "main": {"notes": frozenset({"two"})},
             "two": {"deploy": frozenset({"main"})},
@@ -310,4 +371,4 @@ class TestMutations:
         monkeypatch.setattr("core.json_documents.atomic_write_text", fail_write)
 
         with pytest.raises(SkillPolicyError):
-            service.set_disabled("deploy", disabled=True)
+            service.set_package_disabled(DEPLOY, disabled=True)

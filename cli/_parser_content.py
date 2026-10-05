@@ -269,7 +269,11 @@ def _add_skill_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
             SKILL_HELP[command],
             example=f"skill {command} librarian",
         )
-        command_parser.add_argument("name", metavar="<skill-name>", help="Skill name to toggle")
+        command_parser.add_argument(
+            "name",
+            metavar="<skill-name-or-id>",
+            help="Skill name, or the inventory id when several packages share the name",
+        )
 
     share_parser = _add_command_parser(
         skill_subparsers,

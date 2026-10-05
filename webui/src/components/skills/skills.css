@@ -166,10 +166,12 @@
   color: var(--text-hi);
   background: var(--surface-3);
 }
-/* One package per single-line row: the Mono name with problem badges, then
-   the source label and who gets it, muted, at the end. Descriptions show only
-   in the row tooltip. Rows sit inset in the group; one rounded band marks
-   hover, a tinted band the package opened last. */
+/* One package per single-line row: the Mono name with problem badges, the
+   source label and who gets it, muted, then the row's own controls (switch,
+   Edit, Delete; Restore and Delete permanently in the archive), always
+   visible. The name part is the button that opens the package. Descriptions
+   show only in its tooltip. Rows sit inset in the group; one rounded band
+   marks hover, a tinted band the package opened last. */
 .skills-rows {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -178,8 +180,20 @@
 .skills-row {
   display: flex;
   align-items: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 40px;
+  padding-right: 4px;
+  border-radius: var(--r-md);
+}
+.skills-row:hover {
+  background: var(--surface-2);
+}
+.skills-row-open {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
   gap: 8px;
-  width: 100%;
   min-width: 0;
   min-height: 40px;
   padding: 6px 8px;
@@ -191,10 +205,7 @@
   text-align: left;
   cursor: pointer;
 }
-.skills-row:hover {
-  background: var(--surface-2);
-}
-.skills-row:focus-visible {
+.skills-row-open:focus-visible {
   outline: none;
   background: var(--surface-2);
   box-shadow: inset 0 0 0 2px var(--accent);
@@ -202,6 +213,25 @@
 .skills-row--current,
 .skills-row--current:hover {
   background: var(--accent-08);
+}
+.skills-row-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+}
+.skills-row-switch {
+  display: inline-flex;
+  margin: 0 6px;
+}
+.skills-row-actions .btn-tertiary.btn-icon {
+  color: var(--text-lo);
+}
+.skills-row-actions .btn-tertiary.btn-icon:not(:disabled):hover {
+  color: var(--text-hi);
+}
+.skills-row-actions .skills-row-delete:not(:disabled):hover {
+  color: var(--red);
 }
 .skills-row-meta {
   display: flex;
@@ -240,8 +270,8 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.skills-row .chip,
-.skills-row .badge {
+.skills-row-open .chip,
+.skills-row-open .badge {
   flex-shrink: 0;
 }
 /* A Skill turned off everywhere keeps its row; its name recedes. */
@@ -711,7 +741,8 @@ button.skills-librarian__skill:focus-visible,
     padding-right: 0;
   }
   /* Phone rows keep one line: the source label yields to who gets it. */
-  .skills-row {
+  .skills-row,
+  .skills-row-open {
     min-height: 44px;
   }
   .skills-row-source,

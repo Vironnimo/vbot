@@ -53,9 +53,12 @@ class _SkillRuntime:
         self.inventory: JsonObject = {"skills": [{"name": "deploy"}], "stale_shared": []}
         self.policy_calls: list[tuple[Any, ...]] = []
         self.policy_error: SkillPolicyError | None = None
-        self.skill_policy = SimpleNamespace(
-            set_disabled=self._set_disabled, set_shared=self._set_shared
-        )
+        self.skill_policy = SimpleNamespace(set_shared=self._set_shared)
+        # Inventory ids of the packages the switch knows, with their Project.
+        self.packages: dict[str, tuple[str, str | None]] = {
+            "deploy-id": ("deploy", None),
+            "project-id": ("review", "repo"),
+        }
 
     def agent_skills_dir(self, agent_id: str) -> Path:
         return self._root / "agents" / agent_id / "skills"
@@ -77,10 +80,14 @@ class _SkillRuntime:
     def agent_owns_private_skill(self, agent_id: str, name: str) -> bool:
         return agent_id == "builder" and name == "deploy"
 
-    def _set_disabled(self, name: str, *, disabled: bool) -> None:
+    def set_skill_package_disabled(self, entry_id: str, *, disabled: bool) -> JsonObject:
+        if entry_id not in self.packages:
+            raise ValueError(f"no Skill package has id {entry_id}")
         if self.policy_error is not None:
             raise self.policy_error
-        self.policy_calls.append(("set_disabled", name, disabled))
+        self.policy_calls.append(("set_disabled", entry_id, disabled))
+        name, project_id = self.packages[entry_id]
+        return {"name": name, "disabled": disabled, "project_id": project_id}
 
     def _set_shared(self, agent_id: str, name: str, *, shared: bool, receivers: list[str]) -> None:
         if self.policy_error is not None:
@@ -407,20 +414,20 @@ async def test_install_preview_writes_and_refreshes_nothing(tmp_path: Path) -> N
         ("skill.inspect", {"id": "missing-id"}, "invalid_request", "missing-id", False),
         (
             "skill.set_disabled",
-            {"name": "ghost", "disabled": True},
+            {"id": "ghost-id", "disabled": True},
             "skill_not_found",
-            "ghost",
+            "ghost-id",
             False,
         ),
         (
             "skill.set_disabled",
-            {"name": "deploy", "disabled": "yes"},
+            {"id": "deploy-id", "disabled": "yes"},
             "invalid_request",
             "disabled",
             False,
         ),
         # An unreadable or invalid policy document is refused, never overwritten.
-        ("skill.set_disabled", {"name": "deploy", "disabled": True}, "domain_error", "", True),
+        ("skill.set_disabled", {"id": "deploy-id", "disabled": True}, "domain_error", "", True),
         ("skill.share", {**_SHARE, "agent_id": "ghost"}, "agent_not_found", "ghost", False),
         ("skill.share", {**_SHARE, "name": "notes"}, "skill_not_found", "notes", False),
         ("skill.share", {**_SHARE, "receivers": ["ghost"]}, "agent_not_found", "ghost", False),
@@ -671,9 +678,17 @@ async def test_inventory_adds_each_packages_skill_use(tmp_path: Path) -> None:
     [
         (
             "skill.set_disabled",
-            {"name": "deploy", "disabled": True},
-            {"name": "deploy", "disabled": True},
-            ("set_disabled", "deploy", True),
+            {"id": "deploy-id", "disabled": True},
+            {"name": "deploy", "disabled": True, "project_id": None},
+            ("set_disabled", "deploy-id", True),
+            False,
+        ),
+        # A Project Skill is turned off in its Project.
+        (
+            "skill.set_disabled",
+            {"id": "project-id", "disabled": True},
+            {"name": "review", "disabled": True, "project_id": "repo"},
+            ("set_disabled", "project-id", True),
             False,
         ),
         (
@@ -699,7 +714,7 @@ async def test_inventory_adds_each_packages_skill_use(tmp_path: Path) -> None:
             True,
         ),
     ],
-    ids=["disable", "share", "unshare", "share-cancelled"],
+    ids=["disable", "disable-project", "share", "unshare", "share-cancelled"],
 )
 async def test_policy_mutation_persists_off_the_loop_and_applies_after_cancellation(
     tmp_path: Path,
@@ -716,8 +731,11 @@ async def test_policy_mutation_persists_off_the_loop_and_applies_after_cancellat
     loop_thread = threading.get_ident()
     entered = asyncio.Event()
     release = threading.Event()
-    policy_method = "set_disabled" if method == "skill.set_disabled" else "set_shared"
-    original = getattr(runtime.skill_policy, policy_method)
+    if method == "skill.set_disabled":
+        writer, policy_method = runtime, "set_skill_package_disabled"
+    else:
+        writer, policy_method = runtime.skill_policy, "set_shared"
+    original = getattr(writer, policy_method)
 
     def on_worker(function: Any) -> Any:
         def checked(*args: Any, **kwargs: Any) -> Any:
@@ -742,7 +760,7 @@ async def test_policy_mutation_persists_off_the_loop_and_applies_after_cancellat
         assert runtime.policy_calls
         runtime.reload_calls += 1
 
-    monkeypatch.setattr(runtime.skill_policy, policy_method, slow_write)
+    monkeypatch.setattr(writer, policy_method, slow_write)
     monkeypatch.setattr(runtime, "reload_skills_async", reload_skills)
     task = asyncio.create_task(call(state, method, **params))
     try:
@@ -759,11 +777,16 @@ async def test_policy_mutation_persists_off_the_loop_and_applies_after_cancellat
     else:
         assert (await task)["result"] == result
     assert runtime.policy_calls == [policy_call]
-    assert resource_changes(state) == [{"kind": "skills"}]
-    # Disabling reloads the registry; shared Skills never enter the global pool.
-    if method == "skill.set_disabled":
+    # Disabling reloads the registry, or for a Project Skill refreshes the
+    # Projects; shared Skills never enter the global pool.
+    if params.get("id") == "project-id":
+        assert resource_changes(state) == [{"kind": "projects"}, {"kind": "skills"}]
+        assert (runtime.reload_calls, runtime.invalidated) == (0, [])
+    elif method == "skill.set_disabled":
+        assert resource_changes(state) == [{"kind": "skills"}]
         assert (runtime.reload_calls, runtime.invalidated) == (1, [])
     else:
+        assert resource_changes(state) == [{"kind": "skills"}]
         assert (runtime.reload_calls, runtime.invalidated) == (0, [None])
 
 
@@ -780,7 +803,7 @@ async def test_skill_mutations_remain_serialized_through_cancelled_reload(tmp_pa
         runtime.reload_calls += 1
 
     runtime.reload_skills_async = reload_skills
-    first = asyncio.create_task(call(state, "skill.set_disabled", name="deploy", disabled=True))
+    first = asyncio.create_task(call(state, "skill.set_disabled", id="deploy-id", disabled=True))
     second = None
     try:
         await asyncio.wait_for(reload_entered.wait(), 2)
@@ -788,7 +811,7 @@ async def test_skill_mutations_remain_serialized_through_cancelled_reload(tmp_pa
         await asyncio.sleep(0)
         first.cancel()
         second = asyncio.create_task(
-            call(state, "skill.set_disabled", name="deploy", disabled=False)
+            call(state, "skill.set_disabled", id="deploy-id", disabled=False)
         )
         await asyncio.sleep(0)
         assert not first.done()
@@ -800,6 +823,6 @@ async def test_skill_mutations_remain_serialized_through_cancelled_reload(tmp_pa
             await first
         if second is not None:
             assert (await second)["ok"] is True
-    assert runtime.policy_calls[-1] == ("set_disabled", "deploy", False)
+    assert runtime.policy_calls[-1] == ("set_disabled", "deploy-id", False)
     assert runtime.reload_calls == 2
     assert resource_changes(state) == [{"kind": "skills"}, {"kind": "skills"}]

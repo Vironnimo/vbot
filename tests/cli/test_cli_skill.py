@@ -452,17 +452,52 @@ def test_skill_inventory_reports_the_empty_state(rpc: FakeRpc, run_cli: RunCli) 
     assert out.splitlines() == ["no skills found in any source"]
 
 
-@pytest.mark.parametrize(("command", "disabled"), [("disable", True), ("enable", False)])
-def test_skill_disable_and_enable_toggle_the_policy(
-    rpc: FakeRpc, run_cli: RunCli, command: str, disabled: bool
+_SAME_NAMED_PACKAGES = {
+    "skills": [
+        {"id": "bundled-id", "name": "librarian", "origin": "bundled"},
+        {"id": "private-id", "name": "notes", "origin": "agent", "owner_id": "assistant"},
+        {"id": "other-id", "name": "notes", "origin": "agent", "owner_id": "coder"},
+        {"id": "broken-id", "name": "librarian", "origin": "global", "status": "invalid"},
+    ],
+    "stale_shared": [],
+    "policy_diagnostics": [],
+}
+
+
+@pytest.mark.parametrize(
+    ("command", "target", "entry_id"),
+    [
+        # An invalid package never makes a name ambiguous.
+        ("disable", "librarian", "bundled-id"),
+        ("enable", "librarian", "bundled-id"),
+        ("disable", "other-id", "other-id"),
+    ],
+)
+def test_skill_disable_and_enable_toggle_one_package(
+    rpc: FakeRpc, run_cli: RunCli, command: str, target: str, entry_id: str
 ) -> None:
+    rpc.reply("skill.inventory", _SAME_NAMED_PACKAGES)
     rpc.reply("skill.set_disabled", {"name": "librarian"})
 
-    code, out, _err = run_cli("skill", command, "librarian")
+    code, out, _err = run_cli("skill", command, target)
 
     assert code == 0
-    assert rpc.calls == [("skill.set_disabled", {"name": "librarian", "disabled": disabled})]
+    assert rpc.calls[-1] == (
+        "skill.set_disabled",
+        {"id": entry_id, "disabled": command == "disable"},
+    )
     assert out.splitlines() == [f"{command}d skill librarian"]
+
+
+def test_skill_disable_of_a_shared_name_asks_for_one_id(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("skill.inventory", _SAME_NAMED_PACKAGES)
+
+    code, out, _err = run_cli("skill", "disable", "notes")
+
+    assert code == 1
+    assert [method for method, _params in rpc.calls] == ["skill.inventory"]
+    for text in ("- private-id  [agent of assistant]", "- other-id  [agent of coder]"):
+        assert text in out
 
 
 def test_skill_share_and_unshare_send_the_share_state(rpc: FakeRpc, run_cli: RunCli) -> None:

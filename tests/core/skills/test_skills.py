@@ -543,33 +543,48 @@ def test_allowlist_filters_skills_sorted_by_name(
     assert [skill.name for skill in registry.filter_allowed(allowed)] == expected
 
 
-def test_excluded_names_hide_every_copy_of_the_skill(tmp_path: Path) -> None:
+def test_an_excluded_package_leaves_the_pool_and_lets_a_same_named_one_load(
+    tmp_path: Path,
+) -> None:
     global_dir, bundled_dir = tmp_path / "global", tmp_path / "bundled"
     write_skill(global_dir, "deploy", description="Global copy.")
     write_skill(global_dir, "review")
     write_skill(bundled_dir, "deploy", description="Bundled copy.")
+    write_skill(bundled_dir, "review", description="Bundled review.")
 
-    def load(excluded_names: set[str] | None = None) -> SkillRegistry:
+    def load(excluded: set[tuple[Path, str]] | None = None) -> SkillRegistry:
         return SkillRegistry.load(
             global_dir,
             extra_dirs=[bundled_dir],
             origins=[SKILL_ORIGIN_GLOBAL, SKILL_ORIGIN_BUNDLED],
-            excluded_names=excluded_names,
+            excluded_packages=excluded,
         )
 
-    registry = load({"deploy", "ghost"})
-
-    assert [skill.name for skill in registry.list_all()] == ["review"]
-    assert [skill.name for skill in registry.filter_allowed(["*"])] == ["review"]
-    assert registry.availability_for("deploy", ["*"]).state == "invalid"
-    with pytest.raises(KeyError, match="deploy"):
-        registry.get("deploy")
-    [excluded] = registry.excluded_skills()
-    assert (excluded.name, excluded.origin, excluded.description) == (
-        "deploy",
-        SKILL_ORIGIN_GLOBAL,
-        "Global copy.",
+    # Turning off the global deploy brings the bundled one back; turning off
+    # both review packages removes the name.
+    registry = load(
+        {
+            (global_dir.resolve(), "deploy"),
+            (global_dir.resolve(), "review"),
+            (bundled_dir.resolve(), "review"),
+            (global_dir.resolve(), "ghost"),
+        }
     )
+
+    assert [(skill.name, skill.description) for skill in registry.list_all()] == [
+        ("deploy", "Bundled copy.")
+    ]
+    assert [skill.name for skill in registry.filter_allowed(["*"])] == ["deploy"]
+    assert registry.availability_for("review", ["*"]).state == "invalid"
+    with pytest.raises(KeyError, match="review"):
+        registry.get("review")
+    assert [
+        (excluded.name, excluded.origin, excluded.description)
+        for excluded in registry.excluded_skills()
+    ] == [
+        ("deploy", SKILL_ORIGIN_GLOBAL, "Global copy."),
+        ("review", SKILL_ORIGIN_GLOBAL, "Use it."),
+    ]
     assert load().excluded_skills() == []
 
 

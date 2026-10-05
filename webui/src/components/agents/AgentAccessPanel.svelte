@@ -49,7 +49,7 @@
 
   // A Skill row's menu offers the Skills manager's Agent-row actions in
   // place: the on/off item edits the draft like the row's checkbox, Edit and
-  // Delete (the Agent's own Skills) and Turn off everywhere write at once,
+  // Delete (the Agent's own Skills) and Turn this skill off write at once,
   // and Open skill shows the Skill's page in the Skills manager.
   const skillActions = createSkillActions({
     get agents() {

@@ -151,10 +151,12 @@ export function skillInventory(options = {}) {
   return rpc('skill.inventory', {}, options);
 }
 
-export function setSkillDisabled(name, disabled, options = {}) {
+// Turns one Skill package off or on again by its inventory id; a
+// same-named package from another source is not affected.
+export function setSkillDisabled(id, disabled, options = {}) {
   requireNonEmptyString(
-    name,
-    'Skill name must be a non-empty string',
+    id,
+    'Skill package id must be a non-empty string',
     'skill.set_disabled',
   );
   if (typeof disabled !== 'boolean') {
@@ -164,7 +166,7 @@ export function setSkillDisabled(name, disabled, options = {}) {
       { method: 'skill.set_disabled' },
     );
   }
-  return rpc('skill.set_disabled', { name, disabled }, options);
+  return rpc('skill.set_disabled', { id, disabled }, options);
 }
 
 function requireSkillScope(scope, method) {

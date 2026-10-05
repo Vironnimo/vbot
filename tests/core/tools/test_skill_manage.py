@@ -79,6 +79,8 @@ class _Harness:
         self.references: tuple[SkillReference, ...] = ()
         self.unmovable: set[SkillReference] = set()
         self.merges: list[tuple[str, str, str | None, bool]] = []
+        # How often a global change reloaded the global Skills.
+        self.global_reloads = 0
         self.tools = ToolRegistry()
         self.authoring = SkillAuthoringService(protected_roots=[tmp_path / "resources" / "skills"])
         register_skill_manage_tool(
@@ -93,7 +95,19 @@ class _Harness:
             on_changed=lambda: self.changes.append(list(self.invalidated)),
             run_started_at=self.run_started.get,
             follow_merge=self.follow_merge,
+            resolve_global_skills_dir=lambda: self.global_home,
+            publish_skill=lambda agent_id, name, writer: self.authoring.publish(
+                self.home(agent_id), self.global_home, name, writer=writer
+            ),
+            refresh_global_skills=self.reload_global,
         )
+
+    @property
+    def global_home(self) -> Path:
+        return self.root / "skills"
+
+    async def reload_global(self) -> None:
+        self.global_reloads += 1
 
     async def follow_merge(
         self,
@@ -245,6 +259,7 @@ def test_provider_schema_is_flat_and_hermes_shaped(tmp_path: Path) -> None:
         "write_file",
         "remove_file",
         "delete",
+        "publish",
     ]
     assert parameters["required"] == ["action", "name"]
     assert "default" not in str(parameters)
@@ -595,9 +610,21 @@ _MESSAGE_HEADER = "---\nname: new\ndescription: <what it covers and when to load
                 "content": _skill_md(name="new"),
                 "scope": "global",
             },
-            "skill_manage writes only your own Skills; global, Project and bundled Skills are "
-            "read-only here. Omit scope to write one of your own Skills.",
+            "create adds one of your own Skills; nothing changed. Omit scope to create it, and "
+            "use action publish to make one of your own Skills global.",
             id="global-scope",
+        ),
+        pytest.param(
+            {"action": "patch", "match": "x", "content": "y", "scope": "project"},
+            "skill_manage changes your own Skills and global Skills; Project and bundled Skills "
+            "are read-only here, and nothing changed. Omit scope to change a Skill by its name.",
+            id="project-scope",
+        ),
+        pytest.param(
+            {"action": "publish", "file_path": "references/notes.md"},
+            "publish makes the whole Skill global and takes no file_path or text. Omit them, "
+            "and change the Skill with edit or patch first if it needs a change.",
+            id="publish-with-a-file",
         ),
         pytest.param(
             {"action": "create", "file_path": "references/notes.md", "content": "Notes."},
@@ -1091,6 +1118,178 @@ def test_normalized_call_records_the_package_path_it_writes(
     )
 
     assert normalized["file_path"] == recorded
+
+
+# --- Global Skills ------------------------------------------------------------
+
+
+def _global_skill(harness: _Harness, name: str = "guide") -> Path:
+    document = harness.global_home / name / "SKILL.md"
+    document.parent.mkdir(parents=True)
+    document.write_text(_skill_md(name, "Shared guide.", "# Steps\n"), encoding="utf-8")
+    return document
+
+
+def test_attended_agents_change_global_skills_but_never_delete_them(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path, scopes={"guide": "global"})
+    document = _global_skill(harness)
+
+    patched = harness.run(
+        {"action": "patch", "name": "guide", "old_string": "# Steps", "new_string": "# Fixed"}
+    )
+    deleted = harness.run({"action": "delete", "name": "guide"})
+    background = harness.run(
+        {"action": "patch", "name": "guide", "old_string": "# Fixed", "new_string": "# Mine"},
+        run_kind=RunKind.SKILL_REFLECTION,
+    )
+
+    assert patched["data"] == {"content": "Patched SKILL.md of Skill 'guide' at line 6."}
+    assert "# Fixed" in document.read_text(encoding="utf-8")
+    # The change reaches every Agent: all scopes are invalidated and the global
+    # Skills reload once.
+    assert (harness.invalidated, harness.global_reloads) == ([None], 1)
+    assert deleted == tool_failure(
+        "skill_write_rejected",
+        "Skill 'guide' is a global Skill, which only the user can delete in the Skill "
+        "controls; nothing changed.",
+        retryable=False,
+    )
+    assert background == tool_failure(
+        "skill_protected",
+        "Skill 'guide' is a global Skill, which you cannot change here; nothing changed. "
+        "Leave it as it is and name the needed change in your reply.",
+        retryable=False,
+    )
+    assert document.is_file() and not harness.home("main").exists()
+
+
+def test_global_scope_reaches_a_global_skill_behind_an_own_one(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+    document = _global_skill(harness)
+    own = harness.document("guide")
+    own.parent.mkdir(parents=True)
+    own.write_text(_skill_md("guide", "Mine.", "# Steps\n"), encoding="utf-8")
+    own_before = own.read_bytes()
+
+    patched = harness.run(
+        {
+            "action": "patch",
+            "name": "guide",
+            "old_string": "# Steps",
+            "new_string": "# Fixed",
+            "scope": "global",
+        }
+    )
+    missing = harness.run(
+        {"action": "edit", "name": "guid", "content": _skill_md("guid"), "scope": "global"}
+    )
+
+    assert patched["ok"] is True
+    assert "# Fixed" in document.read_text(encoding="utf-8")
+    assert own.read_bytes() == own_before
+    assert missing == tool_failure(
+        "skill_not_found",
+        "There is no global Skill named 'guid'; nothing changed. Did you mean 'guide'?",
+        retryable=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("scope", "message"),
+    [
+        (
+            "external",
+            "Skill 'guide' comes from a skill folder or an Extension and is read-only; nothing "
+            "changed. Tell the user which change it needs; do not edit its files with file or "
+            "shell Tools.",
+        ),
+        ("bundled", "Skill 'guide' is a bundled Skill — read-only here."),
+    ],
+)
+def test_global_skills_outside_the_global_home_stay_read_only(
+    tmp_path: Path, scope: str, message: str
+) -> None:
+    harness = _Harness(tmp_path, scopes={"guide": scope})
+
+    result = harness.run({"action": "patch", "name": "guide", "old_string": "a", "new_string": "b"})
+
+    assert result["error"]["code"] == "skill_write_rejected"
+    assert result["error"]["message"].startswith(message)
+    assert not harness.global_home.exists()
+
+
+def test_publish_moves_an_own_skill_into_the_global_home(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+    harness.create(name="notes")
+    harness.run(
+        {
+            "action": "write_file",
+            "name": "notes",
+            "file_path": "references/more.md",
+            "content": "More.",
+        }
+    )
+    harness.invalidated.clear()
+
+    published = harness.run({"action": "publish", "name": "notes"})
+
+    assert published["data"] == {
+        "content": "Skill 'notes' is now a global Skill instead of one of your own. Other "
+        "Agents can use it when their Skill selection allows it."
+    }
+    assert (harness.global_home / "notes" / "references" / "more.md").is_file()
+    assert not (harness.home("main") / "notes").exists()
+    assert [entry.reason for entry in harness.authoring.archived(harness.home("main"))] == [
+        "published"
+    ]
+    assert harness.changed_files() == [
+        ("SKILL.md", "created", 9, 0),
+        ("references/more.md", "created", 1, 0),
+    ]
+    assert (harness.invalidated, harness.global_reloads) == ([None], 1)
+
+
+@pytest.mark.parametrize(
+    ("setup", "run_kind", "code", "message"),
+    [
+        (
+            "conflict",
+            None,
+            "skill_write_rejected",
+            "A global Skill named 'notes' already exists; nothing changed. Tell the user, who "
+            "can compare the two Skills in the Skill controls.",
+        ),
+        (
+            "own",
+            RunKind.SKILL_REFLECTION,
+            "skill_write_rejected",
+            "You cannot make a Skill global here; nothing changed. Leave Skill 'notes' as it is.",
+        ),
+        (
+            "global",
+            None,
+            "skill_write_rejected",
+            "Skill 'notes' is already a global Skill; nothing changed.",
+        ),
+    ],
+)
+def test_publish_refusals_change_nothing(
+    tmp_path: Path, setup: str, run_kind: RunKind | None, code: str, message: str
+) -> None:
+    harness = _Harness(tmp_path, scopes={"notes": "global"} if setup == "global" else None)
+    if setup != "global":
+        harness.create(name="notes")
+    if setup in ("conflict", "global"):
+        _global_skill(harness, "notes")
+    before = {path: path.read_bytes() for path in tmp_path.rglob("SKILL.md") if path.is_file()}
+
+    result = harness.run({"action": "publish", "name": "notes"}, run_kind=run_kind)
+
+    assert result == tool_failure(code, message, retryable=False)
+    assert {
+        path: path.read_bytes() for path in tmp_path.rglob("SKILL.md") if path.is_file()
+    } == before
+    assert harness.global_reloads == 0
 
 
 # --- Skills shared with the caller -------------------------------------------

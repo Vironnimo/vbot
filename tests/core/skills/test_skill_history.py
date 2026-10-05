@@ -285,6 +285,38 @@ def test_archived_skills_are_restored_with_their_provenance_or_purged(
         service.purge(root, "../skills")
 
 
+def test_publish_moves_a_skill_into_another_home_with_its_provenance(
+    service: SkillAuthoringService, tmp_path: Path
+) -> None:
+    source = tmp_path / "agent" / "skills"
+    target = tmp_path / "global" / "skills"
+    service.create(source, "demo", skill_document(), writer=REFLECTION)
+    service.write_file(source, "demo", "references/notes.md", "notes", writer=AGENT)
+    service.create(target, "taken", skill_document("taken"), writer=HUMAN_WRITER)
+    service.create(source, "taken", skill_document("taken"), writer=AGENT)
+
+    with pytest.raises(SkillAuthoringError, match="already exists"):
+        service.publish(source, target, "taken", writer=AGENT)
+    published = service.publish(source, target, "demo", writer=AGENT)
+
+    assert (published.operation, published.path) == ("publish", target / "demo" / "SKILL.md")
+    assert (target / "demo" / "references" / "notes.md").read_text(encoding="utf-8") == "notes"
+    # The target's history starts with a create by the publisher; the package
+    # keeps the origin it had in the source home.
+    [revision] = service.history(target, "demo")
+    assert (revision.kind, revision.actor) == ("create", "agent")
+    assert [file.path for file in revision.files] == ["SKILL.md", "references/notes.md"]
+    record = service.record(target, "demo")
+    assert record is not None and record.origin == "reflection"
+    assert (source / "taken").is_dir() and not (source / "demo").exists()
+    [entry] = service.archived(source)
+    assert (entry.archive_id, entry.reason) == (published.archive_id, "published")
+
+    service.restore(source, str(entry.archive_id), writer=HUMAN_WRITER)
+
+    assert (source / "demo" / "SKILL.md").is_file() and (target / "demo" / "SKILL.md").is_file()
+
+
 @pytest.mark.parametrize(
     ("absorbed_into", "match"),
     [("demo", "cannot absorb itself"), ("missing", "Skill 'missing' not found")],

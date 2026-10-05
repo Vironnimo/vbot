@@ -102,7 +102,13 @@ from core.sessions import ChatSessionManager
 from core.sessions.titles import SessionTitleService
 from core.settings.paths import DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
 from core.settings.settings import effective_timezone_name
-from core.skills.authoring import ArchivedSkill, SkillAuthoringService, SkillReference
+from core.skills.authoring import (
+    ArchivedSkill,
+    SkillAuthoringService,
+    SkillReference,
+    SkillWriter,
+    SkillWriteResult,
+)
 from core.skills.policy import SkillPolicyService
 from core.skills.runtime import SkillRuntime
 from core.skills.skills import SkillMetadata, SkillRegistry
@@ -677,6 +683,9 @@ class Runtime:
     def skill_inventory(self) -> dict[str, Any]:
         return self._skill_operations().skill_inventory()
 
+    def set_skill_package_disabled(self, entry_id: str, *, disabled: bool) -> dict[str, Any]:
+        return self._skill_operations().set_package_disabled(entry_id, disabled=disabled)
+
     def project_skill_names(self, project_id: str | None) -> frozenset[str]:
         return self._skill_operations().project_skill_names(project_id)
 
@@ -710,6 +719,11 @@ class Runtime:
             name,
             project_id,
         )
+
+    def _publish_agent_skill(
+        self, agent_id: str, name: str, writer: SkillWriter
+    ) -> SkillWriteResult:
+        return self._skill_operations().publish_agent_skill(agent_id, name, writer=writer)
 
     def _reload_channel_tool_if_started(self) -> None:
         if not self._started:
@@ -968,6 +982,9 @@ class Runtime:
                     on_changed=self._notify_skills_changed,
                     run_started_at=self.run_started_at,
                     follow_merge=self.follow_skill_merge,
+                    resolve_global_skills_dir=lambda: self.global_skills_dir,
+                    publish_skill=self._publish_agent_skill,
+                    refresh_global_skills=self.reload_skills_async,
                 )
         if self._system_prompts is not None:
             self._system_prompts.update_skill_registry(cast(SkillPromptRegistry, self._skills))

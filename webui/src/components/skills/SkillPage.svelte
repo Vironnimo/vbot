@@ -1,7 +1,7 @@
 <script>
   // The page of one Skill package, opened in place of its collection: Back
   // and a breadcrumb to return, a header with where it lives, its status and
-  // actions (Edit, Turn off everywhere / Turn on, Pin, Delete; Edit and
+  // actions (Edit, Turn this skill off / Turn on, Pin, Delete; Edit and
   // Delete stay visible but disabled with the reason on a read-only
   // package), the
   // description as body text (the one place that shows it as content), who

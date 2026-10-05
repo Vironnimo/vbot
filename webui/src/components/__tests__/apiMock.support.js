@@ -71,8 +71,8 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     deleteSkill: (scope, name) => call('skill.delete', { scope, name }),
     skillInventory: () => call('skill.inventory'),
     inspectSkill: (id) => call('skill.inspect', { id }),
-    setSkillDisabled: (name, disabled) =>
-      call('skill.set_disabled', { name, disabled }),
+    setSkillDisabled: (id, disabled) =>
+      call('skill.set_disabled', { id, disabled }),
     setSkillPinned: (scope, name, pinned) =>
       call('skill.set_pinned', { scope, name, pinned }),
     skillHistory: (scope, name, limit) =>

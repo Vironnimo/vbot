@@ -15,6 +15,7 @@ from which it can be restored or purged. Background writers (``reflection``,
 from __future__ import annotations
 
 import shutil
+import tempfile
 from collections.abc import Callable, Collection, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -520,6 +521,63 @@ class SkillAuthoringService:
                 changes=changes,
                 revision=revision,
                 archive_id=archive_id,
+            )
+
+    def publish(
+        self, source_root: Path, target_root: Path, skill_name: str, *, writer: SkillWriter
+    ) -> SkillWriteResult:
+        """Move a Skill package into another home, such as a private Skill into the global one.
+
+        The target home records a ``create`` keeping the source's creator; the
+        source home archives its package with the reason ``published``, so
+        ``restore`` can bring the old copy back. The package files are copied
+        unchanged, a link inside the package as a link. The reported changes
+        create every regular file in the target, root ``SKILL.md`` first.
+        """
+        with self._write_lock:
+            _check_writer(writer)
+            source_dir = self._resolved_skill_dir(source_root, skill_name)
+            destination = self._skill_dir(target_root, skill_name)
+            if destination.exists():
+                raise SkillAuthoringError(f"Skill '{skill_name}' already exists.")
+            record = self.record(source_dir.parent, skill_name)
+            history = SkillHistory(destination.parent)
+            self._observe(history, skill_name, None, writer)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            # A sibling staging directory publishes on one filesystem in one rename.
+            staging = Path(tempfile.mkdtemp(prefix=".skill-publish-", dir=destination.parent))
+            try:
+                shutil.copytree(source_dir, staging / "package", symlinks=True)
+                (staging / "package").rename(destination)
+            finally:
+                shutil.rmtree(staging, ignore_errors=True)
+            entries = (base / name for base, _, names in destination.walk() for name in names)
+            files = sorted(
+                (path for path in entries if path.is_file() and not path.is_symlink()),
+                key=lambda path: (path.name != SKILL_FILENAME or path.parent != destination, path),
+            )
+            changes = tuple(
+                SkillFileChange(
+                    path.relative_to(destination).as_posix(), "created", None, _change_text(path)
+                )
+                for path in files
+            )
+            revision = self._commit(
+                history,
+                skill_name,
+                destination,
+                writer,
+                "create",
+                origin=record.origin if record is not None else writer.actor,
+            )
+            archived = self.delete(source_root, skill_name, writer=writer, reason="published")
+            return SkillWriteResult(
+                name=skill_name,
+                operation="publish",
+                path=destination / SKILL_FILENAME,
+                changes=changes,
+                revision=revision,
+                archive_id=archived.archive_id,
             )
 
     def write_file(

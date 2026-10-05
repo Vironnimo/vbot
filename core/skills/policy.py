@@ -1,14 +1,15 @@
 """Validated Skill Policy — the central disable/share control plane for Skills.
 
 The Skills domain owns ``<data_dir>/skills/policy.json``: a versioned JSON
-document that disables Skills by name across every origin and marks an Identity
-Agent's private Skills as shared with specific other Identity Agents. A missing
+document that turns off individual Skill packages (one source and name each, so
+a same-named package elsewhere stays on) and marks an Identity Agent's private
+Skills as shared with specific other Identity Agents. A missing
 file means an empty policy. A malformed file yields diagnostics plus an empty
 effective policy instead of breaking startup; the manager surfaces the
 diagnostics, and mutations refuse to overwrite it. Another ``format_version`` is
 invalid; data from before persistence Generation 1 is refused, not migrated.
 
-Entries this vBot cannot use (a Skill name that is not trigger-safe, a receiver
+Entries this vBot cannot use (a Skill name that is not trigger-safe, an Agent id
 that is not an Identity Agent id) are warnings: the effective policy leaves them
 out, and mutations write every stored entry back except the one they change.
 """
@@ -35,6 +36,7 @@ from core.json_documents import (
     JsonDocumentFormat,
     JsonDocumentWriteError,
     json_document,
+    json_object,
     validate_format_version,
     write_json_document,
 )
@@ -46,8 +48,22 @@ from core.utils.logging import get_logger
 POLICY_FORMAT_VERSION = 1
 _SKILLS_DIRNAME = "skills"
 _POLICY_FILENAME = "policy.json"
-# ``shared`` is keyed by data (owner ids, Skill names), so only the root has fields.
-POLICY_SHAPE = json_document({"disabled", "shared"})
+# Where a turned-off package is loaded from. ``home`` is the user's global Skill
+# home and ``bundled`` the Skills shipped with vBot; ``extension``, ``folder`` and
+# ``agent`` packages also name their Extension, configured skill folder or owning
+# Identity Agent. Project Skills are turned off in their Project instead.
+SKILL_PACKAGE_SOURCES = ("home", "folder", "extension", "bundled", "agent")
+# ``disabled_packages`` groups names by source; the three sources with several
+# roots are maps keyed by the Extension name, the folder or the Agent id.
+_LISTED_SOURCES = {"home": "home", "bundled": "bundled"}
+_MAPPED_SOURCES = {"extensions": "extension", "folders": "folder", "agents": "agent"}
+_DISABLED_FIELDS = frozenset({*_LISTED_SOURCES, *_MAPPED_SOURCES})
+# ``shared`` is keyed by data (owner ids, Skill names), as are the maps of
+# ``disabled_packages``; only the root and ``disabled_packages`` have fields.
+POLICY_SHAPE = json_document(
+    {"disabled_packages", "shared"},
+    {"disabled_packages": json_object(_DISABLED_FIELDS)},
+)
 
 _LOGGER = get_logger("skills")
 
@@ -63,11 +79,26 @@ class SkillPolicyError(VBotError):
     """Raised when the Skill Policy cannot be persisted."""
 
 
+@dataclass(frozen=True, order=True)
+class SkillPackageRef:
+    """One Skill package: the source it loads from, that source's root, and its name.
+
+    ``location`` names the root where a source has several: the Extension name
+    for ``extension``, the configured folder (as written in ``skill_directories``)
+    for ``folder`` and the owning Identity Agent id for ``agent``. It is ``None``
+    for ``home`` and ``bundled``.
+    """
+
+    source: str
+    name: str
+    location: str | None = None
+
+
 @dataclass(frozen=True)
 class SkillPolicy:
     """The validated, in-memory form of the Skill Policy document."""
 
-    disabled: frozenset[str] = frozenset()
+    disabled_packages: frozenset[SkillPackageRef] = frozenset()
     # Owner Identity Agent id -> {shared Skill name -> receiver Identity Agent
     # ids}. Entries are kept as written (stale owners/names included); staleness
     # is resolved where the receiving registries are built, which knows the live
@@ -83,14 +114,14 @@ class _StoredPolicy:
     entries the effective :class:`SkillPolicy` leaves out.
     """
 
-    disabled: tuple[str, ...] = ()
+    disabled_packages: frozenset[SkillPackageRef] = frozenset()
     shared: Mapping[str, Mapping[str, tuple[str, ...]]] = field(default_factory=dict)
 
     @classmethod
     def from_document(cls, data: Mapping[str, Any]) -> _StoredPolicy:
         """Read the stored lists of a document that passed validation."""
         return cls(
-            disabled=tuple(data.get("disabled") or ()),
+            disabled_packages=_stored_package_refs(data.get("disabled_packages") or {}),
             shared={
                 str(owner_id): {
                     str(skill_name): tuple(receivers or ())
@@ -116,14 +147,25 @@ class _StoredPolicy:
             if skills:
                 shared[owner_id] = skills
         return SkillPolicy(
-            disabled=frozenset(name for name in self.disabled if _is_usable_skill_name(name)),
+            disabled_packages=frozenset(
+                ref for ref in self.disabled_packages if _is_usable_package_ref(ref)
+            ),
             shared=shared,
         )
 
     def to_document(self) -> dict[str, Any]:
         """Return the stored lists in the document's canonical (sorted) order."""
+        disabled: dict[str, Any] = {field_name: [] for field_name in _LISTED_SOURCES}
+        disabled.update({field_name: {} for field_name in _MAPPED_SOURCES})
+        listed = {source: field_name for field_name, source in _LISTED_SOURCES.items()}
+        mapped = {source: field_name for field_name, source in _MAPPED_SOURCES.items()}
+        for ref in sorted(self.disabled_packages):
+            if ref.source in listed:
+                disabled[listed[ref.source]].append(ref.name)
+            elif ref.source in mapped:
+                disabled[mapped[ref.source]].setdefault(ref.location, []).append(ref.name)
         return {
-            "disabled": sorted(self.disabled),
+            "disabled_packages": disabled,
             "shared": {
                 owner_id: {
                     skill_name: sorted(receivers) for skill_name, receivers in skills.items()
@@ -148,12 +190,7 @@ def _validate_policy_document(data: Any) -> list[JsonDiagnostic]:
         return diagnostics
     from core.settings import is_valid_agent_id
 
-    disabled = data.get("disabled", [])
-    if disabled is not None:
-        validate_string_list(diagnostics, "$.disabled", disabled)
-        if isinstance(disabled, list):
-            for index, name in enumerate(disabled):
-                _warn_unusable_skill_name(diagnostics, f"$.disabled[{index}]", name)
+    _validate_disabled_packages(diagnostics, data.get("disabled_packages", {}))
     shared = data.get("shared", {})
     if shared is not None and not isinstance(shared, dict):
         add_error(diagnostics, "$.shared", "must be an object keyed by owner agent id")
@@ -180,6 +217,68 @@ def _validate_policy_document(data: Any) -> list[JsonDiagnostic]:
                         )
     warn_unknown_keys(diagnostics, "$", data, POLICY_SHAPE.fields, "key")
     return diagnostics
+
+
+def _validate_disabled_packages(diagnostics: list[JsonDiagnostic], disabled: Any) -> None:
+    """Validate ``disabled_packages``: name lists per source, mapped where needed."""
+    from core.settings import is_valid_agent_id
+
+    path = "$.disabled_packages"
+    if disabled is None:
+        return
+    if not isinstance(disabled, dict):
+        add_error(diagnostics, path, "must be an object keyed by package source")
+        return
+    for field_name in _LISTED_SOURCES:
+        _validate_name_list(diagnostics, child_path(path, field_name), disabled.get(field_name))
+    for field_name, source in _MAPPED_SOURCES.items():
+        field_path = child_path(path, field_name)
+        roots = disabled.get(field_name)
+        if roots is None:
+            continue
+        if not isinstance(roots, dict):
+            add_error(diagnostics, field_path, f"must be an object keyed by {source}")
+            continue
+        for location, names in sorted(roots.items()):
+            location_path = child_path(field_path, str(location))
+            if source == "agent" and not is_valid_agent_id(location):
+                diagnostics.append(
+                    JsonDiagnostic(
+                        severity="warning",
+                        path=location_path,
+                        message=f"ignoring invalid agent id: {location!r}",
+                    )
+                )
+            _validate_name_list(diagnostics, location_path, names)
+    warn_unknown_keys(diagnostics, path, disabled, _DISABLED_FIELDS, "package source")
+
+
+def _validate_name_list(diagnostics: list[JsonDiagnostic], path: str, names: Any) -> None:
+    if names is None:
+        return
+    validate_string_list(diagnostics, path, names)
+    if isinstance(names, list):
+        for index, name in enumerate(names):
+            _warn_unusable_skill_name(diagnostics, f"{path}[{index}]", name)
+
+
+def _stored_package_refs(disabled: Mapping[str, Any]) -> frozenset[SkillPackageRef]:
+    """Read the stored refs of a validated ``disabled_packages`` object."""
+    refs: set[SkillPackageRef] = set()
+    for field_name, source in _LISTED_SOURCES.items():
+        refs.update(SkillPackageRef(source, str(name)) for name in disabled.get(field_name) or ())
+    for field_name, source in _MAPPED_SOURCES.items():
+        for location, names in (disabled.get(field_name) or {}).items():
+            refs.update(SkillPackageRef(source, str(name), str(location)) for name in names or ())
+    return frozenset(refs)
+
+
+def _is_usable_package_ref(ref: SkillPackageRef) -> bool:
+    from core.settings import is_valid_agent_id
+
+    if not _is_usable_skill_name(ref.name):
+        return False
+    return ref.source != "agent" or is_valid_agent_id(ref.location)
 
 
 def _warn_unusable_skill_name(diagnostics: list[JsonDiagnostic], path: str, name: Any) -> None:
@@ -246,18 +345,26 @@ class SkillPolicyService:
         _, diagnostics = self._read_policy()
         return diagnostics
 
-    def set_disabled(self, name: str, *, disabled: bool) -> SkillPolicy:
-        """Add or remove one Skill name from the global disable switch."""
-        self._validate_skill_name(name)
+    def set_package_disabled(self, ref: SkillPackageRef, *, disabled: bool) -> SkillPolicy:
+        """Turn one Skill package off (``disabled``) or on again."""
+        from core.settings import is_valid_agent_id
+
+        self._validate_skill_name(ref.name)
+        if ref.source not in SKILL_PACKAGE_SOURCES:
+            raise SkillPolicyError(f"Unknown Skill package source: {ref.source!r}")
+        if (ref.source in ("home", "bundled")) != (ref.location is None):
+            raise SkillPolicyError(f"Skill package source {ref.source!r} has the wrong location")
+        if ref.source == "agent" and not is_valid_agent_id(ref.location):
+            raise SkillPolicyError("A private Skill package must name a valid Identity Agent id")
         with self._lock:
             stored = self._read_stored()
-            names = tuple(entry for entry in stored.disabled if entry != name)
+            refs = stored.disabled_packages - {ref}
             if disabled:
-                names = (*names, name)
+                refs = refs | {ref}
             return self._write_policy(
-                _StoredPolicy(disabled=names, shared=stored.shared),
+                _StoredPolicy(disabled_packages=refs, shared=stored.shared),
                 operation="disable" if disabled else "enable",
-                target=name,
+                target=f"{ref.source}:{ref.location or ''}/{ref.name}",
             )
 
     def set_shared(
@@ -300,7 +407,7 @@ class SkillPolicyService:
                 if not owner_skills:
                     del per_owner[owner_id]
             return self._write_policy(
-                _StoredPolicy(disabled=stored.disabled, shared=per_owner),
+                _StoredPolicy(disabled_packages=stored.disabled_packages, shared=per_owner),
                 operation="share" if shared else "unshare",
                 target=f"{owner_id}/{name}",
             )
@@ -326,7 +433,7 @@ class SkillPolicyService:
             per_owner = {owner: dict(skills) for owner, skills in stored.shared.items()}
             per_owner[owner_id] = owner_skills
             return self._write_policy(
-                _StoredPolicy(disabled=stored.disabled, shared=per_owner),
+                _StoredPolicy(disabled_packages=stored.disabled_packages, shared=per_owner),
                 operation="move_shares",
                 target=f"{owner_id}/{name}->{target}",
             )
@@ -404,7 +511,7 @@ class SkillPolicyService:
             "Applied skill policy change (operation=%s target=%s disabled=%d shared_owners=%d)",
             operation,
             target,
-            len(policy.disabled),
+            len(policy.disabled_packages),
             len(policy.shared),
         )
         return policy

@@ -174,7 +174,7 @@ const BUNDLED_PACKAGE_ITEMS = (openLabel) => [
   'Edit instructions Ships with vBot disabled',
   'Copy name',
   '|',
-  'Turn off everywhere',
+  'Turn this skill off',
   '|',
   'Delete… Ships with vBot disabled',
 ];
@@ -365,7 +365,9 @@ describe('Skills manager', () => {
         'deploy',
       );
       expect(document.activeElement.dataset.skillId).toBe('private');
-      expect(document.activeElement.classList).toContain('skills-row--current');
+      expect(document.activeElement.closest('.skills-row').classList).toContain(
+        'skills-row--current',
+      );
     }
 
     // Escape that another layer consumed, or typed in a text field, stays.
@@ -478,12 +480,33 @@ describe('Skills manager', () => {
     );
   });
 
-  it('lists each package on one line with its source and who gets it, and its description only as a tooltip', async () => {
+  it('lists each package on one line with its source, who gets it and its own controls, and its description only as a tooltip', async () => {
     await render();
     const list = document.querySelector('.skills-list');
+    // Explicit user requirement: every row shows its on/off switch, Edit and
+    // Delete; a read-only package keeps Edit and Delete disabled.
+    const controls = (row) => row.closest('.skills-row');
     expect(
-      list.querySelectorAll('[role="switch"], [role="checkbox"]'),
-    ).toHaveLength(0);
+      rows().map((row) => [
+        controls(row)
+          .querySelector('[role="switch"]')
+          .getAttribute('aria-checked'),
+        ...[
+          ...controls(row).querySelectorAll(
+            '.skills-row-actions button:not([role="switch"])',
+          ),
+        ].map((control) => [
+          control.getAttribute('aria-label'),
+          control.disabled,
+        ]),
+      ]),
+    ).toEqual([
+      ['false', ['Edit broken', false], ['Delete broken', false]],
+      ['true', ['Edit deploy', false], ['Delete deploy', false]],
+      ['true', ['Edit notes', false], ['Delete notes', false]],
+      ['true', ['Edit teach', true], ['Delete teach', true]],
+    ]);
+    expect(list.querySelectorAll('[role="checkbox"]')).toHaveLength(0);
     expect(
       rows().map((row) => [
         row.dataset.skillId,
@@ -492,7 +515,7 @@ describe('Skills manager', () => {
         row.querySelector('button'),
       ]),
     ).toEqual([
-      ['disabled', 'Global', 'Off everywhere', null],
+      ['disabled', 'Global', 'Turned off', null],
       ['private', 'Private', 'Main only', null],
       ['shared', 'Private', 'Main + 0 shared (1 blocked)', null],
       ['bundled', 'Bundled', '2 of 2 Agents', null],
@@ -516,6 +539,19 @@ describe('Skills manager', () => {
     expect(
       rpcMock.mock.calls.some(([method]) => method === 'skill.inspect'),
     ).toBe(false);
+
+    // The row's switch turns the package off; its Delete asks first.
+    click(controls(rows()[1]).querySelector('[role="switch"]'));
+    await settle();
+    expect(calls('skill.set_disabled')).toEqual([
+      { id: 'private', disabled: true },
+    ]);
+    click(button('Delete deploy', list));
+    await settle();
+    expect(document.querySelector('[role="dialog"]').textContent).toContain(
+      'deploy',
+    );
+    expect(calls('skill.delete')).toEqual([]);
   });
 
   it('offers install, create and folder setup from one keyboard-operable add menu', async () => {
@@ -731,7 +767,7 @@ describe('Skills manager', () => {
       'Edit instructions',
       'Copy name',
       '|',
-      'Turn off everywhere',
+      'Turn this skill off',
       '|',
       'Delete…',
     ]);
@@ -744,16 +780,16 @@ describe('Skills manager', () => {
     });
     // The keyboard opens the same menu; a read-only package keeps Edit and
     // Delete disabled with the reason, and a package that is off offers Turn
-    // on everywhere.
+    // on again.
     key(document.querySelector('[data-skill-id="bundled"]'), 'ContextMenu');
     expect(menu()).toEqual(BUNDLED_PACKAGE_ITEMS('Open'));
     key(document.querySelector('.context-menu'), 'Escape');
     key(document.querySelector('[data-skill-id="disabled"]'), 'ContextMenu');
-    expect(menu()).toContain('Turn on everywhere');
-    pick('Turn on everywhere');
+    expect(menu()).toContain('Turn this skill on');
+    pick('Turn this skill on');
     await settle();
     expect(calls('skill.set_disabled')).toEqual([
-      { name: 'broken', disabled: false },
+      { id: 'disabled', disabled: false },
     ]);
     // Edit opens the package page, then its editor with the loaded content.
     rightClick(document.querySelector('[data-skill-id="shared"]'));
@@ -784,7 +820,7 @@ describe('Skills manager', () => {
       'Edit instructions',
       'Copy name',
       '|',
-      'Turn off everywhere',
+      'Turn this skill off',
       '|',
       'Delete…',
     ]);
@@ -904,12 +940,12 @@ describe('Skills manager', () => {
     ]);
   });
 
-  it('turns a Skill off everywhere and back on from its page header', async () => {
+  it('turns a Skill off and back on from its page header', async () => {
     await render();
     choose('private');
     await settle();
     rpcMock.mockRejectedValueOnce(new Error('mutation-sentinel'));
-    click(button('Turn off everywhere'));
+    click(button('Turn this skill off'));
     await settle();
     expect(onToast).toHaveBeenCalledWith({
       title: `${t('skills.toggleError')} mutation-sentinel`,
@@ -923,13 +959,13 @@ describe('Skills manager', () => {
         });
       return defaultRpc(method, params);
     });
-    click(button('Turn off everywhere'));
-    expect(button('Turn off everywhere').disabled).toBe(true);
+    click(button('Turn this skill off'));
+    expect(button('Turn this skill off').disabled).toBe(true);
     finish({});
     await settle();
     expect(calls('skill.set_disabled')).toEqual([
-      { name: 'deploy', disabled: true },
-      { name: 'deploy', disabled: true },
+      { id: 'private', disabled: true },
+      { id: 'private', disabled: true },
     ]);
 
     click(button('Back to All skills'));
@@ -937,7 +973,7 @@ describe('Skills manager', () => {
     choose('disabled');
     await settle();
     const detail = document.querySelector('.skills-page');
-    expect(button('Turn off everywhere', detail)).toBeUndefined();
+    expect(button('Turn this skill off', detail)).toBeUndefined();
     expect(
       [...detail.querySelectorAll('.skills-access [role="checkbox"]')].every(
         (box) => box.disabled,
@@ -946,7 +982,7 @@ describe('Skills manager', () => {
     click(button('Turn on', detail));
     await settle();
     expect(calls('skill.set_disabled').at(-1)).toEqual({
-      name: 'broken',
+      id: 'disabled',
       disabled: false,
     });
   });
@@ -1382,7 +1418,7 @@ describe('Skills manager', () => {
     }
   });
 
-  it('lists archived Skills newest first and restores or permanently deletes them from their menu', async () => {
+  it('lists archived Skills newest first and restores or permanently deletes them from their row', async () => {
     archived = [
       {
         scope: 'agent:main',
@@ -1452,8 +1488,17 @@ describe('Skills manager', () => {
       variant: 'success',
     });
 
-    rightClick(archivedRows()[1]);
-    pick('Delete permanently…');
+    // Restore and Delete permanently also stay visible on every row.
+    const row = archivedRows()[1].closest('.skills-row');
+    expect(
+      [...row.querySelectorAll('.skills-row-actions button')].map(
+        (control) => control.textContent.trim() || control.ariaLabel,
+      ),
+    ).toEqual([
+      'Restore',
+      `Delete ${archivedRows()[1].querySelector('.skills-row-name').textContent} permanently`,
+    ]);
+    click(row.querySelector('.skills-row-delete'));
     const dialog = document.querySelector('[role="dialog"]');
     expect(calls('skill.purge')).toEqual([]);
     click(button('Delete permanently', dialog));
@@ -1470,7 +1515,7 @@ describe('Skills manager', () => {
     const detail = document.querySelector('.skills-page');
     expect(document.activeElement).toBe(detail);
     expect(button('Delete deploy', detail)).toBeTruthy();
-    expect(button('Turn off everywhere', detail)).toBeTruthy();
+    expect(button('Turn this skill off', detail)).toBeTruthy();
     expect(detail.querySelector('.skills-page-source').textContent.trim()).toBe(
       'Private skill of Main',
     );

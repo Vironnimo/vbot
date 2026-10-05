@@ -11,11 +11,13 @@ import pytest
 
 from core.extensions.extensions import ExtensionRegistry
 from core.runtime.runtime import Runtime
+from core.skills.policy import SkillPackageRef
 from core.skills.skills import SkillRegistry
 from core.utils.config import Config
 from tests.core.runtime.runtime_test_support import write_skill
 
 RELOADED_SKILL_NAME = "runtime-reloaded-skill"
+RELOADED_PACKAGE = SkillPackageRef("home", RELOADED_SKILL_NAME)
 
 
 def _requirement_skill(root: Path, name: str, env: str, description: str = "Fixture.") -> Path:
@@ -72,7 +74,7 @@ async def test_older_skill_scan_cannot_overwrite_newer_policy(
     older = asyncio.create_task(runtime.reload_skills_async())
     try:
         await asyncio.wait_for(entered.wait(), 5)
-        runtime.skill_policy.set_disabled(RELOADED_SKILL_NAME, disabled=True)
+        runtime.skill_policy.set_package_disabled(RELOADED_PACKAGE, disabled=True)
         if newer_reload == "sync":
             runtime.reload_skills()
         else:
@@ -103,7 +105,7 @@ async def test_skill_scan_cannot_publish_across_runtime_shutdown(
     older = asyncio.create_task(runtime.reload_skills_async())
     try:
         await asyncio.wait_for(entered.wait(), 5)
-        runtime.skill_policy.set_disabled(RELOADED_SKILL_NAME, disabled=True)
+        runtime.skill_policy.set_package_disabled(RELOADED_PACKAGE, disabled=True)
         if shutdown == "stop":
             runtime.stop()
         else:
@@ -250,6 +252,11 @@ def test_scoped_scan_rechecks_changes_before_cache_publication(
             else runtime.agent_skills_dir("main")
         )
         path = _requirement_skill(root, "changing", key, "Before change.")
+        if change == "policy":
+            # Project Skills are turned off in their Project, so the policy
+            # change targets a global package the project scope also sees.
+            write_skill(runtime.global_skills_dir, "turned-off", "Global fixture.")
+            runtime.reload_skills()
         owner = runtime._skill_operations()  # noqa: SLF001 - the scoped scan seam.
         method = (
             "_build_project_skill_bundle" if scope == "project" else "_build_agent_skill_registry"
@@ -278,7 +285,9 @@ def test_scoped_scan_rechecks_changes_before_cache_publication(
                     else:
                         runtime.invalidate_agent_skills("main")
                 elif change == "policy":
-                    runtime.skill_policy.set_disabled("changing", disabled=True)
+                    runtime.skill_policy.set_package_disabled(
+                        SkillPackageRef("home", "turned-off"), disabled=True
+                    )
                     runtime.reload_skills()
                 else:
                     runtime.storage.set_data_dir_credential(key, "test-value")
@@ -295,7 +304,7 @@ def test_scoped_scan_rechecks_changes_before_cache_publication(
                     assert result.get("changing").description == "After change."
                 elif change == "policy":
                     with pytest.raises(KeyError):
-                        result.get("changing")
+                        result.get("turned-off")
                 else:
                     assert result.availability_for("changing", ["*"]).state == "available"
             finally:

@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, cast
 
 from core.runtime.interfaces import ConfigProtocol, LoggerProtocol
-from core.skills.policy import SkillPolicyService
 from core.storage.storage import StorageManager
 from core.utils.config import VBOT_ROOT
 from core.utils.errors import ConfigError, StorageError
@@ -110,17 +109,6 @@ def _global_agent_defaults(storage: StorageManager | None) -> dict[str, Any]:
         return {}
     agent_defaults = storage.load_defaults().get("agent", {})
     return agent_defaults if isinstance(agent_defaults, dict) else {}
-
-
-def _disabled_skill_names(policy: SkillPolicyService | None) -> frozenset[str]:
-    """Return the policy's disabled names for registry-load exclusion.
-
-    Called on every runtime-owned registry build; the manager-facing editor
-    loads deliberately bypass this so disabled skills stay visible there.
-    """
-    if policy is None:
-        return frozenset()
-    return policy.load().disabled
 
 
 def _provider_connection_enabled_overrides(
