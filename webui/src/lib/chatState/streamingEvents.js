@@ -7,8 +7,10 @@ import {
 } from '../api.js';
 import { createToolArgumentPreviewScanner } from '../toolArgumentPreview.js';
 
-export function highestContiguousRunEventSequence(sessionState) {
-  const runId = activeRunIdForReplay(sessionState);
+export function highestContiguousRunEventSequence(
+  sessionState,
+  runId = activeRunIdForReplay(sessionState),
+) {
   if (!runId) {
     return 0;
   }

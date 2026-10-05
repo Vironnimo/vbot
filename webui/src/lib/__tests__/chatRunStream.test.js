@@ -153,46 +153,81 @@ describe('live Run events of the displayed Session', () => {
     ).toBe('Final answer');
   });
 
-  it('applies SSE events only after their Run sequence becomes contiguous', () => {
-    const harness = makeStreamHarness();
-    const runId = 'run-out-of-order';
-    harness.stream.applyConnectionSnapshot({ active_runs: [activeRun(runId)] });
-    const sessionState = harness.displayedSession();
+  it.each([false, true])(
+    'applies SSE events in sequence across a successor (%s)',
+    (successor) => {
+      const harness = makeStreamHarness();
+      const runId = 'run-out-of-order';
+      harness.stream.applyConnectionSnapshot({
+        active_runs: [activeRun(runId)],
+      });
+      const sessionState = harness.displayedSession();
 
-    harness.sse(
-      { type: 'run_started', run_id: runId, sequence: 1, payload: {} },
-      {
-        type: 'run_completed',
-        run_id: runId,
-        sequence: 4,
-        payload: { status: 'completed' },
-      },
-      {
-        type: 'assistant_output',
-        run_id: runId,
-        sequence: 3,
-        payload: { message: { role: 'assistant', content: 'Ordered final' } },
-      },
-    );
+      harness.sse(
+        { type: 'run_started', run_id: runId, sequence: 1, payload: {} },
+        {
+          type: 'run_completed',
+          run_id: runId,
+          sequence: 5,
+          payload: { status: 'completed' },
+        },
+        {
+          type: 'assistant_output',
+          run_id: runId,
+          sequence: 3,
+          payload: { message: { role: 'assistant', content: 'Ordered final' } },
+        },
+        {
+          type: 'model_step_usage',
+          run_id: runId,
+          sequence: 4,
+          payload: { iteration_count: 7 },
+        },
+      );
 
-    expect(sessionState.status).toBe('running');
-    expect(sessionState.runEvents.map((event) => event.sequence)).toEqual([1]);
+      expect(sessionState.status).toBe('running');
+      expect(sessionState.runEvents.map((event) => event.sequence)).toEqual([
+        1,
+      ]);
 
-    harness.sse({
-      type: 'reasoning',
-      run_id: runId,
-      sequence: 2,
-      payload: { reasoning: 'Missing event arrived.' },
-    });
+      const predecessor = harness.subscriptions[0];
+      if (successor) {
+        harness.stream.handleServerEvents(
+          serverRunEvent('run_started', 1, {
+            ...displayed,
+            run_id: 'successor',
+            status: 'running',
+          }),
+        );
+      }
 
-    expect(sessionState.runEvents.map((event) => event.sequence)).toEqual([
-      1, 2, 3, 4,
-    ]);
-    expect(sessionState.status).toBe('completed');
-    expect(
-      visibleTimelineItemsForRender(sessionState)[0].outputs.at(-1).content,
-    ).toBe('Ordered final');
-  });
+      predecessor.handlers.onEvent({
+        data: {
+          type: 'reasoning',
+          run_id: runId,
+          sequence: 2,
+          payload: { reasoning: 'Missing event arrived.' },
+        },
+      });
+
+      expect(
+        sessionState.runEvents
+          .filter((event) => event.run_id === runId)
+          .map((event) => event.sequence),
+      ).toEqual([1, 2, 3, 4, 5]);
+      expect(sessionState.status).toBe(successor ? 'running' : 'completed');
+      if (successor)
+        expect(harness.subscriptions[1].close).not.toHaveBeenCalled();
+      expect(sessionState.currentRun.iterationCount).toBe(successor ? 0 : 7);
+      expect(
+        visibleTimelineItemsForRender(sessionState)[0].outputs.at(-1).content,
+      ).toBe('Ordered final');
+      expect(visibleTimelineItemsForRender(sessionState)[0].status).toBe(
+        'completed',
+      );
+      harness.stream.closeSubscriptions();
+    },
+  );
 
   it('resumes from the first retained SSE event when the replay prefix was evicted', async () => {
     const harness = makeStreamHarness();

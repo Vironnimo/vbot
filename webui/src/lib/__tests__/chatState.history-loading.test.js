@@ -781,6 +781,69 @@ describe('Run recovery', () => {
     expect(runStream.closeSubscriptionFor).not.toHaveBeenCalled();
   });
 
+  it('reconciles a predecessor without replacing a successor observed during the History read', async () => {
+    let resolveHistory;
+    const loadChatHistory = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveHistory = resolve;
+        }),
+    );
+    const { chatState, controller, runStream } = setupController({
+      isDisplayedSession: () => true,
+      operationOverrides: { loadChatHistory },
+    });
+    const session = ensureSessionState(chatState, 'alpha', 'session-one');
+    startRun(session, {
+      run_id: 'predecessor',
+      status: 'running',
+      sse_url: '/old',
+    });
+    const recovery = controller.reconcileRunSession(session, 'predecessor');
+    await vi.waitFor(() => expect(loadChatHistory).toHaveBeenCalledOnce());
+    startRun(session, {
+      run_id: 'successor',
+      status: 'running',
+      sse_url: '/new',
+    });
+    appendRunEvent(session, {
+      type: 'assistant_output_delta',
+      run_id: 'successor',
+      sequence: 1,
+      payload: { content_delta: 'New answer' },
+    });
+    resolveHistory({
+      active_run: { run_id: 'predecessor', status: 'running' },
+      runs: [{ run_id: 'predecessor', status: 'completed', complete: true }],
+      messages: [
+        {
+          id: 'old-answer',
+          role: 'assistant',
+          run_id: 'predecessor',
+          content: 'Old final answer',
+        },
+        {
+          id: 'old-summary',
+          role: 'run_summary',
+          run_id: 'predecessor',
+          status: 'completed',
+        },
+      ],
+    });
+    await expect(recovery).resolves.toBe(true);
+    expect(session.currentRun).toMatchObject({
+      runId: 'successor',
+      status: 'running',
+      sseUrl: '/new',
+    });
+    expect(session.historyRuns.predecessor).toMatchObject({ complete: true });
+    const timeline = visibleTimelineItemsForRender(session);
+    expect(countTimelineTextOccurrences(timeline, 'Old final answer')).toBe(1);
+    expect(countTimelineTextOccurrences(timeline, 'New answer')).toBe(1);
+    expect(runStream.closeSubscriptionFor).not.toHaveBeenCalled();
+    expect(runStream.attachRunStream).not.toHaveBeenCalled();
+  });
+
   it('drops sparse live replay after history proves every Run is finished', async () => {
     const durableMessages = [
       {
