@@ -60,7 +60,6 @@ const DESKTOP_ERROR_CODE_PATTERN = /^[a-z][a-z0-9_]*$/;
 
 let cachedCapabilities = null;
 let cachedBridgeApi = null;
-let voiceAudioContext = null;
 
 /** True when the WebUI was loaded through the Desktop accessor URL. */
 export function isDesktopAccessor() {
@@ -808,52 +807,4 @@ export async function getDesktopLiveHotkey() {
  */
 export async function setDesktopLiveHotkey(changes) {
   return callBridge('setLiveHotkey', changes);
-}
-
-const VOICE_CUES = Object.freeze({
-  detected: [760],
-  sent: [660, 880],
-  cancelled: [520, 360],
-  no_speech: [360],
-  transcription_failed: [320, 260],
-  command_failed: [320, 260],
-  error: [260, 220],
-});
-
-/**
- * Play the short non-verbal cue of one Voice event kind inside the Desktop
- * WebView; kinds without a cue play nothing.
- * Failures are deliberately silent: visual state remains authoritative when
- * the host has no output device or its autoplay policy suspends Web Audio.
- */
-export async function playVoiceCue(kind) {
-  if (typeof window === 'undefined') return;
-  const frequencies = VOICE_CUES[kind];
-  if (!frequencies) return;
-  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-  if (!AudioContextClass) return;
-
-  try {
-    voiceAudioContext ||= new AudioContextClass();
-    if (voiceAudioContext.state === 'suspended') {
-      await voiceAudioContext.resume();
-    }
-    const start = voiceAudioContext.currentTime;
-    frequencies.forEach((frequency, index) => {
-      const oscillator = voiceAudioContext.createOscillator();
-      const gain = voiceAudioContext.createGain();
-      const cueStart = start + index * 0.12;
-      oscillator.frequency.value = frequency;
-      oscillator.type = 'sine';
-      gain.gain.setValueAtTime(0.0001, cueStart);
-      gain.gain.exponentialRampToValueAtTime(0.12, cueStart + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.0001, cueStart + 0.09);
-      oscillator.connect(gain);
-      gain.connect(voiceAudioContext.destination);
-      oscillator.start(cueStart);
-      oscillator.stop(cueStart + 0.1);
-    });
-  } catch {
-    // Visual status remains available.
-  }
 }

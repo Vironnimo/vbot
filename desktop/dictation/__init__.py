@@ -2,5 +2,5 @@
 
 :class:`~desktop.dictation.controller.DictationController` owns the shortcut,
 the recording and the transcription; :mod:`desktop.dictation.insertion` places
-the text and :mod:`desktop.dictation.cues` makes the steps audible.
+the text, and the Desktop's :mod:`desktop.speech.cues` make the steps audible.
 """

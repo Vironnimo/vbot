@@ -11,7 +11,6 @@ import {
   onDesktopDictationRecording,
   onDesktopUpdate,
   onDesktopVoicePush,
-  playVoiceCue,
   restartDesktop,
   stopVoiceRecording,
   supportsDesktopVoice,
@@ -348,7 +347,6 @@ export function createAppDesktop(context) {
 
   // Feedback for one Voice event that happened while this page was open.
   const handleVoiceEvent = (event) => {
-    void playVoiceCue(event.kind);
     switch (event.kind) {
       case 'sent':
         showToast({

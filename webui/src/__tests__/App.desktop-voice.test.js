@@ -11,12 +11,6 @@ vi.mock('svelte', async () => {
   return import('../../node_modules/svelte/src/index-client.js');
 });
 
-const cues = vi.hoisted(() => vi.fn());
-vi.mock('$lib/desktopBridge.js', async (importOriginal) => ({
-  ...(await importOriginal()),
-  playVoiceCue: cues,
-}));
-
 const VOICE_CAPABILITIES = { wakeword: true, voiceApi: 3 };
 // Longer than the auto-dismiss delay of non-error Toasts.
 const PAST_AUTO_DISMISS_MS = 10000;
@@ -115,7 +109,6 @@ describe('App Desktop Voice feedback', () => {
   beforeEach(() => {
     resetAppHarness();
     vi.useFakeTimers();
-    cues.mockReset();
     mountedComponent = null;
     window.history.replaceState({}, '', '/?accessor=desktop');
   });
@@ -201,15 +194,13 @@ describe('App Desktop Voice feedback', () => {
     pushEvent(3, 'sent');
 
     expect(document.querySelector('.toast')).toBeNull();
-    expect(cues).not.toHaveBeenCalled();
 
     pushEvent(6, 'sent', { command_id: 'c-1' });
     expect(toasts('success')).toEqual([toast(t('voice.toast.sentTitle'))]);
-    expect(cues).toHaveBeenCalledExactlyOnceWith('sent');
 
     // The same event again runs once.
     pushEvent(6, 'sent', { command_id: 'c-1' });
-    expect(cues).toHaveBeenCalledOnce();
+    expect(toasts('success')).toHaveLength(1);
   });
 
   it.each([
@@ -253,14 +244,13 @@ describe('App Desktop Voice feedback', () => {
       toast(VOICE_ERROR_TITLE, MICROPHONE_UNAVAILABLE),
     ],
   ])(
-    'reports %s %j with a cue and a %s Toast that only an error keeps',
+    'reports %s %j with a %s Toast that only an error keeps',
     async (kind, extra, variant, expected) => {
       installDesktop();
       await mountApp();
 
       pushEvent(4, kind, extra);
 
-      expect(cues).toHaveBeenCalledExactlyOnceWith(kind);
       expect(toasts(variant)).toEqual([expected]);
       await vi.advanceTimersByTimeAsync(PAST_AUTO_DISMISS_MS);
       flushSync();
@@ -297,14 +287,13 @@ describe('App Desktop Voice feedback', () => {
     expect(toasts('warn')).toHaveLength(0);
   });
 
-  it('plays the detection cue without a Toast and ignores unknown kinds', async () => {
+  it('shows no Toast for a detection or an unknown kind', async () => {
     installDesktop();
     await mountApp();
 
     pushEvent(4, 'detected', { model_id: 'builtin/okay_nabu' });
     pushEvent(5, 'something_new');
 
-    expect(cues.mock.calls).toEqual([['detected'], ['something_new']]);
     expect(document.querySelector('.toast')).toBeNull();
   });
 
@@ -385,7 +374,8 @@ describe('App Desktop Voice feedback', () => {
 
     expect(api.getVoiceStatus).toHaveBeenCalledTimes(2);
     // Missed events are not replayed; the ones received still gave feedback.
-    expect(cues.mock.calls).toEqual([['sent'], ['no_speech']]);
+    expect(toasts('success')).toHaveLength(1);
+    expect(toasts('warn')).toHaveLength(1);
     indicatorShows('microphone_disconnected');
   });
 });

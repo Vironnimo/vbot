@@ -27,7 +27,6 @@ import {
   stopVoiceCalibration,
   onDesktopVoicePush,
   desktopMicrophoneAccess,
-  playVoiceCue,
   waitForDesktopBridge,
   onDesktopLiveRequest,
   onDesktopOpenSession,
@@ -811,45 +810,6 @@ describe('pushed Voice status and events', () => {
     const cleanup = onDesktopVoicePush(() => {});
 
     expect(cleanup()).toBeUndefined();
-  });
-});
-
-describe('Voice cues', () => {
-  it('plays the tones of a cue kind and nothing for other kinds', async () => {
-    const oscillators = [];
-    class FakeAudioContext {
-      state = 'running';
-      currentTime = 0;
-      destination = {};
-      createOscillator() {
-        const oscillator = {
-          frequency: { value: 0 },
-          connect: vi.fn(),
-          start: vi.fn(),
-          stop: vi.fn(),
-        };
-        oscillators.push(oscillator);
-        return oscillator;
-      }
-      createGain() {
-        return {
-          gain: {
-            setValueAtTime: vi.fn(),
-            exponentialRampToValueAtTime: vi.fn(),
-          },
-          connect: vi.fn(),
-        };
-      }
-    }
-    globalThis.window = { AudioContext: FakeAudioContext };
-
-    await playVoiceCue('sent');
-    expect(oscillators.map((oscillator) => oscillator.frequency.value)).toEqual(
-      [660, 880],
-    );
-
-    await playVoiceCue('recording_started');
-    expect(oscillators).toHaveLength(2);
   });
 });
 

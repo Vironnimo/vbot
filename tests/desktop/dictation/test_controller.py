@@ -99,9 +99,6 @@ class FakeCues:
     def play(self, cue: str) -> None:
         self.played.append(cue)
 
-    def close(self) -> None:
-        pass
-
 
 @dataclass
 class FakePage:
@@ -150,7 +147,7 @@ class Rig:
     def dictate(self) -> None:
         """One toggle take: start, wait for the microphone, end."""
         self.press()
-        wait_until(lambda: "start" in self.cues.played)
+        wait_until(lambda: "listen" in self.cues.played)
         self.press()
         self.wait_idle()
 
@@ -235,7 +232,7 @@ def test_a_toggle_take_records_until_the_second_press_and_types_the_stripped_tra
     rig.dictate()
 
     assert rig.inserter.inserted == [("Hallo Welt", TARGET_WINDOW)]
-    assert rig.cues.played == ["start", "stop"]
+    assert rig.cues.played == ["listen", "done"]
     assert rig.page.recording[0] is True
     assert rig.page.recording[-1] is False
     assert rig.page.wake_phrases_paused == rig.page.recording
@@ -258,7 +255,7 @@ def test_a_hold_take_ends_when_the_combination_is_let_go_and_a_tap_is_dropped(
     rig.api.down |= HELD_KEYS
 
     rig.press()
-    wait_until(lambda: "start" in rig.cues.played)
+    wait_until(lambda: "listen" in rig.cues.played)
     rig.press()  # a second press while held changes nothing in hold mode
     rig.api.down -= HELD_KEYS
     rig.wait_idle()
@@ -268,7 +265,7 @@ def test_a_hold_take_ends_when_the_combination_is_let_go_and_a_tap_is_dropped(
     wait_until(lambda: "cancel" in rig.cues.played)
     rig.wait_idle()
 
-    assert rig.cues.played == ["start", "stop", "cancel"]
+    assert rig.cues.played == ["listen", "done", "cancel"]
     assert len(rig.server.uploads) == 1
     assert rig.controller.status()["last_failure"] is None
 
@@ -278,7 +275,7 @@ def test_escape_cancels_the_take_without_inserting(make_rig: Any, during: str) -
     rig = make_rig()
     rig.server.release_transcription.clear()
     rig.press()
-    wait_until(lambda: "start" in rig.cues.played)
+    wait_until(lambda: "listen" in rig.cues.played)
     if during == "transcribing":
         rig.press()
         assert rig.server.transcribing.wait(5)
@@ -317,7 +314,7 @@ def test_a_take_that_types_nothing_signals_and_reports_why(
 
     rig.dictate()
 
-    assert rig.cues.played == ["start", "stop", "error"]
+    assert rig.cues.played == ["listen", "done", "failed"]
     failure = rig.controller.status()["last_failure"]
     assert failure["code"] == code
     assert datetime.fromisoformat(failure["at"]).tzinfo is not None
@@ -346,10 +343,10 @@ def test_a_take_that_cannot_run_ends_by_itself_with_an_error_cue(
         rig.sd.devices.clear()
 
     rig.press()
-    wait_until(lambda: "error" in rig.cues.played)
+    wait_until(lambda: "failed" in rig.cues.played)
     rig.wait_idle()
 
-    assert rig.cues.played[-1] == "error"
+    assert rig.cues.played[-1] == "failed"
     assert rig.server.uploads == []
     assert rig.controller.status()["last_failure"]["code"] == code
 
@@ -405,7 +402,7 @@ def test_a_long_take_is_transcribed_in_pieces_and_inserted_as_one_text(
     if whole_words:
         assert [_energy(upload) for upload in heard] == [_energy(WORD)] * 3
     assert rig.server.urls == [SERVER_URL]
-    assert rig.cues.played == ["start", "stop"]
+    assert rig.cues.played == ["listen", "done"]
 
 
 def test_a_piece_that_cannot_be_transcribed_ends_the_take_at_once(make_rig: Any) -> None:
@@ -416,11 +413,11 @@ def test_a_piece_that_cannot_be_transcribed_ends_the_take_at_once(make_rig: Any)
     rig.sd.feed(LEAD_IN, WORD, silence(0.5, RATE))
 
     rig.press()  # never ended by the user
-    wait_until(lambda: "error" in rig.cues.played)
+    wait_until(lambda: "failed" in rig.cues.played)
     rig.wait_idle()
 
     assert rig.inserter.inserted == []
-    assert rig.cues.played == ["start", "error"]
+    assert rig.cues.played == ["listen", "failed"]
     assert rig.controller.status()["last_failure"]["code"] == "transcription_failed"
 
 
@@ -457,7 +454,7 @@ def test_settings_persist_mode_and_shortcut_and_reject_invalid_changes(
 def test_stop_cancels_a_running_take_and_is_final(make_rig: Any) -> None:
     rig = make_rig()
     rig.press()
-    wait_until(lambda: "start" in rig.cues.played)
+    wait_until(lambda: "listen" in rig.cues.played)
 
     rig.controller.stop()
 

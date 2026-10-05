@@ -104,6 +104,14 @@ class RecordingSink:
 
 
 @dataclass
+class RecordingCues:
+    played: list[str] = field(default_factory=list)
+
+    def play(self, cue: str) -> None:
+        self.played.append(cue)
+
+
+@dataclass
 class Rig:
     voice: VoiceController
     microphone: MicrophoneService
@@ -116,6 +124,7 @@ class Rig:
     caplog: pytest.LogCaptureFixture
     now: list[float] = field(default_factory=lambda: [1000.0])
     fail_engine_start: bool = False
+    cues: RecordingCues = field(default_factory=RecordingCues)
 
     @property
     def engine(self) -> ScriptedEngine:
@@ -252,6 +261,7 @@ def voice_rig(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> Iterator[Call
             mock_frame_seconds=0.005,
             mock_stage_seconds=0.02,
         )
+        cues = RecordingCues()
         voice = VoiceController(
             settings_path=path,
             microphone=microphone,
@@ -260,10 +270,13 @@ def voice_rig(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> Iterator[Call
             live_requests=lambda action, source: live.append((action, source)),
             mock=mock,
             stack_available=stack_available or (lambda: True),
+            cues=cues,  # type: ignore[arg-type]
             runtime=runtime,
             clock=(lambda: now[0]) if frozen_clock else time.monotonic,
         )
-        rig = Rig(voice, microphone, sink, sd, server, live, engines, phrases_seen, caplog, now)
+        rig = Rig(
+            voice, microphone, sink, sd, server, live, engines, phrases_seen, caplog, now, cues=cues
+        )
         rig_ref.append(rig)
         rigs.append(rig)
         if start:
@@ -420,6 +433,7 @@ def test_a_failing_command_keeps_listening(voice_rig: Callable[..., Rig]) -> Non
         "target_agent_unavailable",
     ]
     assert rig.sink.kinds() == ["detected", "command_failed"]
+    assert rig.cues.played == ["listen", "failed"]
     assert failed == {
         "sequence": failed["sequence"],
         "kind": "command_failed",
@@ -763,6 +777,7 @@ def test_mock_mode_simulates_a_command_cycle_without_audio_or_network(
 
     assert status["mode"] == "mock"
     assert rig.sink.kinds()[:4] == ["detected", "recording_started", "recording_ended", "sent"]
+    assert rig.cues.played[:2] == ["listen", "done"]
     assert rig.sd.streams == []
     assert rig.server.methods == []
 

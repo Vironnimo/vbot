@@ -46,6 +46,7 @@ from desktop.settings import (
 if TYPE_CHECKING:
     from desktop.connection import ConnectionController
     from desktop.page_events import PageEventDispatcher
+    from desktop.speech.cues import CuePlayer
     from desktop.speech.microphone import MicrophoneService
     from desktop.wakeword.controller import VoiceController
 
@@ -514,6 +515,7 @@ def _run_desktop(
     from desktop.dictation.controller import DictationController
     from desktop.hotkey import LIVE_VOICE_HOTKEY, HotkeyController, HotkeyHandlers
     from desktop.page_events import PageEventDispatcher
+    from desktop.speech.cues import CuePlayer
     from desktop.speech.microphone import MicrophoneService
 
     webview = webview_module if webview_module is not None else load_webview()
@@ -533,13 +535,16 @@ def _run_desktop(
         settings_path=settings_file,
         handlers=HotkeyHandlers(on_press=lambda: page_events.request_live("toggle", "hotkey")),
     )
-    voice = _create_voice(args, settings_file, microphone, server_url, page_events)
+    # One player for every Voice and dictation cue, so they play in order.
+    cues = CuePlayer()
+    voice = _create_voice(args, settings_file, microphone, server_url, page_events, cues)
     dictation = DictationController(
         settings_path=settings_file,
         microphone=microphone,
         server_url=server_url,
         page=page_events,
         wake_phrases=voice,
+        cues=cues,
     )
     window_holder: list[Any] = []
     window_state = _WindowState()
@@ -683,6 +688,7 @@ def _run_desktop(
         live_hotkey.stop()
         dictation.stop()
         voice.close()
+        cues.close()
         page_events.close()
 
 
@@ -1068,6 +1074,7 @@ def _create_voice(
     microphone: MicrophoneService,
     server_url: str,
     page_events: PageEventDispatcher,
+    cues: CuePlayer | None = None,
 ) -> VoiceController:
     """Create Voice for the window's server; it starts listening on ``start()``.
 
@@ -1088,6 +1095,7 @@ def _create_voice(
         live_requests=page_events.request_live,
         mock=bool(args.mock_wakeword),
         stack_available=_real_wakeword_available,
+        cues=cues,
     )
 
 

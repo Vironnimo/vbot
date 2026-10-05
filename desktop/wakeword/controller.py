@@ -45,6 +45,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from desktop import settings as desktop_settings
+from desktop.speech.cues import (
+    CUE_CANCEL,
+    CUE_DONE,
+    CUE_ERROR,
+    CUE_FAILED,
+    CUE_LISTEN,
+    CUE_NO_SPEECH,
+    CuePlayer,
+)
 from desktop.speech.server_client import (
     DEFAULT_UPLOAD_BUDGET_BYTES,
     SpeechRequestCancelled,
@@ -108,12 +117,24 @@ EVENT_DETECTED = "detected"
 EVENT_RECORDING_STARTED = "recording_started"
 EVENT_RECORDING_ENDED = "recording_ended"
 EVENT_NO_SPEECH = "no_speech"
+EVENT_CANCELLED = "cancelled"
+EVENT_TRANSCRIPTION_FAILED = "transcription_failed"
 EVENT_COMMAND_FAILED = "command_failed"
 EVENT_SENT = "sent"
 EVENT_LIVE_REQUESTED = "live_requested"
 EVENT_MICROPHONE_DISCONNECTED = "microphone_disconnected"
 EVENT_MICROPHONE_RECONNECTED = "microphone_reconnected"
 EVENT_ERROR = "error"
+
+_EVENT_CUES = {
+    EVENT_DETECTED: CUE_LISTEN,
+    EVENT_SENT: CUE_DONE,
+    EVENT_CANCELLED: CUE_CANCEL,
+    EVENT_NO_SPEECH: CUE_NO_SPEECH,
+    EVENT_TRANSCRIPTION_FAILED: CUE_FAILED,
+    EVENT_COMMAND_FAILED: CUE_FAILED,
+    EVENT_ERROR: CUE_ERROR,
+}
 
 LIVE_REQUEST_SOURCE = "wakeword"
 
@@ -245,8 +266,10 @@ class VoiceController:
     listener captures from its current settings, and a change of them rebuilds
     a running listener. ``stack_available()`` reports whether the on-device stack
     imports; it runs once, lazily, on a background thread when a real
-    listener first starts. The listener starts with :meth:`start` (after the
-    window is shown) and ends with :meth:`close`.
+    listener first starts. ``cues`` is the Desktop's shared player (its owner
+    closes it); events with a cue play it, and without a player Voice is
+    silent. The listener starts with :meth:`start` (after the window is shown)
+    and ends with :meth:`close`.
     """
 
     def __init__(
@@ -259,6 +282,7 @@ class VoiceController:
         live_requests: Callable[[str, str], None],
         mock: bool = False,
         stack_available: Callable[[], bool] = lambda: True,
+        cues: CuePlayer | None = None,
         catalog: WakewordModelCatalog | None = None,
         runtime: VoiceRuntime | None = None,
         clock: Callable[[], float] = time.monotonic,
@@ -268,6 +292,7 @@ class VoiceController:
         self._sink = sink
         self._live_requests = live_requests
         self._stack_available = stack_available
+        self._cues = cues
         self._catalog = catalog if catalog is not None else WakewordModelCatalog(settings_path)
         self._runtime = runtime if runtime is not None else VoiceRuntime()
         self._clock = clock
@@ -1265,6 +1290,9 @@ class VoiceController:
             self._sink.publish_event(event)
         except Exception:
             logger.exception("Voice event push failed")
+        cue = _EVENT_CUES.get(kind)
+        if cue is not None and self._cues is not None:
+            self._cues.play(cue)
 
     # -- Catalog helpers -------------------------------------------------------
 

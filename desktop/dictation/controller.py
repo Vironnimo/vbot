@@ -12,9 +12,10 @@ Escape cancels a recording or a running transcription. Each dictation (a
 the shared microphone (:class:`~desktop.speech.microphone.MicrophoneService`),
 checks the server's speech-to-text in parallel (``vbot-dictation-prepare``),
 uploads the recording to the server the window shows, and hands the stripped
-transcript to the :class:`~desktop.dictation.insertion.TextInserter`. Cues mark
-the start (once the microphone delivers audio), the end, a cancel and a
-failure; audio during the start cue is discarded so the cue is not transcribed.
+transcript to the :class:`~desktop.dictation.insertion.TextInserter`. Cues of
+the Desktop's :class:`~desktop.speech.cues.CuePlayer` mark the start (as soon as
+the microphone delivers audio), the end, a cancel and a failure; audio during
+the loud start of the listen cue is discarded so the cue is not transcribed.
 
 A take has no length limit: it records until the user ends it. Long takes are
 split into pieces at speech pauses (:mod:`desktop.dictation.pieces`), which
@@ -42,14 +43,6 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from desktop import settings as desktop_settings
-from desktop.dictation.cues import (
-    CUE_CANCEL,
-    CUE_ERROR,
-    CUE_START,
-    CUE_STOP,
-    START_CUE_SECONDS,
-    CuePlayer,
-)
 from desktop.dictation.insertion import (
     INSERT_CLIPBOARD,
     INSERT_PASTED,
@@ -63,6 +56,14 @@ from desktop.hotkey import (
     HotkeyController,
     HotkeyHandlers,
     HotkeyPreference,
+)
+from desktop.speech.cues import (
+    CUE_CANCEL,
+    CUE_DONE,
+    CUE_FAILED,
+    CUE_LISTEN,
+    LISTEN_LOUD_SECONDS,
+    CuePlayer,
 )
 from desktop.speech.microphone import MicrophoneService
 from desktop.speech.server_client import (
@@ -110,8 +111,9 @@ MIN_RECORDING_SECONDS = 0.3
 # Recording continues this long after the end request, so the last word is not
 # clipped when the shortcut comes right at its end.
 TAIL_SECONDS = 0.2
-# Audio this long after the microphone opened is dropped: the start cue plays then.
-START_SKIP_SECONDS = START_CUE_SECONDS + 0.1
+# Audio this long after the microphone opened is dropped: the listen cue is loud
+# then. It is shorter than anyone takes to start speaking after hearing the cue.
+START_SKIP_SECONDS = LISTEN_LOUD_SECONDS + 0.05
 
 _HOTKEY_FIELDS = ("enabled", "ctrl", "alt", "shift", "win", "key")
 _MODE_KEY = "mode"
@@ -176,6 +178,8 @@ class DictationController:
     :meth:`start` (after the window is shown) and :meth:`stop` (on exit; final)
     bound the shortcut's registration. Every public method is thread-safe. The
     shortcut handlers run on the hotkey thread and only flag the running take.
+    ``cues`` is the Desktop's shared player (its owner closes it); without one
+    the takes are silent.
     """
 
     def __init__(
@@ -199,7 +203,7 @@ class DictationController:
         self._microphone = microphone
         self._page = page
         self._wake_phrases = wake_phrases
-        self._cues = cues or CuePlayer()
+        self._cues = cues
         self._inserter_instance = inserter
         self._client_factory = client_factory or _create_client
         self._clock = clock
@@ -251,7 +255,6 @@ class DictationController:
             take.cancel()
             if take.thread is not None:
                 take.thread.join(_STOP_JOIN_SECONDS)
-        self._cues.close()
 
     def set_server_url(self, server_url: str) -> None:
         """Follow the window's server; the next take transcribes there."""
@@ -340,7 +343,7 @@ class DictationController:
             take = self._take
         if take is not None and take.cancel():
             logger.info("Dictation cancelled")
-            self._cues.play(CUE_CANCEL)
+            self._play(CUE_CANCEL)
 
     def _begin_locked(self) -> None:
         mode = self._read_mode()
@@ -372,7 +375,7 @@ class DictationController:
             self._announce_recording(False)
             if failure is not None:
                 logger.warning("Dictation ended without inserting text: %s", failure)
-                self._cues.play(CUE_ERROR)
+                self._play(CUE_FAILED)
             with self._lock:
                 self._take = None
                 self._state = STATE_IDLE
@@ -403,7 +406,7 @@ class DictationController:
                     self._announce_recording(False)
                 with self._lock:
                     self._state = STATE_TRANSCRIBING
-                self._cues.play(CUE_STOP)
+                self._play(CUE_DONE)
                 text = transcriber.finish()
             finally:
                 transcriber.stop()
@@ -412,6 +415,10 @@ class DictationController:
         if take.cancelled.is_set():
             raise _Cancelled
         self._insert(take, text)
+
+    def _play(self, cue: str) -> None:
+        if self._cues is not None:
+            self._cues.play(cue)
 
     def _announce_recording(self, recording: bool) -> None:
         """While a take records, the page holds a Live call and wake phrases pause."""
@@ -461,13 +468,13 @@ class DictationController:
                 # An end requested before the start cue (a tap) drops the take.
                 if take.finish_requested.is_set() and end_at is None:
                     if not capturing:
-                        self._cues.play(CUE_CANCEL)
+                        self._play(CUE_CANCEL)
                         raise _Cancelled
                     end_at = self._clock() + TAIL_SECONDS
                 state = capture.status.state
                 if not capturing and state == CAPTURE_CAPTURING:
                     capturing = True
-                    self._cues.play(CUE_START)
+                    self._play(CUE_LISTEN)
                 elif not capturing and state != CAPTURE_OPENING:
                     raise _Failed(ERROR_MICROPHONE_UNAVAILABLE)
                 elif capturing and state != CAPTURE_CAPTURING:
@@ -490,7 +497,7 @@ class DictationController:
             capture.join(_CAPTURE_JOIN_SECONDS)
         if seconds < MIN_RECORDING_SECONDS:
             logger.info("Dictation too short (%.2f s); dropped", seconds)
-            self._cues.play(CUE_CANCEL)
+            self._play(CUE_CANCEL)
             raise _Cancelled
         last = cutter.finish()
         if last is not None:

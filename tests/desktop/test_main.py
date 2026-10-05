@@ -27,6 +27,7 @@ from desktop import page_events as desktop_page_events
 from desktop import restart as desktop_restart
 from desktop.dictation import controller as desktop_dictation
 from desktop.main import DesktopProbeResult, DesktopTarget
+from desktop.speech import cues as desktop_cues
 
 _TEST_DESKTOP_SESSION_ID = "desktop-test-session"
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -168,6 +169,8 @@ def launch_seams(monkeypatch: pytest.MonkeyPatch) -> LaunchSeams:
     monkeypatch.setattr(desktop_main._windows, "allow_server_microphone", seams.allow_microphone)
     monkeypatch.setattr(desktop_hotkey, "HotkeyController", seams.hotkey)
     monkeypatch.setattr(desktop_dictation, "DictationController", seams.dictation)
+    player = desktop_cues.CuePlayer
+    monkeypatch.setattr(desktop_cues, "CuePlayer", lambda: player(lambda _sound: None))
     return seams
 
 
@@ -996,7 +999,7 @@ def test_voice_starts_after_the_window_is_shown_and_follows_its_server(
     voice = RecordingVoice(events, on_start=window_shown_first)
 
     def create_voice(
-        _args: Any, _settings: Any, _microphone: Any, url: str, _page_events: Any
+        _args: Any, _settings: Any, _microphone: Any, url: str, _page_events: Any, _cues: Any
     ) -> RecordingVoice:
         created_for.append(url)
         return voice
@@ -1369,10 +1372,10 @@ def test_page_pushes_reach_the_window_page_until_it_closes(
     original_create_voice = desktop_main._create_voice
 
     def create_voice(
-        args: Any, settings: Any, microphone: Any, server_url: str, page_events: Any
+        args: Any, settings: Any, microphone: Any, server_url: str, page_events: Any, cues: Any
     ) -> Any:
         voice_sinks.append(page_events)
-        return original_create_voice(args, settings, microphone, server_url, page_events)
+        return original_create_voice(args, settings, microphone, server_url, page_events, cues)
 
     monkeypatch.setattr(desktop_main, "_create_voice", create_voice)
 
