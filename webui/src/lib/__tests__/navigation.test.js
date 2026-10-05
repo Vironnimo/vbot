@@ -460,13 +460,12 @@ describe('createNavigator', () => {
   });
 
   it('maps unavailable and renamed destinations when restoring', async () => {
-    const renames = new Map();
+    const rename = (from, to) => (location) => ({
+      ...location,
+      place: location.place.map((part) => (part === from ? to : part)),
+    });
     const { navigator } = setup({
       resolveView: (view) => (view === 'debug' ? 'settings' : view),
-      remap: (location) => ({
-        ...location,
-        place: location.place.map((part) => renames.get(part) ?? part),
-      }),
     });
     navigator.navigate('agents', ['alpha']);
     navigator.navigate('debug', ['trace-1']);
@@ -476,11 +475,21 @@ describe('createNavigator', () => {
       extra: null,
     });
 
-    renames.set('alpha', 'alpha-2');
-    navigator.remapAll();
+    navigator.remapAll(rename('alpha', 'beta'));
+    // A rename applies to what is remembered, not to later steps: a new
+    // Agent that reuses the old id is shown as itself.
+    navigator.navigate('agents', ['alpha']);
+    expect(shown(navigator).place).toEqual(['alpha']);
     navigator.back();
     await settle();
-    expect(shown(navigator).place).toEqual(['alpha-2']);
+    navigator.back();
+    await settle();
+    expect(shown(navigator).place).toEqual(['beta']);
+    navigator.forward();
+    await settle();
+    navigator.forward();
+    await settle();
+    expect(shown(navigator).place).toEqual(['alpha']);
   });
 
   it('removes the Session link parameters from the address bar', () => {

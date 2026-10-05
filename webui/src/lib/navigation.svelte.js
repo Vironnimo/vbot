@@ -199,8 +199,6 @@ export function createNavigator({
   resolveView = (viewId) => viewId,
   // Runs an action once pending autosave edits are saved (App's transition).
   gate = (action) => action(),
-  // Adjusts a remembered Location to current identities (renamed Agents).
-  remap = (location) => location,
   guardExit = false,
   // Alt+Left/Right, the browser keys and the mouse side buttons, for hosts
   // whose WebView handles none of them (the Desktop app).
@@ -319,11 +317,10 @@ export function createNavigator({
   // A Location the app can show now: known and available, else the default
   // view's start.
   function resolvable(location) {
-    const mapped = remap(location) ?? location;
-    const view = isKnownView(mapped.view) ? resolveView(mapped.view) : '';
+    const view = isKnownView(location.view) ? resolveView(location.view) : '';
     if (!view) return createLocation(defaultView);
-    if (view !== mapped.view) return createLocation(view);
-    return createLocation(mapped.view, mapped.place, mapped.extra);
+    if (view !== location.view) return createLocation(view);
+    return createLocation(location.view, location.place, location.extra);
   }
 
   function commit(target, { replace = false, origin = 'app' } = {}) {
@@ -459,7 +456,10 @@ export function createNavigator({
     let target;
     if (isOwnState(state)) {
       index = state.index;
-      target = createLocation(state.view, state.place, state.extra);
+      // The mirror holds the entry as `remapAll` last corrected it; the
+      // browser keeps the state the entry was written with.
+      target =
+        entries[index] ?? createLocation(state.view, state.place, state.extra);
     } else {
       // A typed or linked hash made a new entry after the current one.
       index = entryIndex + 1;
@@ -482,11 +482,14 @@ export function createNavigator({
     entries[index] = target;
     synced = false;
     persistStack();
-    gate(() => applyHistoryEntry(target, index));
+    gate(() => applyHistoryEntry(index));
   }
 
-  function applyHistoryEntry(target, index) {
+  // Reads the entry when it is applied: a `remapAll` while the move waited in
+  // the gate has corrected it meanwhile.
+  function applyHistoryEntry(index) {
     if (index !== entryIndex) return false;
+    const target = entries[index];
     const location = resolvable(target);
     if (!sameLocation(location, target)) {
       entries[index] = location;
@@ -627,19 +630,21 @@ export function createNavigator({
     return link.target;
   }
 
-  // Re-apply `remap` to every remembered Location, for example after an
-  // Agent rename; the displayed one is corrected in place.
-  function remapAll() {
+  // Apply `remap` once to every Location remembered now, for example after
+  // an Agent rename; the displayed one is corrected in place. Locations
+  // recorded later are taken as they are, so a reused id names its new owner.
+  function remapAll(remap) {
+    const remapped = (location) => resolvable(remap(location) ?? location);
     for (const [view, location] of Object.entries(memory)) {
-      memory[view] = resolvable(location);
+      memory[view] = remapped(location);
     }
-    entries = entries.map((entry) => (entry ? resolvable(entry) : entry));
+    entries = entries.map((entry) => (entry ? remapped(entry) : entry));
     const current = createLocation(
       displayed.view,
       displayed.place,
       displayed.extra,
     );
-    const next = resolvable(current);
+    const next = remapped(current);
     if (synced && !sameLocation(next, current)) {
       entries[entryIndex] = next;
       writeEntry(next, entryIndex, true);

@@ -179,34 +179,6 @@ export function createAppController({
   let sessionInvalidationSequence = state.sessionInvalidations?.at(-1)?.id ?? 0;
   let unavailableNoticeTimer = null;
   let restoredNoticeTimer = null;
-  // Renamed identity Agents, old id -> new id, so remembered places that name
-  // an old id (history entries, the last place of a view) still resolve.
-  const identityAgentRedirects = new Map();
-
-  function resolveIdentityAgentId(agentId) {
-    let resolved = agentId;
-    const visited = new Set();
-    while (
-      typeof resolved === 'string' &&
-      identityAgentRedirects.has(resolved) &&
-      !visited.has(resolved)
-    ) {
-      visited.add(resolved);
-      resolved = identityAgentRedirects.get(resolved);
-    }
-    return resolved;
-  }
-
-  function applyIdentityAgentRename(oldAgentId, newAgentId) {
-    for (const [source, target] of identityAgentRedirects) {
-      if (target === oldAgentId) {
-        identityAgentRedirects.set(source, newAgentId);
-      }
-    }
-    identityAgentRedirects.set(oldAgentId, newAgentId);
-    onAgentIdChanged(oldAgentId, newAgentId);
-  }
-
   function clearConnectionTimers() {
     if (unavailableNoticeTimer) {
       clearTimeout(unavailableNoticeTimer);
@@ -368,7 +340,7 @@ export function createAppController({
         typeof scope.new_agent_id === 'string' &&
         scope.new_agent_id
       ) {
-        applyIdentityAgentRename(scope.old_agent_id, scope.new_agent_id);
+        onAgentIdChanged(scope.old_agent_id, scope.new_agent_id);
       }
     }
     const tokenKeys = tokenKeysForKind(kind);
@@ -450,6 +422,5 @@ export function createAppController({
     destroy,
     handleConnectionStatusChange,
     handleServerEvent,
-    resolveIdentityAgentId,
   };
 }

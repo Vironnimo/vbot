@@ -388,7 +388,7 @@ describe('App controller', () => {
     expect(onExtensionChange).toHaveBeenCalledOnce();
   });
 
-  it('applies an Agent rename mapping before reloading and resolves old ids', async () => {
+  it('applies an Agent rename mapping before reloading', async () => {
     const onAgentIdChanged = vi.fn();
     const { actions, controller } = setup({ onAgentIdChanged });
 
@@ -406,10 +406,12 @@ describe('App controller', () => {
     );
 
     expect(onAgentIdChanged).toHaveBeenNthCalledWith(1, 'alpha', 'researcher');
+    expect(onAgentIdChanged).toHaveBeenNthCalledWith(
+      2,
+      'researcher',
+      'analyst',
+    );
     expect(actions.onReloadAgents).toHaveBeenCalledTimes(2);
-    // Remembered places naming any earlier id resolve to the current one.
-    expect(controller.resolveIdentityAgentId('alpha')).toBe('analyst');
-    expect(controller.resolveIdentityAgentId('other')).toBe('other');
   });
 
   it.each([

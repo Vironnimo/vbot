@@ -417,7 +417,6 @@
     resolveView: (viewId) =>
       viewId === 'debug' && debugEnabled === false ? 'settings' : viewId,
     gate: navigationGate,
-    remap: remapRenamedAgents,
     guardExit: desktopAccessor,
     handleInput: desktopAccessor,
   });
@@ -537,9 +536,11 @@
     return openView('chat');
   };
 
-  function remapRenamedAgents(location) {
+  // A remembered Location with an Identity Agent's old id replaced by its
+  // new one.
+  function renameAgentInLocation(location, oldAgentId, newAgentId) {
     const resolve = (agentId) =>
-      appController?.resolveIdentityAgentId(agentId) ?? agentId;
+      agentId === oldAgentId ? newAgentId : agentId;
     const remapScope = (segment) =>
       segment.startsWith('agent:')
         ? `agent:${resolve(segment.slice('agent:'.length))}`
@@ -712,7 +713,9 @@
     onLoadProjects: selection.loadProjects,
     onAgentIdChanged: (oldAgentId, newAgentId) => {
       selection.remapIdentityAgentId(oldAgentId, newAgentId);
-      navigator.remapAll();
+      navigator.remapAll((location) =>
+        renameAgentInLocation(location, oldAgentId, newAgentId),
+      );
     },
     onReloadAgents: selection.reloadAgentsFromServer,
     onReloadExtensionPages: extensions.loadExtensionPages,
