@@ -30,33 +30,29 @@ publishing) once its stop event is set.
 
 from __future__ import annotations
 
-import io
 import logging
 import re
 import threading
 import time
-import wave
 from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from desktop.speech.capture import (
+    GAP_READ_FAILED,
+    AudioBlock,
+    CaptureGap,
+    CaptureSubscription,
+    encode_wav,
+)
+from desktop.speech.server_client import SpeechRequestCancelled, SpeechServerError
 from desktop.wakeword._speech_detection import (
     SPEECH_HOP_SAMPLES,
     SpeechDetector,
     frame_is_speech,
 )
-from desktop.wakeword.capture import (
-    GAP_READ_FAILED,
-    AudioBlock,
-    CaptureGap,
-    CaptureSubscription,
-)
-from desktop.wakeword.server_client import (
-    VoiceRequestCancelled,
-    VoiceServerClient,
-    VoiceServerError,
-)
+from desktop.wakeword.server_client import VoiceServerClient
 
 logger = logging.getLogger("vbot.desktop.wakeword.commands")
 
@@ -97,17 +93,6 @@ _START_TIMEOUT_HOPS = int(SPEECH_START_TIMEOUT_SECONDS / _HOP_SECONDS)
 _READ_TIMEOUT_SECONDS = 0.1
 _VOICE_CANCEL_PHRASES = frozenset(["abbrechen", "vergiss es"])
 _NOT_CREATED = object()
-
-
-def encode_wav(pcm16: bytes, sample_rate: int) -> bytes:
-    """Wrap mono 16-bit PCM in a WAV container."""
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as wav_file:
-        wav_file.setnchannels(1)
-        wav_file.setsampwidth(2)
-        wav_file.setframerate(sample_rate)
-        wav_file.writeframes(pcm16)
-    return buffer.getvalue()
 
 
 def is_voice_cancel_phrase(transcript: str) -> bool:
@@ -444,7 +429,7 @@ class CommandPipeline:
             self._on_stage(command.command_id, STAGE_TRANSCRIBING)
             try:
                 transcript = self._client.transcribe(command.wav).strip()
-            except VoiceServerError as exc:
+            except SpeechServerError as exc:
                 logger.warning("Voice command transcription failed (%s): %s", exc.error_code, exc)
                 return outcome(EVENT_TRANSCRIPTION_FAILED, error_code=exc.error_code)
             if not transcript:
@@ -458,10 +443,10 @@ class CommandPipeline:
             self._on_stage(command.command_id, STAGE_SENDING)
             session_id = self._client.resolve_session(command.agent_id, command.session_behavior)
             self._client.send_command(command.agent_id, session_id, transcript)
-        except VoiceRequestCancelled:
+        except SpeechRequestCancelled:
             logger.debug("Voice command stopped with its listener")
             return None
-        except VoiceServerError as exc:
+        except SpeechServerError as exc:
             logger.warning("Voice command failed (%s): %s", exc.error_code, exc)
             return outcome(
                 EVENT_COMMAND_FAILED, agent_id=command.agent_id, error_code=exc.error_code

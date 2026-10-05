@@ -52,7 +52,7 @@ import numpy as np
 if TYPE_CHECKING:
     import ctypes
 
-logger = logging.getLogger("vbot.desktop.wakeword.echo")
+logger = logging.getLogger("vbot.desktop.speech.echo")
 
 ECHO_SAMPLE_RATE = 48000
 """Output rate of the echo stage and processing rate of the echo canceller."""

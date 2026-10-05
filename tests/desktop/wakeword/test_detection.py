@@ -12,18 +12,20 @@ from unittest.mock import Mock
 
 import pytest
 
+from desktop.speech.capture import CaptureSubscription
 from desktop.wakeword import engine as engine_module
-from desktop.wakeword.capture import CaptureSubscription
 from desktop.wakeword.config import DEFAULT_MODEL_IDS, PhraseConfig
 from desktop.wakeword.detection import PRE_ROLL_SECONDS, Detection, DetectionLoop
 from desktop.wakeword.engine import MultiWakewordEngine, WakewordModelCatalog
-from tests.desktop.wakeword.voice_test_support import (
-    AmplitudeDetector,
+from tests.desktop.speech.speech_test_support import (
     FakeSubscription,
-    ScriptedEngine,
     silence,
     tone,
     wait_until,
+)
+from tests.desktop.wakeword.voice_test_support import (
+    AmplitudeDetector,
+    ScriptedEngine,
 )
 
 

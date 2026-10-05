@@ -1,7 +1,7 @@
-"""Microphone capture for Voice: one owner of the input stream, fanned out to subscribers.
+"""Microphone capture for Desktop speech input: one input stream, fanned out to subscribers.
 
 :class:`AudioCapture` owns the microphone stream on one daemon thread
-(``vbot-voice-capture``). Every blocking read goes through one chain::
+(``vbot-mic-capture``). Every blocking read goes through one chain::
 
     native read -> mono int16 -> echo stage (native rate in, stage.rate out)
     -> stateful soxr projection of the stage output to 16 kHz -> AudioBlock
@@ -19,7 +19,7 @@ subscription and keeps reading; a failed read also reopens the stream. Three
 consecutive failed reads, or a reopen that fails, disconnect the microphone:
 the status reports ``disconnected`` and the thread retries every
 ``reconnect_interval`` seconds, refreshing the PortAudio device list first
-while no Voice stream is open. A microphone that cannot open at start is
+while no input stream is open. A microphone that cannot open at start is
 refreshed and retried once before it counts as disconnected.
 
 The echo stage (:class:`EchoStage`) comes from an :class:`EchoStagePool`
@@ -38,9 +38,11 @@ capture thread calls the stage, except for reading ``state``.
 
 from __future__ import annotations
 
+import io
 import logging
 import threading
 import time
+import wave
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -48,15 +50,15 @@ from typing import Any, Protocol
 
 import numpy as np
 
-from desktop.wakeword._microphones import (
+from desktop.speech._microphones import (
     CaptureFormat,
     close_input_stream,
     open_input_stream,
     refresh_microphone_devices,
 )
-from desktop.wakeword.config import MicrophoneSelection
+from desktop.speech.microphone import MicrophoneSelection
 
-logger = logging.getLogger("vbot.desktop.wakeword.capture")
+logger = logging.getLogger("vbot.desktop.speech.capture")
 
 DETECTION_SAMPLE_RATE = 16000
 """Rate of every block's ``pcm16`` projection."""
@@ -151,7 +153,7 @@ class EchoStagePool:
     """Creates echo stages in the background and keeps a returned one for the next capture.
 
     Creating the real stage loads a native library (up to seconds), so it runs
-    on a daemon thread (``vbot-voice-echo-init``) that :meth:`prepare` or
+    on a daemon thread (``vbot-echo-init``) that :meth:`prepare` or
     :meth:`acquire` starts, and every capture after the first reuses the stage
     the previous one returned. A stage is lent to one capture at a time: while
     an abandoned capture thread still holds it, the next capture gets a new
@@ -178,7 +180,7 @@ class EchoStagePool:
             if self._idle is not None or self._creating or self._unavailable:
                 return
             self._creating = True
-        threading.Thread(target=self._create, name="vbot-voice-echo-init", daemon=True).start()
+        threading.Thread(target=self._create, name="vbot-echo-init", daemon=True).start()
 
     def acquire(self, timeout: float = 0.0) -> EchoStage | None:
         """Lend a closed stage, waiting up to ``timeout`` seconds for one being created.
@@ -256,6 +258,17 @@ class AudioBlock:
     def duration(self) -> float:
         """Length of the block in seconds."""
         return len(self.recording) / 2 / self.recording_rate
+
+
+def encode_wav(pcm16: bytes, sample_rate: int) -> bytes:
+    """Wrap mono 16-bit PCM (an :class:`AudioBlock` projection) in a WAV container."""
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(pcm16)
+    return buffer.getvalue()
 
 
 @dataclass(frozen=True)
@@ -426,7 +439,7 @@ class AudioCapture:
         """Start the capture thread (once)."""
         if self._thread is not None:
             return
-        self._thread = threading.Thread(target=self._run, name="vbot-voice-capture", daemon=True)
+        self._thread = threading.Thread(target=self._run, name="vbot-mic-capture", daemon=True)
         self._thread.start()
 
     def join(self, timeout: float) -> bool:
@@ -473,7 +486,7 @@ class AudioCapture:
             while not self._stop.is_set():
                 opened = self._read_until_failure() if opened else self._wait_for_microphone()
         except Exception:
-            logger.exception("Voice microphone capture stopped unexpectedly")
+            logger.exception("Microphone capture stopped unexpectedly")
             final = CaptureStatus(CAPTURE_FAILED, ERROR_PIPELINE_FAILED)
         finally:
             self._close_stream()
@@ -506,9 +519,9 @@ class AudioCapture:
         if self._stop.is_set():
             return False
         if self._open_stream():
-            logger.info("Voice microphone reconnected")
+            logger.info("Microphone reconnected")
             return True
-        logger.debug("Voice microphone is still unavailable")
+        logger.debug("Microphone is still unavailable")
         return False
 
     def _read_until_failure(self) -> bool:
@@ -521,7 +534,7 @@ class AudioCapture:
                 samples, arrival = self._read_block()
             except _ReadError:
                 failures += 1
-                logger.warning("Voice microphone read failed", exc_info=True)
+                logger.warning("Microphone read failed", exc_info=True)
                 self._end_segment(GAP_READ_FAILED)
                 self._close_stream()
                 if self._stop.is_set():
@@ -547,7 +560,7 @@ class AudioCapture:
         if len(samples) != frames:
             raise _ReadError(f"The microphone returned {len(samples)} of {frames} samples")
         if overflowed:
-            logger.info("Voice microphone input overflowed; delivering a capture gap")
+            logger.info("Microphone input overflowed; delivering a capture gap")
             self._end_segment(GAP_OVERFLOW)
         return _to_int16(samples, capture_format.dtype), arrival
 
@@ -614,7 +627,7 @@ class AudioCapture:
         try:
             stream, capture_format = open_input_stream(self._sd, self._requested)
         except Exception:
-            logger.warning("Voice microphone could not be opened", exc_info=True)
+            logger.warning("Microphone could not be opened", exc_info=True)
             return False
         if self._stop.is_set():
             close_input_stream(stream)
@@ -623,7 +636,7 @@ class AudioCapture:
         self._format = capture_format
         self._prepare_stage(capture_format.sample_rate)
         logger.info(
-            "Voice microphone opened (device=%s, host_api=%s, rate=%s, echo=%s)",
+            "Microphone opened (device=%s, host_api=%s, rate=%s, echo=%s)",
             capture_format.name,
             capture_format.host_api,
             capture_format.sample_rate,
@@ -679,7 +692,7 @@ class AudioCapture:
             self._deliver_gap(GAP_ECHO_FAILED)
 
     def _disconnect(self, error_code: str) -> None:
-        logger.warning("Voice microphone disconnected (reason=%s)", error_code)
+        logger.warning("Microphone disconnected (reason=%s)", error_code)
         self._close_stream()
         # The reference stream must be closed before PortAudio is refreshed.
         self._close_stage()
@@ -765,7 +778,7 @@ class AudioCapture:
         try:
             self._on_status(status)
         except Exception:
-            logger.exception("Voice capture status listener failed")
+            logger.exception("Capture status listener failed")
 
     def _unsubscribe(self, subscription: CaptureSubscription) -> None:
         with self._lock:

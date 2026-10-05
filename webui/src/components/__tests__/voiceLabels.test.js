@@ -18,6 +18,8 @@ const BRIDGE_ERROR_CODES = [
   'wakeword_model_delete_failed',
   'calibration_unavailable',
   'calibration_inactive',
+  'microphone_config_invalid',
+  'dictation_config_invalid',
 ];
 
 beforeEach(() => {

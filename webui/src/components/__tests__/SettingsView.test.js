@@ -885,9 +885,15 @@ describe('SettingsView', () => {
       expect(
         document.querySelector('[data-settings-section="desktop_connection"]'),
       ).toBeNull();
-      expect(
-        document.querySelector('[data-settings-section="live_voice_shortcut"]'),
-      ).toBeNull();
+      for (const desktopSection of [
+        'microphone',
+        'live_voice_shortcut',
+        'desktop_dictation',
+      ]) {
+        expect(
+          document.querySelector(`[data-settings-section="${desktopSection}"]`),
+        ).toBeNull();
+      }
       expect(buttonByText('Voice')).toBeTruthy();
       expect(
         document.querySelector(
@@ -901,38 +907,68 @@ describe('SettingsView', () => {
       ).toBeNull();
     });
 
-    it('adds the Live voice shortcut to Voice when the Desktop supports it', async () => {
+    it('adds the Desktop microphone, shortcut and dictation to Voice when the Desktop supports them', async () => {
       rpcMock.mockImplementation(createSettingsRpcMock());
       window.history.pushState({}, '', '/?accessor=desktop');
+      const hotkey = (key) => ({
+        ctrl: true,
+        alt: true,
+        shift: false,
+        win: false,
+        key,
+      });
       window.pywebview = {
         api: {
           getLiveHotkey: vi.fn().mockResolvedValue({
             supported: true,
             enabled: false,
-            hotkey: {
-              ctrl: true,
-              alt: true,
-              shift: false,
-              win: false,
-              key: 'Space',
-            },
+            hotkey: hotkey('Space'),
             error_code: null,
+          }),
+          getMicrophone: vi
+            .fn()
+            .mockResolvedValue({ device: null, echo_cancellation: true }),
+          listMicrophones: vi.fn().mockResolvedValue([]),
+          getDictation: vi.fn().mockResolvedValue({
+            supported: true,
+            enabled: true,
+            hotkey: hotkey('KeyD'),
+            mode: 'toggle',
+            error_code: null,
+            state: 'idle',
+            last_failure: null,
           }),
         },
       };
 
       mountedComponent = mount(SettingsView, {
         target: document.body,
-        props: { desktopCapabilities: { liveHotkey: true } },
+        props: {
+          desktopCapabilities: {
+            liveHotkey: true,
+            microphone: true,
+            dictation: true,
+          },
+        },
       });
       flushSync();
 
+      const combination = (section) =>
+        document
+          .querySelector(
+            `[data-settings-section="${section}"] .shortcut-combination__capture`,
+          )
+          ?.textContent.trim();
       await waitForCondition(
         () =>
-          document
-            .querySelector('.live-shortcut__capture')
-            ?.textContent.trim() === 'Ctrl + Alt + Space',
+          combination('live_voice_shortcut') === 'Ctrl + Alt + Space' &&
+          combination('desktop_dictation') === 'Ctrl + Alt + D',
       );
+      expect(
+        document.querySelector(
+          '[data-settings-section="microphone"] [role="switch"][aria-label="Use echo cancellation"]',
+        ),
+      ).toBeTruthy();
       const page = document.querySelector('[data-settings-page="voice"]');
       expect(
         Array.from(
@@ -942,7 +978,9 @@ describe('SettingsView', () => {
       ).toEqual([
         'speech_models',
         'live_voice_model',
+        'microphone',
         'live_voice_shortcut',
+        'desktop_dictation',
         'voice_controls',
         'transcription_audio',
       ]);
@@ -961,7 +999,6 @@ describe('SettingsView', () => {
               active: true,
             },
           ]),
-          listMicrophones: vi.fn().mockResolvedValue([]),
           listWakewordModels: vi.fn().mockResolvedValue([]),
         },
       };
@@ -972,7 +1009,7 @@ describe('SettingsView', () => {
           agents: agentsPayload(),
           desktopCapabilities: {
             wakeword: true,
-            voiceApi: 2,
+            voiceApi: 3,
             serverSelection: true,
           },
           desktopVoice: {
@@ -983,7 +1020,6 @@ describe('SettingsView', () => {
               state: 'off',
               error_code: null,
               sequence: 1,
-              microphone: null,
               active_microphone: null,
               echo_cancellation: { enabled: true, state: 'off' },
               default_agent_id: null,

@@ -22,8 +22,8 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from desktop.speech.capture import AudioBlock, CaptureGap, CaptureSubscription
 from desktop.wakeword._speech_detection import SpeechDetector, SpeechGate
-from desktop.wakeword.capture import AudioBlock, CaptureGap, CaptureSubscription
 from desktop.wakeword.engine import WakewordEngine
 
 logger = logging.getLogger("vbot.desktop.wakeword.detection")

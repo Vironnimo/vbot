@@ -6,9 +6,8 @@
  * from the last snapshot (`buildVoiceConfigChanges`), and carries unsaved edits
  * across newer snapshots (`rebaseVoiceConfig`).
  *
- * Config shape: `{microphone, echo_cancellation, active_model_ids,
- * model_sensitivities, default_agent_id, default_session_behavior,
- * phrase_actions}`. `phrase_actions` maps a model id to
+ * Config shape: `{active_model_ids, model_sensitivities, default_agent_id,
+ * default_session_behavior, phrase_actions}`. `phrase_actions` maps a model id to
  * `{type: 'command', agent_id, session_behavior}` (null fields use the
  * defaults) or `{type: 'live_voice', mode: 'start' | 'toggle'}`; a missing
  * entry is a command with the defaults.
@@ -59,26 +58,9 @@ function sameVoiceAction(left, right) {
   return a.agent_id === b.agent_id && a.session_behavior === b.session_behavior;
 }
 
-const sameMicrophone = (left, right) =>
-  left === right ||
-  (left != null &&
-    right != null &&
-    left.index === right.index &&
-    left.name === right.name &&
-    left.host_api === right.host_api);
-
 const sameList = (left, right) =>
   left.length === right.length &&
   left.every((value, index) => value === right[index]);
-
-const cloneMicrophone = (microphone) =>
-  microphone
-    ? {
-        index: microphone.index,
-        name: microphone.name,
-        host_api: microphone.host_api ?? '',
-      }
-    : null;
 
 /** Project the editable Voice configuration out of a status snapshot. */
 export function voiceConfigFromStatus(status) {
@@ -91,8 +73,6 @@ export function voiceConfigFromStatus(status) {
     actions[phrase.model_id] = canonicalAction(phrase.action);
   }
   return {
-    microphone: cloneMicrophone(status?.microphone),
-    echo_cancellation: status?.echo_cancellation?.enabled !== false,
     active_model_ids: phrases.map((phrase) => phrase.model_id),
     model_sensitivities: sensitivities,
     default_agent_id: status?.default_agent_id ?? null,
@@ -106,7 +86,6 @@ export function voiceConfigFromStatus(status) {
 export function cloneVoiceConfig(config) {
   return {
     ...config,
-    microphone: cloneMicrophone(config.microphone),
     active_model_ids: [...config.active_model_ids],
     model_sensitivities: { ...config.model_sensitivities },
     phrase_actions: Object.fromEntries(
@@ -145,8 +124,6 @@ export function rebaseVoiceConfig(draft, previous, next) {
     same(draft[key], previous[key]) ? next[key] : draft[key];
   const identical = (left, right) => left === right;
   return cloneVoiceConfig({
-    microphone: pick('microphone', sameMicrophone),
-    echo_cancellation: pick('echo_cancellation', identical),
     active_model_ids: pick('active_model_ids', sameList),
     model_sensitivities: rebaseEntries(
       draft.model_sensitivities,
@@ -186,10 +163,6 @@ function actionChange(action) {
  */
 export function buildVoiceConfigChanges(draft, baseline) {
   const changes = {};
-  if (!sameMicrophone(draft.microphone, baseline.microphone))
-    changes.microphone = cloneMicrophone(draft.microphone);
-  if (draft.echo_cancellation !== baseline.echo_cancellation)
-    changes.echo_cancellation = draft.echo_cancellation;
   if (!sameList(draft.active_model_ids, baseline.active_model_ids))
     changes.active_model_ids = [...draft.active_model_ids];
 

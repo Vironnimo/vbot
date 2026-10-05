@@ -66,8 +66,9 @@ describe('DesktopLiveVoiceShortcut', () => {
     document.querySelector(
       `button[role="switch"][aria-label="${t('settings.liveShortcut.enabledAria')}"]`,
     );
-  const captureButton = () => document.querySelector('.live-shortcut__capture');
-  const space = () => t('settings.liveShortcut.space');
+  const captureButton = () =>
+    document.querySelector('.shortcut-combination__capture');
+  const space = () => t('settings.shortcut.space');
 
   function press(init) {
     captureButton().dispatchEvent(
@@ -103,7 +104,7 @@ describe('DesktopLiveVoiceShortcut', () => {
     flushSync();
     expect(captureButton().getAttribute('aria-pressed')).toBe('true');
     expect(captureButton().textContent.trim()).toBe(
-      t('settings.liveShortcut.capturing'),
+      t('settings.shortcut.capturing'),
     );
 
     // A modifier alone keeps the capture waiting for the key.
@@ -175,9 +176,9 @@ describe('DesktopLiveVoiceShortcut', () => {
   });
 
   it.each([
-    ['hotkey_in_use', 'settings.liveShortcut.error.inUse'],
-    ['hotkey_invalid', 'settings.liveShortcut.error.invalid'],
-    ['hotkey_failed', 'settings.liveShortcut.error.failed'],
+    ['hotkey_in_use', 'settings.shortcut.error.inUse'],
+    ['hotkey_invalid', 'settings.shortcut.error.invalid'],
+    ['hotkey_failed', 'settings.shortcut.error.failed'],
   ])('explains %s from the Desktop', async (code, key) => {
     api.setLiveHotkey.mockResolvedValue(
       status({ enabled: true, error_code: code }),

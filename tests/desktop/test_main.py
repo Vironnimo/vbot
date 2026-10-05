@@ -25,6 +25,7 @@ from desktop import hotkey as desktop_hotkey
 from desktop import main as desktop_main
 from desktop import page_events as desktop_page_events
 from desktop import restart as desktop_restart
+from desktop.dictation import controller as desktop_dictation
 from desktop.main import DesktopProbeResult, DesktopTarget
 
 _TEST_DESKTOP_SESSION_ID = "desktop-test-session"
@@ -54,10 +55,18 @@ class FakeLiveHotkey:
 
     supported = True
 
-    def __init__(self, events: list[str], *, settings_path: Any, on_press: Callable[[], None]):
+    def __init__(
+        self,
+        events: list[str],
+        *,
+        preference: desktop_hotkey.HotkeyPreference,
+        settings_path: Any,
+        handlers: desktop_hotkey.HotkeyHandlers,
+    ):
         self.events = events
+        self.preference = preference
         self.settings_path = settings_path
-        self.on_press = on_press
+        self.on_press = handlers.on_press
 
     def start(self) -> None:
         self.events.append("hotkey.start")
@@ -70,6 +79,29 @@ class FakeLiveHotkey:
 
     def update(self, _changes: Any) -> dict[str, Any]:
         return self.status()
+
+
+class FakeDictation:
+    """Desktop dictation double: tests must never register a real global hotkey."""
+
+    supported = True
+
+    def __init__(self, events: list[str], *, settings_path: Any, server_url: str, **_: Any):
+        self.events = events
+        self.settings_path = settings_path
+        self.server_urls = [server_url]
+
+    def start(self) -> None:
+        self.events.append("dictation.start")
+
+    def stop(self) -> None:
+        self.events.append("dictation.stop")
+
+    def set_server_url(self, server_url: str) -> None:
+        self.server_urls.append(server_url)
+
+    def is_busy(self) -> bool:
+        return False
 
 
 class LaunchSeams:
@@ -85,11 +117,17 @@ class LaunchSeams:
         self.microphone_origin: Callable[[], str | None] | None = None
         self.events: list[str] = []
         self.hotkeys: list[FakeLiveHotkey] = []
+        self.dictations: list[FakeDictation] = []
 
     def hotkey(self, **kwargs: Any) -> FakeLiveHotkey:
         hotkey = FakeLiveHotkey(self.events, **kwargs)
         self.hotkeys.append(hotkey)
         return hotkey
+
+    def dictation(self, **kwargs: Any) -> FakeDictation:
+        dictation = FakeDictation(self.events, **kwargs)
+        self.dictations.append(dictation)
+        return dictation
 
     def claim(
         self,
@@ -128,7 +166,8 @@ def launch_seams(monkeypatch: pytest.MonkeyPatch) -> LaunchSeams:
     monkeypatch.setattr(desktop_main._windows, "webview_secure_origins", seams.secure_origins)
     monkeypatch.setattr(desktop_main._windows, "apply_browser_arguments", seams.apply)
     monkeypatch.setattr(desktop_main._windows, "allow_server_microphone", seams.allow_microphone)
-    monkeypatch.setattr(desktop_hotkey, "LiveHotkeyController", seams.hotkey)
+    monkeypatch.setattr(desktop_hotkey, "HotkeyController", seams.hotkey)
+    monkeypatch.setattr(desktop_dictation, "DictationController", seams.dictation)
     return seams
 
 
@@ -490,7 +529,7 @@ def test_desktop_stays_a_thin_client_of_the_server() -> None:
             assert not re.search(rf"\bserver {verb}\b", source), module
 
 
-def test_disabled_voice_builds_its_bridge_without_loading_the_audio_stack(
+def test_disabled_voice_and_dictation_build_their_bridge_without_the_audio_stack(
     tmp_path: Path,
 ) -> None:
     """Only a fresh process shows which modules Desktop startup imports."""
@@ -500,24 +539,35 @@ import sys
 from pathlib import Path
 from desktop.bridge import DesktopBridge
 from desktop.connection import ConnectionController
+from desktop.dictation.controller import DictationController
 from desktop.main import _create_voice, parse_args
 from desktop.page_events import PageEventDispatcher
+from desktop.speech.microphone import MicrophoneService
 
 settings = Path(sys.argv[1]) / 'settings.json'
 controller = ConnectionController(settings_file=settings)
 page_events = PageEventDispatcher()
-voice = _create_voice(parse_args([]), settings, '', page_events)
-bridge = DesktopBridge(voice=voice, connection=controller)
+microphone = MicrophoneService(settings_path=settings)
+voice = _create_voice(parse_args([]), settings, microphone, '', page_events)
+dictation = DictationController(
+    settings_path=settings, microphone=microphone, server_url='', page=page_events
+)
+bridge = DesktopBridge(
+    voice=voice, microphone=microphone, connection=controller, dictation=dictation
+)
 voice.start()
-assert bridge.getDesktopCapabilities()['voiceApi'] == 2
+dictation.start()
+assert bridge.getDesktopCapabilities()['voiceApi'] == 3
 assert bridge.getVoiceStatus()['state'] == 'off'
+assert bridge.getDictation()['enabled'] is False
+dictation.stop()
 voice.close()
 page_events.close()
 audio_modules = {
-    'desktop.wakeword.capture',
+    'desktop.speech.capture',
     'desktop.wakeword.detection',
     'desktop.wakeword.commands',
-    'desktop.wakeword.echo',
+    'desktop.speech.echo',
     'desktop.wakeword._speech_detection',
 }
 assert not audio_modules & sys.modules.keys(), audio_modules & sys.modules.keys()
@@ -930,6 +980,7 @@ def test_a_requested_session_rides_on_the_first_navigation(
 def test_voice_starts_after_the_window_is_shown_and_follows_its_server(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    launch_seams: LaunchSeams,
     argv: list[str],
     saved: dict[str, Any] | None,
     server_url: str,
@@ -944,7 +995,9 @@ def test_voice_starts_after_the_window_is_shown_and_follows_its_server(
 
     voice = RecordingVoice(events, on_start=window_shown_first)
 
-    def create_voice(_args: Any, _settings: Any, url: str, _page_events: Any) -> RecordingVoice:
+    def create_voice(
+        _args: Any, _settings: Any, _microphone: Any, url: str, _page_events: Any
+    ) -> RecordingVoice:
         created_for.append(url)
         return voice
 
@@ -954,8 +1007,9 @@ def test_voice_starts_after_the_window_is_shown_and_follows_its_server(
 
     assert created_for == [server_url]
     assert events == ["voice.start", "voice.close"]
-    # Every successful in-window connect retargets Voice.
+    # Every successful in-window connect retargets Voice and dictation.
     assert voice.server_urls == ([server_url] if server_url else [])
+    assert launch_seams.dictations[0].server_urls == [server_url, *voice.server_urls]
 
 
 def test_a_failing_gui_loop_closes_voice_hotkey_and_instance_without_starting_them(
@@ -970,7 +1024,7 @@ def test_a_failing_gui_loop_closes_voice_hotkey_and_instance_without_starting_th
     assert voice_events == ["voice.close"]
     assert launch_seams.instance is not None
     assert launch_seams.instance.closed is True
-    assert launch_seams.events == ["apply_browser_arguments", "hotkey.stop"]
+    assert launch_seams.events == ["apply_browser_arguments", "hotkey.stop", "dictation.stop"]
 
 
 def test_launch_with_disabled_voice_never_probes_wakeword_dependencies(
@@ -981,8 +1035,8 @@ def test_launch_with_disabled_voice_never_probes_wakeword_dependencies(
         raise AssertionError("Voice dependencies must stay lazy while Voice is disabled")
 
     monkeypatch.setattr(desktop_main, "_real_wakeword_available", fail_if_probed)
-    monkeypatch.setitem(sys.modules, "desktop.wakeword.capture", None)
-    monkeypatch.setitem(sys.modules, "desktop.wakeword.echo", None)
+    monkeypatch.setitem(sys.modules, "desktop.speech.capture", None)
+    monkeypatch.setitem(sys.modules, "desktop.speech.echo", None)
 
     _launch(tmp_path)
 
@@ -1148,7 +1202,7 @@ def test_microphone_permission_follows_the_connected_server(
     assert launch_seams.microphone_origin() == origin
 
 
-def test_live_hotkey_runs_only_while_the_window_is_shown(
+def test_global_shortcuts_run_only_while_the_window_is_shown(
     tmp_path: Path,
     launch_seams: LaunchSeams,
 ) -> None:
@@ -1161,10 +1215,14 @@ def test_live_hotkey_runs_only_while_the_window_is_shown(
         "apply_browser_arguments",
         "webview.start",
         "hotkey.start",
+        "dictation.start",
         "hotkey.stop",
+        "dictation.stop",
     ]
     assert launch_seams.hotkeys[0].settings_path == tmp_path / "settings.json"
-    assert _bridge(fake_webview).getDesktopCapabilities()["liveHotkey"] is True
+    assert launch_seams.dictations[0].settings_path == tmp_path / "settings.json"
+    capabilities = _bridge(fake_webview).getDesktopCapabilities()
+    assert (capabilities["liveHotkey"], capabilities["dictation"]) == (True, True)
 
 
 class RecordingDispatcher:
@@ -1310,9 +1368,11 @@ def test_page_pushes_reach_the_window_page_until_it_closes(
 
     original_create_voice = desktop_main._create_voice
 
-    def create_voice(args: Any, settings: Any, server_url: str, page_events: Any) -> Any:
+    def create_voice(
+        args: Any, settings: Any, microphone: Any, server_url: str, page_events: Any
+    ) -> Any:
         voice_sinks.append(page_events)
-        return original_create_voice(args, settings, server_url, page_events)
+        return original_create_voice(args, settings, microphone, server_url, page_events)
 
     monkeypatch.setattr(desktop_main, "_create_voice", create_voice)
 

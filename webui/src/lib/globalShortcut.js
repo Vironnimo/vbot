@@ -1,4 +1,7 @@
-/** Pure helpers for the Desktop's global Live voice shortcut. */
+/**
+ * Pure helpers for the Desktop's global shortcuts (the Live voice shortcut
+ * and Desktop dictation). The Desktop owns validation and registration.
+ */
 
 import { t } from './i18n.js';
 
@@ -27,7 +30,7 @@ export function isModifierKeyCode(code) {
  * The shortcut a key press describes, in the Desktop's shape: modifier flags
  * plus the physical key as `KeyboardEvent.code`. The Desktop validates it.
  */
-export function liveShortcutFromKeyboardEvent(event) {
+export function shortcutFromKeyboardEvent(event) {
   return {
     ctrl: Boolean(event.ctrlKey),
     alt: Boolean(event.altKey),
@@ -50,12 +53,12 @@ function keyLabel(code, layoutMap) {
   }
   const digit = DIGIT_CODE.exec(code);
   if (digit) return digit[1];
-  if (code === 'Space') return t('settings.liveShortcut.space');
+  if (code === 'Space') return t('settings.shortcut.space');
   return code;
 }
 
 /** Display text such as "Ctrl + Alt + Space"; empty without a key. */
-export function formatLiveShortcut(shortcut, layoutMap = null) {
+export function formatShortcut(shortcut, layoutMap = null) {
   if (typeof shortcut?.key !== 'string' || !shortcut.key) return '';
   const parts = [];
   if (shortcut.ctrl === true) parts.push('Ctrl');
@@ -64,6 +67,17 @@ export function formatLiveShortcut(shortcut, layoutMap = null) {
   if (shortcut.win === true) parts.push('Win');
   parts.push(keyLabel(shortcut.key, layoutMap));
   return parts.join(' + ');
+}
+
+/**
+ * Explanation of a shortcut `error_code` the Desktop reported; empty without
+ * one. Codes without their own text read as a failed registration.
+ */
+export function shortcutErrorMessage(code) {
+  if (!code) return '';
+  if (code === 'hotkey_in_use') return t('settings.shortcut.error.inUse');
+  if (code === 'hotkey_invalid') return t('settings.shortcut.error.invalid');
+  return t('settings.shortcut.error.failed');
 }
 
 /** The browser's keyboard layout map, or null where it is unavailable. */

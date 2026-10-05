@@ -1,9 +1,8 @@
-"""Live voice hotkey validation and the controller's registration contract."""
+"""Global hotkey validation, stored preference, and the controller's registration contract."""
 
 from __future__ import annotations
 
 import json
-import queue
 import threading
 from pathlib import Path
 from typing import Any
@@ -11,54 +10,18 @@ from typing import Any
 import pytest
 
 from desktop import hotkey
-from desktop.settings import DEFAULT_LIVE_HOTKEY_SETTINGS, read_live_hotkey_settings
+from tests.desktop.hotkey_test_support import FakeHotkeyApi
 
 CTRL_ALT = hotkey.MOD_NOREPEAT | hotkey.MOD_CONTROL | hotkey.MOD_ALT
 BARE = {"ctrl": False, "alt": False, "shift": False, "win": False}
 
 
 def _setting(**changes: Any) -> dict[str, Any]:
-    return {**DEFAULT_LIVE_HOTKEY_SETTINGS, **changes}
+    return {**hotkey.LIVE_VOICE_HOTKEY.defaults, **changes}
 
 
-class FakeHotkeyApi:
-    """Scripted Win32 seam recording the thread each call ran on."""
-
-    def __init__(self, *, register_error: int = 0, layout_keys: dict[int, int] | None = None):
-        self.register_error = register_error
-        self.layout_keys = layout_keys or {}
-        self.messages: queue.Queue[tuple[int, int] | None] = queue.Queue()
-        self.calls: list[tuple[str, Any]] = []
-        self.thread_ids: dict[str, int] = {}
-        self.unregistered = threading.Event()
-
-    def prepare_thread(self) -> None:
-        self.thread_ids["prepare"] = threading.get_native_id()
-        self.calls.append(("prepare", None))
-
-    def layout_virtual_key(self, scan_code: int) -> int:
-        return self.layout_keys.get(scan_code, 0)
-
-    def register(self, hotkey_id: int, modifiers: int, virtual_key: int) -> int:
-        self.thread_ids["register"] = threading.get_native_id()
-        self.calls.append(("register", (hotkey_id, modifiers, virtual_key)))
-        return self.register_error
-
-    def unregister(self, hotkey_id: int) -> None:
-        self.thread_ids["unregister"] = threading.get_native_id()
-        self.calls.append(("unregister", hotkey_id))
-        self.unregistered.set()
-
-    def next_message(self) -> tuple[int, int] | None:
-        return self.messages.get(timeout=5)
-
-    def wake(self, thread_id: int) -> bool:
-        self.calls.append(("wake", thread_id))
-        self.messages.put(None)
-        return True
-
-    def registrations(self) -> list[tuple[int, int, int]]:
-        return [args for name, args in self.calls if name == "register"]
+def _stored(tmp_path: Path) -> dict[str, Any]:
+    return hotkey.read_hotkey_setting(hotkey.LIVE_VOICE_HOTKEY, tmp_path / "settings.json")
 
 
 # -- Combination validation ----------------------------------------------------
@@ -122,7 +85,9 @@ def _controller(
     *,
     supported: bool = True,
     on_press: Any = None,
-) -> tuple[hotkey.LiveHotkeyController, list[FakeHotkeyApi]]:
+    on_release: Any = None,
+    on_escape: Any = None,
+) -> tuple[hotkey.HotkeyController, list[FakeHotkeyApi]]:
     created: list[FakeHotkeyApi] = []
 
     def factory() -> FakeHotkeyApi:
@@ -130,9 +95,12 @@ def _controller(
         created.append(instance)
         return instance
 
-    controller = hotkey.LiveHotkeyController(
+    controller = hotkey.HotkeyController(
+        preference=hotkey.LIVE_VOICE_HOTKEY,
         settings_path=tmp_path / "settings.json",
-        on_press=on_press or (lambda: None),
+        handlers=hotkey.HotkeyHandlers(
+            on_press=on_press or (lambda: None), on_release=on_release, on_escape=on_escape
+        ),
         supported=supported,
         api_factory=factory,
     )
@@ -222,11 +190,11 @@ def test_a_failed_registration_keeps_the_saved_setting_and_reports_its_error(
 
     assert status["error_code"] == code
     assert controller.status()["error_code"] == code
-    assert read_live_hotkey_settings(tmp_path / "settings.json")["key"] == "KeyK"
-    assert read_live_hotkey_settings(tmp_path / "settings.json")["enabled"] is True
+    assert _stored(tmp_path)["key"] == "KeyK"
+    assert _stored(tmp_path)["enabled"] is True
     controller.stop()
     assert ("unregister", 1) not in api.calls
-    assert not any(name == "wake" for name, _ in api.calls)
+    assert not any(name == "post" for name, _ in api.calls)
 
 
 @pytest.mark.parametrize(
@@ -344,3 +312,108 @@ def test_start_and_stop_are_idempotent(tmp_path: Path) -> None:
 
     assert len(created) == 1
     assert created[0].unregistered.wait(timeout=2)
+
+
+def _wait(predicate: Any, timeout: float = 2.0) -> None:
+    done = threading.Event()
+    deadline = threading.Timer(timeout, done.set)
+    deadline.start()
+    try:
+        while not predicate():
+            assert not done.wait(0.005), "condition not reached in time"
+    finally:
+        deadline.cancel()
+
+
+def test_a_held_combination_reports_its_release_and_escape_while_held(tmp_path: Path) -> None:
+    events: list[str] = []
+    controller, created = _controller(
+        tmp_path,
+        on_press=lambda: events.append("press"),
+        on_release=lambda: events.append("release"),
+        on_escape=lambda: events.append("escape"),
+    )
+    controller.update({"enabled": True})
+    controller.start()
+    api = created[0]
+    api.down |= {0x20, hotkey.VK_CONTROL, hotkey.VK_MENU}
+
+    api.messages.put((hotkey.WM_HOTKEY, hotkey.HOTKEY_ID))
+    _wait(lambda: events == ["press"])
+    # Escape with the modifiers still held is not the registered bare Escape.
+    api.down.add(hotkey.VK_ESCAPE)
+    _wait(lambda: events == ["press", "escape"])
+    api.down.discard(hotkey.VK_MENU)  # letting go of any key of the combination ends the hold
+    _wait(lambda: events == ["press", "escape", "release"])
+
+    controller.stop()
+    assert api.unregistered.wait(timeout=2)
+    assert events == ["press", "escape", "release"]
+
+
+def test_escape_is_claimed_only_while_armed_and_survives_a_new_combination(
+    tmp_path: Path,
+) -> None:
+    escapes: list[int] = []
+    escape = (hotkey.ESCAPE_HOTKEY_ID, hotkey.MOD_NOREPEAT, hotkey.VK_ESCAPE)
+    controller, created = _controller(tmp_path, on_escape=lambda: escapes.append(1))
+    controller.update({"enabled": True})
+    controller.start()
+
+    controller.arm_escape(True)
+    _wait(lambda: escape in created[0].registrations())
+    created[0].messages.put((hotkey.WM_HOTKEY, hotkey.ESCAPE_HOTKEY_ID))
+    _wait(lambda: escapes == [1])
+    assert created[0].thread_ids["register"] != threading.get_native_id()
+
+    controller.update({"key": "KeyL"})
+    assert escape in created[1].registrations()
+    assert ("unregister", hotkey.ESCAPE_HOTKEY_ID) in created[0].calls
+
+    controller.arm_escape(False)
+    _wait(lambda: ("unregister", hotkey.ESCAPE_HOTKEY_ID) in created[1].calls)
+    controller.stop()
+    assert created[1].unregistered.wait(timeout=2)
+
+
+def test_arming_escape_without_a_handler_claims_nothing(tmp_path: Path) -> None:
+    controller, created = _controller(tmp_path)
+    controller.update({"enabled": True})
+    controller.start()
+
+    controller.arm_escape(True)
+    controller.stop()
+
+    assert created[0].unregistered.wait(timeout=2)
+    assert created[0].registrations() == [(hotkey.HOTKEY_ID, CTRL_ALT, 0x20)]
+
+
+@pytest.mark.parametrize(
+    ("live_voice", "expected"),
+    [
+        (None, {}),
+        ([], {}),
+        ({"hotkey": "Ctrl+Alt+Space"}, {}),
+        (
+            {"hotkey": {"enabled": True, "ctrl": "yes", "alt": False, "key": " KeyL "}},
+            {"enabled": True, "alt": False, "key": "KeyL"},
+        ),
+    ],
+    ids=["unset", "not-an-object", "not-a-hotkey-object", "per-field-fallback"],
+)
+def test_the_stored_hotkey_falls_back_per_field_to_disabled_ctrl_alt_space(
+    tmp_path: Path, live_voice: object, expected: dict[str, Any]
+) -> None:
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"live_voice": live_voice}), encoding="utf-8"
+    )
+
+    assert _stored(tmp_path) == {
+        "enabled": False,
+        "ctrl": True,
+        "alt": True,
+        "shift": False,
+        "win": False,
+        "key": "Space",
+        **expected,
+    }

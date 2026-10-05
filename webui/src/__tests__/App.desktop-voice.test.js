@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount } from 'svelte';
 
 import { t } from '../lib/i18n.js';
+import { microphoneInUse } from '../lib/microphoneUse.js';
 import { App, cleanupAppHarness, resetAppHarness } from './App.support.js';
 
 vi.mock('svelte', async () => {
@@ -16,7 +17,7 @@ vi.mock('$lib/desktopBridge.js', async (importOriginal) => ({
   playVoiceCue: cues,
 }));
 
-const VOICE_CAPABILITIES = { wakeword: true, voiceApi: 2 };
+const VOICE_CAPABILITIES = { wakeword: true, voiceApi: 3 };
 // Longer than the auto-dismiss delay of non-error Toasts.
 const PAST_AUTO_DISMISS_MS = 10000;
 
@@ -27,7 +28,6 @@ function voiceStatus(overrides = {}) {
     state: 'listening',
     error_code: null,
     sequence: 3,
-    microphone: null,
     active_microphone: null,
     echo_cancellation: { enabled: true, state: 'active' },
     default_agent_id: 'main',
@@ -59,6 +59,12 @@ function pushStatus(status) {
     }),
   );
   flushSync();
+}
+
+function pushDictation(recording) {
+  window.dispatchEvent(
+    new CustomEvent('vbot-desktop-dictation', { detail: { recording } }),
+  );
 }
 
 function pushEvent(sequence, kind, extra = {}) {
@@ -146,7 +152,7 @@ describe('App Desktop Voice feedback', () => {
   });
 
   it('offers no Voice to a Desktop without the Voice bridge it speaks', async () => {
-    installDesktop({ capabilities: { wakeword: true, voiceApi: 1 } });
+    installDesktop({ capabilities: { wakeword: true, voiceApi: 2 } });
     await mountApp();
 
     expect(api.getVoiceStatus).not.toHaveBeenCalled();
@@ -340,6 +346,26 @@ describe('App Desktop Voice feedback', () => {
     indicatorShows('starting');
     pushStatus({ sequence: 'late', state: 'error' });
     indicatorShows('starting');
+  });
+
+  it('counts the microphone as in use while a Desktop dictation records', async () => {
+    installDesktop();
+    await mountApp();
+    expect(microphoneInUse()).toBe(false);
+
+    pushDictation(true);
+    pushDictation(true);
+    expect(microphoneInUse()).toBe(true);
+    // A repeated start holds one claim, which one end releases.
+    pushDictation(false);
+    expect(microphoneInUse()).toBe(false);
+    pushDictation(false);
+    expect(microphoneInUse()).toBe(false);
+
+    // Leaving the page releases a recording that never reported its end.
+    pushDictation(true);
+    mountedComponent = await cleanupAppHarness(mountedComponent);
+    expect(microphoneInUse()).toBe(false);
   });
 
   it('reads the snapshot again when events were missed', async () => {

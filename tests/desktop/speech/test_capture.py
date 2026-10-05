@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import sys
 import threading
 import time
+import wave
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -13,7 +15,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from desktop.wakeword._microphones import (
+from desktop.speech._microphones import (
     CaptureFormat,
     MicrophoneUnavailableError,
     close_input_stream,
@@ -21,7 +23,7 @@ from desktop.wakeword._microphones import (
     open_input_stream,
     refresh_microphone_devices,
 )
-from desktop.wakeword.capture import (
+from desktop.speech.capture import (
     AudioBlock,
     AudioCapture,
     CaptureGap,
@@ -29,9 +31,10 @@ from desktop.wakeword.capture import (
     CaptureSubscription,
     EchoStage,
     EchoStagePool,
+    encode_wav,
 )
-from desktop.wakeword.config import MicrophoneSelection
-from tests.desktop.wakeword.voice_test_support import (
+from desktop.speech.microphone import MicrophoneSelection
+from tests.desktop.speech.speech_test_support import (
     FakeEchoStage,
     FakeSoundDevice,
     Overflow,
@@ -888,3 +891,13 @@ def test_the_microphone_list_hides_wdm_ks_devices() -> None:
     devices = list_microphones(_headset())
 
     assert [(device["index"], device["host_api"]) for device in devices] == [(1, "Windows WASAPI")]
+
+
+def test_encode_wav_wraps_pcm_at_the_given_rate() -> None:
+    pcm = tone(0.1, 48000).tobytes()
+
+    with wave.open(io.BytesIO(encode_wav(pcm, 48000)), "rb") as wav_file:
+        assert wav_file.getframerate() == 48000
+        assert wav_file.getnchannels() == 1
+        assert wav_file.getsampwidth() == 2
+        assert wav_file.readframes(wav_file.getnframes()) == pcm

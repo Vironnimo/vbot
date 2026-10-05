@@ -6,18 +6,13 @@
 
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
-  import InfoHint from '../ui/InfoHint.svelte';
   import Toggle from '../ui/Toggle.svelte';
+  import ShortcutCombination from './ShortcutCombination.svelte';
   import {
     getDesktopLiveHotkey,
     setDesktopLiveHotkey,
   } from '$lib/desktopBridge.js';
-  import {
-    formatLiveShortcut,
-    isModifierKeyCode,
-    liveShortcutFromKeyboardEvent,
-    loadKeyboardLayoutMap,
-  } from '$lib/liveShortcut.js';
+  import { shortcutErrorMessage } from '$lib/globalShortcut.js';
   import { t } from '$lib/i18n.js';
 
   const noop = () => {};
@@ -27,30 +22,12 @@
   let shortcut = $state(null);
   let loadError = $state(false);
   let busy = $state(false);
-  let capturing = $state(false);
-  let layoutMap = $state(null);
   let destroyed = false;
 
-  let combinationLabel = $derived(
-    formatLiveShortcut(shortcut?.hotkey, layoutMap),
-  );
   let controlsDisabled = $derived(
     !shortcut || busy || shortcut.supported === false,
   );
-  let errorText = $derived(errorMessage(shortcut?.errorCode));
-
-  function errorMessage(code) {
-    if (code === 'hotkey_in_use') {
-      return t('settings.liveShortcut.error.inUse');
-    }
-    if (code === 'hotkey_invalid') {
-      return t('settings.liveShortcut.error.invalid');
-    }
-    if (code) {
-      return t('settings.liveShortcut.error.failed');
-    }
-    return '';
-  }
+  let errorText = $derived(shortcutErrorMessage(shortcut?.errorCode));
 
   function applyStatus(status) {
     shortcut = {
@@ -91,34 +68,15 @@
     }
   }
 
-  function toggleCapture() {
-    capturing = !capturing;
-  }
-
-  function handleCaptureKeydown(event) {
-    if (!capturing) return;
-    // Tab still moves focus, which ends the capture.
-    if (event.code === 'Tab') return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (isModifierKeyCode(event.code)) return;
-    capturing = false;
-    if (event.code === 'Escape') return;
-    void update(liveShortcutFromKeyboardEvent(event));
-  }
-
   onMount(() => {
     void load();
-    void loadKeyboardLayoutMap().then((map) => {
-      if (!destroyed) layoutMap = map;
-    });
     return () => {
       destroyed = true;
     };
   });
 </script>
 
-<div class="s-group live-shortcut">
+<div class="s-group">
   {#if loadError}
     <div class="s-group__block">
       <Banner variant="error" role="alert">
@@ -150,39 +108,11 @@
       </div>
     </div>
 
-    <div class="s-row">
-      <div class="s-row-info">
-        <div class="s-row-label">
-          {t('settings.liveShortcut.combination')}
-          <InfoHint
-            text={t('settings.liveShortcut.combinationHelp')}
-            ariaLabel={t('settings.liveShortcut.combinationHelpAria')}
-          />
-        </div>
-        <!-- Speaks up only while a new combination is being recorded. -->
-        <div class="s-row-desc live-shortcut__hint" aria-live="polite">
-          {#if capturing}{t('settings.liveShortcut.captureHint')}{/if}
-        </div>
-      </div>
-      <div class="s-row-control">
-        <Button
-          variant="secondary"
-          class="live-shortcut__capture"
-          disabled={controlsDisabled}
-          ariaLabel={capturing
-            ? t('settings.liveShortcut.capturingAria')
-            : t('settings.liveShortcut.changeAria', {
-                combination: combinationLabel,
-              })}
-          aria-pressed={capturing}
-          onkeydown={handleCaptureKeydown}
-          onblur={() => (capturing = false)}
-          onClick={toggleCapture}
-        >
-          {capturing ? t('settings.liveShortcut.capturing') : combinationLabel}
-        </Button>
-      </div>
-    </div>
+    <ShortcutCombination
+      hotkey={shortcut?.hotkey ?? null}
+      disabled={controlsDisabled}
+      onChange={update}
+    />
 
     {#if shortcut?.supported === false}
       <div class="s-group__block s-group__block--attached">
@@ -197,15 +127,3 @@
     {/if}
   {/if}
 </div>
-
-<style>
-  .live-shortcut :global(.live-shortcut__capture) {
-    min-width: 12em;
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* The empty live region takes no room until it speaks. */
-  .live-shortcut__hint:empty {
-    margin: 0;
-  }
-</style>

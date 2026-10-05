@@ -16,7 +16,6 @@ from desktop.wakeword.config import (
     MAX_ACTIVE_PHRASES,
     CommandAction,
     LiveVoiceAction,
-    MicrophoneSelection,
     PhraseConfig,
     ServerVoiceProfile,
     VoiceConfig,
@@ -59,8 +58,6 @@ def test_parse_returns_defaults_for_missing_or_non_object_sections(raw: object) 
 
     assert config == VoiceConfig()
     assert config.enabled is False
-    assert config.microphone is None
-    assert config.echo_cancellation is True
     assert config.active_model_ids == DEFAULT_MODEL_IDS
     assert all(phrase.sensitivity == 0.5 for phrase in config.phrases)
     assert dict(config.profiles) == {}
@@ -70,8 +67,6 @@ def test_parse_reads_a_complete_section() -> None:
     config = parse_voice_config(
         {
             "enabled": True,
-            "microphone": {"index": 4, "name": " Studio mic ", "host_api": "Windows WASAPI"},
-            "echo_cancellation": False,
             "active_model_ids": ["builtin/hey_nabu", "builtin/hey_jarvis"],
             "model_sensitivities": {"builtin/hey_nabu": 0.55, "builtin/alexa": 0.9},
             "server_profiles": {
@@ -92,8 +87,6 @@ def test_parse_reads_a_complete_section() -> None:
     )
 
     assert config.enabled is True
-    assert config.microphone == MicrophoneSelection(4, "Studio mic", "Windows WASAPI")
-    assert config.echo_cancellation is False
     assert config.phrases == (
         PhraseConfig("builtin/hey_nabu", 0.55),
         PhraseConfig("builtin/hey_jarvis", 0.5),
@@ -144,8 +137,6 @@ def test_parse_drops_each_malformed_field_on_its_own() -> None:
     config = parse_voice_config(
         {
             "enabled": "yes",
-            "microphone": {"index": -1, "name": "Mic", "host_api": "MME"},
-            "echo_cancellation": "off",
             "active_model_ids": ["builtin/okay_nabu"],
             "model_sensitivities": {
                 "builtin/okay_nabu": True,
@@ -289,15 +280,9 @@ def test_listener_settings_change_only_for_acoustic_fields() -> None:
         }
     )
     retuned = parse_voice_config({"model_sensitivities": {"builtin/okay_nabu": 0.6}})
-    echo_off = parse_voice_config({"echo_cancellation": False})
-    other_microphone = parse_voice_config(
-        {"microphone": {"index": 1, "name": "USB", "host_api": "MME"}}
-    )
 
     assert base.listener_settings_changed(rerouted) is False
     assert base.listener_settings_changed(retuned) is True
-    assert base.listener_settings_changed(echo_off) is True
-    assert base.listener_settings_changed(other_microphone) is True
 
 
 # -- Strict changes -------------------------------------------------------------
@@ -309,8 +294,6 @@ def test_apply_changes_writes_global_and_profile_fields() -> None:
     section = _apply(
         raw,
         {
-            "microphone": {"index": 2, "name": "USB", "host_api": "MME"},
-            "echo_cancellation": False,
             "active_model_ids": ["builtin/hey_jarvis", " builtin/alexa "],
             "model_sensitivities": {"builtin/alexa": 0.8},
             "default_agent_id": " main ",
@@ -325,8 +308,6 @@ def test_apply_changes_writes_global_and_profile_fields() -> None:
     assert section == {
         "enabled": True,
         "unknown": {"kept": True},
-        "microphone": {"index": 2, "name": "USB", "host_api": "MME"},
-        "echo_cancellation": False,
         "active_model_ids": ["builtin/hey_jarvis", "builtin/alexa"],
         "model_sensitivities": {"builtin/alexa": 0.8},
         "server_profiles": {
@@ -385,15 +366,11 @@ def test_apply_changes_merges_sensitivities_and_phrase_actions() -> None:
     assert raw == before
 
 
-def test_apply_changes_clears_the_microphone_and_default_agent() -> None:
-    raw = {
-        "microphone": {"index": 2, "name": "USB", "host_api": "MME"},
-        "server_profiles": {SERVER: {"target_agent_id": "main"}},
-    }
+def test_apply_changes_clears_the_default_agent() -> None:
+    raw = {"server_profiles": {SERVER: {"target_agent_id": "main"}}}
 
-    section = _apply(raw, {"microphone": None, "default_agent_id": None})
+    section = _apply(raw, {"default_agent_id": None})
 
-    assert section["microphone"] is None
     assert section["server_profiles"][SERVER]["target_agent_id"] is None
     assert parse_voice_config(section).profile_for(SERVER).default_agent_id is None
 
@@ -419,8 +396,9 @@ def test_apply_changes_moves_an_alias_profile_to_the_canonical_key() -> None:
     [
         ({"enabled": True}, "enabled"),
         ({"model_actions": {}}, "model_actions"),
-        ({"microphone": {"index": "1", "name": "Mic", "host_api": "MME"}}, "microphone"),
-        ({"echo_cancellation": "false"}, "echo_cancellation"),
+        # The microphone is the Desktop's shared setting, not part of Voice.
+        ({"microphone": None}, "microphone"),
+        ({"echo_cancellation": False}, "echo_cancellation"),
         ({"active_model_ids": []}, "active_model_ids"),
         (
             {"active_model_ids": [f"custom/{index}" for index in range(MAX_ACTIVE_PHRASES + 1)]},
@@ -453,7 +431,7 @@ def test_apply_changes_moves_an_alias_profile_to_the_canonical_key() -> None:
             "phrase_actions",
         ),
         ({"phrase_actions": {"": None}}, "phrase_actions"),
-        (["echo_cancellation"], None),  # not an object at all
+        (["active_model_ids"], None),  # not an object at all
     ],
 )
 def test_apply_changes_rejects_invalid_input_with_the_offending_field(
@@ -488,7 +466,13 @@ def test_apply_changes_rejects_a_whole_change_when_one_part_is_invalid() -> None
     raw: dict[str, Any] = {}
 
     with pytest.raises(VoiceConfigError) as raised:
-        _apply(raw, {"echo_cancellation": False, "active_model_ids": ["builtin/unknown"]})
+        _apply(
+            raw,
+            {
+                "model_sensitivities": {"builtin/alexa": 0.6},
+                "active_model_ids": ["builtin/unknown"],
+            },
+        )
 
     assert raised.value.field == "active_model_ids"
     assert raw == {}
@@ -510,9 +494,9 @@ def test_profile_changes_require_a_server(key: str) -> None:
 
 
 def test_global_changes_do_not_need_a_server() -> None:
-    section = _apply({}, {"echo_cancellation": False}, server_url="")
+    section = _apply({}, {"model_sensitivities": {"builtin/alexa": 0.6}}, server_url="")
 
-    assert section == {"echo_cancellation": False}
+    assert section == {"model_sensitivities": {"builtin/alexa": 0.6}}
 
 
 def test_set_enabled_is_strict_and_drops_the_retired_actions() -> None:
@@ -615,7 +599,7 @@ def test_retired_live_voice_actions_move_into_every_profile(tmp_path: Path) -> N
 def test_retired_live_voice_actions_wait_for_the_first_profile() -> None:
     raw = {"model_actions": {"builtin/okay_nabu": "live_voice", "custom/1": "live_voice"}}
 
-    unrelated = _apply(raw, {"echo_cancellation": False})
+    unrelated = _apply(raw, {"model_sensitivities": {"builtin/alexa": 0.6}})
     forgotten = forget_model(unrelated, "custom/1")
     targeted = _apply(forgotten, {"default_agent_id": "main"})
     overridden = _apply(
@@ -627,7 +611,7 @@ def test_retired_live_voice_actions_wait_for_the_first_profile() -> None:
     assert unrelated["model_actions"] == raw["model_actions"]
     assert forgotten["model_actions"] == {"builtin/okay_nabu": "live_voice"}
     assert targeted == {
-        "echo_cancellation": False,
+        "model_sensitivities": {"builtin/alexa": 0.6},
         "server_profiles": {
             SERVER: {
                 "phrase_actions": {"builtin/okay_nabu": {"type": "live_voice", "mode": "start"}},
@@ -681,7 +665,6 @@ def test_config_status_projects_phrases_actions_and_limits() -> None:
     config = parse_voice_config(
         {
             "enabled": True,
-            "microphone": {"index": 4, "name": "Studio mic", "host_api": "Windows WASAPI"},
             "active_model_ids": ["builtin/hey_nabu", "custom/0", "builtin/okay_nabu"],
             "model_sensitivities": {"builtin/hey_nabu": 0.55},
             "server_profiles": {
@@ -700,8 +683,6 @@ def test_config_status_projects_phrases_actions_and_limits() -> None:
 
     assert status == {
         "enabled": True,
-        "microphone": {"index": 4, "name": "Studio mic", "host_api": "Windows WASAPI"},
-        "echo_cancellation": {"enabled": True},
         "default_agent_id": "main",
         "default_session_behavior": "active",
         "phrases": [

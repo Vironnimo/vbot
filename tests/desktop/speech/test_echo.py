@@ -1,4 +1,4 @@
-"""Tests for the Desktop echo stage (``desktop.wakeword.echo``).
+"""Tests for the Desktop echo stage (``desktop.speech.echo``).
 
 No audio devices and no WebRTC library are needed: the echo canceller and the
 playback loopback are injected fakes, and time is a synthetic ``perf_counter``
@@ -18,8 +18,8 @@ from typing import Any
 import numpy as np
 import pytest
 
-from desktop.wakeword import echo
-from desktop.wakeword.echo import (
+from desktop.speech import echo
+from desktop.speech.echo import (
     ECHO_SAMPLE_RATE,
     STATE_ACTIVE,
     STATE_NO_REFERENCE,

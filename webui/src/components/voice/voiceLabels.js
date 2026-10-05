@@ -121,6 +121,8 @@ function knownErrorMessage(code) {
     send_failed: t('settings.voice.error.send'),
     voice_config_invalid: t('settings.voice.error.configInvalid'),
     voice_stack_unavailable: t('settings.voice.error.stackUnavailable'),
+    microphone_config_invalid: t('settings.microphone.error.configInvalid'),
+    dictation_config_invalid: t('settings.dictation.error.configInvalid'),
   };
   return Object.hasOwn(messages, code) ? messages[code] : null;
 }

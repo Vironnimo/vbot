@@ -347,8 +347,8 @@ class DesktopRestart:
 
     The window-facing callables are wired by the launcher: ``active_server``
     (the shown server), ``location`` (the page's URL fragment), ``placement``,
-    ``shell_busy`` (Voice recording or calibrating) and ``close_window``. Every
-    callable may run on the watcher or a restart thread.
+    ``shell_busy`` (Voice recording or calibrating, a running dictation) and
+    ``close_window``. Every callable may run on the watcher or a restart thread.
     """
 
     def __init__(

@@ -1,4 +1,4 @@
-"""Live voice requests, Voice pushes, and Session requests from the Desktop into the page."""
+"""Live voice requests, Voice pushes, Session requests and state pushes into the page."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import pytest
 from desktop.page_events import (
     MAX_PENDING_VOICE_EVENTS,
     PageEventDispatcher,
+    dictation_push_script,
     live_request_script,
     open_session_script,
     restart_request_script,
@@ -362,25 +363,44 @@ def test_close_stops_the_delivery_thread(dispatchers: Any) -> None:
     assert not thread.is_alive()
 
 
-# -- Update restart ----------------------------------------------------------------
+# -- Update restart and dictation state -------------------------------------------
+
+UPDATE_STATES = [
+    {"pending": True, "restarting": False, "failed": False},
+    {"pending": True, "restarting": True, "failed": False},
+    {"pending": True, "restarting": False, "failed": True},
+]
 
 
-def test_update_status_keeps_only_the_newest_waiting_snapshot(dispatchers: Any) -> None:
+@pytest.mark.parametrize(
+    ("publish", "values", "script"),
+    [
+        ("publish_update", UPDATE_STATES, update_push_script),
+        ("publish_dictation", [True, True, False], dictation_push_script),
+    ],
+    ids=["update", "dictation"],
+)
+def test_a_state_push_keeps_only_the_newest_waiting_value(
+    dispatchers: Any, publish: str, values: list[Any], script: Callable[[Any], str]
+) -> None:
     release = threading.Event()
     window = FakeWindow(block=release)
     dispatcher = dispatchers()
     dispatcher.attach_window(window)
-    dispatcher.publish_update({"pending": True, "restarting": False, "failed": False})
+    getattr(dispatcher, publish)(values[0])
     assert window.started.wait(timeout=2)
 
-    dispatcher.publish_update({"pending": True, "restarting": True, "failed": False})
-    dispatcher.publish_update({"pending": True, "restarting": False, "failed": True})
+    getattr(dispatcher, publish)(values[1])
+    getattr(dispatcher, publish)(values[2])
     release.set()
 
     _wait_until(lambda: len(window.scripts) == 2)
-    assert window.scripts[1] == update_push_script(
-        {"pending": True, "restarting": False, "failed": True}
-    )
+    assert window.scripts == [script(values[0]), script(values[2])]
+
+
+def test_the_dictation_script_dispatches_the_recording_state() -> None:
+    assert _voice_detail(dictation_push_script(True)) == {"recording": True}
+    assert '"vbot-desktop-dictation"' in dictation_push_script(False)
 
 
 @pytest.mark.parametrize(

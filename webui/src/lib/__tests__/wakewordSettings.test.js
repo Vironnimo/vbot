@@ -44,7 +44,6 @@ function status(overrides = {}) {
     enabled: true,
     state: 'listening',
     sequence: 1,
-    microphone: { index: 2, name: 'Desk mic', host_api: 'WASAPI' },
     echo_cancellation: { enabled: true, state: 'active' },
     default_agent_id: 'main',
     default_session_behavior: 'active',
@@ -75,8 +74,6 @@ describe('voiceConfigFromStatus', () => {
     );
 
     expect(config).toEqual({
-      microphone: { index: 2, name: 'Desk mic', host_api: 'WASAPI' },
-      echo_cancellation: true,
       active_model_ids: [NABU, JARVIS],
       model_sensitivities: { [NABU]: 0.5 },
       default_agent_id: 'main',
@@ -90,8 +87,6 @@ describe('voiceConfigFromStatus', () => {
 
   it('reads a missing snapshot as an empty configuration', () => {
     expect(voiceConfigFromStatus(null)).toEqual({
-      microphone: null,
-      echo_cancellation: true,
       active_model_ids: [],
       model_sensitivities: {},
       default_agent_id: null,
@@ -107,12 +102,10 @@ describe('voiceConfigFromStatus', () => {
     copy.active_model_ids.pop();
     copy.model_sensitivities[NABU] = 0.9;
     copy.phrase_actions[NABU].agent_id = 'writer';
-    copy.microphone.index = 7;
 
     expect(config.active_model_ids).toEqual([NABU, HEY_NABU]);
     expect(config.model_sensitivities[NABU]).toBe(0.5);
     expect(config.phrase_actions[NABU]).toEqual(DEFAULT_COMMAND);
-    expect(config.microphone.index).toBe(2);
   });
 });
 
@@ -137,8 +130,6 @@ describe('buildVoiceConfigChanges', () => {
     const draft = cloneVoiceConfig(baseline);
     expect(buildVoiceConfigChanges(draft, baseline)).toEqual({});
 
-    draft.microphone = { index: 5, name: 'Headset', host_api: 'MME' };
-    draft.echo_cancellation = false;
     draft.active_model_ids = [NABU, HEY_NABU, JARVIS];
     draft.model_sensitivities[HEY_NABU] = 0.8;
     draft.model_sensitivities[JARVIS] = 0.6;
@@ -155,8 +146,6 @@ describe('buildVoiceConfigChanges', () => {
     draft.phrase_actions[JARVIS] = { type: 'live_voice', mode: 'start' };
 
     expect(buildVoiceConfigChanges(draft, baseline)).toEqual({
-      microphone: { index: 5, name: 'Headset', host_api: 'MME' },
-      echo_cancellation: false,
       active_model_ids: [NABU, HEY_NABU, JARVIS],
       model_sensitivities: { [HEY_NABU]: 0.8, [JARVIS]: 0.6 },
       default_agent_id: 'writer',
@@ -210,7 +199,6 @@ describe('rebaseVoiceConfig', () => {
     const next = voiceConfigFromStatus(
       status({
         default_agent_id: 'writer',
-        echo_cancellation: { enabled: false, state: 'off' },
         phrases: [
           phrase(NABU, { sensitivity: 0.3 }),
           phrase(HEY_NABU, { sensitivity: 0.4 }),

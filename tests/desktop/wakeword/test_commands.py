@@ -12,7 +12,8 @@ from typing import Any, cast
 import numpy as np
 import pytest
 
-from desktop.wakeword.capture import CaptureSubscription
+from desktop.speech.capture import CaptureSubscription
+from desktop.speech.server_client import SpeechRequestCancelled, SpeechServerError
 from desktop.wakeword.commands import (
     MAX_COMMAND_WORKERS,
     MAX_RECORDING_SECONDS,
@@ -21,20 +22,17 @@ from desktop.wakeword.commands import (
     CommandPipeline,
     CommandRecorder,
     RecordingResult,
-    encode_wav,
     is_voice_cancel_phrase,
 )
-from desktop.wakeword.server_client import (
-    VoiceRequestCancelled,
-    VoiceServerClient,
-    VoiceServerError,
-)
-from tests.desktop.wakeword.voice_test_support import (
-    AmplitudeDetector,
+from desktop.wakeword.server_client import VoiceServerClient
+from tests.desktop.speech.speech_test_support import (
     FakeSubscription,
     silence,
     tone,
     wait_until,
+)
+from tests.desktop.wakeword.voice_test_support import (
+    AmplitudeDetector,
 )
 
 QUIET = 100  # audible background below the speech level
@@ -52,16 +50,6 @@ def _quiet(seconds: float) -> np.ndarray:
 
 
 # -- Helpers -----------------------------------------------------------------------------
-
-
-def test_encode_wav_wraps_pcm_at_the_given_rate() -> None:
-    pcm = tone(0.1, 48000).tobytes()
-
-    with wave.open(io.BytesIO(encode_wav(pcm, 48000)), "rb") as wav_file:
-        assert wav_file.getframerate() == 48000
-        assert wav_file.getnchannels() == 1
-        assert wav_file.getsampwidth() == 2
-        assert wav_file.readframes(wav_file.getnframes()) == pcm
 
 
 @pytest.mark.parametrize(
@@ -461,7 +449,7 @@ def test_a_command_is_transcribed_and_sent_to_its_session(
     [
         (
             lambda client: setattr(
-                client, "transcribe_error", VoiceServerError("server_unreachable", "down")
+                client, "transcribe_error", SpeechServerError("server_unreachable", "down")
             ),
             CommandOutcome(
                 "c1", "builtin/okay_nabu", "transcription_failed", error_code="server_unreachable"
@@ -477,7 +465,7 @@ def test_a_command_is_transcribed_and_sent_to_its_session(
         ),
         (
             lambda client: setattr(
-                client, "resolve_error", VoiceServerError("target_agent_unavailable", "gone")
+                client, "resolve_error", SpeechServerError("target_agent_unavailable", "gone")
             ),
             CommandOutcome(
                 "c1",
@@ -519,7 +507,7 @@ def test_a_cancelled_request_publishes_nothing(
     pipeline_harness: Callable[..., PipelineHarness],
 ) -> None:
     rig = pipeline_harness()
-    rig.client.transcribe_error = VoiceRequestCancelled()
+    rig.client.transcribe_error = SpeechRequestCancelled()
 
     rig.pipeline.submit(_command())
     wait_until(lambda: rig.client.uploads != [] and rig.client.transcribing == 0)

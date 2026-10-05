@@ -45,6 +45,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from desktop import settings as desktop_settings
+from desktop.speech.server_client import (
+    DEFAULT_UPLOAD_BUDGET_BYTES,
+    SpeechRequestCancelled,
+    SpeechServerError,
+)
 from desktop.wakeword.calibration import PhraseCalibration
 from desktop.wakeword.config import (
     ERROR_NO_SERVER,
@@ -66,21 +71,11 @@ from desktop.wakeword.engine import (
     WakewordModelDescriptor,
     WakewordModelError,
 )
-from desktop.wakeword.server_client import (
-    DEFAULT_UPLOAD_BUDGET_BYTES,
-    ERROR_TARGET_AGENT_UNAVAILABLE,
-    VoiceRequestCancelled,
-    VoiceServerClient,
-    VoiceServerError,
-)
+from desktop.wakeword.server_client import ERROR_TARGET_AGENT_UNAVAILABLE, VoiceServerClient
 
 if TYPE_CHECKING:
-    from desktop.wakeword.capture import (
-        AudioCapture,
-        CaptureStatus,
-        EchoStageFactory,
-        EchoStagePool,
-    )
+    from desktop.speech.capture import AudioCapture, CaptureStatus
+    from desktop.speech.microphone import MicrophoneService, MicrophoneSettings
     from desktop.wakeword.commands import (
         CommandOutcome,
         CommandPipeline,
@@ -164,22 +159,14 @@ EngineFactory = Callable[
 class VoiceRuntime:
     """Replaceable runtime dependencies (tests inject doubles; ``None`` uses the real one).
 
-    ``echo_stage_factory`` creates the echo stage (default:
-    :func:`desktop.wakeword.echo.create_echo_stage`). It runs in the background
-    when a listener with echo cancellation enabled is built, and again only
-    after a stage failed; later listeners reuse the working stage. It never
-    runs while echo cancellation is disabled, and never again once it returned
-    ``None`` or raised.
+    The microphone, its device list and the echo canceller come from the
+    :class:`~desktop.speech.microphone.MicrophoneService` the controller is
+    given, which has its own seams.
     """
 
-    audio_backend: Any = None
     engine_factory: EngineFactory | None = None
     speech_detector_factory: Callable[[], Any] | None = None
     transport: Any = None
-    echo_stage_factory: EchoStageFactory | None = None
-    reconnect_interval: float = 30.0
-    # How long a starting capture waits for an echo stage; None keeps the capture default.
-    echo_stage_wait: float | None = None
     join_timeout: float = JOIN_TIMEOUT_SECONDS
     mock_frame_seconds: float = 0.1
     mock_stage_seconds: float = 0.8
@@ -254,7 +241,9 @@ class VoiceController:
     """Voice API of the Desktop facade: config, lifecycle, dispatch, status and events.
 
     ``live_requests(action, source)`` asks the page for a Live voice call and
-    must not block. ``stack_available()`` reports whether the on-device stack
+    must not block. ``microphone`` is the Desktop's shared microphone: each
+    listener captures from its current settings, and a change of them rebuilds
+    a running listener. ``stack_available()`` reports whether the on-device stack
     imports; it runs once, lazily, on a background thread when a real
     listener first starts. The listener starts with :meth:`start` (after the
     window is shown) and ends with :meth:`close`.
@@ -264,6 +253,7 @@ class VoiceController:
         self,
         *,
         settings_path: Path | None,
+        microphone: MicrophoneService,
         server_url: str,
         sink: VoiceEventSink,
         live_requests: Callable[[str, str], None],
@@ -274,6 +264,7 @@ class VoiceController:
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._settings_path = settings_path
+        self._microphone = microphone
         self._sink = sink
         self._live_requests = live_requests
         self._stack_available = stack_available
@@ -302,7 +293,6 @@ class VoiceController:
         self._labels: dict[str, str] = {}
         self._labels_loaded = False
         self._command_ids = itertools.count(1)
-        self._echo_stages: EchoStagePool | None = None  # created with the first real listener
         # Runtime state of the current generation (see _reset_runtime_locked).
         self._recording: _Recording | None = None
         self._commands: dict[str, dict[str, Any]] = {}
@@ -316,6 +306,7 @@ class VoiceController:
         self._calibration: PhraseCalibration | None = None
         self._calibration_pushed_at = 0.0
         self._reported_state = self._derive_state_locked()
+        microphone.add_listener(self._on_microphone_changed)
 
     # -- Lifecycle -----------------------------------------------------------
 
@@ -355,6 +346,16 @@ class VoiceController:
                 return
             logger.info("Voice follows the server %s", url or "(none)")
             self._server_url = url
+            self._transition_locked()
+            self._commit_locked()
+
+    def _on_microphone_changed(self, _settings: MicrophoneSettings) -> None:
+        """A new microphone or echo setting rebuilds a running listener."""
+        with self._mutation_lock, self._lock:
+            if not self._started or self._closed or not self._config.enabled:
+                self._commit_locked()  # the status reports the new echo setting
+                return
+            logger.info("Voice follows the changed microphone settings")
             self._transition_locked()
             self._commit_locked()
 
@@ -441,19 +442,7 @@ class VoiceController:
             session.recorder.stop()
         return self.status()
 
-    # -- Models and devices --------------------------------------------------
-
-    def list_microphones(self) -> list[dict[str, Any]]:
-        """Return the shared-mode input devices and whether Voice can use them.
-
-        PortAudio keeps the device list of its last initialization, so the list
-        is refreshed first; the refresh is skipped while a Voice stream is open
-        (it would invalidate the stream), and Retry refreshes it then.
-        """
-        from desktop.wakeword._microphones import list_microphones, refresh_microphone_devices
-
-        refresh_microphone_devices(self._runtime.audio_backend)
-        return list_microphones(self._runtime.audio_backend)
+    # -- Models --------------------------------------------------
 
     def list_models(self) -> list[dict[str, Any]]:
         """Return the curated built-ins and the imported models."""
@@ -661,13 +650,8 @@ class VoiceController:
             self._fail_start(generation, ERROR_NO_SERVER)
             return
         if refresh_devices:
-            from desktop.wakeword._microphones import refresh_microphone_devices
-
             # Skipped by itself while a stream of an abandoned listener is still open.
-            refresh_microphone_devices(self._runtime.audio_backend)
-        echo_stages = self._echo_stage_pool()
-        if config.echo_cancellation:
-            echo_stages.prepare()  # the canceller loads while the listener is built
+            self._microphone.refresh_devices()
         try:
             engine = self._create_engine(config.phrases, generation)
         except WakewordModelError as exc:
@@ -680,7 +664,6 @@ class VoiceController:
             return
 
         from desktop.wakeword import _speech_detection
-        from desktop.wakeword.capture import ECHO_STAGE_WAIT_SECONDS, AudioCapture
         from desktop.wakeword.commands import CommandPipeline, CommandRecorder
         from desktop.wakeword.detection import SUBSCRIPTION_SECONDS, DetectionLoop
 
@@ -691,19 +674,9 @@ class VoiceController:
         stop_event = threading.Event()
         client = VoiceServerClient(server_url, cancel=stop_event, transport=runtime.transport)
         session = _Session(generation, stop_event, client)
-        capture = AudioCapture(
-            microphone=config.microphone,
-            echo_cancellation=config.echo_cancellation,
-            echo_stages=echo_stages,
+        capture = self._microphone.create_capture(
             on_status=lambda status: self._on_capture_status(generation, status),
             stop_event=stop_event,
-            backend=runtime.audio_backend,
-            reconnect_interval=runtime.reconnect_interval,
-            echo_stage_wait=(
-                ECHO_STAGE_WAIT_SECONDS
-                if runtime.echo_stage_wait is None
-                else runtime.echo_stage_wait
-            ),
         )
         session.capture = capture
         session.detection = DetectionLoop(
@@ -777,17 +750,6 @@ class VoiceController:
                     logger.warning("The on-device Voice stack is unavailable")
                     self._mode = MODE_UNAVAILABLE
             return self._mode
-
-    def _echo_stage_pool(self) -> EchoStagePool:
-        """The process-wide echo stage pool, created with the first real listener."""
-        from desktop.wakeword.capture import EchoStagePool
-
-        with self._lock:
-            if self._echo_stages is None:
-                self._echo_stages = EchoStagePool(
-                    self._runtime.echo_stage_factory or _create_echo_stage
-                )
-            return self._echo_stages
 
     def _create_engine(self, phrases: Sequence[PhraseConfig], generation: int) -> WakewordEngine:
         def score_listener(scores: dict[str, float]) -> None:
@@ -1102,7 +1064,7 @@ class VoiceController:
                     agent_id: _agent_problem(client, agent_id) for agent_id in agent_ids
                 }
                 budget = client.upload_budget_bytes() if actions else None
-            except VoiceRequestCancelled:
+            except SpeechRequestCancelled:
                 return
             except Exception:
                 if not session.stop_event.is_set():
@@ -1222,12 +1184,11 @@ class VoiceController:
             "state": state,
             "error_code": error_code,
             "sequence": self._sequence,
-            "microphone": base["microphone"],
             "active_microphone": (
                 dict(self._active_microphone) if self._active_microphone is not None else None
             ),
             "echo_cancellation": {
-                "enabled": config.echo_cancellation,
+                "enabled": self._microphone.settings.echo_cancellation,
                 "state": self._echo_state if capture_running else "off",
             },
             "default_agent_id": base["default_agent_id"],
@@ -1314,17 +1275,10 @@ class VoiceController:
             self._labels_loaded = True
 
 
-def _create_echo_stage() -> Any:
-    # Loads the WebRTC library; only reached when echo cancellation is enabled.
-    from desktop.wakeword.echo import create_echo_stage
-
-    return create_echo_stage()
-
-
 def _agent_problem(client: VoiceServerClient, agent_id: str) -> str | None:
     try:
         client.get_agent(agent_id)
-    except VoiceServerError as exc:
+    except SpeechServerError as exc:
         return exc.error_code
     return None
 

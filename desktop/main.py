@@ -46,6 +46,7 @@ from desktop.settings import (
 if TYPE_CHECKING:
     from desktop.connection import ConnectionController
     from desktop.page_events import PageEventDispatcher
+    from desktop.speech.microphone import MicrophoneService
     from desktop.wakeword.controller import VoiceController
 
 logger = logging.getLogger("vbot.desktop")
@@ -510,8 +511,10 @@ def _run_desktop(
 
     from desktop.bridge import DesktopBridge
     from desktop.connection import ConnectionController, build_connection_html
-    from desktop.hotkey import LiveHotkeyController
+    from desktop.dictation.controller import DictationController
+    from desktop.hotkey import LIVE_VOICE_HOTKEY, HotkeyController, HotkeyHandlers
     from desktop.page_events import PageEventDispatcher
+    from desktop.speech.microphone import MicrophoneService
 
     webview = webview_module if webview_module is not None else load_webview()
 
@@ -522,11 +525,21 @@ def _run_desktop(
     # is fixed for this process; a server added later needs a restart.
     secure_origins = _windows.webview_secure_origins(_launch_targets(controller, override))
     page_events = PageEventDispatcher()
-    live_hotkey = LiveHotkeyController(
+    # Built first: it moves an older microphone choice out of the Voice
+    # settings before Voice reads them.
+    microphone = MicrophoneService(settings_path=settings_file)
+    live_hotkey = HotkeyController(
+        preference=LIVE_VOICE_HOTKEY,
         settings_path=settings_file,
-        on_press=lambda: page_events.request_live("toggle", "hotkey"),
+        handlers=HotkeyHandlers(on_press=lambda: page_events.request_live("toggle", "hotkey")),
     )
-    voice = _create_voice(args, settings_file, server_url, page_events)
+    voice = _create_voice(args, settings_file, microphone, server_url, page_events)
+    dictation = DictationController(
+        settings_path=settings_file,
+        microphone=microphone,
+        server_url=server_url,
+        page=page_events,
+    )
     window_holder: list[Any] = []
     window_state = _WindowState()
     desktop_restart = (
@@ -539,7 +552,7 @@ def _run_desktop(
             placement=lambda: (
                 window_state.placement(window_holder[0], settings_file) if window_holder else None
             ),
-            shell_busy=voice.is_busy,
+            shell_busy=lambda: voice.is_busy() or dictation.is_busy(),
             close_window=lambda: window_holder[0].destroy(),
         )
         if contract is not None
@@ -547,15 +560,22 @@ def _run_desktop(
     )
     bridge = DesktopBridge(
         voice=voice,
+        microphone=microphone,
         connection=controller,
         live_hotkey=live_hotkey,
+        dictation=dictation,
         secure_origins=secure_origins,
         restart=desktop_restart,
     )
-    # Voice follows the window: every successful in-window connect retargets
-    # it, so first-run connect and runtime server switches never leave Voice
-    # pointed at the launch-time (or empty) server.
-    controller.set_active_server_listener(voice.set_server_url)
+
+    # Voice and dictation follow the window: every successful in-window connect
+    # retargets them, so first-run connect and runtime server switches never
+    # leave them pointed at the launch-time (or empty) server.
+    def follow_server(url: str) -> None:
+        voice.set_server_url(url)
+        dictation.set_server_url(url)
+
+    controller.set_active_server_listener(follow_server)
 
     # The window must be created with initial content before the GUI loop; the
     # connection screen is a safe neutral page that the post-loop entry callable
@@ -634,6 +654,7 @@ def _run_desktop(
         connection_entry()
         voice.start()
         live_hotkey.start()
+        dictation.start()
         if desktop_restart is not None:
             desktop_restart.start()
 
@@ -659,6 +680,7 @@ def _run_desktop(
         if desktop_restart is not None:
             desktop_restart.close()
         live_hotkey.stop()
+        dictation.stop()
         voice.close()
         page_events.close()
 
@@ -1042,6 +1064,7 @@ def _is_vbot_health_response(response: HttpResponse) -> bool:
 def _create_voice(
     args: argparse.Namespace,
     settings_file: Path | None,
+    microphone: MicrophoneService,
     server_url: str,
     page_events: PageEventDispatcher,
 ) -> VoiceController:
@@ -1058,6 +1081,7 @@ def _create_voice(
 
     return VoiceController(
         settings_path=settings_file,
+        microphone=microphone,
         server_url=server_url,
         sink=page_events,
         live_requests=page_events.request_live,

@@ -1,7 +1,7 @@
 """Pushes from the Desktop into the loaded page: Live voice requests, Voice updates,
-requests to open a Session, and application update restarts.
+requests to open a Session, application update restarts, and Desktop dictation.
 
-Five window events carry them:
+Six window events carry them:
 
 - ``vbot-desktop-live`` (cancelable), ``detail``
   ``{action: "start" | "toggle", source: "wakeword" | "hotkey"}``: a wake phrase
@@ -21,6 +21,9 @@ Five window events carry them:
   calls ``preventDefault()``, saves its edits and restarts through
   ``restartDesktop``; the Desktop restarts on its own shortly after or, for an
   unhandled request, at once.
+- ``vbot-desktop-dictation``, ``detail`` ``{recording}``: whether a Desktop
+  dictation records from the microphone right now (see :mod:`desktop.dictation`),
+  so the page can hold a Live voice call meanwhile.
 
 ``Window.evaluate_js`` blocks until the page answers and deadlocks on the GUI
 thread, so one daemon thread (``vbot-desktop-page-events``) delivers every push
@@ -34,7 +37,8 @@ in order from one queue. Producers never block:
 - Voice status: at most one snapshot waits; a newer one replaces its content
   where it waits;
 - Session requests: at most one waits; a newer one replaces it where it waits;
-- update status: at most one snapshot waits, like the Voice status;
+- update status and dictation state: at most one of each waits, like the Voice
+  status;
 - restart requests: at most one waits; a later one while it waits is dropped.
 
 A page without handlers (the connection screen) ignores the events.
@@ -58,6 +62,7 @@ VOICE_PUSH_EVENT = "vbot-desktop-voice"
 OPEN_SESSION_EVENT = "vbot-desktop-open-session"
 UPDATE_EVENT = "vbot-desktop-update"
 RESTART_REQUEST_EVENT = "vbot-desktop-restart"
+DICTATION_EVENT = "vbot-desktop-dictation"
 LIVE_REQUEST_ACTIONS = frozenset({"start", "toggle"})
 LIVE_REQUEST_SOURCES = frozenset({"wakeword", "hotkey"})
 MAX_PENDING_LIVE_REQUESTS = 4
@@ -117,6 +122,15 @@ def restart_request_script(reason: str) -> str:
     )
 
 
+def dictation_push_script(recording: bool) -> str:
+    """Return JavaScript that dispatches whether a Desktop dictation records."""
+    detail = json.dumps({"recording": recording})
+    return (
+        f"window.dispatchEvent(new CustomEvent({json.dumps(DICTATION_EVENT)}, "
+        f"{{detail: {detail}}}))"
+    )
+
+
 @dataclass
 class _LiveRequest:
     action: str
@@ -136,6 +150,11 @@ class _UpdatePush:
 
 
 @dataclass
+class _DictationPush:
+    recording: bool
+
+
+@dataclass
 class _RestartRequest:
     on_result: Callable[[bool], None]
 
@@ -149,11 +168,12 @@ class _VoicePush:
         return self.detail.get("type") == "status"
 
 
-_Push = _LiveRequest | _VoicePush | _OpenSession | _UpdatePush | _RestartRequest
+_Push = _LiveRequest | _VoicePush | _OpenSession | _UpdatePush | _DictationPush | _RestartRequest
 
 
 class PageEventDispatcher:
-    """Deliver Live voice requests, Voice pushes, Session requests and update restarts.
+    """Deliver Live voice requests, Voice pushes, Session requests, update restarts and
+    the Desktop dictation state.
 
     Delivery runs off the GUI thread. Implements the Voice event sink
     (``publish_status`` / ``publish_event``).
@@ -167,6 +187,7 @@ class PageEventDispatcher:
         self._pending_status: _VoicePush | None = None
         self._pending_open: _OpenSession | None = None
         self._pending_update: _UpdatePush | None = None
+        self._pending_dictation: _DictationPush | None = None
         self._pending_restart: _RestartRequest | None = None
         self._live_count = 0
         self._event_count = 0
@@ -225,6 +246,18 @@ class PageEventDispatcher:
             self._pending_update = push
             self._enqueue_locked(push)
 
+    def publish_dictation(self, recording: bool) -> None:
+        """Queue the Desktop dictation recording state, replacing one that still waits."""
+        with self._condition:
+            if self._closed:
+                return
+            if self._pending_dictation is not None:
+                self._pending_dictation.recording = recording
+                return
+            push = _DictationPush(recording)
+            self._pending_dictation = push
+            self._enqueue_locked(push)
+
     def request_restart(self, on_result: Callable[[bool], None]) -> None:
         """Ask the page to restart; ``on_result`` learns whether the page took it.
 
@@ -278,6 +311,7 @@ class PageEventDispatcher:
             self._pending_status = None
             self._pending_open = None
             self._pending_update = None
+            self._pending_dictation = None
             self._pending_restart = None
             self._condition.notify_all()
             thread = self._thread
@@ -307,6 +341,8 @@ class PageEventDispatcher:
                     self._pending_open = None
                 elif isinstance(item, _UpdatePush):
                     self._pending_update = None
+                elif isinstance(item, _DictationPush):
+                    self._pending_dictation = None
                 elif isinstance(item, _RestartRequest):
                     self._pending_restart = None
                 elif item is self._pending_status:
@@ -315,6 +351,7 @@ class PageEventDispatcher:
                     self._event_count -= 1
                 detail = dict(item.detail) if isinstance(item, _VoicePush) else None
                 status = dict(item.status) if isinstance(item, _UpdatePush) else {}
+                recording = item.recording if isinstance(item, _DictationPush) else False
             if isinstance(item, _LiveRequest):
                 self._deliver_live(window, item)
             elif isinstance(item, _OpenSession):
@@ -322,6 +359,9 @@ class PageEventDispatcher:
             elif isinstance(item, _UpdatePush):
                 if window is not None:
                     self._evaluate(window, update_push_script(status))
+            elif isinstance(item, _DictationPush):
+                if window is not None:
+                    self._evaluate(window, dictation_push_script(recording))
             elif isinstance(item, _RestartRequest):
                 self._deliver_restart(window, item)
             elif detail is not None:
