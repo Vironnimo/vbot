@@ -181,6 +181,8 @@ class XaiSession:
         self._started = False
         self._close_reason: str | None = None
         self._usage: dict[str, int | float] = {}
+        # Accounting identities must survive the whole call, not just recent events.
+        self._usage_responses: set[str] = set()
         # Response gate.
         self._responses: OrderedDict[str, _Response] = OrderedDict()
         self._active: str | None = None
@@ -561,7 +563,10 @@ class XaiSession:
         response = event.get("response")
         response = response if isinstance(response, dict) else {}
         response_id = _text(response.get("id")) or _text(event.get("response_id"))
-        self._add_usage(step, response.get("usage"))
+        if not response_id or response_id not in self._usage_responses:
+            self._add_usage(step, response.get("usage"))
+            if response_id:
+                self._usage_responses.add(response_id)
         output = response.get("output")
         for item in output if isinstance(output, list) else []:
             if isinstance(item, dict) and item.get("type") == "function_call":
