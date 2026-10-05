@@ -8,6 +8,9 @@ test("a top-level subagent Tool Run delivers its child result automatically", as
   page,
   request,
 }) => {
+  // The scenario may wait 45 s for the delivered child answer; the test needs
+  // room for that plus opening the Sub-Agent Session.
+  test.setTimeout(60_000);
   try {
     await createAgent(request, { id: "e2e-worker", name: "E2E Worker" });
 
