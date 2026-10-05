@@ -75,7 +75,7 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 | model-communication.md | cross-cutting | Sanctioned kernel-to-Model channels; never invent one |
 | server.md | `server/` | Transport/RPC boundary, events, source routing |
 | cli.md | `cli/` | Server lifecycle commands, targeting, output contract |
-| desktop.md | `desktop/` | pywebview shell contract, bridge, Desktop Voice, Live voice support |
+| desktop.md | `desktop/` | pywebview shell contract, bridge, Desktop Voice, Desktop dictation, Live voice support |
 | webui.md | `webui/` | Frontend accessor boundary, shared invariants |
 | logging.md | cross-cutting | What to log at which level, line format, never-log rules, writing pipeline |
 | logs.md | log viewer subsystem | Log parsing, RPC/socket contract, Logs tab |
