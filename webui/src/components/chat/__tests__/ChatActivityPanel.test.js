@@ -4,6 +4,7 @@ import { flushSync, mount, unmount } from 'svelte';
 
 import { reflectionTaskRows } from '../../../lib/chatTimelinePresentation.js';
 import { init, t } from '../../../lib/i18n.js';
+import { TOOLTIP_SHOW_DELAY_MS } from '../../../lib/tooltip.js';
 
 vi.mock('svelte', async () => {
   return import('../../../../node_modules/svelte/src/index-client.js');
@@ -760,6 +761,39 @@ describe('ChatActivityPanel', () => {
     expect(refusal.textContent).toContain(
       'Nothing was undone: the User Memory entry “Prefers short answers.” was changed again later by you (',
     );
+  });
+
+  it("shows a Sub-Agent's status details when hovering anywhere on its row", async () => {
+    openPanel({
+      timelineItems: [
+        runItem([
+          subAgentTask({
+            id: 'a',
+            agentId: 'alba',
+            description: 'Module check',
+            status: 'running',
+          }),
+        ]),
+      ],
+      subAgentStatuses: { 'runTool:run-a': 'bash' },
+    });
+
+    vi.useFakeTimers();
+    rowContaining('alba')
+      .querySelector('.chat-activity__task-description')
+      .dispatchEvent(new Event('pointerenter', { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(TOOLTIP_SHOW_DELAY_MS);
+
+    const tooltipElement = document.getElementById('app-tooltip');
+    expect(
+      tooltipElement.querySelector('.app-tooltip__title')?.textContent,
+    ).toBe(t('chat.toolState.running'));
+    expect(
+      Array.from(tooltipElement.querySelectorAll('dt'), (term) => [
+        term.textContent,
+        term.nextElementSibling.textContent,
+      ]),
+    ).toContainEqual([t('chat.details.latestTool'), 'bash']);
   });
 
   it('shows live command statuses and times on panel rows', () => {

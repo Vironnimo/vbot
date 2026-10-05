@@ -368,7 +368,12 @@
       {@render cancelButton(task)}
     </div>
   {:else}
-    <div class="chat-activity__task-row">
+    <!-- The whole row shows the Sub-Agent's status details, not only its
+         small status icon. -->
+    <div
+      class="chat-activity__task-row"
+      use:tooltip={() => statusDetails(task)}
+    >
       <Button
         variant="tertiary"
         class="chat-activity__task-link"
