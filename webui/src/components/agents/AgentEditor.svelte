@@ -78,6 +78,8 @@
   // has_customizations; the toggle is reverted first and re-applied on confirm.
   let disableCustomPromptConfirmOpen = $state(false);
   let workspaceDecisionOpen = $state(false);
+  // Set while a save made on leaving the editor waits for that decision.
+  let resolveWorkspaceDecision = null;
   let renameDialogOpen = $state(false);
   let renameValue = $state('');
   let renameError = $state('');
@@ -117,7 +119,7 @@
   const autosaveContext = useAutosaveContext();
   const agentSave = createDebouncedAutosave({
     getSnapshot: () => cloneAgentFormValues(formValues),
-    hasChanges: agentAutosaveHasChanges,
+    hasChanges: agentFormHasChanges,
     save: (source) => persistAgent(null, { source }),
   });
   const agentAutosave = agentSave.participant;
@@ -147,6 +149,7 @@
 
     unregisterAgentAutosave();
     clearAgentAutoSaveTimer();
+    settleWorkspaceDecision(null);
   });
 
   function handleAgentSubmit(event) {
@@ -193,14 +196,28 @@
       return true;
     }
 
+    if (source === 'auto' && changesWorkspaceOrProject(result.payload)) {
+      return false;
+    }
+
     if (
-      source === 'manual' &&
       formMode === AGENT_FORM_MODE_EDIT &&
       Object.hasOwn(result.payload, 'workspace') &&
       options.workspaceCopyChoice === undefined
     ) {
       workspaceDecisionOpen = true;
-      return false;
+      if (source !== 'transition') {
+        return false;
+      }
+      // Leaving the editor saves the Workspace change once the user decides
+      // about its files; Cancel keeps the draft and fails the save.
+      const copyFiles = await new Promise((resolve) => {
+        resolveWorkspaceDecision = resolve;
+      });
+      if (copyFiles === null) {
+        return false;
+      }
+      return persistAgent(null, { source, workspaceCopyChoice: copyFiles });
     }
 
     if (
@@ -255,32 +272,43 @@
       return false;
     }
 
-    return agentAutosaveHasChanges();
+    const result = editDraft();
+    return result.isValid
+      ? agentPayloadHasChanges(result.payload) &&
+          !changesWorkspaceOrProject(result.payload)
+      : !formValuesMatch(formValues, editBaselineValues);
   }
 
-  function agentAutosaveHasChanges() {
+  // Every unsaved edit, also one automatic saves skip: navigation and leaving
+  // the page save it first or ask to discard it.
+  function agentFormHasChanges() {
     if (formMode !== AGENT_FORM_MODE_EDIT) {
       return false;
     }
+    const result = editDraft();
+    return result.isValid
+      ? agentPayloadHasChanges(result.payload)
+      : !formValuesMatch(formValues, editBaselineValues);
+  }
 
-    const result = normalizeAgentForm(formValues, {
+  function editDraft() {
+    return normalizeAgentForm(formValues, {
       mode: AGENT_FORM_MODE_EDIT,
       initialValues: editBaselineValues,
     });
-
-    if (!result.isValid) {
-      return !formValuesMatch(formValues, editBaselineValues);
-    }
-
-    return (
-      !Object.hasOwn(result.payload, 'workspace') &&
-      !Object.hasOwn(result.payload, 'root_project_id') &&
-      agentPayloadHasChanges(result.payload)
-    );
   }
 
   function agentPayloadHasChanges(payload) {
     return Object.keys(payload).some((fieldName) => fieldName !== 'id');
+  }
+
+  // A Workspace or Project change saves only explicitly or when the user
+  // leaves the editor, never automatically.
+  function changesWorkspaceOrProject(payload) {
+    return (
+      Object.hasOwn(payload, 'workspace') ||
+      Object.hasOwn(payload, 'root_project_id')
+    );
   }
 
   async function resetWorkspaceToDefault() {
@@ -297,6 +325,9 @@
 
   function chooseWorkspaceCopy(copyFiles) {
     workspaceDecisionOpen = false;
+    if (settleWorkspaceDecision(copyFiles)) {
+      return;
+    }
     void persistAgent(null, {
       source: 'manual',
       workspaceCopyChoice: copyFiles,
@@ -305,6 +336,15 @@
 
   function cancelWorkspaceDecision() {
     workspaceDecisionOpen = false;
+    settleWorkspaceDecision(null);
+  }
+
+  // Answers a save that waits for the Workspace decision; false when none waits.
+  function settleWorkspaceDecision(copyFiles) {
+    const resolve = resolveWorkspaceDecision;
+    resolveWorkspaceDecision = null;
+    resolve?.(copyFiles);
+    return resolve !== null;
   }
 
   function clearAgentAutoSaveTimer() {
