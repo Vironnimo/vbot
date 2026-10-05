@@ -19,7 +19,13 @@ from core.projects import (
     ProjectStore,
     effective_project_allowed_skills,
 )
-from core.skills.authoring import ArchivedSkill, SkillAuthoringService, SkillRecord
+from core.skills.authoring import (
+    ArchivedSkill,
+    SkillAuthoringService,
+    SkillRecord,
+    SkillWriter,
+    SkillWriteResult,
+)
 from core.skills.policy import SkillPackageRef, SkillPolicyService
 from core.skills.skills import (
     SKILL_ORIGIN_AGENT,
@@ -1045,22 +1051,58 @@ class SkillRuntime:
         this answers how the name is *visible* to the agent (bundled / global /
         project / shared) — never how the authoring core sees it, which only knows
         the target root. ``agent`` origin with the name absent from own home means a
-        Skill shared into this agent; ``None`` means genuinely unknown, which
-        includes a name that only a Project which does not exist could provide.
+        Skill shared into this agent; ``global`` is a package in the global home
+        (``<data_dir>/skills``), which an attended Agent can change, while
+        ``external`` is a global Skill from a configured skill folder or an
+        Extension. ``None`` means genuinely unknown, which includes a name that
+        only a Project which does not exist could provide.
         """
         try:
-            origin = self.skills_for(project_id, agent_id).get(name).origin
+            skill = self.skills_for(project_id, agent_id).get(name)
         except KeyError, ProjectNotFoundError:
             return None
+        origin = skill.origin
         if origin == SKILL_ORIGIN_AGENT:
             return "shared"
         if origin == SKILL_ORIGIN_BUNDLED:
             return "bundled"
         if origin == SKILL_ORIGIN_GLOBAL:
-            return "global"
+            home = self.global_skills_dir.resolve()
+            return "global" if skill.path.parent.parent == home else "external"
         if origin is not None and origin.startswith(SKILL_ORIGIN_PROJECT_PREFIX):
             return "project"
         return None
+
+    def publish_agent_skill(
+        self, agent_id: str, name: str, *, writer: SkillWriter
+    ) -> SkillWriteResult:
+        """Move an Identity Agent's private Skill into the global home.
+
+        The private package goes into the Agent's Skill Archive with the reason
+        ``published``. What pointed at the private package follows it: its shares
+        end (receivers reach the global Skill through their own selection), a
+        turned-off private package stays off as the global package, and an Agent
+        whose ``allowed_skills`` lists names without ``*`` gets the name, so the
+        Agent keeps the Skill it had always allowed as its own. The caller
+        reloads the global Skills.
+        """
+        if self._authoring is None:
+            raise RuntimeError("Skill authoring is not configured")
+        result = self._authoring.publish(
+            self.agent_skills_dir(agent_id), self.global_skills_dir, name, writer=writer
+        )
+        policy = self._policy.load()
+        private = SkillPackageRef("agent", name, agent_id)
+        if private in policy.disabled_packages:
+            self._policy.set_package_disabled(SkillPackageRef("home", name), disabled=True)
+            self._policy.set_package_disabled(private, disabled=False)
+        if name in policy.shared.get(agent_id, {}):
+            self._policy.set_shared(agent_id, name, shared=False)
+        allowed = self._agents.get(agent_id).allowed_skills
+        if allowed is not None and "*" not in allowed and name not in allowed:
+            self._agents.update(agent_id, allowed_skills=[*allowed, name])
+        self.invalidate_agent_skills(None)
+        return result
 
     def _shared_package_dirs(self, receiver_agent_id: str) -> list[Path]:
         """Resolve every owner's shared private Skill packages for one receiver.

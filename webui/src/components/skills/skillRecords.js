@@ -101,6 +101,8 @@ function archiveRevisionText(revision) {
       );
     case 'inactive':
       return t('skills.revision.inactive');
+    case 'published':
+      return t('skills.revision.published');
     default:
       return t('skills.revision.deleted');
   }
@@ -179,6 +181,8 @@ export function archivedSkillSummary(item) {
       });
     case 'inactive':
       return t('skills.archived.inactive', { date });
+    case 'published':
+      return t('skills.archived.published', { date });
     default:
       return t('skills.archived.deleted', { date });
   }

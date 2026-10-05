@@ -597,7 +597,11 @@ _REVISION_KIND_TEXT = {
     "pin": "pinned",
     "unpin": "unpinned",
 }
-_ARCHIVE_REASON_TEXT = {"deleted": "deleted", "inactive": "retired after long disuse"}
+_ARCHIVE_REASON_TEXT = {
+    "deleted": "deleted",
+    "inactive": "retired after long disuse",
+    "published": "made global",
+}
 # What moved to the Skill that absorbed a merged one.
 _FOLLOWED_TEXT = {
     "shared": "share with Agent {name}",

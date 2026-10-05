@@ -1,4 +1,4 @@
-"""Direct authoring tool for an Identity Agent's writable vBot Skills."""
+"""Direct authoring tool for an Identity Agent's own Skills and the global Skills."""
 
 from __future__ import annotations
 
@@ -69,7 +69,10 @@ SKILL_MANAGE_TOOL_DESCRIPTION = (
     'Create, change or delete one of your own Skills (listed under "Your own skills"), '
     "or write or remove one of its support files. create and edit take the complete "
     "SKILL.md: YAML front matter with name and description, then the instructions. "
-    "patch replaces old_string with new_string in SKILL.md or in file_path."
+    "patch replaces old_string with new_string in SKILL.md or in file_path. "
+    'edit, patch, write_file and remove_file also change a Skill listed under "Your '
+    'global skills", which other Agents use too. publish turns one of your own Skills '
+    "into a global Skill."
 )
 
 # Results of a delete, which moves the Skill into the archive of its home.
@@ -120,6 +123,31 @@ SKILL_MANAGE_CHANGED_DURING_PASS_REFUSAL = (
     "Load '{name}' again with skill and build your change from that text, or leave it as "
     "it is."
 )
+# Global Skills (the user's global home) serve every Agent. A background writer
+# never changes one, and only the user deletes one.
+SKILL_MANAGE_GLOBAL_BACKGROUND_REFUSAL = (
+    f"Skill '{{name}}' is a global Skill, which you cannot change here; nothing changed. "
+    f"{_LEAVE_IT}"
+)
+SKILL_MANAGE_PUBLISH_BACKGROUND_REFUSAL = (
+    "You cannot make a Skill global here; nothing changed. Leave Skill '{name}' as it is."
+)
+SKILL_MANAGE_PUBLISHED = (
+    "Skill '{name}' is now a global Skill instead of one of your own. Other Agents can use it "
+    "when their Skill selection allows it."
+)
+SKILL_MANAGE_PUBLISH_CONFLICT = (
+    "A global Skill named '{name}' already exists; nothing changed. Tell the user, who can "
+    "compare the two Skills in the Skill controls."
+)
+SKILL_MANAGE_GLOBAL_CREATE = (
+    "create adds one of your own Skills; nothing changed. Omit scope to create it, and use "
+    "action publish to make one of your own Skills global."
+)
+SKILL_MANAGE_UNKNOWN_SCOPE = (
+    "skill_manage changes your own Skills and global Skills; Project and bundled Skills are "
+    "read-only here, and nothing changed. Omit scope to change a Skill by its name."
+)
 # ``absorbed_into`` names the Skill that now holds a deleted Skill's instructions.
 SKILL_MANAGE_ABSORBED_INTO_ACTION = (
     "absorbed_into is used only by delete; nothing changed. Omit absorbed_into for {action}."
@@ -133,16 +161,16 @@ SKILL_MANAGE_ABSORBED_INTO_UNKNOWN = (
     "Name one of your own Skills that now holds the instructions of '{name}'."
 )
 
-_ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "delete")
+_ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "delete", "publish")
 # follow_merge(owner_id, name, target, delete) -> the references that could not move.
 SkillMergeFollower = Callable[
     [str, str, str | None, Callable[[tuple[SkillReference, ...]], Awaitable[bool]]],
     Awaitable[tuple[SkillReference, ...]],
 ]
 # Actions that may operate on a Skill shared into the caller (maintained in the
-# owner's package), by every writer. ``create`` is own-home-only by definition;
-# ``delete`` stays owner/human-only so a receiver cannot remove someone else's
-# playbook.
+# owner's package), by every writer, and on a global Skill by an attended Agent.
+# ``create`` and ``publish`` are own-home-only by definition; ``delete`` stays
+# owner/human-only so an Agent cannot remove someone else's playbook.
 _SHARED_TARGET_ACTIONS = frozenset({"edit", "patch", "write_file", "remove_file"})
 _PROTECTED_MESSAGES = {
     "pinned": SKILL_MANAGE_PINNED_REFUSAL,
@@ -232,6 +260,7 @@ _ACTION_SYNONYMS = {"strreplace": "patch", "deletefile": "remove_file"}
 # ones as placeholders.
 _TEXT_FIELDS = ("content", "new_string", "file_content")
 _OWN_SCOPES = frozenset({"own", "private", "agent", "mine", "personal", "self", "local"})
+_GLOBAL_SCOPES = frozenset({"global", "user"})
 _NAME_MARKS = "/$@"
 _LISTED_NAME_LIMIT = 20
 _PREVIEW_LIMIT = 400
@@ -286,6 +315,8 @@ class _Call:
     file_path: str | None = None
     description: str | None = None
     absorbed_into: str | None = None
+    # ``global`` when the call names the global home explicitly, else ``None``.
+    scope: str | None = None
     notes: list[str] = field(default_factory=list)
 
 
@@ -297,7 +328,9 @@ def make_skill_manage_handler(
     resolve_external_skill_scope: (Callable[[str, str, str | None], str | None] | None) = None,
     *,
     on_changed: Callable[[], None] | None = None,
-) -> Callable[[ToolContext, JsonObject, str | None, tuple[SkillReference, ...]], JsonObject]:
+    resolve_global_skills_dir: Callable[[], Path] | None = None,
+    publish_skill: Callable[[str, str, SkillWriter], SkillWriteResult] | None = None,
+) -> Callable[[ToolContext, JsonObject, str | None, tuple[SkillReference, ...]], _Outcome]:
     """Return the direct Skill-management handler.
 
     A background writer (a Reflection or the Librarian) never changes a Skill
@@ -325,6 +358,14 @@ def make_skill_manage_handler(
 
     ``on_changed()`` optionally reports each successful mutation, after the
     affected scoped caches were invalidated, so open Skill views can refresh.
+
+    ``resolve_global_skills_dir()`` returns the global home. With it, an attended
+    Agent's edit, patch, write_file and remove_file reach a global Skill the
+    resolver reports as ``global`` (or named with ``scope: global``); a
+    background writer is refused. ``publish_skill(agent_id, name, writer)``
+    moves an own Skill into that home (``SkillRuntime.publish_agent_skill``).
+    The handler's outcome says whether the global home changed, so the caller
+    reloads the global Skills.
     """
 
     # (Run id, Skill name) -> the newest outside revision the Run was told about.
@@ -360,16 +401,20 @@ def make_skill_manage_handler(
         arguments: JsonObject,
         run_started_at: str | None = None,
         followed: tuple[SkillReference, ...] = (),
-    ) -> JsonObject:
+    ) -> _Outcome:
         writer = skill_writer(context)
         # The Skills of the calling Agent, or of the Agent a Librarian Session maintains.
         owner_id = context.skill_subject_id
         try:
             call = _read_call(arguments)
             own_root = resolve_agent_skills_dir(owner_id)
-            target_root = own_root
-            shared_target = False
-            if call.action in _SHARED_TARGET_ACTIONS and (
+            global_root = (
+                resolve_global_skills_dir() if resolve_global_skills_dir is not None else None
+            )
+            target_root, target = own_root, "own"
+            if call.scope == "global" and call.action != "publish":
+                target_root, target = _global_target(call, writer, global_root), "global"
+            elif call.action in _SHARED_TARGET_ACTIONS and (
                 find_skill_package_dir(own_root, call.name) is None
             ):
                 shared_root = (
@@ -378,67 +423,86 @@ def make_skill_manage_handler(
                     else None
                 )
                 if shared_root is not None:
-                    target_root = shared_root
-                    shared_target = True
+                    target_root, target = shared_root, "shared"
             # A missing target package on a mutate/delete action is not always an
-            # unknown name: it may be a Skill the agent can see in another scope but
-            # cannot write. Report that scope instead of a bare not-found. ``create``
-            # is excluded — it legitimately writes a private shadow over a shared-pool
-            # name, which is the established override path.
+            # unknown name: it may be a Skill the agent can see in another scope.
+            # A global one an attended Agent changes; for the others report the
+            # scope instead of a bare not-found. ``create`` is excluded — it
+            # legitimately writes a private shadow over a shared-pool name, which
+            # is the established override path.
             if call.action != "create" and find_skill_package_dir(target_root, call.name) is None:
+                if target == "global":
+                    raise _RefusalError(
+                        "skill_not_found", _unknown_skill_message(call.name, target_root, own=False)
+                    )
                 scope = (
                     resolve_external_skill_scope(owner_id, call.name, context.skill_project_id)
                     if resolve_external_skill_scope is not None
                     else None
                 )
-                if scope is not None:
-                    return tool_failure(
-                        "skill_write_rejected",
-                        _scope_rejection_message(call.name, scope),
-                        retryable=False,
+                if scope == "global" and call.action in _SHARED_TARGET_ACTIONS:
+                    target_root, target = _global_target(call, writer, global_root), "global"
+                elif scope is not None:
+                    return _Outcome(
+                        tool_failure(
+                            "skill_write_rejected",
+                            _scope_rejection_message(call.name, scope, call.action),
+                            retryable=False,
+                        )
                     )
-                raise _RefusalError("skill_not_found", _unknown_skill_message(call.name, own_root))
+                else:
+                    raise _RefusalError(
+                        "skill_not_found", _unknown_skill_message(call.name, own_root)
+                    )
             # Checks and write run under one Skill write lock, so a change that
             # lands after a check cannot be overwritten by this write.
             with authoring.exclusive():
-                if writer.background and call.action != "create":
-                    authoring.check_writable(target_root, call.name, writer=writer)
-                if (
-                    writer.actor == LIBRARIAN_SKILL_ACTOR
-                    and run_started_at is not None
-                    and call.action != "create"
-                ):
-                    check_unchanged_since(target_root, call.name, writer, run_started_at)
-                if call.action == "delete":
-                    _check_absorbed_into(call, own_root)
-                result, summary = _apply(authoring, target_root, call, writer, followed)
+                if call.action == "publish":
+                    result, summary = _publish(call, writer, owner_id, global_root, publish_skill)
+                else:
+                    if writer.background and call.action != "create":
+                        authoring.check_writable(target_root, call.name, writer=writer)
+                    if (
+                        writer.actor == LIBRARIAN_SKILL_ACTOR
+                        and run_started_at is not None
+                        and call.action != "create"
+                    ):
+                        check_unchanged_since(target_root, call.name, writer, run_started_at)
+                    if call.action == "delete":
+                        _check_absorbed_into(call, own_root)
+                    result, summary = _apply(authoring, target_root, call, writer, followed)
         except _RefusalError as refusal:
-            return tool_failure(refusal.code, refusal.message, retryable=False)
+            return _Outcome(tool_failure(refusal.code, refusal.message, retryable=False))
         except SkillProtectedError as error:
-            return tool_failure(
-                "skill_protected",
-                _PROTECTED_MESSAGES[error.reason].format(name=error.skill_name),
-                retryable=False,
+            return _Outcome(
+                tool_failure(
+                    "skill_protected",
+                    _PROTECTED_MESSAGES[error.reason].format(name=error.skill_name),
+                    retryable=False,
+                )
             )
         except SkillAuthoringError as error:
-            return tool_failure(
-                "skill_write_rejected",
-                "; ".join(error.diagnostics),
-                retryable=False,
+            return _Outcome(
+                tool_failure(
+                    "skill_write_rejected",
+                    "; ".join(error.diagnostics),
+                    retryable=False,
+                )
             )
         except OSError as error:
-            return tool_failure("skill_write_error", str(error))
+            return _Outcome(tool_failure("skill_write_error", str(error)))
 
+        global_changed = target == "global" or call.action == "publish"
         # An own-home invalidation also reaches its shared receivers. Receiver
-        # edits conservatively invalidate all Agent scopes through the same owner.
-        invalidate_agent_skills(None if shared_target else owner_id)
+        # and global edits conservatively invalidate all Agent scopes.
+        invalidate_agent_skills(owner_id if target == "own" and not global_changed else None)
         if on_changed is not None:
             on_changed()
         _LOGGER.info(
             "Skill mutated (skill=%s scope=%s owner=%s action=%s actor_agent=%s)",
             result.name,
-            "shared" if shared_target else "own",
-            target_root.parent.name if shared_target else owner_id,
+            target,
+            target_root.parent.name if target == "shared" else owner_id,
             call.action,
             context.agent_id,
         )
@@ -448,9 +512,52 @@ def make_skill_manage_handler(
         lines = [summary]
         lines.extend(f"Warning: {warning}" for warning in result.warnings)
         lines.extend(f"Note: {note}" for note in call.notes)
-        return tool_success({"content": "\n".join(lines)})
+        return _Outcome(tool_success({"content": "\n".join(lines)}), global_changed)
 
     return skill_manage_handler
+
+
+@dataclass(frozen=True)
+class _Outcome:
+    """A handler result, and whether it changed the global home."""
+
+    result: JsonObject
+    global_changed: bool = False
+
+
+def _global_target(call: _Call, writer: SkillWriter, global_root: Path | None) -> Path:
+    """The global home for a change of a global Skill, or the refusal of the call."""
+    if call.action == "create":
+        raise _RefusalError("invalid_arguments", SKILL_MANAGE_GLOBAL_CREATE)
+    if call.action == "delete":
+        raise _RefusalError("skill_write_rejected", _scope_rejection_message(call.name, "global"))
+    if global_root is None:
+        raise _RefusalError("skill_write_rejected", _scope_rejection_message(call.name, "external"))
+    if writer.background:
+        raise _RefusalError(
+            "skill_protected", SKILL_MANAGE_GLOBAL_BACKGROUND_REFUSAL.format(name=call.name)
+        )
+    return global_root
+
+
+def _publish(
+    call: _Call,
+    writer: SkillWriter,
+    owner_id: str,
+    global_root: Path | None,
+    publish_skill: Callable[[str, str, SkillWriter], SkillWriteResult] | None,
+) -> tuple[SkillWriteResult, str]:
+    """Make the caller's own Skill ``call.name`` a global Skill."""
+    if writer.background or publish_skill is None or global_root is None:
+        raise _RefusalError(
+            "skill_write_rejected", SKILL_MANAGE_PUBLISH_BACKGROUND_REFUSAL.format(name=call.name)
+        )
+    if (global_root / call.name).exists() or find_skill_package_dir(global_root, call.name):
+        raise _RefusalError(
+            "skill_write_rejected", SKILL_MANAGE_PUBLISH_CONFLICT.format(name=call.name)
+        )
+    result = publish_skill(owner_id, call.name, writer)
+    return result, SKILL_MANAGE_PUBLISHED.format(name=call.name)
 
 
 def _after(timestamp: str, moment: datetime) -> bool:
@@ -509,7 +616,7 @@ def _read_call(arguments: JsonObject) -> _Call:
         raise _RefusalError(
             "invalid_arguments", SKILL_MANAGE_ABSORBED_INTO_ACTION.format(action=call.action)
         )
-    _check_scope(arguments.get("scope"))
+    call.scope = _check_scope(arguments.get("scope"))
     if arguments.get("category"):
         call.notes.append("category is not used; Skills have no categories.")
     if call.file_path is not None:
@@ -633,6 +740,16 @@ def _read_remove_file(call: _Call) -> _Call:
     return call
 
 
+def _read_publish(call: _Call) -> _Call:
+    if call.file_path is not None or call.content or call.new_string or call.old_string:
+        raise _RefusalError(
+            "invalid_arguments",
+            "publish makes the whole Skill global and takes no file_path or text. Omit them, "
+            "and change the Skill with edit or patch first if it needs a change.",
+        )
+    return call
+
+
 def _read_delete(call: _Call) -> _Call:
     if call.file_path is not None:
         raise _RefusalError(
@@ -656,6 +773,7 @@ _ACTION_READERS: dict[str, Callable[[_Call], _Call]] = {
     "write_file": _read_write_file,
     "remove_file": _read_remove_file,
     "delete": _read_delete,
+    "publish": _read_publish,
 }
 
 
@@ -664,16 +782,15 @@ def _text(arguments: JsonObject, key: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _check_scope(scope: object) -> None:
+def _check_scope(scope: object) -> str | None:
+    """``global`` for a call that names the global home, ``None`` for the own one."""
     if scope is None:
-        return
+        return None
     if isinstance(scope, str) and spelling(scope) in _OWN_SCOPES:
-        return
-    raise _RefusalError(
-        "invalid_arguments",
-        "skill_manage writes only your own Skills; global, Project and bundled Skills are "
-        "read-only here. Omit scope to write one of your own Skills.",
-    )
+        return None
+    if isinstance(scope, str) and spelling(scope) in _GLOBAL_SCOPES:
+        return "global"
+    raise _RefusalError("invalid_arguments", SKILL_MANAGE_UNKNOWN_SCOPE)
 
 
 def _refuse_support_file(call: _Call, suggestion: str) -> None:
@@ -952,8 +1069,15 @@ def _support_file_hint(authoring: SkillAuthoringService, target_root: Path, call
     return f'The text is in {matches[0]}; to patch it there, add "file_path": "{matches[0]}".'
 
 
-def _unknown_skill_message(name: str, own_root: Path) -> str:
-    names = sorted(scan_skill_names(own_root))
+def _unknown_skill_message(name: str, root: Path, *, own: bool = True) -> str:
+    names = sorted(scan_skill_names(root))
+    if not own:
+        lead = f"There is no global Skill named '{name}'; nothing changed."
+        suggestions = similar_skill_names(name, names)
+        if suggestions:
+            quoted = ", ".join(f"'{candidate}'" for candidate in suggestions)
+            return f"{lead} Did you mean {quoted}?"
+        return lead
     lead = f"You have no Skill named '{name}'; nothing changed."
     suggestions = similar_skill_names(name, names)
     if suggestions:
@@ -966,15 +1090,29 @@ def _unknown_skill_message(name: str, own_root: Path) -> str:
     return f"{lead} List your own Skills with the skill Tool."
 
 
-def _scope_rejection_message(name: str, scope: str) -> str:
+def _scope_rejection_message(name: str, scope: str, action: str = "delete") -> str:
     if scope == "shared":
+        if action == "publish":
+            return f"Skill '{name}' is shared with you; only its owner can make it global."
         return (
             f"Skill '{name}' is shared with you — only its owner or the user can "
             f"delete it. Edits still go through skill_manage."
         )
+    if scope == "global":
+        if action == "publish":
+            return f"Skill '{name}' is already a global Skill; nothing changed."
+        return (
+            f"Skill '{name}' is a global Skill, which only the user can delete in the Skill "
+            "controls; nothing changed."
+        )
+    if scope == "external":
+        return (
+            f"Skill '{name}' comes from a skill folder or an Extension and is read-only; "
+            "nothing changed. Tell the user which change it needs; do not edit its files "
+            "with file or shell Tools."
+        )
     labels = {
         "bundled": "is a bundled Skill — read-only here.",
-        "global": "is a global Skill — read-only here.",
         "project": "is a Project Skill — read-only here.",
     }
     lead = labels.get(scope)
@@ -1095,8 +1233,14 @@ def register_skill_manage_tool(
     on_changed: Callable[[], None] | None = None,
     run_started_at: Callable[[str], str | None] | None = None,
     follow_merge: SkillMergeFollower | None = None,
+    resolve_global_skills_dir: Callable[[], Path] | None = None,
+    publish_skill: Callable[[str, str, SkillWriter], SkillWriteResult] | None = None,
+    refresh_global_skills: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
     """Register identity-only direct Skill management.
+
+    ``refresh_global_skills()`` reloads the global Skills on the Event Loop
+    after a call changed the global home (a global edit or a publish).
 
     ``run_started_at(run_id)`` returns when a Run started (``None`` when
     unknown). It reads Event Loop state, so it runs on the Loop, before the
@@ -1116,6 +1260,8 @@ def register_skill_manage_tool(
         resolve_shared_skills_dir,
         resolve_external_skill_scope,
         on_changed=on_changed,
+        resolve_global_skills_dir=resolve_global_skills_dir,
+        publish_skill=publish_skill,
     )
 
     def guarded_handler(
@@ -1123,23 +1269,39 @@ def register_skill_manage_tool(
         arguments: JsonObject,
         started: str | None,
         followed: tuple[SkillReference, ...],
+        global_changes: list[bool],
     ) -> JsonObject:
         with lifecycle_guard():
-            return handler(context, arguments, started, followed)
+            outcome = handler(context, arguments, started, followed)
+        global_changes.append(outcome.global_changed)
+        return outcome.result
 
     async def offloaded_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        global_changes: list[bool] = []
+        result = await dispatch(context, arguments, global_changes)
+        if any(global_changes) and refresh_global_skills is not None:
+            await refresh_global_skills()
+        return result
+
+    async def dispatch(
+        context: ToolContext, arguments: JsonObject, global_changes: list[bool]
+    ) -> JsonObject:
         started = None
         if run_started_at is not None and context.run_kind is RunKind.LIBRARIAN:
             started = run_started_at(context.run_id)
         merge = _merge(arguments)
         if follow_merge is None or merge is None:
-            return await run_tool_worker(guarded_handler, context, arguments, started, ())
+            return await run_tool_worker(
+                guarded_handler, context, arguments, started, (), global_changes
+            )
         name, target = merge
         results: list[JsonObject] = []
         planned: list[SkillReference] = []
 
         async def delete(followed: tuple[SkillReference, ...]) -> bool:
-            result = await run_tool_worker(guarded_handler, context, arguments, started, followed)
+            result = await run_tool_worker(
+                guarded_handler, context, arguments, started, followed, global_changes
+            )
             results.append(result)
             planned.extend(followed)
             return result.get("ok") is True

@@ -125,6 +125,7 @@ SKILL_ABSORBED_FILE_MESSAGE = (
 _ARCHIVE_REASONS = {
     "deleted": "deleted",
     "inactive": "retired after a long time without use",
+    "published": "made a global Skill",
 }
 
 SKILL_TOOL_NAME = "skill"
