@@ -617,12 +617,19 @@ describe('Swarm Board discussions', () => {
 });
 
 describe('Swarm Board composer', () => {
-  it('keeps a failed post in the modal and closes only after successful submission', async () => {
+  it('retries a saved post with a lost reply using the same request id', async () => {
     const { bridge, operation } = createBridge();
-    let fail = true;
+    const saved = new Map();
+    let loseReply = true;
     overrideOperations(operation, {
-      'board.post': (_args, fallback) =>
-        fail ? Promise.reject(new Error('post-failed-sentinel')) : fallback(),
+      'board.post': (args, fallback) => {
+        if (!saved.has(args.request_id)) saved.set(args.request_id, fallback());
+        if (loseReply) {
+          loseReply = false;
+          throw new Error('post-failed-sentinel');
+        }
+        return saved.get(args.request_id);
+      },
     });
     await openSwarm(bridge);
     await vi.waitFor(() => expect(button(WRITE_POST)).toBeDefined());
@@ -642,11 +649,27 @@ describe('Swarm Board composer', () => {
     expect(document.getElementById('swarm-post').value).toBe(
       'retained-draft-sentinel',
     );
-    fail = false;
     button(POST).click();
     await vi.waitFor(() =>
       expect(document.querySelector('[role="dialog"]')).toBeNull(),
     );
+    const attempts = callsTo(operation, 'board.post');
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1]).toEqual(attempts[0]);
+    expect(saved.size).toBe(1);
+    // An intentional second post, even with identical text, is a new action.
+    button(WRITE_POST).click();
+    await tick();
+    fill('swarm-post', 'retained-draft-sentinel');
+    await tick();
+    button(POST).click();
+    await vi.waitFor(() =>
+      expect(callsTo(operation, 'board.post')).toHaveLength(3),
+    );
+    expect(callsTo(operation, 'board.post')[2][1].request_id).not.toBe(
+      attempts[0][1].request_id,
+    );
+    expect(saved.size).toBe(2);
   });
 
   it('posts a Board reply with explicit public recipients', async () => {
@@ -680,4 +703,34 @@ describe('Swarm Board composer', () => {
       }),
     );
   });
+
+  it.each(['swarm-post', 'swarm-reply', 'swarm-pings'])(
+    'gives a changed %s draft a new request id after failure',
+    async (field) => {
+      const { bridge, operation } = createBridge();
+      overrideOperations(operation, {
+        'board.post': () => Promise.reject(new Error('post-failed-sentinel')),
+      });
+      await openSwarm(bridge);
+      button(WRITE_POST).click();
+      await tick();
+      fill('swarm-post', 'initial-post');
+      await tick();
+      button(POST).click();
+      await vi.waitFor(() =>
+        expect(callsTo(operation, 'board.post')).toHaveLength(1),
+      );
+      await tick();
+      fill(field, field === 'swarm-reply' ? '#1' : 'changed-draft');
+      await tick();
+      button(POST).click();
+      await vi.waitFor(() =>
+        expect(callsTo(operation, 'board.post')).toHaveLength(2),
+      );
+      const [first, second] = callsTo(operation, 'board.post').map(
+        ([, args]) => args,
+      );
+      expect(second.request_id).not.toBe(first.request_id);
+    },
+  );
 });

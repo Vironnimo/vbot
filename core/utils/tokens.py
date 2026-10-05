@@ -77,8 +77,16 @@ REASONING_TEXT_FIELD = "text"
 REASONING_TEXT_DELTA_MERGE_MAX_CHARS = 256
 # Well-known opaque continuity keys outside ``reasoning_details`` containers —
 # stateless Responses reasoning items carry ``encrypted_content`` directly, and
-# Anthropic-family thinking blocks carry signatures.
-OPAQUE_REASONING_BLOB_KEYS = frozenset({"encrypted_content", "signature", "redacted_thinking"})
+# Anthropic-family thinking blocks and Gemini thought parts carry signatures.
+OPAQUE_REASONING_BLOB_KEYS = frozenset(
+    {
+        "encrypted_content",
+        "signature",
+        "redacted_thinking",
+        "thoughtSignature",
+        "thought_signature",
+    }
+)
 REASONING_META_RESPONSE_OUTPUT_KEY = "response_output"
 REASONING_META_REASONING_ITEMS_KEY = "reasoning_items"
 REASONING_META_ENCRYPTED_CONTENT_KEY = "encrypted_content"
@@ -303,6 +311,7 @@ def _normalize_native_media(
             image
             or mapping_type in ("image", "image_url", "input_image")
             or str(value.get("media_type", "")).startswith("image/")
+            or str(value.get("mimeType", "")).startswith("image/")
         )
         if isinstance(value.get("detail"), str):
             detail = value["detail"]
@@ -700,5 +709,7 @@ def _is_native_media_payload(
     if key == "base64" and isinstance(container.get("media_type"), str):
         return True
     if key == "data" and container_type == "base64":
+        return True
+    if key == "data" and isinstance(container.get("mimeType"), str):
         return True
     return key == "data" and isinstance(container.get("format"), str)

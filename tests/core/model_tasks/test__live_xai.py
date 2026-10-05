@@ -713,12 +713,31 @@ def test_usage_accumulates_numeric_counts_and_ignores_empty_usage():
     empty = session.receive(_done("r1", usage={}))
     session.receive(_created("r2"))
     counted = session.receive(_done("r2", usage={"input_tokens": 3, "output_tokens": 5}))
+    duplicate = session.receive(_done("r2", usage={"input_tokens": 3, "output_tokens": 5}))
+    assert duplicate.events == []
+    assert (
+        session.receive(
+            {
+                "type": "response.done",
+                "response_id": "r2",
+                "response": {
+                    "usage": {"input_tokens": 3, "output_tokens": 5},
+                },
+            }
+        ).events
+        == []
+    )
+    assert session.finish()[-1].usage == {"input_tokens": 3, "output_tokens": 5}
     session.receive(_created("r3"))
     again = session.receive(_done("r3", usage={"input_tokens": 1, "details": {"x": 1}}))
 
     assert empty.events == []
     assert counted.events == [WireUsage({"input_tokens": 3, "output_tokens": 5})]
     assert again.events == [WireUsage({"input_tokens": 4, "output_tokens": 5})]
+    # Remember counted responses for the whole call, beyond the recent-event cache.
+    for index in range(300):
+        session.receive(_done(f"empty-{index}", usage={}))
+    assert session.receive(_done("r2", usage={"input_tokens": 3, "output_tokens": 5})).events == []
     assert session.finish()[-1].usage == {"input_tokens": 4, "output_tokens": 5}
 
 

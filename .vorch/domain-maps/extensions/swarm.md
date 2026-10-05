@@ -328,6 +328,12 @@ key from Session, Run, iteration and Tool Call identity. Separate Tool Calls wit
 identical content create separate posts. Management mutations retain their
 payload-bound request ids.
 
+The human Board composer retains one request id for retries of an unchanged
+payload after a failed or lost reply. Its fingerprint includes the Swarm,
+discussion, text, reply target and recipients; a changed payload or a successfully
+acknowledged post starts a new request identity. This lets the Store replay a
+saved post without creating another one (`SwarmPage.board.test.js`).
+
 Preparing a batch is not delivery. Only a matching canonical Session receipt
 acknowledges its contents. Tool batches are acknowledged after their complete
 carrier is saved. Successful automatic and Tool delivery acknowledgments publish

@@ -125,6 +125,27 @@ async def test_unusable_selection_fails_before_network(
 # Wire routing and reasoning
 # ---------------------------------------------------------------------------
 
+
+def test_messages_estimation_uses_native_replay_without_duplicate_canonical_reasoning() -> None:
+    adapter = zen_adapter()
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "assistant",
+            "content": "Native answer",
+            "reasoning_meta": {
+                "content_blocks": [
+                    {"type": "thinking", "thinking": "Native thought", "signature": "opaque"},
+                ]
+            },
+        },
+        {"role": "user", "content": "continue"},
+    ]
+    native = adapter.estimate_request_input_tokens(messages, model_id=MESSAGES_MODEL)
+    assert native > 0
+    messages[0]["reasoning"] = "redundant canonical thought" * 1000
+    assert adapter.estimate_request_input_tokens(messages, model_id=MESSAGES_MODEL) == native
+
+
 _RESPONSES_BODY = {
     "id": "resp_1",
     "status": "completed",

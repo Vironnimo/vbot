@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
 from core.providers.adapter import (
@@ -17,15 +17,69 @@ from core.providers.adapter import (
     TerminalOutcome,
     neutralize_system_reminder_tags,
     normalize_tool_call_candidates,
+    project_tool_result_content_fallbacks,
     tool_result_content_blocks,
     tool_result_function_response,
 )
 from core.providers.errors import (
     ProviderError,
 )
+from core.providers.tool_schema import render_tool_definitions
 
 ZEN_MAX_IMAGES_PER_REQUEST = 3_600
 """Images Zen's Gemini wire accepts in one request."""
+
+
+def gemini_input_payload(
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    media_types: Collection[str],
+    tools: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Render the native input shared by request construction and Context estimation."""
+    projected = project_tool_result_content_fallbacks([dict(message) for message in messages])
+    system_parts: list[dict[str, str]] = []
+    contents: list[dict[str, Any]] = []
+    tool_names: dict[str, str] = {}
+    image_count = 0
+    for message in projected:
+        if message.get("role") == "system":
+            system_parts.append({"text": _content_text(message.get("content"))})
+            continue
+        if message.get("role") == "assistant":
+            for tool_call in message.get("tool_calls") or []:
+                if not isinstance(tool_call, Mapping):
+                    continue
+                call_id = tool_call.get("id")
+                name = tool_call.get("name")
+                if isinstance(call_id, str) and isinstance(name, str):
+                    tool_names[call_id] = name
+        projected_message = message
+        if message.get("role") == "tool" and not message.get("name"):
+            call_id = message.get("tool_call_id")
+            if isinstance(call_id, str) and call_id in tool_names:
+                projected_message = {**message, "name": tool_names[call_id]}
+        content, added_images = _to_gemini_content(projected_message, media_types)
+        image_count += added_images
+        if content is not None:
+            contents.append(content)
+    if image_count > ZEN_MAX_IMAGES_PER_REQUEST:
+        raise ProviderError(
+            f"Gemini accepts at most {ZEN_MAX_IMAGES_PER_REQUEST} images per request",
+            retryable=False,
+        )
+    payload: dict[str, Any] = {"contents": contents}
+    if system_parts:
+        payload["systemInstruction"] = {"parts": system_parts}
+    if tools:
+        if not isinstance(tools, Sequence) or isinstance(tools, str | bytes):
+            raise ProviderError("Gemini tools must be a list", retryable=False)
+        payload["tools"] = [
+            {
+                "functionDeclarations": render_tool_definitions(tools, profile="omit_strict"),
+            }
+        ]
+    return payload
 
 
 def _replay_part(part: Mapping[str, Any]) -> dict[str, Any]:
