@@ -20,6 +20,8 @@ import { isRecord } from './sessionState.js';
 const SUBAGENT_LEGACY_HISTORY_LIMIT = 20;
 const SUBAGENT_STATUS_CACHE_LIMIT = 2000;
 const COMMAND_STATUS_CACHE_LIMIT = 200;
+const SUBAGENT_WORK_CACHE_LIMIT = 200;
+const SUBAGENT_WORK_KINDS = new Set(['subagent', 'command', 'terminal']);
 const COMMAND_STATUS_RUNNING = 'running';
 const COMMAND_STATUS_STOPPED = 'stopped';
 const RPC_ERROR_RUN_NOT_FOUND = 'run_not_found';
@@ -31,6 +33,7 @@ const RPC_ERROR_RUN_NOT_FOUND = 'run_not_found';
 export function createChatChildTasks({ chatState, operations, errorMessage }) {
   const subAgentStatusVerificationKeys = new Set();
   const subAgentStatusInflightKeys = new Set();
+  const subAgentWorkInflightIds = new Set();
 
   function trimmedString(value) {
     return typeof value === 'string' ? value.trim() : '';
@@ -253,6 +256,55 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     }
   }
 
+  function inspectedWork(inspection) {
+    return (Array.isArray(inspection?.running) ? inspection.running : [])
+      .filter(
+        (entry) =>
+          isRecord(entry) &&
+          SUBAGENT_WORK_KINDS.has(entry.kind) &&
+          trimmedString(entry.id),
+      )
+      .map((entry) => ({
+        kind: entry.kind,
+        id: trimmedString(entry.id),
+        label: trimmedString(entry.label),
+      }));
+  }
+
+  // Reads what a Sub-Agent still runs besides its own Run, for its details
+  // while the user looks at its row. The inspection also refreshes the row's
+  // status. Rows without a Sub-Agent id predate inspection and stay as they
+  // are; a failed read keeps the last known work.
+  async function loadSubAgentWork({ tool, projectId = '' } = {}) {
+    const target = tool ? subAgentNavigationTarget(tool) : null;
+    const workId = trimmedString(subAgentResultData(tool).id);
+    if (!target || !workId || subAgentWorkInflightIds.has(workId)) {
+      return false;
+    }
+    subAgentWorkInflightIds.add(workId);
+    try {
+      const request = {
+        agentId: target.agentId,
+        sessionId: target.sessionId,
+        runId: subAgentEffectiveRunId(tool, chatState.subAgentStatuses),
+        workId,
+        projectId,
+      };
+      const inspection = await inspectExactSubAgentWork(request);
+      applySubAgentInspection(request, inspection);
+      chatState.subAgentWork = mergeBoundedEntries(
+        chatState.subAgentWork,
+        { [workId]: inspectedWork(inspection) },
+        SUBAGENT_WORK_CACHE_LIMIT,
+      ).entries;
+      return true;
+    } catch {
+      return false;
+    } finally {
+      subAgentWorkInflightIds.delete(workId);
+    }
+  }
+
   function setCommandStatuses(updates) {
     chatState.commandStatuses = mergeBoundedEntries(
       chatState.commandStatuses,
@@ -347,8 +399,10 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     applySubAgentStatusUpdates,
     cancelCommand,
     cancelSubAgent,
+    loadSubAgentWork,
     reconcileSubAgentRows,
     dispose() {
+      subAgentWorkInflightIds.clear();
       subAgentStatusInflightKeys.clear();
       subAgentStatusVerificationKeys.clear();
     },

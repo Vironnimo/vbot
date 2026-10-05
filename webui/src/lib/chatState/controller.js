@@ -155,6 +155,7 @@ export function createChatController({
     applySubAgentStatusUpdates,
     cancelCommand,
     cancelSubAgent,
+    loadSubAgentWork,
     reconcileSubAgentRows,
   } = childTasks;
   const activity = createChatActivity({ chatState, operations, errorMessage });
@@ -969,6 +970,7 @@ export function createChatController({
     loadHistoryForSession,
     loadOlderHistory,
     loadReflectionChanges: reflections.loadChanges,
+    loadSubAgentWork,
     loadProject: (projectId) => operations.showProject(projectId),
     markSessionCompletionRead,
     reconcileRunSession,

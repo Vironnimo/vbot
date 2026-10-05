@@ -1051,6 +1051,8 @@
       <ChatActivityPanel
         timelineItems={activeTimelineItems}
         subAgentStatuses={chatState.subAgentStatuses}
+        subAgentWork={chatState.subAgentWork}
+        onSubAgentWorkWanted={actions.handleSubAgentWorkWanted}
         backgroundCommandStatuses={target.activeSessionState
           ?.backgroundCommandStatuses}
         commandStatuses={chatState.commandStatuses}

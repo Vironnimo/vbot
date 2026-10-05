@@ -348,6 +348,22 @@ async def test_list_shows_the_whole_tree(harness: SubAgentHarness) -> None:
     assert "note" in result["data"]
 
 
+async def test_inspect_reports_the_work_a_subagent_still_runs(harness: SubAgentHarness) -> None:
+    outer = await harness.spawn("outer")
+    await harness.settle()
+    outer_session = harness.subagent_session(outer["id"])
+    harness.loop.hold("inner")
+    inner = await harness.spawn("inner", session=outer_session)
+
+    projection = await harness.coordinator.inspect(
+        outer_session.agent_id, outer_session.session_id, outer["id"]
+    )
+
+    assert projection is not None
+    assert projection["status"] == "completed"
+    assert projection["running"] == [{"kind": "subagent", "id": inner["id"], "label": "Do inner"}]
+
+
 async def test_cancel_stops_a_subagent_and_everything_below_it(
     harness: SubAgentHarness,
 ) -> None:

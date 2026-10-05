@@ -42,7 +42,7 @@ The user's first own message in a Sub-Agent Session. It permanently ends forward
 - `spawn(context, arguments)` is the `subagent` handler; `message_parent(context, arguments)` the `message_parent` handler.
 - `stop_tree(address) -> int` is "Stop all" (`/stop all`, `chat.stop_all`, WebUI); returns how many Runs, queued items, commands and terminals it stopped.
 - `subagent_taken_over(address)` is Chat's takeover hook (`ChatLoopDependencies.subagent_taken_over`).
-- `inspect(agent_id, session_id, subagent_id, project_id=None)` returns the WebUI projection of one Sub-Agent Session (active Run, queued, or its latest persisted Run result); `chat_methods.py` serves it.
+- `inspect(agent_id, session_id, subagent_id, project_id=None)` returns the WebUI projection of one Sub-Agent Session (active Run, queued, or its latest persisted Run result) plus `running`, what it still runs besides its own Run, from `running_entries`: `{kind, id, label}` with kind `subagent` (working, not taken over; label its title), `command` or `terminal` (label its name or command line); `chat_methods.py` serves it.
 - `references_identity_agent(agent_id)` guards Identity rename while a followed Run in that Identity's Session is still forwarding.
 - `prompt_targets(agent, project_id)` feeds the `tool:subagent` block; `drain_activity()` is for shutdown.
 - Events (WebUI, through `ToolContext.emit`): `subagent_session_started` on `run` and `send` (`id`, bare `agent_id`, `session_id`, `project_id` when set, `status` `running`/`queued`, `delivery: "automatic"`, `activity_file`, `run_id` for `run`), `subagent_status_changed` on `cancel`. Events and metadata keep bare ids; Agent-facing results use the qualified address.

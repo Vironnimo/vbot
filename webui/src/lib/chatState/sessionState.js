@@ -75,6 +75,10 @@ export function createChatState() {
     commandsError: '',
     availableSkills: [],
     subAgentStatuses: {},
+    // What each Sub-Agent still runs besides its own Run (its working
+    // Sub-Agents, background commands and terminals), by public Sub-Agent id,
+    // as last inspected (bounded, newest last).
+    subAgentWork: {},
     // Live status of each handed-off shell command, by terminal id, from
     // `command_status_changed` (bounded, newest last).
     commandStatuses: {},

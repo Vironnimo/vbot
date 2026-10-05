@@ -242,16 +242,25 @@ export const subAgentToolStatusLabel = (
   return formatDurationMs(subAgentRunDurationMs(tool, subAgentStatuses));
 };
 
+const RUNNING_WORK_LABELS = {
+  subagent: () => t('chat.details.runningSubAgent'),
+  command: () => t('chat.details.runningCommand'),
+  terminal: () => t('chat.details.openTerminal'),
+};
+
 /**
  * Tooltip details behind a spawn row's status: the followed Run's state in
- * words, when it started and finished, how long it ran, and the Tool it is
- * calling while it runs.
+ * words, when it started and finished, how long it ran, the Tool it is
+ * calling while it runs, and the inspected work the Sub-Agent still runs
+ * besides its Run (`remainingWork`, from its inspection; its Sub-Agents by title,
+ * commands and terminals by command line).
  */
 export const subAgentStatusDetails = (
   tool,
   dotStatus,
   subAgentStatuses = {},
   nowMs = Date.now(),
+  remainingWork = [],
 ) => {
   const running = dotStatus === 'running';
   const startedAt = subAgentRunStartedAt(tool, subAgentStatuses);
@@ -278,6 +287,16 @@ export const subAgentStatusDetails = (
       value: lastToolName,
       mono: true,
     });
+  }
+  for (const work of Array.isArray(remainingWork) ? remainingWork : []) {
+    const label = RUNNING_WORK_LABELS[work?.kind];
+    if (label) {
+      rows.push({
+        label: label(),
+        value: work.label || work.id,
+        mono: work.kind !== 'subagent',
+      });
+    }
   }
   return { title: executionStateTitle(dotStatus), rows };
 };

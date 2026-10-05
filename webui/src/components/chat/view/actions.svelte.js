@@ -281,6 +281,13 @@ export function createChatViewActions(context) {
     });
   };
 
+  const handleSubAgentWorkWanted = ({ tool } = {}) => {
+    void context.chatController.loadSubAgentWork({
+      tool,
+      projectId: context.target.displayedSessionProjectId(),
+    });
+  };
+
   const handleCancelBackgroundCommand = async ({ terminalId } = {}) => {
     await context.chatController.cancelCommand({
       sessionState: context.target.activeSessionState,
@@ -413,6 +420,9 @@ export function createChatViewActions(context) {
     },
     get handleCancelSubAgent() {
       return handleCancelSubAgent;
+    },
+    get handleSubAgentWorkWanted() {
+      return handleSubAgentWorkWanted;
     },
     get handleCancelBackgroundCommand() {
       return handleCancelBackgroundCommand;

@@ -205,6 +205,66 @@ describe('Subagent rows', () => {
   );
 });
 
+describe('Sub-Agent work', () => {
+  it('reads what a Sub-Agent still runs through its exact work id', async () => {
+    const inspectSubAgentWork = vi.fn().mockResolvedValue({
+      id: 'sub-work',
+      agent_id: 'worker',
+      project_id: 'project-one',
+      session_id: 'child-session',
+      run_id: 'child-run',
+      status: 'completed',
+      running: [
+        { kind: 'subagent', id: 'sub_inner', label: 'Inner worker' },
+        { kind: 'command', id: 'term_1', label: 'npm run dev' },
+        { kind: 'unknown', id: 'x', label: 'dropped' },
+      ],
+    });
+    const { chatState, controller } = setupController({
+      operationOverrides: { inspectSubAgentWork },
+    });
+
+    await expect(
+      controller.loadSubAgentWork({
+        tool: reloadedRow('sub-work'),
+        projectId: 'project-one',
+      }),
+    ).resolves.toBe(true);
+
+    expect(inspectSubAgentWork).toHaveBeenCalledWith({
+      id: 'sub-work',
+      agent_id: 'worker@project-one',
+      session_id: 'child-session',
+    });
+    expect(chatState.subAgentWork).toEqual({
+      'sub-work': [
+        { kind: 'subagent', id: 'sub_inner', label: 'Inner worker' },
+        { kind: 'command', id: 'term_1', label: 'npm run dev' },
+      ],
+    });
+    expect(chatState.subAgentStatuses).toMatchObject({
+      'run:child-run': 'completed',
+      'workRun:sub-work': 'child-run',
+    });
+  });
+
+  it('leaves a row without a Sub-Agent id uninspected', async () => {
+    const inspectSubAgentWork = vi.fn();
+    const { chatState, controller } = setupController({
+      operationOverrides: { inspectSubAgentWork },
+    });
+    const legacy = reloadedRow('');
+    delete legacy.result.data.id;
+
+    await expect(controller.loadSubAgentWork({ tool: legacy })).resolves.toBe(
+      false,
+    );
+
+    expect(inspectSubAgentWork).not.toHaveBeenCalled();
+    expect(chatState.subAgentWork).toEqual({});
+  });
+});
+
 // A `run` row restored from History: its result names the Sub-Agent and its
 // Session, but not the child Run.
 function reloadedRow(workId) {

@@ -763,8 +763,13 @@ describe('ChatActivityPanel', () => {
     );
   });
 
-  it("shows a Sub-Agent's status details when hovering anywhere on its row", async () => {
+  it("shows a Sub-Agent's status details and remaining work when hovering anywhere on its row", async () => {
+    const onSubAgentWorkWanted = vi.fn();
     openPanel({
+      onSubAgentWorkWanted,
+      subAgentWork: {
+        'sub-a': [{ kind: 'subagent', id: 'sub_inner', label: 'Inner worker' }],
+      },
       timelineItems: [
         runItem([
           subAgentTask({
@@ -788,12 +793,19 @@ describe('ChatActivityPanel', () => {
     expect(
       tooltipElement.querySelector('.app-tooltip__title')?.textContent,
     ).toBe(t('chat.toolState.running'));
-    expect(
-      Array.from(tooltipElement.querySelectorAll('dt'), (term) => [
-        term.textContent,
-        term.nextElementSibling.textContent,
-      ]),
-    ).toContainEqual([t('chat.details.latestTool'), 'bash']);
+    const rows = Array.from(tooltipElement.querySelectorAll('dt'), (term) => [
+      term.textContent,
+      term.nextElementSibling.textContent,
+    ]);
+    expect(rows).toContainEqual([t('chat.details.latestTool'), 'bash']);
+    expect(rows).toContainEqual([
+      t('chat.details.runningSubAgent'),
+      'Inner worker',
+    ]);
+    // Looking at the row asks for its current work.
+    expect(onSubAgentWorkWanted).toHaveBeenCalledWith({
+      tool: expect.objectContaining({ id: 'a' }),
+    });
   });
 
   it('shows live command statuses and times on panel rows', () => {

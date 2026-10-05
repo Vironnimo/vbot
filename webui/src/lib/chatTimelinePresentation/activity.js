@@ -287,6 +287,7 @@ export const backgroundTasks = (
         const dotStatus = subAgentDotStatus(child, subAgentStatuses);
         const subAgentId = trimmedString(subAgentResultData(child).id);
         tasks.push({
+          subAgentId,
           id: subAgentId
             ? `subagent:${subAgentId}`
             : `${item.id ?? itemIndex}:${child.id ?? child.toolCallId ?? childIndex}`,

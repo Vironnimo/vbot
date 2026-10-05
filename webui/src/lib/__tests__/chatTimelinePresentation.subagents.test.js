@@ -583,7 +583,7 @@ describe('Sub-Agent addressing', () => {
 describe('Sub-Agent timing and last Tool', () => {
   const startedAt = '2026-09-04T12:00:00Z';
 
-  it('details the child Run state, moments, runtime and latest Tool', () => {
+  it('details the child Run state, moments, runtime, latest Tool and remaining work', () => {
     const nowMs = Date.parse(startedAt) + 4200;
     const moment = (value) => formatMoment(value, { nowMs, seconds: true });
 
@@ -593,6 +593,11 @@ describe('Sub-Agent timing and last Tool', () => {
         'running',
         { 'runStarted:run-child': startedAt, 'runTool:run-child': 'bash' },
         nowMs,
+        [
+          { kind: 'subagent', id: 'sub_inner', label: 'Inner worker' },
+          { kind: 'command', id: 'term_1', label: 'npm run dev' },
+          { kind: 'terminal', id: 'term_2', label: '' },
+        ],
       ),
     ).toEqual({
       title: t('chat.toolState.running'),
@@ -600,8 +605,20 @@ describe('Sub-Agent timing and last Tool', () => {
         { label: t('chat.details.started'), value: moment(startedAt) },
         { label: t('chat.details.runningFor'), value: seconds('4.2') },
         { label: t('chat.details.latestTool'), value: 'bash', mono: true },
+        {
+          label: t('chat.details.runningSubAgent'),
+          value: 'Inner worker',
+          mono: false,
+        },
+        {
+          label: t('chat.details.runningCommand'),
+          value: 'npm run dev',
+          mono: true,
+        },
+        { label: t('chat.details.openTerminal'), value: 'term_2', mono: true },
       ],
     });
+    // A finished Sub-Agent can leave a background command running.
     expect(
       subAgentStatusDetails(
         runningSubAgentTool(),
@@ -612,6 +629,7 @@ describe('Sub-Agent timing and last Tool', () => {
           'runTool:run-child': 'bash',
         },
         nowMs,
+        [{ kind: 'command', id: 'term_1', label: 'npm run dev' }],
       ),
     ).toEqual({
       title: t('chat.toolState.success'),
@@ -619,6 +637,11 @@ describe('Sub-Agent timing and last Tool', () => {
         { label: t('chat.details.started'), value: moment(startedAt) },
         { label: t('chat.details.finished'), value: moment(nowMs) },
         { label: t('chat.details.duration'), value: seconds('4.2') },
+        {
+          label: t('chat.details.runningCommand'),
+          value: 'npm run dev',
+          mono: true,
+        },
       ],
     });
   });

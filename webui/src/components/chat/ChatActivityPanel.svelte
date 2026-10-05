@@ -22,6 +22,10 @@
   let {
     timelineItems = [],
     subAgentStatuses = {},
+    // What each Sub-Agent still runs besides its Run, by Sub-Agent id, as
+    // last read; a row asks for it while the user looks at it.
+    subAgentWork = {},
+    onSubAgentWorkWanted = () => {},
     backgroundCommandStatuses = {},
     commandStatuses = {},
     reflectionTasks = [],
@@ -184,10 +188,15 @@
               task.dotStatus,
               subAgentStatuses,
               Date.now(),
+              subAgentWork[task.subAgentId],
             )
           : reflectionStatusDetails(task.row);
     return { ...details, placement: 'left' };
   };
+
+  // The row's card; `_work` only marks which reading of the Sub-Agent's work
+  // the card belongs to.
+  const rowDetails = (task, _work) => () => statusDetails(task);
 
   const reflectionStatusDetails = (row) => {
     const started = formatMoment(row?.startedAt, { seconds: true });
@@ -370,9 +379,15 @@
   {:else}
     <!-- The whole row shows the Sub-Agent's status details, not only its
          small status icon. -->
+    <!-- A new function whenever the Sub-Agent's work was read again, so an
+         open card shows what arrived. Pointer and focus only ask for that
+         work; the row's controls stay the interactive elements. -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="chat-activity__task-row"
-      use:tooltip={() => statusDetails(task)}
+      use:tooltip={rowDetails(task, subAgentWork[task.subAgentId])}
+      onpointerenter={() => onSubAgentWorkWanted({ tool: task.tool })}
+      onfocusin={() => onSubAgentWorkWanted({ tool: task.tool })}
     >
       <Button
         variant="tertiary"

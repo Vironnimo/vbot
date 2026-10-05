@@ -128,6 +128,14 @@ _LOGGER = get_logger("subagents")
 _FOLLOW_UP_PLACEHOLDER = "<message>"
 
 
+# The WebUI's names for the kinds of running work `inspect` reports.
+_INSPECTED_WORK_KINDS = {
+    "Sub-Agent": "subagent",
+    "background command": "command",
+    "terminal": "terminal",
+}
+
+
 @dataclass
 class _StartLock:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -246,11 +254,23 @@ class SubAgentCoordinator:
         *,
         project_id: str | None = None,
     ) -> JsonObject | None:
-        """Return the WebUI projection of one Sub-Agent Session's current state."""
+        """Return the WebUI projection of one Sub-Agent Session's current state.
+
+        ``running`` lists what the Sub-Agent still runs besides its own Run: its
+        working Sub-Agents, background commands and terminals.
+        """
         address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
         session = await self._runtime.chat_sessions.get_async(address)
         manager = self._runtime.chat_run_manager
-        projection: JsonObject = {"id": subagent_id, "agent_id": agent_id, "session_id": session_id}
+        projection: JsonObject = {
+            "id": subagent_id,
+            "agent_id": agent_id,
+            "session_id": session_id,
+            "running": [
+                {"kind": _INSPECTED_WORK_KINDS[entry.kind], "id": entry.id, "label": entry.label}
+                for entry in await running_entries(self._runtime, address)
+            ],
+        }
         if project_id is not None:
             projection["project_id"] = project_id
         active = manager.active_run(agent_id=agent_id, session_id=session_id, project_id=project_id)
