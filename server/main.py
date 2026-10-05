@@ -62,6 +62,8 @@ _APP_ROOT = Path(__file__).resolve().parents[1]
 CRASH_LOG_NAME = "server-crash.log"
 # Checked at each start: a larger crash log moves to its single previous generation.
 _CRASH_LOG_ROTATE_BYTES = 1024 * 1024
+# Bound transport draining before lifespan teardown cancels Runs and closes services.
+_GRACEFUL_SHUTDOWN_SECONDS = 5
 
 _UVICORN_IMPORT_ERROR: ModuleNotFoundError | None
 
@@ -118,12 +120,14 @@ def main(argv: list[str] | None = None) -> None:
         )
         log_manager: LogManager | None = None
         server_holder: dict[str, Any] = {}
+        shutdown_event = asyncio.Event()
         try:
 
             def request_shutdown(initiator: str = UNKNOWN_STOP_INITIATOR) -> None:
                 lifecycle.request_stop("control", initiator=initiator)
                 server = server_holder.get("server")
                 if server is not None:
+                    shutdown_event.set()
                     server.should_exit = True
 
             restart_scheduled = False
@@ -162,6 +166,7 @@ def main(argv: list[str] | None = None) -> None:
                 "server_bind": server_bind,
                 "shutdown_token": control.token,
                 "request_shutdown": request_shutdown,
+                "shutdown_event": shutdown_event,
                 "request_restart": request_restart,
                 "on_ready": on_ready,
                 "on_stopped": on_stopped,
@@ -175,6 +180,7 @@ def main(argv: list[str] | None = None) -> None:
                 port=server_bind["listen_port"],
                 # Keep synchronous WebSocket compression off the shared Event Loop.
                 ws_per_message_deflate=False,
+                timeout_graceful_shutdown=_GRACEFUL_SHUTDOWN_SECONDS,
                 log_level="info",
                 access_log=False,
                 log_config=build_uvicorn_log_config(),
@@ -190,6 +196,7 @@ def main(argv: list[str] | None = None) -> None:
 
             def handle_exit(sig: int, frame: FrameType | None) -> None:
                 lifecycle.request_stop("signal", signal=_signal_name(sig))
+                shutdown_event.set()
                 uvicorn_handle_exit(sig, frame)
 
             server.handle_exit = handle_exit  # type: ignore[method-assign]

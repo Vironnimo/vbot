@@ -256,6 +256,7 @@ def create_app(
     server_bind: ServerBindState | None = None,
     shutdown_token: str | None = None,
     request_shutdown: Callable[[str], None] | None = None,
+    shutdown_event: asyncio.Event | None = None,
     request_restart: Callable[[], None] | None = None,
     safe_startup_mode: Literal["verification", "test"] | None = None,
     on_ready: Callable[[Any], None] | None = None,
@@ -270,6 +271,8 @@ def create_app(
     shutdown, after the Runtime stopped, and receives whether it stopped cleanly.
     A failed Runtime shutdown is reported only that way, not raised to uvicorn:
     the Runtime already logged each failed step.
+    The process host sets ``shutdown_event`` when it starts stopping, ending SSE
+    before it waits for HTTP responses and enters lifespan teardown.
     """
     if FastAPI is None:
         raise RuntimeError(
@@ -290,6 +293,7 @@ def create_app(
     async def lifespan(app: FastAPIType) -> AsyncIterator[None]:
         app_runtime.start()
         _initialize_app_state(app, app_runtime, server_bind=resolved_server_bind)
+        app.state.shutdown_event = shutdown_event if shutdown_event is not None else asyncio.Event()
         oauth_redirects = getattr(app_runtime, "oauth_redirects", None)
         if oauth_redirects is not None:
             oauth_redirects.bind(oauth_callback_url(resolved_server_bind))
@@ -328,6 +332,7 @@ def create_app(
         try:
             yield
         finally:
+            app.state.shutdown_event.set()
             runtime_stopped_cleanly = False
             try:
                 server_logger.debug("Server application stopping")
@@ -695,6 +700,7 @@ def create_app(
             _sse_run_events(
                 run,
                 after_sequence=after_sequence,
+                shutdown_event=request.app.state.shutdown_event,
                 file_delivery=request.app.state.file_delivery,
             ),
             media_type="text/event-stream",
@@ -743,6 +749,7 @@ def create_app(
             _sse_run_events(
                 inspection.run,
                 after_sequence=claims["after_sequence"],
+                shutdown_event=request.app.state.shutdown_event,
                 file_delivery=delivery,
                 include_file_urls=True,
             ),
