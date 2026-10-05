@@ -18,6 +18,7 @@ from cli.application import monitor as monitor_module
 from cli.application.monitor import MonitorStatus, ServerMonitor
 from cli.server_management import ServerState
 
+_STARTED_AT = "2026-10-05T12:58:10.000000Z"
 _RUN_EVENT = {
     "type": "run_completed",
     "sequence": 5,
@@ -64,13 +65,23 @@ def test_monitor_follows_the_stream_as_tray_and_resumes_after_a_restart():
         assert connection.request is not None
         paths.append(connection.request.path)
         if len(paths) == 1:
-            hello = {"epoch": "e1", "last_sequence": 4, "replay_status": "fresh"}
+            hello = {
+                "epoch": "e1",
+                "last_sequence": 4,
+                "replay_status": "fresh",
+                "server": {"version": "1.2.3", "started_at": _STARTED_AT},
+            }
             await connection.send(json.dumps({"type": "connection_ready", **hello}))
             await connection.send(json.dumps({"type": "heartbeat"}))
             await connection.send(json.dumps(_RUN_EVENT))
             await connection.close(1012, "restart")
             return
-        hello = {"epoch": "e1", "last_sequence": 5, "replay_status": "resumed"}
+        hello = {
+            "epoch": "e1",
+            "last_sequence": 5,
+            "replay_status": "resumed",
+            "server": {"version": "1.2.3", "started_at": _STARTED_AT},
+        }
         await connection.send(json.dumps({"type": "connection_ready", **hello}))
         resumed.set()
         await connection.wait_closed()
@@ -86,14 +97,15 @@ def test_monitor_follows_the_stream_as_tray_and_resumes_after_a_restart():
                 await asyncio.wait_for(resumed.wait(), timeout=5)
             finally:
                 await asyncio.to_thread(monitor.close)
-            assert monitor.status == MonitorStatus(url, "connected", True)
+            assert monitor.status == MonitorStatus(url, "connected", True, "1.2.3", _STARTED_AT)
         return calls
 
     calls = asyncio.run(scenario())
 
     url = calls[0][1].url
     assert calls == [
-        ("status", MonitorStatus(url, "connected", True)),
+        # The hello names the server process, so the tray knows since when it runs.
+        ("status", MonitorStatus(url, "connected", True, "1.2.3", _STARTED_AT)),
         ("event", _RUN_EVENT),
         ("lost", 1012),
     ]
@@ -107,6 +119,8 @@ def test_monitor_follows_the_stream_as_tray_and_resumes_after_a_restart():
     ("health", "recorded", "expected"),
     [
         pytest.param(None, "absent", ("refused", False), id="nothing-listens"),
+        # Its own server process lives but does not listen: starting or stopping.
+        pytest.param(None, "unresponsive", ("not_listening", False), id="process-not-listening"),
         pytest.param('{"status":"ok"}', "running", ("rejected", True), id="vbot-refuses-stream"),
         pytest.param("<html></html>", "foreign", ("rejected", False), id="foreign-listener"),
         pytest.param(TimeoutError, "unresponsive", ("unresponsive", False), id="busy-server"),
@@ -163,8 +177,10 @@ def test_monitor_classifies_a_target_without_an_event_stream(
 
     assert name == "status"
     assert (status.connection, status.vbot) == expected
-    # Only an unanswered `/health` request is classified, from that observation alone.
-    assert bool(observed) == (health is TimeoutError)
+    # Only a refused connect or an unanswered `/health` request is classified,
+    # from that observation alone.
+    assert bool(observed) == (health is None or health is TimeoutError)
     assert all(
-        (item.reachable, item.is_vbot, item.timed_out) == (False, False, True) for item in observed
+        (item.reachable, item.is_vbot, item.timed_out) == (False, False, health is TimeoutError)
+        for item in observed
     )

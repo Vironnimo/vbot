@@ -9,8 +9,11 @@ from contextlib import aclosing, suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+import psutil  # type: ignore[import-untyped]
+
 from core.performance import count
 from core.runs import RUN_AGENT_ACTIVITY_FIELD, RunStatus
+from core.utils.timestamps import format_canonical_timestamp
 from server._app_lifecycle import _app_chat_runs
 from server._http_dependencies import Request, WebSocket
 from server.clients import ClientEntry, ClientRegistry
@@ -203,6 +206,20 @@ def _connection_replay_status(
     if client_after_sequence < oldest_retained_sequence - 1:
         return REPLAY_STATUS_GAP
     return REPLAY_STATUS_RESUMED
+
+
+def _server_identity(runtime: Any) -> JsonObject:
+    """Name the running server for the connection_ready hello: version and start time.
+
+    ``started_at`` is when this server process started (canonical UTC), so a client
+    that connects later can tell how long the server has been running.
+    """
+    try:
+        version = str(runtime.config.get("VBOT_VERSION") or runtime.build.version)
+    except Exception:
+        version = ""
+    started = datetime.fromtimestamp(psutil.Process().create_time(), tz=UTC)
+    return {"version": version, "started_at": format_canonical_timestamp(started)}
 
 
 def _active_runs_snapshot(state: Any) -> list[JsonObject]:

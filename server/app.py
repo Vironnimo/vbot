@@ -94,11 +94,13 @@ from server._streams import (
     _queues_snapshot,
     _register_ws_client,
     _replay_after_sequence,
+    _server_identity,
     _sse_run_events,
     _stream_websocket_events,
     _unregister_ws_client,
 )
 from server._terminal_socket import serve_terminal_socket
+from server.events import SERVER_STOPPING_EVENT
 from server.file_delivery import PREVIEW_URL_PREFIX
 from server.live.owner import LIVE_SOCKET_CLOSE_UNKNOWN_CALL
 from server.rpc.errors import RPC_ERROR_INTERNAL, RPC_ERROR_INVALID_REQUEST, RpcError
@@ -292,6 +294,7 @@ def create_app(
         if oauth_redirects is not None:
             oauth_redirects.bind(oauth_callback_url(resolved_server_bind))
         app.state.control_token = shutdown_token
+        app.state.server_identity = _server_identity(app_runtime)
         app.state.request_restart = request_restart
         app.state.activity.start()
         app.state.statistics_warmup_task = (
@@ -385,7 +388,10 @@ def create_app(
             raise HTTPException(status_code=404)
         if request_shutdown is None:
             raise HTTPException(status_code=503, detail="Server shutdown is unavailable")
-        request_shutdown(normalize_stop_initiator(request.headers.get(CONTROL_INITIATOR_HEADER)))
+        initiator = normalize_stop_initiator(request.headers.get(CONTROL_INITIATOR_HEADER))
+        # Tell open app clients who stops the server before uvicorn closes their sockets.
+        request.app.state.event_bus.publish(SERVER_STOPPING_EVENT, {"initiator": initiator})
+        request_shutdown(initiator)
         return {"status": "stopping"}
 
     @app.post("/api/rpc")
@@ -776,6 +782,7 @@ def create_app(
                 "replay_status": replay_status,
                 "active_runs": active_runs,
                 "queues": _queues_snapshot(websocket.app.state),
+                "server": websocket.app.state.server_identity,
             }
             await websocket.send_json(hello_frame)
             if replay_status == REPLAY_STATUS_RESUMED:

@@ -1,8 +1,8 @@
-"""Native vBot status window: version, server, update source and update progress.
+"""Native vBot status window: version, server state, details and the activity history.
 
-The window lives on the tray's UI thread. Its activity pane shows update
-progress like the console of a waiting ``vbot update``; its buttons invoke the
-same controller actions as the tray menu.
+The window lives on the tray's UI thread. Its activity pane shows what happened
+to the server and to updates, newest last; its buttons invoke the same
+controller actions as the tray menu.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ _BUTTON_SLOTS = 3
 _BUTTON_ID = 100
 _IDCANCEL = 2
 _SIZE_MINIMIZED = 1
-_EMPTY_ACTIVITY = "No update activity since the tray started."
+_EMPTY_ACTIVITY = "No activity recorded yet."
 _PATH_ROWS = frozenset({"Data", "Installed in"})
 
 _shcore = ctypes.WinDLL("shcore")
@@ -438,7 +438,7 @@ class StatusWindow:
         native.draw_text(
             dc,
             wintypes.RECT(margin, caption, right, caption + native.scale(24, s)),
-            "Update activity",
+            "Activity",
             self._fonts["caption"],
             colors.foreground,
             line,

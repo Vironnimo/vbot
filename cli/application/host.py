@@ -6,8 +6,9 @@ import logging
 import os
 import subprocess
 import sys
-import time
 import webbrowser
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from types import EllipsisType
@@ -17,6 +18,7 @@ from urllib.parse import urlencode
 import psutil  # type: ignore[import-untyped]
 
 from cli.application import operations, processes
+from cli.application.activity import JOURNAL_NAME, ActivityJournal, ActivityRecorder
 from cli.application.monitor import MonitorStatus, ServerMonitor
 from cli.application.notifications import Notifier
 from cli.application.state import (
@@ -35,9 +37,9 @@ from cli.server_management import HealthProbeResult, ServerInstance, ServerState
 from core.utils.logging import LogManager
 from core.utils.processes import subprocess_creation_flags
 from core.utils.server_control import process_started
+from core.utils.timestamps import canonical_timestamp
 
 _LOGGER = logging.getLogger("vbot.application.host")
-_ACTIVITY_LIMIT = 200
 _FAILED_UPDATE_PHASES = frozenset({"failed", "rolled_back", "needs_attention"})
 #: How long a successor must survive before the handoff counts as started.
 _SUCCESSOR_GRACE_SECONDS = 2.0
@@ -50,7 +52,8 @@ class ApplicationFacade:
 
     ``state`` stays cheap enough to call every second: update records are
     reread only when their files change, and the server state comes from the
-    event-stream monitor that :meth:`watch` starts.
+    event-stream monitor that :meth:`watch` starts. What happens to the server
+    and to updates is recorded in the persisted activity history.
 
     ``running_version`` names the installed version whose code this tray runs,
     by default derived from the loaded module; ``None`` (a development checkout)
@@ -76,12 +79,15 @@ class ApplicationFacade:
         self._monitor: ServerMonitor | None = None
         self._notifier: Notifier | None = None
         self._progress_id: str | None = None
-        self._progress_key: tuple[str, str, str | None] | None = None
+        self._progress_key: tuple[str, str | None] | None = None
         self._progress_announced = ""
         self._progress_history = False
         self._observed = False
-        self._activity: list[str] = []
         self._last_update = ""
+        self._activity = ActivityRecorder(
+            ActivityJournal(install.root / "logs" / JOURNAL_NAME),
+            owns_server=install.owns_server,
+        )
 
     def state(self) -> TrayState:
         try:
@@ -90,7 +96,7 @@ class ApplicationFacade:
         except Exception as error:
             self.report_error(f"Could not read update status: {error}")
             operation, update_idle = None, False
-        activity = self._observe_progress(operation)
+        self._observe_update(operation)
         server_state, server_url = self._server()
         version = self._version()
         return TrayState(
@@ -102,10 +108,25 @@ class ApplicationFacade:
             exit_requested=_valid_exit_request(self._install.root),
             error=self._status_error,
             server_url=server_url,
-            update_activity=activity,
+            activity=self._activity.journal.lines(),
+            running_since=self._activity.running_since(),
             details=self._details(server_url),
             restart_pending=update_idle and self._activation_changed(),
         )
+
+    def record_tray_start(self, *, successor: bool) -> None:
+        """Note in the activity history that this tray started."""
+
+        try:
+            version = self._version()
+        except ApplicationError, OSError:
+            version = ""
+        if successor:
+            kind, text = "tray_restarted", f"Tray restarted into vBot {version}"
+        else:
+            kind = "tray_started"
+            text = f"vBot tray started (vBot {version})" if version else "vBot tray started"
+        self._activity.journal.record(kind, text)
 
     def watch(self, sink: TraySink) -> None:
         """Follow the server's event stream and report changes and toasts to ``sink``."""
@@ -123,7 +144,7 @@ class ApplicationFacade:
         )
         monitor = ServerMonitor(
             self._monitor_target,
-            _MonitorEvents(notifier, sink),
+            _MonitorEvents(notifier, self._activity, sink),
             local=self._install.owns_server,
             user_agent=f"vBot-Tray/{self._version() or 'unknown'}",
             classify=self._classify_server if self._install.owns_server else None,
@@ -137,22 +158,32 @@ class ApplicationFacade:
 
     def start_server(self) -> None:
         self._require_server()
-        with exclusive(self._install.root, "operation"):
+        self._activity.expect_start()
+        with (
+            self._recording("Could not start the server"),
+            exclusive(self._install.root, "operation"),
+        ):
             self._require_success(processes.start(self._install))
         self._clear_status_error()
         self._reconnect()
 
     def stop_server(self, *, initiator: str = "tray_stop") -> None:
         self._require_server()
-        self._expect_stop()
-        with exclusive(self._install.root, "operation", allow_removal=True):
+        self._expect_stop(initiator)
+        with (
+            self._recording("Could not stop the server"),
+            exclusive(self._install.root, "operation", allow_removal=True),
+        ):
             self._require_success(processes.stop(self._install, initiator=initiator))
         self._clear_status_error()
 
     def restart_server(self) -> None:
         self._require_server()
-        self._expect_stop()
-        with exclusive(self._install.root, "operation"):
+        self._expect_stop("tray_restart")
+        with (
+            self._recording("Could not restart the server"),
+            exclusive(self._install.root, "operation"),
+        ):
             self._require_success(processes.stop(self._install, initiator="tray_restart"))
             self._require_success(processes.start(self._install))
         self._clear_status_error()
@@ -186,7 +217,8 @@ class ApplicationFacade:
             )
 
     def start_update(self) -> None:
-        operations.request_update(self._install)
+        with self._recording("Could not start an update"):
+            operations.request_update(self._install)
 
     def open_logs(self) -> None:
         path = self._install.root / "logs"
@@ -256,9 +288,20 @@ class ApplicationFacade:
     def _clear_status_error(self) -> None:
         self._status_error = ""
 
-    def _expect_stop(self) -> None:
+    def _expect_stop(self, initiator: str) -> None:
+        self._activity.expect_stop(initiator)
         if self._notifier is not None:
             self._notifier.expect_server_stop()
+
+    @contextmanager
+    def _recording(self, failure: str) -> Iterator[None]:
+        """Record a failed tray action in the activity history and re-raise it."""
+
+        try:
+            yield
+        except Exception as error:
+            self._activity.action_failed(f"{failure}: {error}")
+            raise
 
     def _reconnect(self) -> None:
         if self._monitor is not None:
@@ -301,6 +344,8 @@ class ApplicationFacade:
             return "not_applicable", status.url or ""
         if status.connection == "rejected":
             server_state = "running" if status.vbot else "conflict"
+        elif status.connection == "not_listening":
+            server_state = self._activity.phase()
         else:
             server_state = {
                 "connected": "running",
@@ -345,52 +390,60 @@ class ApplicationFacade:
             return True
         return operation is not None and not operation.terminal
 
-    def _observe_progress(self, operation: Operation | None) -> tuple[str, ...]:
-        """Record update progress like a waiting ``vbot update`` prints it."""
+    def _observe_update(self, operation: Operation | None) -> None:
+        """Record update milestones and results in the activity history.
+
+        Entries name their operation, so a tray that restarts after the update,
+        or starts after one ran without a tray, records each milestone once.
+        """
 
         first, self._observed = not self._observed, True
         if operation is None:
-            return ()
+            return
+        journal = self._activity.journal
         if operation.id != self._progress_id:
             self._progress_id, self._progress_key = operation.id, None
-            self._progress_announced, self._activity = "", []
+            self._progress_announced = ""
             # An update already finished when the tray started is only history.
             self._progress_history = first and operation.terminal
-        key = (operation.phase, operation.message, operation.target_label)
+            if not operation.terminal:
+                journal.record("update_started", "Update started", ref=f"{operation.id}:started")
+        key = (operation.phase, operation.target_label)
         if key == self._progress_key:
-            return tuple(self._activity)
+            return
         self._progress_key = key
+        before, target = operation.previous_label, operation.target_label
         if operation.terminal:
-            self._last_update = (
-                f"{operations.result_summary(self._install, operation)} "
-                f"({_local_time(operation.updated_at, full=True)})"
-            )
-            self._source_label = None
-        if self._progress_history:
-            return ()
-        stamp = time.strftime("%H:%M:%S")
-        if operation.target_label and operation.target_label != self._progress_announced:
-            self._progress_announced = operation.target_label
-            before = operation.previous_label
-            self._activity.append(
-                f"{stamp}  Updating vBot: {before} -> {operation.target_label}"
-                if before and before != operation.target_label
-                else f"{stamp}  Target version: {operation.target_label}"
-            )
-        if not operation.terminal:
-            self._activity.append(f"{stamp}  {operation.message}")
-        else:
             summary = operations.result_summary(self._install, operation)
-            self._activity.append(f"{stamp}  {summary}")
-            if operation.phase in _FAILED_UPDATE_PHASES:
-                if operation.message:
-                    self._activity.append(f"{' ' * 10}{operation.message}")
-                if operation.error:
-                    self._activity.append(f"{' ' * 10}Reason: {operation.error}")
-            if self._notifier is not None:
+            self._last_update = f"{summary} ({_local_time(operation.updated_at, full=True)})"
+            self._source_label = None
+            failed = operation.phase in _FAILED_UPDATE_PHASES
+            if failed:
+                reason = f"Reason: {operation.error}" if operation.error else ""
+                text = " ".join(part for part in (summary, operation.message, reason) if part)
+            elif operation.phase == "completed" and target and before and before != target:
+                text = f"{summary} ({before} -> {target})"
+            else:
+                text = summary
+            journal.record(
+                "update_failed" if failed else "update_finished",
+                text,
+                level="error" if failed else "info",
+                ref=operation.id,
+                at=_canonical_or_empty(operation.updated_at),
+            )
+            if not self._progress_history and self._notifier is not None:
                 self._notifier.update_finished(operation, summary)
-        del self._activity[:-_ACTIVITY_LIMIT]
-        return tuple(self._activity)
+            return
+        if target and target != self._progress_announced:
+            self._progress_announced = target
+            journal.record(
+                "update_target",
+                f"Updating vBot: {before} -> {target}"
+                if before and before != target
+                else f"Target version: {target}",
+                ref=f"{operation.id}:target",
+            )
 
     def _details(self, server_url: str) -> tuple[tuple[str, str], ...]:
         rows: list[tuple[str, str]] = []
@@ -423,20 +476,28 @@ class ApplicationFacade:
 
 
 class _MonitorEvents:
-    """Deliver monitor observations to the notifier and wake the tray on status changes."""
+    """Deliver monitor observations to the notifier and the activity history.
 
-    def __init__(self, notifier: Notifier, sink: TraySink) -> None:
+    Status changes and connection losses also wake the tray.
+    """
+
+    def __init__(self, notifier: Notifier, activity: ActivityRecorder, sink: TraySink) -> None:
         self._notifier = notifier
+        self._activity = activity
         self._sink = sink
 
     def status_changed(self, status: MonitorStatus) -> None:
+        self._activity.status_changed(status)
         self._notifier.status_changed(status)
         self._sink.changed()
 
     def connection_lost(self, close_code: int) -> None:
+        self._activity.connection_lost(close_code)
         self._notifier.connection_lost(close_code)
+        self._sink.changed()
 
     def event_received(self, event: dict[str, Any]) -> None:
+        self._activity.event_received(event)
         self._notifier.event_received(event)
 
 
@@ -462,23 +523,27 @@ def main() -> int:
             manager = LogManager(data_dir=install.root, enable_console=False)
             try:
                 facade = ApplicationFacade(install)
+                facade.record_tray_start(successor=successor)
+                start = False
                 try:
                     operations.recover_operations(install)
                     operation = operations.status(install)
                     # A successor keeps the server as its predecessor left it,
                     # including a server the user stopped on purpose.
-                    if (
+                    start = (
                         not successor
                         and install.owns_server
                         and (operation is None or operation.terminal)
-                    ):
-                        facade.start_server()
-                except Exception as error:
-                    _LOGGER.exception(
-                        "Could not recover or start the packaged application", exc_info=error
                     )
+                except Exception as error:
+                    _LOGGER.exception("Could not recover the packaged application", exc_info=error)
                     facade.report_error(f"Startup failed: {error}")
-                run_tray(facade, install.version() / "app" / "desktop" / "icon.ico")
+                # The tray appears at once; the server then starts as a visible tray action.
+                run_tray(
+                    facade,
+                    install.version() / "app" / "desktop" / "icon.ico",
+                    start_server=start,
+                )
             finally:
                 manager.close()
                 contained(install.root, "host.json").unlink(missing_ok=True)
@@ -501,6 +566,15 @@ def _desktop_target() -> tuple[str, int] | None:
         return None
     host, port = target.get("host"), target.get("port")
     return (host, port) if isinstance(host, str) and isinstance(port, int) else None
+
+
+def _canonical_or_empty(value: str) -> str:
+    """The canonical form of a recorded timestamp; empty records the entry as of now."""
+
+    try:
+        return canonical_timestamp(value)
+    except ValueError:
+        return ""
 
 
 def _local_time(value: str, *, full: bool = False) -> str:

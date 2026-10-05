@@ -13,6 +13,7 @@ from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-
 
 from core.runs import RunKind, RunStatus
 from core.sessions import SessionAddress
+from core.utils.timestamps import is_canonical_timestamp
 from server.app import create_app
 from server.clients import ClientRegistry
 from server.events import APP_ERROR_EVENT, ServerEventBus
@@ -52,6 +53,7 @@ def test_websocket_handshake_sends_connection_ready_frame_with_no_pre_connect_re
 
     # Sequence 4 is this window's own presence connect signal, published on
     # register before the hello read; the 3 pre-connect run events are not replayed.
+    server = hello.pop("server")
     assert hello == {
         "type": "connection_ready",
         "epoch": "epoch-abc",
@@ -60,6 +62,9 @@ def test_websocket_handshake_sends_connection_ready_frame_with_no_pre_connect_re
         "active_runs": [],
         "queues": [],
     }
+    # The hello names the running server, so a late client knows since when it runs.
+    assert set(server) == {"version", "started_at"}
+    assert is_canonical_timestamp(server["started_at"])
     # No "sequence" field on the hello: it must not feed the client's
     # lastSequence bookkeeping.
     assert "sequence" not in hello
@@ -287,6 +292,7 @@ async def test_shared_socket_closes_subscription_immediately(
     app = _stub_app(tmp_path)
     app.state.event_bus = bus
     app.state.client_registry = ClientRegistry()
+    app.state.server_identity = {"version": "1.0", "started_at": "2026-01-01T00:00:00.000000Z"}
     monkeypatch.setattr(server_app, "_active_runs_snapshot", lambda _state: [])
     monkeypatch.setattr(server_app, "_queues_snapshot", lambda _state: [])
     held_streams: list[Any] = []
