@@ -89,6 +89,20 @@ class ChatSessionManager:
         return self._store.database
 
     @property
+    def history_id(self) -> str:
+        """Opaque continuity token of the Session history for projections that follow it.
+
+        Stable across restarts. A data snapshot restore keeps the database
+        identity but brings back older history, after which a Session can reach
+        a ``(generation_id, history_revision)`` it had before, with other
+        content. The token therefore also names the database's latest restore
+        (``Database.restore_id``): a projection that sees another token rereads
+        every Session instead of trusting its freshness stamps.
+        """
+        database = self._store.database
+        return f"{database.database_id}:{database.restore_id or ''}"
+
+    @property
     def archive_ledger(self) -> SessionArchiveLedger:
         """The archive entries kept beside the Sessions they hold."""
         return self._archive_ledger

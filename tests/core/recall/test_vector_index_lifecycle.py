@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from core.chat import ChatMessage
-from core.recall import _passage_catalog
+from core.database import create_data_snapshot, restore_data_snapshot
+from core.recall import RecallBackendContext, VectorRecallBackend, _passage_catalog
 from core.recall.passages import build_session_passages
 from core.recall.vector import SEMANTIC_PARTIAL_REASON
 from core.sessions import ChatSessionManager, SessionAddress
@@ -118,6 +120,53 @@ async def test_history_edit_replaces_changed_and_vanished_passages(
         - {passage.text for passage in old_passages}
     )
     assert len(embedded) < len(new_passages)
+
+
+async def test_a_restored_history_replaces_the_passages_of_discarded_turns(
+    tmp_path: Path, sessions: ChatSessionManager
+) -> None:
+    session = sessions.create("coder", session_id="restored")
+    session.append(ChatMessage.user("I bought some carrots", timestamp=timestamp(1)))
+    snapshot = create_data_snapshot(tmp_path, reason="test", databases=(sessions.database,))
+    assert snapshot is not None
+    session.append(ChatMessage.user("My car broke down", timestamp=timestamp(2)))
+    embeddings = StubEmbeddings()
+
+    def backend(manager: ChatSessionManager) -> VectorRecallBackend:
+        context = RecallBackendContext(data_dir=tmp_path, sessions=manager, embeddings=embeddings)
+        return VectorRecallBackend(context)
+
+    recall = backend(sessions)
+    try:
+        await embed_documents(recall.index, sessions, embeddings)
+        assert "broke down" in (await recall.search_page(request("car"))).hits[0].text
+    finally:
+        recall.close()
+    projected = sessions.list_history_versions([session.address])[session.address]
+    sessions.close()
+
+    # The restored history keeps its identity, and a new turn catches up with the
+    # indexed revision before the restarted backend searches: only the restore
+    # tells the new turn apart from the discarded one.
+    restore_data_snapshot(tmp_path, snapshot, names=("sessions",))
+    restored = ChatSessionManager(tmp_path)
+    recall = backend(restored)
+    try:
+        restored.get(session.address).append(
+            ChatMessage.user("Bananas are tasty fruit", timestamp=timestamp(3))
+        )
+        assert restored.list_history_versions([session.address])[session.address] == projected
+        await embed_documents(recall.index, restored, embeddings)
+        page = await recall.search_page(request("car"))
+        current = build_session_passages(restored.get(session.address).load_active())
+    finally:
+        recall.close()
+        restored.close()
+
+    assert page.hits and all("broke down" not in hit.text for hit in page.hits)
+    assert "Bananas" in page.hits[0].text
+    rows = passage_rows(recall.index.path, "coder", "restored")
+    assert sorted(rows.values()) == sorted(passage.text for passage in current)
 
 
 async def test_filtered_search_keeps_other_sessions_and_prunes_the_whole_scope(

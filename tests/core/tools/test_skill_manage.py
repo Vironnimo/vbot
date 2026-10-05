@@ -508,6 +508,36 @@ def test_a_librarian_pass_reads_a_skill_again_that_changed_after_it_started(
     # Each outside change is reported once: the pass that read "notes" again goes on.
     assert harness.run(merge, run_kind=RunKind.LIBRARIAN)["ok"] is True
 
+    # A person's change that arrives once the pass checked "guide" waits for the
+    # pass's write and lands after it, instead of being overwritten by it.
+    person = threading.Thread(
+        target=harness.authoring.edit,
+        args=(home, "guide", _skill_md("guide", body="# Person\n")),
+        kwargs={"writer": HUMAN_WRITER},
+    )
+    history = harness.authoring.history
+
+    def checked(*args: Any, **kwargs: Any) -> Any:
+        revisions = history(*args, **kwargs)
+        if person.ident is None:
+            person.start()
+            person.join(timeout=0.2)
+        return revisions
+
+    monkeypatch.setattr(harness.authoring, "history", checked)
+    edit: dict[str, object] = {
+        "action": "edit",
+        "name": "guide",
+        "content": _skill_md("guide", body="# Pass\n"),
+    }
+    assert harness.run(edit, run_kind=RunKind.LIBRARIAN)["ok"] is True
+    person.join()
+    assert "# Person" in harness.document("guide").read_text(encoding="utf-8")
+    assert [revision.actor for revision in history(home, "guide", limit=2)] == [
+        "human",
+        "librarian",
+    ]
+
 
 # --- Patch tolerance --------------------------------------------------------
 

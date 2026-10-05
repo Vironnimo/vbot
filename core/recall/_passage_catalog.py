@@ -3,7 +3,9 @@
 The Passage index (:mod:`core.recall.passage_index`) holds this catalog beside
 its literal FTS tables and vectors. It records which Passages every indexed
 Session's current view contains, with a freshness stamp ``(generation_id,
-history_revision)`` per Session.
+history_revision)`` per Session. The stamps hold for the Session history they
+were taken from (``ChatSessionManager.history_id``); after a data snapshot
+restore every Session is reread once.
 
 A Passage is stored once per Recall scope (project and Agent), identified by
 its text and exact boundaries, however many Sessions show it. A fork and its
@@ -94,6 +96,10 @@ CREATE TABLE passage_views (
 ) STRICT, WITHOUT ROWID;
 
 CREATE INDEX passage_views_by_passage ON passage_views (passage_ref, session_ref, owned);
+
+CREATE TABLE catalog_history (
+  history_id TEXT PRIMARY KEY
+) STRICT, WITHOUT ROWID;
 """
 
 # The Passages a set of indexed Sessions shows; the parameter is a JSON array of
@@ -236,6 +242,28 @@ def read_stamps(
             (project, agent_id),
         )
     }
+
+
+def follows_history(connection: sqlite3.Connection, history_id: str) -> bool:
+    """Whether the stored freshness stamps were taken from the Session history *history_id*."""
+    row = connection.execute("SELECT history_id FROM catalog_history").fetchone()
+    return row is not None and str(row[0]) == history_id
+
+
+def follow_history(connection: sqlite3.Connection, history_id: str) -> None:
+    """Invalidate every freshness stamp unless they were taken from *history_id*.
+
+    A data snapshot restore brings back older history, after which a Session
+    can reach a stored ``(generation_id, history_revision)`` again with other
+    content. A revision of -1 matches no live Session, so the next refresh
+    rereads every Session and diffs its Passages by key: Passages of discarded
+    history leave, unchanged ones keep their rows and vectors.
+    """
+    if follows_history(connection, history_id):
+        return
+    connection.execute("UPDATE indexed_sessions SET history_revision = -1")
+    connection.execute("DELETE FROM catalog_history")
+    connection.execute("INSERT INTO catalog_history (history_id) VALUES (?)", (history_id,))
 
 
 def plan_refresh(
@@ -597,12 +625,23 @@ class PassageCatalog:
         One stamp read finds indexed Sessions that left the scope and
         candidates whose ``(generation_id, history_revision)`` changed; only
         those are reread, and only their changed Passages and views are
-        written. A canonical read failure raises :class:`SourceReadError`.
+        written. Stamps of another Session history (a restore) are invalidated
+        first. A canonical read failure raises :class:`SourceReadError`.
         """
         project = stored_scope(project_id)
-        stamps = await self.read(
-            lambda connection: read_stamps(connection, agent_id=agent_id, project=project)
-        )
+        history_id = sessions.history_id
+
+        def current_stamps(connection: sqlite3.Connection) -> dict[str, SessionVersion] | None:
+            if not follows_history(connection, history_id):
+                return None
+            return read_stamps(connection, agent_id=agent_id, project=project)
+
+        stamps = await self.read(current_stamps)
+        if stamps is None:
+            await self.write(lambda connection: follow_history(connection, history_id))
+            stamps = await self.read(
+                lambda connection: read_stamps(connection, agent_id=agent_id, project=project)
+            )
         try:
             plan = await sessions.run_async(
                 plan_refresh, sessions, agent_id, project_id, scope, stamps

@@ -68,6 +68,9 @@ class SessionSource(Protocol):
     @property
     def database(self) -> Database: ...
 
+    @property
+    def history_id(self) -> str: ...
+
     def usage_history(
         self, after_entry_key: int = 0, *, limit: int = 1000
     ) -> tuple[JsonObject, ...]: ...

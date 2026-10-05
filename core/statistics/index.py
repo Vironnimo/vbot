@@ -112,6 +112,9 @@ CREATE TABLE stat_sessions (
     is_subagent INTEGER NOT NULL,
     UNIQUE (project_id, agent_id, session_id)
 );
+CREATE TABLE stat_session_state (
+    history_id TEXT PRIMARY KEY
+) WITHOUT ROWID;
 CREATE TABLE stat_records (
     session_key INTEGER NOT NULL,
     seq INTEGER NOT NULL,
@@ -271,6 +274,9 @@ class StatisticsSessionSource(Protocol):
     """Session surface required by the derived index."""
 
     data_dir: Path
+
+    @property
+    def history_id(self) -> str: ...
 
     def get(self, address: SessionAddress) -> ChatSession: ...
 
@@ -567,6 +573,7 @@ def _reconcile(
                 (owner_name, int(summary.get("is_subagent_session") is True)),
             )
     versions = _source(sessions.list_history_versions, [entry.address for entry in listed.values()])
+    _follow_history(connection, _source(lambda: sessions.history_id))
     stored = _stored_sessions(connection)
     current: dict[tuple[str, str, str], IndexedSession] = {}
     changed: list[tuple[tuple[str, str, str], _Listed, tuple[str, int], _StoredSession | None]] = []
@@ -616,6 +623,23 @@ def _reconcile(
     if removed:
         prune_pricing(connection)
     return current
+
+
+def _follow_history(connection: sqlite3.Connection, history_id: str) -> None:
+    """Have every stored Session reread whole when the Session history is another.
+
+    A data snapshot restore brings back older history, after which a Session
+    can reach a stored ``(generation_id, history_revision)`` again with other
+    content, so stamps taken from another history prove nothing. An empty
+    generation never matches a live Session: each is replaced from its whole
+    history, or pruned when it is gone. The same history writes nothing.
+    """
+    row = connection.execute("SELECT history_id FROM stat_session_state").fetchone()
+    if row is not None and row[0] == history_id:
+        return
+    connection.execute("UPDATE stat_sessions SET generation_id = ''")
+    connection.execute("DELETE FROM stat_session_state")
+    connection.execute("INSERT INTO stat_session_state (history_id) VALUES (?)", (history_id,))
 
 
 def _stored_sessions(connection: sqlite3.Connection) -> dict[tuple[str, str, str], _StoredSession]:

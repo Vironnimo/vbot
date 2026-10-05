@@ -15,7 +15,12 @@ from typing import Any
 import pytest
 
 from core.chat.messages import ChatMessage, ToolCall
-from core.database import APPLICATION_IDS, DatabaseUnavailableError
+from core.database import (
+    APPLICATION_IDS,
+    DatabaseUnavailableError,
+    create_data_snapshot,
+    restore_data_snapshot,
+)
 from core.sessions import ChatSession, ChatSessionManager
 from core.statistics.index import (
     SESSION_FACT_TABLES,
@@ -305,6 +310,32 @@ def test_replaced_canonical_session_rebuilds_only_that_projection(
         "running": 0,
     }
     assert _run_input_tokens(report) == 99 + 7
+
+
+def test_restored_session_history_rebuilds_the_projection(
+    tmp_path: Path, manager: ChatSessionManager, statistics: StatisticsFactory
+) -> None:
+    session = _append_run(manager.create("main"), "kept", minutes=0, input_tokens=7)
+    snapshot = create_data_snapshot(tmp_path, reason="test", databases=(manager.database,))
+    assert snapshot is not None
+    _append_run(manager.get(session.address), "discarded", minutes=1, input_tokens=99)
+    assert _run_input_tokens(statistics().report()) == 7 + 99
+    projected = manager.list_history_versions([session.address])[session.address]
+    manager.close()
+
+    # The restored history keeps its identity, and new work catches up with the
+    # projected revision before the restarted service reports: only the restore
+    # tells the new Run apart from the discarded one.
+    restore_data_snapshot(tmp_path, snapshot, names=("sessions",))
+    restored = ChatSessionManager(tmp_path)
+    try:
+        _append_run(restored.get(session.address), "new", minutes=2, input_tokens=5)
+        assert restored.list_history_versions([session.address])[session.address] == projected
+        report = statistics(sessions=restored).report()
+    finally:
+        restored.close()
+
+    assert _run_input_tokens(report) == 7 + 5
 
 
 def test_history_edit_rebuilds_the_projection_and_keeps_superseded_spend(

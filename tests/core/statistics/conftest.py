@@ -58,12 +58,13 @@ def statistics(tmp_path: Path, manager: ChatSessionManager) -> Iterator[Statisti
         *,
         projects: dict[str, list[str]] | None = None,
         index: StatisticsIndex | None = None,
+        sessions: ChatSessionManager | None = None,
         **options: Any,
     ) -> StatisticsService:
         service_index = index if index is not None else StatisticsIndex(tmp_path)
         indexes.append(service_index)
         return StatisticsService(
-            manager,
+            manager if sessions is None else sessions,
             cast(AgentDirectory, _FakeAgents(list(agent_ids))),
             None if projects is None else cast(ProjectDirectory, _FakeProjects(projects)),
             index=service_index,
