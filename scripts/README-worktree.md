@@ -164,6 +164,8 @@ This deletes:
 - the managed branch `my-task` if the script created that branch itself
 
 On success, the command prints `status: deleted`.
+
+Before removing anything, `delete` and `merge` stop the worktree's vBot server and fake Provider with `scripts/test-env.py stop`. A program other than vBot listening on the recorded `server_port` counts as nothing to stop: it is left running, and cleanup continues.
 Unverified data is kept and reported as `data-status: preserved (ownership
 unverified)`, including for older worktrees without ownership records.
 

@@ -66,6 +66,7 @@ DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS = PATIENT_PROBE_TIMEOUT_SECONDS
 # A local listener holds the target port but never answered `/health`, so it is
 # neither confirmed as vBot nor known to be foreign.
 UNRESPONSIVE_LISTENER_MESSAGE = "port occupied by unresponsive process"
+NON_VBOT_LISTENER_MESSAGE = "port occupied by non-vBot process"
 
 # The control record names a live server process for the target, but the target does
 # not answer `/health`: the server is busy, still starting or already stopping.
@@ -214,7 +215,7 @@ def start_server(
                 )
                 result = CommandResult(
                     ok=False,
-                    message="port occupied by non-vBot process",
+                    message=NON_VBOT_LISTENER_MESSAGE,
                     instance=instance,
                     health=health,
                     log_path=instance.log_path,
@@ -267,7 +268,7 @@ def _start_refusal_message(state: ServerState, health: HealthProbeResult) -> str
     if health.is_vbot:
         return UNRECORDED_SERVER_MESSAGE
     if health.reachable:
-        return "port occupied by non-vBot process"
+        return NON_VBOT_LISTENER_MESSAGE
     return UNRESPONSIVE_LISTENER_MESSAGE
 
 
@@ -351,7 +352,7 @@ def stop_server(
     elif not health.is_vbot:
         return CommandResult(
             ok=False,
-            message="port occupied by non-vBot process",
+            message=NON_VBOT_LISTENER_MESSAGE,
             instance=instance,
             health=health,
         )
@@ -751,7 +752,7 @@ def get_status(instance: ServerInstance) -> CommandResult:
     if health.reachable:
         return CommandResult(
             ok=False,
-            message="port occupied by non-vBot process",
+            message=NON_VBOT_LISTENER_MESSAGE,
             instance=instance,
             health=health,
             webui=WebUIProbeResult(available=False),

@@ -42,6 +42,7 @@ if sys.path[:1] != [str(PROJECT_ROOT)]:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from cli.server_management import (  # noqa: E402
+    NON_VBOT_LISTENER_MESSAGE,
     CommandResult,
     ServerInstance,
     resolve_instance,
@@ -514,6 +515,11 @@ def stop_server(host: str, port: int | None, data_dir: str | None) -> int:
         )
         return 1
 
+    if result.message == NON_VBOT_LISTENER_MESSAGE:
+        # A server of this data directory cannot listen on a port another program holds,
+        # so nothing of this test environment is running there. The occupant stays.
+        print(f"stop....... no (port {instance.port} is held by another program)")
+        return 0
     if not result.ok:
         _print_failure(
             "stop",

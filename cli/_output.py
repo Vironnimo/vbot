@@ -15,7 +15,7 @@ from cli._progress import ProgressPrinter, Status, current_progress, status_line
 from cli._recovery import format_command, recovery_guidance
 from cli.formatting import output_mode
 from cli.parser import parse_args
-from cli.server_management import CommandResult, ServerInstance
+from cli.server_management import NON_VBOT_LISTENER_MESSAGE, CommandResult, ServerInstance
 from core.utils.errors import ConfigError
 
 if TYPE_CHECKING:
@@ -414,4 +414,4 @@ def _log_path_text(result: CommandResult) -> Path:
 
 
 def _is_non_vbot_conflict(result: CommandResult) -> bool:
-    return result.message == "port occupied by non-vBot process"
+    return result.message == NON_VBOT_LISTENER_MESSAGE

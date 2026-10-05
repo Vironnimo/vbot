@@ -107,3 +107,25 @@ def test_stop_terminates_only_the_fake_provider_process_it_started(
     assert TEST_ENV.stop_fake_provider(provider) is stopped
     assert terminated == ([4321] if stopped else [])
     assert provider.pid_path.exists() is not stopped
+
+
+@pytest.mark.parametrize(
+    ("ok", "message", "exit_code"),
+    [
+        pytest.param(True, "not running", 0, id="not-running"),
+        # Worktree cleanup must not be blocked by an unrelated program on the recorded port.
+        pytest.param(False, "port occupied by non-vBot process", 0, id="foreign-occupant"),
+        pytest.param(False, "vBot process not found", 1, id="failure"),
+    ],
+)
+def test_stop_reports_only_a_server_it_could_not_stop_as_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ok: bool, message: str, exit_code: int
+) -> None:
+    def stop_server(instance: object) -> Any:
+        return SimpleNamespace(
+            ok=ok, message=message, instance=instance, health=None, webui=None, log_path=None
+        )
+
+    monkeypatch.setattr(TEST_ENV, "stop_server_command", stop_server)
+
+    assert TEST_ENV.stop_server("127.0.0.1", 8422, str(tmp_path)) == exit_code
