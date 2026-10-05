@@ -57,15 +57,22 @@ SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE = (
     "Sub-Agents cannot be nested more than {limit} levels deep, so you cannot start "
     "another Sub-Agent; nothing was started. Do this task yourself."
 )
+# ``count`` is the limit with its noun, such as "8 Sub-Agents".
+_ACTIVE_LIMIT_TEXT = (
+    "At most {count} can work at the same time, and that many are working now; yours, theirs "
+    "and those of the Agents that delegated to you count together."
+)
+_ACTIVE_LIMIT_CONTINUATION = (
+    "A Sub-Agent stops counting once it has answered or was cancelled: wait for an answer or "
+    "stop one with action cancel, then {retry}, or do this task yourself."
+)
 SUBAGENT_ACTIVE_LIMIT_MESSAGE_TEMPLATE = (
-    "{limit} Sub-Agents of your Agent tree are already working, the limit; nothing was "
-    "started. Wait for their answers or stop one with action cancel, then delegate again, or "
-    "do this task yourself."
+    f"{_ACTIVE_LIMIT_TEXT} Nothing was started. "
+    + _ACTIVE_LIMIT_CONTINUATION.replace("{retry}", "delegate again")
 )
 SUBAGENT_SEND_LIMIT_MESSAGE_TEMPLATE = (
-    "{limit} Sub-Agents of your Agent tree are already working, the limit, and Sub-Agent {id} "
-    "is idle, so your message would start it; nothing was sent. Wait for their answers or "
-    "stop one with action cancel, then send again, or do this task yourself."
+    f"{_ACTIVE_LIMIT_TEXT} Sub-Agent {{id}} is idle, so your message would start it again; "
+    "nothing was sent. " + _ACTIVE_LIMIT_CONTINUATION.replace("{retry}", "send again")
 )
 # ``target`` is the address the Tool accepts; ``reason`` is the resolver's explanation.
 SUBAGENT_TARGET_UNAVAILABLE_MESSAGE_TEMPLATE = (

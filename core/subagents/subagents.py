@@ -128,6 +128,10 @@ _LOGGER = get_logger("subagents")
 _FOLLOW_UP_PLACEHOLDER = "<message>"
 
 
+def _subagent_count(count: int) -> str:
+    return f"{count} Sub-Agent" if count == 1 else f"{count} Sub-Agents"
+
+
 # The WebUI's names for the kinds of running work `inspect` reports.
 _INSPECTED_WORK_KINDS = {
     "Sub-Agent": "subagent",
@@ -430,7 +434,7 @@ class SubAgentCoordinator:
             if await self._tree_at_limit(root, limit):
                 return tool_failure(
                     "subagent_limit_exceeded",
-                    SUBAGENT_ACTIVE_LIMIT_MESSAGE_TEMPLATE.format(limit=limit),
+                    SUBAGENT_ACTIVE_LIMIT_MESSAGE_TEMPLATE.format(count=_subagent_count(limit)),
                 )
             if context.is_cancelled():
                 return tool_failure(
@@ -569,7 +573,9 @@ class SubAgentCoordinator:
             if not is_working(runtime, address) and await self._tree_at_limit(chain[-1], limit):
                 return tool_failure(
                     "subagent_limit_exceeded",
-                    SUBAGENT_SEND_LIMIT_MESSAGE_TEMPLATE.format(limit=limit, id=link.id),
+                    SUBAGENT_SEND_LIMIT_MESSAGE_TEMPLATE.format(
+                        count=_subagent_count(limit), id=link.id
+                    ),
                 )
             if overrides:
                 await sessions.run_async(
