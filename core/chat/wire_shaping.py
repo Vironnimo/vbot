@@ -884,6 +884,53 @@ def extend_request_with_notes(
         request_messages.extend(_notes_to_request_messages(list(group)))
 
 
+def notes_missing_from_request(
+    history: Sequence[ChatMessage],
+    request_messages: Sequence[JsonObject],
+) -> list[ChatMessage]:
+    """Return the notes of *history* that *request_messages* does not render.
+
+    *request_messages* is a live request built from *history*. Notes that other
+    writers append after the request was built reach the Session but not that
+    request. Replay renders every note group directly before the next message
+    the request sends; a group whose rendering is not exactly the request
+    messages there is reported whole, so a note that cannot be verified is
+    reported rather than assumed delivered.
+    """
+    request_indices = {
+        message_id: index
+        for index, message in enumerate(request_messages)
+        if (message_id := message.get("id")) is not None
+    }
+    canonical_ids = {message.id for message in history}
+    missing: list[ChatMessage] = []
+    group: list[ChatMessage] = []
+    rendered: list[JsonObject] = []
+
+    def settle(request_end: int) -> None:
+        start = request_end - len(rendered)
+        if group and (start < 0 or list(request_messages[start:request_end]) != rendered):
+            # Request-only notes (such as portable Reasoning) are not history.
+            missing.extend(
+                note for note in group if note.role == "note" and note.id in canonical_ids
+            )
+        group.clear()
+        rendered.clear()
+
+    for part in _history_request_parts(
+        history, replay_policy=DEFAULT_REASONING_REPLAY_POLICY, agent_model=None
+    ):
+        if isinstance(part, tuple):
+            group.extend(part)
+            rendered.extend(_notes_to_request_messages(list(part)))
+            continue
+        request_index = request_indices.get(part.id)
+        if request_index is not None:
+            settle(request_index)
+    settle(len(request_messages))
+    return missing
+
+
 def _repair_dangling_tool_calls(request_messages: list[JsonObject]) -> list[JsonObject]:
     """Ensure every assistant tool_call_id is answered before the next non-tool message.
 

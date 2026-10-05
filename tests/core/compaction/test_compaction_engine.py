@@ -39,6 +39,7 @@ from tests.core.compaction.compaction_test_support import (
     PROMPT_FRAGMENT,
     StubAdapter,
     StubStorage,
+    _tail_token_span,
     assistant,
     checkpoint,
     compact,
@@ -389,6 +390,45 @@ async def test_checkpoint_carries_only_plain_notes_appended_after_its_snapshot(
     context = effective_compaction_messages([*history, *appended, carried])
     assert context[: len(uncarried_context)] == uncarried_context
     assert [item.id for item in context[len(uncarried_context) :]] == carried_ids
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("strategy", "kept_ids"),
+    [
+        # Summary+Tail keeps the late note before its native Tail.
+        ("summary_tail", ["n-late", "u2", "a2"]),
+        # Continuation summarizes the whole request; the late note follows it.
+        ("continuation", ["n-late"]),
+    ],
+)
+async def test_checkpoint_keeps_notes_its_summarized_request_never_showed(
+    strategy: str, kept_ids: list[str]
+) -> None:
+    # Another writer appended n-late after the live request was built: the
+    # summary cannot cover it, so only the rendered note leaves active Context.
+    head = [user("u1", "old request " * 100), _plain_note("n-shown"), assistant("a1", "old")]
+    late = _plain_note("n-late")
+    tail = [user("u2", "recent request"), assistant("a2", "recent response")]
+    request = [
+        {"id": "system-1", "role": "system", "content": "system"},
+        *_embed_notes_into_request([*head, *tail]),
+    ]
+    model = StubAdapter("SUMMARY")
+    history = [*head, late, *tail]
+
+    result = await compact(
+        history,
+        summary_adapter=model,
+        settings=CompactionSettings(strategy=strategy, tail_tokens=_tail_token_span(tail)),
+        request_messages=request,
+        active_adapter=model,
+        active_model_id="openai/summary",
+    )
+
+    effective = effective_compaction_messages([*history, result])
+    assert [item.id for item in effective[1:]] == kept_ids
+    assert "Background result n-late" not in str(model.requests[0]["messages"])
 
 
 @pytest.mark.asyncio

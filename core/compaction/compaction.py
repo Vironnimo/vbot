@@ -26,6 +26,7 @@ from core.chat.wire_shaping import (
     SYSTEM_REMINDER_OPEN_TAG,
     _notes_to_request_messages,
     model_facing_request,
+    notes_missing_from_request,
 )
 from core.compaction._model_request import _send_streaming_model_request
 from core.compaction.errors import (
@@ -271,6 +272,7 @@ class SummarizationStrategy:
             context.request_messages,
             tail_plan.request_start,
         )
+        uncovered = _notes_outside_request(head, request_prefix)
         prompt = _build_compaction_instruction(
             context.storage.read_prompt_fragment(_fragment_name_for_trigger(context.trigger)),
             context.instruction,
@@ -281,13 +283,11 @@ class SummarizationStrategy:
                 _system_reminder_request_message(prompt),
             ),
             model_target="summary",
-            after_summary=tail_plan.retained_messages,
+            after_summary=(*uncovered, *tail_plan.retained_messages),
             user_quote=_summary_user_quote(head, tail_plan.retained_messages),
             compacted_token_count=(
                 context.previous_compacted_token_count
-                + _estimate_token_span(
-                    [message for message in head if not _is_compaction_checkpoint_note(message)]
-                )
+                + _estimate_token_span(_summarized_messages(head, uncovered))
             ),
         )
 
@@ -319,20 +319,17 @@ class ContinuationStrategy:
             *context.request_messages,
             _system_reminder_request_message(reminder),
         )
+        messages = list(context.messages)
+        uncovered = _notes_outside_request(messages, context.request_messages)
         return CompactionPlan(
             model_messages=tuple(model_messages),
             model_target="active",
+            after_summary=uncovered,
             # Like Summary+Tail, count only newly compacted content: the previous
             # checkpoint notes are already included in the cumulative count.
             compacted_token_count=(
                 context.previous_compacted_token_count
-                + _estimate_token_span(
-                    [
-                        message
-                        for message in context.messages
-                        if not _is_compaction_checkpoint_note(message)
-                    ]
-                )
+                + _estimate_token_span(_summarized_messages(messages, uncovered))
             ),
         )
 
@@ -878,6 +875,34 @@ def _summary_user_quote(
         if _is_compaction_user_quote(message):
             return message
     return None
+
+
+def _notes_outside_request(
+    messages: list[ChatMessage], request_messages: Sequence[JsonObject]
+) -> tuple[ChatMessage, ...]:
+    """Return the notes of *messages* that the summarized request never showed the Model.
+
+    Other writers append notes after the live request was built; the summary
+    cannot cover them, so the checkpoint keeps them verbatim instead of hiding
+    them. The previous checkpoint's own notes are never carried twice.
+    """
+    return tuple(
+        note
+        for note in notes_missing_from_request(messages, request_messages)
+        if not _is_compaction_checkpoint_note(note)
+    )
+
+
+def _summarized_messages(
+    messages: list[ChatMessage], uncovered: tuple[ChatMessage, ...]
+) -> list[ChatMessage]:
+    """Return the newly summarized part of *messages*, without checkpoint or carried notes."""
+    carried = {note.id for note in uncovered}
+    return [
+        message
+        for message in messages
+        if message.id not in carried and not _is_compaction_checkpoint_note(message)
+    ]
 
 
 def _is_compaction_user_quote(message: ChatMessage) -> bool:
