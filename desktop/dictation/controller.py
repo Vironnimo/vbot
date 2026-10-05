@@ -16,18 +16,24 @@ transcript to the :class:`~desktop.dictation.insertion.TextInserter`. Cues mark
 the start (once the microphone delivers audio), the end, a cancel and a
 failure; audio during the start cue is discarded so the cue is not transcribed.
 
+A take has no length limit: it records until the user ends it. Long takes are
+split into pieces at speech pauses (:mod:`desktop.dictation.pieces`), which
+keeps every upload within the server's limit; each piece is transcribed on
+``vbot-dictation-transcribe`` while the user keeps speaking, and the texts are
+joined and inserted once at the end. A piece that cannot be transcribed ends
+the take at once, so the user does not keep talking into nothing.
+
 Only one take runs at a time; a press while one is transcribing is ignored. A
 take that ends too short (under :data:`MIN_RECORDING_SECONDS`, for example a
-tap in hold mode) is dropped like a cancel. A take ends on its own at
-:data:`MAX_RECORDING_SECONDS` or when the server's upload limit is reached,
-and keeps what it recorded when the microphone fails midway. The status keeps
-the latest failure (``last_failure``) so the settings can explain a failure cue
-afterwards.
+tap in hold mode) is dropped like a cancel. A take keeps what it recorded when
+the microphone fails midway. The status keeps the latest failure
+(``last_failure``) so the settings can explain a failure cue afterwards.
 """
 
 from __future__ import annotations
 
 import logging
+import queue
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -50,6 +56,7 @@ from desktop.dictation.insertion import (
     ClipboardTextInserter,
     TextInserter,
 )
+from desktop.dictation.pieces import PIECE_SEARCH_SECONDS, PIECE_TARGET_SECONDS, PieceCutter
 from desktop.hotkey import (
     HOTKEY_ERROR_INVALID,
     HotkeyApi,
@@ -99,7 +106,6 @@ ERROR_DICTATION_FAILED = "dictation_failed"
 NOTICE_INSERTED_TO_CLIPBOARD = "inserted_to_clipboard"
 NOTICE_NOTHING_HEARD = "nothing_heard"
 
-MAX_RECORDING_SECONDS = 600.0
 MIN_RECORDING_SECONDS = 0.3
 # Recording continues this long after the end request, so the last word is not
 # clipped when the shortcut comes right at its end.
@@ -179,7 +185,8 @@ class DictationController:
         hotkey_supported: bool | None = None,
         hotkey_api_factory: Callable[[], HotkeyApi] | None = None,
         clock: Callable[[], float] = time.monotonic,
-        max_recording_seconds: float = MAX_RECORDING_SECONDS,
+        piece_target_seconds: float = PIECE_TARGET_SECONDS,
+        piece_search_seconds: float = PIECE_SEARCH_SECONDS,
     ) -> None:
         self._settings_path = settings_path
         self._microphone = microphone
@@ -188,7 +195,8 @@ class DictationController:
         self._inserter_instance = inserter
         self._client_factory = client_factory or _create_client
         self._clock = clock
-        self._max_recording_seconds = max_recording_seconds
+        self._piece_target_seconds = piece_target_seconds
+        self._piece_search_seconds = piece_search_seconds
         self._hotkey = HotkeyController(
             preference=DICTATION_HOTKEY,
             settings_path=settings_path,
@@ -382,50 +390,44 @@ class DictationController:
                 daemon=True,
             )
             preparation.start()
-            self._page.publish_dictation(True)
+            transcriber = _Transcriber(take, client, preparation)
             try:
-                audio = self._record(take)
+                self._page.publish_dictation(True)
+                try:
+                    self._record(take, transcriber)
+                finally:
+                    self._page.publish_dictation(False)
+                with self._lock:
+                    self._state = STATE_TRANSCRIBING
+                self._cues.play(CUE_STOP)
+                text = transcriber.finish()
             finally:
-                self._page.publish_dictation(False)
-            with self._lock:
-                self._state = STATE_TRANSCRIBING
-            self._cues.play(CUE_STOP)
-            # Its verdict is more precise than a failed upload's.
-            preparation.join()
-            if take.cancelled.is_set():
-                raise _Cancelled
-            if take.server_problem is not None:
-                raise _Failed(take.server_problem)
-            try:
-                text = client.transcribe(audio, filename="dictation.wav")
-            except SpeechRequestCancelled:
-                raise _Cancelled from None
-            except SpeechServerError as exc:
-                raise _Failed(exc.error_code) from exc
+                transcriber.stop()
         finally:
             client.close()
         if take.cancelled.is_set():
             raise _Cancelled
-        self._insert(take, text.strip())
+        self._insert(take, text)
 
-    def _record(self, take: _Take) -> bytes:
-        """Collect the take's audio until it ends; returns it as WAV."""
+    def _record(self, take: _Take, transcriber: _Transcriber) -> None:
+        """Record until the take ends, handing each finished piece to ``transcriber``."""
         # Imported per take: the capture stack (numpy) stays out of Desktop startup.
         from desktop.speech.capture import (
             CAPTURE_CAPTURING,
             CAPTURE_OPENING,
             ERROR_MICROPHONE_UNAVAILABLE,
             AudioBlock,
-            encode_wav,
         )
 
         stop = threading.Event()
         capture = self._microphone.create_capture(on_status=lambda _status: None, stop_event=stop)
         subscription = capture.subscribe(max_seconds=_SUBSCRIPTION_SECONDS)
         capture.start()
-        chunks: list[bytes] = []
-        size = 0
-        rate = 0
+        cutter = PieceCutter(
+            budget_bytes=lambda: take.budget_bytes or DEFAULT_UPLOAD_BUDGET_BYTES,
+            target_seconds=self._piece_target_seconds,
+            search_seconds=self._piece_search_seconds,
+        )
         seconds = 0.0
         skipped = 0.0
         capturing = False
@@ -436,6 +438,8 @@ class DictationController:
                     raise _Cancelled
                 if take.server_problem is not None:
                     raise _Failed(take.server_problem)
+                if transcriber.failure is not None:
+                    raise _Failed(transcriber.failure)
                 # An end requested before the start cue (a tap) drops the take.
                 if take.finish_requested.is_set() and end_at is None:
                     if not capturing:
@@ -459,17 +463,9 @@ class DictationController:
                 if skipped < START_SKIP_SECONDS:
                     skipped += item.duration
                     continue
-                budget = take.budget_bytes or DEFAULT_UPLOAD_BUDGET_BYTES
-                if (rate and item.recording_rate != rate) or size + len(item.recording) > budget:
-                    logger.info("Dictation reached the upload limit")
-                    break
-                chunks.append(item.recording)
-                size += len(item.recording)
-                rate = item.recording_rate
                 seconds += item.duration
-                if seconds >= self._max_recording_seconds:
-                    logger.info("Dictation reached its %.0f s limit", self._max_recording_seconds)
-                    break
+                for piece in cutter.add(item.recording, item.recording_rate, item.duration):
+                    transcriber.submit(piece.pcm, piece.rate, piece.seconds)
         finally:
             stop.set()
             subscription.close()
@@ -478,8 +474,10 @@ class DictationController:
             logger.info("Dictation too short (%.2f s); dropped", seconds)
             self._cues.play(CUE_CANCEL)
             raise _Cancelled
+        last = cutter.finish()
+        if last is not None:
+            transcriber.submit(last.pcm, last.rate, last.seconds)
         logger.info("Dictation recorded %.1f s", seconds)
-        return encode_wav(b"".join(chunks), rate)
 
     def _insert(self, take: _Take, text: str) -> None:
         if not text:
@@ -497,6 +495,76 @@ class DictationController:
         if self._inserter_instance is None:
             self._inserter_instance = ClipboardTextInserter()
         return self._inserter_instance
+
+
+class _Transcriber:
+    """Transcribes a take's pieces in order on one thread while the take records.
+
+    The first piece waits for the server check. The first failure stops the
+    work and is reported through :attr:`failure`; later pieces are not sent.
+    """
+
+    def __init__(
+        self, take: _Take, client: SpeechServerClient, preparation: threading.Thread
+    ) -> None:
+        self._take = take
+        self._client = client
+        self._preparation = preparation
+        self._pieces: queue.SimpleQueue[tuple[bytes, int, float] | None] = queue.SimpleQueue()
+        self._texts: list[str] = []
+        self._stopped = threading.Event()
+        self.failure: str | None = None
+        self._thread = threading.Thread(
+            target=self._run, name="vbot-dictation-transcribe", daemon=True
+        )
+        self._thread.start()
+
+    def submit(self, pcm: bytes, rate: int, seconds: float) -> None:
+        self._pieces.put((pcm, rate, seconds))
+
+    def finish(self) -> str:
+        """Wait for every submitted piece; returns their joined texts."""
+        self._pieces.put(None)
+        self._thread.join()
+        if self._take.cancelled.is_set():
+            raise _Cancelled
+        if self.failure is not None:
+            raise _Failed(self.failure)
+        return " ".join(text for text in self._texts if text)
+
+    def stop(self) -> None:
+        """Send no further piece (the take ended without :meth:`finish`)."""
+        self._stopped.set()
+        self._pieces.put(None)
+
+    def _run(self) -> None:
+        from desktop.speech.capture import encode_wav
+
+        # Its verdict is more precise than a failed upload's.
+        self._preparation.join()
+        number = 0
+        while True:
+            item = self._pieces.get()
+            if item is None or self._stopped.is_set() or self._take.cancelled.is_set():
+                return
+            if self._take.server_problem is not None:
+                self.failure = self._take.server_problem
+                return
+            pcm, rate, seconds = item
+            number += 1
+            try:
+                text = self._client.transcribe(encode_wav(pcm, rate), filename="dictation.wav")
+            except SpeechRequestCancelled:
+                return
+            except SpeechServerError as exc:
+                self.failure = exc.error_code
+                return
+            except Exception:
+                logger.exception("Dictation could not transcribe piece %d", number)
+                self.failure = ERROR_DICTATION_FAILED
+                return
+            logger.info("Dictation piece %d transcribed (%.1f s)", number, seconds)
+            self._texts.append(text.strip())
 
 
 def _prepare_server(take: _Take, client: SpeechServerClient) -> None:

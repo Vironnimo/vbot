@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 
 from desktop import hotkey
@@ -22,7 +23,7 @@ from desktop.dictation.insertion import INSERT_CLIPBOARD, INSERT_FAILED, INSERT_
 from desktop.speech.microphone import MicrophoneService
 from desktop.speech.server_client import SpeechServerRejected
 from tests.desktop.hotkey_test_support import FakeHotkeyApi
-from tests.desktop.speech.speech_test_support import FakeSoundDevice, wait_until
+from tests.desktop.speech.speech_test_support import FakeSoundDevice, silence, tone, wait_until
 
 TARGET_WINDOW = 7
 HELD_KEYS = {ord("D"), hotkey.VK_CONTROL, hotkey.VK_MENU}
@@ -41,6 +42,9 @@ class FakeServer:
         self.transcribing = threading.Event()
         self.uploads: list[bytes] = []
         self.urls: list[str] = []
+        # Answer "Teil <n>" per upload that holds sound, "" for silence.
+        self.numbered = False
+        self.budget_bytes = 10_000_000
 
     def client(self, server_url: str, cancel: threading.Event) -> Any:
         self.urls.append(server_url)
@@ -58,7 +62,7 @@ class _FakeClient:
         return "loaded"
 
     def upload_budget_bytes(self) -> int:
-        return 10_000_000
+        return self.server.budget_bytes
 
     def transcribe(self, audio: bytes, *, filename: str) -> str:
         self.server.uploads.append(audio)
@@ -66,6 +70,9 @@ class _FakeClient:
         assert self.server.release_transcription.wait(5)
         if isinstance(self.server.transcript, Exception):
             raise self.server.transcript
+        if self.server.numbered:
+            heard = [upload for upload in self.server.uploads if _energy(upload) > 0]
+            return f"Teil {len(heard)}" if _energy(audio) > 0 else ""
         return self.server.transcript
 
     def close(self) -> None:
@@ -114,6 +121,10 @@ class Rig:
     page: FakePage
     apis: list[FakeHotkeyApi]
     path: Path
+
+    def inserted_text(self) -> str:
+        assert len(self.inserter.inserted) == 1
+        return self.inserter.inserted[0][0]
 
     @property
     def api(self) -> FakeHotkeyApi:
@@ -188,6 +199,18 @@ def _wav_seconds(audio: bytes) -> float:
         frames: int = wav_file.getnframes()
         rate: int = wav_file.getframerate()
     return frames / rate
+
+
+def _samples(audio: bytes | np.ndarray) -> np.ndarray:
+    if isinstance(audio, np.ndarray):
+        return audio.astype(np.int64)
+    with wave.open(io.BytesIO(audio)) as wav_file:
+        frames = wav_file.readframes(wav_file.getnframes())
+    return np.frombuffer(frames, dtype=np.int16).astype(np.int64)
+
+
+def _energy(audio: bytes | np.ndarray) -> int:
+    return int(np.abs(_samples(audio)).sum())
 
 
 def test_a_toggle_take_records_until_the_second_press_and_types_the_stripped_transcript(
@@ -314,19 +337,74 @@ def test_a_take_that_cannot_run_ends_by_itself_with_an_error_cue(
     assert rig.controller.status()["last_failure"]["code"] == code
 
 
-def test_a_take_ends_by_itself_at_the_length_limit_and_follows_the_server(
+RATE = 16000
+LEAD_IN = silence(0.4, RATE)  # covers the audio dropped under the start cue
+WORD = tone(0.6, RATE)
+
+
+@pytest.mark.parametrize(
+    ("options", "budget", "script", "whole_words"),
+    [
+        (
+            {"piece_target_seconds": 0.5, "piece_search_seconds": 1.0},
+            10_000_000,
+            [WORD, silence(0.5, RATE), WORD, silence(0.5, RATE), WORD],
+            True,
+        ),
+        (
+            {"piece_target_seconds": 0.5, "piece_search_seconds": 0.3},
+            10_000_000,
+            [tone(2.0, RATE)],
+            False,
+        ),
+        ({}, 44 + RATE, [tone(2.0, RATE)], False),
+    ],
+    ids=["cut-at-pauses", "no-pause", "upload-limit"],
+)
+def test_a_long_take_is_transcribed_in_pieces_and_inserted_as_one_text(
     make_rig: Any,
+    options: dict[str, float],
+    budget: int,
+    script: list[np.ndarray],
+    whole_words: bool,
 ) -> None:
-    rig = make_rig(max_recording_seconds=0.5)
-    rig.controller.set_server_url("http://other.lan:8420")
+    """No length limit: pieces keep every upload within the server's limit and lose no audio."""
+    rig = make_rig(server_url="http://other.lan:8420", **options)
+    rig.server.numbered = True
+    rig.server.budget_bytes = budget
+    rig.sd.feed(LEAD_IN, *script)
+    rig.controller.set_server_url(SERVER_URL)
 
     rig.press()
-    wait_until(lambda: bool(rig.inserter.inserted))
+    wait_until(lambda: rig.sd.drained and len(rig.server.uploads) >= 2)
+    rig.press()
     rig.wait_idle()
 
-    assert rig.inserter.inserted == [("Hallo Welt", TARGET_WINDOW)]
-    assert 0.5 <= _wav_seconds(rig.server.uploads[0]) < 1.0
-    assert rig.server.urls == ["http://other.lan:8420"]
+    heard = [upload for upload in rig.server.uploads if _energy(upload) > 0]
+    assert len(heard) >= 2
+    assert rig.inserted_text() == " ".join(f"Teil {n}" for n in range(1, len(heard) + 1))
+    assert sum(_energy(upload) for upload in heard) == sum(_energy(part) for part in script)
+    assert all(len(upload) <= budget for upload in rig.server.uploads)
+    if whole_words:
+        assert [_energy(upload) for upload in heard] == [_energy(WORD)] * 3
+    assert rig.server.urls == [SERVER_URL]
+    assert rig.cues.played == ["start", "stop"]
+
+
+def test_a_piece_that_cannot_be_transcribed_ends_the_take_at_once(make_rig: Any) -> None:
+    rig = make_rig(piece_target_seconds=0.5, piece_search_seconds=0.4)
+    rig.server.transcript = SpeechServerRejected(
+        "transcription_failed", "HTTP 500", status_code=500
+    )
+    rig.sd.feed(LEAD_IN, WORD, silence(0.5, RATE))
+
+    rig.press()  # never ended by the user
+    wait_until(lambda: "error" in rig.cues.played)
+    rig.wait_idle()
+
+    assert rig.inserter.inserted == []
+    assert rig.cues.played == ["start", "error"]
+    assert rig.controller.status()["last_failure"]["code"] == "transcription_failed"
 
 
 def test_settings_persist_mode_and_shortcut_and_reject_invalid_changes(
