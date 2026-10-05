@@ -249,7 +249,9 @@ def test_stereo_48khz_is_resampled_to_mono_16khz() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancellation_waits_for_inference_then_shutdown_releases_model() -> None:
+async def test_cancellation_finishes_running_chunk_skips_the_rest_and_shutdown_releases_model() -> (
+    None
+):
     events: list[Any] = []
     started: Future[int] = Future()
     release = threading.Event()
@@ -263,7 +265,17 @@ async def test_cancellation_waits_for_inference_then_shutdown_releases_model() -
 
     model.transcribe = MagicMock(side_effect=blocking)  # type: ignore[method-assign]
     executor = LocalSpeechExecutor(engines=[replace(entry, create=lambda _options: model)])
-    task = asyncio.create_task(transcribe(executor))
+    # Two chunks: cancellation lets the running one finish (an in-process engine
+    # cannot be interrupted) and never starts the second.
+    task = asyncio.create_task(
+        executor.transcribe(
+            "first",
+            wav(np.full(31 * 16_000, 1000)),
+            filename="input.wav",
+            media_type="audio/wav",
+            options={},
+        )
+    )
     try:
         assert await asyncio.wrap_future(started) != threading.get_ident()
         task.cancel()
@@ -280,6 +292,7 @@ async def test_cancellation_waits_for_inference_then_shutdown_releases_model() -
             await task
         with pytest.raises(asyncio.CancelledError):
             await closing
+        assert model.transcribe.call_count == 1
         assert events == [("first", "close")]
     finally:
         release.set()
@@ -781,6 +794,9 @@ class _Model:
             time.sleep(60)
 
     def transcribe(self, samples, options):
+        if options.get("hang"):
+            Path(options["hang"]).touch()
+            time.sleep(60)
         return _Result(f"{len(samples)} samples in {options['language']}")
 
 
@@ -809,7 +825,7 @@ def _fake_stt_app(root: Path) -> tuple[Any, Path]:
 def test_managed_stt_worker_loads_before_transcribing_and_forwards_progress(
     tmp_path: Path,
 ) -> None:
-    from core.model_tasks.speech_local import _PROGRESS, _LoadingProcesses, _ManagedSttEngine
+    from core.model_tasks.speech_local import _PROGRESS, _ManagedSttEngine, _WaitingWorkers
 
     setup, app = _fake_stt_app(tmp_path)
     progress = SpeechProgress()
@@ -817,7 +833,7 @@ def test_managed_stt_worker_loads_before_transcribing_and_forwards_progress(
     engine = None
     try:
         # Construction returns only once the child reports the model loaded.
-        engine = _ManagedSttEngine(setup, app, "fake", _LoadingProcesses(), {"language": "en"})
+        engine = _ManagedSttEngine(setup, app, "fake", _WaitingWorkers(), {"language": "en"})
         assert progress.snapshot()["phase"] == "loading"
         result = engine.transcribe(np.asarray([0.25, -0.5], dtype=np.float32), {"language": "en"})
     finally:
@@ -841,7 +857,7 @@ async def test_shutdown_during_managed_preload_ends_the_loading_worker(tmp_path:
             replace(
                 entry,
                 create=lambda _options: _ManagedSttEngine(
-                    setup, app, "fake", executor._loading, {"marker": str(marker)}
+                    setup, app, "fake", executor._waiting, {"marker": str(marker)}
                 ),
             )
         ]
@@ -855,6 +871,60 @@ async def test_shutdown_during_managed_preload_ends_the_loading_worker(tmp_path:
         await asyncio.wait_for(executor.aclose(), 10)
         assert executor.memory_status()["models"][0]["loaded"] is False
         assert executor.prepare("fake", {}) == "unavailable"
+    finally:
+        await executor.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["deadline", "cancellation", "shutdown"])
+async def test_managed_stt_worker_that_stops_answering_is_ended(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ending: str
+) -> None:
+    from core.model_tasks import speech_local
+
+    monkeypatch.setattr(speech_local, "_INFERENCE_DEADLINE_S", 0.2 if ending == "deadline" else 60)
+    monkeypatch.setattr(speech_local, "_CANCEL_GRACE_S", 0.2)
+    setup, app = _fake_stt_app(tmp_path)
+    marker = tmp_path / "transcribing"
+    workers: list[Any] = []
+
+    def create(options: Mapping[str, Any]) -> Any:
+        worker = speech_local._ManagedSttEngine(setup, app, "fake", executor._waiting, options)
+        workers.append(worker)
+        return worker
+
+    entry = SpeechEngineDefinition(
+        LocalTaskTargetDescriptor(
+            id="fake",
+            label="Fake",
+            task_types=(TASK_SPEECH_TO_TEXT,),
+            availability=lambda: True,
+            option_fields=(TaskModelOptionField("hang", "text", "Hang", default=""),),
+        ),
+        create,
+    )
+    executor = LocalSpeechExecutor(engines=[entry])
+    try:
+        request = asyncio.create_task(transcribe(executor, "fake", hang=str(marker)))
+        async with asyncio.timeout(10):
+            while not marker.exists():
+                await asyncio.sleep(0.02)
+        # The child sleeps for a minute without answering; each path ends it instead.
+        if ending == "cancellation":
+            request.cancel()
+        elif ending == "shutdown":
+            await asyncio.wait_for(executor.aclose(), 10)
+        done, _pending = await asyncio.wait((request,), timeout=10)
+        assert done
+        if ending == "cancellation":
+            assert request.cancelled()
+        else:
+            error = request.exception()
+            assert type(error) is (
+                LocalSpeechExecutionError if ending == "deadline" else LocalSpeechError
+            )
+        assert workers[0]._process.poll() is not None
+        assert executor.memory_status()["models"][0]["loaded"] is False
     finally:
         await executor.aclose()
 

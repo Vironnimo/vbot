@@ -61,8 +61,12 @@ Each engine has its own cached model and bounded worker, serializing its loading
 inference and unloading outside the Event Loop. Other engines remain independent:
 STT can be unloaded while TTS is busy. Changing load options replaces only that
 engine's model; switching bindings or using a Provider does not evict other models.
-Runtime shutdown closes all engines. Cancellation waits for already-started work
-before reporting cancellation. Memory status is metadata-only; targeted manual
+Runtime shutdown closes all engines. A cancelled STT request that is still queued
+never starts; a running one starts no further chunk, and its caller waits until the
+running chunk has finished, so the engine is never reported idle while it works.
+A managed STT child that has not answered that chunk within `_CANCEL_GRACE_S`
+(30 s) is ended (`abort()`, optional on `LocalTranscriptionEngine`) and its model
+unloaded; an in-process engine cannot be interrupted and always finishes. Memory status is metadata-only; targeted manual
 release refuses a busy engine immediately and keeps the installed Model files. Coverage:
 `test_speech_local.py` checks independent residency, busy TTS during STT release,
 cancellation, no-op release and loading again.
@@ -81,8 +85,9 @@ starts the same load regardless of the option and returns at once with `loaded`,
 the engine's worker, so a transcription arriving meanwhile queues behind it and
 reuses the model; a pending load with the same load identity is not started
 twice; failures are logged and left for the next transcription to report.
-Shutdown cancels a preload that has not started and kills a managed STT child
-that is still loading; an in-process load (development checkout) cannot be interrupted
+Shutdown cancels a preload that has not started and kills every managed STT child
+the server is waiting on, loading or transcribing (`_WaitingWorkers`); its request fails
+as closed. An in-process load or inference (development checkout) cannot be interrupted
 and delays shutdown until it finishes. The real load, including a managed
 child's, logs one INFO line with the engine and load seconds after it completes
 (its start only at DEBUG). Coverage: `test_speech_local.py` (prepare states, dedupe, waiting
@@ -166,7 +171,12 @@ engine over JSON lines: `{"load": true, "options"}` loads the model and answers
 forward loader and inference progress; `{"error"}` ends the child.
 `_ManagedSttEngine` construction returns only after `loaded`, so the executor's
 load boundary (logs, progress, preloading) covers the child's real load.
-`test_speech_local.py` runs this protocol against a real child with a fake engine.
+Every request has a deadline (`_LOAD_DEADLINE_S` 900 s for the load,
+`_INFERENCE_DEADLINE_S` 600 s per chunk of at most 30 s audio): a child that has not
+answered by then is ended with its process tree, the model unloaded, and the request
+fails with `LocalSpeechExecutionError`; the next request loads again.
+`test_speech_local.py` runs this protocol against a real child with a fake engine,
+including a child that stops answering (deadline, cancellation, shutdown).
 
 `SpeechProgress` is a request-local, thread-safe snapshot of phase and elapsed
 time. `SpeechService.transcribe/synthesize(progress=...)` carries it to local workers
@@ -247,7 +257,7 @@ Executable TTS targets send JSON to `/audio/speech` and return raw audio bytes. 
 - With `Accept: application/x-ndjson`, the same upload streams request-local
   progress heartbeats and one terminal result/error. `server/app.py` owns this
   transport and cancels/reaps work on disconnect; local worker cancellation
-  still waits for active inference. Ordinary JSON clients remain supported.
+  waits for the running chunk, bounded for managed STT (Local engines). Ordinary JSON clients remain supported.
   Coverage: `tests/server/test_speech_endpoints.py`.
 - Status and install of every local speech target go through the generic
   `task_model.local_setup_status/install {target}` (`model_tasks.md` -> Contracts),
