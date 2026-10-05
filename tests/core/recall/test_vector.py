@@ -311,13 +311,13 @@ async def test_search_cancellation_reaches_the_embedding_call(
 ) -> None:
     """Cancelling a Run stops its in-flight semantic provider request."""
 
-    started = asyncio.Event()
     cancelled = asyncio.Event()
 
     class _SlowEmbeddings(StubEmbeddings):
         @override
         async def embed(self, texts: list[str], *, purpose: str | None = None) -> EmbeddingResult:
-            started.set()
+            # Cancel the search only once its Provider request is in flight.
+            task.cancel()
             try:
                 await asyncio.Event().wait()
             except asyncio.CancelledError:
@@ -332,8 +332,6 @@ async def test_search_cancellation_reaches_the_embedding_call(
         vector_backend(embeddings=_SlowEmbeddings()).search_page(request("semantic content"))
     )
 
-    await asyncio.wait_for(started.wait(), timeout=1)
-    task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
     assert cancelled.is_set()

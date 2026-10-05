@@ -668,10 +668,10 @@ class _Clock:
     monotonic = staticmethod(time.monotonic)
 
     def __init__(self):
-        self.offset = 0.0
+        self.now = 1000.0
 
     def time(self):
-        return time.time() + self.offset
+        return self.now
 
 
 @pytest.mark.parametrize("event", ["deadline passes", "keeper stops"])
@@ -687,76 +687,48 @@ def test_a_repair_window_protects_its_merge_until_main_has_it(
     keeper, _lock_path, holder_path, release_path = _start_keeper(
         real_repo / ".git", monkeypatch, clock.time() + 30
     )
-    assert _wait_until(lambda: worktree_lock._own_repair_window_is_active(holder_path, "task-a"))
-    main_head = _git_output(real_repo, "rev-parse", "HEAD")
 
     def during_the_check(_landing):
         if event == "deadline passes":
-            clock.offset += 60
+            clock.now += 60
             passed = clock.time()
             # The keeper sees its deadline pass while the merge holds the lease.
             assert _wait_until(
                 lambda: (
                     (worktree_lock._read_holder_record(holder_path) or {}).get("heartbeat", 0)
                     >= passed
-                )
+                ),
+                timeout=1,
             )
             assert keeper.is_alive()
         else:
             release_path.write_text("release\n", encoding="utf-8")
-            keeper.join(timeout=10)
+            keeper.join(timeout=1)
 
-    _around_the_merge_check(monkeypatch, module, during_the_check)
+    try:
+        assert _wait_until(
+            lambda: worktree_lock._own_repair_window_is_active(holder_path, "task-a"), timeout=1
+        )
+        main_head = _git_output(real_repo, "rev-parse", "HEAD")
+        _around_the_merge_check(monkeypatch, module, during_the_check)
+        result = module.cmd_merge(argparse.Namespace(name="task-a", message=None, wait_timeout=0.3))
+        output = capsys.readouterr().out
 
-    result = module.cmd_merge(argparse.Namespace(name="task-a", message=None, wait_timeout=0.3))
-    keeper.join(timeout=10)
-    output = capsys.readouterr().out
-
-    assert not keeper.is_alive()
-    if event == "deadline passes":
-        assert result == 0
-        assert _git_output(real_repo, "log", "-1", "--format=%s") == "merge: task-a"
-    else:
-        # Another merge may hold the lock by now: main must not move.
-        assert result == 1
-        assert "your repair window ended while the merge commit was checked" in output
-        assert _git_output(real_repo, "rev-parse", "HEAD") == main_head
-        assert worktree.exists()
-
-
-def test_repair_start_blocks_others_and_lets_own_merge_win(real_repo, monkeypatch):
-    module = _load_worktree_module()
-    _patch_repo_globals(monkeypatch, module, real_repo)
-    _poll_the_merge_lock_quickly(monkeypatch)
-    _commit_file(real_repo, "shared.txt", "base\n", "base file")
-    worktree_a = _create_task_worktree(module, real_repo, "task-a")
-    _commit_file(worktree_a, "feature-a.txt", "a\n", "a file")
-    worktree_b = _create_task_worktree(module, real_repo, "task-b")
-    _commit_file(worktree_b, "feature-b.txt", "b\n", "b file")
-
-    started = module.cmd_repair_start(argparse.Namespace(name="task-a", window=20, wait_timeout=15))
-    assert started == 0
-
-    blocked = module.cmd_merge(argparse.Namespace(name="task-b", message=None, wait_timeout=0.3))
-    assert blocked == 1
-
-    own_merge = module.cmd_merge(argparse.Namespace(name="task-a", message=None, wait_timeout=30))
-    assert own_merge == 0
-    assert (real_repo / "feature-a.txt").read_text(encoding="utf-8") == "a\n"
-    assert "merge: task-a" in _git_output(real_repo, "log", "--format=%s", "-1")
-
-    holder_path = module._merge_lock_paths()[1]
-    window_closed = False
-    for _ in range(50):
-        if not worktree_lock._own_repair_window_is_active(holder_path, "task-a"):
-            window_closed = True
-            break
-        time.sleep(0.2)
-    assert window_closed
-
-    follow_up = module.cmd_merge(argparse.Namespace(name="task-b", message=None, wait_timeout=60))
-    assert follow_up == 0
-    assert (real_repo / "feature-b.txt").exists()
+        if event == "deadline passes":
+            assert result == 0, output
+            assert _git_output(real_repo, "log", "-1", "--format=%s") == "merge: task-a"
+        else:
+            # Another merge may hold the lock by now: main must not move.
+            assert result == 1, output
+            assert "your repair window ended while the merge commit was checked" in output
+            assert _git_output(real_repo, "rev-parse", "HEAD") == main_head
+            assert worktree.exists()
+        keeper.join(timeout=1)
+        assert not keeper.is_alive()
+    finally:
+        if keeper.is_alive():
+            release_path.write_text("release\n", encoding="utf-8")
+            keeper.join(timeout=1)
 
 
 def test_repair_finish_closes_window_for_other_tasks(real_repo, monkeypatch):

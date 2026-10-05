@@ -8,6 +8,7 @@ import threading
 import time
 import wave
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
@@ -150,16 +151,23 @@ def pool_of(*stages: EchoStage | None) -> tuple[EchoStagePool, list[int]]:
     return EchoStagePool(factory), calls
 
 
-def slow_pool(stage: EchoStage | None, ready: threading.Event) -> tuple[EchoStagePool, list[int]]:
-    """A pool whose factory returns ``stage`` only once ``ready`` is set."""
+@contextmanager
+def gated_pool(
+    stage: EchoStage | None,
+) -> Iterator[tuple[EchoStagePool, threading.Event, list[int]]]:
+    """Hold the factory until released; always release it when the test ends."""
+    ready = threading.Event()
     calls: list[int] = []
 
     def factory() -> EchoStage | None:
         calls.append(1)
-        assert ready.wait(5)
+        ready.wait()
         return stage
 
-    return EchoStagePool(factory), calls
+    try:
+        yield EchoStagePool(factory), ready, calls
+    finally:
+        ready.set()
 
 
 # -- Projections ---------------------------------------------------------------------
@@ -636,80 +644,78 @@ def test_a_stage_that_failed_is_never_lent_again(start_capture: Callable[..., Ru
 def test_a_slow_echo_canceller_does_not_hold_back_listening(
     start_capture: Callable[..., Running],
 ) -> None:
-    ready = threading.Event()
     stage = FakeEchoStage(rate=48000)
-    pool, _ = slow_pool(stage, ready)
-    subscriptions: list[CaptureSubscription] = []
-    run = start_capture(
-        FakeSoundDevice(),
-        echo_cancellation=True,
-        echo_stages=pool,
-        echo_stage_wait=0.05,
-        subscribe=subscribe_to(subscriptions),
-    )
+    with gated_pool(stage) as (pool, ready, _):
+        subscriptions: list[CaptureSubscription] = []
+        run = start_capture(
+            FakeSoundDevice(),
+            echo_cancellation=True,
+            echo_stages=pool,
+            echo_stage_wait=0.05,
+            subscribe=subscribe_to(subscriptions),
+        )
 
-    before = read_items(subscriptions[0], 3)
-    assert all(isinstance(item, AudioBlock) and item.recording_rate == 16000 for item in before)
-    assert run.statuses[0].echo_state == "starting"
+        before = read_items(subscriptions[0], 3)
+        assert all(isinstance(item, AudioBlock) and item.recording_rate == 16000 for item in before)
+        assert run.statuses[0].echo_state == "starting"
 
-    ready.set()
-    items = read_items_until(
-        subscriptions[0], lambda item: isinstance(item, AudioBlock) and item.recording_rate == 48000
-    )
+        ready.set()
+        items = read_items_until(
+            subscriptions[0],
+            lambda item: isinstance(item, AudioBlock) and item.recording_rate == 48000,
+        )
 
-    # The stage changes the recording rate, so its first block follows a gap.
-    assert items[-2] == CaptureGap("echo_attached")
-    assert stage.log[0] == "stage.open:16000"
-    wait_until(lambda: run.capture.status.echo_state == "active")
+        # The stage changes the recording rate, so its first block follows a gap.
+        assert items[-2] == CaptureGap("echo_attached")
+        assert stage.log[0] == "stage.open:16000"
+        wait_until(lambda: run.capture.status.echo_state == "active")
 
 
 def test_an_echo_canceller_at_the_capture_rate_attaches_without_a_gap(
     start_capture: Callable[..., Running],
 ) -> None:
     pytest.importorskip("soxr")
-    ready = threading.Event()
     stage = FakeEchoStage(rate=48000)
-    pool, _ = slow_pool(stage, ready)
-    subscriptions: list[CaptureSubscription] = []
-    run = start_capture(
-        FakeSoundDevice(default_samplerate=48000),
-        echo_cancellation=True,
-        echo_stages=pool,
-        echo_stage_wait=0.05,
-        subscribe=subscribe_to(subscriptions),
-    )
-    before = read_items(subscriptions[0], 2)
-    assert run.statuses[0].echo_state == "starting"
+    with gated_pool(stage) as (pool, ready, _):
+        subscriptions: list[CaptureSubscription] = []
+        run = start_capture(
+            FakeSoundDevice(default_samplerate=48000),
+            echo_cancellation=True,
+            echo_stages=pool,
+            echo_stage_wait=0.05,
+            subscribe=subscribe_to(subscriptions),
+        )
+        before = read_items(subscriptions[0], 2)
+        assert run.statuses[0].echo_state == "starting"
 
-    ready.set()
-    items = before + read_items_until(subscriptions[0], lambda _item: len(stage.processed) >= 3)
+        ready.set()
+        items = before + read_items_until(subscriptions[0], lambda _item: len(stage.processed) >= 3)
 
-    assert [item.index for item in items] == list(range(len(items)))  # type: ignore[union-attr]
-    assert {item.recording_rate for item in items} == {48000}  # type: ignore[union-attr]
-    assert stage.log[0] == "stage.open:48000"
-    wait_until(lambda: run.capture.status.echo_state == "active")
+        assert [item.index for item in items] == list(range(len(items)))  # type: ignore[union-attr]
+        assert {item.recording_rate for item in items} == {48000}  # type: ignore[union-attr]
+        assert stage.log[0] == "stage.open:48000"
+        wait_until(lambda: run.capture.status.echo_state == "active")
 
 
 def test_an_echo_canceller_that_turns_out_unavailable_is_not_asked_again(
     start_capture: Callable[..., Running],
 ) -> None:
-    ready = threading.Event()
-    pool, calls = slow_pool(None, ready)
-    run = start_capture(
-        FakeSoundDevice(), echo_cancellation=True, echo_stages=pool, echo_stage_wait=0.05
-    )
-    wait_until(run.has_status)
-    assert run.statuses[0].echo_state == "starting"
+    with gated_pool(None) as (pool, ready, calls):
+        run = start_capture(
+            FakeSoundDevice(), echo_cancellation=True, echo_stages=pool, echo_stage_wait=0.05
+        )
+        wait_until(run.has_status)
+        assert run.statuses[0].echo_state == "starting"
 
-    ready.set()
-    wait_until(lambda: run.capture.status.echo_state == "unavailable")
-    run.stop.set()
-    assert run.capture.join(5)
-    again = start_capture(FakeSoundDevice(), echo_cancellation=True, echo_stages=pool)
-    wait_until(again.has_status)
+        ready.set()
+        wait_until(lambda: run.capture.status.echo_state == "unavailable")
+        run.stop.set()
+        assert run.capture.join(5)
+        again = start_capture(FakeSoundDevice(), echo_cancellation=True, echo_stages=pool)
+        wait_until(again.has_status)
 
-    assert again.statuses[0].echo_state == "unavailable"
-    assert calls == [1]
+        assert again.statuses[0].echo_state == "unavailable"
+        assert calls == [1]
 
 
 def test_a_gap_releases_the_held_back_audio_before_the_discontinuity(

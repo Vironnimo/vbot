@@ -382,7 +382,8 @@ Tests live in `tests/core/tools/test_search_files*.py`:
   missing paths and their hints, flags owned by vBot, conflicts, regex repair, and
   the help examples.
 - **`test_search_files_lifecycle.py`** checks native child lifecycle, memory
-  polling and cancellation with real subprocesses.
+  polling and cancellation with real subprocesses. The already-finished child
+  case uses in-memory pipes and a fixed exit code, independent of process startup.
 
 Other tests: `tests/cli/test_search_runtime.py` covers provisioning. The probe
 cases in `scripts/provider_probe/workflow_search_files.py` run through

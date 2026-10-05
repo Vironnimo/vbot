@@ -87,16 +87,15 @@ async def test_blocked_loop_records_lag_and_a_stall_with_the_blocking_and_busy_s
     tmp_path: Path,
 ) -> None:
     service = _fast_service(tmp_path)
+    service.start_recording()
     service.start()
     try:
-        await asyncio.sleep(0.05)
-        service.start_recording()
         awaiting = asyncio.create_task(await_blocking_task_for_test())
 
         async def stalled() -> bool:
             return any(map(_is_test_stall, (await service.snapshot())["stalls"]))
 
-        await _wait_for(stalled)
+        await _wait_for(stalled, timeout=1)
         await awaiting
         snapshot = await service.snapshot()
         result = await service.stop_recording()
