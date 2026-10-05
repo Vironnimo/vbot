@@ -22,7 +22,7 @@ import re
 import signal
 import subprocess
 import tempfile
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Container, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
@@ -61,7 +61,9 @@ PRELOAD_OPTION = "preload"
 # A managed STT worker that has not answered within these seconds is ended.
 _LOAD_DEADLINE_S = 900.0
 _INFERENCE_DEADLINE_S = 600.0  # one chunk of at most 30 seconds of audio
-# A cancelled transcription's current chunk may still finish within these seconds.
+# A local TTS worker that has not answered within these seconds is ended.
+_SYNTHESIS_DEADLINE_S = 1800.0  # its load plus at most 5,000 characters
+# A cancelled request's running engine call may still finish within these seconds.
 _CANCEL_GRACE_S = 30.0
 _PROGRESS: ContextVar[SpeechProgress | None] = ContextVar("local_speech_progress", default=None)
 
@@ -88,6 +90,8 @@ class LocalTranscriptionEngine(Protocol):
 
 
 class LocalSynthesisEngine(Protocol):
+    """One loaded TTS model; it may offer ``abort()`` like a transcription engine."""
+
     def synthesize(self, text: str, options: Mapping[str, Any]) -> SpeechSynthesisResult: ...
 
     def close(self) -> None: ...
@@ -237,25 +241,25 @@ class _EngineState:
 
 
 class _WaitingWorkers:
-    """Managed STT workers the parent is waiting on, so closing can end them.
+    """Speech worker children the parent is waiting on, so closing can end them.
 
-    While a worker loads or transcribes a chunk, its executor thread blocks until
-    the child answers; only ending the child releases it before that.
+    While a child loads, transcribes or synthesizes, its executor thread blocks
+    until the child answers; only ending the child releases it before that.
     """
 
     def __init__(self) -> None:
         self._lock = Lock()
-        self._workers: set[_ManagedSttEngine] = set()
+        self._workers: set[_WorkerProcess] = set()
         self._closed = False
 
-    def add(self, worker: _ManagedSttEngine) -> None:
+    def add(self, worker: _WorkerProcess) -> None:
         with self._lock:
             if not self._closed:
                 self._workers.add(worker)
                 return
         worker.end("closed")
 
-    def discard(self, worker: _ManagedSttEngine) -> None:
+    def discard(self, worker: _WorkerProcess) -> None:
         with self._lock:
             self._workers.discard(worker)
 
@@ -267,14 +271,14 @@ class _WaitingWorkers:
             worker.end("closed")
 
 
-class _TranscriptionCancelledError(LocalSpeechError):
-    """The caller cancelled the transcription and receives no result."""
+class _RequestCancelledError(LocalSpeechError):
+    """The caller cancelled the request and receives no result."""
 
 
 class _Cancellation:
-    """One transcription's cancellation, shared by its caller and worker thread.
+    """One request's cancellation, shared by its caller and worker thread.
 
-    The worker stops before its next chunk. A chunk already running gets
+    The worker starts no further engine call. A call already running gets
     ``_CANCEL_GRACE_S`` seconds to finish, so a responsive engine stays loaded;
     then an engine that can ``abort`` is ended.
     """
@@ -294,7 +298,7 @@ class _Cancellation:
 
     def check(self) -> None:
         if self._requested:
-            raise _TranscriptionCancelledError("Local speech recognition was cancelled.")
+            raise _RequestCancelledError("Local speech request was cancelled.")
 
     @contextmanager
     def running(self, engine: object) -> Iterator[None]:
@@ -394,7 +398,10 @@ class LocalSpeechExecutor:
                     )
                     for entry in stt
                 )
-            definitions: tuple[SpeechEngineDefinition, ...] = (*stt, *_tts_definitions(add_setup))
+            definitions: tuple[SpeechEngineDefinition, ...] = (
+                *stt,
+                *_tts_definitions(add_setup, self._waiting),
+            )
         else:
             definitions = tuple(engines)
             for entry in definitions:
@@ -472,24 +479,28 @@ class LocalSpeechExecutor:
         state = self._states.get(local_id)
         if state is None:
             raise LocalSpeechError(f"Local speech-to-text target is not available: {local_id}")
+        return await self._run(
+            state, self._transcribe_with_progress, local_id, audio, dict(options), progress
+        )
+
+    async def _run[Result](
+        self,
+        state: _EngineState,
+        function: Callable[..., Result | None],
+        *arguments: Any,
+    ) -> Result:
+        """Run one request on the engine's worker, passing it a ``_Cancellation``.
+
+        A cancelled request that is still queued never starts. A running one starts
+        no further engine call and ends an unresponsive worker after its grace; the
+        engine stays busy until then, so the caller waits for it.
+        """
         state.pending += 1
         cancellation = _Cancellation()
-        request = asyncio.ensure_future(
-            state.workers.run(
-                self._transcribe_with_progress,
-                local_id,
-                audio,
-                dict(options),
-                progress,
-                cancellation,
-            )
-        )
+        request = asyncio.ensure_future(state.workers.run(function, *arguments, cancellation))
         try:
             await asyncio.wait((request,))
         except asyncio.CancelledError:
-            # A queued request never starts. A running one stops at its next chunk
-            # or ends an unresponsive managed worker; the engine stays busy until
-            # then, so the caller waits for it.
             cancellation.request()
             request.cancel()
             await settle_before_cancelling(asyncio.wait((request,)))
@@ -499,6 +510,16 @@ class LocalSpeechExecutor:
         result = request.result()
         assert result is not None  # Only a cancelled request ends without a result.
         return result
+
+    def _ended_by_cancellation(self, state: _EngineState, local_id: str) -> None:
+        """Unload an engine a cancellation ended because its call did not finish."""
+        state.unload()
+        _LOGGER.warning(
+            "Ended local speech worker that kept a cancelled request "
+            "(engine=%s grace_seconds=%.0f)",
+            local_id,
+            _CANCEL_GRACE_S,
+        )
 
     def _transcribe_with_progress(
         self,
@@ -516,7 +537,7 @@ class LocalSpeechExecutor:
                 progress.update("preparing")
             try:
                 return self._transcribe(local_id, audio, options, cancellation)
-            except _TranscriptionCancelledError:
+            except _RequestCancelledError:
                 return None  # Not a failure: nobody waits for an error.
 
     def prepare(self, local_id: str, options: Mapping[str, Any]) -> str:
@@ -696,20 +717,12 @@ class LocalSpeechExecutor:
                 language=next(iter(languages)) if len(languages) == 1 else None,
                 segments=tuple(segments),
             )
-        except _TranscriptionCancelledError:
+        except _RequestCancelledError:
             raise
         except Exception as error:
             if cancellation.aborted:
-                state.unload()
-                _LOGGER.warning(
-                    "Ended local STT worker that kept a cancelled transcription "
-                    "(engine=%s grace_seconds=%.0f)",
-                    local_id,
-                    _CANCEL_GRACE_S,
-                )
-                raise _TranscriptionCancelledError(
-                    "Local speech recognition was cancelled."
-                ) from error
+                self._ended_by_cancellation(state, local_id)
+                raise _RequestCancelledError("Local speech request was cancelled.") from error
             failure = self._failed(state, local_id, error)
             if failure is error:
                 raise
@@ -809,17 +822,17 @@ class LocalSpeechExecutor:
                 "select the local text-to-speech engine under Text to speech, and choose Install. "
                 "Wait for setup to finish before retrying."
             )
-        state.pending += 1
-        try:
-            return await state.workers.run(
-                self._synthesize, local_id, text, dict(options), progress
-            )
-        finally:
-            state.pending -= 1
+        return await self._run(state, self._synthesize, local_id, text, dict(options), progress)
 
     def _synthesize(
-        self, local_id: str, text: str, options: dict[str, Any], progress: SpeechProgress | None
-    ) -> SpeechSynthesisResult:
+        self,
+        local_id: str,
+        text: str,
+        options: dict[str, Any],
+        progress: SpeechProgress | None,
+        cancellation: _Cancellation,
+    ) -> SpeechSynthesisResult | None:
+        """Synthesize on the engine's worker; ``None`` once the caller cancelled."""
         definition = self._definitions.get(local_id)
         if (
             self._closed
@@ -856,6 +869,7 @@ class LocalSpeechExecutor:
         key = (local_id, json.dumps(load_options, sort_keys=True))
         with _PROGRESS.set(progress):
             try:
+                cancellation.check()
                 if key != state.key:
                     state.unload()
                 if state.engine is None:
@@ -865,15 +879,33 @@ class LocalSpeechExecutor:
                     state.key = key
                 if progress is not None:
                     progress.update("synthesizing")
-                result = cast(LocalSynthesisEngine, state.engine).synthesize(text, options)
+                engine = cast(LocalSynthesisEngine, state.engine)
+                with cancellation.running(engine):
+                    result = engine.synthesize(text, options)
                 if not result.audio:
                     raise ValueError("Empty synthesis")
                 return result
+            except _RequestCancelledError:
+                return None  # Not a failure: nobody waits for an error.
             except Exception as error:
+                if cancellation.aborted:
+                    self._ended_by_cancellation(state, local_id)
+                    return None
                 state.unload()
-                _LOGGER.warning(
-                    "Local TTS failed (engine=%s, error_type=%s)", local_id, type(error).__name__
+                if isinstance(error, LocalSpeechError):
+                    raise  # Closing ended the worker.
+                _LOGGER.log(
+                    # Closing ends running workers; that is no failure of the engine.
+                    logging.DEBUG if self._closed else logging.WARNING,
+                    "Local TTS failed (engine=%s, error_type=%s)",
+                    local_id,
+                    type(error).__name__,
                 )
+                if isinstance(error, TimeoutError):
+                    raise LocalSpeechExecutionError(
+                        "Local speech synthesis stopped responding and was ended. Retry; if it "
+                        "happens again, check the selected device and available memory."
+                    ) from error
                 raise LocalSpeechExecutionError(
                     "Local speech synthesis failed. Check the selected device and available "
                     "memory, then retry."
@@ -882,6 +914,7 @@ class LocalSpeechExecutor:
 
 def _tts_definitions(
     setup_for: Callable[[str, str, PinnedModel], LocalSpeechSetup],
+    waiting: _WaitingWorkers,
 ) -> tuple[SpeechEngineDefinition, ...]:
     """The local TTS targets; *setup_for(id, environment, model)* supplies each installation."""
 
@@ -999,7 +1032,7 @@ def _tts_definitions(
                     metadata={"license": license_name, "download_bytes": model.download_bytes},
                     option_fields=fields,
                 ),
-                partial(_TtsEngine, setup),
+                partial(_TtsEngine, setup, waiting),
                 ("device",),
                 model,
                 environment,
@@ -1008,21 +1041,29 @@ def _tts_definitions(
     return tuple(definitions)
 
 
-class _TtsEngine:
-    """A cached SDK process with fixed entry point and parent-owned output paths."""
+class _WorkerProcess:
+    """A ``speech_worker.py`` child the parent talks to in JSON lines.
 
-    def __init__(self, setup: LocalSpeechSetup, options: Mapping[str, Any]) -> None:
+    The child is ended with its process tree when a request passes its deadline,
+    a cancellation's grace runs out (``abort``) or the executor closes; the
+    request waiting for it then fails.
+    """
+
+    _closed_message: str  # The error of a request whose child closing ended.
+
+    def __init__(self, python: Path, arguments: Sequence[str], waiting: _WaitingWorkers) -> None:
         from core.utils.processes import subprocess_creation_flags
 
-        # The worker loads this model directory with the first request.
-        self._model_path = options["model_path"]
+        self._waiting = waiting
+        self._ending = Lock()
+        self._ended = ""  # Why the parent ended the child, if it did.
         self._process = subprocess.Popen(
             [
-                str(setup.python),
+                str(python),
                 "-I",
                 "-B",
                 str(Path(__file__).with_name("speech_worker.py")),
-                setup.engine,
+                *arguments,
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -1034,60 +1075,93 @@ class _TtsEngine:
             env={**os.environ, "PYTHONUTF8": "1", "TOKENIZERS_PARALLELISM": "false"},
         )
 
-    def synthesize(self, text: str, options: Mapping[str, Any]) -> SpeechSynthesisResult:
+    def abort(self) -> None:
+        """End the child from another thread; the running request fails."""
+        self.end("aborted")
+
+    def end(self, reason: str) -> None:
+        """Kill the child's process tree; the first reason names the failure."""
+        with self._ending:
+            self._ended = self._ended or reason
+        _kill_speech_process(self._process)
+
+    def _exchange(
+        self,
+        request: Mapping[str, Any],
+        answer: str,
+        deadline: float,
+        phases: Container[str] | None = None,
+    ) -> Any:
+        """Send one request line and return the child's ``answer`` field.
+
+        Progress forwards the child's phases (only *phases* when given). The child
+        is ended once *deadline* seconds pass without that answer.
+        """
         process = self._process
         assert process.stdin is not None and process.stdout is not None
-        timer = Timer(1800, self.close)
+        timer = Timer(deadline, self.end, ("deadline",))
         timer.daemon = True
+        self._waiting.add(self)
         timer.start()
         try:
-            with tempfile.TemporaryDirectory(prefix="vbot-tts-") as directory:
-                output = Path(directory) / "speech.wav"
-                process.stdin.write(
-                    json.dumps(
-                        {
-                            "text": text,
-                            "options": {**options, "model_path": self._model_path},
-                            "output": str(output),
-                        }
-                    )
-                    + "\n"
-                )
-                process.stdin.flush()
-                while line := process.stdout.readline(4096):
-                    event = json.loads(line)
-                    if event.get("error"):
-                        raise RuntimeError(event["error"])
-                    if (
-                        event.get("phase") in {"loading", "synthesizing"}
-                        and (progress := _PROGRESS.get()) is not None
-                    ):
-                        progress.update(event["phase"])
-                    if event.get("done"):
-                        if not 44 < output.stat().st_size <= 64 * 1024 * 1024:
-                            raise ValueError("Invalid output size")
-                        return SpeechSynthesisResult(output.read_bytes(), "audio/wav", "wav")
-                raise RuntimeError("Speech worker exited")
+            process.stdin.write(json.dumps(request) + "\n")
+            process.stdin.flush()
+            while line := process.stdout.readline(4096):
+                event = json.loads(line)
+                if event.get("error"):
+                    raise RuntimeError(event["error"])
+                if (
+                    (phase := event.get("phase"))
+                    and (phases is None or phase in phases)
+                    and (progress := _PROGRESS.get()) is not None
+                ):
+                    progress.update(phase)
+                if (payload := event.get(answer)) is not None:
+                    return payload
+        except OSError, ValueError:
+            if not self._ended:
+                raise  # A broken pipe or line of a child ended here is reported below.
         finally:
             timer.cancel()
+            self._waiting.discard(self)
+        if self._ended == "deadline":
+            raise TimeoutError(f"Speech worker did not answer within {deadline:.0f} seconds")
+        if self._ended == "closed":
+            raise LocalSpeechError(self._closed_message)
+        raise RuntimeError("Speech worker exited")
 
     def close(self) -> None:
-        from core.utils.processes import windows_taskkill_tree
+        _close_speech_process(self._process)
 
-        process = self._process
-        if process.poll() is None:
-            if os.name == "nt":
-                if not windows_taskkill_tree(process.pid):
-                    with suppress(ProcessLookupError):
-                        process.kill()
-            else:
-                with suppress(ProcessLookupError):
-                    cast(Any, os).killpg(process.pid, cast(Any, signal).SIGKILL)
-            process.wait()
-        if process.stdin:
-            process.stdin.close()
-        if process.stdout:
-            process.stdout.close()
+
+class _TtsEngine(_WorkerProcess):
+    """A cached SDK process with fixed entry point and parent-owned output paths."""
+
+    _closed_message = "Local speech synthesis is closed. Restart the vBot server before retrying."
+
+    def __init__(
+        self, setup: LocalSpeechSetup, waiting: _WaitingWorkers, options: Mapping[str, Any]
+    ) -> None:
+        # The worker loads this model directory with the first request.
+        self._model_path = options["model_path"]
+        super().__init__(setup.python, [setup.engine], waiting)
+
+    def synthesize(self, text: str, options: Mapping[str, Any]) -> SpeechSynthesisResult:
+        with tempfile.TemporaryDirectory(prefix="vbot-tts-") as directory:
+            output = Path(directory) / "speech.wav"
+            self._exchange(
+                {
+                    "text": text,
+                    "options": {**options, "model_path": self._model_path},
+                    "output": str(output),
+                },
+                "done",
+                _SYNTHESIS_DEADLINE_S,
+                ("loading", "synthesizing"),
+            )
+            if not 44 < output.stat().st_size <= 64 * 1024 * 1024:
+                raise ValueError("Invalid output size")
+            return SpeechSynthesisResult(output.read_bytes(), "audio/wav", "wav")
 
 
 def _packaged_app_root() -> Path | None:
@@ -1102,14 +1176,14 @@ def _packaged_app_root() -> Path | None:
     return None
 
 
-class _ManagedSttEngine:
+class _ManagedSttEngine(_WorkerProcess):
     """Keep the optional ML stack in a managed child interpreter.
 
     Construction returns once the child reports the model loaded, so the
     executor's load boundary (logs, progress, preloading) covers the real load.
-    The child is ended with its process tree when a request passes its deadline,
-    a cancellation's grace runs out (``abort``) or the executor closes.
     """
+
+    _closed_message = "Local speech recognition is closed. Restart the vBot server before retrying."
 
     def __init__(
         self,
@@ -1119,30 +1193,7 @@ class _ManagedSttEngine:
         waiting: _WaitingWorkers,
         options: Mapping[str, Any],
     ) -> None:
-        from core.utils.processes import subprocess_creation_flags
-
-        self._waiting = waiting
-        self._ending = Lock()
-        self._ended = ""  # Why the parent ended the child, if it did.
-        self._process = subprocess.Popen(
-            [
-                str(setup.python),
-                "-I",
-                "-B",
-                str(Path(__file__).with_name("speech_worker.py")),
-                "--stt",
-                engine,
-                str(app_root),
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            creationflags=subprocess_creation_flags(),
-            start_new_session=os.name != "nt",
-            env={**os.environ, "PYTHONUTF8": "1", "TOKENIZERS_PARALLELISM": "false"},
-        )
+        super().__init__(setup.python, ["--stt", engine, str(app_root)], waiting)
         try:
             self._exchange({"load": True, "options": dict(options)}, "loaded", _LOAD_DEADLINE_S)
         except BaseException:
@@ -1164,55 +1215,6 @@ class _ManagedSttEngine:
             segments=tuple(payload.get("segments", ())),
             usage=payload.get("usage"),
         )
-
-    def abort(self) -> None:
-        """End the child from another thread; the running request fails."""
-        self.end("aborted")
-
-    def end(self, reason: str) -> None:
-        """Kill the child's process tree; the first reason names the failure."""
-        with self._ending:
-            self._ended = self._ended or reason
-        _kill_speech_process(self._process)
-
-    def _exchange(self, request: Mapping[str, Any], answer: str, deadline: float) -> Any:
-        """Send one request line and return the child's ``answer`` field.
-
-        The child is ended once *deadline* seconds pass without that answer.
-        """
-        process = self._process
-        assert process.stdin is not None and process.stdout is not None
-        timer = Timer(deadline, self.end, ("deadline",))
-        timer.daemon = True
-        self._waiting.add(self)
-        timer.start()
-        try:
-            process.stdin.write(json.dumps(request) + "\n")
-            process.stdin.flush()
-            while line := process.stdout.readline(4096):
-                event = json.loads(line)
-                if event.get("error"):
-                    raise RuntimeError(event["error"])
-                if event.get("phase") and (progress := _PROGRESS.get()) is not None:
-                    progress.update(event["phase"])
-                if (payload := event.get(answer)) is not None:
-                    return payload
-        except OSError, ValueError:
-            if not self._ended:
-                raise  # A broken pipe or line of a child ended here is reported below.
-        finally:
-            timer.cancel()
-            self._waiting.discard(self)
-        if self._ended == "deadline":
-            raise TimeoutError(f"Speech worker did not answer within {deadline:.0f} seconds")
-        if self._ended == "closed":
-            raise LocalSpeechError(
-                "Local speech recognition is closed. Restart the vBot server before retrying."
-            )
-        raise RuntimeError("Speech worker exited")
-
-    def close(self) -> None:
-        _close_speech_process(self._process)
 
 
 def _kill_speech_process(process: subprocess.Popen[str]) -> None:

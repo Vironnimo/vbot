@@ -6,6 +6,7 @@ import asyncio
 import io
 import json
 import sys
+import threading
 import wave
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,9 +23,11 @@ from core.model_tasks.options import TaskModelOptionField
 from core.model_tasks.speech_local import (
     _PROGRESS,
     LocalSpeechError,
+    LocalSpeechExecutionError,
     LocalSpeechExecutor,
     SpeechEngineDefinition,
     _TtsEngine,
+    _WaitingWorkers,
 )
 from core.model_tasks.speech_models import SPEECH_MODELS
 from core.model_tasks.speech_setup import LocalSpeechSetup
@@ -366,7 +369,7 @@ def test_process_adapter_keeps_audio_and_text_off_arguments_and_cleans_up(tmp_pa
     popen = Mock(return_value=process)
     monkeypatch.setattr(speech_local.subprocess, "Popen", popen)
     setup = LocalSpeechSetup(engine="qwen3-tts", directory=tmp_path)
-    engine = _TtsEngine(setup, {"model_path": "installed"})
+    engine = _TtsEngine(setup, _WaitingWorkers(), {"model_path": "installed"})
     token = _PROGRESS.set(SpeechProgress())
     try:
         result = engine.synthesize("private test text", {})
@@ -383,3 +386,55 @@ def test_process_adapter_keeps_audio_and_text_off_arguments_and_cleans_up(tmp_pa
     assert popen.call_args.args[0][:3] == [str(setup.python), "-I", "-B"]
     assert kill_tree.call_count == 1
     process.wait.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["deadline", "cancellation", "shutdown"])
+async def test_tts_worker_that_stops_answering_is_ended(tmp_path, monkeypatch, ending):
+    from core.model_tasks import speech_local
+
+    monkeypatch.setattr(speech_local, "_SYNTHESIS_DEADLINE_S", 0.05 if ending == "deadline" else 60)
+    monkeypatch.setattr(speech_local, "_CANCEL_GRACE_S", 0.05)
+    asked, killed = threading.Event(), threading.Event()
+
+    def kill_tree(*_arguments):
+        killed.set()
+        return True
+
+    monkeypatch.setattr("core.utils.processes.windows_taskkill_tree", kill_tree)
+    if sys.platform != "win32":
+        monkeypatch.setattr("os.killpg", kill_tree)
+    # The child takes the request and never answers; only killing it ends its output.
+    process = Mock()
+    process.poll.side_effect = lambda: 0 if killed.is_set() else None
+    process.stdin.write.side_effect = lambda _line: asked.set()
+    process.stdout.readline.side_effect = lambda _size: "" if killed.wait(10) else "{}"
+    monkeypatch.setattr(speech_local.subprocess, "Popen", Mock(return_value=process))
+    setup = LocalSpeechSetup(engine="qwen3-tts", directory=tmp_path)
+    entry = SpeechEngineDefinition(
+        LocalTaskTargetDescriptor(
+            id="voice", label="Voice", task_types=(TASK_TEXT_TO_SPEECH,), availability=lambda: True
+        ),
+        lambda options: _TtsEngine(setup, executor._waiting, {**options, "model_path": "m"}),
+    )
+    executor = LocalSpeechExecutor(engines=[entry])
+    try:
+        request = asyncio.create_task(executor.synthesize("voice", "hello", options={}))
+        assert await asyncio.to_thread(asked.wait, 5)
+        if ending == "cancellation":
+            request.cancel()
+        elif ending == "shutdown":
+            await asyncio.wait_for(executor.aclose(), 5)
+        done, _pending = await asyncio.wait((request,), timeout=5)
+        assert done and killed.is_set()
+        if ending == "cancellation":
+            assert request.cancelled()
+        else:
+            error = request.exception()
+            assert type(error) is (
+                LocalSpeechExecutionError if ending == "deadline" else LocalSpeechError
+            )
+        assert executor.memory_status()["models"][0]["loaded"] is False
+    finally:
+        killed.set()
+        await executor.aclose()
