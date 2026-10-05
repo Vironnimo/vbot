@@ -251,6 +251,7 @@ async def test_bound_session_capability_delivers_once_and_ends_after_tool_batch(
         del arguments
         context.record_delivery_receipt("tool-receipt", "tool-hash", "inbox")
         context.record_delivery_receipt("second-receipt", "second-hash", "inbox")
+        context.add_note("deferred-tool-note")
         context.request_turn_end()
         return tool_success({"sentinel": True})
 
@@ -367,7 +368,9 @@ async def test_bound_session_capability_delivers_once_and_ends_after_tool_batch(
         message.content
         for message in runtime.chat_sessions.get(binding.address).load()
         if message.role == "note"
-    ] == ["test-delivery-sentinel"] + (["continuation-fixture"] if continue_after_batch else [])
+    ] == ["test-delivery-sentinel", "deferred-tool-note"] + (
+        ["continuation-fixture"] if continue_after_batch else []
+    )
     assert (
         await runtime.chat_sessions.lookup_delivery_receipt(
             binding.address, binding.generation_id, binding.owner_name, "request-receipt"
@@ -399,6 +402,8 @@ async def test_bound_session_capability_delivers_once_and_ends_after_tool_batch(
         for receipt_id in ("tool-receipt", "second-receipt")
     ]
     assert receipts[0].carrier_location == receipts[1].carrier_location
+    notes = runtime.chat_sessions.get(binding.address).load_active()
+    assert sum(message.content == "deferred-tool-note" for message in notes) == 1
     if continue_after_batch:
         messages = adapter.requests[1]["messages"]
         assert all(message["role"] != "note" for message in messages)

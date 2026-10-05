@@ -193,14 +193,17 @@ class NetworkChannelAdapter(ChannelAdapter):
             if raw.get("files"):
                 # One failing file must not discard the other attachments or caption.
                 messages = tuple({**raw, "files": [file], "text": ""} for file in raw["files"])
-                await self._engine.handle_inbound_media(
+                admitted = await self._engine.handle_inbound_media(
                     facts, messages, companion_text=raw.get("text") or None
                 )
             elif raw.get("text"):
-                await self._engine.handle_inbound_text(facts, raw["text"], raw_message=raw)
+                admitted = await self._engine.handle_inbound_text(
+                    facts, raw["text"], raw_message=raw
+                )
             else:
                 return
-            await self._received.record_received(self._config.id, receipt)
+            if admitted:
+                await self._received.record_received(self._config.id, receipt)
 
     def caption_text(self, raw_message: Any) -> str | None:
         return raw_message.get("text") or None

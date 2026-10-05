@@ -165,6 +165,7 @@ class ChatSession:
             run_id=self.run_id,
             seen_skills=seen_skills,
         )
+        self.acknowledge_deferred_notes(messages)
         # The edit deactivated the tail it replaced; reload the Skill cache on next use.
         with self._buffers.lock:
             self._buffers.activated_skill_contents = {}
@@ -187,6 +188,7 @@ class ChatSession:
         )
 
     def _appended(self, messages: list[ChatMessage]) -> None:
+        self.acknowledge_deferred_notes(messages)
         if any(message.role == "compaction_checkpoint" for message in messages):
             # The appended checkpoint is now the newest history entry, so only
             # activations later in this same batch survive it.
@@ -259,12 +261,21 @@ class ChatSession:
     def _take_deferred_notes(self) -> list[ChatMessage]:
         with self._buffers.lock:
             notes = list(self._buffers.deferred_note_messages)
-            self._buffers.deferred_note_messages.clear()
             self._buffers.defer_notes = False
             return notes
 
     def take_deferred_notes(self) -> list[ChatMessage]:
+        """Snapshot the retry batch; a successful write removes only committed Notes."""
         return self._take_deferred_notes()
+
+    def acknowledge_deferred_notes(self, messages: Sequence[ChatMessage]) -> None:
+        """Retire Notes proven committed, including writes through owned delivery receipts."""
+        note_ids = {message.id for message in messages if message.role == "note"}
+        if note_ids:
+            with self._buffers.lock:
+                self._buffers.deferred_note_messages = [
+                    note for note in self._buffers.deferred_note_messages if note.id not in note_ids
+                ]
 
     def flush_deferred_notes(self) -> None:
         self.append_many(self._take_deferred_notes())

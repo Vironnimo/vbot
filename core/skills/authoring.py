@@ -65,9 +65,10 @@ from core.skills.skill_validator import (
     parse_skill_front_matter,
     split_skill_document,
 )
-from core.skills.skills import RESOURCE_DIRECTORIES, SKILL_FILENAME
+from core.skills.skills import RESOURCE_DIRECTORIES, SKILL_FILENAME, SkillRegistry
 from core.utils.atomic import atomic_write_bytes
 from core.utils.errors import VBotError
+from core.utils.file_status import is_file_strict
 from core.utils.ids import is_reserved_name, new_id, reserved_name_message
 from core.utils.logging import get_logger
 from core.utils.timestamps import format_canonical_timestamp
@@ -474,7 +475,7 @@ class SkillAuthoringService:
         """
         with self._write_lock:
             _check_writer(writer)
-            skill_dir = self._existing_skill_dir(target_root, skill_name)
+            skill_dir = self._resolved_skill_dir(target_root, skill_name)
             root = skill_dir.parent
             reason, absorbed_into = self._archive_reason(root, skill_dir, reason, absorbed_into)
             if followed and absorbed_into is None:
@@ -606,7 +607,7 @@ class SkillAuthoringService:
         """
         with self._write_lock:
             _check_writer(writer)
-            skill_dir = self._existing_skill_dir(target_root, skill_name)
+            skill_dir = self._resolved_skill_dir(target_root, skill_name)
             self._observe(SkillHistory(skill_dir.parent), skill_name, skill_dir, writer)
 
     def set_pinned(
@@ -1067,6 +1068,31 @@ class SkillAuthoringService:
 
     def _existing_skill_file(self, target_root: Path, skill_name: str) -> Path:
         return self._existing_skill_dir(target_root, skill_name) / SKILL_FILENAME
+
+    def _resolved_skill_dir(self, target_root: Path, skill_name: str) -> Path:
+        """Resolve the loaded identity before a deletion or its protection check."""
+        named = self._skill_dir(target_root, skill_name)
+        registry = SkillRegistry.load(named.parent)
+        try:
+            package = registry.get(skill_name).path.parent
+        except KeyError:
+            raise SkillAuthoringError(
+                f"Nothing changed. Skill '{skill_name}' not found in this home's loaded Skills. "
+                "Check its name in SKILL.md before deleting it."
+            ) from None
+        if sum(diagnostic.name == skill_name for diagnostic in registry.diagnostics()) > 1:
+            raise SkillAuthoringError(
+                f"Nothing changed. Several packages declare Skill '{skill_name}'. "
+                "Ask the user to give each package a distinct name, then retry."
+            )
+        resolved = self._existing_skill_dir(target_root, package.name)
+        if named != resolved and is_file_strict(named / SKILL_FILENAME):
+            raise SkillAuthoringError(
+                f"Nothing changed. Skill '{skill_name}' is loaded from folder '{package.name}', "
+                f"but folder '{skill_name}' contains another Skill. "
+                "Ask the user to align the folder names with their SKILL.md names, then retry."
+            )
+        return resolved
 
     def _resource_path(self, skill_dir: Path, relative_path: str) -> Path:
         normalized = _normalized_support_path(relative_path)

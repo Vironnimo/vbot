@@ -404,24 +404,31 @@ export function createChatController({
     const isLatestRequest = request.isLatest;
     try {
       const history = await readCurrentHistory(sessionState);
-      // A new Run may have started while durable history was loading. That
-      // newer Run owns the Session now, so this recovery response must not
-      // replace its optimistic state or subscription.
+      // History may settle an older Run while its successor owns the stream.
+      // Keep the current Run's projection and subscription in that case.
       if (
         !isLatestRequest() ||
-        sessionState.historySnapshotVersion !== request.snapshotVersion ||
-        sessionState.currentRun?.runId !== expectedRunId
+        sessionState.historySnapshotVersion !== request.snapshotVersion
       ) {
-        return true;
+        return (
+          sessionState.currentRun?.runId === expectedRunId ||
+          sessionState.historyRuns?.[expectedRunId]?.complete === true
+        );
       }
 
-      loadHistory(
-        sessionState,
-        history?.messages ?? [],
-        historyLoadOptions(history),
-      );
+      const successor = sessionState.currentRun?.runId !== expectedRunId;
+      const currentRunId = sessionState.currentRun?.runId;
+
+      loadHistory(sessionState, history?.messages ?? [], {
+        ...historyLoadOptions(history),
+        ...(successor ? { activeRunId: currentRunId, reset: false } : {}),
+      });
       reflectionRequest?.apply(history?.reflection_runs);
       sessionState.markReadFailedRunId = '';
+      if (successor) {
+        await syncSessionQueue(sessionState);
+        return sessionState.historyRuns?.[expectedRunId]?.complete === true;
+      }
       const activeRun = attachableHistoryRun(sessionState, history?.active_run);
       if (activeRun) {
         if (isDisplayedSession(sessionState.agentId, sessionState.sessionId)) {

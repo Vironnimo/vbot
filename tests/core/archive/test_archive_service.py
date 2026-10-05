@@ -120,10 +120,19 @@ async def test_a_repeated_archive_keeps_both_entries_and_restore_as_avoids_the_t
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("location", "workspace_state"),
-    [("outside-data-dir", "present"), ("outside-data-dir", "gone"), ("in-data-dir", "present")],
+    [
+        (location, state)
+        for location in ("outside-data-dir", "in-data-dir")
+        for state in ("present", "gone", "unavailable")
+    ],
 )
 async def test_an_external_workspace_stays_in_place_and_returns_with_the_agent(
-    world: ArchiveWorld, tmp_path: Path, location: str, workspace_state: str
+    world: ArchiveWorld,
+    tmp_path: Path,
+    location: str,
+    workspace_state: str,
+    deny_access: Callable[[Path], None],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Outside the Agent's own directory, even inside the data directory.
     external = tmp_path / "repo" if location == "outside-data-dir" else world.data_dir / "shared"
@@ -139,14 +148,27 @@ async def test_an_external_workspace_stays_in_place_and_returns_with_the_agent(
     assert Path(shown.external_workspace or "") == Path(workspace)
     if workspace_state == "gone":
         shutil.rmtree(external)
+    elif workspace_state == "unavailable":
+        deny_access(external)
+    if workspace_state != "present":
+        check = await world.service.restore_check(archived.entry_id)
+        assert [blocker.code for blocker in check.blockers] == [
+            "external_workspace_missing"
+            if workspace_state == "gone"
+            else "external_workspace_unavailable"
+        ]
+        with pytest.raises(ArchiveNotRestorableError):
+            await world.service.restore(archived.entry_id)
+        assert not world.agents.exists("coder")
+        entry = world.sessions.archive_ledger.entry(archived.entry_id)
+        assert entry is not None and entry.state == "archived"
+        if workspace_state == "gone":
+            external.mkdir()
+        else:
+            monkeypatch.undo()
     restored = await world.service.restore(archived.entry_id)
     agent = world.agents.get("coder")
-    if workspace_state == "present":
-        assert (agent.workspace, restored.warnings) == (workspace, ())
-    else:  # the default Workspace replaces a vanished one
-        assert [warning.code for warning in restored.warnings] == ["external_workspace_missing"]
-        assert agent.workspace == world.agents.default_workspace("coder")
-        assert Path(agent.workspace).is_dir()
+    assert (agent.workspace, restored.warnings) == (workspace, ())
 
 
 @pytest.mark.asyncio

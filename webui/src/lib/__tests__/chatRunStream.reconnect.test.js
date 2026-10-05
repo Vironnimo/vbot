@@ -147,28 +147,58 @@ describe('SSE reconnect and stall recovery', () => {
     ]);
   });
 
-  it('loads durable history when a terminal WebSocket event is blocked by a gap', async () => {
-    const { harness, subscriptions, sessionState } = setupRunningStream();
-    subscriptions[0].handlers.onEvent(runEvent(1));
+  it.each([false, true])(
+    'loads durable history for a blocked terminal across a successor (%s)',
+    async (successor) => {
+      const { harness, subscriptions, sessionState } = setupRunningStream();
+      subscriptions[0].handlers.onEvent(runEvent(1));
 
-    harness.stream.handleServerEvents(runCompleted(3));
-    await vi.advanceTimersByTimeAsync(1_000);
+      harness.stream.handleServerEvents(runCompleted(3));
+      if (successor) {
+        harness.reconcileRunSession.mockResolvedValueOnce(false);
+        harness.stream.handleServerEvents(
+          serverRunEvent('run_started', 1, {
+            agent_id: DISPLAYED_AGENT_ID,
+            session_id: DISPLAYED_SESSION_ID,
+            run_id: 'successor',
+            status: 'running',
+          }),
+        );
+      }
+      await vi.advanceTimersByTimeAsync(1_000);
 
-    expect(subscriptions[0].close).toHaveBeenCalledOnce();
-    expect(sessionState.streamError).toBe('errors.streamClosed');
-    expect(harness.reconcileRunSession).toHaveBeenCalledWith(
-      sessionState,
-      RUN_ID,
-    );
-    expect(harness.reportStreamDiagnostic).toHaveBeenCalledWith(
-      expect.objectContaining({
-        reason: 'terminal_event_blocked',
-        runId: RUN_ID,
-        expectedSequence: 2,
-        receivedSequence: 3,
-      }),
-    );
-  });
+      expect(subscriptions[0].close).toHaveBeenCalledOnce();
+      expect(sessionState.streamError).toBe(
+        successor ? '' : 'errors.streamClosed',
+      );
+      expect(harness.reconcileRunSession).toHaveBeenCalledWith(
+        sessionState,
+        RUN_ID,
+      );
+      expect(harness.reportStreamDiagnostic).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: 'terminal_event_blocked',
+          runId: RUN_ID,
+          expectedSequence: 2,
+          receivedSequence: 3,
+        }),
+      );
+      if (successor) {
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(harness.reconcileRunSession).toHaveBeenCalledTimes(2);
+        expect(harness.reconcileRunSession).toHaveBeenLastCalledWith(
+          sessionState,
+          RUN_ID,
+        );
+        expect(sessionState.currentRun).toMatchObject({
+          runId: 'successor',
+          status: 'running',
+        });
+        expect(subscriptions[1].close).not.toHaveBeenCalled();
+      }
+      harness.stream.closeSubscriptions();
+    },
+  );
 
   it('closes the SSE subscription when a contiguous terminal event arrives over WebSocket', () => {
     const { harness, subscriptions, sessionState } = setupRunningStream();

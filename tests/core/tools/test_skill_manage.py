@@ -818,7 +818,11 @@ def test_edit_replaces_complete_skill_document(tmp_path: Path) -> None:
     assert "New body." in text
 
 
-def test_delete_archives_complete_skill_and_invalidates(tmp_path: Path) -> None:
+@pytest.mark.parametrize("directory", ["demo", "package"])
+@pytest.mark.parametrize("run_kind", ["user", "skill_reflection"])
+def test_delete_archives_complete_skill_and_invalidates(
+    tmp_path: Path, directory: str, run_kind: str
+) -> None:
     harness, skill_file = _patch_harness(tmp_path)
     harness.run(
         {
@@ -828,9 +832,13 @@ def test_delete_archives_complete_skill_and_invalidates(tmp_path: Path) -> None:
             "content": "notes\n",
         }
     )
+    if directory != "demo":
+        destination = skill_file.parent.with_name(directory)
+        skill_file.parent.rename(destination)
+        skill_file = destination / "SKILL.md"
     harness.invalidated.clear()
 
-    result = harness.run({"action": "delete", "name": "demo"})
+    result = harness.run({"action": "delete", "name": "demo"}, run_kind=RunKind(run_kind))
 
     assert result["data"] == {
         "content": "Deleted Skill 'demo'. Its files are kept in the archive, where the user "
@@ -843,9 +851,30 @@ def test_delete_archives_complete_skill_and_invalidates(tmp_path: Path) -> None:
     assert not skill_file.parent.exists()
     assert harness.invalidated == ["main"]
     [archived] = harness.authoring.archived(harness.home("main"))
-    assert (archived.name, archived.reason, archived.archived_by) == ("demo", "deleted", "agent")
+    assert (archived.name, archived.reason, archived.archived_by) == (
+        "demo",
+        "deleted",
+        "agent" if run_kind == "user" else "reflection",
+    )
     latest = harness.authoring.history(harness.home("main"), "demo")[0]
     assert (latest.kind, latest.session_id, latest.run_id) == ("archive", "session-one", "run-one")
+
+
+@pytest.mark.parametrize("declared_name", ["demo", "other"])
+def test_delete_refuses_conflicting_package_identities(tmp_path: Path, declared_name: str) -> None:
+    harness, skill_file = _patch_harness(tmp_path)
+    skill_file.parent.rename(skill_file.parent.with_name("package"))
+    skill_file.parent.mkdir()
+    skill_file.write_text(_skill_md(name=declared_name), encoding="utf-8")
+    harness.invalidated.clear()
+    result = harness.run({"action": "delete", "name": "demo"})
+    assert result["ok"] is False
+    assert result["error"]["code"] == "skill_write_rejected"
+    assert "Nothing changed." in result["error"]["message"]
+    assert "Ask the user" in result["error"]["message"]
+    assert (skill_file.parent.with_name("package") / "SKILL.md").is_file()
+    assert skill_file.is_file()
+    assert harness.invalidated == []
 
 
 @pytest.mark.parametrize(

@@ -213,7 +213,7 @@ class ChannelConversationEngine:
 
         if not self._access.should_respond(conversation, (message_text,)):
             if self._config.observe_unaddressed and conversation.kind == "group":
-                self._enqueue_observed_message(
+                return self._enqueue_observed_message(
                     conversation,
                     _format_observed_message(conversation, message_text),
                 )
@@ -252,15 +252,17 @@ class ChannelConversationEngine:
         )
         if not self._access.should_respond(conversation, gating_texts):
             if self._config.observe_unaddressed and conversation.kind == "group":
+                notes = []
                 for caption in gating_texts:
                     body = (
                         f"[media] {caption}"
                         if caption is not None and caption != ""
                         else "[media message]"
                     )
-                    self._enqueue_observed_message(
-                        conversation,
-                        _format_observed_message(conversation, body),
+                    notes.append(_format_observed_message(conversation, body))
+                if notes:
+                    return self._enqueue_observed_message(
+                        conversation, notes[0], following_notes=tuple(notes[1:])
                     )
             return False
 
@@ -444,16 +446,21 @@ class ChannelConversationEngine:
 
     # -- Queue / workers --------------------------------------------------------------
 
-    def _enqueue_observed_message(self, conversation: ConversationFacts, note: str) -> None:
+    def _enqueue_observed_message(
+        self, conversation: ConversationFacts, note: str, *, following_notes: tuple[str, ...] = ()
+    ) -> bool:
         if self._enqueue_chat_work(
             conversation.chat_id,
-            _QueuedObservedMessage(conversation=conversation, note=note),
+            _QueuedObservedMessage(
+                conversation=conversation, note=note, following_notes=following_notes
+            ),
         ):
-            return
+            return True
         _LOGGER.warning(
             "Observed channel context rejected by queue limit (channel=%s)",
             self._config.id,
         )
+        return False
 
     def _enqueue_chat_work(self, platform_target: str, queued: _QueuedWork) -> bool:
         """Admit one channel item before it reaches the per-chat FIFO.
@@ -586,12 +593,13 @@ class ChannelConversationEngine:
         async with self._chat_sessions.write_lock(
             _session_address(route.agent_id, route.session_id)
         ):
-            await self._chat_sessions.run_async(
-                self._routing._append_session_note,
-                route.agent_id,
-                route.session_id,
-                queued.note,
-            )
+            for note in (queued.note, *queued.following_notes):
+                await self._chat_sessions.run_async(
+                    self._routing._append_session_note,
+                    route.agent_id,
+                    route.session_id,
+                    note,
+                )
 
     async def _process_queued_message(self, queued: _QueuedInboundMessage) -> None:
         # Prepared commands have their own queued-work type; only plain messages

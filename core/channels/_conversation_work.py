@@ -103,6 +103,7 @@ class _QueuedObservedMessage:
     conversation: ConversationFacts
     note: str
     admission: WaitingWorkAdmission | None = None
+    following_notes: tuple[str, ...] = ()
 
 
 @dataclass(slots=True, frozen=True)
