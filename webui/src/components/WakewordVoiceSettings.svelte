@@ -23,7 +23,6 @@
     deleteWakewordModel,
     importWakewordModel,
     isDesktopAccessor,
-    listMicrophones,
     listWakewordModels,
     retryVoice,
     setVoiceEnabled,
@@ -44,7 +43,6 @@
 
   const MAX_CUSTOM_WAKEWORD_MODEL_BYTES = 20 * 1024 * 1024;
   const VOICE_LIST_RETRY_MS = 3000;
-  const UNAVAILABLE_MICROPHONE_VALUE = '__configured_unavailable__';
   const SESSION_BEHAVIOR_OPTIONS = Object.freeze([
     {
       value: 'active',
@@ -72,7 +70,6 @@
   let draft = $state(null);
   let baseline = $state(null);
   let appliedSequence = -1;
-  let microphones = $state([]);
   let wakewordModels = $state([]);
   let listsLoaded = $state(false);
   let listsError = $state(false);
@@ -152,45 +149,6 @@
         ]
       : []),
   ]);
-  let configuredMicrophoneDevice = $derived(
-    draft?.microphone
-      ? microphones.find((device) =>
-          sameMicrophoneIdentity(device, draft.microphone),
-        ) || null
-      : null,
-  );
-  let microphoneOptions = $derived([
-    {
-      value: '',
-      label: t('settings.voice.systemAutomaticMic'),
-      secondaryLabel: status?.active_microphone?.name || '',
-    },
-    ...(draft?.microphone && !configuredMicrophoneDevice
-      ? [
-          {
-            value: UNAVAILABLE_MICROPHONE_VALUE,
-            label: draft.microphone.name,
-            secondaryLabel: t('settings.voice.configuredMicUnavailable'),
-            disabled: true,
-          },
-        ]
-      : []),
-    ...microphones.map((device) => ({
-      value: String(device.index),
-      label: device.name,
-      secondaryLabel: device.supported
-        ? t('settings.voice.compatibleMic')
-        : t('settings.voice.incompatibleMic'),
-      disabled: !device.supported,
-    })),
-  ]);
-  let selectedMicrophoneValue = $derived(
-    configuredMicrophoneDevice
-      ? String(configuredMicrophoneDevice.index)
-      : draft?.microphone
-        ? UNAVAILABLE_MICROPHONE_VALUE
-        : '',
-  );
   let attention = $derived.by(() => {
     if (!status) return null;
     if (status.mode === 'unavailable')
@@ -209,16 +167,16 @@
       return { warn: false, code: enableError, retry: false };
     return null;
   });
+  // Echo cancellation is set with the shared microphone; this is what the
+  // running capture does with it.
   let echo = $derived.by(() => {
-    if (!draft || !status) return null;
-    if (!draft.echo_cancellation)
+    if (!status) return null;
+    if (!status.echo_cancellation.enabled)
       return {
         variant: 'neutral',
         label: t('settings.voice.echoOff'),
         detail: t('settings.voice.echoOffDetail'),
       };
-    // The saved setting is on; the state describes the running capture.
-    if (!status.echo_cancellation.enabled) return null;
     switch (status.echo_cancellation.state) {
       case 'starting':
         return {
@@ -269,10 +227,6 @@
   });
   const unregisterVoiceAutosave = autosaveContext.register(voiceAutosave);
 
-  function sameMicrophoneIdentity(left, right) {
-    return left?.name === right?.name && left?.host_api === right?.host_api;
-  }
-
   // Apply a status snapshot to the draft: unedited values follow it, edits
   // stay. Idempotent per sequence.
   function syncFromStatus(snapshot) {
@@ -320,12 +274,8 @@
     if (destroyed || listsLoading) return;
     listsLoading = true;
     try {
-      const [availableMicrophones, availableModels] = await Promise.all([
-        listMicrophones(),
-        listWakewordModels(),
-      ]);
+      const availableModels = await listWakewordModels();
       if (destroyed) return;
-      microphones = availableMicrophones;
       wakewordModels = availableModels;
       listsLoaded = true;
       listsError = false;
@@ -431,22 +381,6 @@
   function handlePhraseActionChange(modelId, action) {
     editDraft({
       phrase_actions: { ...draft.phrase_actions, [modelId]: action },
-    });
-  }
-
-  function handleMicrophoneChange(value) {
-    const parsed = Number.parseInt(value, 10);
-    const device = Number.isInteger(parsed)
-      ? microphones.find((candidate) => candidate.index === parsed)
-      : null;
-    editDraft({
-      microphone: device
-        ? {
-            index: device.index,
-            name: device.name,
-            host_api: device.host_api || '',
-          }
-        : null,
     });
   }
 
@@ -575,7 +509,6 @@
   async function handleRetry() {
     try {
       await retryVoice();
-      microphones = await listMicrophones();
       await desktopVoice?.refresh();
     } catch (error) {
       errorToast(error, t('settings.voice.retryFailed'));
@@ -616,7 +549,7 @@
     {/if}
 
     <!-- Wakeword listening: the switch with the live listening state, the
-         phrases and where their commands go, then the audio input. -->
+         phrases and where their commands go, then the running audio input. -->
     <div class="s-group">
       <div class="s-row s-row--compact">
         <div class="s-row-info">
@@ -842,52 +775,37 @@
         </div>
       </div>
 
-      <div class="s-row">
-        <div class="s-row-info">
-          <div class="s-row-label">
-            {t('settings.voice.microphone')}
+      <!-- What the running capture does with the shared microphone settings,
+           which are changed in the Microphone section. -->
+      {#if status?.active_microphone}
+        <div class="s-row s-row--compact">
+          <div class="s-row-info">
+            <div class="s-row-label">
+              {t('settings.voice.activeMicrophone')}
+            </div>
+          </div>
+          <div class="s-row-control voice-active-microphone">
+            {status.active_microphone.name}
           </div>
         </div>
-        <div class="s-row-control">
-          <Dropdown
-            value={selectedMicrophoneValue}
-            options={microphoneOptions}
-            ariaLabel={t('settings.voice.microphone')}
-            triggerClass="voice-microphone-dropdown"
-            onValueChange={handleMicrophoneChange}
-            disabled={captureLocked || microphones.length === 0}
-          />
-        </div>
-      </div>
+      {/if}
 
-      <div class="s-row">
-        <div class="s-row-info">
-          <div class="s-row-label">
-            {t('settings.voice.echoCancellation')}
-            <InfoHint
-              text={t('settings.voice.echoCancellationHelp')}
-              ariaLabel={t('settings.voice.aboutAria', {
-                name: t('settings.voice.echoCancellation'),
-              })}
-            />
+      {#if echo}
+        <div class="s-row s-row--compact">
+          <div class="s-row-info">
+            <div class="s-row-label">
+              {t('settings.microphone.echoCancellation')}
+            </div>
+            <!-- Only a state that lets speaker output through is explained. -->
+            {#if echo.detail}
+              <div class="s-row-desc">{echo.detail}</div>
+            {/if}
           </div>
-          <!-- Only a state that lets speaker output through is explained. -->
-          {#if echo?.detail}
-            <div class="s-row-desc">{echo.detail}</div>
-          {/if}
-        </div>
-        <div class="s-row-control voice-echo-control">
-          {#if echo}
+          <div class="s-row-control voice-echo-control">
             <StatusChip variant={echo.variant}>{echo.label}</StatusChip>
-          {/if}
-          <Toggle
-            checked={draft?.echo_cancellation ?? true}
-            onChange={(checked) => editDraft({ echo_cancellation: checked })}
-            disabled={captureLocked}
-            ariaLabel={t('settings.voice.echoCancellationAria')}
-          />
+          </div>
         </div>
-      </div>
+      {/if}
     </div>
   {/if}
 </div>

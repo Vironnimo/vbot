@@ -198,6 +198,13 @@
   gap: 10px;
 }
 
+/* Device names can be long and carry no spaces. */
+.voice-settings .voice-active-microphone {
+  min-width: 0;
+  color: var(--text-med);
+  overflow-wrap: anywhere;
+}
+
 /* The running calibration is an inset inside its phrase card. */
 .voice-settings .voice-calibration-panel {
   display: flex;

@@ -94,31 +94,92 @@ export default Object.freeze({
   'settings.sections.speechModels': 'Speech models',
   'settings.sections.liveVoice': 'Live voice',
   'settings.sections.liveVoiceShortcut': 'Live voice shortcut',
+  'settings.sections.microphone': 'Microphone',
+  'settings.sections.desktopDictation': 'Desktop dictation',
+  'settings.shortcut.combination': 'Key combination',
+  'settings.shortcut.combinationHelp':
+    'Combine a letter, digit, function key, or Space with Ctrl, Alt, Shift, or Win. F13 to F24 also work alone.\n\nClick the combination, then press the new keys. Escape cancels.',
+  'settings.shortcut.combinationHelpAria': 'About the key combination',
+  'settings.shortcut.captureHint':
+    'Press the new key combination. Escape cancels.',
+  'settings.shortcut.capturing': 'Press keys…',
+  'settings.shortcut.capturingAria': 'Recording a new key combination',
+  'settings.shortcut.changeAria':
+    'Change the key combination, currently {combination}',
+  'settings.shortcut.space': 'Space',
+  'settings.shortcut.error.inUse':
+    'Another app or another vBot shortcut already uses this key combination. Choose a different one.',
+  'settings.shortcut.error.invalid':
+    'This key combination cannot be used. Combine a letter, digit, function key, or Space with Ctrl, Alt, Shift, or Win.',
+  'settings.shortcut.error.failed':
+    'Windows could not register the shortcut. Choose another key combination or restart the Desktop app.',
   'settings.liveShortcut.enabled': 'Global shortcut',
   'settings.liveShortcut.enabledAria': 'Enable the Live voice shortcut',
   'settings.liveShortcut.description':
     'Starts or stops Live voice, even while another app is in front.',
-  'settings.liveShortcut.combination': 'Key combination',
-  'settings.liveShortcut.combinationHelp':
-    'Combine a letter, digit, function key, or Space with Ctrl, Alt, Shift, or Win. F13 to F24 also work alone.\n\nClick the combination, then press the new keys. Escape cancels.',
-  'settings.liveShortcut.combinationHelpAria': 'About the key combination',
-  'settings.liveShortcut.captureHint':
-    'Press the new key combination. Escape cancels.',
-  'settings.liveShortcut.capturing': 'Press keys…',
-  'settings.liveShortcut.capturingAria': 'Recording a new key combination',
-  'settings.liveShortcut.changeAria':
-    'Change the key combination, currently {combination}',
-  'settings.liveShortcut.space': 'Space',
   'settings.liveShortcut.loadError':
     'The Desktop app did not return the shortcut settings.',
   'settings.liveShortcut.unsupported':
     'Global shortcuts are available in the vBot Desktop app on Windows.',
-  'settings.liveShortcut.error.inUse':
-    'Another app already uses this key combination. Choose a different one.',
-  'settings.liveShortcut.error.invalid':
-    'This key combination cannot be used. Combine a letter, digit, function key, or Space with Ctrl, Alt, Shift, or Win.',
-  'settings.liveShortcut.error.failed':
-    'Windows could not register the shortcut. Choose another key combination or restart the Desktop app.',
+  'settings.microphone.device': 'Microphone',
+  'settings.microphone.deviceDescription':
+    'Used by Wakeword listening and Desktop dictation.',
+  'settings.microphone.deviceHelp':
+    'Wakeword listening and Desktop dictation record from this microphone. System default uses the input device chosen in Windows, or another compatible one when that cannot be used.\n\nLive voice and the Chat and Terminal microphones do not use this setting.',
+  'settings.microphone.deviceHelpAria': 'About the microphone',
+  'settings.microphone.systemDefault': 'System default',
+  'settings.microphone.compatible': 'Compatible',
+  'settings.microphone.unsupported': 'Unsupported format',
+  'settings.microphone.notConnected': 'Not connected',
+  'settings.microphone.notConnectedWarning':
+    'The chosen microphone is not connected. Wakeword listening and Desktop dictation cannot record until you connect it again or choose another one.',
+  'settings.microphone.echoCancellation': 'Echo cancellation',
+  'settings.microphone.echoCancellationHelp':
+    'Removes speaker output, such as Live voice or read-aloud replies, from the microphone signal before wake phrases are detected and commands or dictations are recorded.',
+  'settings.microphone.echoCancellationHelpAria': 'About echo cancellation',
+  'settings.microphone.echoCancellationAria': 'Use echo cancellation',
+  'settings.microphone.loadError':
+    'The Desktop app did not return the microphone settings.',
+  'settings.microphone.error.configInvalid':
+    'The Desktop app rejected this microphone setting. Reload the settings and try again.',
+  'settings.dictation.enabled': 'Dictation shortcut',
+  'settings.dictation.enabledAria': 'Enable Desktop dictation',
+  'settings.dictation.description': 'Types what you say into the app in front.',
+  'settings.dictation.help':
+    'Press the shortcut in any app and speak. vBot records from the chosen microphone, transcribes with the Speech to text Model, and types the text where the cursor is. Escape cancels a running dictation.\n\nIf another window came to the front while you spoke, or the app in front runs as administrator, the text goes to the clipboard instead, ready to paste.',
+  'settings.dictation.helpAria': 'About Desktop dictation',
+  'settings.dictation.mode': 'Recording mode',
+  'settings.dictation.modeToggle': 'Press to start and stop',
+  'settings.dictation.modeToggleDescription':
+    'Press the shortcut to start recording and again to stop.',
+  'settings.dictation.modeHold': 'Hold to talk',
+  'settings.dictation.modeHoldDescription':
+    'Records while you hold the keys down and stops when you let go.',
+  'settings.dictation.loadError':
+    'The Desktop app did not return the dictation settings.',
+  'settings.dictation.unsupported':
+    'Desktop dictation is available in the vBot Desktop app on Windows.',
+  'settings.dictation.error.configInvalid':
+    'The Desktop app rejected this dictation setting. Reload the settings and try again.',
+  'settings.dictation.lastResult': 'Last problem, {time}: {message}',
+  'settings.dictation.result.clipboard':
+    'The text could not be typed into the app in front and is on the clipboard instead.',
+  'settings.dictation.result.nothingHeard': 'No speech was heard.',
+  'settings.dictation.result.microphoneUnavailable':
+    'No compatible microphone was available.',
+  'settings.dictation.result.serverUnreachable':
+    'vBot could not reach the server.',
+  'settings.dictation.result.speechToTextUnconfigured':
+    'No Speech to text Model is configured. Choose one under Speech models.',
+  'settings.dictation.result.speechToTextUnavailable':
+    'The Speech to text Model could not be used. Check its Provider connection.',
+  'settings.dictation.result.transcriptionFailed':
+    'The recording could not be transcribed.',
+  'settings.dictation.result.insertFailed':
+    'The text could not be typed into the app in front or put on the clipboard.',
+  'settings.dictation.result.dictationFailed':
+    'The dictation stopped unexpectedly. Try again, or restart the Desktop app if it keeps happening.',
+  'settings.dictation.result.failed': 'The dictation failed.',
   'settings.sections.recall': 'Conversation search',
   'settings.sections.mediaModels': 'Images, video & music',
   'settings.sections.evaluation': 'Evaluation',
@@ -1186,13 +1247,10 @@ export default Object.freeze({
   'settings.voice.defaultSession': 'Default Session behavior',
   'settings.voice.defaultSessionHelp':
     'Whether spoken commands continue the Agent’s active Session or start a new one each time, unless a phrase chooses otherwise.',
-  'settings.voice.echoCancellation': 'Echo cancellation',
-  'settings.voice.echoCancellationHelp':
-    'Removes speaker output, such as Live voice or read-aloud replies, from the microphone signal before phrases are detected and commands are recorded.',
-  'settings.voice.echoCancellationAria': 'Use echo cancellation',
+  'settings.voice.activeMicrophone': 'Microphone in use',
   'settings.voice.echoOff': 'Off',
   'settings.voice.echoOffDetail':
-    'Speaker output can trigger wake phrases and end up in command recordings.',
+    'Speaker output can trigger wake phrases and end up in command recordings. Turn echo cancellation on under Microphone.',
   'settings.voice.echoStarting': 'Starting',
   'settings.voice.echoStartingDetail':
     'Echo cancellation is still loading. Until it is ready, the microphone signal is used unprocessed.',
@@ -1238,16 +1296,11 @@ export default Object.freeze({
   'settings.voice.deleteConfirm':
     'Remove “{name}” permanently from this Desktop? The TFLite file stored by vBot will be deleted.',
   'settings.voice.deleteSuccess': 'Wakeword model removed.',
-  'settings.voice.microphone': 'Microphone',
   'settings.voice.sensitivity': 'Sensitivity',
   'settings.voice.modelAction': 'When heard',
   'settings.voice.modelActionAria': 'When {name} is heard',
   'settings.voice.sessionBehaviorActive': 'Use active Session',
   'settings.voice.sessionBehaviorNew': 'New Session each time',
-  'settings.voice.systemAutomaticMic': 'Automatic selection',
-  'settings.voice.compatibleMic': 'Compatible',
-  'settings.voice.incompatibleMic': 'Unsupported format',
-  'settings.voice.configuredMicUnavailable': 'Configured device unavailable',
   'settings.voice.calibrationNoiseInstruction':
     'Stay quiet for {seconds} seconds while vBot measures the room.',
   'settings.voice.calibrationPhraseInstruction':

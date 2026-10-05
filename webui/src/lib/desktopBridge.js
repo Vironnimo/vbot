@@ -15,8 +15,9 @@ const VOICE_PUSH_EVENT = 'vbot-desktop-voice';
 const OPEN_SESSION_EVENT = 'vbot-desktop-open-session';
 const UPDATE_PUSH_EVENT = 'vbot-desktop-update';
 const RESTART_REQUEST_EVENT = 'vbot-desktop-restart';
+const DICTATION_PUSH_EVENT = 'vbot-desktop-dictation';
 // The Voice UI works only against this Desktop Voice bridge version.
-const DESKTOP_VOICE_API_VERSION = 2;
+const DESKTOP_VOICE_API_VERSION = 3;
 // A Live voice start never waits longer than this for the Desktop capabilities
 // that decide whether the page may open the microphone.
 const MICROPHONE_ACCESS_TIMEOUT_MS = 3000;
@@ -26,6 +27,8 @@ const DISABLED_DESKTOP_CAPABILITIES = Object.freeze({
   serverSelection: false,
   contextMenu: false,
   liveHotkey: false,
+  microphone: false,
+  dictation: false,
   restart: false,
   secureOrigins: Object.freeze([]),
 });
@@ -48,6 +51,8 @@ const ECHO_CANCELLATION_STATES = new Set([
 const SESSION_BEHAVIORS = new Set(['active', 'new']);
 const LIVE_VOICE_MODES = new Set(['start', 'toggle']);
 const CALIBRATION_PHASES = new Set(['noise', 'phrases', 'ready']);
+const DICTATION_MODES = new Set(['toggle', 'hold']);
+const DICTATION_STATES = new Set(['idle', 'recording', 'transcribing']);
 // Event kinds a newer Desktop adds still advance the sequence; consumers
 // ignore kinds they do not know.
 const VOICE_EVENT_KIND_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
@@ -135,8 +140,9 @@ function callBridge(method, ...args) {
  * Result is cached after the first successful call from a live bridge.
  * Returns disabled capability flags when the bridge is absent, without caching.
  * `voiceApi` is the Desktop Voice bridge version (0 when none is offered);
- * `restart` tells whether the Desktop can restart itself into a new version
- * (false for Desktops from before that protocol).
+ * `microphone` offers the shared microphone settings, `dictation` Desktop
+ * dictation; `restart` tells whether the Desktop can restart itself into a
+ * new version (false for Desktops from before that protocol).
  */
 export async function getDesktopCapabilities() {
   if (!bridgeAvailable()) {
@@ -155,6 +161,8 @@ export async function getDesktopCapabilities() {
     serverSelection: Boolean(caps?.serverSelection),
     contextMenu: Boolean(caps?.contextMenu),
     liveHotkey: Boolean(caps?.liveHotkey),
+    microphone: Boolean(caps?.microphone),
+    dictation: Boolean(caps?.dictation),
     restart: Boolean(caps?.restart),
     secureOrigins: Array.isArray(caps?.secureOrigins)
       ? caps.secureOrigins.filter((origin) => typeof origin === 'string')
@@ -222,7 +230,7 @@ export async function selectDesktopServer(host, port) {
   return result;
 }
 
-// -- Voice (bridge API v2) ----------------------------------------------------
+// -- Voice (bridge API v3) ----------------------------------------------------
 
 const text = (value) =>
   typeof value === 'string' && value.trim().length > 0 ? value : null;
@@ -376,7 +384,6 @@ function normalizeVoiceStatus(raw) {
     state,
     error_code: text(raw.error_code),
     sequence,
-    microphone: normalizeMicrophone(raw.microphone),
     active_microphone: normalizeMicrophone(raw.active_microphone, {
       withSampleRate: true,
     }),
@@ -452,6 +459,105 @@ export async function updateVoiceConfig(changes) {
 export async function listMicrophones() {
   const devices = await callBridge('listMicrophones');
   return Array.isArray(devices) ? devices : [];
+}
+
+// -- Microphone (capability `microphone`) -------------------------------------
+
+function normalizeMicrophoneSettings(raw) {
+  if (!isPlainObject(raw))
+    throw new Error('The Desktop returned invalid microphone settings');
+  return {
+    device: normalizeMicrophone(raw.device),
+    echo_cancellation: raw.echo_cancellation !== false,
+  };
+}
+
+/**
+ * Read the microphone settings Desktop Voice and Desktop dictation share:
+ * `{device, echo_cancellation}`. `device` is the stored
+ * `{index, name, host_api}` choice, or null for the system default.
+ */
+export async function getDesktopMicrophone() {
+  return normalizeMicrophoneSettings(await callBridge('getMicrophone'));
+}
+
+/**
+ * Change the shared microphone settings (`device` and/or
+ * `echo_cancellation`) and resolve the resulting settings. Rejects with the
+ * code `microphone_config_invalid` for a malformed change.
+ */
+export async function setDesktopMicrophone(changes) {
+  return normalizeMicrophoneSettings(
+    await callBridge('setMicrophone', changes),
+  );
+}
+
+// -- Desktop dictation (capability `dictation`) -------------------------------
+
+function normalizeShortcut(raw) {
+  if (!isPlainObject(raw)) return null;
+  return {
+    ctrl: raw.ctrl === true,
+    alt: raw.alt === true,
+    shift: raw.shift === true,
+    win: raw.win === true,
+    key: text(raw.key),
+  };
+}
+
+function normalizeDictationFailure(raw) {
+  if (!isPlainObject(raw) || !text(raw.code)) return null;
+  return { code: raw.code, at: text(raw.at) };
+}
+
+function normalizeDictation(raw) {
+  if (!isPlainObject(raw))
+    throw new Error('The Desktop returned an invalid dictation status');
+  return {
+    supported: raw.supported !== false,
+    enabled: raw.enabled === true,
+    hotkey: normalizeShortcut(raw.hotkey),
+    mode: DICTATION_MODES.has(raw.mode) ? raw.mode : 'toggle',
+    error_code: text(raw.error_code),
+    state: DICTATION_STATES.has(raw.state) ? raw.state : 'idle',
+    last_failure: normalizeDictationFailure(raw.last_failure),
+  };
+}
+
+/**
+ * Read Desktop dictation: `{supported, enabled, hotkey, mode, error_code,
+ * state, last_failure}`. `hotkey` is `{ctrl, alt, shift, win, key}`, `mode`
+ * `toggle` or `hold`, `state` `idle`, `recording` or `transcribing`, and
+ * `last_failure` `{code, at}` (ISO time, or null) for the last dictation that
+ * did not end with typed text.
+ */
+export async function getDesktopDictation() {
+  return normalizeDictation(await callBridge('getDictation'));
+}
+
+/**
+ * Change Desktop dictation (`enabled`, `mode` and/or the key combination
+ * `ctrl`, `alt`, `shift`, `win`, `key`); the Desktop saves and registers it
+ * and resolves the resulting status. A combination it cannot use comes back
+ * as `error_code`.
+ */
+export async function setDesktopDictation(changes) {
+  return normalizeDictation(await callBridge('setDictation', changes));
+}
+
+/**
+ * Receive whether a Desktop dictation records from the microphone right now:
+ * `handler({recording})` runs for every valid push. Returns a cleanup
+ * function.
+ */
+export function onDesktopDictationRecording(handler) {
+  if (typeof window === 'undefined') return () => {};
+  const listener = (event) => {
+    const recording = event?.detail?.recording;
+    if (typeof recording === 'boolean') handler({ recording });
+  };
+  window.addEventListener(DICTATION_PUSH_EVENT, listener);
+  return () => window.removeEventListener(DICTATION_PUSH_EVENT, listener);
 }
 
 /**

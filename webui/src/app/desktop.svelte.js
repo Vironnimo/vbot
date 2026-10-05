@@ -8,6 +8,7 @@ import {
   getDesktopUpdate,
   getVoiceStatus,
   isDesktopAccessor,
+  onDesktopDictationRecording,
   onDesktopUpdate,
   onDesktopVoicePush,
   playVoiceCue,
@@ -17,6 +18,7 @@ import {
   waitForDesktopBridge,
 } from '$lib/desktopBridge.js';
 import { t } from '$lib/i18n.js';
+import { claimMicrophone } from '$lib/microphoneUse.js';
 import { onMount } from 'svelte';
 import {
   bridgeErrorMessage,
@@ -29,6 +31,28 @@ const DESKTOP_BRIDGE_PROBE_TIMEOUT_MS = 1000;
 const DESKTOP_CAPABILITY_RETRY_MS = 1000;
 const VOICE_STATUS_RETRY_MS = 1000;
 const UPDATE_STATE_RETRY_MS = 1000;
+
+/**
+ * While a Desktop dictation records, the microphone counts as in use for this
+ * page, so a running Live voice call holds instead of hearing the dictation.
+ * Holds at most one claim; returns the cleanup function, which releases it.
+ */
+function followDesktopDictation() {
+  let release = null;
+  const stopPushes = onDesktopDictationRecording(({ recording }) => {
+    if (recording) {
+      release ??= claimMicrophone();
+    } else {
+      release?.();
+      release = null;
+    }
+  });
+  return () => {
+    stopPushes();
+    release?.();
+    release = null;
+  };
+}
 
 /**
  * The page's copy of the Desktop Voice status, kept current from pushes.
@@ -461,14 +485,17 @@ export function createAppDesktop(context) {
 
     // Detect desktop capabilities and keep probing while the asynchronously
     // injected bridge is absent or temporarily rejects a capability call.
+    let stopDictation = () => {};
     if (isDesktopAccessor()) {
       void initializeDesktopCapabilities();
+      stopDictation = followDesktopDictation();
     } else {
       desktopCapabilities = disabledDesktopCapabilities();
     }
 
     return () => {
       cancelled = true;
+      stopDictation();
       clearToastDismissTimers();
       if (desktopCapabilityRetryTimer !== null) {
         clearTimeout(desktopCapabilityRetryTimer);

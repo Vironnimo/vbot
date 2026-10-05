@@ -6,6 +6,8 @@
   import ArchiveEntriesPanel from './archive/ArchiveEntriesPanel.svelte';
   import DesktopConnectionSettings from './settings/DesktopConnectionSettings.svelte';
   import DesktopLiveVoiceShortcut from './settings/DesktopLiveVoiceShortcut.svelte';
+  import DesktopMicrophoneSettings from './settings/DesktopMicrophoneSettings.svelte';
+  import DesktopDictationSettings from './settings/DesktopDictationSettings.svelte';
   import SettingsActivityPanel from './settings/SettingsActivityPanel.svelte';
   import SettingsAppearancePanel from './settings/SettingsAppearancePanel.svelte';
   import SettingsChannelsPanel from './settings/SettingsChannelsPanel.svelte';
@@ -147,6 +149,14 @@
       label: () => t('settings.sections.liveVoiceShortcut'),
     },
     {
+      id: 'microphone',
+      label: () => t('settings.sections.microphone'),
+    },
+    {
+      id: 'desktop_dictation',
+      label: () => t('settings.sections.desktopDictation'),
+    },
+    {
       id: 'recall',
       label: () => t('settings.sections.recall'),
     },
@@ -228,12 +238,15 @@
       id: 'voice',
       label: () => t('settings.voice.title'),
       description: () => t('settings.pages.voiceDescription'),
-      // Models first, the Live voice shortcut right after its Model, the
-      // Desktop wakeword next, and the rarely changed recording format last.
+      // Models first, then the Desktop: its microphone, the Live voice
+      // shortcut right after the Live voice Model, dictation and the wakeword.
+      // The rarely changed recording format comes last.
       sections: [
         'speech_models',
         'live_voice_model',
+        ...(desktopCapabilities?.microphone ? ['microphone'] : []),
         ...(desktopCapabilities?.liveHotkey ? ['live_voice_shortcut'] : []),
+        ...(desktopCapabilities?.dictation ? ['desktop_dictation'] : []),
         'voice_controls',
         'transcription_audio',
       ],
@@ -1037,6 +1050,10 @@
     <DesktopConnectionSettings {onToast} />
   {:else if panelId === 'live_voice_shortcut'}
     <DesktopLiveVoiceShortcut {onToast} />
+  {:else if panelId === 'microphone'}
+    <DesktopMicrophoneSettings {desktopVoice} {onToast} />
+  {:else if panelId === 'desktop_dictation'}
+    <DesktopDictationSettings {onToast} />
   {/if}
 {/snippet}
 

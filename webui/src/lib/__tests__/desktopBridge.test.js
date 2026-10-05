@@ -33,6 +33,11 @@ import {
   onDesktopOpenSession,
   getDesktopLiveHotkey,
   setDesktopLiveHotkey,
+  getDesktopMicrophone,
+  setDesktopMicrophone,
+  getDesktopDictation,
+  setDesktopDictation,
+  onDesktopDictationRecording,
   getDesktopUpdate,
   restartDesktop,
   onDesktopUpdate,
@@ -45,6 +50,8 @@ const DISABLED_CAPABILITIES = {
   contextMenu: false,
   voiceApi: 0,
   liveHotkey: false,
+  microphone: false,
+  dictation: false,
   restart: false,
   secureOrigins: [],
 };
@@ -81,6 +88,16 @@ function eventWindow(properties = {}) {
   return globalThis.window;
 }
 
+const DICTATION = Object.freeze({
+  supported: true,
+  enabled: true,
+  hotkey: { ctrl: true, alt: false, shift: true, win: false, key: 'KeyD' },
+  mode: 'toggle',
+  error_code: null,
+  state: 'idle',
+  last_failure: null,
+});
+
 function rawStatus(overrides = {}) {
   return {
     enabled: true,
@@ -88,7 +105,6 @@ function rawStatus(overrides = {}) {
     state: 'listening',
     error_code: null,
     sequence: 4,
-    microphone: null,
     active_microphone: null,
     echo_cancellation: { enabled: true, state: 'active' },
     default_agent_id: 'main',
@@ -169,8 +185,10 @@ describe('getDesktopCapabilities', () => {
       wakeword: true,
       serverSelection: true,
       contextMenu: true,
-      voiceApi: 2,
+      voiceApi: 3,
       liveHotkey: 1,
+      microphone: true,
+      dictation: 1,
       restart: true,
       secureOrigins: ['http://pi.lan:8420', 42, null],
     }));
@@ -181,8 +199,10 @@ describe('getDesktopCapabilities', () => {
       wakeword: true,
       serverSelection: true,
       contextMenu: true,
-      voiceApi: 2,
+      voiceApi: 3,
       liveHotkey: true,
+      microphone: true,
+      dictation: true,
       restart: true,
       secureOrigins: ['http://pi.lan:8420'],
     });
@@ -221,10 +241,10 @@ describe('getDesktopCapabilities', () => {
   });
 
   it('offers the Voice UI only for the Voice bridge version it speaks', () => {
-    expect(supportsDesktopVoice({ wakeword: true, voiceApi: 2 })).toBe(true);
+    expect(supportsDesktopVoice({ wakeword: true, voiceApi: 3 })).toBe(true);
     expect(supportsDesktopVoice({ wakeword: true, voiceApi: 0 })).toBe(false);
-    expect(supportsDesktopVoice({ wakeword: true, voiceApi: 3 })).toBe(false);
-    expect(supportsDesktopVoice({ wakeword: false, voiceApi: 2 })).toBe(false);
+    expect(supportsDesktopVoice({ wakeword: true, voiceApi: 2 })).toBe(false);
+    expect(supportsDesktopVoice({ wakeword: false, voiceApi: 3 })).toBe(false);
     expect(supportsDesktopVoice(null)).toBe(false);
   });
 });
@@ -335,6 +355,34 @@ describe('Desktop bridge calls', () => {
       { supported: true, enabled: true, hotkey: null, error_code: null },
     ],
     [
+      'getMicrophone',
+      getDesktopMicrophone,
+      [],
+      {
+        device: { index: 2, name: 'Desk mic', host_api: 'Windows WASAPI' },
+        echo_cancellation: false,
+      },
+    ],
+    [
+      'setMicrophone',
+      setDesktopMicrophone,
+      [{ device: null }],
+      { device: null, echo_cancellation: true },
+    ],
+    ['getDictation', getDesktopDictation, [], DICTATION],
+    [
+      'setDictation',
+      setDesktopDictation,
+      [{ mode: 'hold' }],
+      {
+        ...DICTATION,
+        mode: 'hold',
+        error_code: 'hotkey_in_use',
+        state: 'transcribing',
+        last_failure: { code: 'nothing_heard', at: '2026-10-05T09:30:00Z' },
+      },
+    ],
+    [
       'getDesktopUpdate',
       getDesktopUpdate,
       [],
@@ -363,6 +411,47 @@ describe('Desktop bridge calls', () => {
     desktopWindow({ [method]: () => null });
 
     await expect(call()).resolves.toEqual(empty);
+  });
+
+  it('reads missing microphone and dictation fields as their defaults', async () => {
+    desktopWindow({
+      getMicrophone: () => ({ device: { index: 'two', name: 'Desk mic' } }),
+      getDictation: () => ({
+        hotkey: { ctrl: 1, key: 'KeyD' },
+        mode: 'press',
+        error_code: '',
+        state: 'thinking',
+        last_failure: { code: 'nothing_heard', at: 7 },
+      }),
+    });
+
+    await expect(getDesktopMicrophone()).resolves.toEqual({
+      device: null,
+      echo_cancellation: true,
+    });
+    await expect(getDesktopDictation()).resolves.toEqual({
+      supported: true,
+      enabled: false,
+      hotkey: {
+        ctrl: false,
+        alt: false,
+        shift: false,
+        win: false,
+        key: 'KeyD',
+      },
+      mode: 'toggle',
+      error_code: null,
+      state: 'idle',
+      last_failure: { code: 'nothing_heard', at: null },
+    });
+
+    desktopWindow({ getMicrophone: () => null, getDictation: () => [] });
+    await expect(getDesktopMicrophone()).rejects.toThrow(
+      'The Desktop returned invalid microphone settings',
+    );
+    await expect(getDesktopDictation()).rejects.toThrow(
+      'The Desktop returned an invalid dictation status',
+    );
   });
 
   it('rejects without the bridge instead of fabricating a disabled state', async () => {
@@ -459,7 +548,6 @@ describe('Voice status validation', () => {
 
   it('keeps a complete snapshot as reported', async () => {
     const raw = rawStatus({
-      microphone: { index: 2, name: 'Desk mic', host_api: 'WASAPI' },
       active_microphone: {
         index: 2,
         name: 'Desk mic',
@@ -880,6 +968,29 @@ describe('pushed Session requests', () => {
     expect(dispatch({ agent: 'builder', session: 'session-2' })).toBe(false);
     cleanup();
     expect(dispatch({ agent: 'builder', session: 'session-3' })).toBe(false);
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('pushed Desktop dictation state', () => {
+  it('hands whether a dictation records to the handler and drops malformed pushes', () => {
+    const page = eventWindow();
+    const handler = vi.fn();
+    const cleanup = onDesktopDictationRecording(handler);
+    const push = (detail) =>
+      page.dispatchEvent(new CustomEvent('vbot-desktop-dictation', { detail }));
+
+    push({ recording: true });
+    push({ recording: 'yes' });
+    push(null);
+    push({ recording: false });
+    expect(handler.mock.calls).toEqual([
+      [{ recording: true }],
+      [{ recording: false }],
+    ]);
+
+    cleanup();
+    push({ recording: true });
     expect(handler).toHaveBeenCalledTimes(2);
   });
 });

@@ -16,7 +16,6 @@ vi.mock('$lib/desktopBridge.js', async (importOriginal) => ({
   isDesktopAccessor: vi.fn(() => true),
   setVoiceEnabled: vi.fn(),
   updateVoiceConfig: vi.fn(),
-  listMicrophones: vi.fn(),
   listWakewordModels: vi.fn(),
   importWakewordModel: vi.fn(),
   deleteWakewordModel: vi.fn(),
@@ -79,7 +78,6 @@ function voiceStatus(overrides = {}) {
     state: 'listening',
     error_code: null,
     sequence: 1,
-    microphone: null,
     active_microphone: null,
     echo_cancellation: { enabled: true, state: 'active' },
     default_agent_id: 'main',
@@ -125,15 +123,6 @@ function applyChanges(status, changes) {
     ...status,
     sequence: status.sequence + 1,
     phrases,
-    microphone:
-      'microphone' in changes ? changes.microphone : status.microphone,
-    echo_cancellation:
-      'echo_cancellation' in changes
-        ? {
-            enabled: changes.echo_cancellation,
-            state: changes.echo_cancellation ? 'active' : 'off',
-          }
-        : status.echo_cancellation,
     default_agent_id:
       'default_agent_id' in changes
         ? changes.default_agent_id
@@ -165,22 +154,6 @@ describe('WakewordVoiceSettings', () => {
     mountedComponent = null;
     vi.clearAllMocks();
     desktopBridge.isDesktopAccessor.mockReturnValue(true);
-    desktopBridge.listMicrophones.mockResolvedValue([
-      {
-        index: 4,
-        name: 'Studio microphone',
-        host_api: 'WASAPI',
-        supported: true,
-        default_sample_rate: 48000,
-      },
-      {
-        index: 5,
-        name: 'Bluetooth hands-free',
-        host_api: 'WASAPI',
-        supported: false,
-        default_sample_rate: 8000,
-      },
-    ]);
     desktopBridge.listWakewordModels.mockResolvedValue(MODELS);
     desktopBridge.updateVoiceConfig.mockImplementation(async (changes) =>
       applyChanges(owner.status, changes),
@@ -316,16 +289,6 @@ describe('WakewordVoiceSettings', () => {
     });
 
     it('shows a warning and retries a disconnected microphone', async () => {
-      desktopBridge.listMicrophones
-        .mockResolvedValueOnce([])
-        .mockResolvedValue([
-          {
-            index: 7,
-            name: 'Hot-plugged microphone',
-            supported: true,
-            default_sample_rate: 48000,
-          },
-        ]);
       await mountPanel({
         status: voiceStatus({
           state: 'microphone_disconnected',
@@ -342,9 +305,6 @@ describe('WakewordVoiceSettings', () => {
 
       expect(desktopBridge.retryVoice).toHaveBeenCalledOnce();
       expect(owner.refresh).toHaveBeenCalledOnce();
-      buttonByLabel('Microphone').click();
-      flushSync();
-      expect(option('Hot-plugged microphone')).not.toBeUndefined();
     });
 
     it('shows a Voice failure with a retry', async () => {
@@ -600,7 +560,7 @@ describe('WakewordVoiceSettings', () => {
     });
   });
 
-  describe('defaults and capture', () => {
+  describe('defaults and audio input', () => {
     it('saves the default Agent and Session behavior for this server', async () => {
       await mountPanel();
 
@@ -624,68 +584,51 @@ describe('WakewordVoiceSettings', () => {
       });
     });
 
-    it('saves a stable microphone descriptor instead of a device index', async () => {
+    it('shows the microphone the running capture uses', async () => {
       await mountPanel();
+      expect(document.querySelector('.voice-active-microphone')).toBeNull();
 
-      buttonByLabel('Microphone').click();
-      flushSync();
-      expect(option('Bluetooth hands-free').disabled).toBe(true);
-      option('Studio microphone').click();
-      await settle();
-
-      expect(desktopBridge.updateVoiceConfig).toHaveBeenCalledWith({
-        microphone: {
+      owner.status = voiceStatus({
+        sequence: 2,
+        active_microphone: {
           index: 4,
           name: 'Studio microphone',
-          host_api: 'WASAPI',
+          host_api: 'Windows WASAPI',
+          sample_rate: 48000,
         },
       });
+      flushSync();
+
+      expect(
+        document.querySelector('.voice-active-microphone').textContent.trim(),
+      ).toBe('Studio microphone');
     });
 
     it.each([
-      ['starting', 'Starting', true],
-      ['active', 'Active', false],
-      ['no_reference', 'NoReference', true],
-      ['unavailable', 'Unavailable', true],
-    ])(
-      'shows the echo cancellation state %s',
-      async (state, key, explained) => {
-        await mountPanel({
-          status: voiceStatus({ echo_cancellation: { enabled: true, state } }),
-        });
-
-        const control = document.querySelector('.voice-echo-control');
-        expect(control.querySelector('.chip').textContent).toContain(
-          t(`settings.voice.echo${key}`),
-        );
-        // Only a state that lets speaker output through is explained.
-        const detail = control.closest('.s-row').querySelector('.s-row-desc');
-        if (explained) {
-          expect(detail.textContent).toContain(
-            t(`settings.voice.echo${key}Detail`),
-          );
-        } else {
-          expect(detail).toBeNull();
-        }
-      },
-    );
-
-    it('turns echo cancellation off', async () => {
-      await mountPanel();
-
-      switchByLabel('Use echo cancellation').click();
-      await settle();
-
-      expect(desktopBridge.updateVoiceConfig).toHaveBeenCalledWith({
-        echo_cancellation: false,
+      [{ enabled: true, state: 'starting' }, 'Starting', true],
+      [{ enabled: true, state: 'active' }, 'Active', false],
+      [{ enabled: true, state: 'no_reference' }, 'NoReference', true],
+      [{ enabled: true, state: 'unavailable' }, 'Unavailable', true],
+      // Turned off in the shared microphone settings.
+      [{ enabled: false, state: 'off' }, 'Off', true],
+    ])('shows the echo cancellation state %o', async (echo, key, explained) => {
+      await mountPanel({
+        status: voiceStatus({ echo_cancellation: echo }),
       });
-      const row = document
-        .querySelector('.voice-echo-control')
-        .closest('.s-row');
-      expect(row.querySelector('.chip').textContent).toContain(
-        t('settings.voice.echoOff'),
+
+      const control = document.querySelector('.voice-echo-control');
+      expect(control.querySelector('.chip').textContent).toContain(
+        t(`settings.voice.echo${key}`),
       );
-      expect(row.textContent).toContain(t('settings.voice.echoOffDetail'));
+      // Only a state that lets speaker output through is explained.
+      const detail = control.closest('.s-row').querySelector('.s-row-desc');
+      if (explained) {
+        expect(detail.textContent).toContain(
+          t(`settings.voice.echo${key}Detail`),
+        );
+      } else {
+        expect(detail).toBeNull();
+      }
     });
 
     it('keeps unsaved edits when the Desktop pushes a newer status', async () => {
