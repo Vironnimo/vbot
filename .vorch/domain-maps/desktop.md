@@ -158,5 +158,5 @@ Read these only when your task matches - not by default.
 
 - Desktop Voice internals and the speech core (listener pipeline and lifecycle detail, stored `wakeword` settings, Voice bridge methods, status snapshot, pushed events, readiness, command recording and sending, server client, the shared microphone setting, microphones and capture, echo cancellation, wake phrase models, calibration, mock mode) -> `desktop/voice.md`
 - Live voice from the Desktop (Live voice phrase action, global shortcut, pushed Live requests, the Live hold and wake phrases during a call, WebView2 secure origins, autoplay, and microphone permission) -> `desktop/live-voice.md`
-- Desktop dictation (stored `dictation` settings, toggle and hold shortcut, Escape, take flow and limits, cues, clipboard paste and its fallbacks, status and failure codes, the Live hold during dictation) -> `desktop/dictation.md`
+- Desktop dictation (stored `dictation` settings, toggle and hold shortcut, Escape, take flow and limits, cues, clipboard paste and its fallbacks, status and failure codes, the Live hold and wake phrase pause during dictation) -> `desktop/dictation.md`
 - Packaged update restart (noticing a newly activated version, restart triggers and their delays, the restart request and handoff protocol, restoring server, location and window placement) -> `desktop/update-restart.md`

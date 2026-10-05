@@ -566,6 +566,24 @@ def test_during_a_recording_command_phrases_are_ignored_and_live_phrases_still_w
     assert rig.live == [("start", "wakeword")]
 
 
+def test_paused_wake_phrases_are_ignored_until_resumed(voice_rig: Callable[..., Rig]) -> None:
+    rig = voice_rig()
+    rig.wait_ready()
+    rig.voice.update_config({"phrase_actions": {HEY: {"type": "live_voice", "mode": "start"}}})
+
+    rig.voice.pause_wake_phrases(True)
+    rig.engine.fire(OKAY)
+    rig.engine.fire(HEY)
+    wait_until(lambda: rig.engine.pending == 0)
+    rig.voice.pause_wake_phrases(False)
+    rig.engine.fire(HEY)
+    rig.sink.wait_for_event("live_requested")
+
+    assert rig.sink.kinds() == ["detected", "live_requested"]
+    assert rig.live == [("start", "wakeword")]
+    assert rig.voice.status()["recording"] is None
+
+
 def test_more_than_two_phrases_listen_together(voice_rig: Callable[..., Rig]) -> None:
     active = [OKAY, HEY, "builtin/hey_jarvis", "builtin/alexa"]
     rig = voice_rig(settings={"active_model_ids": active})

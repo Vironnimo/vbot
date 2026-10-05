@@ -539,6 +539,7 @@ def _run_desktop(
         microphone=microphone,
         server_url=server_url,
         page=page_events,
+        wake_phrases=voice,
     )
     window_holder: list[Any] = []
     window_state = _WindowState()
