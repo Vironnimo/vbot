@@ -62,6 +62,7 @@ _SERVICE_KEY_VARIABLES = frozenset(
 SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",
     "max_active_subagents",
+    "max_active_subagents_total",
 )
 
 

@@ -62,7 +62,7 @@ ACCESSOR_DEFAULTS: list[tuple[Read, dict[str, Any], Any]] = [
     (
         StorageManager.load_subagent_settings,
         {"max_subagent_depth": "deep"},
-        {"max_subagent_depth": 4, "max_active_subagents": 8},
+        {"max_subagent_depth": 2, "max_active_subagents": 8, "max_active_subagents_total": 50},
     ),
     (StorageManager.load_skill_directory_settings, {"skill_directories": "~/skills"}, []),
     (
@@ -223,12 +223,22 @@ SECTION_UPDATES: dict[str, tuple[dict[str, Any], dict[str, Any], Read, Any]] = {
     ),
     "subagents-persist-flat-keys": (
         {},
-        {"subagents": {"max_subagent_depth": 6, "max_active_subagents": 12}},
+        {
+            "subagents": {
+                "max_subagent_depth": 6,
+                "max_active_subagents": 12,
+                "max_active_subagents_total": 40,
+            }
+        },
         lambda storage: {
             key: storage.load_settings()[key]
-            for key in ("max_subagent_depth", "max_active_subagents")
+            for key in (
+                "max_subagent_depth",
+                "max_active_subagents",
+                "max_active_subagents_total",
+            )
         },
-        {"max_subagent_depth": 6, "max_active_subagents": 12},
+        {"max_subagent_depth": 6, "max_active_subagents": 12, "max_active_subagents_total": 40},
     ),
     "compaction-merges-into-stored-section": (
         {
@@ -630,7 +640,11 @@ def test_multiple_sections_update_in_one_write(
     updated = storage.update_settings_sections(
         {
             "appearance": {"language": "en"},
-            "subagents": {"max_subagent_depth": 6, "max_active_subagents": 12},
+            "subagents": {
+                "max_subagent_depth": 6,
+                "max_active_subagents": 12,
+                "max_active_subagents_total": 40,
+            },
             "recall": {"backend": "sqlite_fts"},
             "debug": {"enabled": True, "trace_limit": 200},
         }
@@ -642,6 +656,7 @@ def test_multiple_sections_update_in_one_write(
         "appearance": APPEARANCE_DEFAULTS,
         "debug": {"enabled": True, "trace_limit": 200},
         "max_active_subagents": 12,
+        "max_active_subagents_total": 40,
         "max_subagent_depth": 6,
         "recall": {"backend": "sqlite_fts"},
         "server_port": 8500,

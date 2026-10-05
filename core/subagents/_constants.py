@@ -1,7 +1,8 @@
 """Sub-Agent policy defaults, event names and Agent-facing wording."""
 
-DEFAULT_MAX_SUBAGENT_DEPTH = 4
+DEFAULT_MAX_SUBAGENT_DEPTH = 2
 DEFAULT_MAX_ACTIVE_SUBAGENTS = 8
+DEFAULT_MAX_ACTIVE_SUBAGENTS_TOTAL = 50
 SUBAGENT_SESSION_STARTED_EVENT = "subagent_session_started"
 SUBAGENT_STATUS_CHANGED_EVENT = "subagent_status_changed"
 USER_CANCEL_REASON = "user"
@@ -57,22 +58,34 @@ SUBAGENT_DEPTH_LIMIT_MESSAGE_TEMPLATE = (
     "Sub-Agents cannot be nested more than {limit} levels deep, so you cannot start "
     "another Sub-Agent; nothing was started. Do this task yourself."
 )
-# ``count`` is the limit with its noun, such as "8 Sub-Agents".
-_ACTIVE_LIMIT_TEXT = (
-    "At most {count} can work at the same time, and that many are working now; yours, theirs "
-    "and those of the Agents that delegated to you count together."
-)
-_ACTIVE_LIMIT_CONTINUATION = (
+# Active-limit refusals. ``count`` is the limit with its noun, such as "8 Sub-Agents";
+# ``{retry}`` is replaced per action.
+_SESSION_LIMIT_TEXT = "You already have {count} working, the most you can have at the same time."
+_SESSION_LIMIT_CONTINUATION = (
     "A Sub-Agent stops counting once it has answered or was cancelled: wait for an answer or "
     "stop one with action cancel, then {retry}, or do this task yourself."
 )
+_APP_LIMIT_TEXT = "{count} are working across vBot, the most it runs at the same time."
+_APP_LIMIT_CONTINUATION = (
+    "Do this task yourself, or wait until one of your own working Sub-Agents answers, then {retry}."
+)
+_NOTHING_STARTED = "Nothing was started."
+_IDLE_NOT_SENT = "Sub-Agent {id} is idle, so your message would start it again; nothing was sent."
 SUBAGENT_ACTIVE_LIMIT_MESSAGE_TEMPLATE = (
-    f"{_ACTIVE_LIMIT_TEXT} Nothing was started. "
-    + _ACTIVE_LIMIT_CONTINUATION.replace("{retry}", "delegate again")
+    f"{_SESSION_LIMIT_TEXT} {_NOTHING_STARTED} "
+    + _SESSION_LIMIT_CONTINUATION.replace("{retry}", "delegate again")
 )
 SUBAGENT_SEND_LIMIT_MESSAGE_TEMPLATE = (
-    f"{_ACTIVE_LIMIT_TEXT} Sub-Agent {{id}} is idle, so your message would start it again; "
-    "nothing was sent. " + _ACTIVE_LIMIT_CONTINUATION.replace("{retry}", "send again")
+    f"{_SESSION_LIMIT_TEXT} {_IDLE_NOT_SENT} "
+    + _SESSION_LIMIT_CONTINUATION.replace("{retry}", "send again")
+)
+SUBAGENT_APP_LIMIT_MESSAGE_TEMPLATE = (
+    f"{_APP_LIMIT_TEXT} {_NOTHING_STARTED} "
+    + _APP_LIMIT_CONTINUATION.replace("{retry}", "delegate again")
+)
+SUBAGENT_SEND_APP_LIMIT_MESSAGE_TEMPLATE = (
+    f"{_APP_LIMIT_TEXT} {_IDLE_NOT_SENT} "
+    + _APP_LIMIT_CONTINUATION.replace("{retry}", "send again")
 )
 # ``target`` is the address the Tool accepts; ``reason`` is the resolver's explanation.
 SUBAGENT_TARGET_UNAVAILABLE_MESSAGE_TEMPLATE = (

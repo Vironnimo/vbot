@@ -407,24 +407,32 @@ async def test_user_stop_all_stops_the_tree_without_waking_anyone(
 
 
 @pytest.mark.parametrize(
-    ("settings", "depth", "code"),
+    ("settings", "nested", "code"),
     [
-        ({"max_subagent_depth": 1}, 1, "subagent_depth_exceeded"),
-        ({"max_active_subagents": 1}, 0, "subagent_limit_exceeded"),
+        ({"max_subagent_depth": 1}, True, "subagent_depth_exceeded"),
+        ({"max_active_subagents": 1}, False, "subagent_limit_exceeded"),
+        # The working Sub-Agent counts for its Parent's limit, not for its own.
+        ({"max_active_subagents": 1}, True, None),
+        ({"max_active_subagents_total": 1}, True, "subagent_app_limit_exceeded"),
     ],
-    ids=["depth", "active-per-tree"],
+    ids=["depth", "active-per-session", "per-session-ignores-the-parents", "active-app-wide"],
 )
 async def test_limits_refuse_another_subagent(
-    harness: SubAgentHarness, settings: dict[str, int], depth: int, code: str
+    harness: SubAgentHarness, settings: dict[str, int], nested: bool, code: str | None
 ) -> None:
     harness.storage.settings = settings
     harness.loop.hold("first")
     first = await harness.spawn("first")
-    caller = harness.subagent_session(first["id"]) if depth else harness.parent
+    caller = harness.subagent_session(first["id"]) if nested else harness.parent
 
     result = await harness.call({"description": "Do second", "content": "second"}, caller)
 
+    if code is None:
+        assert result["ok"] is True
+        assert [turn.content for turn in harness.loop.turns] == ["first", "second"]
+        return
     assert result["error"]["code"] == code
+    assert "{" not in result["error"]["message"]
     assert [turn.content for turn in harness.loop.turns] == ["first"]
 
 
@@ -452,7 +460,7 @@ async def test_send_counts_against_the_limit_only_when_it_starts_an_idle_subagen
     assert started["data"]["status"] == "started"
 
 
-async def test_parallel_starts_respect_the_active_limit_with_a_stale_tree_read(
+async def test_parallel_starts_respect_the_active_limit_with_a_stale_count(
     harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     harness.storage.settings = {"max_active_subagents": 1}
@@ -463,10 +471,10 @@ async def test_parallel_starts_respect_the_active_limit_with_a_stale_tree_read(
     run_async = harness.sessions.run_async
 
     async def stale_second_tree_read(function: Any, *arguments: Any, **options: Any) -> Any:
-        # The second start reads the tree, then resumes only after the first start finished.
+        # The second start counts, then resumes only after the first start finished.
         nonlocal tree_reads
         result = await run_async(function, *arguments, **options)
-        if function is subagents_module.descendants:
+        if function is subagents_module.children:
             tree_reads += 1
             if tree_reads == 2:
                 await first_started.wait()

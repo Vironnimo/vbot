@@ -62,8 +62,9 @@ DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES = 104_857_600
 
 
 SUBAGENT_SETTING_DEFAULTS = {
-    "max_subagent_depth": 4,
+    "max_subagent_depth": 2,
     "max_active_subagents": 8,
+    "max_active_subagents_total": 50,
 }
 
 
@@ -203,8 +204,12 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
             ("max_subagent_depth", "Maximum nested Sub-Agent depth."),
             (
                 "max_active_subagents",
-                "Maximum Sub-Agents working at the same time in one Agent tree "
-                "(a top-level Session plus all Sub-Agents below it).",
+                "Maximum Sub-Agents of one Session working at the same time "
+                "(its own Sub-Agents only, not theirs).",
+            ),
+            (
+                "max_active_subagents_total",
+                "Maximum Sub-Agents working at the same time across the whole app.",
             ),
         )
     ),
