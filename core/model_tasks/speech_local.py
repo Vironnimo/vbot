@@ -16,13 +16,14 @@ import gc
 import importlib
 import io
 import json
+import logging
 import os
 import re
 import signal
 import subprocess
 import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import partial
@@ -57,6 +58,11 @@ _CHUNK_SAMPLES = 30 * _SAMPLE_RATE
 _LOAD_OPTIONS = ("model_path", "device", "dtype")
 # Local STT option asking the Runtime to load the engine after startup and binding changes.
 PRELOAD_OPTION = "preload"
+# A managed STT worker that has not answered within these seconds is ended.
+_LOAD_DEADLINE_S = 900.0
+_INFERENCE_DEADLINE_S = 600.0  # one chunk of at most 30 seconds of audio
+# A cancelled transcription's current chunk may still finish within these seconds.
+_CANCEL_GRACE_S = 30.0
 _PROGRESS: ContextVar[SpeechProgress | None] = ContextVar("local_speech_progress", default=None)
 
 
@@ -69,7 +75,12 @@ class LocalSpeechExecutionError(LocalSpeechError):
 
 
 class LocalTranscriptionEngine(Protocol):
-    """One loaded model; all calls are serialized outside the Event Loop."""
+    """One loaded model; all calls are serialized outside the Event Loop.
+
+    An engine that can stop a running call from another thread may also offer
+    ``abort()``; the call then fails and the engine is unloaded. A managed
+    worker does; an in-process engine always finishes its call.
+    """
 
     def transcribe(self, samples: Any, options: Mapping[str, Any]) -> SpeechTranscriptionResult: ...
 
@@ -225,35 +236,96 @@ class _EngineState:
             engine.close()
 
 
-class _LoadingProcesses:
-    """Managed STT workers still loading, so closing can abort a long load.
+class _WaitingWorkers:
+    """Managed STT workers the parent is waiting on, so closing can end them.
 
-    A loading worker blocks its executor thread until the child answers; only
-    killing the child ends that wait before the load finishes.
+    While a worker loads or transcribes a chunk, its executor thread blocks until
+    the child answers; only ending the child releases it before that.
     """
 
     def __init__(self) -> None:
         self._lock = Lock()
-        self._processes: set[subprocess.Popen[str]] = set()
+        self._workers: set[_ManagedSttEngine] = set()
         self._closed = False
 
-    def add(self, process: subprocess.Popen[str]) -> None:
+    def add(self, worker: _ManagedSttEngine) -> None:
         with self._lock:
             if not self._closed:
-                self._processes.add(process)
+                self._workers.add(worker)
                 return
-        _kill_speech_process(process)
+        worker.end("closed")
 
-    def discard(self, process: subprocess.Popen[str]) -> None:
+    def discard(self, worker: _ManagedSttEngine) -> None:
         with self._lock:
-            self._processes.discard(process)
+            self._workers.discard(worker)
 
     def close(self) -> None:
         with self._lock:
             self._closed = True
-            processes, self._processes = self._processes, set()
-        for process in processes:
-            _kill_speech_process(process)
+            workers, self._workers = self._workers, set()
+        for worker in workers:
+            worker.end("closed")
+
+
+class _TranscriptionCancelledError(LocalSpeechError):
+    """The caller cancelled the transcription and receives no result."""
+
+
+class _Cancellation:
+    """One transcription's cancellation, shared by its caller and worker thread.
+
+    The worker stops before its next chunk. A chunk already running gets
+    ``_CANCEL_GRACE_S`` seconds to finish, so a responsive engine stays loaded;
+    then an engine that can ``abort`` is ended.
+    """
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._requested = False
+        self._abort: Callable[[], None] | None = None
+        self._timer: Timer | None = None
+        self.aborted = False
+
+    def request(self) -> None:
+        """Event Loop: the caller was cancelled."""
+        with self._lock:
+            self._requested = True
+            self._arm()
+
+    def check(self) -> None:
+        if self._requested:
+            raise _TranscriptionCancelledError("Local speech recognition was cancelled.")
+
+    @contextmanager
+    def running(self, engine: object) -> Iterator[None]:
+        """Worker thread: one engine call, which a cancellation may abort after its grace."""
+        with self._lock:
+            self._abort = getattr(engine, "abort", None)
+            self._arm()
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._abort = None
+                if self._timer is not None:
+                    self._timer.cancel()
+                    self._timer = None
+        if self.aborted:
+            # The call answered while the grace ran out; the engine is ended anyway.
+            raise RuntimeError("Speech worker was ended")
+
+    def _arm(self) -> None:
+        if self._requested and self._abort is not None and self._timer is None:
+            self._timer = Timer(_CANCEL_GRACE_S, self._expire)
+            self._timer.daemon = True
+            self._timer.start()
+
+    def _expire(self) -> None:
+        # Aborting under the lock lets ``running`` see whether its engine was ended.
+        with self._lock:
+            if self._abort is not None:
+                self.aborted = True
+                self._abort()
 
 
 class LocalSpeechExecutor:
@@ -267,7 +339,7 @@ class LocalSpeechExecutor:
         managed_worker: bool = False,
     ) -> None:
         install_lock = asyncio.Lock()
-        self._loading = _LoadingProcesses()
+        self._waiting = _WaitingWorkers()
         packaged_app = None if managed_worker else _packaged_app_root()
         # A development checkout's STT targets share the server interpreter's packages.
         server_stack = ServerSpeechStack()
@@ -317,7 +389,7 @@ class LocalSpeechExecutor:
                             self.setups[entry.descriptor.id],
                             packaged_app,
                             entry.descriptor.id,
-                            self._loading,
+                            self._waiting,
                         ),
                     )
                     for entry in stt
@@ -401,12 +473,32 @@ class LocalSpeechExecutor:
         if state is None:
             raise LocalSpeechError(f"Local speech-to-text target is not available: {local_id}")
         state.pending += 1
-        try:
-            return await state.workers.run(
-                self._transcribe_with_progress, local_id, audio, dict(options), progress
+        cancellation = _Cancellation()
+        request = asyncio.ensure_future(
+            state.workers.run(
+                self._transcribe_with_progress,
+                local_id,
+                audio,
+                dict(options),
+                progress,
+                cancellation,
             )
+        )
+        try:
+            await asyncio.wait((request,))
+        except asyncio.CancelledError:
+            # A queued request never starts. A running one stops at its next chunk
+            # or ends an unresponsive managed worker; the engine stays busy until
+            # then, so the caller waits for it.
+            cancellation.request()
+            request.cancel()
+            await settle_before_cancelling(asyncio.wait((request,)))
+            raise
         finally:
             state.pending -= 1
+        result = request.result()
+        assert result is not None  # Only a cancelled request ends without a result.
+        return result
 
     def _transcribe_with_progress(
         self,
@@ -414,13 +506,18 @@ class LocalSpeechExecutor:
         audio: bytes,
         options: dict[str, Any],
         progress: SpeechProgress | None,
-    ) -> SpeechTranscriptionResult:
+        cancellation: _Cancellation,
+    ) -> SpeechTranscriptionResult | None:
+        """Transcribe on the engine's worker; ``None`` once the caller cancelled."""
         # Scope built-in loader reporting to this worker invocation without adding
         # transport or progress requirements to third-party engine factories.
         with _PROGRESS.set(progress):
             if progress is not None:
                 progress.update("preparing")
-            return self._transcribe(local_id, audio, options)
+            try:
+                return self._transcribe(local_id, audio, options, cancellation)
+            except _TranscriptionCancelledError:
+                return None  # Not a failure: nobody waits for an error.
 
     def prepare(self, local_id: str, options: Mapping[str, Any]) -> str:
         """Start loading one STT engine in the background, before its first request.
@@ -535,18 +632,31 @@ class LocalSpeechExecutor:
     def _failed(self, state: _EngineState, local_id: str, error: Exception) -> LocalSpeechError:
         """Unload after a failure and return the error the caller should see."""
         state.unload()
-        _LOGGER.warning(
-            "Local STT failed (engine=%s error_type=%s)", local_id, type(error).__name__
+        _LOGGER.log(
+            # Closing ends running workers; that is no failure of the engine.
+            logging.DEBUG if self._closed else logging.WARNING,
+            "Local STT failed (engine=%s error_type=%s)",
+            local_id,
+            type(error).__name__,
         )
         if isinstance(error, LocalSpeechError):
             return error
+        if isinstance(error, TimeoutError):
+            return LocalSpeechExecutionError(
+                "Local speech recognition stopped responding and was ended. Retry; if it "
+                "happens again, check the selected device and available memory."
+            )
         return LocalSpeechExecutionError(
             f"Local speech recognition failed ({type(error).__name__}). "
             "Check the selected device, model directory and available memory."
         )
 
     def _transcribe(
-        self, local_id: str, audio: bytes, options: dict[str, Any]
+        self,
+        local_id: str,
+        audio: bytes,
+        options: dict[str, Any],
+        cancellation: _Cancellation,
     ) -> SpeechTranscriptionResult:
         definition, options, key = self._stt_request(local_id, options)
         state = self._states[local_id]
@@ -558,13 +668,15 @@ class LocalSpeechExecutor:
             saw_samples = False
             for start, samples in _audio_chunks(audio):
                 saw_samples = True
+                cancellation.check()
                 # Exact digital silence needs no model and must not invent text.
                 if not samples.any():
                     continue
                 engine = self._loaded_engine(state, definition, options, key)
                 if (progress := _PROGRESS.get()) is not None:
                     progress.update("transcribing")
-                result = engine.transcribe(samples, options)
+                with cancellation.running(engine):
+                    result = engine.transcribe(samples, options)
                 if not isinstance(result.text, str):
                     raise ValueError("Local engine returned a non-text transcription")
                 if result.text.strip():
@@ -584,7 +696,20 @@ class LocalSpeechExecutor:
                 language=next(iter(languages)) if len(languages) == 1 else None,
                 segments=tuple(segments),
             )
+        except _TranscriptionCancelledError:
+            raise
         except Exception as error:
+            if cancellation.aborted:
+                state.unload()
+                _LOGGER.warning(
+                    "Ended local STT worker that kept a cancelled transcription "
+                    "(engine=%s grace_seconds=%.0f)",
+                    local_id,
+                    _CANCEL_GRACE_S,
+                )
+                raise _TranscriptionCancelledError(
+                    "Local speech recognition was cancelled."
+                ) from error
             failure = self._failed(state, local_id, error)
             if failure is error:
                 raise
@@ -624,7 +749,7 @@ class LocalSpeechExecutor:
         for setup in self.setups.values():
             setup.close()
         self._closed = True
-        self._loading.close()
+        self._waiting.close()
         for state in self._states.values():
             if state.preparing is not None:
                 state.preparing.cancel()
@@ -638,7 +763,7 @@ class LocalSpeechExecutor:
             if self._closed:
                 return
             self._closed = True
-            # An unstarted preload never starts; closing aborts a started managed load.
+            # An unstarted preload never starts; closing ends a waiting managed worker.
             for state in self._states.values():
                 if state.preparing is not None:
                     state.preparing.cancel()
@@ -648,8 +773,9 @@ class LocalSpeechExecutor:
         await settle_before_cancelling(self._close_task, on_late_failure=_log_close_failure)
 
     async def _finish_close(self) -> None:
+        # Ending loading and transcribing workers releases their worker threads.
         # Killing a process tree blocks, so it must not run on the Event Loop.
-        await asyncio.to_thread(self._loading.close)
+        await asyncio.to_thread(self._waiting.close)
         await asyncio.gather(
             *(state.preparing for state in self._states.values() if state.preparing is not None),
             return_exceptions=True,
@@ -981,6 +1107,8 @@ class _ManagedSttEngine:
 
     Construction returns once the child reports the model loaded, so the
     executor's load boundary (logs, progress, preloading) covers the real load.
+    The child is ended with its process tree when a request passes its deadline,
+    a cancellation's grace runs out (``abort``) or the executor closes.
     """
 
     def __init__(
@@ -988,11 +1116,14 @@ class _ManagedSttEngine:
         setup: LocalSpeechSetup,
         app_root: Path,
         engine: str,
-        loading: _LoadingProcesses,
+        waiting: _WaitingWorkers,
         options: Mapping[str, Any],
     ) -> None:
         from core.utils.processes import subprocess_creation_flags
 
+        self._waiting = waiting
+        self._ending = Lock()
+        self._ended = ""  # Why the parent ended the child, if it did.
         self._process = subprocess.Popen(
             [
                 str(setup.python),
@@ -1012,14 +1143,11 @@ class _ManagedSttEngine:
             start_new_session=os.name != "nt",
             env={**os.environ, "PYTHONUTF8": "1", "TOKENIZERS_PARALLELISM": "false"},
         )
-        loading.add(self._process)
         try:
-            self._exchange({"load": True, "options": dict(options)}, "loaded")
+            self._exchange({"load": True, "options": dict(options)}, "loaded", _LOAD_DEADLINE_S)
         except BaseException:
             self.close()
             raise
-        finally:
-            loading.discard(self._process)
 
     def transcribe(self, samples: Any, options: Mapping[str, Any]) -> SpeechTranscriptionResult:
         payload = self._exchange(
@@ -1028,6 +1156,7 @@ class _ManagedSttEngine:
                 "options": dict(options),
             },
             "result",
+            _INFERENCE_DEADLINE_S,
         )
         return SpeechTranscriptionResult(
             text=payload["text"],
@@ -1036,20 +1165,50 @@ class _ManagedSttEngine:
             usage=payload.get("usage"),
         )
 
-    def _exchange(self, request: Mapping[str, Any], answer: str) -> Any:
-        """Send one request line and return the child's ``answer`` field."""
+    def abort(self) -> None:
+        """End the child from another thread; the running request fails."""
+        self.end("aborted")
+
+    def end(self, reason: str) -> None:
+        """Kill the child's process tree; the first reason names the failure."""
+        with self._ending:
+            self._ended = self._ended or reason
+        _kill_speech_process(self._process)
+
+    def _exchange(self, request: Mapping[str, Any], answer: str, deadline: float) -> Any:
+        """Send one request line and return the child's ``answer`` field.
+
+        The child is ended once *deadline* seconds pass without that answer.
+        """
         process = self._process
         assert process.stdin is not None and process.stdout is not None
-        process.stdin.write(json.dumps(request) + "\n")
-        process.stdin.flush()
-        while line := process.stdout.readline(4096):
-            event = json.loads(line)
-            if event.get("error"):
-                raise RuntimeError(event["error"])
-            if event.get("phase") and (progress := _PROGRESS.get()) is not None:
-                progress.update(event["phase"])
-            if (payload := event.get(answer)) is not None:
-                return payload
+        timer = Timer(deadline, self.end, ("deadline",))
+        timer.daemon = True
+        self._waiting.add(self)
+        timer.start()
+        try:
+            process.stdin.write(json.dumps(request) + "\n")
+            process.stdin.flush()
+            while line := process.stdout.readline(4096):
+                event = json.loads(line)
+                if event.get("error"):
+                    raise RuntimeError(event["error"])
+                if event.get("phase") and (progress := _PROGRESS.get()) is not None:
+                    progress.update(event["phase"])
+                if (payload := event.get(answer)) is not None:
+                    return payload
+        except OSError, ValueError:
+            if not self._ended:
+                raise  # A broken pipe or line of a child ended here is reported below.
+        finally:
+            timer.cancel()
+            self._waiting.discard(self)
+        if self._ended == "deadline":
+            raise TimeoutError(f"Speech worker did not answer within {deadline:.0f} seconds")
+        if self._ended == "closed":
+            raise LocalSpeechError(
+                "Local speech recognition is closed. Restart the vBot server before retrying."
+            )
         raise RuntimeError("Speech worker exited")
 
     def close(self) -> None:
