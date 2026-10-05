@@ -136,14 +136,19 @@ def reply_run(rpc: FakeRpc, session_id: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("flags", "overrides"),
+    ("flags", "overrides", "project"),
     [
-        pytest.param((), None, id="no-overrides"),
+        pytest.param((), None, {}, id="no-overrides"),
         pytest.param(
             ("--model", MODEL, "--thinking-effort", "high", "--temperature", "0.2"),
             {"model": MODEL, "thinking_effort": "high", "temperature": 0.2},
+            {},
             id="overrides",
         ),
+        pytest.param(
+            ("--project", "vbot"), None, {"working_project_id": "vbot"}, id="in-a-project"
+        ),
+        pytest.param(("--workspace",), None, {"working_project_id": None}, id="in-the-workspace"),
     ],
 )
 def test_chat_starts_a_session_and_prints_the_answer(
@@ -152,6 +157,7 @@ def test_chat_starts_a_session_and_prints_the_answer(
     run_cli: RunCli,
     flags: tuple[str, ...],
     overrides: dict[str, Any] | None,
+    project: dict[str, Any],
 ) -> None:
     reply_run(rpc, "s-new")
     run_stream.connection(*TOOL_RUN)
@@ -161,7 +167,9 @@ def test_chat_starts_a_session_and_prints_the_answer(
     assert code == 0
     assert out == "The answer.\n"
     # The server creates the Session with the accepted message; none is created up front.
+    # Without --project or --workspace it works in the Agent's default Project.
     new_session = {"agent_overrides": overrides} if overrides else {}
+    new_session.update(project)
     assert rpc.calls == [
         (
             "chat.stream",

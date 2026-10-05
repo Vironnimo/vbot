@@ -1001,6 +1001,13 @@ describe('AgentsView', () => {
     const mounted = mountUnderCoordinator();
     mountedComponent = mounted.component;
     await waitForCondition(() => document.body.querySelector('#agent-project'));
+    // The selection is where new Sessions work; existing ones keep theirs.
+    expect(
+      document.querySelector('label[for="agent-project"]').textContent.trim(),
+    ).toBe('Default project');
+    expect(document.getElementById('agent-project-help').textContent).toContain(
+      'Existing sessions keep the project they started in.',
+    );
 
     vi.useFakeTimers();
     try {

@@ -222,7 +222,8 @@ def project_remove(
         ]
     if "affected_agent_ids" in payload.data:
         lines.append(
-            f"affected_rooted_agents: {_format_string_list(payload.data.get('affected_agent_ids'))}"
+            "default_project_cleared_for: "
+            f"{_format_string_list(payload.data.get('affected_agent_ids'))}"
         )
     if "copied_files" in payload.data:
         lines.extend(_format_agent_file_effects("copied_files", payload.data.get("copied_files")))

@@ -160,6 +160,10 @@ SUBAGENT_SESSION_SETTINGS_UNREADABLE_MESSAGE_TEMPLATE = (
     "subagent was not run: Sub-Agent {id} has Agent settings that cannot be read ({reason}), "
     "so it cannot continue. Delegate the work to a new Sub-Agent instead."
 )
+SUBAGENT_SESSION_PROJECT_MISSING_MESSAGE_TEMPLATE = (
+    "subagent was not run: Sub-Agent {id} works in Project {project_id}, which no longer "
+    "exists, so it cannot continue. Delegate the work to a new Sub-Agent instead."
+)
 
 # Sections vBot delivers to the Parent Agent.
 FORWARDED_SECTION_TEMPLATE = (

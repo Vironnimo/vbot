@@ -61,7 +61,7 @@ def test_agent_show_prints_every_agent_field(rpc: FakeRpc, run_cli: RunCli) -> N
         "model: openai/gpt-5.2",
         "fallback_models: anthropic/claude-sonnet-4",
         "workspace: C:/data/workspace-coder",
-        "project: vbot",
+        "default_project: vbot",
         "temperature: 0.4",
         "top_p: -",
         "thinking_effort: high",
@@ -149,7 +149,7 @@ MODEL_HINTS = ("vbot model list --task chat", "vbot agent update librarian --mod
             },
             (
                 "workspace: C:/agents/librarian/workspace",
-                "project: second-brain",
+                "default_project: second-brain",
                 'effective_sources: {"model":"agent"}',
             ),
             MODEL_HINTS[:1],

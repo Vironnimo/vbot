@@ -18,8 +18,8 @@ from core.agents import default_workspace_dir
 from core.attachments import sniff_media_type
 from core.chat.content_blocks import ContentBlock, FileMentionBlock, TextBlock
 from core.chat.errors import ChatError
-from core.projects import resolve_working_project_id
 from core.prompts import INLINE_FILE_MAX_BYTES
+from core.sessions import AGENT_DEFAULT_PROJECT
 from core.tools.search import SearchBudget, ignore_rules_apply, iter_search_entries
 from core.utils.logging import get_logger
 
@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from core.runtime.interfaces import RuntimeServices
+    from core.sessions import WorkingProjectChoice
     from core.tools.file_state import FileReadState
 
 _LOGGER = get_logger("chat.file_mentions")
@@ -44,16 +45,28 @@ MENTION_FILE_LIST_LIMIT = 5000
 MENTION_FILE_LIST_TIMEOUT_SECONDS = 5.0
 
 
-def resolve_mention_root(runtime: RuntimeServices, agent_id: str, project_id: str | None) -> Path:
+def resolve_mention_root(
+    runtime: RuntimeServices,
+    agent_id: str,
+    project_id: str | None,
+    *,
+    session_id: str | None = None,
+    working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
+) -> Path:
     """Resolve the directory ``@``-mentions work against for one chat address.
 
-    Mirrors tool path resolution (``ToolContext.effective_cwd``): a project
-    session uses the project's repo cwd, an identity session the agent's
-    workspace — so the picker lists exactly the tree that relative tool paths
-    resolve against.
+    Mirrors tool path resolution (``ToolContext.effective_cwd``): a Session
+    working in a Project uses the Project's repo cwd, any other Session the
+    Agent's Workspace — so the picker lists exactly the tree that relative tool
+    paths resolve against. An existing Session (*session_id*) uses its own
+    working Project; without one (a draft, or a Session not created yet) the
+    root is where a new Session with *working_project_id* would work.
     """
-    agent = runtime.agent_resolver.resolve_agent(project_id, agent_id)
-    working_project_id = resolve_working_project_id(project_id, agent)
+    resolver = runtime.agent_resolver
+    agent = resolver.resolve_agent(project_id, agent_id)
+    working_project_id = resolver.resolve_working_project(
+        project_id, agent, session_id=session_id, requested=working_project_id
+    )
     if working_project_id is not None:
         root = Path(runtime.projects.get(working_project_id).cwd)
         if not root.is_dir():

@@ -412,7 +412,7 @@ class RequestBuilder:
         inputs: RequestBuildInputs,
     ) -> _RequestState:
         # For a project-born session the Working Project context lands in the system
-        # prompt; for an unrooted identity session it is empty. The
+        # prompt; for an identity session working in its Workspace it is empty. The
         # config-agent body is inserted verbatim (never re-expanded) by the builder.
         # ``skill_registry`` scopes the skills block to the project pool (``None`` =
         # the global registry); ``inputs.skill_catalog`` is the current prompt-epoch

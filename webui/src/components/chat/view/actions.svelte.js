@@ -354,6 +354,7 @@ export function createChatViewActions(context) {
     const fileMentions = await collectQueueEditFileMentions(
       newContent,
       sessionState.agentId,
+      sessionState.sessionId,
     );
     return await context.chatController.updateQueued(
       sessionState,
@@ -363,7 +364,11 @@ export function createChatViewActions(context) {
     );
   };
 
-  const collectQueueEditFileMentions = async (text, agentAddress) => {
+  const collectQueueEditFileMentions = async (
+    text,
+    agentAddress,
+    sessionId,
+  ) => {
     const tokens = extractMentionTokens(typeof text === 'string' ? text : '');
     if (tokens.length === 0) {
       return [];
@@ -372,7 +377,10 @@ export function createChatViewActions(context) {
       if (!agentAddress) {
         return [];
       }
-      const result = await context.chatController.listFiles(agentAddress);
+      const result = await context.chatController.listFiles(
+        agentAddress,
+        sessionId,
+      );
       return matchMentionCandidates(
         tokens,
         Array.isArray(result?.files) ? result.files : [],

@@ -751,10 +751,11 @@ async def _dispatch_tool_calls(
             # The owning run's project rides onto every ToolContext so the
             # subagent tool can inherit it; None keeps the identity path.
             project_id=context.project_id,
-            # The run's effective skill project (rooted-aware) and, in a Librarian
+            # The run's effective skill project (its working Project) and, in a Librarian
             # Session, the Agent whose Skills it maintains, so the skill tools
             # resolve the same pool the run's catalog advertises.
             skill_project_id=context.skill_project_id,
+            working_project_id=run.working_project_id,
             skill_agent_id=getattr(agent, "skill_agent_id", None),
             run_kind=run.run_kind,
             allowed_tools=_dispatch_allowed_tools(
@@ -1083,7 +1084,7 @@ def _resolve_tool_cwd(project_cwd: Path | None, workspace: Path) -> Path:
     """Choose the tool working directory: project cwd when set, else workspace.
 
     Chat supplies the admitted working Project's cwd for Project Agents and
-    Rooted Identity Agents. Without a working Project, relative file/shell paths
-    resolve against the Identity Agent's Workspace.
+    Identity Sessions working in a Project. Without a working Project, relative
+    file/shell paths resolve against the Identity Agent's Workspace.
     """
     return project_cwd if project_cwd is not None else workspace

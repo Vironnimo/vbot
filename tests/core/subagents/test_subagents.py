@@ -17,7 +17,7 @@ import pytest
 import core.subagents.subagents as subagents_module
 from core.projects import AgentResolutionError, ResolutionProjectNotFoundError
 from core.runs import RunKind, RunStatus
-from core.sessions import SUBAGENT_PARENT_META_KEY
+from core.sessions import SESSION_WORKING_PROJECT_META_KEY, SUBAGENT_PARENT_META_KEY
 from core.subagents._constants import (
     FACTS_NO_SIBLINGS_PENDING_TEXT,
     FACTS_NOTHING_RUNNING_TEXT,
@@ -128,6 +128,56 @@ async def test_subagent_in_another_scope_is_addressed_by_its_qualified_agent_id(
     sent = await harness.call({"action": "send", "id": data["id"], "content": "more"})
     assert sent["ok"], sent
     assert sent["data"]["agent_id"] == "worker@vbot"
+
+
+@pytest.mark.parametrize(
+    ("target", "working_project_id"),
+    [
+        pytest.param("worker", "alpha", id="identity-target"),
+        pytest.param("parent", "alpha", id="self-copy"),
+        pytest.param("worker@team", "team", id="team-target-in-its-project"),
+    ],
+)
+async def test_a_subagent_works_in_its_parents_project_unless_it_is_a_team_agent(
+    harness: SubAgentHarness, target: str, working_project_id: str
+) -> None:
+    harness.resolver.projects.add("alpha")
+
+    result = await harness.call(
+        {"description": "Do review", "content": "review", "agent_id": target},
+        allowed_agents=["*"],
+        working_project_id="alpha",
+    )
+    await harness.settle()
+
+    assert result["ok"], result
+    child = harness.subagent_session(result["data"]["id"])
+    stored = harness.sessions.metadata_value(child, SESSION_WORKING_PROJECT_META_KEY)
+    assert stored == working_project_id
+    [turn] = harness.loop.turns
+    assert turn.run is not None
+    assert turn.run.working_project_id == working_project_id
+
+
+async def test_a_subagent_whose_project_is_gone_cannot_continue(
+    harness: SubAgentHarness,
+) -> None:
+    harness.resolver.projects.add("alpha")
+    data = await harness.call(
+        {"description": "Do review", "content": "review"}, working_project_id="alpha"
+    )
+    await harness.settle()
+    harness.resolver.projects.discard("alpha")
+
+    result = await harness.call({"action": "send", "id": data["data"]["id"], "content": "more"})
+
+    assert result["error"]["code"] == "project_not_found"
+    assert result["error"]["message"] == (
+        f"subagent was not run: Sub-Agent {data['data']['id']} works in Project alpha, "
+        "which no longer exists, so it cannot continue. "
+        "Delegate the work to a new Sub-Agent instead."
+    )
+    assert [turn.content for turn in harness.loop.turns] == ["review"]
 
 
 @pytest.mark.parametrize(

@@ -51,6 +51,7 @@ from server.rpc.validation import (
     _optional_bool,
     _optional_positive_integer,
     _optional_string,
+    _optional_working_project,
     _reject_unsupported,
     _required_agent_address,
     _required_string,
@@ -80,12 +81,18 @@ async def _create_session(state: Any, params: JsonObject) -> JsonObject:
     session_id = _optional_string(params, "session_id")
     make_current = _optional_bool(params, "make_current", default=False)
     overrides = _optional_agent_overrides(params, allow_clear=False)
+    requested_project = _optional_working_project(params, project_id)
     chat_sessions = state.runtime.chat_sessions
     resolver = state.runtime.agent_resolver
+    working_project_id: str | None = None
 
     def create_session() -> Any:
         created = chat_sessions.create(
-            agent_id, session_id=session_id, project_id=project_id, actor="rpc"
+            agent_id,
+            session_id=session_id,
+            project_id=project_id,
+            actor="rpc",
+            working_project_id=working_project_id if project_id is None else None,
         )
         if overrides:
             resolver.update_session_overrides(
@@ -99,7 +106,13 @@ async def _create_session(state: Any, params: JsonObject) -> JsonObject:
         # One resolver seam validates both sources: identity agents through the
         # store, project agents through the team scan. The session is then created
         # under the matching anchor (identity dir vs. project anchor).
-        await resolver.resolve_agent_async(project_id, agent_id)
+        agent = await resolver.resolve_agent_async(project_id, agent_id)
+        # The Session works in this Project for its whole life: the requested
+        # one (it must exist), the Workspace (null), or the Agent's default
+        # Project; a Team Agent's Session in its Team's Project.
+        working_project_id = await resolver.resolve_working_project_async(
+            project_id, agent, requested=requested_project
+        )
         # An unusable Model fails before the Session exists.
         if overrides and overrides.get("model") is not None:
             await resolver.require_model_configured_async(overrides["model"])
@@ -112,7 +125,11 @@ async def _create_session(state: Any, params: JsonObject) -> JsonObject:
     # agent; they do NOT switch to the new session. Scoped to the new Session so
     # windows not listing this Agent ignore it.
     publish_session_changed(state, project_id, agent_id, session.id)
-    response: JsonObject = {"agent_id": agent_id, "session_id": session.id}
+    response: JsonObject = {
+        "agent_id": agent_id,
+        "session_id": session.id,
+        "working_project_id": working_project_id,
+    }
     if overrides:
         response["agent_overrides"] = AgentOverrides(**overrides).as_dict()
     return response

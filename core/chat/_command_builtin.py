@@ -34,7 +34,13 @@ from core.projects import (
 )
 from core.prompts.briefs import learn_brief
 from core.runs import ActiveRunError, ChatRunManager, RunAdmissionBlockedError
-from core.sessions import SUBAGENT_PARENT_META_KEY, SUBAGENT_SESSION_META_KEY, SessionAddress
+from core.sessions import (
+    AGENT_DEFAULT_PROJECT,
+    SESSION_WORKING_PROJECT_META_KEY,
+    SUBAGENT_PARENT_META_KEY,
+    SUBAGENT_SESSION_META_KEY,
+    SessionAddress,
+)
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
 
 if TYPE_CHECKING:
@@ -171,6 +177,19 @@ async def _execute_handoff(
     if not handoff_text:
         return _notice("handoff", "Handoff could not be generated.")
 
+    # A Team target works in its Team's Project; an Identity target continues
+    # in the Project the handed-off Session works in.
+    working_project_id = (
+        await _command_session_io(
+            sessions,
+            "metadata_value_async",
+            "metadata_value",
+            SessionAddress(context.project_id, context.agent_id, context.session_id),
+            SESSION_WORKING_PROJECT_META_KEY,
+        )
+        if target_project_id is None
+        else AGENT_DEFAULT_PROJECT
+    )
     target_session = await _command_session_io(
         sessions,
         "create_async",
@@ -178,6 +197,7 @@ async def _execute_handoff(
         target_agent_id,
         project_id=target_project_id,
         actor="command",
+        working_project_id=working_project_id,
     )
     if target_project_id is None:
         agents = _require_dependency(agents, "AgentStore")

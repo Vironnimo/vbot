@@ -190,9 +190,10 @@ class ArchiveService:
     ) -> ProjectArchiveOutcome:
         """Move a Project's Anchor and Sessions into a new entry; its repo is never touched.
 
-        Identity Agents rooted in the Project are unrooted first; an Agent whose
-        Workspace was elsewhere gets its default Workspace back, copying the
-        identity files along with ``copy_identity_files``. Refuses with
+        Identity Agents whose default Project it is lose that default first; an
+        Agent whose Workspace was elsewhere gets its default Workspace back,
+        copying the identity files along with ``copy_identity_files``. Identity
+        Sessions working in the Project keep it and refuse Runs until a restore. Refuses with
         :class:`ArchiveSubjectInUseError` while a live automation targets the
         Project and with ``RunAdmissionBlockedError`` while it has Runs.
         """

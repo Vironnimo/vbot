@@ -358,8 +358,8 @@ class SkillRuntime:
         scoping lives in exactly one place.
 
         **Contract:** ``identity_agent_id`` carries the run's agent id only when the
-        run executes as an identity agent (plain or rooted — a rooted run passes its
-        home project as ``project_id``). A config-agent run passes ``None``: config
+        run executes as an identity agent (a run whose Session works in a Project
+        passes that Project as ``project_id``). A config-agent run passes ``None``: config
         agents own no private home, and agent ids are project-local, so a team slug
         that merely collides with an identity agent's id must never pull that
         identity agent's private skills into the project run (the project skill
@@ -629,11 +629,12 @@ class SkillRuntime:
     def _agent_skill_access(self, agent: Agent, package_ids: dict[Path, str]) -> dict[str, Any]:
         """Project one Identity Agent's effective Skill grants for the manager.
 
-        Uses the registry the Agent's own Runs resolve (its root Project when that
-        Project still exists), so every listed name is one the Agent can see or be
-        granted. ``own`` marks a package from this Agent's private home. ``grant``
-        names why a Skill is (not) granted, first match wins: ``own`` private package
-        not in ``excluded_skills``, ``project`` granted by the root Project (which
+        Uses the registry a new Session of the Agent resolves (its default Project
+        when that Project still exists; an existing Session keeps the Project it
+        works in), so every listed name is one the Agent can see or be granted.
+        ``own`` marks a package from this Agent's private home. ``grant`` names why
+        a Skill is (not) granted, first match wins: ``own`` private package not in
+        ``excluded_skills``, ``project`` granted by the default Project (which
         outranks an exclusion), ``excluded`` by ``excluded_skills``, ``allowed`` by
         ``allowed_skills``, else ``not_selected``. ``available`` reports whether its
         requirements, including Skill dependencies under this Agent's grants, are met.
@@ -647,7 +648,7 @@ class SkillRuntime:
         try:
             registry = self.skills_for(project_id, agent.id)
         except ProjectError:
-            # The root Project vanished between the existence probe and the scan.
+            # The default Project vanished between the existence probe and the scan.
             registry = self.skills_for(None, agent.id)
         home = self.agent_skills_dir(agent.id).resolve()
         wildcard = WILDCARD_ALLOWLIST in agent.allowed_skills

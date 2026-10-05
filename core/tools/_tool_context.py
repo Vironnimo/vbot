@@ -110,12 +110,16 @@ class ToolContext:
     # the global/identity path, exactly unchanged.
     project_id: str | None = None
     # The project whose skill pool this run resolves against. Equals ``project_id``
-    # for a project run and ``None`` for a plain identity run, but for a *rooted*
-    # identity agent (its workspace is a registered repo, so ``project_id`` is
-    # ``None``) this is its home project â€” so the ``skill`` tool loads the same
-    # skills the run's catalog advertises. Kept separate from ``project_id`` so
-    # skill resolution stays rooted-aware without changing subagent inheritance.
+    # for a project run and ``None`` for an identity run in the Agent's Workspace;
+    # for an identity Session working in a Project (``project_id`` is ``None``)
+    # it is that Project, so the ``skill`` tool loads the same skills the run's
+    # catalog advertises. Kept separate from ``project_id`` so skill resolution
+    # follows the working Project without changing subagent addressing.
     skill_project_id: str | None = None
+    # The Project the owning Run works in: its Session's working Project (for a
+    # project run its ``project_id``), or ``None`` for the Agent's Workspace. A
+    # Sub-Agent of an Identity Agent spawned from this Run works there too.
+    working_project_id: str | None = None
     # The Agent whose Skills this call reads and changes when it is not the calling
     # Agent: the Agent a Librarian Session is bound to. ``None`` (every other
     # Session) is the calling Agent; read :attr:`skill_subject_id`.
@@ -517,6 +521,8 @@ class ToolExecutionConfig:
     project_id: str | None = None
     # Effective skill project for this group; see ``ToolContext.skill_project_id``.
     skill_project_id: str | None = None
+    # Working Project of the owning Run; see ``ToolContext.working_project_id``.
+    working_project_id: str | None = None
     # Agent whose Skills this group works on; see ``ToolContext.skill_agent_id``.
     skill_agent_id: str | None = None
     # Kind of the owning Run; see ``ToolContext.run_kind``.

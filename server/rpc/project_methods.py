@@ -21,9 +21,9 @@ a clean report — that is a valid Project, not an error.
 
 **Remove lock.** ``project.rm`` moves the anchor and the Project's Sessions into
 an archive entry (never the repo) unless the Project is in use: an atomic Run
-Admission Guard covers Project-anchored and Rooted-Agent work
-(``RPC_ERROR_PROJECT_BUSY``), while the Agent-reference lock covers automation
-references and rooted-Agent updates (``RPC_ERROR_PROJECT_IN_USE``).
+Admission Guard covers Project-anchored work and Identity Sessions working in the
+Project (``RPC_ERROR_PROJECT_BUSY``), while the Agent-reference lock covers
+automation references and default-Project updates (``RPC_ERROR_PROJECT_IN_USE``).
 """
 
 from __future__ import annotations

@@ -81,7 +81,7 @@ def admit_run(
     owner = _owner_fields(admission)
     started_at = _store_values._timestamp(admission.started_at, "Run start")
     if admission.expected_generation_id is None:
-        _store_mutations.ensure_live(connection, address)
+        _store_mutations.ensure_live(connection, address, admission.working_project_id)
     state = _store_values._require_live(connection, address)
     if (
         admission.expected_generation_id is not None

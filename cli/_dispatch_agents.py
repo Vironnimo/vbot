@@ -374,6 +374,8 @@ def dispatch_chat_command(args: argparse.Namespace, instance: ServerInstance) ->
             session_id=args.session,
             continue_latest=args.continue_latest,
             overrides=overrides,
+            working_project_id=args.working_project,
+            workspace=args.workspace,
             json_output=args.json,
         ),
     )

@@ -190,6 +190,16 @@ describe('RPC wrappers', () => {
       { agent_id: 'agent-1', session_id: 'session-1' },
     ],
     [
+      'files.list for a draft',
+      (o) => api.listFiles('agent-1', null, o),
+      { agent_id: 'agent-1' },
+    ],
+    [
+      'files.list for a Session',
+      (o) => api.listFiles('agent-1', 'session-1', o),
+      { agent_id: 'agent-1', session_id: 'session-1' },
+    ],
+    [
       'chat.queue_remove',
       (o) => api.removeFromQueue('agent-1', 'session-1', 'queue-1', o),
       { agent_id: 'agent-1', session_id: 'session-1', item_id: 'queue-1' },

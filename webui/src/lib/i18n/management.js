@@ -467,7 +467,7 @@ export default Object.freeze({
     'Gives this Agent its own editable copy of the System Prompt. Turning it off keeps the customized blocks but stops using them.',
   'agents.form.skills': 'Skills',
   'agents.form.skillsDescription':
-    'Skills this Agent may load. Its own private Skills are on until you turn them off; the Skills of its root project are always on and managed on the project.',
+    'Skills this Agent may load. Its own private Skills are on until you turn them off; the Skills of its default project are always on in sessions that work there and are managed on the project.',
   'agents.form.subagentTargets': 'Sub-Agent targets',
   'agents.access.allIdentityAgents': 'All Identity Agents',
   'agents.access.allProjectAgents': 'All Project Agents',
@@ -553,10 +553,10 @@ export default Object.freeze({
   'agents.form.workspaceEditableHelp':
     "Home of this agent's identity and memory files (SOUL.md, USER.md, MEMORY.md); the memory tool works here. File tools follow the session's working directory instead — the project repository in project sessions.",
   'agents.form.workspaceSetToDefault': 'Set to default',
-  'agents.form.project': 'Project',
+  'agents.form.project': 'Default project',
   'agents.form.noProject': 'No project',
   'agents.form.projectHelp':
-    'Where relative file and shell work runs. Workspace remains the identity and memory home.',
+    'New sessions of this agent work in this project: relative file and shell work runs in its repository. Existing sessions keep the project they started in. Workspace remains the identity and memory home.',
   'agents.form.projectLoadError': 'Projects could not be loaded.',
   'agents.form.projectUnavailableHelp':
     'The saved selection is preserved. Project editing is unavailable until the catalog reloads.',
@@ -570,9 +570,9 @@ export default Object.freeze({
   'agents.form.submitUpdate': 'Save changes',
   'agents.form.required': 'This field is required.',
   'agents.form.agentWildcardNote':
-    'Additional Agents: all other Identity Agents and all Agents on every registered Project, including ones added later. The calling Agent remains implicit. Rooting does not narrow this.',
+    'Additional Agents: all other Identity Agents and all Agents on every registered Project, including ones added later. The calling Agent remains implicit. A default project does not narrow this.',
   'agents.form.agentAddressNote':
-    'Additional Agents use bare Identity ids or agent@project ids. The calling Agent remains implicit. Rooting does not change this list.',
+    'Additional Agents use bare Identity ids or agent@project ids. The calling Agent remains implicit. A default project does not change this list.',
   'agents.form.modelSearchPlaceholder': 'Filter models…',
   'agents.form.modelSearchEmpty': 'No models match',
   'agents.detail.newSubtitle': 'id assigned at creation',
@@ -711,9 +711,9 @@ export default Object.freeze({
   'projects.menu.remove': 'Remove…',
   'projects.remove.confirmTitle': 'Remove project',
   'projects.remove.body':
-    'Remove {name}? The Project and its Sessions move to the Archive, where you can restore them. Rooted Agents that use it are reset to their Default Workspace; their own Sessions stay. The repository and old Workspace files are never touched.',
+    'Remove {name}? The Project and its Sessions move to the Archive, where you can restore them. Agents that use it as their default project are reset to their Default Workspace. Their own Sessions stay; those that work in this Project cannot continue until it is restored. The repository and old Workspace files are never touched.',
   'projects.remove.permanentBody':
-    'Remove {name} permanently? The Project’s vBot data and its Sessions are deleted now and cannot be restored. Rooted Agents that use it are reset to their Default Workspace; their own Sessions stay. The repository and old Workspace files are never touched.',
+    'Remove {name} permanently? The Project’s vBot data and its Sessions are deleted now and cannot be restored. Agents that use it as their default project are reset to their Default Workspace. Their own Sessions stay; those that work in this Project cannot continue. The repository and old Workspace files are never touched.',
   'projects.remove.copyIdentityFiles':
     'Copy SOUL.md, USER.md, and MEMORY.md to affected Default Workspaces',
   'projects.remove.copyIdentityFilesHelp':
@@ -1181,7 +1181,7 @@ export default Object.freeze({
   'archive.detail.reasonExtension': 'The Extension archived these Sessions',
   'archive.detail.reasonExtensionRemoved': 'The Extension was removed',
   'archive.detail.repository': 'Repository',
-  'archive.detail.rootProject': 'Root Project',
+  'archive.detail.rootProject': 'Default Project',
   'archive.detail.workspace': 'Workspace',
   'archive.detail.workspaceExternal':
     'Outside the Agent’s own folder; it was left in place.',

@@ -416,7 +416,9 @@
     if (!agentId) {
       return null;
     }
-    return async () => await chatController.listFiles(agentId);
+    // A Session lists the Project it works in; a draft the Agent's default.
+    const sessionId = target.activeSessionState?.sessionId ?? null;
+    return async () => await chatController.listFiles(agentId, sessionId);
   });
   // The model catalog is global (not agent/session-scoped), so the loader is
   // always available. The composer fetches on demand when `/model ` is typed.

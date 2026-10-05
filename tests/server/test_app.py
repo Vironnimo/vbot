@@ -110,7 +110,11 @@ def test_real_runtime_serves_a_fresh_data_directory_and_stops_with_the_app(
     assert moved["result"]["workspace"] == str(workspace.resolve())
     assert updated["result"]["name"] == "Updated Coder"
     assert (workspace / "SOUL.md").exists()
-    assert session["result"] == {"agent_id": "coder", "session_id": "kept"}
+    assert session["result"] == {
+        "agent_id": "coder",
+        "session_id": "kept",
+        "working_project_id": None,
+    }
     assert renamed["result"]["id"] == "researcher"
     assert agents["researcher"]["current_session_id"] == "kept"
     assert renamed_history["result"]["session_id"] == "kept"

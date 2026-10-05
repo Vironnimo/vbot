@@ -231,6 +231,24 @@ class ResolutionProjectNotFoundError(AgentResolutionError):
     """The addressed Project has no Anchor with exactly this id."""
 
 
+# A Session keeps the Project it was created with; it never moves to another one.
+WORKING_PROJECT_MISSING_MESSAGE = (
+    "This Session works in Project {project_id}, which no longer exists. "
+    "Restore the Project to continue this Session, or start a new Session."
+)
+
+
+class WorkingProjectMissingError(AgentResolutionError):
+    """The Project a Session works in no longer exists, so the Session cannot run.
+
+    The Session stays readable; it runs again once the Project is restored.
+    """
+
+    def __init__(self, project_id: str) -> None:
+        super().__init__(WORKING_PROJECT_MISSING_MESSAGE.format(project_id=project_id))
+        self.project_id = project_id
+
+
 class GlobalAgentDefaultsProvider(Protocol):
     """Returns the instance-wide ``defaults.agent`` map (model, temperature, …).
 

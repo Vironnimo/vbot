@@ -59,13 +59,19 @@ _RECONNECT_LIMIT = 3
 
 @dataclass(frozen=True)
 class ChatRequest:
-    """One ``vbot chat`` invocation after argument parsing and stdin reading."""
+    """One ``vbot chat`` invocation after argument parsing and stdin reading.
+
+    A new Session works in ``working_project_id``, or with ``workspace`` in the
+    Agent's Workspace; with neither, in the Agent's default Project.
+    """
 
     agent: str
     prompt: str
     session_id: str | None = None
     continue_latest: bool = False
     overrides: JsonObject = field(default_factory=dict)
+    working_project_id: str | None = None
+    workspace: bool = False
     json_output: bool = False
 
 
@@ -82,10 +88,16 @@ def chat(instance: ServerInstance, request: ChatRequest) -> CommandResult:
 
     params: JsonObject = {"agent_id": request.agent, "content": request.prompt}
     if session_id is None:
-        # The new Session starts with the overrides and exists only once accepted.
-        params["new_session"] = (
+        # The new Session starts with the overrides and its working Project, and
+        # exists only once accepted.
+        new_session: JsonObject = (
             {"agent_overrides": dict(request.overrides)} if request.overrides else {}
         )
+        if request.workspace:
+            new_session["working_project_id"] = None
+        elif request.working_project_id is not None:
+            new_session["working_project_id"] = request.working_project_id
+        params["new_session"] = new_session
     else:
         params["session_id"] = session_id
     payload = _rpc_call(instance, "chat.stream", params)

@@ -469,7 +469,9 @@ class StubRuntime:
             write_bootstrap_marker(tmp_path)
         self.chat_sessions = ChatSessionManager(tmp_path)
         self.snapshot_barrier = SnapshotBarrier()
-        self.agent_resolver = StubAgentResolver(self.agents, sessions=self.chat_sessions)
+        self.agent_resolver = StubAgentResolver(
+            self.agents, sessions=self.chat_sessions, projects=self.projects
+        )
         self.file_read_state = FileReadState()
         self.tools = ToolRegistry()
         self.system_prompts = StubPrompts(self.tools)

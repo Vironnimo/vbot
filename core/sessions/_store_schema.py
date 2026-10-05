@@ -13,7 +13,7 @@ from core.database import (
     Migration,
     SnapshotFacts,
 )
-from core.sessions import _store_archive_backfill, _store_fts
+from core.sessions import _store_archive_backfill, _store_fts, _store_working_projects
 from core.sessions.schema import APPLICATION_ID, DATABASE_NAME, FORMAT_GENERATION, SCHEMA_SQL
 
 # Owner facts every data snapshot records for the Session member and
@@ -35,6 +35,9 @@ def session_database_spec(path: Path) -> DatabaseSpec:
     def adopt_archives(connection: sqlite3.Connection) -> None:
         _store_archive_backfill.adopt_legacy_archives(connection, data_dir)
 
+    def adopt_root_projects(connection: sqlite3.Connection) -> None:
+        _store_working_projects.adopt_agent_root_projects(connection, data_dir)
+
     return DatabaseSpec(
         name=DATABASE_NAME,
         path=Path(path),
@@ -42,9 +45,15 @@ def session_database_spec(path: Path) -> DatabaseSpec:
         application_id=APPLICATION_ID,
         format_generation=FORMAT_GENERATION,
         schema_sql=SCHEMA_SQL,
-        # Archives written before archive entries existed become entries: the
-        # legacy trees under archive/ and the archived Sessions.
-        migrations=(Migration("sessions.0001_archive_entries", apply=adopt_archives),),
+        migrations=(
+            # Archives written before archive entries existed become entries: the
+            # legacy trees under archive/ and the archived Sessions.
+            Migration("sessions.0001_archive_entries", apply=adopt_archives),
+            # Sessions created before Sessions stored a working Project keep
+            # working in their Agent's root Project. An older vBot ignores the
+            # column and keeps using the Agent's root Project.
+            Migration("sessions.0002_session_working_projects", apply=adopt_root_projects),
+        ),
         after_open=_store_fts._ensure_fts_schema,
         snapshot_facts=_SNAPSHOT_FACTS,
         health=_session_health,

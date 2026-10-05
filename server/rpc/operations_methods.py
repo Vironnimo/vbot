@@ -8,7 +8,6 @@ from typing import Any, cast
 from core.projects import (
     resolve_prompt_project,
     resolve_skill_scope,
-    resolve_working_project_id,
     runtime_agent_body,
 )
 from core.prompts import ProjectPromptContext, PromptError, SystemPromptManager
@@ -20,7 +19,9 @@ from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import (
+    _draft_working_project,
     _optional_positive_integer,
+    _optional_string,
     _reject_unsupported,
     _required_agent_address,
     _required_block_slug,
@@ -234,7 +235,11 @@ def _optional_layout_position(params: JsonObject) -> int | None:
 
 
 async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"agent_id", "scope", "include_tools"}, "prompt.preview")
+    _reject_unsupported(
+        params,
+        {"agent_id", "scope", "include_tools", "session_id", "working_project_id"},
+        "prompt.preview",
+    )
     include_tools = params.get("include_tools", False)
     if not isinstance(include_tools, bool):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.include_tools must be a boolean")
@@ -260,10 +265,19 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
         project_id: str | None = None
     else:
         agent_id, project_id = _required_agent_address(params, "agent_id")
+    # The preview renders the Project the Run would work in: an existing
+    # Session's (``session_id``, which also applies its Agent overrides), else a
+    # draft's new Session's (``working_project_id``; left out, the Agent's
+    # default Project; null, its Workspace).
+    session_id = _optional_string(params, "session_id")
+    requested_project = _draft_working_project(params, project_id, session_id)
 
     def resolve_preview_agent() -> tuple[Any, Any | None]:
-        resolved_agent = state.runtime.agent_resolver.resolve_agent(project_id, agent_id)
-        working_project_id = resolve_working_project_id(project_id, resolved_agent)
+        resolver = state.runtime.agent_resolver
+        resolved_agent = resolver.resolve_agent(project_id, agent_id, session_id=session_id)
+        working_project_id = resolver.resolve_working_project(
+            project_id, resolved_agent, session_id=session_id, requested=requested_project
+        )
         return resolved_agent, resolve_prompt_project(
             state.runtime.projects,
             working_project_id,
@@ -283,8 +297,8 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
         if prompt_project is not None
         else None
     )
-    # Skill scope mirrors the chat loop through the shared policy: a rooted
-    # identity preview sees its home project's skills like the run would, and the
+    # Skill scope mirrors the chat loop through the shared policy: an identity
+    # preview working in a Project sees its skills like the run would, and the
     # private-skill layer applies to identity previews only (a project-qualified
     # preview renders a config agent, whose slug must not resolve a same-named
     # identity agent's private home).

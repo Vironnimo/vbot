@@ -42,11 +42,11 @@ from core.projects.resolver import (
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
     RuntimeAgent,
+    WorkingProjectMissingError,
     build_agent_resolver,
     effective_project_allowed_skills,
     resolve_prompt_project,
     resolve_skill_scope,
-    resolve_working_project_id,
     runtime_agent_body,
 )
 from core.projects.store import ArchivedProjectPayload, ProjectStore
@@ -71,6 +71,7 @@ __all__ = [
     "ResolutionAgentNotFoundError",
     "ResolutionProjectNotFoundError",
     "RuntimeAgent",
+    "WorkingProjectMissingError",
     "build_agent_resolver",
     "build_project",
     "cwd_exists",
@@ -84,7 +85,6 @@ __all__ = [
     "project_tool_configurability_reason",
     "resolve_prompt_project",
     "resolve_skill_scope",
-    "resolve_working_project_id",
     "runtime_agent_body",
     "slugify_agent_id",
     "slugify_project_id",

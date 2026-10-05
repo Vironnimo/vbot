@@ -14,7 +14,8 @@ from core.projects import (
     InvalidAgentAddressError,
     parse_agent_address,
 )
-from core.settings import is_valid_agent_id
+from core.sessions import AGENT_DEFAULT_PROJECT, WorkingProjectChoice
+from core.settings import is_valid_agent_id, is_valid_project_id
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 
 JsonObject = dict[str, Any]
@@ -255,3 +256,45 @@ def _optional_agent_overrides(
     except ValueError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{key}: {exc}") from exc
     return dict(raw)
+
+
+def _optional_working_project(
+    container: JsonObject, project_id: str | None, *, label: str = "params"
+) -> WorkingProjectChoice:
+    """Read ``<label>.working_project_id``: the working Project a new Session starts in.
+
+    Left out, the Session starts in its Agent's default Project; ``null`` names
+    the Agent's Workspace, a string a Project (whose existence the resolver
+    checks). A Team Agent address takes none: its Sessions work in its Project.
+    """
+    if "working_project_id" not in container:
+        return AGENT_DEFAULT_PROJECT
+    key = f"{label}.working_project_id"
+    if project_id is not None:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"{key} is not accepted for a Team Agent: its Sessions work in Project {project_id}",
+        )
+    value = container["working_project_id"]
+    if value is None:
+        return None
+    if not isinstance(value, str) or not is_valid_project_id(value):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{key} must be null or a valid Project id")
+    return value
+
+
+def _draft_working_project(
+    params: JsonObject, project_id: str | None, session_id: str | None
+) -> WorkingProjectChoice:
+    """Read ``params.working_project_id`` for a request about a Session not created yet.
+
+    An existing Session (``params.session_id``) works in its own Project, so a
+    request names at most one of the two; see :func:`_optional_working_project`.
+    """
+    if session_id is not None and "working_project_id" in params:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.working_project_id and params.session_id exclude each other: "
+            "an existing Session works in its own Project",
+        )
+    return _optional_working_project(params, project_id)

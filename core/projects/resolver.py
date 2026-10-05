@@ -41,6 +41,7 @@ from core.projects._runtime_agent import (
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
     RuntimeAgent,
+    WorkingProjectMissingError,
 )
 from core.projects.projects import ProjectError, ProjectNotFoundError
 from core.projects.scan_report import FindingType, ScanFinding
@@ -50,6 +51,7 @@ from core.projects.scanners.base import (
     ScanResult,
     scan_project,
 )
+from core.sessions import AGENT_DEFAULT_PROJECT
 from core.settings import AgentDefaults
 from core.utils.workers import BoundedWorkerPool
 
@@ -63,7 +65,7 @@ if TYPE_CHECKING:
     from core.projects.store import ProjectStore
     from core.providers.providers import ProviderRegistry
     from core.runtime.interfaces import ProviderCredentialResolverProtocol
-    from core.sessions import SessionAddress
+    from core.sessions import SessionAddress, WorkingProjectChoice
 
 __all__ = [
     "AGENT_OVERRIDE_FIELDS",
@@ -83,11 +85,11 @@ __all__ = [
     "ResolutionAgentNotFoundError",
     "ResolutionProjectNotFoundError",
     "RuntimeAgent",
+    "WorkingProjectMissingError",
     "build_agent_resolver",
     "effective_project_allowed_skills",
     "resolve_prompt_project",
     "resolve_skill_scope",
-    "resolve_working_project_id",
     "runtime_agent_body",
 ]
 
@@ -104,6 +106,18 @@ SKILL_SUBJECT_MISSING_MESSAGE = (
     "This Session works on the Skills of Agent {agent_id}, which no longer exists, "
     "so it cannot continue."
 )
+# An Agent's default Project names where its new Sessions work.
+DEFAULT_PROJECT_MISSING_MESSAGE = (
+    "Agent {agent_id} starts new Sessions in Project {project_id}, which no longer exists. "
+    "Choose another default Project for the Agent."
+)
+# A Team Agent's Session works in the Team's Project, never in another one.
+TEAM_WORKING_PROJECT_MESSAGE = (
+    "A Session of Team Agent {agent_id}@{project_id} works in Project {project_id}; "
+    "it cannot work in another Project."
+)
+# What a Session read finds when the Session does not exist (yet).
+_NO_SESSION = object()
 
 
 class SessionMetadataStore(Protocol):
@@ -341,6 +355,134 @@ class AgentResolver:
             self._apply_temporary_address, agent, address, overrides
         )
 
+    def resolve_working_project(
+        self,
+        project_id: str | None,
+        agent: RuntimeAgent,
+        *,
+        session_id: str | None = None,
+        requested: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
+    ) -> str | None:
+        """Return the Project a Run of *agent* works in, or ``None`` for its Workspace.
+
+        A Project Agent (``project_id`` set) works in its address Project. With
+        ``session_id``, a Session of an Identity Agent works in the Project it was
+        created with; once that Project no longer exists the Session is refused
+        with :class:`WorkingProjectMissingError`, never moved to the Workspace.
+        Without a Session, or for one that does not exist yet, the result is
+        where a new Session with *requested* works
+        (:meth:`new_session_working_project`).
+        """
+        if project_id is None:
+            stored = self._stored_working_project(agent.id, session_id)
+            if stored is not _NO_SESSION:
+                return self._require_session_project(cast("str | None", stored))
+        return self.new_session_working_project(project_id, agent, requested)
+
+    async def resolve_working_project_async(
+        self,
+        project_id: str | None,
+        agent: RuntimeAgent,
+        *,
+        session_id: str | None = None,
+        requested: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
+    ) -> str | None:
+        """Event-Loop-safe :meth:`resolve_working_project`.
+
+        The Session read runs on the Session database's pool; the Project check
+        reads Project files on the ``agent-resolution`` pool.
+        """
+        if project_id is None:
+            stored = await self._stored_working_project_async(agent.id, session_id)
+            if stored is not _NO_SESSION:
+                return await _RESOLUTION_WORKERS.run(
+                    self._require_session_project, cast("str | None", stored)
+                )
+        return await _RESOLUTION_WORKERS.run(
+            self.new_session_working_project, project_id, agent, requested
+        )
+
+    def new_session_working_project(
+        self,
+        project_id: str | None,
+        agent: RuntimeAgent,
+        requested: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
+    ) -> str | None:
+        """Return the Project a new Session of *agent* works in, ``None`` for its Workspace.
+
+        A Session of a Project Agent works in its address Project and takes no
+        other choice. For an Identity Agent, *requested* names a Project, which
+        must exist (:class:`ResolutionProjectNotFoundError`), ``None`` names the
+        Workspace, and :data:`~core.sessions.AGENT_DEFAULT_PROJECT` the Agent's
+        default Project (its ``root_project_id``).
+        """
+        if project_id is not None:
+            if requested is not AGENT_DEFAULT_PROJECT:
+                raise AgentResolutionError(
+                    TEAM_WORKING_PROJECT_MESSAGE.format(agent_id=agent.id, project_id=project_id)
+                )
+            return project_id
+        if requested is AGENT_DEFAULT_PROJECT:
+            default = getattr(agent, "root_project_id", None)
+            if default is not None and not self._projects.exists(default):
+                raise AgentResolutionError(
+                    DEFAULT_PROJECT_MISSING_MESSAGE.format(agent_id=agent.id, project_id=default)
+                )
+            return cast("str | None", default)
+        if requested is not None and not self._projects.exists(requested):
+            raise ResolutionProjectNotFoundError(f"Project not found: {requested}")
+        return requested
+
+    async def session_working_project_async(self, address: SessionAddress) -> str | None:
+        """Return the Project the Session at *address* works in, ``None`` for the Workspace.
+
+        A Project Session works in its address Project; a Session of an Identity
+        Agent in the Project it was created with (a missing Session has none).
+        Raises :class:`WorkingProjectMissingError` once that Project no longer
+        exists. The Session read runs on the Session database's pool, the Project
+        check on the ``agent-resolution`` pool.
+        """
+        if address.project_id is not None:
+            return address.project_id
+        stored = await self._stored_working_project_async(address.agent_id, address.session_id)
+        if stored is _NO_SESSION:
+            return None
+        return await _RESOLUTION_WORKERS.run(
+            self._require_session_project, cast("str | None", stored)
+        )
+
+    def _require_session_project(self, project_id: str | None) -> str | None:
+        """Return a Session's stored working Project once it is known to exist."""
+        if project_id is not None and not self._projects.exists(project_id):
+            raise WorkingProjectMissingError(project_id)
+        return project_id
+
+    def _stored_working_project(self, agent_id: str, session_id: str | None) -> object:
+        """Return the working Project a Session stores, or ``_NO_SESSION`` without one."""
+        if session_id is None or self._sessions is None:
+            return _NO_SESSION
+        from core.sessions import SESSION_WORKING_PROJECT_META_KEY, SessionNotFoundError
+
+        try:
+            return self._sessions.metadata_value(
+                _session_address(None, agent_id, session_id), SESSION_WORKING_PROJECT_META_KEY
+            )
+        except SessionNotFoundError:
+            return _NO_SESSION
+
+    async def _stored_working_project_async(self, agent_id: str, session_id: str | None) -> object:
+        """Event-Loop-safe :meth:`_stored_working_project`."""
+        if session_id is None or self._sessions is None:
+            return _NO_SESSION
+        from core.sessions import SESSION_WORKING_PROJECT_META_KEY, SessionNotFoundError
+
+        try:
+            return await self._sessions.metadata_value_async(
+                _session_address(None, agent_id, session_id), SESSION_WORKING_PROJECT_META_KEY
+            )
+        except SessionNotFoundError:
+            return _NO_SESSION
+
     def session_overrides(self, address: SessionAddress) -> AgentOverrides:
         """Return the Agent overrides *address* stores (none for a missing Session)."""
         return AgentOverrides.from_stored(self._session_value(address, AGENT_OVERRIDES_META_KEY))
@@ -483,9 +625,10 @@ class AgentResolver:
         return self._apply_overrides(agent, overrides)
 
     def _require_temporary_project(self, project_id: str | None) -> None:
-        # A temporary Agent keeps its owner's Tool and Skill selection: like a
-        # Rooted Agent it uses the Project's directory, Skills and context, not
-        # the Tool and Skill whitelists that bound the Project's Team.
+        # A temporary Agent keeps its owner's Tool and Skill selection: like an
+        # Identity Session working in a Project it uses the Project's directory,
+        # Skills and context, not the Tool and Skill whitelists that bound the
+        # Project's Team.
         if project_id is not None:
             self._load_project(project_id)
 
@@ -871,31 +1014,20 @@ def runtime_agent_body(agent: RuntimeAgent) -> str:
     return instructions if isinstance(instructions, str) else ""
 
 
-def resolve_working_project_id(project_id: str | None, agent: RuntimeAgent) -> str | None:
-    """Return the Project captured for work admission.
-
-    Project Config-Agent work uses its Session/address Project. Identity work uses
-    only the Agent's explicit saved selection; Workspace equality has no meaning.
-    """
-    if project_id is not None:
-        return project_id
-    return getattr(agent, "root_project_id", None)
-
-
 def resolve_prompt_project(
     projects: ProjectStore, working_project_id: str | None
 ) -> Project | None:
     """Return the project whose auto-load files belong in this run's system prompt.
 
-    The one rooting policy shared by the chat loop and the prompt-preview RPC, so
-    the preview can never drift from what a run actually sends:
+    The one policy shared by the chat loop and the prompt-preview RPC, so the
+    preview can never drift from what a run actually sends:
 
-    - ``working_project_id`` set → that explicitly selected Project.
+    - ``working_project_id`` set → the Project the Session works in.
     - ``working_project_id is None`` → no Project context.
 
     Kept beside :func:`runtime_agent_body` for the same reason: the chat loop and
-    the RPC call it with the already-resolved working scope, so prompt assembly
-    never learns Rooting or Session-addressing policy itself.
+    the RPC call it with the already-resolved working Project, so prompt assembly
+    never learns working-Project or Session-addressing policy itself.
     """
     if working_project_id is not None:
         project = projects.get(working_project_id)
@@ -912,13 +1044,13 @@ def resolve_skill_scope(
 
     The one skill-scoping policy shared by the chat loop, the prompt-preview RPC,
     and ``$``-autocomplete, so no surface can drift from the pool a run actually
-    activates against. ``prompt_project`` is the already-resolved rooting result
+    activates against. ``prompt_project`` is the already-resolved working Project
     from :func:`resolve_prompt_project` (pure — no second store lookup here), and
     ``agent`` the resolved runtime Agent:
 
     - ``skill_project_id`` — the effective skill project: the run's own project,
-      or, for a **rooted identity** agent (``project_id is None`` but homed in a
-      registered repo), its home project; else ``None``.
+      or, for an identity Session working in a Project (``project_id is None``),
+      that Project; else ``None``.
     - ``identity_agent_id`` — the agent's private-skill layer applies to identity
       runs only: a project run executes a config agent whose project-local slug
       must never resolve a same-named identity agent's private home (private
@@ -930,8 +1062,8 @@ def resolve_skill_scope(
         return project_id, None
     from core.agents import skill_subject_id
 
-    rooted_project_id = prompt_project.project_id if prompt_project is not None else None
-    return rooted_project_id, skill_subject_id(agent)
+    working_project_id = prompt_project.project_id if prompt_project is not None else None
+    return working_project_id, skill_subject_id(agent)
 
 
 def _skill_binding_key(agent: RuntimeAgent) -> str | None:

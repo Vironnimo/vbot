@@ -27,8 +27,8 @@ if TYPE_CHECKING:
 # pinned on the Session so ordinary Runs reuse one stable prefix. A successful
 # Compaction rescans Skill sources and replaces this snapshot.
 PINNED_SKILL_CATALOG_SLOT = "pinned_skill_catalog"
-# Rooted Identity Agent Working Project Context, rendered from the selected Project's
-# identity and auto-load files and reused verbatim until the next Compaction.
+# Working Project Context, rendered from the identity and auto-load files of the
+# Project the Session works in and reused verbatim until the next Compaction.
 PINNED_WORKING_PROJECT_CONTEXT_SLOT = "pinned_working_project_context"
 # Session-pinned rendered SOUL block text and pinned-memory text: prompt-epoch
 # snapshots like the Skill catalog above. The first request of an epoch renders
@@ -54,8 +54,8 @@ PINNED_DYNAMIC_BLOCKS_SLOT = "pinned_dynamic_blocks"
 PINNED_AGENT_BODY_SLOT = "pinned_agent_body"
 # Qualifies the Project-dependent snapshots (Working Project Context and Skill
 # catalog) with the Project they were rendered for. The working Project is
-# re-resolved at every Run admission (a Rooted Identity Agent may be re-rooted
-# mid-Session), so a pin rendered for another Project, or for none, re-renders.
+# resolved at every Run admission (a Project restored under a new id gives its
+# Sessions that id), so a pin rendered for another Project, or for none, re-renders.
 PINNED_PROJECT_ATTRIBUTE = "working_project_id"
 
 
@@ -117,8 +117,8 @@ def pinned_skill_catalog(
     write leaves the System Prompt prefix unchanged.
     Skill activation and ``/``-``$`` triggers still resolve the live registry.
     The snapshot is qualified with ``skill_project_id``, the Project whose Skill
-    pool *skill_registry* resolves: when a re-rooted Identity Agent's Run resolves
-    another Project (or none), the catalog re-renders from the current registry.
+    pool *skill_registry* resolves: when a Run resolves another Project (or none)
+    than the snapshot's, the catalog re-renders from the current registry.
     A successful Compaction rescans every Skill source and replaces the snapshot;
     a new Session starts with a fresh snapshot too.
     """
@@ -242,13 +242,14 @@ def pinned_working_project_context(
     """Return the pinned Working Project Context for this prompt epoch.
 
     This snapshot governs only the automatic Working Project block and covers
-    Rooted Identity Agents and Project Config Agents alike. The rest of the
-    System Prompt keeps its existing live assembly behavior. A successful
-    Compaction replaces the snapshot from the current Project and auto-load
-    files. The snapshot is qualified with the working Project id, so a Rooted
-    Identity Agent re-rooted to another Project re-renders it at its next Run.
-    An unrooted Identity Agent has no Working Project block: a stale pin from an
-    earlier Rooting is ignored (never shown) and replaced by the next Project's.
+    Identity Sessions working in a Project and Project Config Agents alike. The
+    rest of the System Prompt keeps its existing live assembly behavior. A
+    successful Compaction replaces the snapshot from the current Project and
+    auto-load files. The snapshot is qualified with the working Project id, so a
+    Run in another Project (a Project restored under a new id) re-renders it.
+    A Session working in its Agent's Workspace has no Working Project block: a
+    stale pin from another Project is ignored (never shown) and replaced by the
+    next Project's.
     """
     if prompt_project is None or project_context is None:
         return None

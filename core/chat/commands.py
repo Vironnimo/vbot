@@ -24,7 +24,7 @@ from core.runs import (
     RunAdmissionBlockedError,
     RunNotFoundError,
 )
-from core.sessions import SessionAddress
+from core.sessions import AGENT_DEFAULT_PROJECT, SessionAddress, WorkingProjectChoice
 from core.skills.skill_validator import SKILL_NAME_TRIGGER_PATTERN
 from core.tools.terminal_manager import TerminalManager
 from core.utils.logging import get_logger
@@ -190,13 +190,17 @@ class CommandExecutionContext:
 class NewSessionCommandContext:
     """Addressing of a command sent for a new Session, which does not exist yet.
 
-    ``agent_overrides`` are the Agent overrides the new Session starts with.
+    ``agent_overrides`` are the Agent overrides the new Session starts with and
+    ``working_project_id`` the working Project a Session of an Identity Agent
+    starts in (a Project id, ``None`` for the Workspace, or the Agent's default
+    Project).
     """
 
     agent_id: str
     project_id: str | None
     reply_surface: ReplySurface
     agent_overrides: AgentOverrides = field(default_factory=AgentOverrides)
+    working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT
     on_change: CommandChangeObserver | None = None
 
     def report_change(self, change: CommandResourceChange) -> None:
@@ -793,17 +797,22 @@ class CommandDispatcher:
     ) -> NewSessionCommandResult:
         resolver = _require_dependency(self._agent_resolver, "AgentResolver")
         sessions = _require_dependency(self._sessions, "ChatSessionManager")
-        # The Agent and an override Model must be usable before the Session exists.
-        await resolver.resolve_agent_async(
+        # The Agent, an override Model and the working Project must be usable
+        # before the Session exists.
+        agent = await resolver.resolve_agent_async(
             context.project_id,
             context.agent_id,
             new_session_overrides=context.agent_overrides,
+        )
+        working_project_id = await resolver.resolve_working_project_async(
+            context.project_id, agent, requested=context.working_project_id
         )
         session = await sessions.create_async(
             context.agent_id,
             project_id=context.project_id,
             actor="command",
             metadata=context.agent_overrides.session_metadata() or None,
+            working_project_id=working_project_id if context.project_id is None else None,
         )
         address = SessionAddress(context.project_id, context.agent_id, session.id)
         try:

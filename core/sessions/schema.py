@@ -45,6 +45,10 @@ CREATE TABLE store_meta (
 -- The latest completion and its read mark name runs of this Session by run_key.
 -- A Run is deleted only with its Session, so these keys never dangle; they
 -- carry no foreign key, which would scan sessions for every deleted Run.
+-- working_project_id is the Project a Session of an Identity Agent works in,
+-- fixed at creation (NULL: the Agent's Workspace). A Project Session works in
+-- its address Project and keeps it NULL; it carries no CHECK, since an older
+-- vBot that does not know the column moves Sessions between scopes.
 CREATE TABLE sessions (
   session_key INTEGER PRIMARY KEY,
   generation_id TEXT NOT NULL UNIQUE,
@@ -87,6 +91,7 @@ CREATE TABLE sessions (
   compaction_policy_json TEXT CHECK (compaction_policy_json IS NULL OR (json_valid(compaction_policy_json) AND json_type(compaction_policy_json) = 'object')),
   metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json) AND json_type(metadata_json) = 'object'),
   agent_overrides_json TEXT CHECK (agent_overrides_json IS NULL OR (json_valid(agent_overrides_json) AND json_type(agent_overrides_json) = 'object')),
+  working_project_id TEXT,
   CHECK ((latest_completion_run_key IS NULL) = (latest_completion_status IS NULL)),
   CHECK ((forked_at IS NULL) = (fork_point_seq IS NULL)),
   CHECK ((fork_parent_key IS NULL) OR (forked_at IS NOT NULL))
@@ -131,6 +136,11 @@ CREATE INDEX sessions_by_subagent_parent
 CREATE INDEX sessions_by_subagent_id
   ON sessions (subagent_parent_id)
   WHERE state = 'live' AND subagent_parent_id IS NOT NULL;
+
+-- Sessions working in one Project (they follow a Project restored under a new id).
+CREATE INDEX sessions_by_working_project
+  ON sessions (working_project_id)
+  WHERE working_project_id IS NOT NULL;
 
 CREATE TABLE session_run_kinds (
   session_key INTEGER NOT NULL REFERENCES sessions (session_key) ON DELETE CASCADE,

@@ -323,7 +323,7 @@ def _format_agent_detail(agent: Mapping[str, Any]) -> str:
         f"model: {_string_or_default(agent.get('model'), '-')}",
         f"fallback_models: {_format_string_list(agent.get('fallback_models'))}",
         f"workspace: {_string_or_default(agent.get('workspace'), '-')}",
-        f"project: {_string_or_default(agent.get('root_project_id'), '-')}",
+        f"default_project: {_string_or_default(agent.get('root_project_id'), '-')}",
         f"temperature: {_value_text(agent.get('temperature'))}",
         f"top_p: {_value_text(agent.get('top_p'))}",
         f"thinking_effort: {_value_text(agent.get('thinking_effort'))}",
@@ -339,7 +339,9 @@ def _format_agent_detail(agent: Mapping[str, Any]) -> str:
     ]
     if agent.get("builtin") == "librarian":
         lines.insert(3, _LIBRARIAN_LINE)
-    project_index = next(index for index, line in enumerate(lines) if line.startswith("project:"))
+    project_index = next(
+        index for index, line in enumerate(lines) if line.startswith("default_project:")
+    )
     if "default_workspace" in agent:
         lines.insert(
             project_index,

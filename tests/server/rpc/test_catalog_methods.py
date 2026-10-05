@@ -5,13 +5,15 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from core.chat import CommandDispatcher, CommandOutcome
+from core.projects import AgentResolver
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.runs import ChatRunManager
+from core.sessions import SessionAddress, SessionNotFoundError
 from core.tools import ToolRegistry, tool_success
 from server.rpc.catalog_methods import _list_commands, _list_files, _list_tools
 from server.rpc.errors import RpcError
@@ -43,6 +45,35 @@ class _Registry:
         return list(self._skills.values())
 
 
+class _SessionProjects:
+    """Session store double: the working Project each existing Session stores."""
+
+    def __init__(self, projects: dict[str, str | None]) -> None:
+        self._projects = projects
+
+    def metadata_value(self, address: SessionAddress, key: str) -> str | None:
+        assert key == "working_project_id"
+        if address.session_id not in self._projects:
+            raise SessionNotFoundError(f"session does not exist: {address.session_id}")
+        return address.project_id or self._projects[address.session_id]
+
+    async def metadata_value_async(self, address: SessionAddress, key: str) -> str | None:
+        return self.metadata_value(address, key)
+
+
+def _working_projects(
+    projects: Any, session_projects: dict[str, str | None] | None = None
+) -> AgentResolver:
+    """The real resolver's working-Project policy over *projects* and these Sessions."""
+    return AgentResolver(
+        cast(Any, None),
+        projects,
+        cast(Any, None),
+        dict,
+        sessions=cast(Any, _SessionProjects(session_projects or {})),
+    )
+
+
 def _state(
     *,
     global_names: list[str],
@@ -55,9 +86,12 @@ def _state(
     command_dispatcher: CommandDispatcher | None = None,
     agent_skills: dict[str, list[str]] | None = None,
     session_subjects: dict[str, str] | None = None,
+    session_projects: dict[str, str | None] | None = None,
+    existing_projects: frozenset[str] = frozenset({"vbot"}),
 ) -> Any:
     """``agent_skills`` gives Agents their own registries; ``session_subjects`` binds
-    a Session to the Agent whose Skills it works on (a Librarian Session)."""
+    a Session to the Agent whose Skills it works on (a Librarian Session);
+    ``session_projects`` names the Project each existing Session works in."""
     global_registry = _Registry(global_names)
     project_registry = _Registry(project_names or [])
     agent_registries = {
@@ -89,11 +123,16 @@ def _state(
             project_id=project_id,
             cwd=project_cwd or str(Path.cwd()),
         ),
+        exists=existing_projects.__contains__,
     )
+    working_projects = _working_projects(projects, session_projects)
     runtime = SimpleNamespace(
         skills=global_registry,
         skills_for=skills_for,
-        agent_resolver=SimpleNamespace(resolve_agent_async=resolve_agent_async),
+        agent_resolver=SimpleNamespace(
+            resolve_agent_async=resolve_agent_async,
+            resolve_working_project_async=working_projects.resolve_working_project_async,
+        ),
         projects=projects,
     )
     return SimpleNamespace(
@@ -139,7 +178,7 @@ async def test_a_librarian_session_suggests_the_skills_it_maintains() -> None:
 
     assert (_skill_names(in_session), _skill_names(elsewhere)) == (["release"], ["debugging"])
     # A Session belongs to an Agent.
-    with pytest.raises(RpcError, match="session_id needs params.agent_id"):
+    with pytest.raises(RpcError, match="need params.agent_id"):
         await _list_commands(state, {"session_id": "curating"})
 
 
@@ -158,21 +197,70 @@ async def test_project_agent_address_uses_project_registry() -> None:
     assert _skill_names(result) == ["proj-a", "proj-b"]
 
 
+@pytest.mark.parametrize(
+    ("default_project", "params", "expected"),
+    [
+        pytest.param("vbot", {}, ["project-skill"], id="draft-in-the-default-project"),
+        pytest.param(
+            "vbot", {"working_project_id": None}, ["global-skill"], id="draft-in-the-workspace"
+        ),
+        pytest.param(
+            None, {"working_project_id": "vbot"}, ["project-skill"], id="draft-in-a-project"
+        ),
+        pytest.param(None, {"session_id": "in-vbot"}, ["project-skill"], id="session-in-a-project"),
+        pytest.param(
+            "vbot", {"session_id": "in-workspace"}, ["global-skill"], id="session-in-workspace"
+        ),
+        pytest.param("vbot", {"session_id": "in-removed"}, [], id="session-project-removed"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_rooted_identity_agent_suggests_home_project_skills() -> None:
-    # A bare Rooted Identity Agent autocompletes against its explicitly selected
-    # Project pool, not the bare global registry.
+async def test_identity_agent_suggests_the_skills_of_its_working_project(
+    default_project: str | None, params: dict[str, Any], expected: list[str]
+) -> None:
+    # An Identity Agent autocompletes against the pool of the Project its Session
+    # works in; a draft against the Project its new Session would work in. A Session
+    # whose Project no longer exists cannot run, so it is offered no Skills.
     state = _state(
-        global_names=["bundled-only"],
-        project_names=["home-skill"],
-        agent_allowed=["*"],
-        agent_workspace="/srv/repo",
-        rooted_project_id="vbot",
+        global_names=["global-skill"],
+        project_names=["project-skill"],
+        rooted_project_id=default_project,
+        session_projects={"in-vbot": "vbot", "in-workspace": None, "in-removed": "gone"},
     )
 
-    result = await _list_commands(state, {"agent_id": "main"})
+    result = await _list_commands(state, {"agent_id": "main", **params})
 
-    assert _skill_names(result) == ["home-skill"]
+    assert _skill_names(result) == expected
+
+
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        pytest.param(
+            {"agent_id": "main", "session_id": "s1", "working_project_id": "vbot"},
+            "exclude each other",
+            id="session-and-draft-project",
+        ),
+        pytest.param(
+            {"agent_id": "builder@vbot", "working_project_id": "other"},
+            "not accepted for a Team Agent",
+            id="team-agent",
+        ),
+        pytest.param(
+            {"agent_id": "main", "working_project_id": "Not A Project!"},
+            "must be null or a valid Project id",
+            id="invalid-project-id",
+        ),
+        pytest.param({"working_project_id": "vbot"}, "need params.agent_id", id="no-agent"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_draft_working_project_is_validated(params: dict[str, Any], message: str) -> None:
+    state = _state(global_names=[])
+
+    with pytest.raises(RpcError, match=message) as exc_info:
+        await _list_commands(state, params)
+    assert exc_info.value.code == "invalid_request"
 
 
 @pytest.mark.asyncio
@@ -583,14 +671,21 @@ def _files_state(
     workspace: str,
     data_dir: str,
     root_project_id: str | None = None,
+    session_projects: dict[str, str | None] | None = None,
 ) -> Any:
+    projects = SimpleNamespace(
+        get=lambda project_id: SimpleNamespace(cwd=project_cwd), exists=lambda _id: True
+    )
+    working_projects = _working_projects(projects, session_projects)
     runtime = SimpleNamespace(
-        projects=SimpleNamespace(get=lambda project_id: SimpleNamespace(cwd=project_cwd)),
+        projects=projects,
         agent_resolver=SimpleNamespace(
             resolve_agent=lambda project_id, agent_id: SimpleNamespace(
+                id=agent_id,
                 workspace=workspace,
                 root_project_id=root_project_id,
-            )
+            ),
+            resolve_working_project=working_projects.resolve_working_project,
         ),
         storage=SimpleNamespace(data_dir=data_dir),
         chat_sessions=_InlineSessionPool(),
@@ -628,8 +723,26 @@ async def test_files_list_identity_address_lists_workspace(tmp_path) -> None:
     assert result["files"] == ["MEMORY.md"]
 
 
+@pytest.mark.parametrize(
+    ("default_project", "params", "expected"),
+    [
+        pytest.param("vbot", {}, ["project.txt"], id="draft-in-the-default-project"),
+        pytest.param(
+            "vbot", {"working_project_id": None}, ["private.txt"], id="draft-in-the-workspace"
+        ),
+        pytest.param(
+            None, {"working_project_id": "vbot"}, ["project.txt"], id="draft-in-a-project"
+        ),
+        pytest.param(None, {"session_id": "in-vbot"}, ["project.txt"], id="session-in-a-project"),
+        pytest.param(
+            "vbot", {"session_id": "in-workspace"}, ["private.txt"], id="session-in-workspace"
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_files_list_rooted_identity_lists_selected_project(tmp_path) -> None:
+async def test_files_list_lists_the_working_project_of_an_identity_agent(
+    tmp_path: Path, default_project: str | None, params: dict[str, Any], expected: list[str]
+) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "project.txt").write_text("project", encoding="utf-8")
@@ -640,12 +753,13 @@ async def test_files_list_rooted_identity_lists_selected_project(tmp_path) -> No
         project_cwd=str(repo),
         workspace=str(workspace),
         data_dir=str(tmp_path),
-        root_project_id="vbot",
+        root_project_id=default_project,
+        session_projects={"in-vbot": "vbot", "in-workspace": None},
     )
 
-    result = await _list_files(state, {"agent_id": "main"})
+    result = await _list_files(state, {"agent_id": "main", **params})
 
-    assert result["files"] == ["project.txt"]
+    assert result["files"] == expected
 
 
 @pytest.mark.asyncio

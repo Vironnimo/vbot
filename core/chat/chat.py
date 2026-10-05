@@ -36,7 +36,7 @@ from core.chat.model_resolution import (
 )
 from core.chat.request_runner import WireRequestRunner
 from core.compaction.run_coordination import CompactionRunCoordinator
-from core.projects import AgentOverrides, resolve_working_project_id
+from core.projects import AgentOverrides
 from core.runs import (
     ActiveRunError,
     QueuedRunItem,
@@ -47,9 +47,11 @@ from core.runs import (
     WaitingWorkAdmission,
 )
 from core.sessions import (
+    AGENT_DEFAULT_PROJECT,
     ChatSession,
     SessionAddress,
     TemporarySessionBinding,
+    WorkingProjectChoice,
     editable_session_message_index,
 )
 from core.sessions.errors import SessionNotFoundError
@@ -67,13 +69,17 @@ class _NewSession:
     """The Session a Run start creates once its target validated.
 
     ``session_id`` is the id it gets (the store allocates one when ``None``),
-    ``agent_overrides`` are stored with it in the creating write, and ``actor``
-    names who asked for it (see ``ChatSessionManager.create``).
+    ``agent_overrides`` are stored with it in the creating write, ``actor``
+    names who asked for it (see ``ChatSessionManager.create``), and
+    ``working_project_id`` is the working Project a Session of an Identity
+    Agent starts in (a Project id, ``None`` for the Workspace, or the Agent's
+    default Project).
     """
 
     session_id: str | None = None
     agent_overrides: AgentOverrides = field(default_factory=AgentOverrides)
     actor: str | None = None
+    working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT
 
 
 class ChatLoop:
@@ -265,6 +271,7 @@ class ChatLoop:
         *,
         session_id: str | None = None,
         agent_overrides: AgentOverrides | None = None,
+        working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
         actor: str | None = None,
         internal: bool = False,
         input_origin: InputOrigin | None = None,
@@ -289,8 +296,12 @@ class ChatLoop:
         removes the Session again. ``session_id`` is the id the new Session gets
         (an existing Session at that id fails the start); ``actor`` names who
         asked for the Session (``rpc``, ``command``) and makes its creation log
-        at INFO. The server-facing :meth:`start_run` contract still requires an
-        explicitly existing Session.
+        at INFO. A Session of an Identity Agent works in ``working_project_id``
+        for its whole life: a Project id (it must exist), ``None`` for the
+        Agent's Workspace, or by default the Agent's default Project; a Project
+        Agent's Session works in its address Project and takes no other. The
+        server-facing :meth:`start_run` contract still requires an explicitly
+        existing Session.
         """
         return await self._start_run(
             agent_id,
@@ -301,6 +312,7 @@ class ChatLoop:
                 session_id=session_id,
                 agent_overrides=agent_overrides or AgentOverrides(),
                 actor=actor,
+                working_project_id=working_project_id,
             ),
             internal=internal,
             input_origin=input_origin,
@@ -341,10 +353,11 @@ class ChatLoop:
         """
         _validate_run_tool_iteration_limit(max_tool_iterations)
         await self._reject_owner_managed_session(project_id, agent_id, session_id)
-        agent = await self._dependencies.agent_resolver.resolve_agent_async(
-            project_id, agent_id, session_id=session_id
+        resolver = self._dependencies.agent_resolver
+        agent = await resolver.resolve_agent_async(project_id, agent_id, session_id=session_id)
+        working_project_id = await resolver.resolve_working_project_async(
+            project_id, agent, session_id=session_id
         )
-        working_project_id = resolve_working_project_id(project_id, agent)
         provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
         _ensure_provider_exists(self._dependencies.providers, provider_id)
         session = await self._get_session_async(
@@ -418,10 +431,11 @@ class ChatLoop:
         if compaction_service is None:
             raise CompactionUnavailableError("Compaction is not available.")
 
-        agent = await self._dependencies.agent_resolver.resolve_agent_async(
-            project_id, agent_id, session_id=session_id
+        resolver = self._dependencies.agent_resolver
+        agent = await resolver.resolve_agent_async(project_id, agent_id, session_id=session_id)
+        working_project_id = await resolver.resolve_working_project_async(
+            project_id, agent, session_id=session_id
         )
-        working_project_id = resolve_working_project_id(project_id, agent)
         session = await self._get_session_async(
             agent_id, session_id, create_missing=False, project_id=project_id
         )
@@ -497,11 +511,18 @@ class ChatLoop:
         resolver = self._dependencies.agent_resolver
         if new_session is None:
             agent = await resolver.resolve_agent_async(project_id, agent_id, session_id=session_id)
+            # A Session that does not exist yet (``create_missing``) starts in the
+            # Agent's default Project.
+            working_project_id = await resolver.resolve_working_project_async(
+                project_id, agent, session_id=session_id
+            )
         else:
             agent = await resolver.resolve_agent_async(
                 project_id, agent_id, new_session_overrides=new_session.agent_overrides
             )
-        working_project_id = resolve_working_project_id(project_id, agent)
+            working_project_id = await resolver.resolve_working_project_async(
+                project_id, agent, requested=new_session.working_project_id
+            )
         provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
         _ensure_provider_exists(self._dependencies.providers, provider_id)
         if new_session is not None:
@@ -511,10 +532,15 @@ class ChatLoop:
                 project_id=project_id,
                 actor=new_session.actor,
                 metadata=new_session.agent_overrides.session_metadata() or None,
+                working_project_id=_stored_working_project(project_id, working_project_id),
             )
         else:
             session = await self._get_session_async(
-                agent_id, session_id, create_missing=create_missing, project_id=project_id
+                agent_id,
+                session_id,
+                create_missing=create_missing,
+                project_id=project_id,
+                working_project_id=_stored_working_project(project_id, working_project_id),
             )
         if edit_message_id is not None:
             if internal or not isinstance(content, str):
@@ -642,7 +668,9 @@ class ChatLoop:
                 address.project_id, address.agent_id, session_id=address.session_id
             )
         )
-        working_project_id = resolve_working_project_id(address.project_id, agent)
+        working_project_id = await self._dependencies.agent_resolver.resolve_working_project_async(
+            address.project_id, agent, session_id=address.session_id
+        )
         provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
         _ensure_provider_exists(self._dependencies.providers, provider_id)
         await self._get_session_async(
@@ -691,7 +719,9 @@ class ChatLoop:
         *,
         create_missing: bool,
         project_id: str | None = None,
+        working_project_id: str | None = None,
     ) -> ChatSession:
+        """Return the Session, creating a missing one in *working_project_id* on request."""
         session_manager = self._dependencies.sessions
         if session_id is None:
             raise ChatSessionError("session id is required")
@@ -706,6 +736,7 @@ class ChatLoop:
                 agent_id,
                 session_id=session_id,
                 project_id=project_id,
+                working_project_id=working_project_id,
             )
 
     async def preview_tool_definitions(
@@ -715,6 +746,11 @@ class ChatLoop:
         return await self._requests.preview_tool_definitions(
             agent, session_tool_grants=session_tool_grants
         )
+
+
+def _stored_working_project(project_id: str | None, working_project_id: str | None) -> str | None:
+    """Return the working Project a new Session stores: none for a Project Session."""
+    return None if project_id is not None else working_project_id
 
 
 def _validate_run_tool_iteration_limit(max_tool_iterations: int | None) -> None:

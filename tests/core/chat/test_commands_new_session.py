@@ -26,7 +26,12 @@ from core.chat import (
 from core.chat.messages import ChatMessage
 from core.projects import AgentOverrides, ModelConfigurationError
 from core.runs import ChatRunManager
-from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import (
+    AGENT_DEFAULT_PROJECT,
+    ChatSessionManager,
+    SessionAddress,
+    WorkingProjectChoice,
+)
 from tests.core.chat.commands_test_support import _make_agent, _prepared
 
 UNUSABLE_MODEL = "openai/unusable"
@@ -53,6 +58,18 @@ class _Resolver:
             )
         return replace(self.agent, **overrides.agent_changes())
 
+    async def resolve_working_project_async(
+        self,
+        project_id: str | None,
+        agent: Any,
+        *,
+        requested: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
+    ) -> str | None:
+        # ``coder`` has no default Project; every requested Project exists.
+        if project_id is not None:
+            return project_id
+        return None if requested is AGENT_DEFAULT_PROJECT else cast("str | None", requested)
+
     def effective_config(
         self, project_id: str | None, agent_id: str, *, session_id: str | None = None
     ) -> dict[str, dict[str, Any]]:
@@ -77,12 +94,15 @@ def dispatcher(sessions: ChatSessionManager) -> CommandDispatcher:
     )
 
 
-def _context(**overrides: Any) -> NewSessionCommandContext:
+def _context(
+    working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT, **overrides: Any
+) -> NewSessionCommandContext:
     return NewSessionCommandContext(
         agent_id="coder",
         project_id=None,
         reply_surface=ReplySurface.webui(),
         agent_overrides=AgentOverrides(**overrides),
+        working_project_id=working_project_id,
     )
 
 
@@ -156,15 +176,19 @@ async def test_a_creating_command_keeps_its_session_only_when_it_used_it(
     )
 
     result = await dispatcher.execute_for_new_session(
-        _prepared(dispatcher, "/workflow"), _context(model="openai/gpt-mini")
+        _prepared(dispatcher, "/workflow"),
+        _context(working_project_id="vbot", model="openai/gpt-mini"),
     )
 
-    # The handler ran in a Session created with the new Session's overrides.
+    # The handler ran in a Session created with the new Session's overrides and
+    # working Project.
     [session_id] = observed
     if uses_session:
         assert result.session_id == session_id
         address = SessionAddress(None, "coder", session_id)
-        assert sessions.get_metadata(address)["agent_overrides"] == {"model": "openai/gpt-mini"}
+        metadata = sessions.get_metadata(address)
+        assert metadata["agent_overrides"] == {"model": "openai/gpt-mini"}
+        assert metadata["working_project_id"] == "vbot"
         assert result.outcome.resource_changes[0].kind == "sessions"
         assert result.outcome.resource_changes[0].scope == {
             "agent_id": "coder",

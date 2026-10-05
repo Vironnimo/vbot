@@ -159,6 +159,7 @@ class SessionStore:
         generate_id: bool = False,
         run_kind: str | None = None,
         metadata: JsonObject | None = None,
+        working_project_id: str | None = None,
     ) -> SessionAddress:
         return self._execute_write(
             lambda connection: _store_mutations.create(
@@ -168,14 +169,24 @@ class SessionStore:
                 generate_id=generate_id,
                 run_kind=run_kind,
                 metadata=metadata,
+                working_project_id=working_project_id,
             )
         )
 
-    def ensure_live(self, address: SessionAddress) -> None:
-        """Create a missing live Session; an existing one costs only a read."""
+    def ensure_live(
+        self, address: SessionAddress, new_working_project: Callable[[], str | None] | None = None
+    ) -> None:
+        """Create a missing live Session; an existing one costs only a read.
+
+        *new_working_project* returns the working Project a created Session
+        starts in; it runs only when the Session is missing.
+        """
         if self._read(lambda connection: _store_values._find_live(connection, address)) is not None:
             return
-        self._execute_write(lambda connection: _store_mutations.ensure_live(connection, address))
+        working_project_id = None if new_working_project is None else new_working_project()
+        self._execute_write(
+            lambda connection: _store_mutations.ensure_live(connection, address, working_project_id)
+        )
 
     def exists(self, address: SessionAddress) -> bool:
         return self._read(lambda connection: _store_queries.exists(connection, address))
@@ -252,6 +263,15 @@ class SessionStore:
             )
         )
 
+    def retarget_working_project(
+        self, old_project_id: str, new_project_id: str, archived_at: str
+    ) -> int:
+        return self._execute_write(
+            lambda connection: _store_mutations.retarget_working_project(
+                connection, old_project_id, new_project_id, archived_at
+            )
+        )
+
     def retarget_metadata_value(
         self, agent_id: str, key: str, old_value: str, new_value: str
     ) -> int:
@@ -305,20 +325,32 @@ class SessionStore:
         mutation: Callable[[JsonObject], None],
         *,
         create_missing: bool,
+        new_working_project: Callable[[], str | None] | None = None,
     ) -> tuple[JsonObject, JsonObject]:
-        """Try the mutation on a read snapshot; enter the writer only for a real change."""
+        """Try the mutation on a read snapshot; enter the writer only for a real change.
+
+        *new_working_project* returns the working Project a Session this creates
+        starts in; it runs only when the Session is missing.
+        """
         state = self._read(
             lambda connection: _store_values._find_live_metadata_row(connection, address)
         )
+        working_project_id = None
         if state is not None:
             previous, updated, storage = _store_mutations.metadata_change(state, mutation)
             if storage is None:
                 return previous, updated
         elif not create_missing:
             raise SessionNotFoundError(f"session does not exist: {address.session_id}")
+        elif new_working_project is not None:
+            working_project_id = new_working_project()
         return self._execute_write(
             lambda connection: _store_mutations.ensure_metadata(
-                connection, address, mutation, create_missing=create_missing
+                connection,
+                address,
+                mutation,
+                create_missing=create_missing,
+                working_project_id=working_project_id,
             )
         )
 

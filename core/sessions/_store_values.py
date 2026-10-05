@@ -40,7 +40,7 @@ _SESSION_STATE_COLUMNS = """
     s.list_visibility_mask, s.latest_completion_run_key, s.latest_completion_status,
     s.latest_completion_at, s.read_completion_run_key, s.prompt_cache_affinity_id,
     s.seen_skills_initialized, s.compaction_policy_json, s.metadata_json,
-    s.agent_overrides_json
+    s.agent_overrides_json, s.working_project_id
 """
 # Derived facade values: the direct fork source's address and the Run kinds.
 _DERIVED_METADATA_COLUMNS = """
@@ -85,6 +85,7 @@ _SESSION_LIST_COLUMNS = f"""
     s.forked_at,
     s.fork_point_seq,
     s.compaction_policy_json,
+    s.working_project_id,
     {_COMPLETION_ACTIVITY_COLUMNS},
     {_DERIVED_METADATA_COLUMNS}
 """
@@ -144,9 +145,12 @@ _SUBAGENT_FLAG_KEY = "is_subagent_session"
 _SUBAGENT_PARENT_KEY = "subagent_parent"
 _COMPACTION_POLICY_KEY = "compaction_policy"
 _AGENT_OVERRIDES_KEY = "agent_overrides"
-# Facade keys derived from relations; a write may repeat but never change them.
+# Facade keys derived from relations or fixed at creation; a write may repeat
+# but never change them.
 _FORK_SOURCE_KEY = "fork_source"
 _RUN_KINDS_KEY = "run_kinds"
+_WORKING_PROJECT_KEY = "working_project_id"
+_MANAGED_KEYS = (_FORK_SOURCE_KEY, _RUN_KINDS_KEY, _WORKING_PROJECT_KEY)
 # Subagent parent fields in facade order, each with its column.
 _SUBAGENT_PARENT_FIELDS = (
     ("id", "subagent_parent_id"),
@@ -272,14 +276,14 @@ def _subagent_parent_columns(value: Any) -> tuple[Any, ...]:
 def _session_metadata_storage(metadata: JsonObject, derived: JsonObject) -> _MetadataStorage:
     """Split the metadata facade into its columns and the open metadata object.
 
-    *derived* holds the current relation-backed values (``fork_source`` and
-    ``run_kinds``); a write may repeat them but not change them. Prompt state
-    keys are rejected: they have dedicated Session APIs.
+    *derived* holds the current managed values (``fork_source``, ``run_kinds``
+    and ``working_project_id``); a write may repeat them but not change them.
+    Prompt state keys are rejected: they have dedicated Session APIs.
     """
     if not isinstance(metadata, dict):
         raise ChatSessionError("session metadata must be an object")
     residual = dict(metadata)
-    for key in (_FORK_SOURCE_KEY, _RUN_KINDS_KEY):
+    for key in _MANAGED_KEYS:
         if key in residual and residual.pop(key) != derived.get(key):
             raise ChatSessionError(f"Session metadata {key} is managed by Sessions")
     reserved = sorted(key for key in residual if _is_reserved_prompt_key(key))
@@ -329,9 +333,20 @@ def _session_metadata_storage(metadata: JsonObject, derived: JsonObject) -> _Met
     )
 
 
+def _working_project_from_state(state: sqlite3.Row) -> str | None:
+    """Return the Project one Session row works in: its address Project, else its own."""
+    if state["project_id"]:
+        return str(state["project_id"])
+    value = state["working_project_id"]
+    return None if value is None else str(value)
+
+
 def _derived_metadata_from_state(state: sqlite3.Row) -> JsonObject:
-    """Return the relation-backed facade values of one metadata row."""
+    """Return the managed facade values of one metadata row."""
     derived: JsonObject = {}
+    working_project_id = _working_project_from_state(state)
+    if working_project_id is not None:
+        derived[_WORKING_PROJECT_KEY] = working_project_id
     if state["fork_parent_session_id"] is not None:
         derived[_FORK_SOURCE_KEY] = {
             "agent_id": str(state["fork_parent_agent_id"]),

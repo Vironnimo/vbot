@@ -5,6 +5,7 @@ from __future__ import annotations
 import atexit
 import shutil
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,7 +20,7 @@ from core.chat import (
 from core.chat._run_state import RequestBuildInputs
 from core.database import write_bootstrap_marker
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
-from core.projects import AgentOverrides, AgentResolutionError, ConfigAgent
+from core.projects import AgentOverrides, AgentResolutionError, AgentResolver, ConfigAgent
 from core.providers.accounts import ConnectionRef
 from core.runs import PROVIDER_REQUEST_STATUS_EVENT, ChatRunManager, Run
 from core.sessions import ChatSession, SessionAddress, SessionNotFoundError
@@ -201,6 +202,9 @@ class StubProjects:
     def get(self, project_id: str) -> StubProject:
         return self._projects[project_id]
 
+    def exists(self, project_id: str) -> bool:
+        return project_id in self._projects
+
     def list(self) -> list[StubProject]:
         return [self._projects[project_id] for project_id in sorted(self._projects)]
 
@@ -217,7 +221,8 @@ class StubAgentResolver:
     that fell through. Session Agent overrides a test sets live in memory, keyed
     by Session address; without them, the overrides stored on the Session (as a
     new Session stores them) apply. Either applies whenever a resolution names
-    its Session.
+    its Session. The working Project of a Run is the real resolver's, over the
+    Projects *projects* returns.
     """
 
     def __init__(
@@ -226,9 +231,11 @@ class StubAgentResolver:
         project_agents: dict[tuple[str, str], StubAgent | ConfigAgent] | None = None,
         unresolvable: set[tuple[str, str]] | None = None,
         sessions: ChatSessionManager | None = None,
+        projects: Callable[[], Any] | None = None,
     ) -> None:
         self._agents = agents
         self._sessions = sessions
+        self._projects = projects or (lambda: StubProjects({}))
         self._project_agents = dict(project_agents or {})
         self._unresolvable = set(unresolvable or set())
         self._session_overrides: dict[SessionAddress, dict[str, Any]] = {}
@@ -319,6 +326,36 @@ class StubAgentResolver:
     def _with_overrides(self, agent: Any, address: SessionAddress) -> Any:
         overrides = self.session_overrides(address)
         return agent if overrides.is_empty else replace(agent, **overrides.agent_changes())
+
+    def _working_projects(self) -> AgentResolver:
+        """The real resolver's working-Project policy over this stub's Projects and Sessions."""
+        return AgentResolver(
+            cast(Any, self._agents),
+            cast(Any, self._projects()),
+            cast(Any, None),
+            dict,
+            sessions=cast(Any, self._sessions),
+        )
+
+    def resolve_working_project(
+        self, project_id: str | None, agent: Any, **options: Any
+    ) -> str | None:
+        return self._working_projects().resolve_working_project(project_id, agent, **options)
+
+    async def resolve_working_project_async(
+        self, project_id: str | None, agent: Any, **options: Any
+    ) -> str | None:
+        return await self._working_projects().resolve_working_project_async(
+            project_id, agent, **options
+        )
+
+    def new_session_working_project(
+        self, project_id: str | None, agent: Any, *options: Any
+    ) -> str | None:
+        return self._working_projects().new_session_working_project(project_id, agent, *options)
+
+    async def session_working_project_async(self, address: SessionAddress) -> str | None:
+        return await self._working_projects().session_working_project_async(address)
 
 
 class StubProviders:
@@ -640,7 +677,11 @@ class StubRuntime:
         self.agents = StubAgents(agent)
         self.chat_sessions = ChatSessionManager(data_dir)
         self.agent_resolver = StubAgentResolver(
-            self.agents, project_agents, unresolvable_agents, sessions=self.chat_sessions
+            self.agents,
+            project_agents,
+            unresolvable_agents,
+            sessions=self.chat_sessions,
+            projects=lambda: self.projects,
         )
         self.projects = projects if projects is not None else StubProjects({})
         # Real guard instance so tests can assert auto-injected prompt files are

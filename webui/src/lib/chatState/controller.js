@@ -980,7 +980,8 @@ export function createChatController({
     editMessage,
     handleServerEvents,
     startFromServerState,
-    listFiles: (agentAddress) => operations.listFiles(agentAddress),
+    listFiles: (agentAddress, sessionId) =>
+      operations.listFiles(agentAddress, sessionId),
     getSession: (...args) => operations.getSession(...args),
     getSessionChangeStats: (...args) =>
       operations.getSessionChangeStats(...args),

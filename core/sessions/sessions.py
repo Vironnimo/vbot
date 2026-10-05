@@ -21,6 +21,7 @@ from core.sessions._metadata import (
     _validate_session_id,
 )
 from core.sessions._types import (
+    AGENT_DEFAULT_PROJECT,
     SESSION_AUTO_TITLE_INITIALIZED_KEY,
     SESSION_AUTO_TITLE_KEY,
     SESSION_TITLE_KEY,
@@ -46,6 +47,7 @@ from core.sessions._types import (
     SessionSearchResult,
     TemporarySessionBinding,
     ToolResultFacts,
+    WorkingProjectChoice,
 )
 from core.sessions.archive_ledger import SessionArchiveLedger
 from core.sessions.errors import FtsHealth, SessionNotFoundError
@@ -88,6 +90,7 @@ class ChatSessionManager:
         self._completion_read_callbacks: list[Callable[[SessionAddress, str], None]] = []
         self._write_locks: dict[SessionAddress, _SessionWriteLock] = {}
         self._write_locks_guard = threading.Lock()
+        self._agent_default_project: Callable[[str], str | None] | None = None
 
     def close(self) -> None:
         with self._write_locks_guard:
@@ -156,6 +159,34 @@ class ChatSessionManager:
             else None
         )
 
+    def set_agent_default_project(self, provider: Callable[[str], str | None] | None) -> None:
+        """Name where a new Session of an Identity Agent works when its creator names nothing.
+
+        *provider* maps an Identity Agent id to its default Project (``None``:
+        its Workspace) and must not raise. Without one, such Sessions work in
+        the Workspace.
+        """
+        self._agent_default_project = provider
+
+    def _new_working_project(
+        self, address: SessionAddress, choice: WorkingProjectChoice
+    ) -> str | None:
+        """Return the working Project a new Session at *address* stores for *choice*.
+
+        A Project Session works in its address Project and stores none; the
+        Agent's default Project is read only for a Session of an Identity Agent.
+        """
+        if address.project_id is not None:
+            if choice is not AGENT_DEFAULT_PROJECT and choice is not None:
+                raise ChatSessionError("A Project Session works in its own Project")
+            return None
+        if choice is AGENT_DEFAULT_PROJECT:
+            provider = self._agent_default_project
+            return None if provider is None else provider(address.agent_id)
+        if choice is not None and not is_valid_project_id(choice):
+            raise ChatSessionError("invalid working project id")
+        return choice
+
     def write_lock(self, address: SessionAddress) -> _SessionWriteLock:
         _validate_session_id(address.session_id)
         with self._write_locks_guard:
@@ -172,6 +203,7 @@ class ChatSessionManager:
         actor: str | None = None,
         run_kind: RunKind | None = None,
         metadata: JsonObject | None = None,
+        working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
     ) -> ChatSession:
         """Create a Session.
 
@@ -181,6 +213,12 @@ class ChatSessionManager:
         ``run_kind`` labels the new Session and ``metadata`` sets metadata facade
         values (a title, open keys) in the same write, so no reader ever sees the
         Session without them (a Librarian pass Session and its binding).
+
+        ``working_project_id`` is the Project a Session of an Identity Agent works
+        in for its whole life: a Project id, ``None`` for the Agent's Workspace, or
+        by default the Agent's default Project (:meth:`set_agent_default_project`).
+        The caller checks that a named Project exists. A Project Session works in
+        its address Project and accepts no other.
         """
         _validate_agent_id(agent_id)
         if project_id is not None and not is_valid_project_id(project_id):
@@ -189,18 +227,22 @@ class ChatSessionManager:
             _validate_session_id(session_id)
         if run_kind is not None and not isinstance(run_kind, RunKind):
             raise ChatSessionError("run kind must be a RunKind")
+        requested = SessionAddress(project_id, agent_id, session_id or "")
+        working_project = self._new_working_project(requested, working_project_id)
         address = self._store.create(
-            SessionAddress(project_id, agent_id, session_id or ""),
+            requested,
             generate_id=session_id is None,
             run_kind=None if run_kind is None else run_kind.value,
             metadata=metadata,
+            working_project_id=working_project,
         )
         _LOGGER.log(
             logging.INFO if actor is not None else logging.DEBUG,
-            "Session created (agent=%s%s session=%s actor=%s)",
+            "Session created (agent=%s%s session=%s%s actor=%s)",
             address.agent_id,
             f" project={address.project_id}" if address.project_id else "",
             address.session_id,
+            f" working_project={working_project}" if working_project else "",
             actor or "internal",
         )
         return ChatSession(self._store, address)
@@ -214,6 +256,7 @@ class ChatSessionManager:
         actor: str | None = None,
         run_kind: RunKind | None = None,
         metadata: JsonObject | None = None,
+        working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
     ) -> ChatSession:
         return await self._store.run_async(
             lambda: self.create(
@@ -223,6 +266,7 @@ class ChatSessionManager:
                 actor=actor,
                 run_kind=run_kind,
                 metadata=metadata,
+                working_project_id=working_project_id,
             )
         )
 
@@ -252,9 +296,14 @@ class ChatSessionManager:
         return await self._store.run_async(self.get, address)
 
     def get_or_create(self, address: SessionAddress) -> ChatSession:
-        """Return the live Session, creating it when missing (existing ones cost a read)."""
+        """Return the live Session, creating it when missing (existing ones cost a read).
+
+        A created Session of an Identity Agent works in the Agent's default Project.
+        """
         _validate_creatable_address(address)
-        self._store.ensure_live(address)
+        self._store.ensure_live(
+            address, lambda: self._new_working_project(address, AGENT_DEFAULT_PROJECT)
+        )
         return ChatSession(self._store, address)
 
     def get_metadata(self, address: SessionAddress) -> JsonObject:
@@ -270,10 +319,16 @@ class ChatSessionManager:
         """Re-assert metadata, writing only a real change (or a ``create_missing`` Session).
 
         The mutation may run twice, so it must be deterministic and side-effect free.
+        A created Session of an Identity Agent works in the Agent's default Project.
         """
         if create_missing:
             _validate_creatable_address(address)
-        return self._store.ensure_metadata(address, mutation, create_missing=create_missing)
+        return self._store.ensure_metadata(
+            address,
+            mutation,
+            create_missing=create_missing,
+            new_working_project=lambda: self._new_working_project(address, AGENT_DEFAULT_PROJECT),
+        )
 
     async def get_metadata_async(self, address: SessionAddress) -> JsonObject:
         return await self._store.run_async(self.get_metadata, address)
@@ -340,7 +395,10 @@ class ChatSessionManager:
         self._store.recover_interrupted_runs()
 
     async def start_run(self, run: Run) -> None:
-        """Admit *run* with its Run kind and execution owner in one transaction."""
+        """Admit *run* with its Run kind and execution owner in one transaction.
+
+        A Session the admission creates works in the Run's working Project.
+        """
         address = SessionAddress(
             project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
         )
@@ -353,6 +411,7 @@ class ChatSessionManager:
             owner=run.execution_owner,
             input_id=run.execution_input_id,
             expected_generation_id=run.expected_session_generation_id,
+            working_project_id=None if run.project_id is not None else run.working_project_id,
         )
         await self._store.run_async(self._store.admit_run, address, admission)
 
@@ -849,11 +908,34 @@ class ChatSessionManager:
         """
         return self._store.retarget_metadata_value(agent_id, key, old_value, new_value)
 
+    def retarget_working_project(
+        self, old_project_id: str, new_project_id: str, archived_at: str
+    ) -> int:
+        """Let the Sessions of a Project restored under a new id work in it again.
+
+        Every Session, live or archived, that was created before the Project's
+        archive at ``archived_at`` and works in ``old_project_id`` now works in
+        ``new_project_id``; a Session created later works in another Project that
+        took the old id and stays. Returns how many changed; a repeated call
+        changes nothing more.
+        """
+        changed = self._store.retarget_working_project(old_project_id, new_project_id, archived_at)
+        _LOGGER.debug(
+            "Retargeted working Project of Sessions (project=%s new_project=%s count=%d)",
+            old_project_id,
+            new_project_id,
+            changed,
+        )
+        return changed
+
     async def move(self, source: SessionAddress, target: SessionAddress) -> ChatSession:
         """Give a Session a new address; history, forks and relations stay attached.
 
         A move into another scope leaves the Agent-bound prompt state behind and
-        starts a new prompt-cache affinity.
+        starts a new prompt-cache affinity. The Session keeps working where it
+        worked: moved into an Identity scope it keeps its working Project (a
+        Project Session takes its address Project along), and moved into a
+        Project scope it works in that Project.
         """
         _validate_session_id(source.session_id)
         _validate_creatable_address(target)
@@ -876,7 +958,8 @@ class ChatSessionManager:
         without copying it. It belongs to ``target_agent_id`` (default: the
         source's Agent) in ``target_project_id`` (``None``: outside any
         Project). Channel, Sub-Agent and reflection bindings stay behind;
-        ``title`` and ``run_kind`` label the fork instead.
+        ``title`` and ``run_kind`` label the fork instead. The fork works where
+        the source works, by the scope rules of :meth:`move`.
         """
         _validate_session_id(source.session_id)
         agent_id = target_agent_id or source.agent_id

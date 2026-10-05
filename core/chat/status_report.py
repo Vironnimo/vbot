@@ -249,12 +249,13 @@ def resolve_status_project_label(
     projects: ProjectStore | None,
     project_id: str | None,
 ) -> str | None:
-    """Return a display label for the session's project, or ``None`` for identity.
+    """Return a display label for the Project a Session works in, ``None`` for none.
 
-    An identity session (``project_id is None``) has no project, so status renders
-    the placeholder. A project session resolves the project's display name as
-    ``"<display name> (<id>)"``; it degrades to the bare id when the store is
-    absent or the project can't be loaded — the stable id is still informative.
+    A Session working in its Agent's Workspace (``project_id is None``) has no
+    Project, so status renders the placeholder. A Project resolves its display
+    name as ``"<display name> (<id>)"``; it degrades to the bare id when the
+    store is absent or the Project can't be loaded (a removed Project) — the
+    stable id is still informative.
     """
     if project_id is None:
         return None
@@ -453,8 +454,8 @@ def build_status_text(
     ``sampling_status`` is the resolved temperature and top_p with their sources
     (see :func:`resolve_status_sampling`); without it the lines degrade to the
     configured agent values alone.
-    ``project_label`` names the session's project (``None`` for an identity
-    session, rendered as the placeholder).
+    ``project_label`` names the Project the Session works in (``None`` for a
+    Session working in its Agent's Workspace, rendered as the placeholder).
     ``wire_profile`` describes the Connection the Model resolves to (see
     :class:`StatusWireProfile`), ``None`` rendering the placeholder when nothing
     resolves; learned wire facts get a line only when any exist. Left out, the

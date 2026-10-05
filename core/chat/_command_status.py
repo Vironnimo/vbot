@@ -36,7 +36,11 @@ from core.chat.status_report import (
 )
 from core.projects import AgentOverrides, format_agent_address
 from core.runs import ChatRunManager
-from core.sessions import SessionAddress
+from core.sessions import (
+    AGENT_DEFAULT_PROJECT,
+    SESSION_WORKING_PROJECT_META_KEY,
+    SessionAddress,
+)
 from core.settings.settings import effective_timezone_name
 
 if TYPE_CHECKING:
@@ -257,18 +261,16 @@ async def _execute_status(
         agent_resolver, context.agent_id, context.project_id, session_id=context.session_id
     )
     status_session: list[ChatMessage] | StatusSessionFacts = []
+    # The Project the Session works in; a Project Session works in its own.
+    working_project_id = context.project_id
     try:
         if sessions is not None:
-            session = await _command_session_io(
-                sessions,
-                "get_async",
-                "get",
-                SessionAddress(
-                    project_id=context.project_id,
-                    agent_id=context.agent_id,
-                    session_id=context.session_id,
-                ),
+            address = SessionAddress(
+                project_id=context.project_id,
+                agent_id=context.agent_id,
+                session_id=context.session_id,
             )
+            session = await _command_session_io(sessions, "get_async", "get", address)
             snapshot = await _command_session_io(
                 session,
                 "status_snapshot_async",
@@ -280,6 +282,13 @@ async def _execute_status(
                 latest_assistant_usage=snapshot.latest_assistant_usage,
                 session_usage=snapshot.session_usage,
                 cache_input_tokens=snapshot.cache_input_tokens,
+            )
+            working_project_id = await _command_session_io(
+                sessions,
+                "metadata_value_async",
+                "metadata_value",
+                address,
+                SESSION_WORKING_PROJECT_META_KEY,
             )
     except Exception as error:
         log = _LOGGER.warning if _has_exception_name(error, "ChatSessionError") else _LOGGER.error
@@ -298,7 +307,7 @@ async def _execute_status(
             context.session_id,
             context.project_id,
         ),
-        context.project_id,
+        working_project_id,
         local_context_windows_loader=local_context_windows_loader,
         models=models,
         projects=projects,
@@ -324,18 +333,28 @@ async def _execute_status_without_session(
     storage: Any | None,
     wire_profile_describer: WireProfileDescriber | None,
 ) -> CommandOutcome:
-    """``/status`` for a new Session: the Agent as its first Run would run, no History."""
+    """``/status`` for a new Session: the Agent as its first Run would run, no History.
+
+    The Project shown is the one the new Session would work in.
+    """
     agent = await _status_agent(
         agent_resolver,
         context.agent_id,
         context.project_id,
         new_session_overrides=context.agent_overrides,
     )
+    working_project_id: str | None
+    if context.project_id is not None:
+        working_project_id = context.project_id
+    elif context.working_project_id is AGENT_DEFAULT_PROJECT:
+        working_project_id = getattr(agent, "root_project_id", None)
+    else:
+        working_project_id = context.working_project_id
     return await _status_outcome(
         agent,
         [],
         StatusActivity(activity="idle", run_id=None, created_at=None, updated_at=None),
-        context.project_id,
+        working_project_id,
         local_context_windows_loader=local_context_windows_loader,
         models=models,
         projects=projects,
@@ -382,7 +401,7 @@ async def _status_outcome(
     agent: RuntimeAgent | None,
     status_session: list[ChatMessage] | StatusSessionFacts,
     activity: StatusActivity,
-    project_id: str | None,
+    working_project_id: str | None,
     *,
     local_context_windows_loader: Callable[[], Mapping[str, Any]] | None,
     models: ModelRegistry | None,
@@ -420,7 +439,7 @@ async def _status_outcome(
         model_details.display_name,
         activity,
         actual_thinking_effort=actual_thinking_effort,
-        project_label=resolve_status_project_label(projects, project_id),
+        project_label=resolve_status_project_label(projects, working_project_id),
         sampling_status=resolve_status_sampling(agent, model_details),
         timezone=_status_timezone(storage=storage),
         wire_profile=wire_profile,

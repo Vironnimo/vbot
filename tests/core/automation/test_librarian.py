@@ -330,6 +330,8 @@ async def test_consolidation_runs_the_brief_only_over_changed_candidates(
         {
             "agent_id": "librarian",
             "run_kind": RunKind.LIBRARIAN,
+            # A Librarian pass works in the Librarian's Workspace.
+            "working_project_id": None,
             "metadata": {
                 "skill_agent_id": "main",
                 "auto_title": harness.title("Main"),

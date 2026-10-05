@@ -24,9 +24,11 @@ from core.compaction import COMPACTION_POLICY_META_KEY, effective_compaction_pol
 from core.projects import AgentOverrides, AgentResolutionError, format_agent_address
 from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem, Run, RunCancelledError
 from core.sessions import (
+    AGENT_DEFAULT_PROJECT,
     ChatSession,
     SessionAddress,
     SessionChatHistorySnapshot,
+    WorkingProjectChoice,
     new_session_id,
 )
 from core.tools.shell import (
@@ -71,6 +73,7 @@ from server.rpc.validation import (
     _optional_file_mentions,
     _optional_positive_integer,
     _optional_string,
+    _optional_working_project,
     _parse_chat_content,
     _reject_unsupported,
     _required_agent_address,
@@ -624,11 +627,19 @@ async def _execute_chat_command(
     return _command_outcome_response(outcome, session_id)
 
 
+@dataclass(frozen=True)
+class _NewSessionTarget:
+    """A chat submission's new Session: its Agent overrides and working Project."""
+
+    agent_overrides: AgentOverrides
+    working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT
+
+
 async def _execute_new_session_chat_command(
     state: Any,
     agent_id: str,
     prepared: PreparedCommand,
-    agent_overrides: AgentOverrides,
+    target: _NewSessionTarget,
     *,
     project_id: str | None,
 ) -> Run | JsonObject:
@@ -641,7 +652,8 @@ async def _execute_new_session_chat_command(
                 agent_id=agent_id,
                 project_id=project_id,
                 reply_surface=WEBUI_REPLY_SURFACE,
-                agent_overrides=agent_overrides,
+                agent_overrides=target.agent_overrides,
+                working_project_id=target.working_project_id,
                 on_change=on_change,
             ),
         )
@@ -664,20 +676,30 @@ async def _expand_content_file_mentions(
     session_id: str,
     content: str | list[ContentBlock],
     file_mentions: list[str],
+    *,
+    new_session_project: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
 ) -> str | list[ContentBlock]:
     """Snapshot ``@``-mentioned files into the outgoing content, if any.
 
     Runs before Run start *and* before busy-session enqueue, so a queued message
-    carries the files as they were when the user hit send. The root resolution
-    reads the Agent (whose current-Session pointer it verifies) on the Session
-    database's pool; the file I/O runs on the Chat RPC pool.
+    carries the files as they were when the user hit send. The files resolve in
+    the Session's working Project; for a Session the submission creates, in
+    *new_session_project*. The root resolution reads the Agent (whose
+    current-Session pointer it verifies) on the Session database's pool; the
+    file I/O runs on the Chat RPC pool.
     """
     if not file_mentions:
         return content
     runtime = state.runtime
     try:
         root = await runtime.chat_sessions.run_async(
-            resolve_mention_root, runtime, agent_id, project_id
+            lambda: resolve_mention_root(
+                runtime,
+                agent_id,
+                project_id,
+                session_id=session_id,
+                working_project_id=new_session_project,
+            )
         )
         return await _CHAT_RPC_WORKERS.run(
             expand_file_mentions,
@@ -755,13 +777,13 @@ async def _submit_chat(
     """
 
     agent_id, project_id = _required_agent_address(params, "agent_id")
-    target = _chat_target(params)
+    target = _chat_target(params, project_id)
     content = _parse_chat_content(params, "content")
     input_origin = _optional_chat_input_origin(params)
     file_mentions = _optional_file_mentions(params)
 
     prepared_command = _state_command_dispatcher(state).prepare(content)
-    if isinstance(target, AgentOverrides):
+    if isinstance(target, _NewSessionTarget):
         if prepared_command is not None:
             return await _execute_new_session_chat_command(
                 state, agent_id, prepared_command, target, project_id=project_id
@@ -850,13 +872,13 @@ async def _submit_chat(
     return run
 
 
-def _chat_target(params: JsonObject) -> str | AgentOverrides:
+def _chat_target(params: JsonObject, project_id: str | None) -> str | _NewSessionTarget:
     """Read where a chat submission goes: exactly one of two fields.
 
     ``session_id`` names an existing Session and is returned. ``new_session``
     is an object asking for a new Session that the submission creates; its
-    optional ``agent_overrides`` (validated like ``session.create``'s) are
-    returned as the new Session's Agent overrides.
+    optional ``agent_overrides`` and ``working_project_id`` (validated like
+    ``session.create``'s) are what the new Session starts with.
     """
     session_id = _optional_string(params, "session_id")
     new_session = params.get("new_session")
@@ -870,11 +892,16 @@ def _chat_target(params: JsonObject) -> str | AgentOverrides:
         return session_id
     if not isinstance(new_session, dict):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.new_session must be an object")
-    _reject_unsupported(new_session, {"agent_overrides"}, "params.new_session")
+    _reject_unsupported(
+        new_session, {"agent_overrides", "working_project_id"}, "params.new_session"
+    )
     overrides = _optional_agent_overrides(
         new_session, allow_clear=False, label="params.new_session"
     )
-    return AgentOverrides(**overrides) if overrides else AgentOverrides()
+    return _NewSessionTarget(
+        AgentOverrides(**overrides) if overrides else AgentOverrides(),
+        _optional_working_project(new_session, project_id, label="params.new_session"),
+    )
 
 
 async def _start_chat_in_new_session(
@@ -882,7 +909,7 @@ async def _start_chat_in_new_session(
     agent_id: str,
     project_id: str | None,
     content: str | list[ContentBlock],
-    agent_overrides: AgentOverrides,
+    target: _NewSessionTarget,
     *,
     input_origin: ChatInputOrigin | None,
     file_mentions: list[str],
@@ -898,7 +925,13 @@ async def _start_chat_in_new_session(
     session_id = new_session_id() if file_mentions else None
     if session_id is not None:
         content = await _expand_content_file_mentions(
-            state, agent_id, project_id, session_id, content, file_mentions
+            state,
+            agent_id,
+            project_id,
+            session_id,
+            content,
+            file_mentions,
+            new_session_project=target.working_project_id,
         )
     chat_loop = _streaming_chat_loop(state) if streaming else state.chat_loop
     try:
@@ -906,7 +939,8 @@ async def _start_chat_in_new_session(
             agent_id,
             content,
             session_id=session_id,
-            agent_overrides=agent_overrides,
+            agent_overrides=target.agent_overrides,
+            working_project_id=target.working_project_id,
             actor="rpc",
             input_origin=input_origin,
             reply_surface=WEBUI_REPLY_SURFACE,

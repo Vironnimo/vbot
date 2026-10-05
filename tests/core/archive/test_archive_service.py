@@ -28,6 +28,7 @@ from core.chat import ChatSessionError
 from core.sessions import (
     ARCHIVE_KIND_FILES,
     ARCHIVE_TREE_FILES,
+    SESSION_WORKING_PROJECT_META_KEY,
     ArchiveEntry,
     ArchiveEntryFilter,
     ArchiveTree,
@@ -215,14 +216,16 @@ async def test_a_moved_legacy_workspace_returns_to_its_folder_or_the_default_one
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("target_id", [None, "vbot-2"], ids=["same-id", "new-id"])
 async def test_an_archived_project_returns_and_roots_its_agents_again(
-    world: ArchiveWorld, tmp_path: Path
+    world: ArchiveWorld, tmp_path: Path, target_id: str | None
 ) -> None:
     repo = _repo(tmp_path)
     world.projects.create("vbot", "vBot", repo)
     workspace = world.agents.create("coder", workspace=tmp_path / "identity-home").workspace
     world.agents.update("coder", root_project_id="vbot")
     build = world.sessions.create("builder", session_id="build", project_id="vbot").address
+    notes = world.sessions.create("coder", session_id="notes", working_project_id="vbot").address
 
     archived = await world.service.archive_project("vbot")
 
@@ -235,13 +238,18 @@ async def test_an_archived_project_returns_and_roots_its_agents_again(
     assert unrooted.root_project_id is None
     assert unrooted.workspace == world.agents.default_workspace("coder")
     assert repo.is_dir()
+    # An Identity Session stays where it works; it cannot run until the Project returns.
+    assert world.sessions.metadata_value(notes, SESSION_WORKING_PROJECT_META_KEY) == "vbot"
 
-    await world.service.restore(archived.entry_id)
+    await world.service.restore(archived.entry_id, target_id=target_id)
 
-    assert world.projects.get("vbot").display_name == "vBot"
-    assert world.sessions.exists(build)
+    project_id = target_id or "vbot"
+    assert world.projects.get(project_id).display_name == "vBot"
+    assert world.sessions.exists(replace(build, project_id=project_id))
     rooted = world.agents.get("coder")
-    assert (rooted.root_project_id, rooted.workspace) == ("vbot", workspace)
+    assert (rooted.root_project_id, rooted.workspace) == (project_id, workspace)
+    # Its Sessions work in the Project again, under its new id too.
+    assert world.sessions.metadata_value(notes, SESSION_WORKING_PROJECT_META_KEY) == project_id
 
 
 @pytest.mark.asyncio

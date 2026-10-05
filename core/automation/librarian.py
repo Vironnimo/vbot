@@ -1075,6 +1075,8 @@ class LibrarianService:
         session = await sessions.create_async(
             LIBRARIAN_AGENT_ID,
             run_kind=RunKind.LIBRARIAN,
+            # The Librarian maintains Skills in its own Workspace, never in a Project.
+            working_project_id=None,
             metadata={
                 SKILL_AGENT_ID_KEY: agent_id,
                 SESSION_AUTO_TITLE_KEY: title,

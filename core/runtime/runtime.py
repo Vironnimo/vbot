@@ -336,10 +336,9 @@ class Runtime:
         self._extension_change_publisher = publisher
 
     def _extension_cwd(self, project_id: str | None, agent_id: str) -> Path:
-        from core.projects.resolver import resolve_working_project_id
-
+        # No Session is at hand: the Agent works where its new Sessions would.
         agent = self.agent_resolver.resolve_agent(project_id, agent_id)
-        working_project_id = resolve_working_project_id(project_id, agent)
+        working_project_id = self.agent_resolver.new_session_working_project(project_id, agent)
         if working_project_id is not None:
             return Path(self.projects.get(working_project_id).cwd)
         return Path(agent.workspace)

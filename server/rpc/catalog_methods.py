@@ -6,19 +6,25 @@ from typing import Any
 
 from core.chat.file_mentions import list_mention_files, resolve_mention_root
 from core.projects import (
+    WorkingProjectMissingError,
     project_tool_configurability_reason,
     resolve_prompt_project,
     resolve_skill_scope,
-    resolve_working_project_id,
 )
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
+from core.sessions import AGENT_DEFAULT_PROJECT, WorkingProjectChoice
 from core.utils.workers import BoundedWorkerPool
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.payloads import _invalid_skill_response, _skill_response, _tool_response
 from server.rpc.runtime_access import _state_command_dispatcher
-from server.rpc.validation import _optional_string, _reject_unsupported, _required_agent_address
+from server.rpc.validation import (
+    _draft_working_project,
+    _optional_string,
+    _reject_unsupported,
+    _required_agent_address,
+)
 
 JsonObject = dict[str, Any]
 _COMMAND_CATALOG_OUTPUT = {
@@ -99,13 +105,22 @@ async def _list_commands(state: Any, params: JsonObject) -> JsonObject:
     # the skill suggestions to that agent's effective skills; without it the call
     # returns the global skill list (today's behavior). The optional ``session_id``
     # names that Agent's Session, whose Skills may be another Agent's (a Librarian
-    # Session). Validated as a request shape before the domain work so a malformed
-    # address is a clean client error.
-    _reject_unsupported(params, {"agent_id", "session_id"}, "chat.commands")
+    # Session) and which works in its own Project. Without a Session, the optional
+    # ``working_project_id`` names the Project a draft's new Session would work in
+    # (left out: the Agent's default Project; null: its Workspace). Validated as a
+    # request shape before the domain work so a malformed address is a clean
+    # client error.
+    _reject_unsupported(params, {"agent_id", "session_id", "working_project_id"}, "chat.commands")
     address = _required_agent_address(params, "agent_id") if "agent_id" in params else None
     session_id = _optional_string(params, "session_id")
-    if session_id is not None and address is None:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.session_id needs params.agent_id")
+    if address is None and ("session_id" in params or "working_project_id" in params):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.session_id and params.working_project_id need params.agent_id",
+        )
+    working_project_id = _draft_working_project(
+        params, None if address is None else address[1], session_id
+    )
     try:
         command_items = [
             {
@@ -119,7 +134,7 @@ async def _list_commands(state: Any, params: JsonObject) -> JsonObject:
             }
             for spec in _state_command_dispatcher(state).catalog()
         ]
-        skills = await _command_skill_suggestions(state, address, session_id)
+        skills = await _command_skill_suggestions(state, address, session_id, working_project_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     skill_items = [
@@ -134,7 +149,10 @@ async def _list_commands(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _command_skill_suggestions(
-    state: Any, address: tuple[str, str | None] | None, session_id: str | None = None
+    state: Any,
+    address: tuple[str, str | None] | None,
+    session_id: str | None = None,
+    working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
 ) -> list[Any]:
     """Return the skills offered for autocomplete, sorted by name.
 
@@ -143,11 +161,14 @@ async def _command_skill_suggestions(
     agent-aware project-scoped registry, so an agent's suggestions are exactly the
     skills it could actually activate. The scope comes from the same shared policy
     a run uses (``resolve_prompt_project`` + ``resolve_skill_scope``): a project
-    address suggests that project's pool, a rooted identity agent additionally sees
-    its home project's skills, and the private-skill layer applies to identity
-    agents only (a team slug colliding with an identity agent's id must not surface
-    that agent's private skills here). With ``session_id`` the Agent resolves as
-    that Session runs it, so a Librarian Session suggests the Skills it maintains.
+    address suggests that project's pool, an identity agent working in a Project
+    additionally sees that Project's skills, and the private-skill layer applies to
+    identity agents only (a team slug colliding with an identity agent's id must
+    not surface that agent's private skills here). With ``session_id`` the Agent
+    resolves as that Session runs it, in the Session's working Project, so a
+    Librarian Session suggests the Skills it maintains; without one the working
+    Project is *working_project_id* (a draft's new Session). A Session whose
+    Project no longer exists cannot run, so it is offered no Skills.
 
     A Chat asks whenever its Agent address changes, so nothing here runs on the
     Event Loop: the Agent resolves on its own pools, and the scope and
@@ -157,15 +178,23 @@ async def _command_skill_suggestions(
     if address is None:
         return await _CATALOG_WORKERS.run(_sorted_filtered_skills, state.runtime.skills, ["*"])
     agent_id, project_id = address
-    agent = await state.runtime.agent_resolver.resolve_agent_async(
-        project_id, agent_id, session_id=session_id
+    resolver = state.runtime.agent_resolver
+    agent = await resolver.resolve_agent_async(project_id, agent_id, session_id=session_id)
+    try:
+        working_project = await resolver.resolve_working_project_async(
+            project_id, agent, session_id=session_id, requested=working_project_id
+        )
+    except WorkingProjectMissingError:
+        return []
+    return await _CATALOG_WORKERS.run(
+        _agent_skill_suggestions, state.runtime, project_id, agent, working_project
     )
-    return await _CATALOG_WORKERS.run(_agent_skill_suggestions, state.runtime, project_id, agent)
 
 
-def _agent_skill_suggestions(runtime: Any, project_id: str | None, agent: Any) -> list[Any]:
+def _agent_skill_suggestions(
+    runtime: Any, project_id: str | None, agent: Any, working_project_id: str | None
+) -> list[Any]:
     allowed_skills = getattr(agent, "allowed_skills", ["*"])
-    working_project_id = resolve_working_project_id(project_id, agent)
     prompt_project = resolve_prompt_project(runtime.projects, working_project_id)
     skill_project_id, identity_agent_id = resolve_skill_scope(project_id, prompt_project, agent)
     return _sorted_filtered_skills(
@@ -180,19 +209,30 @@ def _sorted_filtered_skills(skill_registry: Any, allowed_skills: list[str]) -> l
 async def _list_files(state: Any, params: JsonObject) -> JsonObject:
     """List cwd files for the composer's ``@``-mention picker.
 
-    Resolves the address's working directory exactly like tool path resolution
-    (project repo for a project agent, else the agent workspace) and returns
-    gitignore-filtered relative paths. The client fetches once per picker open
-    and filters locally, so this stays a single call per interaction. The walk
-    runs in a worker thread — a large tree must not block the event loop.
+    Resolves the working directory exactly like tool path resolution (the repo
+    of the Project the Session works in, else the agent workspace) and returns
+    gitignore-filtered relative paths. The optional ``session_id`` names the
+    Session whose working Project counts; without one, the optional
+    ``working_project_id`` names a draft's (left out: the Agent's default
+    Project; null: its Workspace). The client fetches once per picker open and
+    filters locally, so this stays a single call per interaction. The walk runs
+    in a worker thread — a large tree must not block the event loop.
     """
-    _reject_unsupported(params, {"agent_id"}, "files.list")
+    _reject_unsupported(params, {"agent_id", "session_id", "working_project_id"}, "files.list")
     agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _optional_string(params, "session_id")
+    working_project_id = _draft_working_project(params, project_id, session_id)
     try:
         # Resolving the root reads the Agent, whose current-Session pointer it
-        # verifies, so it runs on the Session database's pool.
+        # verifies, and the Session, so it runs on the Session database's pool.
         root = await state.runtime.chat_sessions.run_async(
-            resolve_mention_root, state.runtime, agent_id, project_id
+            lambda: resolve_mention_root(
+                state.runtime,
+                agent_id,
+                project_id,
+                session_id=session_id,
+                working_project_id=working_project_id,
+            )
         )
         files, truncated = await _CATALOG_WORKERS.run(list_mention_files, root)
     except Exception as exc:

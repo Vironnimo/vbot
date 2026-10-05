@@ -32,7 +32,13 @@ from tests.server.rpc.chat_methods_test_support import (
     finished_run,
     resource_changes,
 )
-from tests.server.rpc_test_support import JsonObject, StubAdapter, StubRuntime, make_state
+from tests.server.rpc_test_support import (
+    JsonObject,
+    StubAdapter,
+    StubProject,
+    StubRuntime,
+    make_state,
+)
 
 WEBUI = ReplySurface.webui()
 
@@ -196,7 +202,8 @@ async def test_send_snapshots_mentioned_files_into_the_content(tmp_path: Path) -
         loop,
         projects=SimpleNamespace(get=lambda project_id: SimpleNamespace(cwd="")),
         agent_resolver=SimpleNamespace(
-            resolve_agent=lambda project_id, agent_id: SimpleNamespace(workspace=str(workspace))
+            resolve_agent=lambda project_id, agent_id: SimpleNamespace(workspace=str(workspace)),
+            resolve_working_project=lambda project_id, agent, **_: None,
         ),
         storage=SimpleNamespace(data_dir=str(tmp_path)),
         file_read_state=file_state,
@@ -528,12 +535,16 @@ async def test_new_session_is_created_with_its_first_message_and_overrides(
         ]
     )
     state = make_state(tmp_path, adapter)
+    state.runtime.projects.add(StubProject("vbot", "vBot", str(tmp_path)))
 
     response = await call(
         state,
         method,
         agent_id="coder",
-        new_session={"agent_overrides": {"model": "openai/gpt-4.1-mini"}},
+        new_session={
+            "agent_overrides": {"model": "openai/gpt-4.1-mini"},
+            "working_project_id": "vbot",
+        },
         content="Hi",
     )
 
@@ -552,6 +563,8 @@ async def test_new_session_is_created_with_its_first_message_and_overrides(
     [request] = adapter.requests or adapter.stream_requests
     assert request["model_id"] == "gpt-4.1-mini"
     assert state.runtime.agent_resolver.session_overrides(address).model == "openai/gpt-4.1-mini"
+    # The Session works in the chosen Project for its whole life.
+    assert sessions.metadata_value(address, "working_project_id") == "vbot"
     # The Identity Agent's new Session becomes current; other windows list it
     # (later changes come from the Run itself).
     assert state.runtime.agents.get("coder").current_session_id == session_id
@@ -575,6 +588,14 @@ def _agent_without_model(state: SimpleNamespace) -> JsonObject:
     return {"agent_id": "coder", "new_session": {}}
 
 
+def _unknown_working_project(_state: SimpleNamespace) -> JsonObject:
+    return {"agent_id": "coder", "new_session": {"working_project_id": "ghost"}}
+
+
+def _team_working_project(_state: SimpleNamespace) -> JsonObject:
+    return {"agent_id": "builder@vbot", "new_session": {"working_project_id": "other"}}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("arrange", "code"),
@@ -582,6 +603,8 @@ def _agent_without_model(state: SimpleNamespace) -> JsonObject:
         pytest.param(_unusable_override, "invalid_request", id="unusable-override-model"),
         pytest.param(_unknown_agent, "agent_not_found", id="unknown-agent"),
         pytest.param(_agent_without_model, "domain_error", id="no-provider"),
+        pytest.param(_unknown_working_project, "project_not_found", id="unknown-project"),
+        pytest.param(_team_working_project, "invalid_request", id="team-agent-project"),
     ],
 )
 async def test_a_refused_message_for_a_new_session_leaves_no_session(
@@ -700,7 +723,7 @@ def test_http_send_persists_the_run_and_serves_its_timeline_and_history(
 
     assert create_response.json() == {
         "ok": True,
-        "result": {"agent_id": "coder", "session_id": "session-one"},
+        "result": {"agent_id": "coder", "session_id": "session-one", "working_project_id": None},
     }
     assert send_result["message"]["content"] == "Lookup complete."
     timeline = [

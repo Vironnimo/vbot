@@ -264,8 +264,8 @@ class SystemPromptManager:
         collapses). ``project_context`` carries Project identity, Workspace, and
         auto-load files for the live ``core:working_project`` render (``None`` off a
         Project → collapses). ``working_project_context`` is the already-rendered,
-        prompt-epoch replacement used by Rooted Identity Agents and Project Config
-        Agents; when set it wins over ``project_context`` so Working Project files
+        prompt-epoch replacement used by Identity Sessions working in a Project and
+        by Project Config Agents; when set it wins over ``project_context`` so Working Project files
         are not read again. ``soul_context`` and ``memory_files_context`` are the
         matching prompt-epoch replacements for the SOUL block and the pinned-memory
         producer; when set they emit verbatim instead of re-reading the workspace
@@ -277,8 +277,8 @@ class SystemPromptManager:
         instead of re-filtering the registry. Chat replaces it after Compaction.
 
         ``agent_project_id`` is the Agent's addressing scope for contributed blocks.
-        It stays separate from ``project_context`` because a Rooted Identity Agent
-        may receive files from its working Project while remaining identity-scoped.
+        It stays separate from ``project_context`` because an Identity Session may
+        receive files from its working Project while remaining identity-scoped.
 
         ``read_paths``, when a list is passed, is filled with the resolved absolute
         path of every prompt file whose content actually reached the assembled prompt

@@ -129,7 +129,11 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
       }),
     stopAll: (agentId, sessionId) =>
       call('chat.stop_all', { agent_id: agentId, session_id: sessionId }),
-    listFiles: (agentId) => call('files.list', { agent_id: agentId }),
+    listFiles: (agentId, sessionId) =>
+      call('files.list', {
+        agent_id: agentId,
+        ...(sessionId ? { session_id: sessionId } : {}),
+      }),
     listPrompts: (params = {}) => call('prompt.list', params),
     updatePromptBlock: (params) => call('prompt.update', params),
     resetPromptBlock: (params) => call('prompt.reset', params),

@@ -1,9 +1,9 @@
 """System Prompt inputs the chat loop supplies per Session scope, and their Session pins.
 
 A Project Session hands its config-agent body and Working Project to the prompt builder,
-a Rooted Identity Agent supplies its selected Project, and any other identity Session
-supplies neither. Foreign Project Context is loaded only by the explicit ``project``
-Tool and is therefore outside Chat's request-building path.
+an Identity Session supplies the Project it works in, and an Identity Session working in
+its Agent's Workspace supplies neither. Foreign Project Context is loaded only by the
+explicit ``project`` Tool and is therefore outside Chat's request-building path.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from typing import Any, cast
 import pytest
 
 from core.chat import ChatError
+from core.projects import WorkingProjectMissingError
 from core.projects.resolver import ConfigAgent
 from core.prompts import ProjectPromptContext
 from core.tools import ToolContext, ToolRegistry, tool_success
@@ -163,24 +164,21 @@ def _identity_runtime(
     tmp_path: Path,
     repo: Path,
     *,
-    root_project_id: str | None,
+    working_project_id: str | None,
     responses: list[dict[str, Any]] | None = None,
     tools: ToolRegistry | None = None,
     allowed_tools: tuple[str, ...] = ("*",),
 ) -> tuple[Any, StubAdapter]:
-    """An identity Session s1 whose Agent workspace is the Project repository."""
-    agent = StubAgent(
-        id=AGENT_ID,
-        model=MODEL,
-        allowed_tools=list(allowed_tools),
-        workspace=repo,
-        root_project_id=root_project_id,
-    )
+    """An identity Session s1 working in *working_project_id*.
+
+    The Agent's Workspace is the Project repository.
+    """
+    agent = StubAgent(id=AGENT_ID, model=MODEL, allowed_tools=list(allowed_tools), workspace=repo)
     adapter = StubAdapter(responses or [{"content": "Hello", "tool_calls": None}])
     runtime: Any = StubRuntime(
         data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools, projects=_projects(repo)
     )
-    runtime.chat_sessions.create(AGENT_ID, session_id="s1")
+    runtime.chat_sessions.create(AGENT_ID, session_id="s1", working_project_id=working_project_id)
     return runtime, adapter
 
 
@@ -195,7 +193,7 @@ def _system_message(adapter: StubAdapter, request: int = 0) -> str:
     ("scope", "body", "working_project", "skill_pool", "personal_pins"),
     [
         ("project", BODY, True, (PROJECT_ID, None), False),
-        ("rooted-identity", "", True, (PROJECT_ID, AGENT_ID), True),
+        ("identity-in-a-project", "", True, (PROJECT_ID, AGENT_ID), True),
         # Sharing the repository path does not select a Project.
         ("identity", "", False, (None, AGENT_ID), True),
     ],
@@ -215,8 +213,8 @@ async def test_session_scope_selects_body_working_project_skills_and_pins(
     if scope == "project":
         runtime, adapter = _project_runtime(tmp_path, repo)
     else:
-        root_project_id = PROJECT_ID if scope == "rooted-identity" else None
-        runtime, adapter = _identity_runtime(tmp_path, repo, root_project_id=root_project_id)
+        working_project_id = PROJECT_ID if scope == "identity-in-a-project" else None
+        runtime, adapter = _identity_runtime(tmp_path, repo, working_project_id=working_project_id)
 
     await build_chat_loop(runtime).send(AGENT_ID, "Hi", session_id="s1", project_id=project_id)
 
@@ -474,7 +472,7 @@ async def test_config_agent_session_pins_body_and_working_project_across_runs(
 
 
 @pytest.mark.asyncio
-async def test_rooted_project_context_stays_pinned_across_project_tool_call(
+async def test_working_project_context_stays_pinned_across_project_tool_call(
     tmp_path: Path,
 ) -> None:
     from core.prompts.pinned_context import PINNED_WORKING_PROJECT_CONTEXT_SLOT
@@ -501,7 +499,7 @@ async def test_rooted_project_context_stays_pinned_across_project_tool_call(
     runtime, adapter = _identity_runtime(
         tmp_path,
         repo,
-        root_project_id=PROJECT_ID,
+        working_project_id=PROJECT_ID,
         responses=[
             {"content": None, "tool_calls": [call]},
             {"content": "Done", "tool_calls": None},
@@ -524,12 +522,12 @@ async def test_rooted_project_context_stays_pinned_across_project_tool_call(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("roots", [("alpha", "beta"), ("alpha", None, "beta")])
-async def test_rerooting_replaces_project_dependent_pins(
-    tmp_path: Path, roots: tuple[str | None, ...]
+async def test_a_session_keeps_its_working_project_when_the_default_changes(
+    tmp_path: Path,
 ) -> None:
-    # The working Project is re-resolved per Run: re-rooting A->B (directly or via
-    # an unrooted Run) must never keep showing A's Working Project or Skill catalog.
+    # The working Project is fixed when a Session is created: a later change of the
+    # Agent's default Project starts new Sessions in the new Project but never moves
+    # an existing Session, its Working Project block or its Skill catalog.
     from dataclasses import replace
 
     from core.prompts.pinned_context import (
@@ -548,38 +546,41 @@ async def test_rerooting_replaces_project_dependent_pins(
             auto_load=["AGENTS.md"],
             display_name=project_id.title(),
         )
-    agent = StubAgent(id="coder", model=MODEL, allowed_tools=["*"], workspace=tmp_path / "ws")
-    adapter = StubAdapter([{"content": "Hello", "tool_calls": None} for _ in roots])
+    agent = StubAgent(
+        id="coder",
+        model=MODEL,
+        allowed_tools=["*"],
+        workspace=tmp_path / "ws",
+        root_project_id="alpha",
+    )
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None} for _ in range(3)])
     runtime: Any = StubRuntime(
         data_dir=tmp_path, agent=agent, adapter=adapter, projects=StubProjects(projects)
     )
-    runtime.chat_sessions.create("coder", session_id="s1")
     loop = build_chat_loop(runtime)
 
-    for index, root in enumerate(roots):
-        runtime.agents._agent = replace(agent, root_project_id=root)
-        await loop.send("coder", "Hi", session_id="s1")
+    # Each send to a missing Session creates it in the Agent's then-default Project.
+    await loop.send("coder", "Hi", session_id="s1")
+    runtime.agents._agent = replace(agent, root_project_id="beta")
+    await loop.send("coder", "Again", session_id="s1")
+    await loop.send("coder", "Hi", session_id="s2")
 
-        system = _system_message(adapter, index)
-        address = session_address("coder", "s1")
-        catalog_pin = runtime.chat_sessions.prompt_pin(address, PINNED_SKILL_CATALOG_SLOT)
-        assert catalog_pin is not None
-        assert catalog_pin["working_project_id"] == root
-        if root is None:
-            assert "## Working Project" not in system
-            assert "rules" not in system
-            continue
-        other = "beta" if root == "alpha" else "alpha"
-        assert f"- Project ID: `{root}`" in system
-        assert f"{root} rules" in system
+    for request, session_id, project_id in ((1, "s1", "alpha"), (2, "s2", "beta")):
+        system = _system_message(adapter, request)
+        other = "beta" if project_id == "alpha" else "alpha"
+        assert f"- Project ID: `{project_id}`" in system
+        assert f"{project_id} rules" in system
         assert f"{other} rules" not in system
-        project_pin = runtime.chat_sessions.prompt_pin(address, PINNED_WORKING_PROJECT_CONTEXT_SLOT)
-        assert project_pin is not None
-        assert project_pin["working_project_id"] == root
-
-    prompts = runtime.system_prompts
-    assert prompts.render_skill_catalog_calls == len(roots)
-    rendered_projects = [call.project_id for call in prompts.render_working_project_context_calls]
+        address = session_address("coder", session_id)
+        assert runtime.chat_sessions.metadata_value(address, "working_project_id") == project_id
+        for slot in (PINNED_SKILL_CATALOG_SLOT, PINNED_WORKING_PROJECT_CONTEXT_SLOT):
+            pin = runtime.chat_sessions.prompt_pin(address, slot)
+            assert pin is not None
+            assert pin["working_project_id"] == project_id
+    assert _system_message(adapter, 0) == _system_message(adapter, 1)
+    rendered_projects = [
+        call.project_id for call in runtime.system_prompts.render_working_project_context_calls
+    ]
     assert rendered_projects == ["alpha", "beta"]
 
 
@@ -604,20 +605,42 @@ async def test_project_run_reads_its_working_project_off_the_event_loop(tmp_path
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("root_project_id", "error"),
-    [(PROJECT_ID, ChatError), ("missing", KeyError)],
-    ids=["missing-repository", "missing-project"],
-)
-async def test_rooted_identity_without_its_project_fails_before_the_user_message(
-    tmp_path: Path, root_project_id: str, error: type[Exception]
+async def test_identity_session_without_its_project_repository_fails_before_the_user_message(
+    tmp_path: Path,
 ) -> None:
     runtime, _adapter = _identity_runtime(
-        tmp_path, tmp_path / "missing-repo", root_project_id=root_project_id
+        tmp_path, tmp_path / "missing-repo", working_project_id=PROJECT_ID
     )
 
-    with pytest.raises(error):
+    with pytest.raises(ChatError):
         await build_chat_loop(runtime).send(AGENT_ID, "must not persist", session_id="s1")
 
     session = runtime.chat_sessions.get(session_address(AGENT_ID, "s1"))
     assert [message.role for message in session.load()] == ["error", "run_summary"]
+
+
+@pytest.mark.asyncio
+async def test_a_session_whose_project_is_gone_refuses_runs_until_the_project_returns(
+    tmp_path: Path,
+) -> None:
+    # The Session never falls back to the Workspace: it refuses Runs while its
+    # Project is gone and works there again once the Project is restored.
+    runtime, adapter = _identity_runtime(tmp_path, _repo(tmp_path), working_project_id=PROJECT_ID)
+    project = runtime.projects._projects.pop(PROJECT_ID)
+    loop = build_chat_loop(runtime)
+
+    with pytest.raises(WorkingProjectMissingError) as refused:
+        await loop.send(AGENT_ID, "must not persist", session_id="s1")
+
+    assert str(refused.value) == (
+        "This Session works in Project vbot, which no longer exists. Restore the Project "
+        "to continue this Session, or start a new Session."
+    )
+    address = session_address(AGENT_ID, "s1")
+    assert runtime.chat_sessions.get(address).load() == []
+    assert adapter.requests == []
+
+    runtime.projects._projects[PROJECT_ID] = project
+    await loop.send(AGENT_ID, "Hi", session_id="s1")
+
+    assert f"- Project ID: `{PROJECT_ID}`" in _system_message(adapter)

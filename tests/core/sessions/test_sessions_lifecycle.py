@@ -1,4 +1,7 @@
-"""Session lifecycle: create, reopen, move, fork, archive and restore."""
+"""Session lifecycle: create, reopen, move, fork, archive and restore.
+
+Each Session works in the Project it was created with; move and fork carry it.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +10,7 @@ import sqlite3
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -20,7 +23,12 @@ from core.prompts.pinned_context import (
     PINNED_WORKING_PROJECT_CONTEXT_SLOT,
 )
 from core.runs import RunKind
-from core.sessions import FORK_SOURCE_META_KEY, ChatSessionManager
+from core.sessions import (
+    FORK_SOURCE_META_KEY,
+    SESSION_WORKING_PROJECT_META_KEY,
+    ChatSessionManager,
+    SessionAddress,
+)
 from tests.core.sessions.history_fixtures import admit_run, settle_run
 from tests.core.sessions.sessions_test_support import _address
 
@@ -69,6 +77,110 @@ def test_move_updates_the_composite_address_without_losing_history(manager) -> N
     assert manager.exists(target)
     assert moved.address == target
     assert moved.load() == [message]
+
+
+def _working_project(manager: ChatSessionManager, address: SessionAddress) -> str | None:
+    return cast("str | None", manager.metadata_value(address, SESSION_WORKING_PROJECT_META_KEY))
+
+
+def test_a_session_works_in_the_project_it_was_created_with(manager) -> None:
+    defaults = {"coder": "alpha"}
+    manager.set_agent_default_project(defaults.get)
+
+    created = [
+        manager.create("coder", session_id="by-default"),
+        manager.create("coder", session_id="explicit", working_project_id="beta"),
+        manager.create("coder", session_id="workspace", working_project_id=None),
+        manager.get_or_create(_address("coder", "implicit")),
+        manager.create("builder", session_id="team", project_id="team"),
+    ]
+    # A later change of the default moves no Session.
+    defaults["coder"] = "beta"
+
+    assert [_working_project(manager, session.address) for session in created] == [
+        "alpha",
+        "beta",
+        None,
+        "alpha",
+        "team",
+    ]
+    summaries = {summary["id"]: summary for summary in manager.list_summaries("coder")}
+    assert summaries["by-default"]["working_project_id"] == "alpha"
+    assert summaries["workspace"]["working_project_id"] is None
+    with pytest.raises(ChatSessionError, match="own Project"):
+        manager.create("builder", session_id="other", project_id="team", working_project_id="beta")
+    # The working Project is fixed: a metadata write may repeat it but not change it.
+    manager.mutate_metadata(created[0].address, lambda metadata: metadata.update(title="Kept"))
+    with pytest.raises(ChatSessionError, match="managed by Sessions"):
+        manager.mutate_metadata(
+            created[0].address, lambda metadata: metadata.update(working_project_id="beta")
+        )
+    assert _working_project(manager, created[0].address) == "alpha"
+
+
+@pytest.mark.parametrize(
+    ("source_project", "source_working", "target_project", "expected"),
+    [
+        pytest.param(None, "alpha", None, "alpha", id="identity-keeps-its-project"),
+        pytest.param(None, None, None, None, id="identity-keeps-the-workspace"),
+        pytest.param("team", None, None, "team", id="project-session-to-identity"),
+        pytest.param(None, "alpha", "team", "team", id="into-a-team-the-address-governs"),
+    ],
+)
+@pytest.mark.parametrize("operation", ["move", "fork"])
+def test_move_and_fork_keep_working_where_the_source_worked(
+    manager,
+    operation: str,
+    source_project: str | None,
+    source_working: str | None,
+    target_project: str | None,
+    expected: str,
+) -> None:
+    source = manager.create(
+        "coder",
+        session_id="source",
+        project_id=source_project,
+        **({} if source_project else {"working_project_id": source_working}),
+    )
+    source.append(ChatMessage.user("hello"))
+
+    if operation == "move":
+        target = _address("reviewer", "source", target_project)
+        result = asyncio.run(manager.move(source.address, target))
+    else:
+        result = asyncio.run(
+            manager.fork(
+                source.address, target_agent_id="reviewer", target_project_id=target_project
+            )
+        )
+
+    assert _working_project(manager, result.address) == expected
+
+
+def test_a_project_restored_under_a_new_id_takes_only_its_own_sessions(
+    manager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = iter(f"2026-08-13T21:00:0{second}.000000Z" for second in range(10))
+    monkeypatch.setattr("core.sessions._store_mutations.utc_now_timestamp", lambda: next(clock))
+    manager.create("coder", session_id="live", working_project_id="alpha")
+    archived = manager.create("coder", session_id="archived", working_project_id="alpha")
+    manager.create("coder", session_id="other", working_project_id="beta")
+    archived_at = next(clock)
+    # A later Project that took the old id keeps its Sessions.
+    manager.create("coder", session_id="later", working_project_id="alpha")
+    asyncio.run(manager.archive(archived.address))
+
+    assert manager.retarget_working_project("alpha", "alpha-2", archived_at) == 2
+    assert manager.retarget_working_project("alpha", "alpha-2", archived_at) == 0
+
+    with sqlite3.connect(manager._store.path) as connection:
+        stored = dict(connection.execute("SELECT session_id, working_project_id FROM sessions"))
+    assert stored == {
+        "live": "alpha-2",
+        "archived": "alpha-2",
+        "other": "beta",
+        "later": "alpha",
+    }
 
 
 _AGENT_RENDERED_PINS = {

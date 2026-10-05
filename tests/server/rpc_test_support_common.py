@@ -363,16 +363,23 @@ class StubAgentResolver:
     :meth:`register_project_agent`, mirroring the real resolver's config path; an
     unregistered Team member raises :class:`ResolutionAgentNotFoundError`.
 
-    Session Agent overrides are the real resolver's, stored in ``sessions``; a
-    resolution or provenance read that names its Session applies them.
+    Session Agent overrides and the working Project of a Run are the real
+    resolver's, over ``sessions`` and ``projects``; a resolution or provenance
+    read that names its Session applies them.
     """
 
-    def __init__(self, agents: StubAgents, sessions: Any | None = None) -> None:
+    def __init__(
+        self, agents: StubAgents, sessions: Any | None = None, projects: Any | None = None
+    ) -> None:
         self._agents = agents
         self._project_agents: dict[tuple[str, str], ConfigAgent] = {}
         self.models = StubModelChecker()
         self._overrides = AgentResolver(
-            cast(Any, agents), cast(Any, None), cast(Any, self.models), dict, sessions=sessions
+            cast(Any, agents),
+            cast(Any, projects if projects is not None else StubProjects()),
+            cast(Any, self.models),
+            dict,
+            sessions=sessions,
         )
 
     def register_project_agent(self, project_id: str, agent: ConfigAgent) -> None:
@@ -433,6 +440,24 @@ class StubAgentResolver:
         self, address: SessionAddress, changes: Mapping[str, Any]
     ) -> AgentOverrides:
         return await self._overrides.update_session_overrides_async(address, changes)
+
+    def resolve_working_project(
+        self, project_id: str | None, agent: Any, **options: Any
+    ) -> str | None:
+        return self._overrides.resolve_working_project(project_id, agent, **options)
+
+    async def resolve_working_project_async(
+        self, project_id: str | None, agent: Any, **options: Any
+    ) -> str | None:
+        return await self._overrides.resolve_working_project_async(project_id, agent, **options)
+
+    def new_session_working_project(
+        self, project_id: str | None, agent: Any, *options: Any
+    ) -> str | None:
+        return self._overrides.new_session_working_project(project_id, agent, *options)
+
+    async def session_working_project_async(self, address: SessionAddress) -> str | None:
+        return await self._overrides.session_working_project_async(address)
 
     def effective_config(
         self, project_id: str | None, agent_id: str, *, session_id: str | None = None
