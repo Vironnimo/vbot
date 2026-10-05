@@ -2,8 +2,7 @@ import { textOrEmpty, positiveIntegerOrDefault } from './values.js';
 
 const SUBAGENT_SETTINGS_DEFAULTS = Object.freeze({
   max_subagent_depth: 4,
-  max_subagents_per_turn: 8,
-  subagent_timeout_minutes: 60,
+  max_active_subagents: 8,
 });
 
 const AGENT_DEFAULTS_FIELDS = Object.freeze([
@@ -96,13 +95,9 @@ export function normalizeSubAgentSettings(rawSettings) {
       subagents.max_subagent_depth,
       SUBAGENT_SETTINGS_DEFAULTS.max_subagent_depth,
     ),
-    max_subagents_per_turn: positiveIntegerOrDefault(
-      subagents.max_subagents_per_turn,
-      SUBAGENT_SETTINGS_DEFAULTS.max_subagents_per_turn,
-    ),
-    subagent_timeout_minutes: positiveIntegerOrDefault(
-      subagents.subagent_timeout_minutes,
-      SUBAGENT_SETTINGS_DEFAULTS.subagent_timeout_minutes,
+    max_active_subagents: positiveIntegerOrDefault(
+      subagents.max_active_subagents,
+      SUBAGENT_SETTINGS_DEFAULTS.max_active_subagents,
     ),
   };
 }

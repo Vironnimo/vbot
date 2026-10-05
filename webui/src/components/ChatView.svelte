@@ -27,7 +27,10 @@
   import ComputerUseControl from './ComputerUseControl.svelte';
   import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
   import { agentActivityTooltip } from './chat/agentActivityTooltip.js';
-  import { reflectionTaskRows } from '../lib/chatTimelinePresentation.js';
+  import {
+    backgroundTasks,
+    reflectionTaskRows,
+  } from '../lib/chatTimelinePresentation.js';
   import { onMount, tick, untrack } from 'svelte';
   import { listConnections, listModels, subscribeRunEvents } from '$lib/api.js';
   import { getDraft } from '$lib/composerMemory.js';
@@ -298,6 +301,17 @@
   // shared by the timeline, the Activity panel and Sub-Agent reconciliation.
   let activeTimelineItems = $derived(
     visibleTimelineItemsForRender(target.activeSessionState),
+  );
+  // Known work that outlives the Run: a running Sub-Agent or handed-off
+  // command the loaded rows started. It keeps Stop all offered once the Run
+  // ended.
+  let backgroundWorkRunning = $derived(
+    backgroundTasks(
+      activeTimelineItems,
+      chatState.subAgentStatuses,
+      target.activeSessionState?.backgroundCommandStatuses,
+      chatState.commandStatuses,
+    ).some((task) => task.dotStatus === 'running'),
   );
   let identityAgentActivity = $derived.by(() => {
     const displayedSessionKey = target.displayedSessionKey();
@@ -852,7 +866,6 @@
             loadingOlderHistory={target.activeSessionState
               ?.loadingOlderHistory === true}
             subAgentStatuses={chatState.subAgentStatuses}
-            subAgentResults={chatState.subAgentResults}
             backgroundCommandStatuses={target.activeSessionState
               ?.backgroundCommandStatuses}
             commandStatuses={chatState.commandStatuses}
@@ -1011,6 +1024,9 @@
                 sessionUsage={target.activeSessionState?.sessionUsage}
                 onSendMessage={composerSendMessage}
                 onCancelRun={actions.handleCancelRun}
+                {backgroundWorkRunning}
+                stoppingAll={target.activeSessionState?.stoppingAll ?? false}
+                onStopAll={actions.handleStopAll}
                 onTranscriptionError={actions.handleTranscriptionError}
                 onListFiles={composerListFiles}
                 onLoadModelCatalog={composerLoadModelCatalog}

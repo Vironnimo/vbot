@@ -1,64 +1,49 @@
 import { describe, expect, it } from 'vitest';
 import {
   backgroundTasks,
+  isSubAgentSendTool,
   isSubAgentSpawnTool,
   resolveSubAgentCancelPlan,
+  subAgentAction,
   subAgentAgentId,
-  subAgentDisplayResult,
   subAgentDotStatus,
   subAgentEffectiveRunId,
   subAgentLastToolName,
   subAgentNavigationTarget,
   subAgentNeedsStatusVerification,
   subAgentPreview,
-  subAgentResultEntryAllowsFetch,
-  subAgentResultKey,
-  subAgentResultTextFromMessages,
-  subAgentShouldFetchResult,
   subAgentStatusDetails,
   subAgentTask,
   subAgentToolStatusLabel,
-  toolDetailPresentation,
 } from '../chatTimelinePresentation.js';
 import { t } from '../i18n.js';
 import { formatMoment } from '../timeText.js';
 import {
   backgroundCommandTool,
-  queuedSubAgentTool,
+  reloadedSubAgentTool,
   runningSubAgentTool,
+  sendSubAgentTool,
 } from './chatTimelinePresentation.support.js';
 
 const seconds = (value) => t('chat.durationSeconds', { seconds: value });
 
-function blockingSubAgentTool(overrides = {}) {
-  return runningSubAgentTool({
-    result: {
-      ok: true,
-      error: null,
-      data: {
-        id: 'sub_child',
-        agent_id: 'worker',
-        session_id: 'session-child',
-        status: 'completed',
-        result: 'Final answer from the worker.',
-        delivery: 'inline',
-      },
-      artifacts: [],
-    },
-    ...overrides,
-  });
-}
+// The Sub-Agent of `runningSubAgentTool` finished the Run its spawn started
+// and now runs again for a later message.
+const workingAgain = {
+  'run:run-child': 'completed',
+  'session:worker::session-child': 'running',
+};
 
-describe('Sub-Agent spawn rows', () => {
+describe('Sub-Agent actions', () => {
   it.each([
-    ['a running spawn', () => runningSubAgentTool(), true],
+    ['a running spawn', () => runningSubAgentTool(), 'run'],
     [
       'a canonical run action',
       () => ({
         name: 'subagent',
         arguments: { action: 'run', content: 'canonical child task' },
       }),
-      true,
+      'run',
     ],
     [
       'a capitalized run action',
@@ -66,18 +51,18 @@ describe('Sub-Agent spawn rows', () => {
         name: 'subagent',
         arguments: { action: 'Run', content: 'Inspect the project' },
       }),
-      true,
+      'run',
     ],
     [
-      'a spawn action carrying delivery metadata',
+      'a spawn action carrying a started result',
       () =>
         runningSubAgentTool({
           arguments: { action: 'spawn', task: 'Inspect the project' },
         }),
-      true,
+      'run',
     ],
     [
-      'another harness spelling carrying delivery metadata',
+      'another harness spelling carrying a started result',
       () =>
         runningSubAgentTool({
           arguments: {
@@ -86,23 +71,68 @@ describe('Sub-Agent spawn rows', () => {
             subagent_type: 'worker',
           },
         }),
-      true,
+      'run',
     ],
     [
-      'an unfamiliar action without delivery metadata',
+      'an unfamiliar action without a result',
       () => ({
         name: 'subagent',
         arguments: { action: 'spawn', task: 'Inspect the project' },
       }),
-      false,
+      '',
     ],
     [
-      'a stop action without delivery metadata',
+      'a stop action without a result',
       () => ({
         name: 'subagent',
         arguments: { action: 'stop', id: 'sub_child' },
       }),
-      false,
+      '',
+    ],
+    ['a send call', () => sendSubAgentTool(), 'send'],
+    [
+      'a message to an id without an action',
+      () => ({
+        name: 'subagent',
+        arguments: { id: 'sub_child', content: 'Also check the tests' },
+      }),
+      'send',
+    ],
+    [
+      'a run naming an existing Sub-Agent, by its result',
+      () =>
+        sendSubAgentTool({
+          arguments: { action: 'run', id: 'sub_child', content: 'More' },
+        }),
+      'send',
+    ],
+    [
+      'a run naming an existing Sub-Agent, by its live start event',
+      () => ({
+        name: 'subagent',
+        status: 'running',
+        arguments: { action: 'run', id: 'sub_child', content: 'More' },
+        subAgentSession: {
+          id: 'sub_child',
+          agent_id: 'worker',
+          session_id: 'session-child',
+          status: 'running',
+        },
+      }),
+      'send',
+    ],
+    [
+      'a list call',
+      () => ({ name: 'subagent', arguments: { action: 'list' } }),
+      'list',
+    ],
+    [
+      'a former status call carrying a started result',
+      () =>
+        runningSubAgentTool({
+          arguments: { action: 'status', id: 'sub_child' },
+        }),
+      'list',
     ],
     [
       'a cancel call',
@@ -110,28 +140,29 @@ describe('Sub-Agent spawn rows', () => {
         name: 'subagent',
         arguments: { action: 'cancel', id: 'sub_child' },
       }),
-      false,
+      'cancel',
     ],
     [
-      'a status call carrying delivery metadata',
-      () =>
-        runningSubAgentTool({
-          arguments: { action: 'status', id: 'sub_child' },
-        }),
-      false,
-    ],
-    [
-      'a capitalized cancel call carrying delivery metadata',
+      'a capitalized cancel call carrying a started result',
       () =>
         runningSubAgentTool({
           arguments: { action: 'Cancel', id: 'sub_child' },
         }),
-      false,
+      'cancel',
     ],
-  ])('treats %s as a spawn: %s', (_label, tool, spawn) => {
-    expect(isSubAgentSpawnTool(tool())).toBe(spawn);
+    [
+      'another Tool',
+      () => ({ name: 'bash', arguments: { command: 'ls' } }),
+      '',
+    ],
+  ])('reads %s as %o', (_label, tool, action) => {
+    expect(subAgentAction(tool())).toBe(action);
+    expect(isSubAgentSpawnTool(tool())).toBe(action === 'run');
+    expect(isSubAgentSendTool(tool())).toBe(action === 'send');
   });
+});
 
+describe('Sub-Agent rows', () => {
   it.each([
     [{ prompt: 'Review imports', subagent_type: 'worker' }, 'Review imports'],
     [{ goal: 'Fix tests' }, 'Fix tests'],
@@ -150,7 +181,7 @@ describe('Sub-Agent spawn rows', () => {
     expect(subAgentTask(tool)).toBe(task);
   });
 
-  it('projects automatic Sub-Agent and Bash tasks with active work first', () => {
+  it('projects started Sub-Agents and handed-off commands with active work first', () => {
     const running = runningSubAgentTool({ type: 'tool_call' });
     const completed = runningSubAgentTool({
       type: 'tool_call',
@@ -165,8 +196,7 @@ describe('Sub-Agent spawn rows', () => {
         agent_id: 'reviewer',
         session_id: 'session-reviewer',
         run_id: 'run-reviewer',
-        status: 'completed',
-        delivery: 'automatic',
+        status: 'running',
       },
       result: {
         ok: true,
@@ -174,36 +204,22 @@ describe('Sub-Agent spawn rows', () => {
           id: 'sub_completed',
           agent_id: 'reviewer',
           session_id: 'session-reviewer',
-          status: 'completed',
-          delivery: 'automatic',
+          status: 'running',
         },
         artifacts: [],
       },
     });
-    const foreground = runningSubAgentTool({
+    // A message to an existing Sub-Agent and a refused run start no work.
+    const message = sendSubAgentTool({ type: 'tool_call', id: 'tool-send' });
+    const refused = {
       type: 'tool_call',
-      id: 'tool-foreground',
-      subAgentSession: {
-        id: 'sub_foreground',
-        agent_id: 'worker',
-        session_id: 'session-foreground',
-        run_id: 'run-foreground',
-        status: 'completed',
-        delivery: 'inline',
-      },
-      result: {
-        ok: true,
-        data: {
-          id: 'sub_foreground',
-          agent_id: 'worker',
-          session_id: 'session-foreground',
-          status: 'completed',
-          delivery: 'inline',
-          result: 'done',
-        },
-        artifacts: [],
-      },
-    });
+      id: 'tool-refused',
+      name: 'subagent',
+      status: 'failed',
+      arguments: { action: 'run', agent_id: 'missing', content: 'Do it' },
+      resultEvent: { type: 'tool_call_result' },
+      result: { ok: false, error: { code: 'not_found' }, data: null },
+    };
     const backgroundBash = backgroundCommandTool();
     const foregroundBash = backgroundCommandTool({
       id: 'bash-foreground',
@@ -221,10 +237,10 @@ describe('Sub-Agent spawn rows', () => {
         {
           id: 'run-new',
           type: 'assistant_run',
-          items: [completed, foreground, foregroundBash, backgroundBash],
+          items: [completed, message, refused, foregroundBash, backgroundBash],
         },
       ],
-      {},
+      { 'run:run-reviewer': 'completed' },
       { term_one: 'failed' },
     );
 
@@ -251,7 +267,7 @@ describe('Sub-Agent spawn rows', () => {
     );
   });
 
-  it('lists a legacy explicit background spawn without delivery metadata', () => {
+  it('lists a legacy spawn without an action', () => {
     const legacy = {
       type: 'tool_call',
       id: 'tool-legacy',
@@ -299,7 +315,6 @@ describe('Sub-Agent status', () => {
           session_id: 'session-child',
           run_id: 'run-child',
           status: 'running',
-          delivery: 'automatic',
         },
         startedEvent: {},
       }),
@@ -321,29 +336,34 @@ describe('Sub-Agent status', () => {
       'running',
     ],
     [
-      'settles a queued spawn through the queue-to-Run mapping',
-      queuedSubAgentTool,
-      {
-        'queueRun:queue-item-1': 'run-from-queue',
-        'run:run-from-queue': 'completed',
-        'session:worker::session-child': 'running',
-      },
-      'success',
-    ],
-    [
-      'keeps a queued spawn running without the mapping',
-      queuedSubAgentTool,
-      {},
+      'follows the Session while the Sub-Agent works on a later message',
+      runningSubAgentTool,
+      workingAgain,
       'running',
     ],
     [
-      'keeps an exact queued cancellation when its Session runs again',
-      queuedSubAgentTool,
-      {
-        'queue:queue-item-1': 'cancelled',
-        'session:worker::session-child': 'running',
-      },
-      'cancelled',
+      'settles a reloaded row through the Run inspection found',
+      reloadedSubAgentTool,
+      { 'workRun:sub_reloaded': 'run-found', 'run:run-found': 'completed' },
+      'success',
+    ],
+    [
+      'settles a reloaded row without a known Run through its Session',
+      reloadedSubAgentTool,
+      { 'session:worker::session-child': 'completed' },
+      'success',
+    ],
+    [
+      'keeps a failed spawn call failed',
+      () => runningSubAgentTool({ status: 'failed' }),
+      { 'run:run-child': 'running' },
+      'failed',
+    ],
+    [
+      'reports a send row by its own call',
+      sendSubAgentTool,
+      { 'session:worker::session-child': 'running' },
+      'success',
     ],
   ])('%s', (_label, tool, statuses, dotStatus) => {
     expect(subAgentDotStatus(tool(), statuses)).toBe(dotStatus);
@@ -353,7 +373,7 @@ describe('Sub-Agent status', () => {
     ['a frozen running descriptor', runningSubAgentTool, 'running', {}, true],
     [
       'a Run-id-less row with a Session status',
-      queuedSubAgentTool,
+      reloadedSubAgentTool,
       'running',
       { 'session:worker::session-child': 'running' },
       false,
@@ -394,51 +414,55 @@ describe('Sub-Agent status', () => {
     },
   );
 
-  it('resolves the effective Run id from the descriptor or controller mappings', () => {
+  it('resolves the effective Run id from the start event or inspection', () => {
     expect(subAgentEffectiveRunId(runningSubAgentTool())).toBe('run-child');
-    expect(subAgentEffectiveRunId(queuedSubAgentTool())).toBe('');
+    expect(subAgentEffectiveRunId(reloadedSubAgentTool())).toBe('');
     expect(
-      subAgentEffectiveRunId(queuedSubAgentTool(), {
-        'workRun:sub_queued': 'run-from-inspection',
-        'queueRun:queue-item-1': 'run-from-queue',
+      subAgentEffectiveRunId(reloadedSubAgentTool(), {
+        'workRun:sub_reloaded': 'run-from-inspection',
       }),
     ).toBe('run-from-inspection');
-    expect(
-      subAgentEffectiveRunId(queuedSubAgentTool(), {
-        'queueRun:queue-item-1': 'run-from-queue',
-      }),
-    ).toBe('run-from-queue');
   });
 
   it.each([
     [
-      'cancels the descriptor Run',
+      'cancels the followed Run',
       runningSubAgentTool,
       undefined,
       { kind: 'run', runId: 'run-child' },
     ],
     [
-      // A started queued spawn resolves through the mapping, never through
-      // the frozen descriptor.
-      'cancels the Run a queued spawn has started',
-      queuedSubAgentTool,
-      { 'queueRun:queue-item-1': 'run-from-queue' },
-      { kind: 'run', runId: 'run-from-queue' },
+      'cancels the Run inspection found for a reloaded row',
+      reloadedSubAgentTool,
+      { 'workRun:sub_reloaded': 'run-found' },
+      { kind: 'run', runId: 'run-found' },
     ],
     [
-      'removes a queued spawn without a resolvable Run id',
-      queuedSubAgentTool,
+      'inspects a reloaded row without a known Run',
+      reloadedSubAgentTool,
       undefined,
       {
-        kind: 'queue',
-        queueItemId: 'queue-item-1',
+        kind: 'inspect',
         agentId: 'worker',
         sessionId: 'session-child',
+        workId: 'sub_reloaded',
+      },
+    ],
+    [
+      // The Run working on the later message is not the followed one.
+      'inspects a Sub-Agent working on a later message',
+      runningSubAgentTool,
+      workingAgain,
+      {
+        kind: 'inspect',
+        agentId: 'worker',
+        sessionId: 'session-child',
+        workId: 'sub_child',
       },
     ],
     ['plans nothing for a missing row', () => null, undefined, null],
     [
-      'plans nothing without Run or Queue item',
+      'plans nothing without Run or Session',
       () => ({ name: 'subagent', arguments: {} }),
       undefined,
       null,
@@ -449,27 +473,18 @@ describe('Sub-Agent status', () => {
 });
 
 describe('Sub-Agent addressing', () => {
-  it('keys a Sub-Agent result by its stable public work id', () => {
-    expect(subAgentResultKey(runningSubAgentTool())).toBe('work:sub_child');
-    expect(subAgentResultKey(queuedSubAgentTool())).toBe('work:sub_queued');
-    expect(
-      subAgentResultKey(queuedSubAgentTool(), {
-        'queueRun:queue-item-1': 'run-from-queue',
-      }),
-    ).toBe('work:sub_queued');
-    expect(subAgentResultKey({ name: 'subagent', arguments: {} })).toBe('');
-  });
-
   it('keeps a qualified target address for navigation, status keys and cancel', () => {
-    // Shape merged from the live `subagent_session_started` event before the
-    // final persisted Tool result exists.
-    const tool = queuedSubAgentTool({
-      subAgentSession: {
-        agent_id: 'worker',
-        project_id: 'vbot',
-        session_id: 'session-child',
-        queue_item_id: 'queue-item-1',
-        status: 'queued',
+    // A historical result names the child by its bare id beside `project_id`.
+    const tool = reloadedSubAgentTool({
+      result: {
+        ok: true,
+        data: {
+          id: 'sub_reloaded',
+          agent_id: 'worker',
+          project_id: 'vbot',
+          session_id: 'session-child',
+          status: 'running',
+        },
       },
     });
 
@@ -477,17 +492,16 @@ describe('Sub-Agent addressing', () => {
       agentId: 'worker@vbot',
       sessionId: 'session-child',
     });
-    expect(subAgentResultKey(tool)).toBe('work:sub_queued');
     expect(
       subAgentToolStatusLabel(tool, 'success', {
         'sessionDuration:worker@vbot::session-child': 8700,
       }),
     ).toBe(seconds('8.7'));
     expect(resolveSubAgentCancelPlan(tool)).toEqual({
-      kind: 'queue',
-      queueItemId: 'queue-item-1',
+      kind: 'inspect',
       agentId: 'worker@vbot',
       sessionId: 'session-child',
+      workId: 'sub_reloaded',
     });
   });
 
@@ -506,7 +520,6 @@ describe('Sub-Agent addressing', () => {
               project_id: 'vbot',
               session_id: 'session-child',
               status: 'running',
-              delivery: 'automatic',
             }
           : undefined,
         result: {
@@ -518,7 +531,6 @@ describe('Sub-Agent addressing', () => {
             project_id: 'vbot',
             session_id: 'session-child',
             status: 'running',
-            delivery: 'automatic',
           },
           artifacts: [],
         },
@@ -534,138 +546,14 @@ describe('Sub-Agent addressing', () => {
           'sessionTool:worker@vbot::session-child': 'read',
         }),
       ).toBe('read');
-      expect(
-        subAgentDisplayResult(tool, { loading: false, result: 'done' }).data,
-      ).toMatchObject({ agent_id: 'worker@vbot', project_id: 'vbot' });
     },
   );
-});
 
-describe('Sub-Agent results', () => {
-  it('allows fetching without an entry and retries failed entries after the cooldown', () => {
-    const now = 1_000_000;
-    const failedEntry = {
-      loading: false,
-      result: '',
-      error: true,
-      failedAt: now,
-    };
-
-    expect(subAgentResultEntryAllowsFetch(null, now)).toBe(true);
-    expect(subAgentResultEntryAllowsFetch(undefined, now)).toBe(true);
-    expect(
-      subAgentResultEntryAllowsFetch({ loading: true, result: '' }, now),
-    ).toBe(false);
-    expect(
-      subAgentResultEntryAllowsFetch({ loading: false, result: 'done' }, now),
-    ).toBe(false);
-    expect(subAgentResultEntryAllowsFetch(failedEntry, now + 1000)).toBe(false);
-    expect(subAgentResultEntryAllowsFetch(failedEntry, now + 20000)).toBe(true);
-  });
-
-  it.each([
-    [
-      'a finished automatic-delivery spawn',
-      runningSubAgentTool,
-      'success',
-      true,
-    ],
-    ['a running spawn', runningSubAgentTool, 'running', false],
-    [
-      'a status call',
-      () =>
-        runningSubAgentTool({
-          arguments: { action: 'status', id: 'sub_child' },
-        }),
-      'success',
-      false,
-    ],
-    [
-      'a blocking spawn that carries its result',
-      blockingSubAgentTool,
-      'success',
-      false,
-    ],
-  ])('fetches a result for %s: %s', (_label, tool, dotStatus, fetch) => {
-    expect(subAgentShouldFetchResult(tool(), dotStatus)).toBe(fetch);
-  });
-
-  it('renders a fetched result the same way a blocking spawn result renders', () => {
-    const tool = runningSubAgentTool();
-    const rendered = toolDetailPresentation(
-      subAgentDisplayResult(tool, {
-        loading: false,
-        result: 'Final answer from the worker.',
-      }),
-      { preferPayload: true, toolName: 'subagent', tool },
-    ).copyText;
-
-    expect(rendered).toContain('result: Final answer from the worker.');
-    expect(rendered).toContain('status: completed');
-  });
-
-  it('keeps the original Tool result without fetched output', () => {
-    const tool = runningSubAgentTool();
-
-    expect(subAgentDisplayResult(tool, null)).toBe(tool.result);
-    expect(subAgentDisplayResult(tool, { loading: true, result: '' })).toBe(
-      tool.result,
-    );
-  });
-
-  const intermediateMessages = [
-    { role: 'user', content: 'First task' },
-    { role: 'assistant', content: 'First answer.' },
-    { role: 'run_summary', run_id: 'run-one', status: 'completed' },
-    { role: 'user', content: 'Continue' },
-    { role: 'assistant', content: 'Still working.' },
-  ];
-
-  it.each([
-    [
-      'the final assistant message of a terminal Run segment',
-      [
-        { role: 'user', content: 'Do the work' },
-        { role: 'assistant', content: 'Working on it' },
-        { role: 'tool', content: 'tool output' },
-        { role: 'assistant', content: 'All done.' },
-        { role: 'run_summary', run_id: 'run-child', status: 'completed' },
-      ],
-      'run-child',
-      'All done.',
-    ],
-    [
-      'no newer intermediate assistant output',
-      intermediateMessages,
-      undefined,
-      '',
-    ],
-    [
-      'the answer of the requested earlier Run',
-      intermediateMessages,
-      'run-one',
-      'First answer.',
-    ],
-    [
-      'the text of assistant content blocks',
-      [
-        {
-          role: 'assistant',
-          content: [
-            { type: 'text', text: 'First part.' },
-            { type: 'media', attachment_id: 'a1' },
-            { type: 'text', text: 'Second part.' },
-          ],
-        },
-        { role: 'run_summary', run_id: 'run-child', status: 'completed' },
-      ],
-      'run-child',
-      'First part.\n\nSecond part.',
-    ],
-    ['nothing from an empty History', [], undefined, ''],
-    ['nothing from a missing History', null, undefined, ''],
-  ])('extracts %s', (_label, messages, runId, text) => {
-    expect(subAgentResultTextFromMessages(messages, runId)).toBe(text);
+  it('links a send row to the Session of the Sub-Agent it addressed', () => {
+    expect(subAgentNavigationTarget(sendSubAgentTool())).toEqual({
+      agentId: 'worker',
+      sessionId: 'session-child',
+    });
   });
 });
 
@@ -714,7 +602,7 @@ describe('Sub-Agent timing and last Tool', () => {
 
   it.each([
     [
-      'the child Run runtime of a non-blocking spawn',
+      'the child Run runtime',
       runningSubAgentTool,
       'success',
       { 'runDuration:run-child': 4200 },
@@ -730,7 +618,7 @@ describe('Sub-Agent timing and last Tool', () => {
       () => '',
     ],
     [
-      'no time for a finished non-blocking spawn without a tracked runtime',
+      'no time for a finished spawn without a tracked runtime',
       runningSubAgentTool,
       'success',
       {},
@@ -738,28 +626,21 @@ describe('Sub-Agent timing and last Tool', () => {
     ],
     [
       'the Session duration for a row without Run id',
-      queuedSubAgentTool,
+      reloadedSubAgentTool,
       'success',
       { 'sessionDuration:worker::session-child': 8700 },
       () => seconds('8.7'),
     ],
     [
-      'the queue-mapped Run duration over the Session duration',
-      queuedSubAgentTool,
+      'the inspected Run duration over the Session duration',
+      reloadedSubAgentTool,
       'success',
       {
-        'queueRun:queue-item-1': 'run-from-queue',
-        'runDuration:run-from-queue': 3100,
+        'workRun:sub_reloaded': 'run-found',
+        'runDuration:run-found': 3100,
         'sessionDuration:worker::session-child': 8700,
       },
       () => seconds('3.1'),
-    ],
-    [
-      'the spawn-call duration of a blocking spawn with a result',
-      () => blockingSubAgentTool({ durationMs: 1500 }),
-      'success',
-      {},
-      () => seconds('1.5'),
     ],
     [
       'the cancelled label without a tracked runtime',
@@ -773,6 +654,17 @@ describe('Sub-Agent timing and last Tool', () => {
       runningSubAgentTool,
       'running',
       { 'runStarted:run-child': startedAt },
+      () => seconds('4.2'),
+    ],
+    [
+      'a live tick from the Run working on a later message',
+      runningSubAgentTool,
+      'running',
+      {
+        ...workingAgain,
+        'runStarted:run-child': '2026-09-04T11:00:00Z',
+        'sessionStarted:worker::session-child': startedAt,
+      },
       () => seconds('4.2'),
     ],
     [
@@ -809,27 +701,33 @@ describe('Sub-Agent timing and last Tool', () => {
     ['as empty before the first child Tool', runningSubAgentTool, {}, ''],
     [
       'from the Session key without Run id',
-      queuedSubAgentTool,
+      reloadedSubAgentTool,
       { 'sessionTool:worker::session-child': 'read' },
       'read',
     ],
     [
-      'by the queue-mapped Run id over the Session key',
-      queuedSubAgentTool,
+      'by the inspected Run id over the Session key',
+      reloadedSubAgentTool,
       {
-        'queueRun:queue-item-1': 'run-from-queue',
-        'runTool:run-from-queue': 'bash',
+        'workRun:sub_reloaded': 'run-found',
+        'runTool:run-found': 'bash',
         'sessionTool:worker::session-child': 'read',
       },
       'bash',
     ],
     [
-      'as empty for a status call',
+      'as empty for a list call',
       () =>
         runningSubAgentTool({
-          arguments: { action: 'status', id: 'sub_child' },
+          arguments: { action: 'list', id: 'sub_child' },
         }),
       { 'runTool:run-child': 'bash' },
+      '',
+    ],
+    [
+      'as empty for a send row',
+      sendSubAgentTool,
+      { 'sessionTool:worker::session-child': 'read' },
       '',
     ],
   ])('resolves the last child Tool %s', (_label, tool, statuses, name) => {

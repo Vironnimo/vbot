@@ -19,15 +19,15 @@ import { trimmedString, parseJsonValue, truncateToolLabel } from './values.js';
 import {
   subAgentRunStartedAt,
   isSubAgentSpawnTool,
+  isSubAgentTargetTool,
   subAgentDotStatus,
   subAgentLastToolName,
   subAgentToolStatusLabel,
-  isBackgroundSubAgentSpawn,
   subAgentAgentId,
   subAgentPreview,
+  subAgentResultData,
   subAgentTask,
   subAgentNavigationTarget,
-  isStartingForegroundSubAgent,
 } from './subagents.js';
 
 const MAX_BACKGROUND_COMMAND_LABEL_LENGTH = 96;
@@ -283,10 +283,14 @@ export const backgroundTasks = (
       if (child?.type !== 'tool_call') {
         continue;
       }
-      if (isBackgroundSubAgentSpawn(child)) {
+      // A refused `run` started no Sub-Agent; only started ones are work.
+      if (isSubAgentSpawnTool(child) && subAgentNavigationTarget(child)) {
         const dotStatus = subAgentDotStatus(child, subAgentStatuses);
+        const subAgentId = trimmedString(subAgentResultData(child).id);
         tasks.push({
-          id: `${item.id ?? itemIndex}:${child.id ?? child.toolCallId ?? childIndex}`,
+          id: subAgentId
+            ? `subagent:${subAgentId}`
+            : `${item.id ?? itemIndex}:${child.id ?? child.toolCallId ?? childIndex}`,
           kind: 'subagent',
           tool: child,
           dotStatus,
@@ -340,9 +344,10 @@ export const backgroundTasks = (
   }
 
   // A retained live Run can overlap its persisted History until reconciliation
-  // confirms the full Run. Both describe the same background command; the panel
-  // must show it once, otherwise its keyed rows cannot mount when opened.
-  // Prefer the latest occurrence, keeping its current Tool projection and order.
+  // confirms the full Run. Both describe the same Sub-Agent or background
+  // command; the panel must show it once, otherwise its keyed rows cannot mount
+  // when opened. Prefer the latest occurrence, keeping its current Tool
+  // projection and order.
   return [...new Map(tasks.map((task) => [task.id, task])).values()]
     .sort((left, right) => {
       const activeDifference =
@@ -474,12 +479,14 @@ export const backgroundCommandToolStatusLabel = (
   return '';
 };
 
+// A Sub-Agent row appears once it names its Sub-Agent's Session (the live
+// start event or the result), or once the call ended without one.
 function shouldRenderToolCall(tool) {
-  if (isSubAgentSpawnTool(tool)) {
+  if (isSubAgentTargetTool(tool)) {
     return Boolean(
       subAgentNavigationTarget(tool) ||
       tool.resultEvent ||
-      isStartingForegroundSubAgent(tool),
+      ['failed', 'cancelled'].includes(toolStatus(tool)),
     );
   }
   return Boolean(

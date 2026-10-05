@@ -677,7 +677,7 @@ describe('connection snapshots', () => {
       'session:child::stale-session': 'queued',
       'run:completed-run': 'completed',
       'runDuration:completed-run': 1250,
-      'queueRun:queue-one': 'completed-run',
+      'workRun:sub_one': 'completed-run',
     });
 
     harness.stream.applyConnectionSnapshot({
@@ -688,7 +688,7 @@ describe('connection snapshots', () => {
     expect(harness.subAgentRunStatuses).toEqual({
       'run:completed-run': 'completed',
       'runDuration:completed-run': 1250,
-      'queueRun:queue-one': 'completed-run',
+      'workRun:sub_one': 'completed-run',
     });
   });
 

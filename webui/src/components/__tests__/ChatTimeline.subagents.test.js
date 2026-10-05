@@ -12,17 +12,17 @@ import {
 import { loadHistory } from '../../lib/chatState.js';
 import { t } from '../../lib/i18n.js';
 
-const BACKGROUND_ARGUMENTS = {
+const RUN_ARGUMENTS = {
+  action: 'run',
   agent_id: 'beta',
-  background: true,
   content: 'Inspect in the background',
 };
 
-// A background sub-agent whose spawn result names Child Run `sub-run`.
-function backgroundSubAgentSession() {
+// A Sub-Agent whose start names Child Run `sub-run`.
+function subAgentSession() {
   const sessionState = timelineSession();
   appendEvents(sessionState, 'run-parent', [
-    toolStarted('call-subagent', 'subagent', BACKGROUND_ARGUMENTS),
+    toolStarted('call-subagent', 'subagent', RUN_ARGUMENTS),
     toolResult('call-subagent', 'subagent', {
       ok: true,
       data: {
@@ -43,60 +43,141 @@ function subAgentLine() {
 describe('ChatTimeline sub-agent rows', () => {
   const timeline = setupChatTimelineSuite();
 
-  it('renders a sub-agent status action as an ordinary Tool call', () => {
-    const sessionState = timelineSession();
-    appendEvents(sessionState, 'run-subagent-status', [
-      toolStarted('call-subagent', 'subagent', {
-        action: 'run',
-        agent_id: 'beta',
-        content: 'Inspect the logs',
-      }),
-      toolResult('call-subagent', 'subagent', {
-        ok: true,
-        data: {
-          id: 'sub_work_1',
-          agent_id: 'beta',
-          session_id: 'sub-session-1',
-          status: 'running',
-          delivery: 'automatic',
-        },
-      }),
-      toolStarted('call-subagent-status', 'subagent', {
-        action: 'status',
+  it.each([
+    [
+      'list',
+      { action: 'list' },
+      {
+        subagents: [
+          {
+            id: 'sub_work_1',
+            agent_id: 'beta',
+            session_id: 'sub-session-1',
+            state: 'running',
+          },
+        ],
+      },
+      'list',
+    ],
+    [
+      'former status',
+      { action: 'status', id: 'sub_work_1' },
+      { subagents: [] },
+      'list · sub_work_1',
+    ],
+    [
+      'cancel',
+      { action: 'cancel', id: 'sub_work_1' },
+      {
         id: 'sub_work_1',
+        agent_id: 'beta',
+        session_id: 'sub-session-1',
+        status: 'cancelled',
+      },
+      'cancel · sub_work_1',
+    ],
+  ])(
+    'renders a %s call as an ordinary Tool call',
+    (_action, args, data, label) => {
+      const sessionState = timelineSession();
+      appendEvents(sessionState, 'run-subagent-call', [
+        toolStarted('call-subagent', 'subagent', {
+          action: 'run',
+          agent_id: 'beta',
+          content: 'Inspect the logs',
+        }),
+        toolResult('call-subagent', 'subagent', {
+          ok: true,
+          data: {
+            id: 'sub_work_1',
+            agent_id: 'beta',
+            session_id: 'sub-session-1',
+            status: 'running',
+          },
+        }),
+        toolStarted('call-subagent-other', 'subagent', args),
+        toolResult('call-subagent-other', 'subagent', { ok: true, data }),
+      ]);
+      timeline.render(sessionState);
+
+      const subagentRows = document.querySelectorAll(
+        '.subagent-tool-event .subagent-line',
+      );
+      expect(subagentRows).toHaveLength(1);
+      expect(subagentRows[0].querySelector('.te-dot.running')).not.toBeNull();
+      const callRow = Array.from(
+        document.querySelectorAll(
+          '.run-tool-event:not(.subagent-tool-event) .tool-event-line',
+        ),
+      ).find((row) => row.querySelector('.te-fn')?.textContent === 'subagent');
+      expect(callRow.textContent).toContain(label);
+      expect(callRow.textContent).not.toContain(t('chat.subagent.label'));
+      expect(
+        callRow.querySelector('.subagent-link, [data-cancel="subagent"]'),
+      ).toBeNull();
+    },
+  );
+
+  it('renders a message to an existing Sub-Agent with a link to its Session and no cancel', () => {
+    const onNavigateToSubAgent = vi.fn();
+    const sessionState = timelineSession();
+    appendEvents(sessionState, 'run-subagent-send', [
+      toolStarted('call-send', 'subagent', {
+        action: 'send',
+        id: 'sub_work_1',
+        content: 'Also check the tests',
       }),
-      toolResult('call-subagent-status', 'subagent', {
+      {
+        type: 'subagent_session_started',
+        payload: {
+          tool_call: { id: 'call-send', index: 0, name: 'subagent' },
+          data: {
+            id: 'sub_work_1',
+            agent_id: 'beta',
+            session_id: 'sub-session-1',
+            status: 'running',
+          },
+        },
+      },
+      toolResult('call-send', 'subagent', {
         ok: true,
         data: {
           id: 'sub_work_1',
           agent_id: 'beta',
           session_id: 'sub-session-1',
-          status: 'completed',
+          status: 'steered',
         },
       }),
     ]);
-    timeline.render(sessionState);
+    // The Sub-Agent's own work shows on the row that started it; the send row
+    // reports its delivery.
+    timeline.render(sessionState, {
+      onNavigateToSubAgent,
+      subAgentStatuses: { 'session:beta::sub-session-1': 'running' },
+    });
 
-    const subagentRows = document.querySelectorAll(
-      '.subagent-tool-event .subagent-line',
+    expect(subAgentLine().querySelector('.te-fn').textContent.trim()).toBe(
+      t('chat.subagent.sendLabel'),
     );
-    expect(subagentRows).toHaveLength(1);
-    expect(subagentRows[0].querySelector('.subagent-status')).toBeNull();
-    expect(subagentRows[0].querySelector('.te-dot.running')).not.toBeNull();
-    const statusRow = Array.from(
-      document.querySelectorAll(
-        '.run-tool-event:not(.subagent-tool-event) .tool-event-line',
-      ),
-    ).find((row) => row.querySelector('.te-fn')?.textContent === 'subagent');
-    expect(statusRow.textContent).toContain('status · sub_work_1');
-    expect(statusRow.textContent).not.toContain(t('chat.subagent.label'));
     expect(
-      statusRow.querySelector('.subagent-link, [data-cancel="subagent"]'),
-    ).toBeNull();
+      subAgentLine().querySelector('.subagent-agent').textContent,
+    ).toContain('beta');
+    expect(
+      subAgentLine().querySelector('.subagent-preview').textContent,
+    ).toContain('Also check the tests');
+    expect(subAgentLine().querySelector('.te-dot.done')).not.toBeNull();
+    expect(subAgentLine().querySelector('[data-cancel="subagent"]')).toBeNull();
+
+    subAgentLine().querySelector('.subagent-link').click();
+    flushSync();
+    expect(onNavigateToSubAgent).toHaveBeenCalledWith({
+      agentId: 'beta',
+      sessionId: 'sub-session-1',
+    });
   });
 
-  it('keeps a spawned background sub-agent row running while the Child Run runs', () => {
-    timeline.render(backgroundSubAgentSession());
+  it('keeps a Sub-Agent row running while its Child Run runs', () => {
+    timeline.render(subAgentSession());
 
     expect(
       subAgentLine()
@@ -107,55 +188,21 @@ describe('ChatTimeline sub-agent rows', () => {
     expect(subAgentLine().querySelector('.te-dot.done')).toBeNull();
   });
 
-  it('settles a completed background sub-agent without starting result recovery', () => {
-    const onRequestSubAgentResult = vi.fn();
-    timeline.render(backgroundSubAgentSession(), {
-      subAgentStatuses: { 'run:sub-run': 'completed' },
-      onRequestSubAgentResult,
-    });
-
-    expect(subAgentLine().querySelector('.te-dot.done')).not.toBeNull();
-    expect(subAgentLine().querySelector('.te-dot.running')).toBeNull();
-    // Without a tracked runtime the row shows no time.
-    expect(subAgentLine().querySelector('.te-time')).toBeNull();
-    // Recovery is the owner's job, never a presentation side effect.
-    expect(onRequestSubAgentResult).not.toHaveBeenCalled();
-  });
-
   it.each([
-    [
-      'the Child Run runtime',
-      {
-        subAgentStatuses: {
-          'run:sub-run': 'completed',
-          'runDuration:sub-run': 4200,
-        },
-      },
-      '.subagent-line .te-time',
-      '4.2s',
-    ],
-    [
-      'a fetched result in the Tool body',
-      {
-        subAgentStatuses: { 'run:sub-run': 'completed' },
-        subAgentResults: {
-          'beta::sub-session::sub-run': {
-            loading: false,
-            result: 'Investigation complete.',
-          },
-        },
-      },
-      '.tool-event-body',
-      'Investigation complete.',
-    ],
+    ['no time without a tracked runtime', {}, null],
+    ['the Child Run runtime', { 'runDuration:sub-run': 4200 }, '4.2s'],
   ])(
-    'shows %s on a completed background sub-agent',
-    (_case, props, selector, text) => {
-      timeline.render(backgroundSubAgentSession(), props);
+    'settles a Sub-Agent row when its Run completes, showing %s',
+    (_case, timing, time) => {
+      timeline.render(subAgentSession(), {
+        subAgentStatuses: { 'run:sub-run': 'completed', ...timing },
+      });
 
+      expect(subAgentLine().querySelector('.te-dot.done')).not.toBeNull();
+      expect(subAgentLine().querySelector('.te-dot.running')).toBeNull();
       expect(
-        document.querySelector(`.subagent-tool-event ${selector}`).textContent,
-      ).toContain(text);
+        subAgentLine().querySelector('.te-time')?.textContent.trim() ?? null,
+      ).toBe(time);
     },
   );
 
@@ -165,10 +212,7 @@ describe('ChatTimeline sub-agent rows', () => {
     const sessionState = timelineSession();
     appendEvents(sessionState, 'run-parent', [
       {
-        ...toolStarted('call-subagent', 'subagent', {
-          action: 'run',
-          ...BACKGROUND_ARGUMENTS,
-        }),
+        ...toolStarted('call-subagent', 'subagent', RUN_ARGUMENTS),
         timestamp: '2026-08-05T18:00:00.000Z',
       },
       {
@@ -182,7 +226,6 @@ describe('ChatTimeline sub-agent rows', () => {
               session_id: 'sub-session',
               run_id: 'sub-run',
               status: 'running',
-              delivery: 'automatic',
             },
           },
           { timing: { duration_ms: 50 } },
@@ -241,8 +284,8 @@ describe('ChatTimeline sub-agent rows', () => {
       const sessionState = timelineSession();
       appendEvents(sessionState, 'run-subagent-link', [
         toolStarted('call-subagent', 'subagent', {
+          action: 'run',
           agent_id: 'beta',
-          background: false,
           content: 'Inspect the logs',
         }),
         targetEvent,
@@ -260,24 +303,7 @@ describe('ChatTimeline sub-agent rows', () => {
     },
   );
 
-  it('renders a blocking sub-agent row while its Session is starting', () => {
-    const sessionState = timelineSession();
-    appendEvents(sessionState, 'run-blocking', [
-      toolStarted('call-subagent', 'subagent', {
-        agent_id: 'beta',
-        background: false,
-        content: 'Inspect slowly',
-      }),
-    ]);
-    timeline.render(sessionState);
-
-    expect(
-      document.querySelector('.subagent-tool-event').textContent,
-    ).toContain(t('chat.subagent.starting'));
-    expect(document.querySelector('.subagent-link')).toBeNull();
-  });
-
-  it('renders a cancelled blocking sub-agent as cancelled after History reload', () => {
+  it('renders a Sub-Agent call cancelled before its result as cancelled after History reload', () => {
     const sessionState = timelineSession();
     loadHistory(sessionState, [
       { id: 'user-1', role: 'user', content: 'Research the APIs' },
@@ -290,8 +316,8 @@ describe('ChatTimeline sub-agent rows', () => {
             id: 'call-subagent',
             name: 'subagent',
             arguments: {
+              action: 'run',
               agent_id: 'researcher',
-              background: false,
               content: 'Research the APIs',
             },
           },
@@ -309,15 +335,15 @@ describe('ChatTimeline sub-agent rows', () => {
 
     const subAgentRow = document.querySelector('.subagent-tool-event');
     expect(subAgentRow.textContent).toContain(t('chat.toolCancelled'));
-    expect(subAgentRow.textContent).not.toContain(t('chat.subagent.starting'));
     expect(subAgentRow.querySelector('.te-dot.cancelled')).not.toBeNull();
+    expect(subAgentRow.querySelector('.subagent-link')).toBeNull();
     expect(subAgentRow.querySelector('[data-cancel="subagent"]')).toBeNull();
   });
 
   it.each([
     [
-      'a background sub-agent before its Session target',
-      toolStarted('call-subagent', 'subagent', BACKGROUND_ARGUMENTS),
+      'a sub-agent before its Session target',
+      toolStarted('call-subagent', 'subagent', RUN_ARGUMENTS),
     ],
     [
       'a streamed sub-agent call that is still preparing',

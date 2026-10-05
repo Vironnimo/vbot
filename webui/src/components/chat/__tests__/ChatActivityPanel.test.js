@@ -16,19 +16,12 @@ vi.mock('svelte/reactivity', async () => {
 const { default: ChatActivityPanel } =
   await import('../ChatActivityPanel.svelte');
 
-function subAgentTask({
-  id,
-  agentId,
-  content = 'Review',
-  status,
-  delivery = 'automatic',
-}) {
+function subAgentTask({ id, agentId, content = 'Review', status }) {
   const data = {
     id: `sub-${id}`,
     agent_id: agentId,
     session_id: `session-${id}`,
     status,
-    delivery,
   };
   return {
     type: 'tool_call',
@@ -176,8 +169,9 @@ describe('ChatActivityPanel', () => {
     flushSync();
   }
 
-  // Sub-Agent Runs in every state (the running one listed last), a foreground
-  // Sub-Agent, and two background commands (one failed through its tracked status).
+  // Sub-Agent Runs in every state (the running one listed last), a message to
+  // one of them, and two background commands (one failed through its tracked
+  // status).
   function sessionTasks() {
     const tasks = {
       completed: subAgentTask({
@@ -195,13 +189,28 @@ describe('ChatActivityPanel', () => {
         agentId: 'tester',
         status: 'failed',
       }),
-      foreground: subAgentTask({
-        id: 'foreground',
-        agentId: 'planner',
-        content: 'Run foreground checks',
-        status: 'completed',
-        delivery: 'inline',
-      }),
+      message: {
+        type: 'tool_call',
+        id: 'message',
+        name: 'subagent',
+        status: 'success',
+        arguments: {
+          action: 'send',
+          id: 'sub-completed',
+          content: 'Also check the docs',
+        },
+        result: {
+          ok: true,
+          error: null,
+          data: {
+            id: 'sub-completed',
+            agent_id: 'reviewer',
+            session_id: 'session-completed',
+            status: 'queued',
+          },
+          artifacts: [],
+        },
+      },
       running: subAgentTask({
         id: 'running',
         agentId: 'builder',
@@ -258,8 +267,8 @@ describe('ChatActivityPanel', () => {
     commands.querySelector('summary').click();
     expect(commands.open).toBe(true);
 
-    // Foreground Sub-Agents stay in the timeline only.
-    expect(document.body.textContent).not.toContain('Run foreground checks');
+    // A message to a Sub-Agent stays in the timeline only.
+    expect(document.body.textContent).not.toContain('Also check the docs');
     const subAgentRows = Object.fromEntries(
       [...subagents.querySelectorAll('.chat-activity__task-row')].map((row) => [
         row

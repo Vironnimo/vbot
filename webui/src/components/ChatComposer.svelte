@@ -4,6 +4,8 @@
   import ModelAutocomplete from './ModelAutocomplete.svelte';
   import SkillAutocomplete from './SkillAutocomplete.svelte';
   import Button from './ui/Button.svelte';
+  import ContextMenu from './ui/ContextMenu.svelte';
+  import { contextMenuAnchor } from './ui/contextMenu.js';
   import { activeLocaleTag, t } from '$lib/i18n.js';
   import { onDestroy, tick } from 'svelte';
   import {
@@ -46,6 +48,11 @@
     focusRequest = 0,
     onSendMessage,
     onCancelRun = () => {},
+    // Known work of this Session that outlives its Run (a running Sub-Agent
+    // or handed-off command): Stop all stays offered after the Run ended.
+    backgroundWorkRunning = false,
+    stoppingAll = false,
+    onStopAll = () => {},
     onTranscriptionError,
     onListFiles = null,
     onLoadModelCatalog = null,
@@ -108,6 +115,36 @@
 
   let inputOrigin = $state('');
   let submitInFlight = $state(false);
+
+  // While a Run is active, Stop cancels it and its menu offers Stop all; once
+  // only background work runs, Stop all stands alone. The menu closes with
+  // the Run, since it renders inside the Run's Stop control.
+  let stopMenu = $state(null);
+
+  function openStopMenu(event) {
+    stopMenu = {
+      ...contextMenuAnchor(event),
+      label: t('chat.stopOptions'),
+      items: [
+        {
+          id: 'stop-run',
+          label: t('chat.cancelRun'),
+          group: 'run',
+          disabled: cancelling,
+          hint: cancelling ? t('cancel.cancelling') : '',
+          onSelect: onCancelRun,
+        },
+        {
+          id: 'stop-all',
+          label: t('chat.stopAll'),
+          group: 'all',
+          danger: true,
+          disabled: stoppingAll,
+          onSelect: onStopAll,
+        },
+      ],
+    };
+  }
 
   // Why Send is unavailable right now. A disabled composer (no Agent, History
   // loading) explains itself, so it gives no reason here.
@@ -980,21 +1017,81 @@
         <!-- Run-level cancel lives next to Send: while a run is active both
              actions coexist — Send queues, the stop button cancels. It is
              deliberately independent of the composer `disabled` state so a
-             run stays cancellable even while the input is locked. -->
+             run stays cancellable even while the input is locked. Its menu
+             button offers Stop all, which also ends the Session's background
+             commands, terminals and Sub-Agents. -->
+        <span class="composer-stop composer-stop-group">
+          <Button
+            variant="danger"
+            icon
+            class="composer-stop-run"
+            disabled={cancelling}
+            disabledReason={cancelling ? t('cancel.cancelling') : ''}
+            ariaLabel={cancelling
+              ? t('cancel.cancelling')
+              : t('chat.cancelRun')}
+            tooltip={{
+              title: t('chat.cancelRun'),
+              text: t('chat.cancelRunHint'),
+            }}
+            onClick={onCancelRun}
+          >
+            <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
+              <rect
+                x="3.5"
+                y="3.5"
+                width="7"
+                height="7"
+                rx="1"
+                fill="currentColor"
+                stroke="none"
+              />
+            </svg>
+          </Button>
+          <Button
+            variant="danger"
+            icon
+            class="composer-stop-menu"
+            loading={stoppingAll}
+            ariaLabel={t('chat.stopOptions')}
+            tooltip={{
+              title: t('chat.stopOptions'),
+              text: t('chat.stopOptionsHint'),
+            }}
+            aria-haspopup="menu"
+            aria-expanded={stopMenu !== null}
+            onClick={openStopMenu}
+          >
+            <svg viewBox="0 0 10 14" width="9" height="13" aria-hidden="true">
+              <path d="M2 5.5 5 8.5l3-3" />
+            </svg>
+          </Button>
+        </span>
+        <ContextMenu menu={stopMenu} onClose={() => (stopMenu = null)} />
+      {:else if backgroundWorkRunning}
         <Button
           variant="danger"
           icon
-          class="composer-stop"
-          disabled={cancelling}
-          disabledReason={cancelling ? t('cancel.cancelling') : ''}
-          ariaLabel={cancelling ? t('cancel.cancelling') : t('chat.cancelRun')}
-          tooltip={t('chat.cancelRun')}
-          onClick={onCancelRun}
+          class="composer-stop composer-stop-all"
+          loading={stoppingAll}
+          ariaLabel={t('chat.stopAll')}
+          tooltip={{ title: t('chat.stopAll'), text: t('chat.stopAllHint') }}
+          onClick={onStopAll}
         >
           <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
             <rect
-              x="3.5"
-              y="3.5"
+              x="1.5"
+              y="1.5"
+              width="7"
+              height="7"
+              rx="1"
+              fill="currentColor"
+              stroke="none"
+              opacity="0.5"
+            />
+            <rect
+              x="5.5"
+              y="5.5"
               width="7"
               height="7"
               rx="1"

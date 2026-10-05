@@ -454,6 +454,11 @@ describe('RPC wrappers', () => {
       { run_id: 'run-2' },
     ],
     [
+      'chat.stop_all',
+      (o) => api.stopAll('builder@vbot', 'session-1', o),
+      { agent_id: 'builder@vbot', session_id: 'session-1' },
+    ],
+    [
       'chat.cancel_tool_call',
       (o) =>
         api.cancelToolCall(

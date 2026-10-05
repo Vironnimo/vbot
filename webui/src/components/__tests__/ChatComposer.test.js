@@ -265,9 +265,27 @@ describe('ChatComposer', () => {
   });
 
   describe('sending', () => {
-    it('offers no stop control while no Run is active', () => {
+    it('offers no stop control while nothing runs', () => {
       composer.mount({ isRunning: false, onCancelRun: vi.fn() });
       expect(buttonLabelled('chat.cancelRun')).toBeNull();
+      expect(buttonLabelled('chat.stopAll')).toBeNull();
+      expect(buttonLabelled('chat.stopOptions')).toBeNull();
+    });
+
+    it('offers Stop all alone while only background work runs, also with a disabled composer', () => {
+      const onStopAll = vi.fn();
+      composer.mount({
+        isRunning: false,
+        backgroundWorkRunning: true,
+        disabled: true,
+        onStopAll,
+      });
+
+      expect(buttonLabelled('chat.cancelRun')).toBeNull();
+      const stopAllButton = buttonLabelled('chat.stopAll');
+      expect(stopAllButton.disabled).toBe(false);
+      stopAllButton.click();
+      expect(onStopAll).toHaveBeenCalledOnce();
     });
 
     it.each([

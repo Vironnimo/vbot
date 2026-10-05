@@ -1005,8 +1005,7 @@ export function settingsPayload(options = {}) {
     },
     subagents: {
       max_subagent_depth: 4,
-      max_subagents_per_turn: 8,
-      subagent_timeout_minutes: 60,
+      max_active_subagents: 8,
     },
     compaction: {
       enabled: true,

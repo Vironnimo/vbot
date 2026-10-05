@@ -36,13 +36,15 @@ function isFocusTarget(node) {
 }
 
 /**
- * Anchor for a menu opened by `event`: `{ x, y, returnFocus }` in viewport
- * coordinates. A pointer event opens at the pointer; a keyboard event (or a
- * keyboard-generated `contextmenu` without coordinates) opens below the
+ * Anchor for a menu opened by `event`: `{ x, y, above?, returnFocus }` in
+ * viewport coordinates. A pointer event opens at the pointer; a keyboard event
+ * (or a keyboard-generated `contextmenu` without coordinates) opens below the
  * event target's left edge, and a menu button (`aria-haspopup="menu"`, such
- * as a row's "more" button) always opens below its own left edge. `returnFocus` is the element that held focus
- * when the menu opened, falling back to the event's element, so closing the
- * menu returns the user where they were.
+ * as a row's "more" button) always opens below its own left edge. Such an
+ * element anchor also gives `above`, the element's top edge, so a menu without
+ * room below opens above the element instead of covering it. `returnFocus` is
+ * the element that held focus when the menu opened, falling back to the
+ * event's element, so closing the menu returns the user where they were.
  */
 export function contextMenuAnchor(event) {
   const eventTarget = event?.target instanceof Element ? event.target : null;
@@ -57,6 +59,7 @@ export function contextMenuAnchor(event) {
 
   let x;
   let y;
+  let above;
   if (pointer) {
     x = event.clientX;
     y = event.clientY;
@@ -64,6 +67,7 @@ export function contextMenuAnchor(event) {
     const rect = target?.getBoundingClientRect?.();
     x = rect?.left ?? KEYBOARD_ANCHOR_FALLBACK;
     y = rect?.bottom ?? KEYBOARD_ANCHOR_FALLBACK;
+    above = rect?.top;
   }
 
   const active = document.activeElement;
@@ -76,5 +80,7 @@ export function contextMenuAnchor(event) {
         ? target
         : null;
 
-  return { x, y, returnFocus };
+  return Number.isFinite(above)
+    ? { x, y, above, returnFocus }
+    : { x, y, returnFocus };
 }

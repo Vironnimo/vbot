@@ -538,34 +538,20 @@ describe('agent defaults, sub-agents and session titles', () => {
   it('normalizes sub-agent limits to positive integers', () => {
     expect(normalizeSubAgentSettings({})).toEqual({
       max_subagent_depth: 4,
-      max_subagents_per_turn: 8,
-      subagent_timeout_minutes: 60,
+      max_active_subagents: 8,
     });
     expect(
       normalizeSubAgentSettings({
-        subagents: {
-          max_subagent_depth: '6',
-          max_subagents_per_turn: 0,
-          subagent_timeout_minutes: 90,
-        },
+        subagents: { max_subagent_depth: '6', max_active_subagents: 0 },
       }),
-    ).toEqual({
-      max_subagent_depth: 6,
-      max_subagents_per_turn: 8,
-      subagent_timeout_minutes: 90,
-    });
+    ).toEqual({ max_subagent_depth: 6, max_active_subagents: 8 });
     expect(
       buildSubAgentSettingsPayload({
         max_subagent_depth: '7',
-        max_subagents_per_turn: '9',
-        subagent_timeout_minutes: '30',
+        max_active_subagents: '9',
       }),
     ).toEqual({
-      subagents: {
-        max_subagent_depth: 7,
-        max_subagents_per_turn: 9,
-        subagent_timeout_minutes: 30,
-      },
+      subagents: { max_subagent_depth: 7, max_active_subagents: 9 },
     });
   });
 

@@ -23,6 +23,7 @@ import {
   startChatRun as requestStartChatRun,
   updateQueueItem as requestUpdateQueueItem,
   steerQueueItem as requestSteerQueueItem,
+  stopAll as requestStopAll,
   undoLearningChanges as requestUndoLearningChanges,
 } from '../api.js';
 import { t } from '../i18n.js';
@@ -115,6 +116,7 @@ function defaultChatOperations() {
     startChatRun: (...args) => requestStartChatRun(...args),
     updateQueueItem: (...args) => requestUpdateQueueItem(...args),
     steerQueueItem: (...args) => requestSteerQueueItem(...args),
+    stopAll: (...args) => requestStopAll(...args),
     undoLearningChanges: (...args) => requestUndoLearningChanges(...args),
   };
 }
@@ -665,6 +667,36 @@ export function createChatController({
     }
   }
 
+  // Stops everything the Session runs: its Run, background commands and
+  // terminals, and every Sub-Agent below it. Each stopped Run ends through its
+  // own live events; the outcome only reports how much was stopped.
+  async function stopAll(sessionState) {
+    if (!sessionState?.agentId || !sessionState?.sessionId) {
+      return { kind: 'unavailable' };
+    }
+    if (sessionState.stoppingAll) {
+      return { kind: 'pending' };
+    }
+    sessionState.stoppingAll = true;
+    sessionState.actionError = '';
+    try {
+      const result = await operations.stopAll(
+        sessionState.agentId,
+        sessionState.sessionId,
+      );
+      const stopped = Number(result?.stopped);
+      return {
+        kind: 'stopped',
+        stopped: Number.isFinite(stopped) && stopped > 0 ? stopped : 0,
+      };
+    } catch (error) {
+      sessionState.actionError = `${t('chat.stopAllError')} ${errorMessage(error)}`;
+      return { kind: 'failed' };
+    } finally {
+      sessionState.stoppingAll = false;
+    }
+  }
+
   async function controlRun(sessionState, action, { runId, toolCallId } = {}) {
     const currentRun = sessionState?.currentRun;
     const targetRunId = runId ?? currentRun?.runId;
@@ -946,6 +978,7 @@ export function createChatController({
     removeQueued,
     steerQueued,
     sendMessage,
+    stopAll,
     syncAgentActivity,
     syncSessionQueue,
     undoReflection: reflections.undo,

@@ -246,6 +246,24 @@
   margin-inline: 4px;
 }
 
+/* Stop and its menu button read as one split control. */
+.input-area .composer-stop-group {
+  display: inline-flex;
+  align-items: center;
+}
+
+.input-area .composer-stop-group .composer-stop-run {
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
+.input-area .composer-stop-group .btn-icon.composer-stop-menu {
+  width: 18px;
+  margin-inline-start: -1px;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+
 .input-area.drag-over .input-wrap {
   border-color: var(--accent-40);
   box-shadow: var(--focus-ring);

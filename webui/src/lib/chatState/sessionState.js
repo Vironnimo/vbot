@@ -75,7 +75,6 @@ export function createChatState() {
     commandsError: '',
     availableSkills: [],
     subAgentStatuses: {},
-    subAgentResults: {},
     // Live status of each handed-off shell command, by terminal id, from
     // `command_status_changed` (bounded, newest last).
     commandStatuses: {},
@@ -144,6 +143,8 @@ export function ensureSessionState(state, agentId, sessionId) {
       releasedRunIds: [],
       currentRun: null,
       cancellingRunIds: [],
+      // True while a Stop all request for this Session is in flight.
+      stoppingAll: false,
       queue: [],
       status: CHAT_STATUS_IDLE,
       error: null,

@@ -244,6 +244,25 @@ describe('ContextMenu', () => {
     expect(menuElement().style.left).toBe(`${window.innerWidth - 224 - 8}px`);
     expect(menuElement().style.top).toBe(`${window.innerHeight - 100 - 8}px`);
   });
+
+  it('opens above its anchor element when there is no room below', async () => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 224,
+      height: 100,
+      left: 0,
+      top: 0,
+      right: 224,
+      bottom: 100,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+    const buttonTop = window.innerHeight - 40;
+
+    await openMenu({ x: 40, y: window.innerHeight - 10, above: buttonTop });
+
+    expect(menuElement().style.top).toBe(`${buttonTop - 100}px`);
+  });
 });
 
 describe('contextMenu helpers', () => {
@@ -262,6 +281,7 @@ describe('contextMenu helpers', () => {
     row.focus();
     vi.spyOn(row, 'getBoundingClientRect').mockReturnValue({
       left: 12,
+      top: 40,
       bottom: 64,
     });
 
@@ -281,6 +301,7 @@ describe('contextMenu helpers', () => {
     expect(contextMenuAnchor(keyboard)).toEqual({
       x: 12,
       y: 64,
+      above: 40,
       returnFocus: row,
     });
 
@@ -297,6 +318,7 @@ describe('contextMenu helpers', () => {
     expect(contextMenuAnchor(click)).toEqual({
       x: 12,
       y: 64,
+      above: 40,
       returnFocus: row,
     });
   });

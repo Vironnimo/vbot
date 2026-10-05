@@ -81,25 +81,6 @@ describe('Sub-Agent row statuses', () => {
     });
   });
 
-  it('maps a drained queued Sub-Agent to the Run its run_started announces', () => {
-    const harness = makeStreamHarness();
-
-    harness.stream.handleServerEvents(
-      serverRunEvent('run_started', 1, {
-        run_id: 'run-drained-1',
-        agent_id: DISPLAYED_AGENT_ID,
-        session_id: DISPLAYED_SESSION_ID,
-        status: 'running',
-        output: { status: 'running', queue_item_id: 'queue-item-42' },
-      }),
-    );
-
-    expect(harness.subAgentRunStatuses).toMatchObject({
-      'queueRun:queue-item-42': 'run-drained-1',
-      'run:run-drained-1': 'running',
-    });
-  });
-
   it('projects an explicit Parent-Agent cancellation onto the exact child row', () => {
     const harness = makeStreamHarness();
 
@@ -113,8 +94,7 @@ describe('Sub-Agent row statuses', () => {
           data: {
             agent_id: DISPLAYED_AGENT_ID,
             session_id: DISPLAYED_SESSION_ID,
-            run_id: 'run-drained-1',
-            queue_item_id: 'queue-item-42',
+            run_id: 'run-child-1',
             status: 'cancelled',
           },
         },
@@ -122,9 +102,7 @@ describe('Sub-Agent row statuses', () => {
     );
 
     expect(harness.subAgentRunStatuses).toMatchObject({
-      'run:run-drained-1': 'cancelled',
-      'queue:queue-item-42': 'cancelled',
-      'queueRun:queue-item-42': 'run-drained-1',
+      'run:run-child-1': 'cancelled',
       [`session:${DISPLAYED_AGENT_ID}::${DISPLAYED_SESSION_ID}`]: 'cancelled',
     });
   });

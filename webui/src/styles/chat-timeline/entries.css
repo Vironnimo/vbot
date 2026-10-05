@@ -1088,12 +1088,6 @@
   white-space: nowrap;
 }
 
-.subagent-state {
-  color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
-}
-
 /* Per-row cancel control. The CSS-only fade-in keeps fast tool calls (the
    majority) from flashing a button for calls that finish in well under the
    reveal window. */

@@ -128,6 +128,8 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
         run_id: runId,
         tool_call_id: toolCallId,
       }),
+    stopAll: (agentId, sessionId) =>
+      call('chat.stop_all', { agent_id: agentId, session_id: sessionId }),
     listFiles: (agentId) => call('files.list', { agent_id: agentId }),
     listPrompts: (params = {}) => call('prompt.list', params),
     updatePromptBlock: (params) => call('prompt.update', params),

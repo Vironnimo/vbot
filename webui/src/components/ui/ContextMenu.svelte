@@ -8,6 +8,8 @@
   //
   // menu: null | {
   //   x, y,              viewport coordinates of the anchor
+  //   above?,            top edge of the anchor's element: a menu without
+  //                      room below opens above it instead of covering it
   //   returnFocus,       element focused again after Escape or an action
   //   label,             accessible name of the menu
   //   items: [{ id, label, onSelect, danger?, disabled?, group?, hint? }]
@@ -130,10 +132,19 @@
     const node = element;
     if (!current || !node) return undefined;
     const bounds = node.getBoundingClientRect();
+    const fitsBelow =
+      current.y + bounds.height <= window.innerHeight - VIEWPORT_MARGIN;
+    const fitsAbove =
+      Number.isFinite(current.above) &&
+      current.above - bounds.height >= VIEWPORT_MARGIN;
     placement = {
       menu: current,
       x: clamp(current.x, bounds.width, window.innerWidth),
-      y: clamp(current.y, bounds.height, window.innerHeight),
+      y: clamp(
+        !fitsBelow && fitsAbove ? current.above - bounds.height : current.y,
+        bounds.height,
+        window.innerHeight,
+      ),
     };
     let cancelled = false;
     void tick().then(() => {

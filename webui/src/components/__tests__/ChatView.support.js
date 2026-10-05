@@ -312,6 +312,10 @@ export function createChatRpcMock({
       throw new Error('Unexpected stream call');
     }
 
+    if (method === 'chat.stop_all') {
+      return { ok: true, stopped: 0 };
+    }
+
     if (method === 'chat.control_run') {
       return {
         run_id: params.run_id,

@@ -7,25 +7,21 @@ export {
   toolRowPresentation,
 } from './chatTimelinePresentation/toolRows.js';
 export {
+  subAgentAction,
   subAgentLastToolName,
   subAgentToolStatusLabel,
   isSubAgentSpawnTool,
-  isStartingForegroundSubAgent,
+  isSubAgentSendTool,
+  isSubAgentTargetTool,
   subAgentAgentId,
   subAgentEffectiveRunId,
-  subAgentQueueItemId,
   resolveSubAgentCancelPlan,
   subAgentPreview,
   subAgentTask,
   subAgentStatusDetails,
   subAgentDotStatus,
   subAgentNavigationTarget,
-  subAgentResultKey,
-  subAgentResultEntryAllowsFetch,
-  subAgentShouldFetchResult,
   subAgentNeedsStatusVerification,
-  subAgentDisplayResult,
-  subAgentResultTextFromMessages,
   subAgentResultData,
 } from './chatTimelinePresentation/subagents.js';
 export {

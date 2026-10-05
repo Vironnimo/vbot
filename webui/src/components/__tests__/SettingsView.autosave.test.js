@@ -36,8 +36,7 @@ function subagents(depth) {
   return {
     subagents: {
       max_subagent_depth: depth,
-      max_subagents_per_turn: 8,
-      subagent_timeout_minutes: 60,
+      max_active_subagents: 8,
     },
   };
 }
@@ -121,11 +120,7 @@ describe('SettingsView editor saving', () => {
     const inputs = document.querySelectorAll(
       '[data-settings-section="subagents"] input.s-input',
     );
-    expect(Array.from(inputs, (input) => input.value)).toEqual([
-      '4',
-      '8',
-      '60',
-    ]);
+    expect(Array.from(inputs, (input) => input.value)).toEqual(['4', '8']);
     const saveState = inputs[0]
       .closest('.settings-editor')
       .querySelector('.save-status');
@@ -134,7 +129,6 @@ describe('SettingsView editor saving', () => {
     for (const [index, value] of [
       [0, '5'],
       [1, '12'],
-      [2, '45'],
     ]) {
       inputs[index].value = value;
       inputs[index].dispatchEvent(new Event('input', { bubbles: true }));
@@ -149,8 +143,7 @@ describe('SettingsView editor saving', () => {
         {
           subagents: {
             max_subagent_depth: 5,
-            max_subagents_per_turn: 12,
-            subagent_timeout_minutes: 45,
+            max_active_subagents: 12,
           },
           base: subagents(4),
         },
@@ -236,7 +229,7 @@ describe('SettingsView editor saving', () => {
     // Another window (or a save left running when the user navigated away)
     // lands after this editor loaded its values.
     await backend('settings.update', {
-      subagents: { ...subagents(4).subagents, max_subagents_per_turn: 10 },
+      subagents: { ...subagents(4).subagents, max_active_subagents: 10 },
     });
 
     setInputValue(DEPTH, '6');
@@ -247,25 +240,19 @@ describe('SettingsView editor saving', () => {
     expect(getSettingsUpdateCalls()[1][1]).toEqual({
       subagents: {
         max_subagent_depth: 6,
-        max_subagents_per_turn: 10,
-        subagent_timeout_minutes: 60,
+        max_active_subagents: 10,
       },
       base: {
         subagents: {
           max_subagent_depth: 4,
-          max_subagents_per_turn: 10,
-          subagent_timeout_minutes: 60,
+          max_active_subagents: 10,
         },
       },
     });
     const inputs = document.querySelectorAll(
       '[data-settings-section="subagents"] input.s-input',
     );
-    expect(Array.from(inputs, (input) => input.value)).toEqual([
-      '6',
-      '10',
-      '60',
-    ]);
+    expect(Array.from(inputs, (input) => input.value)).toEqual(['6', '10']);
   });
 
   // A cleared number field falls back to its default. It writes only when the

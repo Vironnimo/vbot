@@ -15,7 +15,6 @@ import {
   listQueueMock,
   listedSessions,
   message,
-  removeFromQueueMock,
   rpcCalls,
   rpcMock,
   runEventSource,
@@ -31,6 +30,7 @@ import {
   waitForText,
 } from './ChatView.support.js';
 import { createChatViewParentHarness } from './ChatView.parent.support.svelte.js';
+import { t } from '../../lib/i18n.js';
 
 const alphaProps = () => ({
   sharedAgents: [createAgent()],
@@ -57,16 +57,16 @@ async function startRun(runId, content) {
   return runEventSource(runId);
 }
 
-// Emits a background `subagent` spawn into the running parent Run: the tool
-// call, its child Session start and the spawn result, all carrying `spawn`.
+// Emits a `subagent` run into the running parent Run: the tool call, its
+// child Session start and the run result, all carrying `spawn`.
 function emitSubAgentSpawn(source, callId, spawn, { afterStart } = {}) {
   const toolCall = { id: callId, index: 0, name: 'subagent' };
   source.emit('tool_call_started', {
     tool_call: {
       ...toolCall,
       arguments: {
+        action: 'run',
         agent_id: 'alpha',
-        background: true,
         content: 'Inspect the project',
       },
     },
@@ -151,21 +151,6 @@ describe('ChatView Runs', () => {
       },
     });
     flushSync();
-  }
-
-  // A background sub-agent spawn queued behind a busy child Session: its
-  // descriptor carries only a Queue item id, never a Run id. The row checks
-  // its status automatically on render.
-  async function mountQueuedSubAgent() {
-    await chat.mountChat(alphaProps(), { ready: null });
-    const source = await startRun('run-parent', 'Spawn queued sub-agent');
-    emitSubAgentSpawn(source, 'call-queued', {
-      agent_id: 'alpha',
-      session_id: 'sub-session-1',
-      queue_item_id: 'queue-item-1',
-      status: 'queued',
-    });
-    expect(subAgentRow()).not.toBeNull();
   }
 
   const clickSubAgentCancel = () =>
@@ -625,70 +610,125 @@ describe('ChatView Runs', () => {
       expect(cancelRunMock).toHaveBeenCalledWith('child-run', {
         reason: 'user',
       });
-      expect(removeFromQueueMock).not.toHaveBeenCalled();
     });
+  });
 
-    it('keeps a queued spawn running while its Queue item waits, and cancelling removes it', async () => {
-      serveSubAgentHistory(subSessionHistory());
-      listQueueMock.mockImplementation(async (_agentId, sessionId) => ({
-        items:
-          sessionId === 'sub-session-1'
-            ? [{ id: 'queue-item-1', content: 'Inspect', internal: false }]
-            : [],
-      }));
-      await mountQueuedSubAgent();
+  describe('Stop all', () => {
+    const labelledButton = (label) =>
+      document.querySelector(`button[aria-label="${label}"]`);
+    const toastText = () =>
+      document.querySelector('.chat-view__command-toast')?.textContent.trim();
 
-      // The automatic Run-id-less check consults the child Queue and keeps the
-      // dot running instead of settling "no trace" as success.
-      await waitForCondition(() =>
-        listQueueMock.mock.calls.some(
-          ([agentId, sessionId]) =>
-            agentId === 'alpha' && sessionId === 'sub-session-1',
-        ),
-      );
-      await settle();
-      expect(subAgentDot('running')).not.toBeNull();
-      expect(subAgentRow().querySelectorAll('.te-dot')).toHaveLength(1);
+    it.each([
+      [0, 'chat.stopAllNothing'],
+      [3, 'chat.stopAllDone'],
+    ])(
+      'stops all work of the Session from the Stop menu and reports %i stopped',
+      async (stopped, notice) => {
+        const fallback = createChatRpcMock({
+          streamResponse: runningRun('run-parent'),
+        });
+        rpcMock.mockImplementation(async (method, params) =>
+          method === 'chat.stop_all'
+            ? { ok: true, stopped }
+            : fallback(method, params),
+        );
+        await chat.mountChat(alphaProps(), { ready: null });
+        await startRun('run-parent', 'Start a long run');
+        await waitForCondition(() =>
+          Boolean(labelledButton(t('chat.stopOptions'))),
+        );
 
-      clickSubAgentCancel();
-      // Nothing else ever reports a never-started child, so the cancel
-      // settles the row itself.
-      await waitForCondition(() => subAgentDot('cancelled') !== null);
-      // The Queue removal keys on the bare child Agent id.
-      expect(removeFromQueueMock).toHaveBeenCalledWith(
-        'alpha',
-        'sub-session-1',
-        'queue-item-1',
-      );
-      expect(cancelRunMock).not.toHaveBeenCalled();
-    });
+        labelledButton(t('chat.stopOptions')).click();
+        flushSync();
+        Array.from(document.querySelectorAll('[role="menuitem"]'))
+          .find((item) => item.textContent.includes(t('chat.stopAll')))
+          .click();
 
-    it('cancels the child Session active Run when the queued spawn already started', async () => {
-      serveSubAgentHistory(
-        subSessionHistory({ active_run: runningRun('child-active-run') }),
-      );
-      // The Queue item is gone and no Queue-to-Run mapping survived a reload.
-      removeFromQueueMock.mockRejectedValue(
-        Object.assign(new Error('queued item not found: queue-item-1'), {
-          code: 'queue_item_not_found',
+        await waitForCondition(() => toastText() === t(notice));
+        expect(rpcCalls('chat.stop_all')).toEqual([
+          { agent_id: 'alpha', session_id: 'session-1' },
+        ]);
+        expect(cancelRunMock).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ['offers', subSessionHistory({ active_run: runningRun('child-run') })],
+      [
+        'does not offer',
+        subSessionHistory({
+          messages: [
+            {
+              id: 'sub-run-summary',
+              role: 'run_summary',
+              run_id: 'child-run',
+              status: 'completed',
+            },
+          ],
         }),
-      );
-      await mountQueuedSubAgent();
-      await waitForCondition(() => subAgentDot('running') !== null);
+      ],
+    ])(
+      '%s Stop all without a Run by whether a Sub-Agent of the Session runs',
+      async (offers, childHistory) => {
+        const fallback = createChatRpcMock({
+          sessionMessages: {
+            'session-1': [
+              message('user-1', 'Delegate the work', 'user'),
+              {
+                id: 'assistant-spawn',
+                role: 'assistant',
+                content: null,
+                tool_calls: [
+                  {
+                    id: 'call-worker',
+                    name: 'subagent',
+                    arguments: {
+                      action: 'run',
+                      agent_id: 'alpha',
+                      content: 'Do the work',
+                    },
+                  },
+                ],
+              },
+              {
+                id: 'spawn-result',
+                role: 'tool',
+                tool_call_id: 'call-worker',
+                name: 'subagent',
+                content: JSON.stringify({
+                  ok: true,
+                  data: {
+                    agent_id: 'alpha',
+                    session_id: 'sub-session-1',
+                    run_id: 'child-run',
+                    status: 'running',
+                  },
+                }),
+              },
+              message('assistant-one', 'Hello'),
+            ],
+          },
+        });
+        rpcMock.mockImplementation(async (method, params) =>
+          method === 'chat.history' && params?.session_id === 'sub-session-1'
+            ? childHistory
+            : fallback(method, params),
+        );
+        await chat.mountChat(alphaProps());
+        await waitForCondition(() => statusChecks() === 1);
+        await settle();
 
-      clickSubAgentCancel();
-      await waitForCondition(() => subAgentDot('cancelled') !== null);
-      expect(cancelRunMock).toHaveBeenCalledWith('child-active-run', {
-        reason: 'user',
-      });
-    });
-
-    it('settles a never-started queued spawn to cancelled once its Queue item is gone', async () => {
-      serveSubAgentHistory(subSessionHistory());
-      await mountQueuedSubAgent();
-
-      await waitForCondition(() => subAgentDot('cancelled') !== null);
-      expect(subAgentDot('done')).toBeNull();
-    });
+        expect(findCancelRunButton()).toBeUndefined();
+        if (offers === 'offers') {
+          expect(subAgentDot('running')).not.toBeNull();
+          labelledButton(t('chat.stopAll')).click();
+          await waitForCondition(() => rpcCalls('chat.stop_all').length === 1);
+        } else {
+          expect(subAgentDot('done')).not.toBeNull();
+          expect(labelledButton(t('chat.stopAll'))).toBeNull();
+        }
+      },
+    );
   });
 });
