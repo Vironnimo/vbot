@@ -58,7 +58,7 @@ _DESKTOP_EXECUTABLE = "vbot.desktop.exe"
 _TOAST_SHOWN_SECONDS = 300.0
 _BADGES = {
     "stopped": (138, 138, 138, 255),
-    "updating": (47, 124, 246, 255),
+    "busy": (47, 124, 246, 255),
     "error": (229, 72, 77, 255),
 }
 
@@ -562,7 +562,7 @@ def _draw_with_font(
 def render_icon(base: Any, state: str, size: int) -> Any:
     """Return the application icon at ``size`` with the badge for ``state``.
 
-    ``normal`` has no badge; ``stopped``, ``updating`` and ``error`` add a
+    ``normal`` has no badge; ``stopped``, ``busy`` and ``error`` add a
     colored dot, separated from the logo by a transparent ring.
     """
 

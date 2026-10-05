@@ -142,6 +142,19 @@ def _wait_until(condition, *, timeout: float = 2.0) -> None:
             {"Open in browser", "Start server"},
             id="not-responding",
         ),
+        # Started elsewhere: a start that never finishes can still be stopped.
+        pytest.param(
+            "starting",
+            {"Stop server"},
+            {"Open in browser", "Start server", "Restart server"},
+            id="starting",
+        ),
+        pytest.param(
+            "stopping",
+            set(),
+            {"Open in browser", "Start server", "Restart server", "Stop server"},
+            id="stopping",
+        ),
     ],
 )
 def test_server_desktop_menu_projects_only_the_available_actions(
@@ -193,16 +206,18 @@ def test_update_is_disabled_while_an_operation_is_active():
             "Server not responding",
             id="not-responding",
         ),
+        pytest.param(TrayState("starting", "server"), "busy", "Server starting…", id="starting"),
+        pytest.param(TrayState("stopping", "server"), "busy", "Server stopping…", id="stopping"),
         pytest.param(
             TrayState("running", "server", update_phase="verifying"),
-            "updating",
+            "busy",
             "Updating…",
             id="updating",
         ),
         pytest.param(
             TrayState("running", "server", update_phase="rolled_back"),
             "error",
-            "Update failed",
+            "update failed",
             id="failed-update",
         ),
         pytest.param(
@@ -227,13 +242,13 @@ def test_icon_and_tooltip_show_the_application_state(state: TrayState, icon: str
     assert status in presentation.status.headline
 
 
-def test_status_window_lists_details_progress_and_recovery_actions():
+def test_status_window_lists_details_activity_and_recovery_actions():
     actions = Actions(
         TrayState(
             "stopped",
             "server",
             version="0.5.0",
-            update_activity=("12:00:00  Checking release",),
+            activity=("12:00:00  Server stopped from the tray",),
             details=(("Server", "http://127.0.0.1:8420"),),
             error="Startup failed: port is occupied",
         )
@@ -244,14 +259,22 @@ def test_status_window_lists_details_progress_and_recovery_actions():
     status = controller.presentation().status
     assert status.title == "vBot 0.5.0"
     assert status.failed is True
+    # A failed action never hides how the server stands.
+    assert "Server stopped" in status.headline
     assert status.rows[0] == ("Last error", "Startup failed: port is occupied")
     assert ("Server", "http://127.0.0.1:8420") in status.rows
-    assert status.activity == ("12:00:00  Checking release",)
+    assert status.activity == ("12:00:00  Server stopped from the tray",)
     assert [item.action for item in status.buttons] == [
         "start_server",
         "start_update",
         "open_logs",
     ]
+
+    actions.current = TrayState(
+        "running", "server", running_since="2026-10-05T12:58:29.000000Z", activity=()
+    )
+    controller._poll_state()
+    assert controller.presentation().status.headline.startswith("Server running since ")
 
 
 @pytest.mark.parametrize(
@@ -350,6 +373,42 @@ def test_callbacks_use_one_worker_and_recover_after_a_facade_exception():
         release_start.set()
         release_logs.set()
         controller.close()
+
+
+def test_a_running_lifecycle_action_shows_its_transition_while_the_state_keeps_refreshing():
+    start_entered = threading.Event()
+    release_start = threading.Event()
+
+    class SlowStart(Actions):
+        @override
+        def start_server(self) -> None:
+            super().start_server()
+            start_entered.set()
+            assert release_start.wait(timeout=5)
+            self.current = replace(self.current, server_state="running")
+
+    actions = SlowStart(TrayState("stopped", "server", version="0.5.0"))
+    view = View()
+    controller = TrayController(actions, poll_interval=0.01)
+    controller.attach_view(view)
+    # The tray's initial server start runs like a clicked one, once the icon shows.
+    controller.start(start_server=True)
+    try:
+        assert start_entered.wait(timeout=5)
+        _wait_until(lambda: "Server starting…" in view.presented[-1].tooltip)
+        assert view.presented[-1].icon == "busy"
+        assert not {"Start server", "Stop server", "Restart server"} & _labels(controller).keys()
+        # The facade is still polled while the action runs.
+        actions.current = replace(actions.current, version="0.5.1")
+        _wait_until(lambda: view.presented[-1].tooltip.startswith("vBot 0.5.1"))
+
+        release_start.set()
+        _wait_until(lambda: "Server running" in view.presented[-1].tooltip)
+        assert "Stop server" in _labels(controller)
+    finally:
+        release_start.set()
+        controller.close()
+    assert actions.calls == ["start_server"]
 
 
 def test_update_request_disables_duplicate_clicks_until_facade_reports_completion():
@@ -460,25 +519,37 @@ def test_quit_stops_the_view_only_after_the_facade_quits_successfully():
         controller.close()
 
 
+def _run_queued(controller: TrayController) -> None:
+    """Run the queued actions on the test's thread, as the action thread would."""
+
+    while not controller._work.empty():
+        work = controller._work.get_nowait()
+        assert work is not None
+        work()
+
+
 def test_pending_restart_waits_for_an_idle_tray_and_retries_ten_minutes_after_a_failure():
     now = [1000.0]
     actions = Actions(TrayState("running", "server", restart_pending=True))
     view = View()
-    controller = TrayController(actions, poll_interval=0.01, clock=lambda: now[0])
+    controller = TrayController(actions, clock=lambda: now[0])
     controller.attach_view(view)
 
     view.busy = True
     controller._poll_state()
+    _run_queued(controller)
     assert actions.calls == []
 
     view.busy = False
     actions.fail = "restart"
     controller._poll_state()
+    _run_queued(controller)
     assert actions.calls == ["restart"]
     assert view.stopped is False
     assert controller.presentation().status.rows[0][0] == "Last error"
     now[0] += 599
     controller._poll_state()
+    _run_queued(controller)
     assert actions.calls == ["restart"]
 
     now[0] += 1
@@ -486,13 +557,13 @@ def test_pending_restart_waits_for_an_idle_tray_and_retries_ten_minutes_after_a_
     # A queued tray action goes first; the handoff never quits or stops the server.
     controller.invoke("open_logs")
     controller._poll_state()
-    assert actions.calls == ["restart"]
-    controller.start()
-    try:
-        _wait_until(lambda: view.stopped)
-    finally:
-        controller.close()
+    _run_queued(controller)
+    assert actions.calls == ["restart", "open_logs"]
     controller._poll_state()
+    _run_queued(controller)
+    assert view.stopped is True
+    controller._poll_state()
+    _run_queued(controller)
     assert actions.calls == ["restart", "open_logs", "restart"]
 
 
@@ -687,7 +758,7 @@ def test_windows_tray_is_interacting_while_its_menu_toast_or_status_window_shows
     status.hwnd = 0
 
 
-@pytest.mark.parametrize("state", ["stopped", "updating", "error"])
+@pytest.mark.parametrize("state", ["stopped", "busy", "error"])
 def test_windows_icon_badges_the_state_and_keeps_the_normal_logo(state: str):
     if sys.platform != "win32":
         pytest.skip("native Windows tray")

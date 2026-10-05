@@ -16,6 +16,7 @@ import pytest
 
 from cli._server_target import HealthProbeResult
 from cli.application import desktop, host
+from cli.application.activity import JOURNAL_NAME, ActivityJournal
 from cli.application.monitor import MonitorStatus
 from cli.application.notifications import Toast
 from cli.application.state import ApplicationError, Installation, Operation
@@ -35,6 +36,13 @@ def _install(root: Path, *, shape: str = "server") -> Installation:
     (version / "release.json").write_text('{"version":"0.4.2"}', encoding="utf-8")
     (root / "active-version").write_text("rel_current\n", encoding="ascii")
     return install
+
+
+def _activity(install: Installation) -> list[str]:
+    """The kinds of the recorded activity entries, as any later tray reads them."""
+
+    journal = ActivityJournal(install.root / "logs" / JOURNAL_NAME)
+    return [entry.kind for entry in journal.entries()]
 
 
 def _desktop_interpreter(install: Installation) -> Path:
@@ -204,6 +212,7 @@ def _on_monitor_loop(callback) -> None:
         pytest.param(MonitorStatus("u", "connected", True), "running", id="connected"),
         pytest.param(MonitorStatus("u", "unresponsive"), "unresponsive", id="busy-server"),
         pytest.param(MonitorStatus("u", "refused"), "stopped", id="refused"),
+        pytest.param(MonitorStatus("u", "not_listening"), "starting", id="process-starting"),
         pytest.param(MonitorStatus("u", "unreachable"), "stopped", id="unreachable"),
         pytest.param(MonitorStatus("u", "rejected", True), "running", id="safe-mode"),
         pytest.param(MonitorStatus("u", "rejected", False), "conflict", id="foreign-listener"),
@@ -234,14 +243,14 @@ def test_server_state_follows_the_event_stream_monitor(
     assert sink.changes == 1
 
 
-def test_update_progress_is_recorded_and_its_result_toasted_once(
+def test_update_milestones_are_recorded_once_and_the_result_toasted_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     install = _install(tmp_path)
     Operation(id="upd_old", phase="failed", message="Old failure").save(install)
     facade, _monitor, sink = _watched(install, monkeypatch)
-    # An update that finished before the tray started is only history.
-    assert facade.state().update_activity == ()
+    # An update that finished before the tray started is history: recorded, never toasted.
+    assert len(facade.state().activity) == 1
     assert sink.toasts == []
 
     operation = Operation(id="upd_new", phase="preparing", message="Checking release")
@@ -250,15 +259,21 @@ def test_update_progress_is_recorded_and_its_result_toasted_once(
     assert (state.update_phase, state.update_message) == ("preparing", "Checking release")
     operation.target_label, operation.previous_label = "0.5.0", "0.4.2"
     operation.server_was_running = True
+    operation.transition(install, "verifying", "Verifying")
+    facade.state()
     operation.transition(install, "completed", "Updated")
-    lines = facade.state().update_activity
-    assert facade.state().update_activity == lines
+    lines = facade.state().activity
+    assert facade.state().activity == lines
 
-    assert [line.split("  ", 1)[1] for line in lines] == [
-        "Checking release",
-        "Updating vBot: 0.4.2 -> 0.5.0",
-        "Update completed — server restarted and passed its health check.",
+    assert _activity(install) == [
+        "update_failed",
+        "update_started",
+        "update_target",
+        "update_finished",
     ]
+    # A successor tray, started after the update, records nothing twice.
+    _watched(install, monkeypatch)[0].state()
+    assert len(_activity(install)) == 4
     assert [(toast.kind, toast.title) for toast in sink.toasts] == [
         ("update_result", "vBot updated")
     ]
@@ -269,7 +284,8 @@ def test_update_progress_is_recorded_and_its_result_toasted_once(
 def test_tray_initiated_stop_never_counts_as_an_unexpected_server_stop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    facade, monitor, sink = _watched(_install(tmp_path), monkeypatch)
+    install = _install(tmp_path)
+    facade, monitor, sink = _watched(install, monkeypatch)
 
     @contextmanager
     def lock(_root: Path, _name: str, **_kwargs: object):
@@ -287,6 +303,8 @@ def test_tray_initiated_stop_never_counts_as_an_unexpected_server_stop(
 
     assert sink.toasts == []
     assert monitor.reconnects == 1
+    # The activity names the tray's own stop, never a crash.
+    assert _activity(install) == ["server_stopped"]
 
 
 def test_malformed_host_exit_request_is_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -320,6 +338,7 @@ def test_lifecycle_actions_hold_operation_lock_and_raise_for_failed_result(
     with pytest.raises(ApplicationError, match="occupied"):
         facade.start_server()
     assert calls == ["lock:operation"]
+    assert _activity(facade._install) == ["action_failed"]
 
     monkeypatch.setattr(
         host.processes,
@@ -473,20 +492,21 @@ def test_browser_and_logs_use_only_the_owned_local_target(
 
 
 @pytest.mark.parametrize(
-    ("successor", "timeout", "started"),
+    ("successor", "timeout", "start", "recorded"),
     [
-        pytest.param(None, 0, ["start"], id="first-host"),
+        pytest.param(None, 0, True, "tray_started", id="first-host"),
         # A restart successor waits for its predecessor and keeps the server as
         # it is, including a server the user stopped on purpose.
-        pytest.param("1", 30, [], id="restart-successor"),
+        pytest.param("1", 30, False, "tray_restarted", id="restart-successor"),
     ],
 )
-def test_main_recovers_before_initial_start_and_only_a_first_host_starts_the_server(
+def test_main_recovers_before_the_tray_and_only_a_first_host_starts_the_server(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     successor: str | None,
     timeout: float,
-    started: list[str],
+    start: bool,
+    recorded: str,
 ):
     install = _install(tmp_path)
     order: list[str] = []
@@ -513,18 +533,23 @@ def test_main_recovers_before_initial_start_and_only_a_first_host_starts_the_ser
     monkeypatch.setattr(
         host.operations, "recover_operations", lambda _install: order.append("recover")
     )
-    monkeypatch.setattr(host.ApplicationFacade, "start_server", lambda _self: order.append("start"))
-    monkeypatch.setattr(host, "run_tray", lambda _facade, _icon: order.append("tray"))
+    # The tray shows at once and starts the server as its first action.
+    monkeypatch.setattr(
+        host,
+        "run_tray",
+        lambda _facade, _icon, *, start_server: order.append(f"tray:start={start_server}"),
+    )
 
     assert host.main() == 0
-    assert order == [f"lock:host:{timeout:g}", "logging", "recover", *started, "tray", "close"]
+    assert order == [f"lock:host:{timeout:g}", "logging", "recover", f"tray:start={start}", "close"]
+    assert _activity(install) == [recorded]
 
 
-def test_main_keeps_tray_running_when_initial_start_fails(
+def test_main_keeps_tray_running_when_recovery_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     install = _install(tmp_path)
-    received: list[host.ApplicationFacade] = []
+    received: list[tuple[host.ApplicationFacade, bool]] = []
 
     @contextmanager
     def lock(_root: Path, _name: str, **_kwargs: object):
@@ -540,15 +565,19 @@ def test_main_keeps_tray_running_when_initial_start_fails(
     monkeypatch.setattr(host, "discover", lambda: install)
     monkeypatch.setattr(host, "exclusive", lock)
     monkeypatch.setattr(host, "LogManager", Manager)
-    monkeypatch.setattr(host.operations, "recover_operations", lambda _install: None)
-    monkeypatch.setattr(host.operations, "status", lambda _install: None)
     monkeypatch.setattr(
-        host.ApplicationFacade,
-        "start_server",
-        lambda _self: (_ for _ in ()).throw(ApplicationError("port is occupied")),
+        host.operations,
+        "recover_operations",
+        lambda _install: (_ for _ in ()).throw(ApplicationError("record unreadable")),
     )
-    monkeypatch.setattr(host, "run_tray", lambda facade, _icon: received.append(facade))
+    monkeypatch.setattr(
+        host,
+        "run_tray",
+        lambda facade, _icon, *, start_server: received.append((facade, start_server)),
+    )
 
     assert host.main() == 0
     assert len(received) == 1
-    assert received[0].state().error == "Startup failed: port is occupied"
+    facade, start_server = received[0]
+    assert facade.state().error == "Startup failed: record unreadable"
+    assert start_server is False

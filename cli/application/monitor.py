@@ -5,7 +5,8 @@ pushes Run and resource events, and the connection's protocol pings are the only
 traffic while nothing happens, so an idle tray does no periodic work for its
 server. While disconnected, the monitor retries with a bounded backoff and
 classifies the listener through ``/health``; when that goes unanswered too, the
-optional ``classify`` callback tells a busy server from an unreachable target.
+optional ``classify`` callback tells a busy server from an unreachable target,
+and when nothing listens, a starting or stopping server process from a stopped one.
 """
 
 from __future__ import annotations
@@ -48,18 +49,23 @@ class MonitorStatus:
     """The monitor's current knowledge about its server target.
 
     ``connection`` is ``unknown`` before the first attempt, ``connected`` while
-    the event stream is open, ``refused`` when nothing listens, ``rejected``
-    when a listener answered but refused the stream, ``unresponsive`` when the
-    target's own server process lives but answered neither the stream nor
-    ``/health`` (a busy Event Loop, still starting or already stopping),
+    the event stream is open, ``refused`` when nothing listens, ``not_listening``
+    when nothing listens but the target's own server process lives (it is still
+    starting or already shutting down), ``rejected`` when a listener answered but
+    refused the stream, ``unresponsive`` when the target's own server process
+    lives but answered neither the stream nor ``/health`` (a busy Event Loop),
     ``unreachable`` when the target could not be reached otherwise, and
     ``no_target`` without a target. ``vbot`` says whether the listener's
-    ``/health`` identified vBot.
+    ``/health`` identified vBot. While connected, ``server_version`` and
+    ``started_at`` (canonical UTC) name the running server as its hello reported
+    it; both are empty for a server that does not report them.
     """
 
     url: str | None = None
     connection: str = "unknown"
     vbot: bool = False
+    server_version: str = ""
+    started_at: str = ""
 
 
 class MonitorListener(Protocol):
@@ -75,11 +81,11 @@ class MonitorListener(Protocol):
 class ServerMonitor:
     """Own the tray's background event loop, stream connection and server RPC client.
 
-    ``classify`` classifies the target from the monitor's own unanswered
-    ``/health`` request, which it receives as the health observation. It runs on
-    the monitor's thread only after a failed connect, so it must stay cheap and
-    must not probe the target again; without it, silence counts as
-    ``unreachable``.
+    ``classify`` classifies the target from the monitor's own failed request,
+    which it receives as the health observation. It runs on the monitor's thread
+    only after a failed connect, so it must stay cheap and must not probe the
+    target again; without it, silence counts as ``unreachable`` and a refused
+    connect as ``refused``.
     """
 
     def __init__(
@@ -206,7 +212,17 @@ class ServerMonitor:
                     continue
                 delay = 0.0
                 cursor = _next_cursor(cursor, hello)
-                self._set_status(MonitorStatus(url=url, connection="connected", vbot=True))
+                server = hello.get("server")
+                server = server if isinstance(server, dict) else {}
+                self._set_status(
+                    MonitorStatus(
+                        url=url,
+                        connection="connected",
+                        vbot=True,
+                        server_version=_text(server.get("version")),
+                        started_at=_text(server.get("started_at")),
+                    )
+                )
                 cursor = await self._stream(url, connection, cursor)
             finally:
                 await connection.close()
@@ -265,7 +281,7 @@ class ServerMonitor:
 
     async def _classify_failure(self, url: str, error: Exception) -> None:
         if isinstance(error, ConnectionRefusedError):
-            self._set_status(MonitorStatus(url=url, connection="refused"))
+            self._set_status(MonitorStatus(url=url, connection=self._classify_refusal(error)))
             return
         if not isinstance(error, (OSError, InvalidHandshake, TimeoutError)):
             _LOGGER.warning("Unexpected tray stream failure: %s", error, exc_info=error)
@@ -274,12 +290,29 @@ class ServerMonitor:
             health = health_result(await self._client.get(f"{url}{HEALTH_PATH}", timeout=2.0))
         except httpx.RequestError as exc:
             if isinstance(exc, httpx.ConnectError) and self._local:
-                connection = "refused"
+                connection = self._classify_refusal(exc)
             else:
                 connection = self._classify_silence(exc)
             self._set_status(MonitorStatus(url=url, connection=connection))
             return
         self._set_status(MonitorStatus(url=url, connection="rejected", vbot=health.is_vbot))
+
+    def _classify_refusal(self, error: Exception) -> str:
+        """Tell a server process that does not listen yet (or any more) from a stopped one."""
+
+        if self._classify is None:
+            return "refused"
+        health = HealthProbeResult(
+            reachable=False, is_vbot=False, error=str(error) or type(error).__name__
+        )
+        try:
+            state = self._classify(health)
+        except Exception:
+            _LOGGER.exception("Could not classify the refusing tray server target")
+            return "refused"
+        # Only the target's own live process counts; it does not listen while it
+        # starts its Runtime and after it closed its listener to shut down.
+        return "not_listening" if state == "unresponsive" else "refused"
 
     def _classify_silence(self, error: httpx.RequestError) -> str:
         """Tell a busy server from an unreachable target without probing it again."""
@@ -315,6 +348,10 @@ class ServerMonitor:
             getattr(self._listener, name)(value)
         except Exception:
             _LOGGER.exception("The tray monitor listener failed in %s", name)
+
+
+def _text(value: object) -> str:
+    return value if isinstance(value, str) else ""
 
 
 def _next_cursor(cursor: tuple[str, int] | None, hello: dict[str, Any]) -> tuple[str, int] | None:

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from cli.application.activity import local_time
 from cli.application.notifications import Toast
 
 _LOGGER = logging.getLogger("vbot.application.tray")
@@ -26,6 +27,24 @@ _FINISHED_UPDATE_PHASES = frozenset(
     {"completed", "failed", "rolled_back", "needs_attention", "prepared"}
 )
 _FAILED_UPDATE_PHASES = frozenset({"failed", "rolled_back", "needs_attention"})
+#: The server state a queued or running tray lifecycle action shows as.
+_ACTION_TRANSITIONS = {
+    "start_server": "starting",
+    "stop_server": "stopping",
+    "restart_server": "restarting",
+    "quit": "stopping",
+}
+_TRANSITIONS = frozenset({"starting", "stopping", "restarting"})
+_SERVER_LINES = {
+    "running": "Server running",
+    "starting": "Server starting…",
+    "stopping": "Server stopping…",
+    "restarting": "Server restarting…",
+    "unresponsive": "Server not responding",
+    "stopped": "Server stopped",
+    "conflict": "Server port is occupied",
+    "unknown": "Checking server…",
+}
 #: Earliest retry after a failed restart into the active version.
 _RESTART_RETRY_SECONDS = 600.0
 
@@ -34,11 +53,16 @@ _RESTART_RETRY_SECONDS = 600.0
 class TrayState:
     """The complete state the tray needs from the application facade.
 
-    ``update_activity`` holds the progress lines observed for the newest update,
-    like the console of a waiting ``vbot update``; ``details`` holds the labeled
-    rows of the status window. ``restart_pending`` means another version became
-    active since this tray started and no update is running, so the tray should
-    hand over to a successor running the active version.
+    ``server_state`` is ``running``, ``starting``, ``stopping`` (the server
+    process lives but does not listen yet or any more), ``unresponsive``,
+    ``stopped``, ``conflict``, ``unknown`` before the first observation, or
+    ``not_applicable`` for a Desktop Client. ``running_since`` is when the
+    connected server started (canonical UTC, empty when unknown). ``activity``
+    holds the rendered lines of the activity history, oldest first; ``details``
+    holds the labeled rows of the status window. ``restart_pending`` means
+    another version became active since this tray started and no update is
+    running, so the tray should hand over to a successor running the active
+    version.
     """
 
     server_state: str
@@ -49,7 +73,8 @@ class TrayState:
     exit_requested: bool = False
     error: str = ""
     server_url: str = ""
-    update_activity: tuple[str, ...] = ()
+    activity: tuple[str, ...] = ()
+    running_since: str = ""
     details: tuple[tuple[str, str], ...] = ()
     restart_pending: bool = False
 
@@ -123,7 +148,8 @@ class TrayStatus:
 class TrayPresentation:
     """Everything a native view shows; views apply only what changed.
 
-    ``icon`` is ``normal``, ``stopped``, ``updating`` or ``error``.
+    ``icon`` is ``normal``, ``stopped``, ``busy`` (an update or a server
+    transition runs) or ``error``.
     """
 
     icon: str
@@ -151,7 +177,13 @@ class TrayView(Protocol):
 
 
 class TrayController:
-    """Serialize facade work and project facade state onto one native view."""
+    """Run facade actions on one action thread and project facade state onto one native view.
+
+    State refreshes run on their own thread, so the view keeps showing what
+    happens while an action such as a server start takes its time. A queued or
+    running lifecycle action shows as its transition (starting, stopping,
+    restarting) and withholds the lifecycle actions until it finished.
+    """
 
     def __init__(
         self,
@@ -170,26 +202,34 @@ class TrayController:
         self._update_requested = False
         self._restarted = False
         self._restart_retry_at: float | None = None
+        self._pending: list[str] = []
         self._work: queue.Queue[Callable[[], object] | None] = queue.Queue()
-        self._poll_queued = threading.Event()
+        self._wake = threading.Event()
         self._closed = threading.Event()
         self._view: TrayView | None = None
         self._state_lock = threading.Lock()
         self._published: TrayPresentation | None = None
         self._worker = threading.Thread(target=self._run_worker, name="vbot-tray", daemon=True)
+        self._poller = threading.Thread(target=self._run_poller, name="vbot-tray-poll", daemon=True)
 
-    def start(self) -> None:
-        """Start the one worker which refreshes state and executes callbacks."""
+    def start(self, *, start_server: bool = False) -> None:
+        """Start the action and refresh threads; optionally start the server first."""
 
         self._worker.start()
+        self._poller.start()
+        if start_server:
+            self._queue("start_server", self._actions.start_server)
         self.changed()
 
     def close(self) -> None:
-        """Stop the worker after the native tray loop exits."""
+        """Stop both threads after the native tray loop exits."""
 
         self._closed.set()
+        self._wake.set()
         self._work.put(None)
-        self._worker.join(timeout=self._poll_interval + 1.0)
+        for thread in (self._poller, self._worker):
+            if thread.is_alive():
+                thread.join(timeout=self._poll_interval + 1.0)
 
     def attach_view(self, view: TrayView) -> None:
         """Attach the native view after lazy backend initialization."""
@@ -205,13 +245,15 @@ class TrayController:
             return (TrayMenuItem("vBot\nStarting…"), TrayMenuItem("Quit vBot", "quit"))
 
         update_active = self._update_active(state)
+        server = self._server_state(state)
         title, status, _failed = self._status_line(state)
         separator = TrayMenuItem("", enabled=False, separator=True)
         items: list[TrayMenuItem] = [TrayMenuItem(f"{title}\n{status}", enabled=False), separator]
         if state.install_shape in _DESKTOP_SHAPES:
             items.append(TrayMenuItem("Open Desktop", "open_desktop", default=True))
         if state.install_shape in _SERVER_SHAPES:
-            if state.server_state == "running":
+            lifecycle = not update_active
+            if server == "running":
                 items.extend(
                     (
                         TrayMenuItem(
@@ -220,26 +262,29 @@ class TrayController:
                             default=state.install_shape not in _DESKTOP_SHAPES,
                         ),
                         separator,
-                        TrayMenuItem("Restart server", "restart_server", enabled=not update_active),
-                        TrayMenuItem("Stop server", "stop_server", enabled=not update_active),
+                        TrayMenuItem("Restart server", "restart_server", enabled=lifecycle),
+                        TrayMenuItem("Stop server", "stop_server", enabled=lifecycle),
                     )
                 )
-            elif state.server_state == "unresponsive":
+            elif server == "unresponsive":
                 # The server process lives, so a start would be refused; only its
                 # own restart or stop can recover it.
                 items.extend(
                     (
                         separator,
-                        TrayMenuItem("Restart server", "restart_server", enabled=not update_active),
-                        TrayMenuItem("Stop server", "stop_server", enabled=not update_active),
+                        TrayMenuItem("Restart server", "restart_server", enabled=lifecycle),
+                        TrayMenuItem("Stop server", "stop_server", enabled=lifecycle),
                     )
                 )
-            elif state.server_state in {"stopped", "conflict"}:
+            elif server == "starting" and self._own_transition() is None:
+                # Started elsewhere (the tray's own start is its running action);
+                # a start that never finishes can still be stopped.
                 items.extend(
-                    (
-                        separator,
-                        TrayMenuItem("Start server", "start_server", enabled=not update_active),
-                    )
+                    (separator, TrayMenuItem("Stop server", "stop_server", enabled=lifecycle))
+                )
+            elif server in {"stopped", "conflict"}:
+                items.extend(
+                    (separator, TrayMenuItem("Start server", "start_server", enabled=lifecycle))
                 )
         items.extend(
             (
@@ -264,11 +309,12 @@ class TrayController:
             return TrayPresentation("normal", "vBot", menu, status)
         title, line, failed = self._status_line(state)
         update_active = self._update_active(state)
-        if failed or state.server_state in {"conflict", "unresponsive"}:
+        server = self._server_state(state)
+        if failed or server in {"conflict", "unresponsive"}:
             icon = "error"
-        elif update_active:
-            icon = "updating"
-        elif state.install_shape in _SERVER_SHAPES and state.server_state == "stopped":
+        elif update_active or server in _TRANSITIONS:
+            icon = "busy"
+        elif state.install_shape in _SERVER_SHAPES and server == "stopped":
             icon = "stopped"
         else:
             icon = "normal"
@@ -282,7 +328,14 @@ class TrayController:
         rows = state.details
         if error:
             rows = (("Last error", error), *rows)
-        status = TrayStatus(title, line, failed, rows, state.update_activity, buttons)
+        headline = line
+        if update_active and state.update_message:
+            headline = f"{line} {state.update_message}"
+        elif server == "running" and state.running_since:
+            headline = line.replace(
+                "Server running", f"Server running since {local_time(state.running_since)}", 1
+            )
+        status = TrayStatus(title, headline, failed, rows, state.activity, buttons)
         return TrayPresentation(icon, f"{title} — {line}"[:127], menu, status)
 
     def invoke(self, action: str) -> None:
@@ -300,9 +353,7 @@ class TrayController:
         if action == "start_update":
             with self._state_lock:
                 self._update_requested = True
-        callback = getattr(self._actions, action)
-        self._work.put(lambda: self._run_action(action, callback))
-        self._publish()
+        self._queue(action, getattr(self._actions, action))
 
     def invoke_default(self) -> None:
         """Run the primary action of a left click on the notification-area icon."""
@@ -317,18 +368,12 @@ class TrayController:
             self.invoke("show_status")
             return
         agent, session = toast.session
-        self._work.put(
-            lambda: self._run_action(
-                "open_session", lambda: self._actions.open_session(agent, session)
-            )
-        )
+        self._queue("open_session", lambda: self._actions.open_session(agent, session))
 
     def changed(self) -> None:
         """Refresh facade state soon; repeated signals coalesce."""
 
-        if not self._poll_queued.is_set():
-            self._poll_queued.set()
-            self._work.put(self._poll_state)
+        self._wake.set()
 
     def show(self, toast: Toast) -> None:
         if self._view is not None:
@@ -338,34 +383,52 @@ class TrayController:
         if self._view is not None:
             self._view.dismiss_toast(key)
 
-    def _run_worker(self) -> None:
-        while not self._closed.is_set():
+    def _queue(self, action: str, callback: Callable[[], None]) -> None:
+        self._enqueue(action, lambda: self._run_action(action, callback))
+
+    def _enqueue(self, action: str, work: Callable[[], object]) -> None:
+        with self._state_lock:
+            self._pending.append(action)
+
+        def run() -> None:
             try:
-                work = self._work.get(timeout=self._poll_interval)
-            except queue.Empty:
-                self._poll_state()
-                continue
-            if work is None:
-                return
+                work()
+            finally:
+                with self._state_lock:
+                    self._pending.remove(action)
+                self.changed()
+
+        self._work.put(run)
+        self._publish()
+
+    def _run_worker(self) -> None:
+        while (work := self._work.get()) is not None:
             work()
-            if work != self._poll_state:
-                self._poll_state()
+
+    def _run_poller(self) -> None:
+        while not self._closed.is_set():
+            self._wake.wait(timeout=self._poll_interval)
+            self._wake.clear()
+            if self._closed.is_set():
+                return
+            self._poll_state()
 
     def _poll_state(self) -> None:
-        self._poll_queued.clear()
         try:
             state = self._actions.state()
             if not isinstance(state, TrayState):
                 raise TypeError("TrayActions.state() must return TrayState")
-        except Exception as error:  # facade failures must never kill the tray worker
+        except Exception as error:  # facade failures must never kill the refresh thread
             self._record_error("Could not refresh vBot status", error)
             return
         with self._state_lock:
             self._state = state
             if state.update_phase in _FINISHED_UPDATE_PHASES:
                 self._update_requested = False
+            quit_pending = "quit" in self._pending
         if state.exit_requested:
-            self._run_action("quit", self._actions.quit)
+            if not quit_pending:
+                self._queue("quit", self._actions.quit)
         elif state.restart_pending:
             self._restart(state)
         self._publish()
@@ -373,21 +436,27 @@ class TrayController:
     def _restart(self, state: TrayState) -> None:
         """Hand the tray over to the active version once nobody is using it.
 
-        Runs on the worker, so attempts never overlap. A successful handoff stops
-        the view without quitting: the server keeps running for the successor.
+        The attempt runs on the action thread, so it never overlaps a tray
+        action. A successful handoff stops the view without quitting: the server
+        keeps running for the successor.
         """
 
         view = self._view
+        with self._state_lock:
+            busy = bool(self._pending)
         if (
             view is None
             or self._restarted
             or self._update_active(state)
             or (self._restart_retry_at is not None and self._clock() < self._restart_retry_at)
             # A queued tray action goes first; the next poll checks again.
-            or not self._work.empty()
+            or busy
             or view.interacting()
         ):
             return
+        self._enqueue("restart_tray", self._restart_tray)
+
+    def _restart_tray(self) -> None:
         if self._run_action("restart_tray", self._actions.restart):
             self._restarted = True
         else:
@@ -418,6 +487,20 @@ class TrayController:
         with self._state_lock:
             return self._state
 
+    def _server_state(self, state: TrayState) -> str:
+        """The facade's server state, overlaid by the tray's own pending lifecycle action."""
+
+        if state.install_shape not in _SERVER_SHAPES:
+            return state.server_state
+        return self._own_transition() or state.server_state
+
+    def _own_transition(self) -> str | None:
+        """The transition of the tray's own queued or running lifecycle action, if any."""
+
+        with self._state_lock:
+            action = next((item for item in self._pending if item in _ACTION_TRANSITIONS), None)
+        return _ACTION_TRANSITIONS[action] if action is not None else None
+
     def _update_active(self, state: TrayState) -> bool:
         with self._state_lock:
             return self._update_requested or (
@@ -425,30 +508,29 @@ class TrayController:
             )
 
     def _status_line(self, state: TrayState) -> tuple[str, str, bool]:
-        """Return the title, the one-line status and whether it reports a failure."""
+        """Return the title, the one-line status and whether it reports a failure.
+
+        The line always says how the server stands; a failed action or update
+        adds a note, and the status window has the details.
+        """
 
         with self._state_lock:
             error = self._status_error
         title = f"vBot {state.version}" if state.version else "vBot"
-        if error or state.error:
-            return title, "Action failed · see Status", True
-        if state.update_phase in _FAILED_UPDATE_PHASES:
-            return title, "Update failed · see Status", True
         if self._update_active(state):
-            return title, "Updating…", False
-        if state.update_phase == "prepared":
-            return title, "Update prepared · not active", False
-        if state.install_shape in _SERVER_SHAPES:
-            status = {
-                "running": "Server running",
-                "unresponsive": "Server not responding",
-                "stopped": "Server stopped",
-                "conflict": "Server port is occupied",
-                "unknown": "Checking server…",
-            }.get(state.server_state, "Server status unavailable")
+            line = "Updating…"
+        elif state.install_shape in _SERVER_SHAPES:
+            line = _SERVER_LINES.get(self._server_state(state), "Server status unavailable")
         else:
-            status = "Desktop Client"
-        return title, status, False
+            line = "Desktop Client"
+        update_failed = state.update_phase in _FAILED_UPDATE_PHASES
+        if error or state.error:
+            line += " · action failed"
+        elif update_failed:
+            line += " · update failed"
+        elif state.update_phase == "prepared":
+            line += " · update prepared, not active"
+        return title, line, bool(error or state.error or update_failed)
 
     def _publish(self, *, force: bool = False) -> None:
         view = self._view
@@ -465,8 +547,12 @@ class TrayController:
             _LOGGER.exception("Could not refresh the vBot tray")
 
 
-def run_tray(actions: TrayActions, icon_path: Path) -> None:
-    """Run the native tray loop, importing its platform backend lazily."""
+def run_tray(actions: TrayActions, icon_path: Path, *, start_server: bool = False) -> None:
+    """Run the native tray loop, importing its platform backend lazily.
+
+    With ``start_server`` the tray starts the server as its first action, once
+    its icon shows.
+    """
 
     if sys.platform != "win32":
         raise RuntimeError("The vBot tray host requires Windows")
@@ -476,7 +562,7 @@ def run_tray(actions: TrayActions, icon_path: Path) -> None:
     view = windows_tray.WindowsTray(controller, icon_path)
     controller.attach_view(view)
     actions.watch(controller)
-    controller.start()
+    controller.start(start_server=start_server)
     try:
         view.run()
     finally:
