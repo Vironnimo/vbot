@@ -78,6 +78,9 @@
     get scopedParams() {
       return scope.scopedParams;
     },
+    get blocksScopeKey() {
+      return scope.blocksScopeKey;
+    },
     get schedulePreviewRefresh() {
       return scope.schedulePreviewRefresh;
     },

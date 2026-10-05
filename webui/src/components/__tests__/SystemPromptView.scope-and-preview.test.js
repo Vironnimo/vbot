@@ -54,6 +54,23 @@ function documentText() {
   return document.querySelector('.sp-document')?.textContent ?? '';
 }
 
+function blockText(blockId) {
+  return blockElement(blockId).querySelector('textarea').value;
+}
+
+function blockIsDirty(blockId) {
+  return blockElement(blockId).textContent.includes(
+    t('systemPrompt.fragmentEditor.dirtyIndicator'),
+  );
+}
+
+function typeBlock(blockId, value) {
+  const textarea = blockElement(blockId).querySelector('textarea');
+  textarea.value = value;
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  flushSync();
+}
+
 describe('SystemPromptView scope and preview', () => {
   const suite = setupSystemPromptViewSuite();
 
@@ -94,6 +111,10 @@ describe('SystemPromptView scope and preview', () => {
     // Only the scopes the server offers (default and enabled Agents) appear.
     expect(scopeOptionLabels()).toEqual([DEFAULT_SCOPE(), 'Alpha']);
 
+    // A draft the switch leaves unsaved (the user discarded it) stays with
+    // the default scope, also where the Agent scope has a block of that id.
+    typeBlock('core:intro', 'default draft');
+
     // Choosing a scope is a step to its place.
     selectPromptScope('Alpha');
     expect(navigate).toHaveBeenCalledWith(['prompt', 'agent:agent-1']);
@@ -112,6 +133,8 @@ describe('SystemPromptView scope and preview', () => {
     expect(inheritedBadges()[0].textContent.trim()).toBe(
       t('systemPrompt.blockList.inheritedBadge'),
     );
+    expect(blockText('core:intro')).toBe('# Intro');
+    expect(blockIsDirty('core:intro')).toBe(false);
 
     // The Agent picker stays available and the preview carries the scope.
     await waitForCondition(
@@ -131,20 +154,60 @@ describe('SystemPromptView scope and preview', () => {
 
     // Editing an inherited block autosaves the override with the Agent scope.
     vi.useFakeTimers();
-    const textarea = blockElement('core:intro').querySelector('textarea');
-    textarea.value = 'agent override';
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    flushSync();
+    typeBlock('core:intro', 'agent override');
     await vi.advanceTimersByTimeAsync(800);
     await Promise.resolve();
     await Promise.resolve();
     flushSync();
 
-    expect(lastCall('prompt.update')[1]).toMatchObject({
+    const updates = rpcMock.mock.calls.filter(
+      ([method]) => method === 'prompt.update',
+    );
+    expect(updates).toHaveLength(1);
+    expect(updates[0][1]).toMatchObject({
       id: 'core:intro',
       content: 'agent override',
       scope: AGENT_SCOPE,
     });
+  });
+
+  // Leaving while a save runs lets it finish in the background.
+  it('keeps a block save that settles after a scope switch in its own scope', async () => {
+    const defaultSave = deferred();
+    const baseRpc = createRpcMock();
+    rpcMock.mockImplementation((method, params) =>
+      method === 'prompt.update' && !params?.scope
+        ? defaultSave.promise
+        : baseRpc(method, params),
+    );
+    mountView();
+    await waitForDefaultScope();
+
+    vi.useFakeTimers();
+    typeBlock('core:intro', 'default draft');
+    await vi.advanceTimersByTimeAsync(800);
+    vi.useRealTimers();
+    expect(lastCall('prompt.update')[1]).toEqual({
+      id: 'core:intro',
+      content: 'default draft',
+    });
+
+    selectPromptScope('Alpha');
+    await waitForCondition(
+      () => hasCall('prompt.list', (params) => params.scope) && !isLoading(),
+      100,
+    );
+    expect(blockText('core:intro')).toBe('# Intro');
+    expect(blockIsDirty('core:intro')).toBe(false);
+
+    defaultSave.resolve({
+      id: 'core:intro',
+      text: 'default draft',
+      is_modified: true,
+    });
+    await waitForCondition(() => true);
+    expect(blockText('core:intro')).toBe('# Intro');
+    expect(blockIsDirty('core:intro')).toBe(false);
   });
 
   it('keeps the newest scope when an older prompt list settles late', async () => {

@@ -41,6 +41,10 @@ export function createPromptScope(context) {
 
   let scopeLoadRequestId = 0;
 
+  // The scope the shown blocks were listed for. Block edits and saves belong
+  // to it, also while another scope's blocks are still loading.
+  let blocksScopeKey = 'default';
+
   let previewRequestId = 0;
 
   let previewRefreshTimer = null;
@@ -93,7 +97,7 @@ export function createPromptScope(context) {
       selectedAgentId = resolvePreviewAgentId(selectedAgentId);
       promptScopes = normalizePromptScopes(promptsResult?.scopes, agents);
       selectedScopeKey = resolveScopeKey(selectedScopeKey);
-      applyBlocks(promptsResult?.blocks);
+      applyBlocks(promptsResult?.blocks, 'default');
     } catch {
       context.showToast(t('systemPrompt.error.loadFailed'), 'error');
     } finally {
@@ -166,7 +170,7 @@ export function createPromptScope(context) {
       }
       promptScopes = normalizePromptScopes(promptsResult?.scopes, agents);
       selectedScopeKey = resolveScopeKey(scopeKey);
-      applyBlocks(promptsResult?.blocks);
+      applyBlocks(promptsResult?.blocks, scopeKey);
       return true;
     } catch {
       if (requestId !== scopeLoadRequestId) {
@@ -184,10 +188,14 @@ export function createPromptScope(context) {
   // Map the server block metadata into the local row model. Editable text blocks
   // get the live-edit fields; non-editable data blocks get a `preview` of their
   // current text. The id is the stable identity used everywhere.
-  function applyBlocks(rawBlocks) {
+  function applyBlocks(rawBlocks, scopeKey) {
     const source = Array.isArray(rawBlocks) ? rawBlocks : [];
+    // Another scope's blocks share ids but not content: a draft stays with
+    // the scope it was typed in.
+    const sameScope = scopeKey === blocksScopeKey;
+    blocksScopeKey = scopeKey;
     const previousById = new SvelteMap(
-      context.blocks.map((block) => [block.id, block]),
+      sameScope ? context.blocks.map((block) => [block.id, block]) : [],
     );
     context.clearAutoSaveTimers();
 
@@ -318,7 +326,7 @@ export function createPromptScope(context) {
   }
 
   function scopedParams(baseParams = {}) {
-    const scope = selectedScopePayload();
+    const scope = scopePayloadForKey(blocksScopeKey);
     return scope ? { ...baseParams, scope } : baseParams;
   }
 
@@ -515,6 +523,9 @@ export function createPromptScope(context) {
     },
     get scopedParams() {
       return scopedParams;
+    },
+    get blocksScopeKey() {
+      return blocksScopeKey;
     },
     get canRefreshPreview() {
       return canRefreshPreview;

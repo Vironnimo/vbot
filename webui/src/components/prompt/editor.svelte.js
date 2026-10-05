@@ -209,6 +209,7 @@ export function createPromptEditor(context) {
     }
 
     const draftContent = block.editedContent;
+    const scopeKey = context.blocksScopeKey;
     blocks[index].isSaving = true;
 
     try {
@@ -219,7 +220,8 @@ export function createPromptEditor(context) {
       });
 
       const liveIndex = blockIndexById(blockId);
-      if (liveIndex === -1) {
+      // Saved; rows listed for another scope meanwhile keep their own text.
+      if (liveIndex === -1 || context.blocksScopeKey !== scopeKey) {
         return true;
       }
       const nextSaved =
