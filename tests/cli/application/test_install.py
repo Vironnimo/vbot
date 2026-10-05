@@ -127,3 +127,23 @@ def test_a_nonempty_destination_is_refused_before_any_change(tmp_path: Path) -> 
         install_payload(destination, _payload(tmp_path), shape="server", data_dir=tmp_path / "data")
 
     assert [path.name for path in destination.iterdir()] == ["pyproject.toml"]
+
+
+@pytest.mark.parametrize("relationship", ["same", "child", "parent", "normalized-child"])
+def test_install_rejects_overlapping_data_before_mutations(
+    tmp_path: Path, relationship: str
+) -> None:
+    root = tmp_path / "application"
+    data = {
+        "same": root,
+        "child": root / "data",
+        "parent": tmp_path,
+        "normalized-child": tmp_path / "outside" / ".." / "application" / "data",
+    }[relationship]
+    payload = _payload(tmp_path)
+
+    with pytest.raises(ApplicationError):
+        install_payload(root, payload, shape="server", data_dir=data)
+
+    assert not root.exists()
+    assert not (tmp_path / "outside").exists()

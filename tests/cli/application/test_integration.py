@@ -16,6 +16,7 @@ from cli.application.autostart import UNIT_NAME, CommandRun, autostart, owned_un
 from cli.application.integration import request_host_exit, uninstall
 from cli.application.state import ApplicationError, Installation
 from cli.server_management import ServerState
+from core.utils.server_control import server_control_claim
 
 
 def _install(root: Path, shape: str = "server") -> Installation:
@@ -273,3 +274,68 @@ def test_data_only_reset_preserves_application_autostart_and_running_state(
             "data_removed": True,
             "server_restarted": state == "running",
         }
+
+
+@pytest.mark.parametrize("mode", ["application", "data", "all"])
+def test_uninstall_refuses_data_inside_the_application_before_changes(
+    tmp_path: Path, mode: str
+) -> None:
+    install = _install(tmp_path / "app")
+    data = install.root / "data"
+    data.mkdir()
+    sentinel = data / "state.db"
+    sentinel.write_bytes(b"keep")
+    install = Installation(
+        install.root,
+        "server",
+        "127.0.0.1",
+        8420,
+        str(tmp_path / "elsewhere" / ".." / "app" / "data"),
+    )
+
+    def unexpected_change(*args: object, **kwargs: object) -> None:
+        pytest.fail("Unsafe paths reached uninstall changes")
+
+    with pytest.raises(ApplicationError):
+        uninstall(
+            install,
+            platform="linux",
+            data_only=mode == "data",
+            remove_data=mode == "all",
+            stop=unexpected_change,
+            exit_host=unexpected_change,
+            remove_tree=unexpected_change,
+        )
+
+    assert sentinel.read_bytes() == b"keep"
+
+
+@pytest.mark.parametrize("data_only", [False, True], ids=["all", "data-only"])
+@pytest.mark.parametrize("claim", ["another-port", "unreadable"])
+def test_data_removal_requires_every_server_claim_to_be_released(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_only: bool, claim: str
+) -> None:
+    install = _install(tmp_path / "app")
+    data = Path(str(install.server_data_directory))
+    data.mkdir()
+    sentinel = data / "state.db"
+    sentinel.write_bytes(b"keep")
+
+    def unavailable(_data: Path) -> tuple[int, ...]:
+        raise PermissionError("cannot enumerate claims")
+
+    if claim == "unreadable":
+        monkeypatch.setattr(integration, "live_server_ports", unavailable)
+    with server_control_claim(data, 8439), pytest.raises(ApplicationError):
+        uninstall(
+            install,
+            platform="linux",
+            data_only=data_only,
+            remove_data=not data_only,
+            server_state=lambda _install: "absent",
+            stop=lambda _install: SimpleNamespace(ok=True, message="stopped"),
+            exit_host=lambda _install: None,
+        )
+
+    assert sentinel.read_bytes() == b"keep"
+    assert install.root.is_dir()
