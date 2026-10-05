@@ -10,6 +10,9 @@ Answers reach the Parent through :mod:`core.subagents.forwarding`.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
 from core.agents import is_librarian
@@ -124,6 +127,12 @@ _LOGGER = get_logger("subagents")
 _FOLLOW_UP_PLACEHOLDER = "<message>"
 
 
+@dataclass
+class _StartLock:
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    users: int = 0
+
+
 class SubAgentCoordinator:
     """Run the Sub-Agent Tools and forward Sub-Agent answers to their Parents."""
 
@@ -132,9 +141,22 @@ class SubAgentCoordinator:
         self._trigger_service = trigger_service
         self._activities = SubAgentActivities(runtime)
         self._forwarding = SubAgentForwarding(runtime, trigger_service, self._activities)
-        # New Sub-Agents being started per tree root, counted against the limit
-        # until their Run is active.
-        self._starting: dict[SessionAddress, int] = {}
+        # One start at a time per tree root: the limit check reads the tree, which
+        # is stale once another start of the same tree has finished meanwhile.
+        self._start_locks: dict[SessionAddress, _StartLock] = {}
+
+    @asynccontextmanager
+    async def _start_lock(self, root: SessionAddress) -> AsyncIterator[None]:
+        """Hold the start lock of one tree root; drop it once no start uses it."""
+        entry = self._start_locks.setdefault(root, _StartLock())
+        entry.users += 1
+        try:
+            async with entry.lock:
+                yield
+        finally:
+            entry.users -= 1
+            if entry.users == 0:
+                self._start_locks.pop(root, None)
 
     def install(self, run_manager: ChatRunManager) -> None:
         """Start following the Runs *run_manager* starts in Sub-Agent Sessions.
@@ -374,16 +396,13 @@ class SubAgentCoordinator:
             )
         root = chain[-1] if chain else caller
         limit = settings["max_active_subagents"]
-        tree = await sessions.run_async(descendants, sessions, root)
-        active = sum(1 for link in tree if is_working(runtime, link.session))
-        if active + self._starting.get(root, 0) >= limit:
-            return tool_failure(
-                "subagent_limit_exceeded",
-                SUBAGENT_ACTIVE_LIMIT_MESSAGE_TEMPLATE.format(limit=limit),
-            )
-
-        self._starting[root] = self._starting.get(root, 0) + 1
-        try:
+        async with self._start_lock(root):
+            tree = await sessions.run_async(descendants, sessions, root)
+            if sum(1 for link in tree if is_working(runtime, link.session)) >= limit:
+                return tool_failure(
+                    "subagent_limit_exceeded",
+                    SUBAGENT_ACTIVE_LIMIT_MESSAGE_TEMPLATE.format(limit=limit),
+                )
             if context.is_cancelled():
                 return tool_failure(
                     "run_cancelled", "Your Run was cancelled before the Sub-Agent started."
@@ -412,12 +431,6 @@ class SubAgentCoordinator:
                 executor,
                 admission=_admission(context, target_agent, address, new_subagent_id),
             )
-        finally:
-            remaining = self._starting.get(root, 1) - 1
-            if remaining > 0:
-                self._starting[root] = remaining
-            else:
-                self._starting.pop(root, None)
 
         activity_file = self._activities.path(address)
         _LOGGER.info(

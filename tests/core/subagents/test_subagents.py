@@ -9,8 +9,12 @@ in the Session ends forwarding.
 
 from __future__ import annotations
 
+import asyncio
+from typing import Any
+
 import pytest
 
+import core.subagents.subagents as subagents_module
 from core.projects import AgentResolutionError, ResolutionProjectNotFoundError
 from core.runs import RunKind, RunStatus
 from core.sessions import SUBAGENT_PARENT_META_KEY
@@ -406,6 +410,39 @@ async def test_limits_refuse_another_subagent(
 
     assert result["error"]["code"] == code
     assert [turn.content for turn in harness.loop.turns] == ["first"]
+
+
+async def test_parallel_starts_respect_the_active_limit_with_a_stale_tree_read(
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness.storage.settings = {"max_active_subagents": 1}
+    harness.loop.hold("first")
+    harness.loop.hold("second")
+    first_started = asyncio.Event()
+    tree_reads = 0
+    run_async = harness.sessions.run_async
+
+    async def stale_second_tree_read(function: Any, *arguments: Any, **options: Any) -> Any:
+        # The second start reads the tree, then resumes only after the first start finished.
+        nonlocal tree_reads
+        result = await run_async(function, *arguments, **options)
+        if function is subagents_module.descendants:
+            tree_reads += 1
+            if tree_reads == 2:
+                await first_started.wait()
+        return result
+
+    monkeypatch.setattr(harness.sessions, "run_async", stale_second_tree_read)
+    first = asyncio.create_task(harness.call({"description": "Do first", "content": "first"}))
+    second = asyncio.create_task(harness.call({"description": "Do second", "content": "second"}))
+    await asyncio.wait({first, second}, return_when=asyncio.FIRST_COMPLETED)
+    first_started.set()
+    results = [await first, await second]
+
+    assert sorted(bool(result["ok"]) for result in results) == [False, True]
+    [refused] = [result for result in results if not result["ok"]]
+    assert refused["error"]["code"] == "subagent_limit_exceeded"
+    assert len(harness.loop.turns) == 1
 
 
 async def test_takeover_ends_forwarding_and_parent_messages(harness: SubAgentHarness) -> None:
