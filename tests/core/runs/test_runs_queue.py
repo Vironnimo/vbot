@@ -564,6 +564,51 @@ async def test_steering_append_failure_retains_input_and_blocks_mid_append_edits
         await manager.aclose()
 
 
+@pytest.mark.parametrize("cleared", [True, False], ids=["queue-cleared", "queue-kept"])
+async def test_cancel_during_a_steering_append_starts_a_successor_only_for_kept_input(
+    cleared: bool,
+) -> None:
+    manager = ChatRunManager()
+    address = SessionAddress(project_id=None, agent_id="coder", session_id="one")
+    steered = asyncio.Event()
+    appending = asyncio.Event()
+
+    async def append(_item: QueuedRunItem) -> None:
+        appending.set()
+        await asyncio.Event().wait()
+
+    async def execute(run: Run) -> str:
+        await steered.wait()
+        await manager.deliver_steering(run, append)
+        return "done"
+
+    successor_started = asyncio.Event()
+
+    async def successor(_run: Run) -> str:
+        successor_started.set()
+        return "successor"
+
+    run = await manager.start(address, execute)
+    item = await manager.enqueue(address, successor, steerable=True)
+    manager.steer_queued("coder", "one", item.item_id, project_id=None)
+    steered.set()
+    try:
+        await asyncio.wait_for(appending.wait(), timeout=1)
+        if cleared:
+            assert manager.clear_queued("coder", "one", project_id=None) == 1
+        await manager.cancel(run.id)
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        assert run.status == RunStatus.CANCELLED
+        assert successor_started.is_set() is not cleared
+        if cleared:
+            assert manager.list_queued("coder", "one", project_id=None) == []
+            assert item.future.cancelled()
+    finally:
+        await manager.aclose()
+
+
 async def test_removing_second_steer_during_first_append_does_not_deliver_it() -> None:
     manager = ChatRunManager()
     release = asyncio.Event()

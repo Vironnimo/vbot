@@ -508,6 +508,23 @@ class ChatRunManager:
             return True
         return False
 
+    def clear_queued(self, agent_id: str, session_id: str, *, project_id: str | None) -> int:
+        """Remove every queued item of one Session; return how many were withdrawn.
+
+        Input whose steering append is in flight cannot leave the Queue during that
+        I/O; it is withdrawn instead and leaves it when the append ends, so it never
+        starts a Run of its own.
+        """
+        address = _session_address(project_id, agent_id, session_id)
+        withdrawn = 0
+        for item in list(self._queues.get(address, ())):
+            if item.steering_in_flight:
+                item.withdrawn = True
+                withdrawn += 1
+            elif self.remove_queued(agent_id, session_id, item.item_id, project_id=project_id):
+                withdrawn += 1
+        return withdrawn
+
     def update_queued(
         self,
         agent_id: str,
@@ -606,7 +623,20 @@ class ChatRunManager:
                 delivered = True
             finally:
                 item.steering_in_flight = False
+                if item.withdrawn:
+                    self._drop_withdrawn(run, item)
         return delivered
+
+    def _drop_withdrawn(self, run: Run, item: QueuedRunItem) -> None:
+        """Take a withdrawn item out of the Queue after an append that did not finish."""
+        address = _session_address(run.project_id, run.agent_id, run.session_id)
+        queue = self._queues.get(address)
+        if queue is not None and item in queue:
+            queue.remove(item)
+            if not queue:
+                self._queues.pop(address, None)
+        if not item.future.done():
+            item.future.cancel()
 
     def get(self, run_id: str) -> Run:
         """Return a run by id."""

@@ -234,6 +234,8 @@ class QueuedRunItem:
     steerable: bool = False
     steering: bool = False
     steering_in_flight: bool = field(default=False, repr=False)
+    # Cleared while its append was in flight: it must leave the Queue, not start a Run.
+    withdrawn: bool = field(default=False, repr=False)
     admission: RunAdmission = field(default_factory=RunAdmission, repr=False)
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     waiting_scope: str | None = field(default=None, repr=False)

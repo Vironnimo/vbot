@@ -696,16 +696,9 @@ class SubAgentCoordinator:
         runs: list[Run] = []
         for address in addresses:
             if clear_queue:
-                for item in manager.list_queued(
+                stopped += manager.clear_queued(
                     address.agent_id, address.session_id, project_id=address.project_id
-                ):
-                    if manager.remove_queued(
-                        address.agent_id,
-                        address.session_id,
-                        item.item_id,
-                        project_id=address.project_id,
-                    ):
-                        stopped += 1
+                )
             run = manager.active_run(
                 agent_id=address.agent_id,
                 session_id=address.session_id,
