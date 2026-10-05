@@ -419,7 +419,10 @@ class _SessionSnapshot:
         *write* returns every record after *since* from its own transaction,
         including other writers' appends, exactly as :meth:`refresh` would.
         """
-        await self._apply(session, await write(since=self.cursor))
+        committed = await write(since=self.cursor)
+        if committed is not None:
+            session.acknowledge_deferred_notes(committed.messages)
+        await self._apply(session, committed)
 
     async def flush_deferred_notes(self, session: ChatSession) -> None:
         """Persist deferred notes, then include every newer record."""

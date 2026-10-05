@@ -128,6 +128,8 @@ Generated Session ids use `ses_` plus 12 lowercase base32 characters. Creation a
 
 ## Cross-Domain Rules
 
+- Deferred Notes stay in the Session handle's retry batch until a write commits. `take_deferred_notes` snapshots that batch and ends deferral without clearing it; append, edit and flush acknowledge only committed Note ids, preserving Notes added during the write. Chat's snapshot commit acknowledges transaction-returned Messages too, including owned receipt writes that bypass the handle. The separate pending-Context delivery buffer is unchanged. Coverage: `test_deferred_notes_keep_their_existing_ordering` (`test_sessions_history.py`).
+
 - `ChatSession.run_records(expected_generation_id=None)` returns the Session's own Runs (`inherited = 0`) in start order as `SessionRunRecord`s with status and completion facts; it raises `SessionNotFoundError` for a missing Session or another live generation. Statistics reads it after `load_since`.
 - `ChatSession.reflection_runs()` selects, for each live direct fork of this generation (`fork_parent_key`) in the same Project and Agent that carries a reflection Run kind, its first settled own Run by start sequence. Inherited (copied) Runs never count, so they cannot masquerade as review results.
 - Chat owns `ChatMessage`, request assembly, Run execution, Compaction behavior, and when Stream drafts are written. Sessions owns canonical persistence, ordering, views, metadata and prompt-state transactionality, validation, and storage lifecycle.

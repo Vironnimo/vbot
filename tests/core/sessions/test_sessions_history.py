@@ -171,16 +171,61 @@ def test_edit_targets_only_an_own_plain_text_user_message_after_the_latest_takeo
         editable_session_message_index([first, takeover], first.id)
 
 
-def test_deferred_notes_keep_their_existing_ordering(manager) -> None:
+@pytest.mark.asyncio
+@pytest.mark.parametrize("write", ["flush", "async-flush", "batch", "edit"])
+async def test_deferred_notes_keep_their_existing_ordering(
+    manager, monkeypatch: pytest.MonkeyPatch, write: str
+) -> None:
     session = manager.create("coder", session_id="session-one")
+    user = ChatMessage.user("original")
+    if write == "edit":
+        session.append(user)
     session.begin_defer_notes()
     session.add_note("first")
     session.add_note("second")
 
-    session.flush_deferred_notes()
+    async def persist() -> None:
+        if write == "async-flush":
+            await session.flush_deferred_notes_async()
+        elif write == "flush":
+            session.flush_deferred_notes()
+        elif write == "batch":
+            await session.append_many_async(session.take_deferred_notes())
+        else:
+            session.apply_edit(user.id, [*session.take_deferred_notes(), user])
 
-    assert [message.content for message in session.load()] == ["first", "second"]
-    assert [message.content for message in session.drain_pending_notes()] == ["first", "second"]
+    operation = "apply_edit" if write == "edit" else "append_messages"
+    original = getattr(session._store, operation)
+
+    def fail(*args, **kwargs):
+        raise OSError("write failed")
+
+    monkeypatch.setattr(session._store, operation, fail)
+    with pytest.raises(OSError):
+        await persist()
+
+    def write_with_new_note(*args, **kwargs):
+        # New deferred work must not be removed when the old batch commits.
+        session.begin_defer_notes()
+        session.add_note("third")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(session._store, operation, write_with_new_note)
+    await persist()
+    monkeypatch.setattr(session._store, operation, original)
+    await session.flush_deferred_notes_async()
+    await session.flush_deferred_notes_async()
+
+    assert [message.content for message in session.load_active() if message.role == "note"] == [
+        "first",
+        "second",
+        "third",
+    ]
+    assert [message.content for message in session.drain_pending_notes()] == [
+        "first",
+        "second",
+        "third",
+    ]
 
 
 def test_tool_result_persisted_needs_the_call_and_its_result_in_that_session(manager) -> None:
