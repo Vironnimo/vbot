@@ -542,7 +542,12 @@ class ToolRegistry:
         self,
         definitions: Sequence[JsonObject],
     ) -> dict[str, ToolContract]:
-        """Compile the exact model-facing input contracts for one Provider cycle."""
+        """Compile the exact model-facing input contracts for one Provider cycle.
+
+        A definition whose Tool is no longer registered gets no contract: nothing
+        can dispatch it, and only its registration would say whether its schema
+        may stay open, as a Session's pinned definition of a removed Tool does.
+        """
         contracts: dict[str, ToolContract] = {}
         for definition in definitions:
             name = definition.get("name")
@@ -554,12 +559,14 @@ class ToolRegistry:
             if not isinstance(parameters, dict):
                 raise ValueError(f"Provider Tool definition parameters must be an object: {name}")
             tool = self._tools.get(name)
+            if tool is None:
+                continue
             contracts[name] = compile_tool_contract(
                 name=name,
                 input_schema=parameters,
-                result_schema=tool.contract.result_schema if tool is not None else None,
-                parallel_safe=tool.parallel_safe if tool is not None else True,
-                require_closed_input=not (tool is not None and tool.open_input_schema),
+                result_schema=tool.contract.result_schema,
+                parallel_safe=tool.parallel_safe,
+                require_closed_input=not tool.open_input_schema,
             )
         return contracts
 

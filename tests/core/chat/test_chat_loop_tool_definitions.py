@@ -286,13 +286,19 @@ async def test_an_announced_tool_removed_again_fails_as_removed_under_its_own_na
     )
     loop = build_chat_loop(runtime)
     handler = tools.get("web_fetch").handler
+    # An open schema compiles only under its registered Tool's permission, which
+    # the Session keeps no trace of once the Tool is unregistered.
+    open_parameters = {"type": "object", "properties": {"url": {"type": "string"}}}
+
+    def register_fetch() -> None:
+        tools.register("fetch", "Probe Tool.", open_parameters, handler, open_input_schema=True)
 
     await loop.send("coder", "Start", session_id="session-one")
-    tools.register("fetch", "Probe Tool.", {"type": "object"}, handler)
+    register_fetch()
     await loop.send("coder", "Added", session_id="session-one")
     tools.unregister("fetch")
     await loop.send("coder", "Fetch it", session_id="session-one")
-    tools.register("fetch", "Probe Tool.", {"type": "object"}, handler)
+    register_fetch()
     await loop.send("coder", "Back", session_id="session-one")
 
     # "fetch" is no longer registered, yet it never maps to the listed web_fetch.
