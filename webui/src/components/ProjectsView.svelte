@@ -178,8 +178,13 @@
     projectsController.trackModelDropdownOpen(open);
   }
 
+  // Adding, re-pointing and removing a Project reload the Project list, which
+  // replaces the shown Project's form and Team drafts: pending edits save
+  // first, or the shared prompt discards them.
   function openAdd() {
-    projectsController.openAdd();
+    return autosaveContext.requestTransition(() =>
+      projectsController.openAdd(),
+    );
   }
 
   function refreshScan() {
@@ -203,11 +208,15 @@
   }
 
   function removeOne(project) {
-    projectsController.openRemove(project);
+    return autosaveContext.requestTransition(() =>
+      projectsController.openRemove(project),
+    );
   }
 
   function openRePoint(project) {
-    projectsController.openRePoint(project);
+    return autosaveContext.requestTransition(() =>
+      projectsController.openRePoint(project),
+    );
   }
 
   function removeDisabled(project) {
