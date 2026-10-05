@@ -57,13 +57,6 @@ from desktop.hotkey import (
     HotkeyHandlers,
     HotkeyPreference,
 )
-from desktop.speech.capture import (
-    CAPTURE_CAPTURING,
-    CAPTURE_OPENING,
-    ERROR_MICROPHONE_UNAVAILABLE,
-    AudioBlock,
-    encode_wav,
-)
 from desktop.speech.microphone import MicrophoneService
 from desktop.speech.server_client import (
     DEFAULT_UPLOAD_BUDGET_BYTES,
@@ -391,7 +384,7 @@ class DictationController:
             preparation.start()
             self._page.publish_dictation(True)
             try:
-                pcm, rate = self._record(take)
+                audio = self._record(take)
             finally:
                 self._page.publish_dictation(False)
             with self._lock:
@@ -404,7 +397,7 @@ class DictationController:
             if take.server_problem is not None:
                 raise _Failed(take.server_problem)
             try:
-                text = client.transcribe(encode_wav(pcm, rate), filename="dictation.wav")
+                text = client.transcribe(audio, filename="dictation.wav")
             except SpeechRequestCancelled:
                 raise _Cancelled from None
             except SpeechServerError as exc:
@@ -415,8 +408,17 @@ class DictationController:
             raise _Cancelled
         self._insert(take, text.strip())
 
-    def _record(self, take: _Take) -> tuple[bytes, int]:
-        """Collect the take's audio until it ends; returns ``(pcm16, rate)``."""
+    def _record(self, take: _Take) -> bytes:
+        """Collect the take's audio until it ends; returns it as WAV."""
+        # Imported per take: the capture stack (numpy) stays out of Desktop startup.
+        from desktop.speech.capture import (
+            CAPTURE_CAPTURING,
+            CAPTURE_OPENING,
+            ERROR_MICROPHONE_UNAVAILABLE,
+            AudioBlock,
+            encode_wav,
+        )
+
         stop = threading.Event()
         capture = self._microphone.create_capture(on_status=lambda _status: None, stop_event=stop)
         subscription = capture.subscribe(max_seconds=_SUBSCRIPTION_SECONDS)
@@ -477,7 +479,7 @@ class DictationController:
             self._cues.play(CUE_CANCEL)
             raise _Cancelled
         logger.info("Dictation recorded %.1f s", seconds)
-        return b"".join(chunks), rate
+        return encode_wav(b"".join(chunks), rate)
 
     def _insert(self, take: _Take, text: str) -> None:
         if not text:

@@ -529,7 +529,7 @@ def test_desktop_stays_a_thin_client_of_the_server() -> None:
             assert not re.search(rf"\bserver {verb}\b", source), module
 
 
-def test_disabled_voice_builds_its_bridge_without_loading_the_audio_stack(
+def test_disabled_voice_and_dictation_build_their_bridge_without_the_audio_stack(
     tmp_path: Path,
 ) -> None:
     """Only a fresh process shows which modules Desktop startup imports."""
@@ -539,6 +539,7 @@ import sys
 from pathlib import Path
 from desktop.bridge import DesktopBridge
 from desktop.connection import ConnectionController
+from desktop.dictation.controller import DictationController
 from desktop.main import _create_voice, parse_args
 from desktop.page_events import PageEventDispatcher
 from desktop.speech.microphone import MicrophoneService
@@ -548,10 +549,18 @@ controller = ConnectionController(settings_file=settings)
 page_events = PageEventDispatcher()
 microphone = MicrophoneService(settings_path=settings)
 voice = _create_voice(parse_args([]), settings, microphone, '', page_events)
-bridge = DesktopBridge(voice=voice, microphone=microphone, connection=controller)
+dictation = DictationController(
+    settings_path=settings, microphone=microphone, server_url='', page=page_events
+)
+bridge = DesktopBridge(
+    voice=voice, microphone=microphone, connection=controller, dictation=dictation
+)
 voice.start()
+dictation.start()
 assert bridge.getDesktopCapabilities()['voiceApi'] == 3
 assert bridge.getVoiceStatus()['state'] == 'off'
+assert bridge.getDictation()['enabled'] is False
+dictation.stop()
 voice.close()
 page_events.close()
 audio_modules = {
