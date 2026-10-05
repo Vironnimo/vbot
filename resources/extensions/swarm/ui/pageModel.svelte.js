@@ -91,6 +91,7 @@ export function createSwarmPageModel(host) {
   let replyTo = $state('');
 
   let posting = $state(false);
+  let postMutation = null;
 
   let pending = $state('');
 
@@ -1036,25 +1037,32 @@ export function createSwarmPageModel(host) {
   }
 
   async function post() {
-    if (!selectedSwarm || !postText.trim()) return;
+    if (posting || !selectedSwarm || !postText.trim()) return;
+    const payload = {
+      swarm_id: selectedSwarm.id,
+      discussion_id: selectedDiscussion,
+      text: postText,
+      ...(replyTo.trim() ? { reply_to: replyTo.trim() } : {}),
+      ...(postRecipients.trim()
+        ? {
+            recipients: postRecipients
+              .split(',')
+              .map((item) => item.trim())
+              .filter(Boolean),
+          }
+        : {}),
+    };
+    const fingerprint = JSON.stringify(payload);
+    if (postMutation?.fingerprint !== fingerprint)
+      postMutation = { fingerprint, id: requestId() };
     posting = true;
     error = '';
     try {
       const result = await call('board.post', {
-        swarm_id: selectedSwarm.id,
-        discussion_id: selectedDiscussion,
-        text: postText,
-        ...(replyTo.trim() ? { reply_to: replyTo.trim() } : {}),
-        ...(postRecipients.trim()
-          ? {
-              recipients: postRecipients
-                .split(',')
-                .map((item) => item.trim())
-                .filter(Boolean),
-            }
-          : {}),
-        request_id: requestId(),
+        ...payload,
+        request_id: postMutation.id,
       });
+      postMutation = null;
       postText = '';
       postRecipients = '';
       replyTo = '';
