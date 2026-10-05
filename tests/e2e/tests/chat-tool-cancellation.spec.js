@@ -25,9 +25,9 @@ test("cancelling one running tool lets the Agentic Loop continue", async ({
   ).toBeVisible({ timeout: 30_000 });
   const bash = toolRow(page, chat, "bash");
   await expect(bash).toBeVisible();
-  await expect(bash.locator(".te-dot")).toHaveClass(/cancelled|error/);
+  await expect(bash.locator(".te-dot")).toHaveClass(/cancelled/);
   await openToolRow(bash);
-  await expect(bash).toContainText("Command aborted by the user");
+  await expect(bash).toContainText("the user stopped it");
   await expect(chat.getByText("· Cancelled", { exact: true })).toHaveCount(0);
   await expect(
     chat.getByRole("button", { exact: true, name: "New session" }),

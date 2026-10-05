@@ -55,7 +55,7 @@ test("Statistics aggregates persisted Run and Tool activity across its views", a
   const tools = statistics
     .getByRole("tabpanel", { name: "Tools & skills" })
     .getByRole("table", { name: "Per Tool" });
-  for (const toolName of ["status", "process"]) {
+  for (const toolName of ["status", "terminal"]) {
     const cells = tools
       .getByRole("row", { name: new RegExp(`^${toolName}\\s`) })
       .getByRole("cell");

@@ -325,8 +325,8 @@ function plannedToolResponse(prompt, results, offeredTools) {
         ],
       };
     }
-    if (resultsFor(results, "process").length === 0) {
-      return { calls: [toolCall("process", { action: "status" })] };
+    if (resultsFor(results, "terminal").length === 0) {
+      return { calls: [toolCall("terminal", { action: "list" })] };
     }
     return { text: "Runtime tools completed." };
   }
@@ -397,10 +397,14 @@ function plannedToolResponse(prompt, results, offeredTools) {
           toolCall("subagent", {
             action: "run",
             agent_id: "e2e-worker",
+            description: "Return the child result",
             content: "E2E_SUBAGENT_CHILD Return the deterministic child result",
           }),
         ],
       };
+    }
+    if (subagentResults[0].failed) {
+      return { text: "Sub-agent call failed." };
     }
     return { text: "Sub-agent started; awaiting automatic delivery." };
   }
