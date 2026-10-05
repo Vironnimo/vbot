@@ -1,4 +1,4 @@
-"""The pywebview ``js_api`` facade: capabilities, system actions, Voice, servers, hotkey."""
+"""The pywebview ``js_api`` facade: capabilities, system actions, microphone, Voice, servers."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from desktop.connection import ConnectionController
 from desktop.main import DesktopProbeResult, DesktopTarget
 from desktop.page_events import PageEventDispatcher
 from desktop.restart import RestartError
+from desktop.speech.microphone import MicrophoneService
 from desktop.system_actions import DesktopSystemActions
 from desktop.wakeword.config import VoiceConfigError
 from desktop.wakeword.controller import VoiceControlError, VoiceController
@@ -27,7 +28,6 @@ VOICE_METHODS = {
     "getVoiceStatus",
     "setVoiceEnabled",
     "updateVoiceConfig",
-    "listMicrophones",
     "listWakewordModels",
     "importWakewordModel",
     "deleteWakewordModel",
@@ -39,8 +39,11 @@ VOICE_METHODS = {
 }
 
 
+MICROPHONE_METHODS = {"getMicrophone", "setMicrophone", "listMicrophones"}
+
+
 class FakeVoice:
-    """Records the Voice controller calls and returns a marker per method (or raises ``error``)."""
+    """Records the owner's calls and returns a marker per method (or raises ``error``)."""
 
     def __init__(self, error: Exception | None = None) -> None:
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
@@ -71,6 +74,7 @@ class FakeHotkey:
 
 def _bridge(*, error: Exception | None = None, **kwargs: Any) -> tuple[DesktopBridge, FakeVoice]:
     voice = FakeVoice(error)
+    kwargs.setdefault("microphone", cast(MicrophoneService, FakeVoice()))
     return DesktopBridge(voice=cast(VoiceController, voice), **kwargs), voice
 
 
@@ -86,7 +90,7 @@ def test_pywebview_sees_only_the_bridge_methods() -> None:
     }
 
     assert public_attributes == []
-    assert public_methods == VOICE_METHODS | {
+    assert public_methods == VOICE_METHODS | MICROPHONE_METHODS | {
         "getDesktopCapabilities",
         "setClipboardText",
         "getClipboardText",
@@ -191,9 +195,10 @@ def test_capabilities_announce_the_voice_bridge_version_and_optional_services(
 
     assert bridge.getDesktopCapabilities() == {
         "wakeword": True,
-        "voiceApi": 2,
+        "voiceApi": 3,
         "serverSelection": True,
         "contextMenu": True,
+        "microphone": True,
         "liveHotkey": live_hotkey,
         "secureOrigins": ["http://a.lan:8420", "http://pi.lan:9000"],
         "restart": False,
@@ -257,6 +262,29 @@ def test_system_actions_validate_and_delegate() -> None:
     assert opened == ["https://example.com/path?q=1"]
 
 
+# -- Microphone --------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("method", "args", "service_method"),
+    [
+        ("getMicrophone", (), "status"),
+        ("setMicrophone", ({"echo_cancellation": False},), "update"),
+        ("listMicrophones", (), "list_devices"),
+    ],
+)
+def test_microphone_methods_delegate_to_the_service(
+    method: str, args: tuple[Any, ...], service_method: str
+) -> None:
+    microphone = FakeVoice()
+    bridge, _ = _bridge(microphone=cast(MicrophoneService, microphone))
+
+    result = getattr(bridge, method)(*args)
+
+    assert result == {"from": service_method}
+    assert microphone.calls == [(service_method, args)]
+
+
 # -- Voice -------------------------------------------------------------------------
 
 
@@ -265,8 +293,7 @@ def test_system_actions_validate_and_delegate() -> None:
     [
         ("getVoiceStatus", (), "status"),
         ("setVoiceEnabled", (True,), "set_enabled"),
-        ("updateVoiceConfig", ({"echo_cancellation": False},), "update_config"),
-        ("listMicrophones", (), "list_microphones"),
+        ("updateVoiceConfig", ({"default_session_behavior": "new"},), "update_config"),
         ("listWakewordModels", (), "list_models"),
         ("deleteWakewordModel", ("custom/computer",), "delete_model"),
         ("retryVoice", (), "retry"),
@@ -321,13 +348,15 @@ def test_model_import_rejects_invalid_content_before_the_controller(
 
 def test_voice_methods_reach_a_real_controller(tmp_path: Path) -> None:
     page_events = PageEventDispatcher()
+    microphone = MicrophoneService(settings_path=tmp_path / "settings.json")
     voice = VoiceController(
         settings_path=tmp_path / "settings.json",
+        microphone=microphone,
         server_url="",
         sink=page_events,
         live_requests=page_events.request_live,
     )
-    bridge = DesktopBridge(voice=voice)
+    bridge = DesktopBridge(voice=voice, microphone=microphone)
     try:
         assert bridge.getVoiceStatus()["state"] == "off"
         assert bridge.setVoiceEnabled(False) == {"enabled": False, "error_code": None}

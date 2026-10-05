@@ -46,6 +46,7 @@ from desktop.settings import (
 if TYPE_CHECKING:
     from desktop.connection import ConnectionController
     from desktop.page_events import PageEventDispatcher
+    from desktop.speech.microphone import MicrophoneService
     from desktop.wakeword.controller import VoiceController
 
 logger = logging.getLogger("vbot.desktop")
@@ -512,6 +513,7 @@ def _run_desktop(
     from desktop.connection import ConnectionController, build_connection_html
     from desktop.hotkey import LiveHotkeyController
     from desktop.page_events import PageEventDispatcher
+    from desktop.speech.microphone import MicrophoneService
 
     webview = webview_module if webview_module is not None else load_webview()
 
@@ -522,11 +524,14 @@ def _run_desktop(
     # is fixed for this process; a server added later needs a restart.
     secure_origins = _windows.webview_secure_origins(_launch_targets(controller, override))
     page_events = PageEventDispatcher()
+    # Built first: it moves an older microphone choice out of the Voice
+    # settings before Voice reads them.
+    microphone = MicrophoneService(settings_path=settings_file)
     live_hotkey = LiveHotkeyController(
         settings_path=settings_file,
         on_press=lambda: page_events.request_live("toggle", "hotkey"),
     )
-    voice = _create_voice(args, settings_file, server_url, page_events)
+    voice = _create_voice(args, settings_file, microphone, server_url, page_events)
     window_holder: list[Any] = []
     window_state = _WindowState()
     desktop_restart = (
@@ -547,6 +552,7 @@ def _run_desktop(
     )
     bridge = DesktopBridge(
         voice=voice,
+        microphone=microphone,
         connection=controller,
         live_hotkey=live_hotkey,
         secure_origins=secure_origins,
@@ -1042,6 +1048,7 @@ def _is_vbot_health_response(response: HttpResponse) -> bool:
 def _create_voice(
     args: argparse.Namespace,
     settings_file: Path | None,
+    microphone: MicrophoneService,
     server_url: str,
     page_events: PageEventDispatcher,
 ) -> VoiceController:
@@ -1058,6 +1065,7 @@ def _create_voice(
 
     return VoiceController(
         settings_path=settings_file,
+        microphone=microphone,
         server_url=server_url,
         sink=page_events,
         live_requests=page_events.request_live,

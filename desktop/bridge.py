@@ -11,10 +11,12 @@ looks like a code, and is logged with its traceback.
 
 The same instance stays the window's ``js_api`` across navigation, so it
 serves both the shell connection screen (server selection) and the remote
-WebUI (capabilities, clipboard and browser, the Live voice hotkey, Voice, the
-update restart). The facade holds no Voice state: Voice methods delegate to
-:class:`desktop.wakeword.controller.VoiceController`, server selection to the
-connection controller, the update restart to :class:`desktop.restart.DesktopRestart`.
+WebUI (capabilities, clipboard and browser, the microphone, the Live voice
+hotkey, Voice, the update restart). The facade holds no state of its own:
+microphone methods delegate to :class:`desktop.speech.microphone.MicrophoneService`,
+Voice methods to :class:`desktop.wakeword.controller.VoiceController`, server
+selection to the connection controller, the update restart to
+:class:`desktop.restart.DesktopRestart`.
 """
 
 from __future__ import annotations
@@ -37,12 +39,17 @@ if TYPE_CHECKING:
     from desktop.connection import PreparedConnection, ServerEntry
     from desktop.hotkey import LiveHotkeyController
     from desktop.restart import DesktopRestart
+    from desktop.speech.microphone import MicrophoneService
     from desktop.wakeword.controller import VoiceController
 
 logger = logging.getLogger("vbot.desktop.bridge")
 
-VOICE_API_VERSION = 2
-"""Version of the Voice bridge methods; the WebUI enables Voice only for this version."""
+VOICE_API_VERSION = 3
+"""Version of the Voice bridge methods; the WebUI enables Voice only for this version.
+
+3: the microphone and echo cancellation moved from the Voice config to the
+shared microphone methods (``getMicrophone`` / ``setMicrophone``).
+"""
 
 _MAX_MODEL_BASE64_CHARS = 4 * ((MAX_CUSTOM_WAKEWORD_MODEL_BYTES + 2) // 3)
 _ERROR_CODE = re.compile(r"[a-z][a-z0-9_]*")
@@ -120,6 +127,7 @@ class DesktopBridge:
         self,
         *,
         voice: VoiceController,
+        microphone: MicrophoneService,
         connection: ConnectionDelegate | None = None,
         system_actions: DesktopSystemActions | None = None,
         live_hotkey: LiveHotkeyController | None = None,
@@ -127,6 +135,7 @@ class DesktopBridge:
         restart: DesktopRestart | None = None,
     ) -> None:
         self._voice = voice
+        self._microphone = microphone
         self._connection = connection
         self._system_actions = system_actions or DesktopSystemActions()
         self._live_hotkey = live_hotkey
@@ -147,6 +156,7 @@ class DesktopBridge:
             "voiceApi": VOICE_API_VERSION,
             "serverSelection": True,
             "contextMenu": True,
+            "microphone": True,
             "liveHotkey": self._live_hotkey is not None and self._live_hotkey.supported,
             "secureOrigins": list(self._secure_origins),
             "restart": self._restart is not None,
@@ -166,6 +176,20 @@ class DesktopBridge:
         self._system_actions.open_external_url(url)
         return {"opened": True}
 
+    # -- Microphone ------------------------------------------------------------
+
+    def getMicrophone(self) -> dict[str, Any]:  # noqa: N802
+        """Return the shared microphone settings ``{device, echo_cancellation}``."""
+        return self._microphone.status()
+
+    def setMicrophone(self, changes: Any) -> dict[str, Any]:  # noqa: N802
+        """Apply one partial microphone change; returns the settings."""
+        return self._microphone.update(changes)
+
+    def listMicrophones(self) -> list[dict[str, Any]]:  # noqa: N802
+        """Return the input devices and whether speech input can use them."""
+        return self._microphone.list_devices()
+
     # -- Voice -----------------------------------------------------------------
 
     def getVoiceStatus(self) -> dict[str, Any]:  # noqa: N802
@@ -179,10 +203,6 @@ class DesktopBridge:
     def updateVoiceConfig(self, changes: Any) -> dict[str, Any]:  # noqa: N802
         """Apply one partial Voice config change; returns the status snapshot."""
         return self._voice.update_config(changes)
-
-    def listMicrophones(self) -> list[dict[str, Any]]:  # noqa: N802
-        """Return the input devices and whether Voice can use them."""
-        return self._voice.list_microphones()
 
     def listWakewordModels(self) -> list[dict[str, Any]]:  # noqa: N802
         """Return the curated built-ins and the imported wakeword models."""

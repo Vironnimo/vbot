@@ -502,22 +502,24 @@ from desktop.bridge import DesktopBridge
 from desktop.connection import ConnectionController
 from desktop.main import _create_voice, parse_args
 from desktop.page_events import PageEventDispatcher
+from desktop.speech.microphone import MicrophoneService
 
 settings = Path(sys.argv[1]) / 'settings.json'
 controller = ConnectionController(settings_file=settings)
 page_events = PageEventDispatcher()
-voice = _create_voice(parse_args([]), settings, '', page_events)
-bridge = DesktopBridge(voice=voice, connection=controller)
+microphone = MicrophoneService(settings_path=settings)
+voice = _create_voice(parse_args([]), settings, microphone, '', page_events)
+bridge = DesktopBridge(voice=voice, microphone=microphone, connection=controller)
 voice.start()
-assert bridge.getDesktopCapabilities()['voiceApi'] == 2
+assert bridge.getDesktopCapabilities()['voiceApi'] == 3
 assert bridge.getVoiceStatus()['state'] == 'off'
 voice.close()
 page_events.close()
 audio_modules = {
-    'desktop.wakeword.capture',
+    'desktop.speech.capture',
     'desktop.wakeword.detection',
     'desktop.wakeword.commands',
-    'desktop.wakeword.echo',
+    'desktop.speech.echo',
     'desktop.wakeword._speech_detection',
 }
 assert not audio_modules & sys.modules.keys(), audio_modules & sys.modules.keys()
@@ -944,7 +946,9 @@ def test_voice_starts_after_the_window_is_shown_and_follows_its_server(
 
     voice = RecordingVoice(events, on_start=window_shown_first)
 
-    def create_voice(_args: Any, _settings: Any, url: str, _page_events: Any) -> RecordingVoice:
+    def create_voice(
+        _args: Any, _settings: Any, _microphone: Any, url: str, _page_events: Any
+    ) -> RecordingVoice:
         created_for.append(url)
         return voice
 
@@ -981,8 +985,8 @@ def test_launch_with_disabled_voice_never_probes_wakeword_dependencies(
         raise AssertionError("Voice dependencies must stay lazy while Voice is disabled")
 
     monkeypatch.setattr(desktop_main, "_real_wakeword_available", fail_if_probed)
-    monkeypatch.setitem(sys.modules, "desktop.wakeword.capture", None)
-    monkeypatch.setitem(sys.modules, "desktop.wakeword.echo", None)
+    monkeypatch.setitem(sys.modules, "desktop.speech.capture", None)
+    monkeypatch.setitem(sys.modules, "desktop.speech.echo", None)
 
     _launch(tmp_path)
 
@@ -1310,9 +1314,11 @@ def test_page_pushes_reach_the_window_page_until_it_closes(
 
     original_create_voice = desktop_main._create_voice
 
-    def create_voice(args: Any, settings: Any, server_url: str, page_events: Any) -> Any:
+    def create_voice(
+        args: Any, settings: Any, microphone: Any, server_url: str, page_events: Any
+    ) -> Any:
         voice_sinks.append(page_events)
-        return original_create_voice(args, settings, server_url, page_events)
+        return original_create_voice(args, settings, microphone, server_url, page_events)
 
     monkeypatch.setattr(desktop_main, "_create_voice", create_voice)
 

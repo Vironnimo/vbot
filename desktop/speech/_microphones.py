@@ -1,6 +1,6 @@
 """Microphone discovery, capture-format selection and the PortAudio backend lock.
 
-Voice opens every sounddevice (PortAudio) input stream through
+Desktop speech input opens every sounddevice (PortAudio) input stream through
 :func:`open_input_stream`, which serializes backend access behind
 :data:`AUDIO_BACKEND_LOCK` and counts the open streams: re-initializing
 PortAudio (:func:`refresh_microphone_devices`) would invalidate every open
@@ -23,13 +23,13 @@ import threading
 from dataclasses import dataclass
 from typing import Any
 
-logger = logging.getLogger("vbot.desktop.wakeword.microphones")
+logger = logging.getLogger("vbot.desktop.speech.microphones")
 
 AUDIO_BACKEND_LOCK = threading.Lock()
 """Serializes every PortAudio call that queries, opens, closes or refreshes devices."""
 
 MIN_CAPTURE_SAMPLE_RATE = 16000
-"""Lowest native rate Voice accepts (the detection rate)."""
+"""Lowest native rate speech input accepts (the 16 kHz detection rate)."""
 
 _COMMON_CAPTURE_SAMPLE_RATES = (48000, 44100, 32000, 16000)
 _CAPTURE_DTYPES = ("int16", "float32")
@@ -44,7 +44,7 @@ _open_stream_count = 0  # guarded by AUDIO_BACKEND_LOCK
 
 
 class MicrophoneUnavailableError(RuntimeError):
-    """No usable input-device format could supply Voice-quality audio."""
+    """No usable input-device format could supply speech-quality audio."""
 
 
 @dataclass(frozen=True)
@@ -128,7 +128,7 @@ def _candidate_device_indices(sd: Any, requested_device: dict[str, Any] | None) 
 def _capture_format_for_device(sd: Any, device: int) -> CaptureFormat | None:
     """Find the best native format that can be normalized to mono int16.
 
-    The device's own rate comes first: audio is resampled once, by Voice, and
+    The device's own rate comes first: audio is resampled once, by the capture, and
     the command recording keeps the bandwidth the device delivers.
     """
     try:
@@ -169,7 +169,7 @@ def _select_capture_format(sd: Any, requested_device: dict[str, Any] | None) -> 
         capture_format = _capture_format_for_device(sd, device)
         if capture_format is not None:
             return capture_format
-    raise MicrophoneUnavailableError("No input device supports Voice capture")
+    raise MicrophoneUnavailableError("No input device supports speech capture")
 
 
 def open_input_stream(
@@ -232,7 +232,7 @@ def _import_sounddevice() -> Any:
 
 
 def list_microphones(sd: Any = None) -> list[dict[str, Any]]:
-    """Enumerate shared-mode input devices and whether Voice can use them.
+    """Enumerate shared-mode input devices and whether speech input can use them.
 
     ``sd`` is the sounddevice module (imported on demand when ``None``); an
     absent backend yields an empty list.
@@ -270,7 +270,7 @@ def list_microphones(sd: Any = None) -> list[dict[str, Any]]:
 def refresh_microphone_devices(sd: Any = None) -> bool:
     """Reinitialize PortAudio so a retry sees devices connected after startup.
 
-    Skipped (``False``) while any Voice input stream is open, because a
+    Skipped (``False``) while any speech input stream is open, because a
     re-initialization would invalidate it, and when the backend offers no
     refresh hooks.
     """

@@ -24,17 +24,20 @@ import numpy as np
 import pytest
 
 from desktop import settings as desktop_settings
+from desktop.speech.microphone import MicrophoneService
 from desktop.wakeword.config import PhraseConfig, VoiceConfigError
 from desktop.wakeword.controller import VoiceControlError, VoiceController, VoiceRuntime
-from tests.desktop.wakeword.voice_test_support import (
-    AmplitudeDetector,
+from tests.desktop.speech.speech_test_support import (
     FakeEchoStage,
     FakeSoundDevice,
-    FakeVoiceServer,
     Overflow,
-    ScriptedEngine,
     tone,
     wait_until,
+)
+from tests.desktop.wakeword.voice_test_support import (
+    AmplitudeDetector,
+    FakeVoiceServer,
+    ScriptedEngine,
 )
 
 SERVER = "http://pi.lan:9000"
@@ -47,7 +50,6 @@ STATUS_KEYS = {
     "state",
     "error_code",
     "sequence",
-    "microphone",
     "active_microphone",
     "echo_cancellation",
     "default_agent_id",
@@ -104,6 +106,7 @@ class RecordingSink:
 @dataclass
 class Rig:
     voice: VoiceController
+    microphone: MicrophoneService
     sink: RecordingSink
     sd: FakeSoundDevice
     server: FakeVoiceServer
@@ -205,11 +208,14 @@ def voice_rig(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> Iterator[Call
         path = tmp_path / f"settings-{len(rigs)}.json"
         section: dict[str, Any] = {
             "enabled": True,
-            "echo_cancellation": False,
             "server_profiles": {SERVER: {"target_agent_id": "main"}},
         }
         section.update(settings or {})
+        microphone_section = {"echo_cancellation": section.pop("echo_cancellation", False)}
         desktop_settings.update_section(desktop_settings.WAKEWORD_KEY, lambda _: section, path)
+        desktop_settings.update_section(
+            desktop_settings.MICROPHONE_KEY, lambda _: microphone_section, path
+        )
 
         engines: list[ScriptedEngine] = []
         phrases_seen: list[Sequence[PhraseConfig]] = []
@@ -231,20 +237,24 @@ def voice_rig(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> Iterator[Call
         server = server or FakeVoiceServer()
         sd = sd or FakeSoundDevice(pace=0.0025)
         now = [1000.0]
-        runtime = VoiceRuntime(
+        microphone = MicrophoneService(
+            settings_path=path,
             audio_backend=sd,
+            echo_stage_factory=echo_factory or (lambda: None),
+            echo_stage_wait=echo_stage_wait,
+            reconnect_interval=0.05,
+        )
+        runtime = VoiceRuntime(
             engine_factory=engine_factory,
             speech_detector_factory=AmplitudeDetector,
             transport=server.transport(),
-            echo_stage_factory=echo_factory or (lambda: None),
-            reconnect_interval=0.05,
-            echo_stage_wait=echo_stage_wait,
             join_timeout=5.0,
             mock_frame_seconds=0.005,
             mock_stage_seconds=0.02,
         )
         voice = VoiceController(
             settings_path=path,
+            microphone=microphone,
             server_url=server_url,
             sink=sink,
             live_requests=lambda action, source: live.append((action, source)),
@@ -253,7 +263,7 @@ def voice_rig(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> Iterator[Call
             runtime=runtime,
             clock=(lambda: now[0]) if frozen_clock else time.monotonic,
         )
-        rig = Rig(voice, sink, sd, server, live, engines, phrases_seen, caplog, now)
+        rig = Rig(voice, microphone, sink, sd, server, live, engines, phrases_seen, caplog, now)
         rig_ref.append(rig)
         rigs.append(rig)
         if start:
@@ -714,21 +724,6 @@ def test_retry_refreshes_the_devices_while_no_microphone_stream_is_open(
     ]
 
 
-def test_listing_microphones_refreshes_the_devices_unless_voice_holds_a_stream(
-    voice_rig: Callable[..., Rig],
-) -> None:
-    rig = voice_rig(start=False)
-
-    idle = rig.voice.list_microphones()
-    rig.voice.start()
-    rig.wait_state("listening")
-    listening = rig.voice.list_microphones()
-
-    assert [device["name"] for device in idle] == ["Mic"]
-    assert listening == idle
-    assert rig.sd.events == ["terminate", "initialize", "stream.open"]
-
-
 def test_voice_waits_for_start_and_needs_a_server(voice_rig: Callable[..., Rig]) -> None:
     rig = voice_rig(start=False, server_url="")
 
@@ -890,7 +885,7 @@ def test_an_unavailable_echo_stage_is_reported_and_not_created_again(
     assert calls == [1]
 
 
-def test_disabled_echo_cancellation_never_creates_the_stage(
+def test_a_microphone_change_rebuilds_the_listener_and_disabled_echo_never_creates_the_stage(
     voice_rig: Callable[..., Rig],
 ) -> None:
     calls: list[int] = []
@@ -901,7 +896,7 @@ def test_disabled_echo_cancellation_never_creates_the_stage(
 
     rig = voice_rig(echo_factory=factory)
     status = rig.wait_state("listening")
-    rig.voice.update_config({"echo_cancellation": True})
+    rig.microphone.update({"echo_cancellation": True})
     wait_until(lambda: len(rig.engines) == 2)
     enabled = rig.wait_state("listening")
 

@@ -21,8 +21,6 @@ Stored shape (every field optional)::
 
     {
       "enabled": true,
-      "microphone": {"index": 4, "name": "Studio mic", "host_api": "Windows WASAPI"},
-      "echo_cancellation": true,
       "active_model_ids": ["builtin/hey_nabu", "builtin/hey_jarvis"],
       "model_sensitivities": {"builtin/hey_nabu": 0.55},
       "server_profiles": {
@@ -38,9 +36,11 @@ Stored shape (every field optional)::
       }
     }
 
-Acoustic settings (active phrases, sensitivities, microphone, echo
-cancellation) are global. Agent ids are server-specific, so the default command
-target and the per-phrase actions live in the profile of one server. Writers
+Acoustic settings (active phrases, sensitivities) are global; the microphone
+and echo cancellation are the Desktop's shared microphone settings
+(:mod:`desktop.speech.microphone`), not part of this section. Agent ids are
+server-specific, so the default command target and the per-phrase actions live
+in the profile of one server. Writers
 keep unknown keys inside and outside the section.
 
 The retired global ``model_actions`` (``{model_id: "command" | "live_voice"}``)
@@ -86,8 +86,6 @@ ERROR_VOICE_CONFIG_INVALID = "voice_config_invalid"
 ERROR_NO_SERVER = "no_server"
 
 _KEY_ENABLED = "enabled"
-_KEY_MICROPHONE = "microphone"
-_KEY_ECHO_CANCELLATION = "echo_cancellation"
 _KEY_ACTIVE_MODEL_IDS = "active_model_ids"
 _KEY_MODEL_SENSITIVITIES = "model_sensitivities"
 _KEY_SERVER_PROFILES = "server_profiles"
@@ -98,16 +96,12 @@ _PROFILE_KEY_PHRASE_ACTIONS = "phrase_actions"
 
 # Change keys accepted by apply_voice_changes. ``enabled`` has its own
 # operation (set_enabled) because enabling runs readiness checks first.
-_CHANGE_MICROPHONE = "microphone"
-_CHANGE_ECHO_CANCELLATION = "echo_cancellation"
 _CHANGE_ACTIVE_MODEL_IDS = "active_model_ids"
 _CHANGE_MODEL_SENSITIVITIES = "model_sensitivities"
 _CHANGE_DEFAULT_AGENT = "default_agent_id"
 _CHANGE_DEFAULT_SESSION_BEHAVIOR = "default_session_behavior"
 _CHANGE_PHRASE_ACTIONS = "phrase_actions"
 _GLOBAL_CHANGE_KEYS = (
-    _CHANGE_MICROPHONE,
-    _CHANGE_ECHO_CANCELLATION,
     _CHANGE_ACTIVE_MODEL_IDS,
     _CHANGE_MODEL_SENSITIVITIES,
 )
@@ -132,23 +126,6 @@ class VoiceConfigError(ValueError):
         super().__init__(message)
         self.field = field
         self.error_code = error_code
-
-
-@dataclass(frozen=True)
-class MicrophoneSelection:
-    """Stable identity of an explicitly chosen input device.
-
-    Capture accepts the stored index only while name and host API still match,
-    so a reordered device list never routes audio to a recycled index.
-    """
-
-    index: int
-    name: str
-    host_api: str
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return the stored ``{index, name, host_api}`` form."""
-        return {"index": self.index, "name": self.name, "host_api": self.host_api}
 
 
 @dataclass(frozen=True)
@@ -225,8 +202,6 @@ class VoiceConfig:
     """
 
     enabled: bool = False
-    microphone: MicrophoneSelection | None = None
-    echo_cancellation: bool = True
     phrases: tuple[PhraseConfig, ...] = field(default_factory=_default_phrases)
     profiles: Mapping[str, ServerVoiceProfile] = field(default_factory=_frozen_mapping)
 
@@ -274,11 +249,7 @@ class VoiceConfig:
         Action routing (phrase actions, default Agent and Session behavior) can
         change on a running listener; everything acoustic cannot.
         """
-        return (
-            self.microphone != other.microphone
-            or self.echo_cancellation != other.echo_cancellation
-            or self.phrases != other.phrases
-        )
+        return self.phrases != other.phrases
 
 
 def canonical_profile_key(server_url: str) -> str:
@@ -325,37 +296,16 @@ def parse_voice_config(raw: object) -> VoiceConfig:
     """
     section = _writable_section(raw)
     enabled = section.get(_KEY_ENABLED)
-    echo_cancellation = section.get(_KEY_ECHO_CANCELLATION)
     model_ids = _parse_active_model_ids(section.get(_KEY_ACTIVE_MODEL_IDS))
     sensitivities = _parse_sensitivities(section.get(_KEY_MODEL_SENSITIVITIES))
     return VoiceConfig(
         enabled=enabled if isinstance(enabled, bool) else False,
-        microphone=_parse_microphone(section.get(_KEY_MICROPHONE)),
-        echo_cancellation=echo_cancellation if isinstance(echo_cancellation, bool) else True,
         phrases=tuple(
             PhraseConfig(model_id, sensitivities.get(model_id, DEFAULT_SENSITIVITY))
             for model_id in (model_ids or DEFAULT_MODEL_IDS)
         ),
         profiles=_parse_profiles(section.get(_KEY_SERVER_PROFILES)),
     )
-
-
-def _parse_microphone(value: object) -> MicrophoneSelection | None:
-    if not isinstance(value, Mapping):
-        return None
-    index = value.get("index")
-    name = value.get("name")
-    host_api = value.get("host_api")
-    if (
-        not isinstance(index, int)
-        or isinstance(index, bool)
-        or index < 0
-        or not isinstance(name, str)
-        or not name.strip()
-        or not isinstance(host_api, str)
-    ):
-        return None
-    return MicrophoneSelection(index=index, name=name.strip(), host_api=host_api.strip())
 
 
 def _parse_active_model_ids(value: object) -> tuple[str, ...] | None:
@@ -471,8 +421,7 @@ def apply_voice_changes(
 ) -> dict[str, Any]:
     """Validate one partial Voice change and return the new stored section.
 
-    ``changes`` keys: ``microphone`` (descriptor or ``null``),
-    ``echo_cancellation`` (bool), ``active_model_ids`` (1 to
+    ``changes`` keys: ``active_model_ids`` (1 to
     :data:`MAX_ACTIVE_PHRASES` unique ids; an id that is not active yet must
     be known, while an active one whose model is gone may stay, so the other
     phrases stay editable), ``model_sensitivities``
@@ -498,13 +447,6 @@ def apply_voice_changes(
             )
 
     section = _writable_section(raw)
-    if _CHANGE_MICROPHONE in changes:
-        microphone = _validated_microphone(changes[_CHANGE_MICROPHONE])
-        section[_KEY_MICROPHONE] = microphone.to_dict() if microphone is not None else None
-    if _CHANGE_ECHO_CANCELLATION in changes:
-        section[_KEY_ECHO_CANCELLATION] = _validated_bool(
-            changes[_CHANGE_ECHO_CANCELLATION], _CHANGE_ECHO_CANCELLATION
-        )
     if _CHANGE_ACTIVE_MODEL_IDS in changes:
         active = frozenset(parse_voice_config(section).active_model_ids)
         section[_KEY_ACTIVE_MODEL_IDS] = _validated_active_model_ids(
@@ -653,18 +595,6 @@ def _validated_bool(value: object, field_name: str) -> bool:
             f"Voice setting {field_name} must be true or false", field=field_name
         )
     return value
-
-
-def _validated_microphone(value: object) -> MicrophoneSelection | None:
-    if value is None:
-        return None
-    microphone = _parse_microphone(value)
-    if microphone is None:
-        raise VoiceConfigError(
-            "Voice microphone must be a device descriptor or null",
-            field=_CHANGE_MICROPHONE,
-        )
-    return microphone
 
 
 def _validated_active_model_ids(value: object, known_model_ids: Callable[[str], bool]) -> list[str]:
@@ -838,8 +768,6 @@ def config_status(
     profile = config.profile_for(server_url)
     return {
         "enabled": config.enabled,
-        "microphone": config.microphone.to_dict() if config.microphone is not None else None,
-        "echo_cancellation": {"enabled": config.echo_cancellation},
         "default_agent_id": profile.default_agent_id,
         "default_session_behavior": profile.default_session_behavior,
         "phrases": [
