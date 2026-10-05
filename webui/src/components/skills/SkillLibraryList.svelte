@@ -93,6 +93,7 @@
           {@const readOnlyReason = entry.editable_scope
             ? ''
             : skillReadOnlyReason(entry)}
+          <!-- svelte-ignore a11y_no_static_element_interactions (Right click anywhere on the row, including its switch and buttons; the context menu key on the row's open button is the keyboard path.) -->
           <div
             class="skills-row"
             class:skills-row--current={currentId === entry.id}
