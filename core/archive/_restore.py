@@ -446,8 +446,8 @@ def _plan_workspace(
     """Where the restored Agent's Workspace lives.
 
     A Workspace inside the Agent's directory travels with it. An external one
-    stays where it was and is re-attached, or the default Workspace replaces a
-    vanished one. A Workspace an older vBot moved into the archive returns to
+    stays where it was and is re-attached; a missing or inaccessible one blocks
+    restoration. A Workspace an older vBot moved into the archive returns to
     its folder, or becomes the default Workspace when that folder is in use.
     """
     default = str(default_workspace_dir(services.data_dir, target).resolve())
@@ -479,13 +479,28 @@ def _plan_workspace(
         return None, None
     workspace = Path(agent.workspace)
     home = services.data_dir / "agents" / agent.id
-    if not workspace.resolve().is_relative_to(home.resolve()) and not workspace.is_dir():
-        findings.warn(
-            "external_workspace_missing",
-            f"the Workspace folder {workspace} is gone; the Agent uses its default Workspace",
-            path=str(workspace),
-        )
-        return default, None
+    if not workspace.resolve().is_relative_to(home.resolve()):
+        try:
+            available = is_dir_strict(workspace)
+            if available:
+                # A stat alone need not establish access to a mounted directory.
+                with os.scandir(workspace):
+                    pass
+        except OSError:
+            findings.block(
+                "external_workspace_unavailable",
+                f"the Workspace folder {workspace} cannot be accessed; "
+                "restore access to this folder, then restore the Agent again",
+                path=str(workspace),
+            )
+        else:
+            if not available:
+                findings.block(
+                    "external_workspace_missing",
+                    f"the Workspace folder {workspace} is missing or is not a directory; "
+                    "restore this folder, then restore the Agent again",
+                    path=str(workspace),
+                )
     return None, None
 
 
