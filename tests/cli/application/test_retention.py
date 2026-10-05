@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,6 +13,7 @@ import pytest
 
 from cli.application import retention
 from cli.application.state import Installation, Operation
+from tests.core.conftest import deny_access as deny_access
 
 
 def _install(root: Path, versions: list[str], *, active: str) -> Installation:
@@ -171,6 +173,46 @@ def test_an_unreadable_record_keeps_every_version(
     assert [
         record.levelno for record in caplog.records if record.name == "vbot.application.retention"
     ] == [logging.WARNING]
+
+
+@pytest.mark.parametrize("engine", ["speech-engines", "embedding-engines"])
+@pytest.mark.parametrize("unreadable", ["listing", "entry", "configuration"])
+def test_an_incomplete_environment_inventory_keeps_every_runtime_in_place(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    deny_access: Callable[[Path], None],
+    engine: str,
+    unreadable: str,
+) -> None:
+    install = _install(tmp_path, ["rel_active", "rel_required"], active="rel_active")
+    runtime = tmp_path / "versions" / "rel_required" / "runtime"
+    environments = tmp_path / "data" / engine
+    environment = environments / "private"
+    _environment(environment, runtime)
+    _processes(monkeypatch)
+    deny_access(
+        {
+            "listing": environments,
+            "entry": environments,
+            "configuration": environment / "pyvenv.cfg",
+        }[unreadable]
+    )
+    if unreadable == "entry":
+        # Enumeration succeeded, but one child's status is unavailable.
+        real_iterdir = Path.iterdir
+        monkeypatch.setattr(
+            Path,
+            "iterdir",
+            lambda path: iter([environment]) if path == environments else real_iterdir(path),
+        )
+
+    retired = retention.retire_unneeded(install)
+    retention.remove_retired(retired)
+    monkeypatch.undo()
+
+    assert retired == []
+    assert runtime.is_dir()
+    assert _versions(install) == {"rel_active", "rel_required"}
 
 
 def test_downloads_of_finished_operations_are_retired(
