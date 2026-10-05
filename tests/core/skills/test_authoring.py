@@ -266,8 +266,9 @@ def test_changes_to_missing_or_binary_targets_fail(
         operation(service, root)
 
 
+@pytest.mark.parametrize("directory", ["demo", "package"])
 def test_delete_archives_the_skill_directory(
-    service: SkillAuthoringService, root: Path, tmp_path: Path
+    service: SkillAuthoringService, root: Path, tmp_path: Path, directory: str
 ) -> None:
     service.create(root, "demo", skill_document(), writer=AGENT)
     service.write_file(root, "demo", "references/notes.md", "notes\n", writer=AGENT)
@@ -275,6 +276,8 @@ def test_delete_archives_the_skill_directory(
     outside.mkdir()
     (outside / "private.md").write_text("private", encoding="utf-8")
     link_directory(root / "demo" / "assets", outside)
+    if directory != "demo":
+        (root / "demo").rename(root / directory)
 
     result = service.delete(root, "demo", writer=HUMAN_WRITER)
 
@@ -284,6 +287,7 @@ def test_delete_archives_the_skill_directory(
         ("references/notes.md", "deleted"),
     ]
     assert not (root / "demo").exists()
+    assert not (root / directory).exists()
     archived = tmp_path / "skill-archive" / str(result.archive_id)
     assert result.path == archived
     assert (archived / "references" / "notes.md").read_text(encoding="utf-8") == "notes\n"
@@ -296,6 +300,25 @@ def test_delete_archives_the_skill_directory(
         "human",
         "agent",
     )
+
+
+@pytest.mark.parametrize("declared_name", ["demo", "other"])
+def test_mutations_refuse_conflicting_package_identities(
+    service: SkillAuthoringService, root: Path, declared_name: str
+) -> None:
+    service.create(root, "demo", skill_document(), writer=AGENT)
+    (root / "demo").rename(root / "package")
+    service.create(root, "demo", skill_document(name="demo"), writer=AGENT)
+    conflicting = root / "demo" / "SKILL.md"
+    conflicting.write_text(skill_document(name=declared_name), encoding="utf-8")
+    before = conflicting.read_bytes()
+
+    with pytest.raises(SkillAuthoringError):
+        service.delete(root, "demo", writer=HUMAN_WRITER)
+
+    assert (root / "package" / "SKILL.md").is_file()
+    assert conflicting.read_bytes() == before
+    assert not (root.parent / "skill-archive").exists()
 
 
 @pytest.mark.parametrize("action", ["delete", "write_file", "remove_file", "patch"])
