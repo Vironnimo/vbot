@@ -31,6 +31,9 @@ RESOURCE_CHANGED_EVENT = "resource_changed"
 COMMAND_STATUS_CHANGED_EVENT = "command_status_changed"
 RECALL_INDEX_STATUS_EVENT = "recall_index_status"
 ACTIVITY_STATUS_EVENT = "activity_status"
+# Published once when a stop request reaches the server:
+# ``{"initiator": <STOP_INITIATORS value or "unknown">}``.
+SERVER_STOPPING_EVENT = "server_stopping"
 
 ALLOWED_SERVER_EVENT_TYPES = frozenset(
     {
@@ -46,6 +49,7 @@ ALLOWED_SERVER_EVENT_TYPES = frozenset(
         COMMAND_STATUS_CHANGED_EVENT,
         RECALL_INDEX_STATUS_EVENT,
         ACTIVITY_STATUS_EVENT,
+        SERVER_STOPPING_EVENT,
     }
 )
 

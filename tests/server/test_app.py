@@ -225,15 +225,22 @@ def test_control_shutdown_requires_secret_and_requests_uvicorn_exit(
     if initiator is not None:
         headers[CONTROL_INITIATOR_HEADER] = initiator
 
-    with TestClient(app) as client:
+    with TestClient(app) as client, client.websocket_connect("/ws") as websocket:
+        websocket.receive_json()
         rejected = client.post(CONTROL_SHUTDOWN_PATH)
         accepted = client.post(CONTROL_SHUTDOWN_PATH, headers=headers)
+        announced = websocket.receive_json()
 
     assert rejected.status_code == 404
     assert accepted.status_code == 202
     assert accepted.json() == {"status": "stopping"}
-    # The shutdown carries who asked for it, limited to the known initiators.
+    # The shutdown carries who asked for it, limited to the known initiators,
+    # and open app clients learn it before their sockets close.
     assert requested == [reported]
+    assert (announced["type"], announced["payload"]) == (
+        "server_stopping",
+        {"initiator": reported},
+    )
 
 
 def test_statistics_warmup_reconciles_the_index_at_startup(tmp_path: Path) -> None:
