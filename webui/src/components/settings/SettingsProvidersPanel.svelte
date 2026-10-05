@@ -45,6 +45,7 @@
     setConnectionEnabled as setConnectionEnabledRequest,
     unsetProviderKey,
   } from '$lib/api.js';
+  import { useAutosaveContext } from '$lib/autosave.js';
   import { shouldApplyReloadNow } from '$lib/resourceInvalidation.js';
   import { createLocalProviderModels } from './providers/localModels.svelte.js';
   import ProviderDetailDisclosure from './providers/ProviderDetailDisclosure.svelte';
@@ -64,6 +65,7 @@
     modelsRefreshToken = 0,
   } = $props();
   const uid = $props.id();
+  const autosaveContext = useAutosaveContext();
   const localModels = createLocalProviderModels({
     get settings() {
       return settings;
@@ -391,7 +393,16 @@
     await onRefreshProviderSettings();
   }
 
-  async function disconnectOAuthAccount(provider, connection, account) {
+  // Removing a credential can disconnect its Provider, which removes its row
+  // with the OpenRouter routing editor: pending edits save first, or the
+  // shared prompt discards them.
+  function disconnectOAuthAccount(provider, connection, account) {
+    return autosaveContext.requestTransition(() =>
+      disconnectOAuthAccountNow(provider, connection, account),
+    );
+  }
+
+  async function disconnectOAuthAccountNow(provider, connection, account) {
     onError('');
 
     try {
@@ -406,7 +417,13 @@
     }
   }
 
-  async function removeApiKey(provider, connection, account) {
+  function removeApiKey(provider, connection, account) {
+    return autosaveContext.requestTransition(() =>
+      removeApiKeyNow(provider, connection, account),
+    );
+  }
+
+  async function removeApiKeyNow(provider, connection, account) {
     onError('');
 
     try {

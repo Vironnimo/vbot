@@ -3,6 +3,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
+import {
+  createAutosaveCoordinator,
+  createAutosaveParticipant,
+} from '../../lib/autosave.js';
 import { init } from '../../lib/i18n.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
@@ -22,6 +26,8 @@ vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
 
 const { default: SettingsProvidersPanel } =
   await import('../settings/SettingsProvidersPanel.svelte');
+const { default: AutosaveContextHost } =
+  await import('./AutosaveContextHost.support.svelte');
 
 describe('SettingsProvidersPanel', () => {
   let mountedComponent;
@@ -60,12 +66,17 @@ describe('SettingsProvidersPanel', () => {
         },
       ],
     }));
-    mountedComponent = mount(SettingsProvidersPanel, {
+    const coordinator = createAutosaveCoordinator();
+    mountedComponent = mount(AutosaveContextHost, {
       target: document.body,
       props: {
-        settings: { providers: { items } },
-        visible: true,
-        onRefreshProviderSettings: onRefreshProviderSettingsMock,
+        component: SettingsProvidersPanel,
+        componentProps: {
+          settings: { providers: { items } },
+          visible: true,
+          onRefreshProviderSettings: onRefreshProviderSettingsMock,
+        },
+        coordinator,
       },
     });
     flushSync();
@@ -99,10 +110,28 @@ describe('SettingsProvidersPanel', () => {
       account: 'work',
       value: 'replacement-test',
     });
+    // Removing a key can disconnect its Provider and with it remove an
+    // editor in its row, so pending edits save first.
+    let pendingEdit = true;
+    coordinator.register(
+      createAutosaveParticipant({
+        getSnapshot: () => pendingEdit,
+        hasChanges: () => pendingEdit,
+        save: async () => {
+          expect(rpcMock).not.toHaveBeenCalledWith(
+            'provider.unset_key',
+            expect.anything(),
+          );
+          pendingEdit = false;
+          return true;
+        },
+      }),
+    );
     findButton('Remove shared key').click();
     await waitForCondition(() =>
       rpcMock.mock.calls.some(([method]) => method === 'provider.unset_key'),
     );
+    expect(pendingEdit).toBe(false);
     expect(rpcMock).toHaveBeenCalledWith('provider.unset_key', {
       provider_id: 'opencode-go',
       connection_id: 'opencode-go:api-key',
