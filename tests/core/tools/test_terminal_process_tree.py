@@ -9,13 +9,22 @@ import time
 
 from core.tools._terminal_process_tree import track_process_tree
 
-# The root runs a child that fails, starts a sleeper it does not wait for, and
-# exits 0 once it has read a line - after the tracker is in place.
-_ROOT = """
+# The root runs a child that fails, starts a survivor it does not wait for, and
+# exits 0 once it has read a line - after the tracker is in place. The survivor
+# works briefly before it sleeps: on POSIX only running members count towards
+# the CPU time, which the kernel charges in clock ticks.
+_SURVIVOR = """
+import time
+start = time.process_time()
+while time.process_time() - start < 0.05:
+    pass
+time.sleep(60)
+"""
+_ROOT = f"""
 import subprocess, sys
 sys.stdin.readline()
 subprocess.run([sys.executable, "-c", "raise SystemExit(5)"])
-subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+subprocess.Popen([sys.executable, "-c", {_SURVIVOR!r}])
 """
 
 
@@ -35,7 +44,10 @@ def test_tree_reports_survivors_and_failed_children_and_kills_every_member() -> 
         assert root.wait(timeout=20) == 0
 
         deadline = time.monotonic() + 10
-        while not (facts := tree.facts()).running and time.monotonic() < deadline:
+        while time.monotonic() < deadline:
+            facts = tree.facts()
+            if facts.running and facts.cpu_seconds > 0:
+                break
             time.sleep(0.05)
         assert len(facts.running) == 1
         assert facts.running[0].name.lower().startswith("python")
