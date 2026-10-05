@@ -465,15 +465,34 @@ def snapshot_document_paths(data_dir: Path) -> tuple[str, ...]:
     ``OSError``; a missing directory simply holds no documents.
     """
 
-    root = Path(data_dir)
-    found: set[str] = set()
-    for pattern in SNAPSHOT_DOCUMENTS.values():
-        found.update(_matching_documents(root, tuple(pattern.split("/")), ()))
-    return tuple(sorted(found))
+    return matching_data_paths(data_dir, SNAPSHOT_DOCUMENTS.values())
 
 
 def is_snapshot_document_path(path: str) -> bool:
     """Whether ``path`` is a relative POSIX path the snapshot document set may contain."""
+
+    return path_matches_patterns(path, SNAPSHOT_DOCUMENTS.values())
+
+
+def matching_data_paths(data_dir: Path, patterns: Iterable[str]) -> tuple[str, ...]:
+    """Every existing regular file below ``data_dir`` that one of ``patterns`` matches.
+
+    A pattern is a relative POSIX path; a segment with ``*``, ``?`` or ``[``
+    matches one name that does not start with ``.``, any other segment matches
+    itself exactly. Only regular files reached through real directories count;
+    symbolic links and Windows junctions never match. Operational listing
+    failures raise ``OSError``; a missing directory simply holds no match.
+    """
+
+    root = Path(data_dir)
+    found: set[str] = set()
+    for pattern in patterns:
+        found.update(_matching_documents(root, tuple(pattern.split("/")), ()))
+    return tuple(sorted(found))
+
+
+def path_matches_patterns(path: str, patterns: Iterable[str]) -> bool:
+    """Whether relative POSIX ``path`` is one :func:`matching_data_paths` could return."""
 
     if not isinstance(path, str) or not path or any(char in path for char in "\\:\0"):
         return False
@@ -481,8 +500,8 @@ def is_snapshot_document_path(path: str) -> bool:
     if any(part in {"", ".", ".."} for part in parts):
         return False
     return any(
-        len(parts) == len(pattern) and all(map(_segment_matches, parts, pattern, strict=True))
-        for pattern in (tuple(value.split("/")) for value in SNAPSHOT_DOCUMENTS.values())
+        len(parts) == len(pattern) and all(map(_part_matches, parts, pattern, strict=True))
+        for pattern in (tuple(value.split("/")) for value in patterns)
     )
 
 
@@ -506,6 +525,13 @@ def _document_data_dirs(path: Path) -> tuple[Path, ...]:
 
 def _segment_matches(name: str, pattern: str) -> bool:
     return not name.startswith(".") and fnmatch.fnmatchcase(name, pattern)
+
+
+def _part_matches(name: str, pattern: str) -> bool:
+    """A wildcard segment as :func:`_matching_documents` lists it; others exactly."""
+    if any(char in pattern for char in "*?["):
+        return _segment_matches(name, pattern)
+    return name == pattern
 
 
 def _matching_documents(

@@ -11,6 +11,9 @@ from cli.agent_management import agent_reorder
 from cli.archive_management import archive_list, archive_purge, archive_restore, archive_show
 from cli.chat_management import ChatRequest, chat
 from cli.data_store_management import (
+    data_store_config_backup_list,
+    data_store_config_backup_restore,
+    data_store_config_backup_show,
     data_store_incident_acknowledge,
     data_store_snapshot_create,
     data_store_snapshot_list,
@@ -389,8 +392,15 @@ def dispatch_data_store_command(
         [ServerInstance, str], CommandResult
     ] = data_store_incident_acknowledge,
     unregister_fn: Callable[[ServerInstance, str, bool], CommandResult] = data_store_unregister,
+    config_backup_list_fn: Callable[
+        [ServerInstance], CommandResult
+    ] = data_store_config_backup_list,
+    config_backup_show_fn: Callable[
+        [ServerInstance, str], CommandResult
+    ] = data_store_config_backup_show,
+    config_backup_restore_fn: Callable[..., CommandResult] = data_store_config_backup_restore,
 ) -> CommandResult:
-    """Dispatch operator controls for the data directory's canonical databases."""
+    """Dispatch operator controls for the canonical databases and configuration backups."""
 
     if args.command == "status":
         return status_fn(instance)
@@ -409,6 +419,15 @@ def dispatch_data_store_command(
                 args.database,
                 documents=args.documents,
                 complete=args.all,
+            )
+    if args.command == "config-backup":
+        if args.config_backup_command == "list":
+            return config_backup_list_fn(instance)
+        if args.config_backup_command == "show":
+            return config_backup_show_fn(instance, args.backup_id)
+        if args.config_backup_command == "restore":
+            return config_backup_restore_fn(
+                instance, args.backup_id, args.yes, args.file, complete=args.all
             )
     if args.command == "incident" and args.incident_command == "acknowledge":
         return incident_acknowledge_fn(instance, args.incident_id)

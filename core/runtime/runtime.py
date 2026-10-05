@@ -82,6 +82,7 @@ from core.runtime._agent_rename import (
     rename_identity_agent,
 )
 from core.runtime._bootstrap import RuntimeStartupSummary, bootstrap, start_event_loop_service
+from core.runtime._config_backups import ConfigBackupSchedule
 from core.runtime._configuration import _resolve_data_dir, _resolve_resources_path
 from core.runtime._extension_host import ExtensionHostFactory
 from core.runtime._prompt_blocks import refresh_prompt_blocks
@@ -225,6 +226,7 @@ class Runtime:
         self._bootstrap_service: BootstrapService | None = None
         self._automation_references: AutomationReferences | None = None
         self._archive: ArchiveService | None = None
+        self._config_backups: ConfigBackupSchedule | None = None
         self._trigger_service: TriggerService | None = None
         self._reflection_service: ReflectionService | None = None
         self._learning_changes: LearningChanges | None = None
@@ -536,6 +538,16 @@ class Runtime:
 
     def _start_archive_retention(self) -> None:
         start_event_loop_service(self._archive, "Archive is not available")
+
+    def _start_config_backups(self) -> None:
+        """Back up the configuration files while serving (``core.database.config_backups``)."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._config_backups is None:
+            self._config_backups = ConfigBackupSchedule(self._data_dir, self._snapshot_barrier)
+        self._config_backups.start()
 
     def _start_librarian(self) -> None:
         start_event_loop_service(self._librarian_service, "Librarian service not available")

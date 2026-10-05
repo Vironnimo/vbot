@@ -8,6 +8,7 @@ from cli._parser_common import (
     AGENT_HELP,
     ARCHIVE_HELP,
     AREA_HELP,
+    DATA_STORE_CONFIG_BACKUP_HELP,
     DATA_STORE_HELP,
     DATA_STORE_SNAPSHOT_HELP,
     PERMANENT_DELETE_HELP,
@@ -890,6 +891,55 @@ def _add_data_store_parsers(
         ),
     )
     restore_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm restore while the exact server target is stopped",
+    )
+
+    config_backup_parser = commands.add_parser(
+        "config-backup",
+        help=DATA_STORE_HELP["config-backup"],
+        description=DATA_STORE_HELP["config-backup"],
+    )
+    config_backup_commands = config_backup_parser.add_subparsers(
+        dest="config_backup_command", required=True
+    )
+    _add_command_parser(
+        config_backup_commands,
+        "list",
+        DATA_STORE_CONFIG_BACKUP_HELP["list"],
+        example="data-store config-backup list",
+    )
+    show_parser = _add_command_parser(
+        config_backup_commands,
+        "show",
+        DATA_STORE_CONFIG_BACKUP_HELP["show"],
+        example="data-store config-backup show <backup-id>",
+    )
+    show_parser.add_argument("backup_id", metavar="<backup-id>")
+    config_restore_parser = _add_command_parser(
+        config_backup_commands,
+        "restore",
+        DATA_STORE_CONFIG_BACKUP_HELP["restore"],
+        example="data-store config-backup restore <backup-id> --file settings.json --yes",
+    )
+    config_restore_parser.add_argument("backup_id", metavar="<backup-id>")
+    config_restore_parser.add_argument(
+        "--file",
+        action="append",
+        default=[],
+        metavar="<path>",
+        help="Restore this file, as `show` names it (repeatable)",
+    )
+    config_restore_parser.add_argument(
+        "--all",
+        action="store_true",
+        help=(
+            "Restore every file of the backup; files created after it and files whose "
+            "folder no longer exists stay as they are"
+        ),
+    )
+    config_restore_parser.add_argument(
         "--yes",
         action="store_true",
         help="Confirm restore while the exact server target is stopped",

@@ -129,6 +129,9 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
     if (archive := runtime._archive) is not None:
         # A purge in progress ends before its next Session; the next start continues it.
         yield _Step("archive_retention", archive.stop, archive.aclose)
+    if (config_backups := runtime._config_backups) is not None:
+        # The last check backs up a configuration changed since the previous one.
+        yield _Step("config_backups", config_backups.stop, config_backups.aclose)
     if (terminals := runtime._terminal_manager) is not None:
         # Before triggers close, so a handed-off command's stopped result is submitted.
         yield _Step("commands", None, terminals.shutdown_commands)

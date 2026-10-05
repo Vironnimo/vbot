@@ -31,7 +31,7 @@ Split oversized source files into focused internal units behind the owning modul
 
 Live voice (`live_voice` Task Model) keeps the provider call, delegated reasoning and app operations on the server; an accessor holds at most the call media and answers UI requests (`model_tasks/live.md`).
 
-**Persistence:** Every SQLite database opens through the shared kernel `core/database/` (`database.md`): connection and journal policy, additive schema evolution with a migration ledger, and for canonical databases the data-store marker (`<data-dir>/data-store.json`), data snapshots, quarantine and auto-restore. Canonical Session history lives in normalized tables of `<data-dir>/sessions.db` with FTS search; a fork shares its source's history through lineage instead of copying it (`sessions.md`). Only explicit operator and update workflows create data snapshots (`<data-dir>/snapshots/`); normal Runtime startup and operation never copy a database.
+**Persistence:** Every SQLite database opens through the shared kernel `core/database/` (`database.md`): connection and journal policy, additive schema evolution with a migration ledger, and for canonical databases the data-store marker (`<data-dir>/data-store.json`), data snapshots, quarantine and auto-restore. Canonical Session history lives in normalized tables of `<data-dir>/sessions.db` with FTS search; a fork shares its source's history through lineage instead of copying it (`sessions.md`). Only explicit operator and update workflows create data snapshots (`<data-dir>/snapshots/`); normal Runtime startup and operation never copy a database. The configuration files (JSON documents, `.env`, Workspace identity files, prompt overrides) get deduplicated configuration backups (`<data-dir>/config-backups/`) at Runtime start, after changes every 5 minutes, and at shutdown (`database.md` -> Configuration backup).
 
 **Tools:** Execute a call whose intended effect is clear even when it does not match the schema; refuse only genuinely ambiguous calls, before side effects, with the corrected call. Similarity alone is not intent for a mutation or an explicit target. Schemas, argument normalization/validation, concurrency: `tools.md`. Agent-facing design: `tools/designing-agent-tools.md`; review procedure and instruments: `.vorch/workflows/tool-review-workflow.md`.
 
@@ -53,7 +53,7 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 | runs.md | `core/runs/` | Run lifecycle, cancellation, timeline events, queues |
 | compaction.md | `core/compaction/` | Triggers, strategies, plans, checkpoints |
 | sessions.md | `core/sessions/` | Canonical SQLite Session persistence, metadata, and lifecycle |
-| database.md | `core/database/` | Shared SQLite kernel, format-stability contract, data-store marker, data snapshots and recovery |
+| database.md | `core/database/` | Shared SQLite kernel, format-stability contract, data-store marker, data snapshots, configuration backups and recovery |
 | recall.md | `core/recall/` | Recall backends, the shared Passage index (literal FTS and vectors), background semantic indexing |
 | statistics.md | `core/statistics/` | Disposable SQLite projection, report RPC |
 | usage.md | `core/usage/` | Durable Model request accounting, historical Usage import |
@@ -130,7 +130,7 @@ python desktop/main.py                # Desktop shell
 ```
 A git-ignored checkout marker selects dev data `~/.vbot-dev`, port `8421`; the installed CLI outside the checkout uses `~/.vbot`, `8420`; managed worktrees have their own. Never target the installed instance with development commands, including its interpreter: running an installed version's runtime interpreter (`versions/<id>/runtime/python.exe`, `runtime/bin/python3` on Linux) writes `__pycache__` into the verified version (`cli/application.md` -> Update operation).
 
-**Data store:** `python cli/main.py data-store status|snapshot|incident|unregister` reports and manages every canonical database (`cli.md`). A data directory from before Generation 1 (vBot 0.4.4 and earlier) has no converter and is refused at startup (`database.md` -> Evolution contract, item 6).
+**Data store:** `python cli/main.py data-store status|snapshot|config-backup|incident|unregister` reports and manages every canonical database (`cli.md`). A data directory from before Generation 1 (vBot 0.4.4 and earlier) has no converter and is refused at startup (`database.md` -> Evolution contract, item 6).
 
 **Frontend build:** `cd webui && npm ci && npm run build`. It also compiles bundled Extension `ui/page.html` entries to relative `web/` assets (`webui/scripts/build-extension-pages.mjs`); installers ship assets and Extension sources. `npm run format`/`format:check`/`lint` and the commit hook cover these Extension sources too.
 

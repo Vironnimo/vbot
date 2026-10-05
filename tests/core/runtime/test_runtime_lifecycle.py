@@ -99,6 +99,7 @@ async def test_safe_startup_does_not_load_extensions_or_start_producers(
         "_start_calendar_service",
         "_start_provider_usage_service",
         "_start_archive_retention",
+        "_start_config_backups",
     ):
         monkeypatch.setattr(runtime, name, Mock(side_effect=AssertionError(name)))
 

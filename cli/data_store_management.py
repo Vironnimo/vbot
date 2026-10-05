@@ -1,4 +1,4 @@
-"""Operational controls for the data directory's canonical SQLite databases."""
+"""Operational controls for the data directory's canonical databases and configuration backups."""
 
 from __future__ import annotations
 
@@ -18,12 +18,16 @@ from cli.server_management import (
     stop_server,
 )
 from core.database import (
+    ConfigRestore,
     DatabaseError,
     SnapshotRestore,
     UnregisteredDatabase,
+    describe_config_backup,
+    list_config_backups,
     open_database,
     read_marker,
     read_verified_manifest,
+    restore_config_backup,
     restore_data_snapshot,
     snapshot_root,
     snapshot_summaries,
@@ -225,6 +229,11 @@ def data_store_snapshot_restore(
             check_only=check_only,
         )
 
+    def restore_and_verify(snapshot: Path) -> SnapshotRestore:
+        restored = restore(snapshot, check_only=False)
+        _verify_restored(restored.databases, specs)
+        return restored
+
     try:
         snapshot = _snapshot_path(instance, snapshot_id)
         # Check before stopping the server: nothing changes yet.
@@ -235,6 +244,131 @@ def data_store_snapshot_restore(
             message=f"snapshot cannot be restored: {snapshot_id}: {exc}",
             instance=instance,
         )
+    return _restore_while_stopped(
+        instance,
+        lambda: _describe_restore(restore_and_verify(snapshot)),
+        noun="data snapshot",
+        item_id=snapshot_id,
+    )
+
+
+def data_store_config_backup_list(instance: ServerInstance) -> CommandResult:
+    """List the configuration backups, newest first, from the local data directory."""
+    if instance.host not in _LOOPBACK_HOSTS:
+        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
+    try:
+        backups = list_config_backups(instance.data_dir)
+    except DatabaseError as exc:
+        return CommandResult(ok=False, message=str(exc), instance=instance)
+    items = []
+    for index, backup in enumerate(backups):
+        older = backups[index + 1].files if index + 1 < len(backups) else {}
+        item = backup.summary()
+        item["changed"] = sorted(
+            path
+            for path in backup.files.keys() | older.keys()
+            if backup.files.get(path) != older.get(path)
+        )
+        items.append(item)
+    return _json_result(instance, {"config_backups": items})
+
+
+def data_store_config_backup_show(instance: ServerInstance, backup_id: str) -> CommandResult:
+    """Show one configuration backup's files against the current ones."""
+    if instance.host not in _LOOPBACK_HOSTS:
+        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
+    try:
+        described = describe_config_backup(instance.data_dir, backup_id)
+    except (ValueError, DatabaseError) as exc:
+        return CommandResult(ok=False, message=str(exc), instance=instance)
+    return _json_result(instance, described)
+
+
+def data_store_config_backup_restore(
+    instance: ServerInstance,
+    backup_id: str,
+    confirm: bool,
+    files: Iterable[str] = (),
+    *,
+    complete: bool = False,
+) -> CommandResult:
+    """Restore files of one configuration backup while the exact target is stopped.
+
+    ``files`` names the files to restore; ``complete`` restores every file of the
+    backup. Files created after the backup and files whose folder no longer exists
+    stay as they are. The state before the restore is backed up first.
+    """
+    if instance.host not in _LOOPBACK_HOSTS:
+        return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)
+    selected = sorted(set(files))
+    if complete == bool(selected):
+        return CommandResult(
+            ok=False,
+            message="name the files to restore with --file, or restore every file with --all",
+            instance=instance,
+        )
+    if not confirm:
+        return CommandResult(
+            ok=False,
+            message="refusing data-store restore without confirmation; re-run with --yes",
+            instance=instance,
+        )
+    paths = None if complete else selected
+
+    def restore(*, check_only: bool) -> ConfigRestore:
+        return restore_config_backup(
+            instance.data_dir, backup_id, paths=paths, check_only=check_only
+        )
+
+    try:
+        # Check before stopping the server: nothing changes yet.
+        plan = restore(check_only=True)
+    except (OSError, ValueError, DatabaseError) as exc:
+        return CommandResult(
+            ok=False,
+            message=f"configuration backup cannot be restored: {backup_id}: {exc}",
+            instance=instance,
+        )
+    if not plan.restored:
+        return CommandResult(
+            ok=True,
+            message=f"nothing to restore from configuration backup {backup_id} ("
+            + _describe_config_restore(plan)
+            + ")",
+            instance=instance,
+        )
+    return _restore_while_stopped(
+        instance,
+        lambda: _describe_config_restore(restore(check_only=False)),
+        noun="configuration backup",
+        item_id=backup_id,
+    )
+
+
+def _describe_config_restore(restored: ConfigRestore) -> str:
+    parts = [f"{len(restored.restored)} restored: " + ", ".join(restored.restored)]
+    if restored.unchanged:
+        parts.append(f"{len(restored.unchanged)} already equal")
+    parts.extend(f"{path} left alone: {reason}" for path, reason in restored.skipped.items())
+    if restored.created_after:
+        parts.append("created after the backup and kept: " + ", ".join(restored.created_after))
+    if restored.before_restore is not None:
+        parts.append(
+            f"the replaced state is configuration backup {restored.before_restore}; "
+            "restore it to take this restore back"
+        )
+    return "; ".join(parts)
+
+
+def _restore_while_stopped(
+    instance: ServerInstance, restore: Callable[[], str], *, noun: str, item_id: str
+) -> CommandResult:
+    """Run ``restore`` while the exact target is stopped; start it again if it ran.
+
+    ``restore`` changes the data directory and describes what it changed. A
+    server that was running, busy or answering, is stopped first and started
+    again only after the restore succeeded.
+    """
     health = probe_health_patiently(instance)
     state = classify_server(instance, health=health)
     if state == "foreign":
@@ -262,12 +396,11 @@ def data_store_snapshot_restore(
             health=stopped.health,
         )
     try:
-        restored = restore(snapshot, check_only=False)
-        _verify_restored(restored.databases, specs)
+        described = restore()
     except (OSError, ValueError, DatabaseError) as exc:
         return CommandResult(
             ok=False,
-            message=f"data snapshot restore failed: {snapshot_id}: {exc}",
+            message=f"{noun} restore failed: {item_id}: {exc}",
             instance=instance,
             health=health,
         )
@@ -278,7 +411,7 @@ def data_store_snapshot_restore(
             return CommandResult(
                 ok=False,
                 message=(
-                    f"restored data snapshot {snapshot_id}, but restoring the prior server "
+                    f"restored {noun} {item_id}, but restoring the prior server "
                     f"state failed: {restarted.message}"
                 ),
                 instance=instance,
@@ -287,7 +420,7 @@ def data_store_snapshot_restore(
     return CommandResult(
         ok=True,
         message=(
-            f"restored data snapshot {snapshot_id} ({_describe_restore(restored)})"
+            f"restored {noun} {item_id} ({described})"
             + (" and restarted the server" if restarted is not None else "")
         ),
         instance=instance,

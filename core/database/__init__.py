@@ -9,7 +9,9 @@ marker and maintenance guard, data snapshots (every canonical database plus
 the JSON document set, taken online as a crash at one instant would leave them
 and kept apart from compound mutations by the :class:`SnapshotBarrier`; see
 ``core.database.snapshot_barrier``), quarantine, recovery incidents, automatic
-restore and the updater's guarded pre-update snapshot rollback. See
+restore, the updater's guarded pre-update snapshot rollback, and the frequent
+configuration backups of the small configuration files
+(``core.database.config_backups``). See
 ``.vorch/domain-maps/database.md``. :class:`DisposableDatabase` and
 :func:`projection_failure` serve owners of disposable projections at runtime.
 """
@@ -20,6 +22,20 @@ from core.database._connections import (
     has_live_connection,
     is_wal_reset_vulnerable,
     required_journal_mode,
+)
+from core.database.config_backups import (
+    CONFIGURATION_FILE_PATTERNS,
+    ConfigBackup,
+    ConfigFile,
+    ConfigRestore,
+    capture_config_backup,
+    config_backup_root,
+    config_backup_summary,
+    configuration_fingerprint,
+    describe_config_backup,
+    list_config_backups,
+    read_config_backup,
+    restore_config_backup,
 )
 from core.database.database import Database, open_database, open_offline_database
 from core.database.disposable import DisposableDatabase, ProjectionFailure, projection_failure
@@ -32,6 +48,7 @@ from core.database.errors import (
     DatabaseUnavailableError,
     IncidentConflictError,
     MemberFrozenError,
+    OperationLockBusyError,
     UpdateRollbackRefusedError,
     older_format_hint,
 )
@@ -98,6 +115,7 @@ __all__ = [
     "ANCHOR_CAPTURE",
     "APPLICATION_IDS",
     "CANONICAL",
+    "CONFIGURATION_FILE_PATTERNS",
     "DISPOSABLE",
     "HELD_CAPTURE",
     "JOURNAL_MODE_DELETE",
@@ -105,6 +123,9 @@ __all__ = [
     "MAINTENANCE_GUARD_FILE_NAME",
     "MARKER_FILE_NAME",
     "TRAILING_CAPTURE",
+    "ConfigBackup",
+    "ConfigFile",
+    "ConfigRestore",
     "DataStoreMarker",
     "Database",
     "DatabaseConversionRequiredError",
@@ -122,6 +143,7 @@ __all__ = [
     "MarkerEntry",
     "MemberFrozenError",
     "Migration",
+    "OperationLockBusyError",
     "ProjectionFailure",
     "SnapshotBarrier",
     "SnapshotCapture",
@@ -134,28 +156,36 @@ __all__ = [
     "active_incidents",
     "begin_maintenance",
     "canonical_database_path",
+    "capture_config_backup",
+    "config_backup_root",
+    "config_backup_summary",
+    "configuration_fingerprint",
     "create_data_snapshot",
     "create_update_snapshot",
     "data_changed_since",
     "data_store_status",
+    "describe_config_backup",
     "describe_missing_databases",
     "find_update_snapshot",
     "finish_maintenance",
     "has_live_connection",
     "is_extension_database_name",
     "is_wal_reset_vulnerable",
+    "list_config_backups",
     "list_data_snapshots",
     "maintenance",
     "older_format_hint",
     "open_database",
     "open_offline_database",
     "projection_failure",
+    "read_config_backup",
     "read_incident",
     "read_maintenance",
     "read_marker",
     "read_snapshot_health",
     "read_verified_manifest",
     "required_journal_mode",
+    "restore_config_backup",
     "restore_data_snapshot",
     "restore_update_snapshot",
     "snapshot_root",
