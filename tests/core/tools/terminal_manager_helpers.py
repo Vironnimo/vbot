@@ -41,6 +41,7 @@ class FakeTerminalAdapter:
         self.alive = True
         self.code: int | None = None
         self.write_error: BaseException | None = None
+        self.closed = False
 
     @property
     def pid(self) -> int:
@@ -72,6 +73,7 @@ class FakeTerminalAdapter:
         self.finish(-1)
 
     def close(self) -> None:
+        self.closed = True
         self.finish(-1)
         self._output.put(None)
 

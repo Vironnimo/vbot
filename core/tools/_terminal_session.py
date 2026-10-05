@@ -16,6 +16,8 @@ from core.runs import RunAdmissionBlockedError, RunExecutionOwner
 from core.storage.temp_files import TemporaryFileLease
 from core.tools import terminal_backend
 from core.tools.terminal_backend import TerminalAdapter
+from core.tools.terminal_emulator import EmulatorUpdate
+from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
 
@@ -74,6 +76,9 @@ _COMMAND_QUIET_POLL_SECONDS = 0.5
 _COMMAND_MATCH_EXIT_SECONDS = 2.0
 # Labels in Agent notices are cut to this many characters.
 _NOTICE_LABEL_CHARS = 60
+# Failures that persist across chunks or polls, keyed by (terminal id, kind):
+# logged when they start and when they end, not on every repetition.
+_CONDITIONS = LoggedConditions()
 
 CommandWaitOutcome = Literal["exited", "deadline", "idle"]
 
@@ -230,8 +235,12 @@ class TerminalSession:
         self._last_activity_at = self._last_output_at
         self._quiet = _QuietWatch()
         self._shell_dead_at: float | None = None
-        # Set once vBot killed the command's process tree.
+        # Set once vBot killed the process tree.
         self._tree_killed = asyncio.Event()
+        # Why output can no longer be read, and why the screen fell behind it;
+        # either becomes the Session's failure once its processes have ended.
+        self._read_failure: Exception | None = None
+        self._render_failure: Exception | None = None
         # Set once the session finished: none of its processes runs any longer.
         self._finished_event = asyncio.Event()
         self._next_liveness_check = 0.0
@@ -354,7 +363,7 @@ class TerminalSession:
                 reader.cancel()
                 await asyncio.gather(reader, return_exceptions=True)
         if not self.finished:
-            await self._mark_finished(None)
+            await self._mark_finished()
 
     def stop_now(self) -> bool:
         """Synchronously stop the process for Runtime shutdown; False if the tree survived."""
@@ -409,6 +418,8 @@ class TerminalSession:
         self._cancel_delivery()
         self._finish_files()
         self._screen.close()
+        for kind in ("render", "end_check"):
+            _CONDITIONS.ended((self.terminal_id, kind))
 
     # Commands
 
@@ -724,7 +735,8 @@ class TerminalSession:
             return True
         self._next_tree_poll = now + COMMAND_TREE_POLL_SECONDS
         facts = await asyncio.to_thread(command.tree_facts)
-        return facts is not None and bool(facts.running)
+        # A tree that cannot be inspected now may still run.
+        return facts is None or bool(facts.running)
 
     async def _keep_idle_baseline(self) -> None:
         """While output pauses, take the idle baseline, so a status or wait can tell
@@ -742,23 +754,59 @@ class TerminalSession:
         except Exception:
             return None
 
-    async def _await_tree_end(self) -> None:
-        """Wait while processes the command started still run without the terminal."""
-        command = self._command
-        if command is None:
-            return
-        while True:
-            facts = await asyncio.to_thread(command.tree_facts)
-            if facts is None or not facts.running or self._tree_killed.is_set():
+    async def _await_end(self) -> None:
+        """Wait until the Session's processes have ended, or vBot killed them.
+
+        Output has ended or can no longer be read, so the processes are polled:
+        an interactive program until it exits, a command until its shell exited
+        and every process it started ended.
+        """
+        while not self._tree_killed.is_set():
+            if await self._processes_ended():
                 return
             await self._wait_or_sleep(self._tree_killed, COMMAND_TREE_POLL_SECONDS)
 
+    async def _processes_ended(self) -> bool:
+        """Whether every process of the Session has ended; False while that is unknown."""
+        key = (self.terminal_id, "end_check")
+        try:
+            ended = await self._check_processes_ended()
+        except Exception:
+            if _CONDITIONS.started(key):
+                _LOGGER.warning(
+                    "Terminal process check failed; the Session stays live until its "
+                    "processes are confirmed ended (terminal=%s)",
+                    self.terminal_id,
+                    exc_info=True,
+                )
+            return False
+        if _CONDITIONS.ended(key):
+            _LOGGER.info("Terminal process check recovered (terminal=%s)", self.terminal_id)
+        return ended
+
+    async def _check_processes_ended(self) -> bool:
+        if await asyncio.to_thread(self._adapter.is_alive):
+            return False
+        command = self._command
+        if command is None:
+            return True
+        async with self._lock:
+            await self._record_shell_exit()
+        tree = command.tree
+        if tree is None:
+            return True
+        # Raises when the tree cannot be inspected.
+        facts = await asyncio.to_thread(tree.facts)
+        return not facts.running
+
     async def _record_shell_exit(self) -> None:
-        """Fix the command's outcome when its shell exits; the lock is held."""
+        """Fix the command's outcome when its shell exits; the lock is held.
+
+        The timeout stays armed: it stops processes the shell left running.
+        """
         command = self._require_command()
         if command.shell_exited:
             return
-        self._cancel_task(self._timeout_task)
         exit_code = await asyncio.to_thread(self._shell_exit_code)
         try:
             command.add_lines(await self._screen.commit_transcript())
@@ -769,7 +817,7 @@ class TerminalSession:
                 exc_info=True,
             )
         facts = await asyncio.to_thread(command.tree_facts)
-        command.record_exit(exit_code, facts, self._services.monotonic())
+        command.record_exit(exit_code, facts)
         self.exit_code = exit_code
         report = command.report(self.terminal_id, self._services.monotonic())
         reason = command.stop_reason
@@ -914,8 +962,7 @@ class TerminalSession:
                     bracketed_paste=bracketed_paste,
                     superseded=superseded,
                 )
-        await self._mark_finished(None)
-        raise TerminalClosedError("Terminal Session is no longer running") from write_error
+        raise await self._write_failure() from write_error
 
     async def send_operator_input(
         self,
@@ -955,8 +1002,26 @@ class TerminalSession:
                 if changed:
                     self._publish_state()
                 return
-        await self._mark_finished(None)
-        raise TerminalClosedError("Terminal Session is no longer running") from write_error
+        raise await self._write_failure() from write_error
+
+    async def _write_failure(self) -> TerminalManagerError:
+        """The error for input the PTY refused, by whether the program still runs.
+
+        An interactive program that has ended finishes the Session now. A
+        command's Session finishes once every process it started has ended,
+        which the reader notices.
+        """
+        try:
+            alive = await asyncio.to_thread(self._adapter.is_alive)
+        except Exception:
+            alive = True
+        if alive:
+            return TerminalManagerError(
+                f"The input could not be written to terminal {self.terminal_id}"
+            )
+        if self._command is None:
+            await self._mark_finished()
+        return TerminalClosedError("Terminal Session is no longer running")
 
     async def resize(self, columns: int, rows: int) -> dict[str, Any]:
         """Resize the PTY and the rendered screen together."""
@@ -1101,8 +1166,33 @@ class TerminalSession:
     # Output and activity
 
     async def _read(self) -> None:
+        """Read output, then keep the Session live until its processes have ended.
+
+        The end of output - EOF, a closed PTY, or a failure to read or handle
+        it - is no end of the program: the Session finishes only once its
+        process has ended (a command's: its whole tree), or once vBot killed
+        it, which ends the wait or cancels this task.
+        """
+        ended = False
+        try:
+            await self._read_output()
+            await self._await_end()
+            ended = True
+        except asyncio.CancelledError:
+            # Only a kill or a shutdown cancels the reader, after it stopped the processes.
+            ended = True
+            raise
+        finally:
+            if ended:
+                await self._mark_finished()
+
+    async def _read_output(self) -> None:
+        """Read and render output until it ends or the command's processes ended.
+
+        An unexpected failure ends only the reading: it becomes the Session's
+        failure, and the program keeps running until it ends or is stopped.
+        """
         loop = asyncio.get_running_loop()
-        error: BaseException | None = None
         command = self._command is not None
         try:
             while True:
@@ -1113,59 +1203,44 @@ class TerminalSession:
                 except TimeoutError:
                     if command:
                         if not await self._command_alive(read_timed_out=True):
-                            break
+                            return
                         await self._keep_idle_baseline()
                     elif not await asyncio.to_thread(self._adapter.is_alive):
-                        break
+                        return
                     continue
                 if text:
                     async with self._lock:
                         await self._render_output(text)
                 if command and not await self._command_alive(read_timed_out=False):
-                    break
-        except asyncio.CancelledError:
-            raise
+                    return
         except EOFError, OSError:
-            pass
-        except BaseException as caught:
-            error = caught
-        finally:
-            if command and not self._termination_pending:
-                # Output ended (POSIX: every holder of the terminal closed it);
-                # processes the command left behind may still run without it.
-                with contextlib.suppress(Exception):
-                    async with self._lock:
-                        await self._record_shell_exit()
-                    await self._await_tree_end()
-            await self._mark_finished(error)
+            # Output ended (POSIX: every holder of the terminal closed it).
+            return
+        except Exception as error:
+            self._read_failure = error
+            _LOGGER.error(
+                "Terminal output reading failed; the program keeps running until it ends "
+                "or is stopped (terminal=%s)",
+                self.terminal_id,
+                exc_info=True,
+            )
 
     async def _render_output(self, text: str) -> None:
-        if self._log_handle is not None:
-            self._log_handle.write(text)
-            self._log_handle.flush()
+        """Log, stream and render one chunk of output; the lock is held.
+
+        A failing log or renderer degrades the Session instead of ending it:
+        its output keeps being read, so the program neither stalls nor ends.
+        """
+        self._write_log(text)
         # Viewers get the bytes first; the snapshot a new viewer takes waits
         # for this lock, so it already contains them.
         self._publish_output(text)
-        update = await self._screen.feed(text)
+        update = await self._render(text)
         self._last_output_at = self._services.monotonic()
         self._note_activity()
-        if self._command is not None:
-            self._command.add_lines(update.transcript)
-        if update.responses:
-            # Terminal protocol replies, not input: they start no activity.
-            await asyncio.to_thread(self._adapter.write, update.responses)
-        paste_disabled = self._bracketed_paste and not update.bracketed_paste
-        facts_changed = (update.title, update.alternate_screen) != (
-            self._title,
-            self._alternate_screen,
-        )
-        self._title = update.title
-        self._bracketed_paste = update.bracketed_paste
-        self._alternate_screen = update.alternate_screen
-        if update.alternate_exited:
-            await self._publish_snapshot()
-        if update.alternate_exited or paste_disabled:
-            self._snapshot_on_settle = True
+        facts_changed = False
+        if update is not None:
+            facts_changed = await self._apply_update(update)
         effect = self._activity.output(
             self._services.monotonic(),
             attached=self.attachment is not None,
@@ -1180,6 +1255,76 @@ class TerminalSession:
         self._output_count += 1
         self._output_event.set()
         self._signal_change()
+
+    def _write_log(self, text: str) -> None:
+        handle = self._log_handle
+        if handle is None:
+            return
+        try:
+            handle.write(text)
+            handle.flush()
+        except OSError:
+            _LOGGER.warning(
+                "Terminal output log write failed; the log ends here (terminal=%s)",
+                self.terminal_id,
+                exc_info=True,
+            )
+            self._log_handle = None
+            with contextlib.suppress(OSError):
+                handle.close()
+
+    async def _render(self, text: str) -> EmulatorUpdate | None:
+        """Feed *text* to the screen; None when that failed, which leaves the screen behind."""
+        try:
+            update = await self._screen.feed(text)
+        except Exception as error:
+            self._render_failed(error)
+            return None
+        if self._render_failure is not None:
+            self._render_failure = None
+            if _CONDITIONS.ended((self.terminal_id, "render")):
+                _LOGGER.info("Terminal screen rendering recovered (terminal=%s)", self.terminal_id)
+        return update
+
+    def _render_failed(self, error: Exception) -> None:
+        """The screen missed output; it follows the output again once a later chunk renders."""
+        self._render_failure = error
+        if _CONDITIONS.started((self.terminal_id, "render")):
+            _LOGGER.warning(
+                "Terminal screen rendering failed; the program keeps running and its screen "
+                "falls behind its output (terminal=%s)",
+                self.terminal_id,
+                exc_info=error,
+            )
+
+    async def _apply_update(self, update: EmulatorUpdate) -> bool:
+        """Apply what rendering found; True when the title or the alternate screen changed."""
+        if self._command is not None:
+            self._command.add_lines(update.transcript)
+        if update.responses:
+            # Terminal protocol replies, not input: they start no activity. Whether
+            # a program that can no longer read them still runs is checked apart.
+            with contextlib.suppress(EOFError, OSError):
+                await asyncio.to_thread(self._adapter.write, update.responses)
+        paste_disabled = self._bracketed_paste and not update.bracketed_paste
+        facts_changed = (update.title, update.alternate_screen) != (
+            self._title,
+            self._alternate_screen,
+        )
+        self._title = update.title
+        self._bracketed_paste = update.bracketed_paste
+        self._alternate_screen = update.alternate_screen
+        if update.alternate_exited:
+            try:
+                await self._publish_snapshot()
+            except Exception:
+                # Viewers resynchronize at the next snapshot instead.
+                _LOGGER.warning(
+                    "Could not render the snapshot of terminal=%s", self.terminal_id, exc_info=True
+                )
+        if update.alternate_exited or paste_disabled:
+            self._snapshot_on_settle = True
+        return facts_changed
 
     def _signal_change(self) -> None:
         """Wake every waiter: output, input, attention or the program's end changed."""
@@ -1199,12 +1344,21 @@ class TerminalSession:
         try:
             await self._services.sleep(self._services.activity_quiet_seconds)
             async with self._lock:
-                if generation != self._activity.generation or self.finished:
+                # A screen behind its output cannot show that the output settled.
+                if (
+                    generation != self._activity.generation
+                    or self.finished
+                    or self._render_failure is not None
+                ):
                     return
                 if self._snapshot_on_settle:
                     self._snapshot_on_settle = False
                     await self._publish_snapshot()
-                observation = await self._screen.observe(TERMINAL_DELIVERY_TAIL_LINES)
+                try:
+                    observation = await self._screen.observe(TERMINAL_DELIVERY_TAIL_LINES)
+                except Exception as error:
+                    self._render_failed(error)
+                    return
                 effect = self._activity.settle(
                     generation, observation.signature, attached=self.attachment is not None
                 )
@@ -1269,7 +1423,11 @@ class TerminalSession:
         except asyncio.CancelledError:
             return
 
-    async def _mark_finished(self, error: BaseException | None) -> None:
+    async def _mark_finished(self) -> None:
+        """Record the end once no process of the Session runs any longer.
+
+        A failure to read or render its output, if any, becomes its outcome.
+        """
         # A root process EOF cannot confirm that captured descendants exited.
         if self._termination_pending:
             return
@@ -1281,11 +1439,15 @@ class TerminalSession:
             if self._command is not None:
                 await self._record_shell_exit()
                 self._command.tree_ended()
-                with contextlib.suppress(OSError):
-                    await asyncio.to_thread(self._adapter.close)
             self.finished_at = self.finished_at or _utc_now()
             if self._command is None:
                 self.exit_code = await asyncio.to_thread(self._adapter.exit_code)
+            # Release the terminal (on Windows also its console host and reader
+            # thread) and the timeout, which has nothing left to stop.
+            with contextlib.suppress(OSError):
+                await asyncio.to_thread(self._adapter.close)
+            self._cancel_task(self._timeout_task)
+            error = self._read_failure or self._render_failure
             self._activity.finish(error=error is not None)
             try:
                 await self._publish_snapshot()

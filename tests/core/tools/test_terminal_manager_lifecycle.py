@@ -355,6 +355,8 @@ async def test_reader_reads_on_after_idle_timeouts_and_stops_when_the_program_en
         adapter.alive = False
         await eventually(lambda: terminal_info(manager, started.terminal_id).state == "exited")
         assert terminal_info(manager, started.terminal_id).exit_code == 3
+        # The finished Session releases its PTY (on Windows its console host and reader thread).
+        assert adapter.closed
     finally:
         await manager.aclose()
 

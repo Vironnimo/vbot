@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -11,10 +12,12 @@ import pytest
 import core.tools._terminal_session as terminal_session
 import core.tools._terminal_state as terminal_state
 from core.runs import RunAdmissionBlockedError
+from core.tools._terminal_render_host import TerminalScreen
 from core.tools.terminal_manager import (
     TerminalClosedError,
     TerminalInfo,
     TerminalManager,
+    TerminalManagerError,
     TerminalNotOwnedError,
     TerminalOwner,
     TerminalStaleScreenError,
@@ -253,15 +256,28 @@ async def test_notification_revision_authorizes_only_the_delivered_screen(
 
 
 @pytest.mark.asyncio
-async def test_closed_pty_write_marks_terminal_exited_and_delivers_attention(
+async def test_refused_write_ends_the_terminal_only_once_its_program_ended(
     delivering_manager: Delivering, tmp_path: Path
 ) -> None:
     manager, factory, trigger = delivering_manager
     started = await spawn(manager, tmp_path)
     manager.attach(started.terminal_id, owner(), origin_run_id="attach-run")
-    factory.adapters[0].emit("last words\r\n")
+    adapter = factory.adapters[0]
+    adapter.emit("last words\r\n")
     await eventually(lambda: terminal_info(manager, started.terminal_id).screen_revision > 0)
-    factory.adapters[0].write_error = EOFError("Pty is closed")
+
+    def unwritable(text: str) -> None:
+        raise OSError(5, f"Input/output error writing {text!r}")
+
+    # A write the PTY refuses while the program still runs ends nothing.
+    adapter.write = unwritable  # type: ignore[method-assign]
+    with pytest.raises(TerminalManagerError, match="could not be written") as refused:
+        await manager.send_operator_input(started.terminal_id, "early input")
+    assert not isinstance(refused.value, TerminalClosedError)
+    assert terminal_info(manager, started.terminal_id).finished_at is None
+    del adapter.write
+
+    adapter.write_error = EOFError("Pty is closed")
 
     with pytest.raises(TerminalClosedError):
         await manager.send_operator_input(started.terminal_id, "late input")
@@ -508,29 +524,70 @@ async def test_textless_agent_start_suppresses_the_startup_settle(
     assert attention.kind == "output_settled"
 
 
+@pytest.mark.parametrize("failing", ["read", "render"])
 @pytest.mark.asyncio
-async def test_terminal_failure_delivers_the_error_and_the_last_screen(
-    delivering_manager: Delivering, tmp_path: Path
+async def test_terminal_failure_keeps_the_program_until_it_ends_then_delivers_the_error(
+    clocked_manager: Clocked,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failing: str,
 ) -> None:
-    manager, factory, trigger = delivering_manager
+    manager, factory, trigger, clock = clocked_manager
     started = await spawn(manager, tmp_path)
+    terminal_id = started.terminal_id
     adapter = factory.adapters[0]
     adapter.emit("partial output\r\n")
-    await eventually(lambda: terminal_info(manager, started.terminal_id).screen_revision > 0)
+    await eventually(lambda: terminal_info(manager, terminal_id).screen_revision > 0)
 
-    def broken(_size: int) -> str:
-        raise RuntimeError("renderer broke")
+    if failing == "read":
+        error = "reader broke"
 
-    # The read in progress returns the next output; the one after it fails.
-    adapter.read = broken  # type: ignore[method-assign]
-    adapter.emit("done")
-    await eventually(lambda: len(trigger.submissions) == 1)
+        def broken_read(_size: int) -> str:
+            raise RuntimeError(error)
 
+        # The read in progress returns the next output; the one after it fails.
+        adapter.read = broken_read  # type: ignore[method-assign]
+        adapter.emit("done")
+        last_screen = "partial output\ndone"
+    else:
+        error = "renderer broke"
+
+        async def broken_feed(_screen: TerminalScreen, _text: str) -> Any:
+            raise RuntimeError(error)
+
+        # Output is still read; only the screen falls behind it.
+        monkeypatch.setattr(TerminalScreen, "feed", broken_feed)
+        adapter.emit("lost")
+        last_screen = "partial output"
+    await eventually(
+        lambda: any(
+            record.levelno >= logging.WARNING and terminal_id in record.getMessage()
+            for record in caplog.records
+        )
+    )
+
+    # The program still runs, so it keeps its place and nothing reports its end.
+    running = terminal_info(manager, terminal_id)
+    assert running.state not in {"exited", "error"}
+    assert running.finished_at is None
+    with pytest.raises(ValueError, match="must be stopped"):
+        manager.forget_for_operator(terminal_id)
+    assert trigger.submissions == []
+
+    adapter.finish(0)
+
+    async def delivered() -> bool:
+        # Without output to read, the program's end is noticed by a poll.
+        await clock.advance(1)
+        return bool(trigger.submissions)
+
+    await eventually(delivered)
     assert trigger.submissions[0][1]["body"] == (
-        f"Terminal {started.terminal_id} (fake-tui) failed and its program no longer runs: "
-        "renderer broke. Last screen lines:\n```text\npartial output\ndone\n```"
+        f"Terminal {terminal_id} (fake-tui) failed and its program no longer runs: {error}. "
+        f"Last screen lines:\n```text\n{last_screen}\n```"
     )
     status = await call(
-        manager, make_context(tmp_path), {"action": "status", "terminal_id": started.terminal_id}
+        manager, make_context(tmp_path), {"action": "status", "terminal_id": terminal_id}
     )
     assert status["data"]["state"] == "failed"
