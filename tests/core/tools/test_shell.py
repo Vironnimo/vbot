@@ -237,10 +237,7 @@ async def test_finished_command_reports_output_exit_code_failed_programs_and_env
 
 
 @pytest.mark.asyncio
-async def test_leniently_read_arguments_run_with_a_note(
-    shell: Shell, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("PATH", "original-path")
+async def test_leniently_read_arguments_run_with_a_note(shell: Shell) -> None:
     call = shell.call({"cmd": "ls", "timeout": 60000, "env_keys": ["PATH"]})
     _adapter, tree = await shell.started()
     tree.shell_exits(0)
