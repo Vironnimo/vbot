@@ -247,6 +247,86 @@ describe('SettingsExtensionsPanel', () => {
     ).toBeGreaterThan(listCallsBefore);
   });
 
+  // Each re-lists the Extensions and rebuilds every configuration form.
+  it.each([
+    [
+      'reloading',
+      'extensions.reload',
+      () => buttonByText(t('settings.extensions.reload')).click(),
+    ],
+    [
+      'disabling',
+      'settings.update',
+      () =>
+        document
+          .querySelector(
+            'button[role="switch"][aria-label="Enable extension guard_bash"]',
+          )
+          .click(),
+    ],
+    [
+      'saving a secret',
+      'extensions.set_secret',
+      () => {
+        const secret = document.querySelector('input[type="password"]');
+        secret.value = 'new-token';
+        secret.dispatchEvent(new Event('input', { bubbles: true }));
+        secret
+          .closest('form')
+          .dispatchEvent(
+            new Event('submit', { bubbles: true, cancelable: true }),
+          );
+      },
+    ],
+  ])(
+    'saves a pending configuration edit before %s',
+    async (_label, method, act) => {
+      const record = withSchema([
+        { key: 'level', type: 'text', label: 'Level' },
+        { key: 'token', type: 'secret', label: 'Token', set: false },
+      ]);
+      serveExtensions([record], {
+        'extensions.list': async () => ({
+          extensions: [structuredClone(record)],
+          settings: savedSection([record]),
+        }),
+        'settings.update': async ({ extensions }) => {
+          record.config = extensions.config.guard_bash ?? {};
+          record.disabled = extensions.disabled.includes('guard_bash');
+          return {};
+        },
+      });
+      await mountPanel();
+      const writes = () =>
+        rpcMock.mock.calls
+          .map(([called]) => called)
+          .filter((called) => called !== 'extensions.list');
+
+      const level = document.querySelector('#extension-guard_bash-level');
+      level.value = 'warn';
+      level.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      act();
+
+      await vi.waitFor(() =>
+        expect(writes()).toEqual(['settings.update', method]),
+      );
+      expect(settingsUpdates()[0][1].extensions.config.guard_bash).toEqual({
+        level: 'warn',
+      });
+      // The re-listed form shows the saved edit.
+      await vi.waitFor(() =>
+        expect(
+          rpcMock.mock.calls.filter(([called]) => called === 'extensions.list'),
+        ).toHaveLength(2),
+      );
+      await flushAsync();
+      expect(document.querySelector('#extension-guard_bash-level').value).toBe(
+        'warn',
+      );
+    },
+  );
+
   // The saved section keeps entries the records do not show, such as those of
   // an Extension that no longer loads, and its own order.
   const removedEntries = {
