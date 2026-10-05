@@ -165,6 +165,8 @@ def test_cmd_merge_merges_removes_worktree_and_branch(real_repo, monkeypatch, ca
     (data_dir / "sentinel.txt").write_text("keep if unowned", encoding="utf-8")
     if owned:
         _record_owned_data(module, worktree_a, data_dir)
+        (data_dir / "settings.json").write_text('{"server_port": 8422}', encoding="utf-8")
+        monkeypatch.setattr(module, "_stop_worktree_services", lambda *args: None)
 
     result = module.cmd_merge(argparse.Namespace(name="task-a", message=None, wait_timeout=60))
 

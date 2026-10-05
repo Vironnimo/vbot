@@ -105,7 +105,9 @@ def test_cmd_delete_preserves_both_data_dirs_when_marker_is_tampered(tmp_path, m
     [
         pytest.param({"server_port": 8422}, {"server_port": 8423}, "8422", id="settings-port"),
         pytest.param({}, {"server_port": 8422}, "8422", id="port-recorded-at-creation"),
+        pytest.param(None, {"server_port": 8422}, "8422", id="missing-settings"),
         pytest.param({}, {}, None, id="unknown-port-stops-nothing"),
+        pytest.param(None, {}, None, id="missing-settings-and-port"),
     ],
 )
 def test_cmd_delete_stops_managed_services_before_removing_worktree(
@@ -123,7 +125,8 @@ def test_cmd_delete_stops_managed_services_before_removing_worktree(
         encoding="utf-8",
     )
     data_dir.mkdir(parents=True)
-    (data_dir / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+    if settings is not None:
+        (data_dir / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
     calls = []
 
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
@@ -138,13 +141,16 @@ def test_cmd_delete_stops_managed_services_before_removing_worktree(
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
 
-    assert module.cmd_delete(argparse.Namespace(name=name, force=False)) == 0
-    assert not data_dir.exists()
+    result = module.cmd_delete(argparse.Namespace(name=name, force=False))
     if port is None:
         # Without a known port, stop would target vBot's default port, where
         # another installation may run.
         assert all("stop" not in command for command, _cwd in calls)
+        assert result == 1
+        assert data_dir.is_dir() and worktree_path.is_dir()
         return
+    assert result == 0
+    assert not data_dir.exists()
     assert calls[0] == (
         [
             module.sys.executable,
@@ -162,7 +168,8 @@ def test_cmd_delete_stops_managed_services_before_removing_worktree(
     assert calls[1][0][:3] == ["git", "-C", str(worktree_path)]
 
 
-def test_cmd_delete_reports_stop_failure_without_removing_anything(tmp_path, monkeypatch):
+@pytest.mark.parametrize("failure", ["stop", "remaining-claim", "unreadable-claims"])
+def test_cmd_delete_reports_stop_failure_without_removing_anything(tmp_path, monkeypatch, failure):
     module = _load_worktree_module()
     name = "unstoppable-worktree"
     worktree_path = tmp_path / ".worktrees" / name
@@ -182,9 +189,15 @@ def test_cmd_delete_reports_stop_failure_without_removing_anything(tmp_path, mon
 
     def fake_run_command(command, *, cwd=None):
         calls.append(command)
-        return 1, "still running"
+        return (1, "still running") if failure == "stop" else (0, "")
+
+    def claims(_data_dir):
+        if failure == "unreadable-claims":
+            raise PermissionError("cannot enumerate claims")
+        return (8423,)
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(module, "live_server_ports", claims)
 
     assert module.cmd_delete(argparse.Namespace(name=name, force=True)) == 1
     assert len(calls) == 1
@@ -282,10 +295,13 @@ def test_cmd_delete_rechecks_ownership_after_git_removal(real_repo, monkeypatch,
     worktree_path = _create_task_worktree(module, real_repo, name)
     data_dir = real_repo.parent / "home" / f".vbot-{name}"
     data_dir.mkdir(parents=True)
+    (data_dir / "settings.json").write_text('{"server_port": 8422}', encoding="utf-8")
     _record_owned_data(module, worktree_path, data_dir)
     real_run_command = module._run_command
 
     def run_command(command, *, cwd=None):
+        if command[1:2] and command[1].endswith("test-env.py"):
+            return 0, ""
         result = real_run_command(command, cwd=cwd)
         if command[:3] == ["git", "worktree", "remove"]:
             (data_dir / module.DATA_OWNER_FILE_NAME).unlink()
@@ -734,7 +750,10 @@ def _branch_exists(repo: Path, name: str) -> bool:
 
 
 @pytest.mark.parametrize("force", [False, True])
-def test_cmd_delete_finishes_marker_only_leftover(real_repo, monkeypatch, capsys, force):
+@pytest.mark.parametrize("working_files", [False, True])
+def test_cmd_delete_finishes_marker_only_leftover(
+    real_repo, monkeypatch, capsys, force, working_files
+):
     module = _load_worktree_module()
     _patch_repo_globals(monkeypatch, module, real_repo)
     name = "leftover"
@@ -745,10 +764,20 @@ def test_cmd_delete_finishes_marker_only_leftover(real_repo, monkeypatch, capsys
     data_dir = _seed_leftover_data_dir(real_repo, name, 8433)
     _record_owned_data(module, worktree_path, data_dir)
     stop_calls = _intercept_service_stop(module, monkeypatch)
+    sentinel = worktree_path / "unsaved.txt"
+    if working_files:
+        sentinel.write_text("keep my work", encoding="utf-8")
     # The enclosing repository is on main; the leftover must not resolve to it.
     assert module._read_worktree_branch_name(worktree_path) is None
 
-    assert module.cmd_delete(argparse.Namespace(name=name, force=force)) == 0
+    result = module.cmd_delete(argparse.Namespace(name=name, force=force))
+    if working_files and not force:
+        assert result == 1
+        assert sentinel.read_text(encoding="utf-8") == "keep my work"
+        assert data_dir.is_dir() and _branch_exists(real_repo, name)
+        assert stop_calls == []
+        return
+    assert result == 0
 
     assert "status: deleted" in capsys.readouterr().out
     assert not worktree_path.exists()

@@ -417,12 +417,16 @@ Important behavior:
   `worktree.py` is used, which still refuses to kill a fake Provider it cannot
   verify as its own
 - the port comes from the data dir's `settings.json`, else from the marker; with
-  neither it stops nothing, because `stop` without a port targets vBot's default
-  port `8420`, where the installed application may run. `vbot server stop` also
-  refuses to stop a vBot server whose control record belongs to another data dir
-- a directory without `.git` is a leftover whose checkout is already gone (see
-  "Merge succeeded but cleanup failed"); it holds no uncommitted work, so both
-  modes remove it and prune Git's registration. Its branch is read from
+  neither deletion refuses, because `stop` without a port targets vBot's default
+  port `8420`, where the installed application may run. Missing settings do not
+  skip the stop when the marker records a port. After stopping, any remaining
+  server claim on the data directory, or a failed claim check, prevents deletion.
+  `vbot server stop` also refuses to stop a server whose control record belongs
+  to another data directory
+- a directory without `.git` is removed without `--force` only when it holds
+  nothing except the worktree marker (see "Merge succeeded but cleanup failed").
+  Remaining files require restored Git metadata or an explicit `--force`; a
+  failed filesystem check refuses deletion. Its branch is read from
   `git worktree list`, never from the enclosing repository; a managed branch is
   still deleted with `git branch -d` without `--force`, so unmerged commits keep
   their branch

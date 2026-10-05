@@ -24,6 +24,8 @@ _checkout_root = Path(__file__).resolve().parents[1]
 if sys.path[:1] != [str(_checkout_root)]:
     sys.path.insert(0, str(_checkout_root))
 
+from core.utils.file_status import exists_strict, is_file_strict  # noqa: E402
+from core.utils.server_control import live_server_ports  # noqa: E402
 from scripts._webui_packages import installed_differences  # noqa: E402
 from scripts._worktree_args import parse_args  # noqa: E402
 from scripts._worktree_lock import (  # noqa: E402
@@ -625,13 +627,12 @@ def _stop_worktree_services(
     checkout is gone (for example after a merge whose directory removal
     failed) falls back to this checkout's copy: ``stop`` targets the recorded
     data dir and port, and still refuses to kill a fake Provider it cannot
-    verify as its own. Without a known port nothing is stopped: ``stop``
+    verify as its own. Without a known port deletion refuses: ``stop``
     would otherwise target vBot's default port.
     """
-    settings_path = data_dir / "settings.json"
     port = _worktree_server_port(marker_data, data_dir)
-    if not settings_path.exists() or port is None:
-        return None
+    if port is None or not 1 <= port <= 65535:
+        return "the worktree server port is unknown; restore its settings or marker before deleting"
     script_cwd = worktree_path
     test_env_script = worktree_path / "scripts" / "test-env.py"
     if not test_env_script.is_file():
@@ -652,6 +653,12 @@ def _stop_worktree_services(
     ]
     return_code, stderr = _run_command(command, cwd=script_cwd)
     if return_code == 0:
+        try:
+            claims = live_server_ports(data_dir)
+        except OSError as exc:
+            return f"server claims on the worktree data directory could not be checked: {exc}"
+        if claims:
+            return f"the worktree data directory is still in use on ports: {claims}"
         return None
     return stderr or "managed worktree services could not be stopped"
 
@@ -788,15 +795,28 @@ def cmd_delete(args: argparse.Namespace) -> int:
     sweep_private_checkouts(WORKTREES_DIR)
     sweep_trash_directories(WORKTREES_DIR)
 
-    if not worktree_path.exists():
-        print_error(f"worktree '{name}' does not exist")
+    try:
+        if not exists_strict(worktree_path):
+            print_error(f"worktree '{name}' does not exist")
+            return 1
+        checkout_present = exists_strict(worktree_path / ".git", follow_symlinks=False)
+        if not checkout_present and not args.force:
+            leftovers = [
+                path.name
+                for path in worktree_path.iterdir()
+                if path.name != WORKTREE_FILE_NAME or not is_file_strict(path)
+            ]
+            if leftovers:
+                print_error(
+                    "worktree Git metadata is missing; restore it or use --force to discard files"
+                )
+                return 1
+    except OSError as exc:
+        print_error(f"worktree contents could not be checked: {exc}")
         return 1
 
-    # A directory without `.git` is a leftover whose checkout is gone, typically
-    # a merge whose directory removal failed and restored the marker. `git -C`
-    # would resolve such a directory through the enclosing repository, so its
-    # branch comes only from Git's worktree registration.
-    checkout_present = (worktree_path / ".git").exists()
+    # Without `.git`, `git -C` would resolve the enclosing repository. Only
+    # Git's registration can identify the branch of a verified empty leftover.
     if checkout_present:
         worktree_branch = _read_worktree_branch_name(worktree_path)
     else:
@@ -833,8 +853,8 @@ def cmd_delete(args: argparse.Namespace) -> int:
     terminated_paths: list[str] = []
     leftover_path: Path | None = None
     removal_deferred = False
-    # Without a checkout there is no work to lose in either mode, and
-    # `git worktree remove` refuses a registered directory lacking `.git`.
+    # A metadata-less directory was checked for remaining files above, or the
+    # caller explicitly chose to discard them. Git cannot remove it itself.
     finish_removal = not checkout_present
     if checkout_present:
         if args.force:
