@@ -19,6 +19,7 @@ from tests.core.providers.openrouter_test_support import (
     RESPONSES_URL,
     catalog_lookup,
     catalog_model,
+    chat_sse,
     openrouter_adapter,
     responses_sse,
     sent_body,
@@ -224,20 +225,37 @@ def _marked(message: dict[str, Any]) -> bool:
     [
         ("anthropic/claude-sonnet-4.6", True),
         pytest.param("~anthropic/claude-haiku-latest", True, id="auto-router"),
+        ("deepseek/deepseek-v3.2", True),
+        ("qwen/qwen3-max", True),
+        ("qwen/qwen-plus", True),
+        ("qwen/qwen3.6-plus", True),
+        ("qwen/qwen3-coder-plus", True),
+        ("qwen/qwen3-coder-flash", True),
+        ("qwen/qwen3.5-plus-02-15", False),
+        ("qwen/qwen3.5-flash-02-23", False),
+        ("qwen/qwen3-30b-a3b-instruct-2507", False),
         ("openai/gpt-5.2", False),
     ],
 )
+@pytest.mark.parametrize("streaming", [False, True], ids=["send", "stream"])
 @respx.mock
 @pytest.mark.asyncio
-async def test_only_claude_family_system_prompts_carry_an_envelope_cache_marker(
-    model_id: str, marked: bool
+async def test_documented_explicit_cache_models_carry_an_envelope_cache_marker(
+    model_id: str, marked: bool, streaming: bool
 ) -> None:
-    route = respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=CHAT_SUCCESS))
-
-    await openrouter_adapter().send(
-        [{"role": "system", "content": "You are helpful."}, {"role": "user", "content": "Hi"}],
-        model_id=model_id,
+    route = respx.post(CHAT_URL).mock(
+        return_value=(
+            chat_sse({"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]})
+            if streaming
+            else httpx.Response(200, json=CHAT_SUCCESS)
+        )
     )
+    adapter = openrouter_adapter()
+    history = [{"role": "system", "content": "You are helpful."}, {"role": "user", "content": "Hi"}]
+    if streaming:
+        _ = [delta async for delta in adapter.stream(history, model_id=model_id)]
+    else:
+        await adapter.send(history, model_id=model_id)
 
     messages = sent_body(route)["messages"]
     if marked:
@@ -245,7 +263,7 @@ async def test_only_claude_family_system_prompts_carry_an_envelope_cache_marker(
             {"type": "text", "text": "You are helpful.", "cache_control": EPHEMERAL}
         ]
     else:
-        # Other families cache implicitly; a stray marker risks a strict-upstream 400.
+        # Models outside the documented opt-in set keep their ordinary wire content.
         assert messages[0]["content"] == "You are helpful."
         assert not any(_marked(message) for message in messages)
 
@@ -288,15 +306,16 @@ def _alternating(count: int) -> list[dict[str, Any]]:
         ),
     ],
 )
+@pytest.mark.parametrize("model_id", ["anthropic/claude-sonnet-4.6", "qwen/qwen3-coder-flash"])
 @respx.mock
 @pytest.mark.asyncio
-async def test_claude_history_markers_roll_over_the_most_recent_markable_messages(
-    history: list[dict[str, Any]], expected_marks: list[bool]
+async def test_explicit_cache_history_markers_roll_over_the_most_recent_markable_messages(
+    history: list[dict[str, Any]], expected_marks: list[bool], model_id: str
 ) -> None:
     route = respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=CHAT_SUCCESS))
     original = copy.deepcopy(history)
 
-    await openrouter_adapter().send(history, model_id="anthropic/claude-sonnet-4.6")
+    await openrouter_adapter().send(history, model_id=model_id)
 
     assert [_marked(message) for message in sent_body(route)["messages"]] == expected_marks
     # Chat sends its live history without copying it; markers stay on the wire.

@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "_comment": "OpenRouter. Every chat Model speaks Chat Completions except the GPT-5.6 Models, which speak stateless Responses. Chat reasoning is OpenRouter's reasoning object ({effort}, or {enabled: true} for on/off Models) plus include_reasoning; OpenRouter maps an effort onto an upstream token budget itself, so no budget is sent. A Model without a catalog ladder snaps onto none..xhigh, an id the catalog does not know is treated as a reasoning Model, and a Model whose reasoning is mandatory gets its lowest active level instead of off. Claude Models cache only at explicit cache_control breakpoints; other families cache implicitly and do not get markers. Responses accepts max_output_tokens and top_p as its only optional parameters and omits reasoning for effort none.",
+  "_comment": "OpenRouter. Every chat Model speaks Chat Completions except the GPT-5.6 Models, which speak stateless Responses. Chat reasoning is OpenRouter's reasoning object ({effort}, or {enabled: true} for on/off Models) plus include_reasoning; OpenRouter maps an effort onto an upstream token budget itself, so no budget is sent. A Model without a catalog ladder snaps onto none..xhigh, an id the catalog does not know is treated as a reasoning Model, and a Model whose reasoning is mandatory gets its lowest active level instead of off. Claude and the six documented Alibaba Chat Models receive explicit cache_control breakpoints; other Models receive no markers. Responses accepts max_output_tokens and top_p as its only optional parameters and omits reasoning for effort none.",
   "defaults": {
     "reasoning": {
       "supported": true,
@@ -35,6 +35,20 @@
       "when": {"prefix": ["anthropic/claude", "~anthropic/claude"]},
       "set": {"request": {"prompt_cache": "anthropic_breakpoints"}},
       "note": "Anthropic cache_control breakpoints on the last system message and the most recent history messages."
+    },
+    {
+      "when": {
+        "ids": [
+          "deepseek/deepseek-v3.2",
+          "qwen/qwen3-max",
+          "qwen/qwen-plus",
+          "qwen/qwen3.6-plus",
+          "qwen/qwen3-coder-plus",
+          "qwen/qwen3-coder-flash"
+        ]
+      },
+      "set": {"request": {"prompt_cache": "anthropic_breakpoints"}},
+      "note": "The documented Alibaba endpoints require the same block-level cache_control opt-in; endpoint routing remains the caller's policy."
     }
   ],
   "models": {
