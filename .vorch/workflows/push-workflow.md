@@ -2,6 +2,8 @@
 
 How to push `main` to GitHub. Commits and merges run static checks only, so `main` may hold a commit that breaks a test elsewhere. The push is where every such failure is found and fixed: `python scripts/push.py` checks the commit `main` points to completely and pushes exactly that commit only when every check passes. Nothing red reaches the remote.
 
+A push is finished only when the `main-build` CI run it starts is green: CI also runs E2E and builds the packages the user installs, and only a green run publishes them. Never use a plain `git push`.
+
 ## Steps
 
 ### 1. Run the push command
@@ -32,9 +34,24 @@ Tests the report lists as flaky failed under the parallel load and passed when r
 
 Then run `python scripts/push.py` again. Repeat steps 2 and 3 until it pushes.
 
-### 4. Report
+### 4. Watch CI to the end
 
-Tell the user which commit was pushed and what you fixed on the way: each failure, the commit that caused it, and the commit that fixed it. Name the flaky tests the report listed.
+A push to `main` that changes more than development documentation starts the `main-build` workflow (complete CI, E2E included, and the packages). Find its run and check that its `headSha` is the pushed commit:
+
+```bash
+gh run list --workflow=main-build.yml --branch=main --event=push --limit 1 --json databaseId,headSha,status
+```
+
+Show it to the user and follow it yourself until it ends:
+
+- Where your environment has a terminal the user sees (the Claude desktop app's Terminal panel), run `gh run watch <run-id> --exit-status --interval 15` there, so the user follows it live and sees the result.
+- Watch it yourself too, in the background: `gh run watch <run-id> --exit-status`, which ends with the run. A run takes a while; keep working or wait, but do not end your task before it finished.
+
+A red run is part of the push: read its failures (`gh run view <run-id> --log-failed`), fix every one as in steps 2 and 3, whatever commit caused it, run `python scripts/push.py` again, and watch the new run. Repeat until a run is green. A run cancelled because a newer push superseded it says nothing; watch the newer one.
+
+### 5. Report
+
+Tell the user which commit was pushed, the green CI run, and what you fixed on the way: each failure, the commit that caused it, and the commit that fixed it. Name the flaky tests the report listed.
 
 ## Gotchas
 
