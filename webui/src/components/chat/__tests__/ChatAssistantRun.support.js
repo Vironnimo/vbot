@@ -121,6 +121,7 @@ export function readChild({ status = 'running', ...fields } = {}) {
 export function subAgentChild({
   status = 'running',
   runStatus = 'running',
+  description = 'Module check',
 } = {}) {
   const data = {
     id: 'sub_child',
@@ -131,7 +132,12 @@ export function subAgentChild({
   };
   return toolChild(
     'subagent',
-    { action: 'run', agent_id: 'worker', content: 'Inspect' },
+    {
+      action: 'run',
+      agent_id: 'worker',
+      content: 'Inspect',
+      ...(description ? { description } : {}),
+    },
     {
       status,
       subAgentSession: { ...data, run_id: 'run-child' },
