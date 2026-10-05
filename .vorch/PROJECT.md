@@ -136,7 +136,7 @@ A git-ignored checkout marker selects dev data `~/.vbot-dev`, port `8421`; the i
 
 **Release:** Read `.vorch/workflows/release-workflow.md` when the user requests a release.
 
-**Push:** Read `.vorch/workflows/push-workflow.md` when the user asks to push.
+**Push:** Read `.vorch/workflows/push-workflow.md` when the user asks to push, and push only that way (`python scripts/push.py`, never a plain `git push`). A push is finished only when the `main-build` CI run it starts is green.
 
 ## Testing
 

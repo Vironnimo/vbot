@@ -42,12 +42,9 @@ A push to `main` that changes more than development documentation starts the `ma
 gh run list --workflow=main-build.yml --branch=main --event=push --limit 1 --json databaseId,headSha,status
 ```
 
-Show it to the user and follow it yourself until it ends:
+Follow it job by job, not only its end: check the jobs every minute or two (`gh run view <run-id> --json status,jobs`). As soon as one job fails, read that job's failures (`gh run view --job <job-id> --log-failed`) and start fixing while the other jobs still run; keep checking them, since they may add failures. Do not end your task before the run finished.
 
-- Where your environment has a terminal the user sees (the Claude desktop app's Terminal panel), run `gh run watch <run-id> --exit-status --interval 15` there, so the user follows it live and sees the result.
-- Watch it yourself too, in the background: `gh run watch <run-id> --exit-status`, which ends with the run. A run takes a while; keep working or wait, but do not end your task before it finished.
-
-A red run is part of the push: read its failures (`gh run view <run-id> --log-failed`), fix every one as in steps 2 and 3, whatever commit caused it, run `python scripts/push.py` again, and watch the new run. Repeat until a run is green. A run cancelled because a newer push superseded it says nothing; watch the newer one.
+A red run is part of the push: fix every failure as in steps 2 and 3, whatever commit caused it, run `python scripts/push.py` again once the run has ended and every failure is fixed, and watch the new run. Repeat until a run is green. A run cancelled because a newer push superseded it says nothing; watch the newer one.
 
 ### 5. Report
 
