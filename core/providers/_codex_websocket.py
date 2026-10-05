@@ -6,7 +6,7 @@ import asyncio
 import copy
 import inspect
 import json
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import aclosing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -45,6 +45,7 @@ class _CodexWebSocketContinuation:
     route: CodexWebSocketRoute
     last_request_payload: dict[str, Any]
     last_response_id: str
+    # Original final Provider output, never normalized or rendered for replay.
     last_response_items: list[dict[str, Any]]
 
 
@@ -114,12 +115,10 @@ class CodexWebSocket:
         base_url: str,
         connect: CodexWebSocketConnector,
         debug_recorder: ProviderDebugRecorder | None,
-        response_input: Callable[[dict[str, Any], str], Any],
     ) -> None:
         self._base_url = base_url
         self._codex_websocket_connect = connect
         self._debug_recorder = debug_recorder
-        self._response_input = response_input
         self._codex_websocket: Any | None = None
         self._codex_websocket_route: CodexWebSocketRoute | None = None
         self._codex_websocket_continuation: _CodexWebSocketContinuation | None = None
@@ -138,6 +137,9 @@ class CodexWebSocket:
                 await self.aclose()
             request_payload = self._build_codex_cached_request(payload, route)
             retried_missing_continuation = False
+            # Only final Provider snapshots can prove what previous_response_id
+            # restores. The decoder also retains incomplete/modified snapshots.
+            output_items: dict[int | None, dict[str, Any] | None] = {}
             while True:
                 try:
                     async with aclosing(
@@ -146,6 +148,7 @@ class CodexWebSocket:
                             headers=headers,
                             route=route,
                             state=state,
+                            output_items=output_items,
                         )
                     ) as deltas:
                         async for delta in deltas:
@@ -165,13 +168,14 @@ class CodexWebSocket:
                     self._codex_websocket_continuation = None
                     await self.aclose()
                     request_payload = payload
+                    output_items.clear()
                     continue
                 except BaseException:
                     self._codex_websocket_continuation = None
                     await self.aclose()
                     raise
 
-                self._remember_codex_websocket_continuation(payload, route, state)
+                self._remember_codex_websocket_continuation(payload, route, state, output_items)
                 return
 
     async def _stream_codex_websocket_attempt(
@@ -181,6 +185,7 @@ class CodexWebSocket:
         headers: dict[str, str],
         route: CodexWebSocketRoute,
         state: ResponsesStreamState,
+        output_items: dict[int | None, dict[str, Any] | None],
     ) -> AsyncGenerator[dict[str, Any]]:
         wire_payload = {"type": "response.create", **request_payload}
         wire_text = json.dumps(wire_payload, ensure_ascii=False, separators=(",", ":"))
@@ -230,7 +235,32 @@ class CodexWebSocket:
                     raise _CodexPreviousResponseMissingError
                 event_type = event_data.get("type")
                 event_name = event_type if isinstance(event_type, str) else ""
+                raw_item = event_data.get("item")
+                final_item = (
+                    copy.deepcopy(raw_item)
+                    if event_name == "response.output_item.done" and isinstance(raw_item, dict)
+                    else None
+                )
                 deltas = normalize_responses_stream_event(event_name, event_data, state)
+                if (
+                    "output_index" in event_data
+                    or event_name in {"response.output_item.added", "response.output_item.done"}
+                    or any(
+                        delta.get("type") in {"content_delta", "reasoning_delta", "tool_call_delta"}
+                        for delta in deltas
+                    )
+                ):
+                    raw_index = event_data.get("output_index")
+                    index = (
+                        raw_index
+                        if isinstance(raw_index, int)
+                        and not isinstance(raw_index, bool)
+                        and raw_index >= 0
+                        else None
+                    )
+                    output_items.setdefault(index, None)
+                    if index is not None and final_item is not None:
+                        output_items[index] = final_item
                 for delta in deltas:
                     if delta.get("type") in {
                         "content_delta",
@@ -349,18 +379,29 @@ class CodexWebSocket:
         payload: dict[str, Any],
         route: CodexWebSocketRoute,
         state: ResponsesStreamState,
+        output_items: dict[int | None, dict[str, Any] | None],
     ) -> None:
         completed_response = state.completed_response
         if not isinstance(completed_response, Mapping):
             self._codex_websocket_continuation = None
             return
         response_id = completed_response.get("id")
-        normalized_response = state.normalized_response()
-        response_items = self._response_input(normalized_response, route[1])
+        response_items = completed_response.get("output")
+        if not response_items:
+            indices = sorted(index for index in output_items if index is not None)
+            if (
+                not output_items
+                or any(item is None for item in output_items.values())
+                or indices != list(range(len(output_items)))
+            ):
+                self._codex_websocket_continuation = None
+                return
+            response_items = [output_items[index] for index in indices]
         if (
             not isinstance(response_id, str)
             or not response_id
             or not isinstance(response_items, list)
+            or not all(isinstance(item, dict) for item in response_items)
         ):
             self._codex_websocket_continuation = None
             return
@@ -368,7 +409,5 @@ class CodexWebSocket:
             route=route,
             last_request_payload=payload,
             last_response_id=response_id,
-            last_response_items=[
-                copy.deepcopy(item) for item in response_items if isinstance(item, dict)
-            ],
+            last_response_items=copy.deepcopy(response_items),
         )

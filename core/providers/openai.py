@@ -178,9 +178,6 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             base_url=str(self._client.base_url),
             connect=codex_websocket_connect or cast(CodexWebSocketConnector, websocket_connect),
             debug_recorder=self._debug_recorder,
-            response_input=lambda response, model_id: self._build_responses_payload(
-                [response], model_id=model_id, stream=True
-            ).get("input"),
         )
 
     @override
