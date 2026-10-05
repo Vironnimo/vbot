@@ -398,17 +398,20 @@ def make_skill_manage_handler(
                         retryable=False,
                     )
                 raise _RefusalError("skill_not_found", _unknown_skill_message(call.name, own_root))
-            if writer.background and call.action != "create":
-                authoring.check_writable(target_root, call.name, writer=writer)
-            if (
-                writer.actor == LIBRARIAN_SKILL_ACTOR
-                and run_started_at is not None
-                and call.action != "create"
-            ):
-                check_unchanged_since(target_root, call.name, writer, run_started_at)
-            if call.action == "delete":
-                _check_absorbed_into(call, own_root)
-            result, summary = _apply(authoring, target_root, call, writer, followed)
+            # Checks and write run under one Skill write lock, so a change that
+            # lands after a check cannot be overwritten by this write.
+            with authoring.exclusive():
+                if writer.background and call.action != "create":
+                    authoring.check_writable(target_root, call.name, writer=writer)
+                if (
+                    writer.actor == LIBRARIAN_SKILL_ACTOR
+                    and run_started_at is not None
+                    and call.action != "create"
+                ):
+                    check_unchanged_since(target_root, call.name, writer, run_started_at)
+                if call.action == "delete":
+                    _check_absorbed_into(call, own_root)
+                result, summary = _apply(authoring, target_root, call, writer, followed)
         except _RefusalError as refusal:
             return tool_failure(refusal.code, refusal.message, retryable=False)
         except SkillProtectedError as error:

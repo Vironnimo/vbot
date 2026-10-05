@@ -992,7 +992,10 @@ class LibrarianService:
         cutoff: datetime,
     ) -> _Library:
         """Archive the inactive Skills, then describe what consolidation may change."""
-        with self._runtime.agents.lifecycle_guard():
+        # Holding off other Skill writes keeps the activity read below true for
+        # the archives: a person's change lands before it, which keeps the
+        # Skill, or after the archive, never unseen in between.
+        with self._runtime.agents.lifecycle_guard(), self._authoring.exclusive():
             root = self._skills_dir(agent_id)
             if not root.is_dir():
                 return _Library((), (), (), _fingerprint({}))

@@ -238,6 +238,16 @@ class SkillAuthoringService:
         self._protected_roots = [self._resolve(root) for root in protected_roots]
         self._write_lock = RLock()
 
+    @contextmanager
+    def exclusive(self) -> Iterator[None]:
+        """Hold off every other Skill write while the block runs.
+
+        Each method takes the same lock, so a caller's check and the write it
+        guards see the same Skills: a person's change cannot land in between.
+        """
+        with self._write_lock:
+            yield
+
     def create(
         self,
         target_root: Path,
