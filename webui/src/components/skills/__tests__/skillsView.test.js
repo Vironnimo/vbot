@@ -365,7 +365,9 @@ describe('Skills manager', () => {
         'deploy',
       );
       expect(document.activeElement.dataset.skillId).toBe('private');
-      expect(document.activeElement.classList).toContain('skills-row--current');
+      expect(document.activeElement.closest('.skills-row').classList).toContain(
+        'skills-row--current',
+      );
     }
 
     // Escape that another layer consumed, or typed in a text field, stays.
@@ -478,12 +480,33 @@ describe('Skills manager', () => {
     );
   });
 
-  it('lists each package on one line with its source and who gets it, and its description only as a tooltip', async () => {
+  it('lists each package on one line with its source, who gets it and its own controls, and its description only as a tooltip', async () => {
     await render();
     const list = document.querySelector('.skills-list');
+    // Explicit user requirement: every row shows its on/off switch, Edit and
+    // Delete; a read-only package keeps Edit and Delete disabled.
+    const controls = (row) => row.closest('.skills-row');
     expect(
-      list.querySelectorAll('[role="switch"], [role="checkbox"]'),
-    ).toHaveLength(0);
+      rows().map((row) => [
+        controls(row)
+          .querySelector('[role="switch"]')
+          .getAttribute('aria-checked'),
+        ...[
+          ...controls(row).querySelectorAll(
+            '.skills-row-actions button:not([role="switch"])',
+          ),
+        ].map((control) => [
+          control.getAttribute('aria-label'),
+          control.disabled,
+        ]),
+      ]),
+    ).toEqual([
+      ['false', ['Edit broken', false], ['Delete broken', false]],
+      ['true', ['Edit deploy', false], ['Delete deploy', false]],
+      ['true', ['Edit notes', false], ['Delete notes', false]],
+      ['true', ['Edit teach', true], ['Delete teach', true]],
+    ]);
+    expect(list.querySelectorAll('[role="checkbox"]')).toHaveLength(0);
     expect(
       rows().map((row) => [
         row.dataset.skillId,
@@ -516,6 +539,19 @@ describe('Skills manager', () => {
     expect(
       rpcMock.mock.calls.some(([method]) => method === 'skill.inspect'),
     ).toBe(false);
+
+    // The row's switch turns the package off; its Delete asks first.
+    click(controls(rows()[1]).querySelector('[role="switch"]'));
+    await settle();
+    expect(calls('skill.set_disabled')).toEqual([
+      { name: 'deploy', disabled: true },
+    ]);
+    click(button('Delete deploy', list));
+    await settle();
+    expect(document.querySelector('[role="dialog"]').textContent).toContain(
+      'deploy',
+    );
+    expect(calls('skill.delete')).toEqual([]);
   });
 
   it('offers install, create and folder setup from one keyboard-operable add menu', async () => {
@@ -1382,7 +1418,7 @@ describe('Skills manager', () => {
     }
   });
 
-  it('lists archived Skills newest first and restores or permanently deletes them from their menu', async () => {
+  it('lists archived Skills newest first and restores or permanently deletes them from their row', async () => {
     archived = [
       {
         scope: 'agent:main',
@@ -1452,8 +1488,17 @@ describe('Skills manager', () => {
       variant: 'success',
     });
 
-    rightClick(archivedRows()[1]);
-    pick('Delete permanently…');
+    // Restore and Delete permanently also stay visible on every row.
+    const row = archivedRows()[1].closest('.skills-row');
+    expect(
+      [...row.querySelectorAll('.skills-row-actions button')].map(
+        (control) => control.textContent.trim() || control.ariaLabel,
+      ),
+    ).toEqual([
+      'Restore',
+      `Delete ${archivedRows()[1].querySelector('.skills-row-name').textContent} permanently`,
+    ]);
+    click(row.querySelector('.skills-row-delete'));
     const dialog = document.querySelector('[role="dialog"]');
     expect(calls('skill.purge')).toEqual([]);
     click(button('Delete permanently', dialog));

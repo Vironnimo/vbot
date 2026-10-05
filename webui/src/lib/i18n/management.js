@@ -77,6 +77,7 @@ export default Object.freeze({
   'skills.source.projectOf': 'Project skill of {name}',
   'skills.source.bundled': 'Bundled with vBot',
   'skills.source.global': 'Global skill',
+  'skills.source.extension': '{name} extension',
   'skills.source.globalFrom': 'Global skill from {name}',
   'skills.copy.private': '{name}’s private copy',
   'skills.copy.project': 'the copy in project {name}',
@@ -137,6 +138,14 @@ export default Object.freeze({
   'skills.page.breadcrumb': 'Location',
   'skills.page.backTo': 'Back to {name}',
   'skills.page.backHint': 'Back (Esc)',
+  'skills.row.toggle': 'Use {name}',
+  'skills.row.onHint':
+    'On: Agents and projects that use this skill get it. Turn it off to stop it for all of them.',
+  'skills.row.offHint':
+    'Off for every Agent and project. Turn it on to use it again.',
+  'skills.row.edit': 'Edit {name}',
+  'skills.row.restore': 'Restore {name}',
+  'skills.row.purge': 'Delete {name} permanently',
   'skills.menu.label': 'Actions for {name}',
   'skills.menu.open': 'Open',
   'skills.menu.openSkill': 'Open skill',

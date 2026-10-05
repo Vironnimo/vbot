@@ -30,7 +30,10 @@ export function skillSourceLabel(entry) {
   if (entry.owner_id) return t('skills.source.private');
   if (entry.origin?.startsWith('project:')) return t('skills.source.project');
   if (entry.origin === 'bundled') return t('skills.library.bundled');
-  return humanizeSourceLabel(entry.source_label) || t('skills.library.global');
+  const label = humanizeSourceLabel(entry.source_label);
+  if (label && entry.source_kind === 'extension')
+    return t('skills.source.extension', { name: label });
+  return label || t('skills.library.global');
 }
 
 /** Where a package lives, spelled out for the detail pane. */

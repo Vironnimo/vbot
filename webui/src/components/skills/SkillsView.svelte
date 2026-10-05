@@ -755,7 +755,11 @@
               {projects}
               page={currentPage}
               {pageCount}
+              busy={actions.busy}
               onOpen={showSkill}
+              onEdit={menuActions.edit}
+              onDelete={menuActions.remove}
+              onSetDisabled={menuActions.setDisabled}
               onContextMenu={openLibraryMenu}
               onPage={changePage}
               onClearFilters={() => {
@@ -772,7 +776,10 @@
               emptyTitle={collectionText.empty}
               emptyHelp={collectionText.emptyHelp}
               {agents}
+              busy={actions.busy}
               onMenu={openArchivedMenu}
+              onRestore={menuActions.restore}
+              onPurge={menuActions.purge}
               onClearFilters={() => changeSearch('')}
             />
           {:else if scopeAgent}
