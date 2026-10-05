@@ -266,6 +266,7 @@ describe('ProjectsView Team', () => {
     await selectDemo();
     await expandMember('builder');
 
+    setInputValue('project-override-builder-top-p', '0,9');
     buttonByTestId('project-override-clear-model-builder').click();
     await waitForCondition(() => clearOverrideMock.mock.calls.length === 1);
     expect(clearOverrideMock).toHaveBeenCalledWith('demo', 'builder', 'model');
@@ -276,6 +277,8 @@ describe('ProjectsView Team', () => {
           '[data-testid="project-override-clear-model-builder"]',
         ),
     );
+    // Another field's unsaved draft survives the clear.
+    expect(inputById('project-override-builder-top-p').value).toBe('0,9');
   });
 
   it('sets a sampling override with the comma-tolerant value', async () => {

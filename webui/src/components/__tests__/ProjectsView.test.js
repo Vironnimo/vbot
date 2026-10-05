@@ -273,24 +273,34 @@ describe('ProjectsView list and selection', () => {
       value: { writeText },
       configurable: true,
     });
-    const alpha = project({
-      project_id: 'alpha',
-      display_name: 'Alpha',
-      cwd: 'C:/repos/alpha',
-    });
-    const beta = project({
-      project_id: 'beta',
-      display_name: 'Beta',
-      cwd: 'C:/repos/beta',
-      cwd_exists: false,
-    });
-    listProjectsMock.mockResolvedValue({ projects: [alpha, beta] });
-    showProjectMock.mockImplementation((projectId) =>
-      Promise.resolve({
-        project: projectId === 'beta' ? beta : alpha,
-        scan: cleanScan(),
+    const records = {
+      alpha: project({
+        project_id: 'alpha',
+        display_name: 'Alpha',
+        cwd: 'C:/repos/alpha',
       }),
-    );
+      beta: project({
+        project_id: 'beta',
+        display_name: 'Beta',
+        cwd: 'C:/repos/beta',
+        cwd_exists: false,
+      }),
+    };
+    listProjectsMock.mockImplementation(async () => ({
+      projects: Object.values(records),
+    }));
+    showProjectMock.mockImplementation(async (projectId) => ({
+      project: records[projectId],
+      scan: cleanScan(),
+    }));
+    setProjectMock.mockImplementation(async (projectId, changes) => {
+      records[projectId] = { ...records[projectId], ...changes };
+      return { project: records[projectId], scan: cleanScan() };
+    });
+    removeProjectMock.mockImplementation(async (projectId) => {
+      delete records[projectId];
+      return { project_id: projectId, archived: true };
+    });
     const navigation = createStandaloneNavigation(['alpha']);
     view.mount({ navigation, onToast });
     await waitForCondition(() =>
@@ -323,17 +333,28 @@ describe('ProjectsView list and selection', () => {
     await waitForCondition(() => onToast.mock.calls.length === 1);
     expect(writeText).toHaveBeenCalledWith('C:/repos/beta');
 
+    // Re-pointing and removing reload the Project list: the shown Project's
+    // unsaved edit saves before each dialog opens instead of being replaced.
+    setInputValue('project-edit-name', 'Alpha draft');
     openRowMenu('beta')[1].click();
     await waitForCondition(() => inputById('projects-repoint-cwd'));
+    expect(setProjectMock.mock.calls).toEqual([
+      ['alpha', { display_name: 'Alpha draft' }],
+    ]);
     setInputValue('projects-repoint-cwd', 'C:/repos/moved');
     submitButtonInDialog('Re-point').click();
-    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
-    expect(setProjectMock).toHaveBeenCalledWith('beta', {
+    await waitForCondition(() => setProjectMock.mock.calls.length === 2);
+    expect(setProjectMock).toHaveBeenLastCalledWith('beta', {
       cwd: 'C:/repos/moved',
     });
 
+    await waitForCondition(() => !inputById('projects-repoint-cwd'));
+    setInputValue('project-edit-name', 'Alpha final');
     openRowMenu('beta')[2].click();
-    flushSync();
+    await waitForCondition(() => document.querySelector('[role="dialog"]'));
+    expect(setProjectMock).toHaveBeenLastCalledWith('alpha', {
+      display_name: 'Alpha final',
+    });
     expect(document.querySelector('[role="dialog"]').textContent).toContain(
       'Beta',
     );
@@ -343,8 +364,13 @@ describe('ProjectsView list and selection', () => {
       copyRootedAgentIdentityFiles: false,
       permanent: false,
     });
-    // Removing another Project keeps the shown one.
+    await waitForCondition(
+      () => !document.querySelector('[data-testid="project-toggle-beta"]'),
+    );
+    // Removing another Project keeps the shown one with its saved edits.
     expect(navigation.place).toEqual(['alpha']);
+    expect(inputById('project-edit-name').value).toBe('Alpha final');
+    expect(setProjectMock).toHaveBeenCalledTimes(3);
   });
 
   it('surfaces a blocked removal as an alert', async () => {

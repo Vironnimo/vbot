@@ -176,7 +176,8 @@ export function createProjectDialogs({
       if (!isActive()) {
         return;
       }
-      if (state.selectedProjectId === project.project_id) {
+      const removedShown = state.selectedProjectId === project.project_id;
+      if (removedShown) {
         state.selectedProjectId = '';
         state.activeTeam = [];
         state.activeReport = null;
@@ -202,7 +203,17 @@ export function createProjectDialogs({
                 copyState,
               });
       state.statusMessage = [removed, reset].filter(Boolean).join(' ');
-      await loadProjects();
+      if (removedShown) {
+        await loadProjects();
+      } else {
+        // The shown Project stays editable while the removal runs: its row
+        // goes now, and the full list waits for those edits like an outside
+        // change instead of replacing them.
+        state.projects = state.projects.filter(
+          (candidate) => candidate.project_id !== project.project_id,
+        );
+        await loadProjects({ reload: true });
+      }
     } catch (error) {
       if (!isActive()) {
         return;

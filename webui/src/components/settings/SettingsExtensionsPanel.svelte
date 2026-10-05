@@ -248,7 +248,21 @@
     }
   }
 
-  async function reloadExtensions() {
+  // Reload, enable/disable and secret writes re-list the Extensions, which
+  // replaces every configuration form: pending edits save first, or the
+  // shared prompt discards them. They also apply to the reloaded Extensions.
+  function afterPendingEdits(action) {
+    if (panelBusy) {
+      return false;
+    }
+    return autosaveContext.requestTransition(action);
+  }
+
+  function reloadExtensions() {
+    return afterPendingEdits(reloadExtensionsNow);
+  }
+
+  async function reloadExtensionsNow() {
     if (panelBusy) {
       return;
     }
@@ -419,7 +433,11 @@
     }
   }
 
-  async function saveSecret(extension, field, value) {
+  function saveSecret(extension, field, value) {
+    return afterPendingEdits(() => saveSecretNow(extension, field, value));
+  }
+
+  async function saveSecretNow(extension, field, value) {
     if (panelBusy) {
       return;
     }
@@ -448,7 +466,11 @@
     }
   }
 
-  async function toggleExtension(extension) {
+  function toggleExtension(extension) {
+    return afterPendingEdits(() => toggleExtensionNow(extension));
+  }
+
+  async function toggleExtensionNow(extension) {
     if (panelBusy) {
       return;
     }

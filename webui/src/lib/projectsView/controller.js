@@ -159,8 +159,8 @@ export function createProjectsController({
     state.overrideBusyKey = '';
   }
 
-  function seedOverrideDrafts({ replace = false } = {}) {
-    const next = replace ? {} : { ...state.overrideDrafts };
+  function seedOverrideDrafts() {
+    const next = { ...state.overrideDrafts };
     for (const member of state.activeTeam) {
       if (!next[member.agent_id]) {
         next[member.agent_id] = seedTeamOverrideDraft(member);
@@ -169,7 +169,8 @@ export function createProjectsController({
     state.overrideDrafts = next;
   }
 
-  function applyScan(scan, { replaceDrafts = false } = {}) {
+  // Untouched fields follow the scan; edited ones keep their draft.
+  function applyScan(scan) {
     const oldSeeds = Object.fromEntries(
       state.activeTeam.map((member) => [
         member.agent_id,
@@ -179,19 +180,17 @@ export function createProjectsController({
     state.activeTeam = projectTeam(scan);
     state.activeReport = normalizeScanReport(scan?.report);
     state.activeScanSkills = normalizeScanSkills(scan);
-    if (!replaceDrafts) {
-      for (const member of state.activeTeam) {
-        const previous = oldSeeds[member.agent_id];
-        const draft = state.overrideDrafts[member.agent_id];
-        if (!previous || !draft) continue;
-        const next = seedTeamOverrideDraft(member);
-        for (const field of Object.keys(next)) {
-          if (JSON.stringify(draft[field]) === JSON.stringify(previous[field]))
-            draft[field] = next[field];
-        }
+    for (const member of state.activeTeam) {
+      const previous = oldSeeds[member.agent_id];
+      const draft = state.overrideDrafts[member.agent_id];
+      if (!previous || !draft) continue;
+      const next = seedTeamOverrideDraft(member);
+      for (const field of Object.keys(next)) {
+        if (JSON.stringify(draft[field]) === JSON.stringify(previous[field]))
+          draft[field] = next[field];
       }
     }
-    seedOverrideDrafts({ replace: replaceDrafts });
+    seedOverrideDrafts();
   }
 
   function clearSelectedProject() {
@@ -785,7 +784,21 @@ export function createProjectsController({
       if (!active) {
         return false;
       }
-      applyScan(result?.scan, { replaceDrafts: true });
+      applyScan(result?.scan);
+      // Only the cleared field returns to what it inherits; the other drafts,
+      // saved or not, stay as they are.
+      const member = state.activeTeam.find(
+        (entry) => entry.agent_id === agentId,
+      );
+      if (member && state.overrideDrafts[agentId]) {
+        state.overrideDrafts = {
+          ...state.overrideDrafts,
+          [agentId]: {
+            ...state.overrideDrafts[agentId],
+            [field]: seedTeamOverrideDraft(member)[field],
+          },
+        };
+      }
       onToast({
         title: t('projects.team.overrideCleared'),
         variant: 'success',

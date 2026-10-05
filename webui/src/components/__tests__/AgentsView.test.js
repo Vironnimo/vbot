@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
+import { createAutosaveCoordinator } from '../../lib/autosave.js';
 import { init, t } from '../../lib/i18n.js';
 import { createStandaloneNavigation } from '../../lib/navigation.svelte.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
@@ -44,6 +45,8 @@ vi.mock('svelte', async () => {
 vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
 
 const { default: AgentsView } = await import('../AgentsView.svelte');
+const { default: AutosaveContextHost } =
+  await import('./AutosaveContextHost.support.svelte');
 
 function listedAgentIds() {
   return Array.from(
@@ -91,6 +94,24 @@ function pressMoveUp(target) {
 function isBefore(first, second) {
   return Boolean(
     first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING,
+  );
+}
+
+// Mounted under an explicit coordinator, whose flush is what leaving the
+// editor runs.
+function mountUnderCoordinator() {
+  const coordinator = createAutosaveCoordinator();
+  const component = mount(AutosaveContextHost, {
+    target: document.body,
+    props: { component: AgentsView, coordinator },
+  });
+  flushSync();
+  return { component, coordinator };
+}
+
+function hasButton(label) {
+  return Array.from(document.body.querySelectorAll('button')).some(
+    (button) => button.textContent.trim() === label,
   );
 }
 
@@ -841,15 +862,16 @@ describe('AgentsView', () => {
     ]);
   });
 
+  // Leaving the editor saves the change too, once the decision is made.
   it.each([
-    [t('agents.workspaceMove.dontCopy'), false],
-    [t('agents.workspaceMove.copy'), true],
+    ['saving', t('agents.workspaceMove.dontCopy'), false],
+    ['leaving the editor', t('agents.workspaceMove.copy'), true],
   ])(
-    'saves a Workspace change only after the "%s" decision',
-    async (decision, copyIdentityFiles) => {
+    'on %s, saves a Workspace change only after the "%s" decision',
+    async (trigger, decision, copyIdentityFiles) => {
       rpcMock.mockImplementation(createAgentsRpcMock());
-      mountedComponent = mount(AgentsView, { target: document.body });
-      flushSync();
+      const mounted = mountUnderCoordinator();
+      mountedComponent = mounted.component;
       await waitForCondition(
         () =>
           document.body.querySelector('#agent-workspace')?.value ===
@@ -863,7 +885,14 @@ describe('AgentsView', () => {
       ).toHaveLength(1);
 
       setWorkspace('D:/agents/moved');
-      submitAgentForm();
+      expect(mounted.coordinator.hasPending()).toBe(true);
+      let leaving = null;
+      if (trigger === 'saving') {
+        submitAgentForm();
+      } else {
+        leaving = mounted.coordinator.flushPending();
+      }
+      await waitForCondition(() => hasButton(decision));
       expect(getAgentUpdateCalls()).toHaveLength(0);
 
       getButton(decision).click();
@@ -874,27 +903,44 @@ describe('AgentsView', () => {
         workspace: 'D:/agents/moved',
         copy_workspace_identity_files: copyIdentityFiles,
       });
+      if (leaving) {
+        await expect(leaving).resolves.toBe(true);
+      }
     },
   );
 
-  it('cancels a workspace save without discarding the draft', async () => {
-    rpcMock.mockImplementation(createAgentsRpcMock());
-    mountedComponent = mount(AgentsView, { target: document.body });
-    flushSync();
-    await waitForCondition(() =>
-      document.body.querySelector('#agent-workspace'),
-    );
+  // Cancel on leaving fails the save, which keeps the editor shown.
+  it.each(['saving', 'leaving the editor'])(
+    'cancels a Workspace save on %s without discarding the draft',
+    async (trigger) => {
+      rpcMock.mockImplementation(createAgentsRpcMock());
+      const mounted = mountUnderCoordinator();
+      mountedComponent = mounted.component;
+      await waitForCondition(() =>
+        document.body.querySelector('#agent-workspace'),
+      );
 
-    setWorkspace('D:/agents/draft');
-    submitAgentForm();
-    getButton(t('common.cancel')).click();
-    flushSync();
+      setWorkspace('D:/agents/draft');
+      let leaving = null;
+      if (trigger === 'saving') {
+        submitAgentForm();
+      } else {
+        leaving = mounted.coordinator.flushPending();
+      }
+      await waitForCondition(() => hasButton(t('common.cancel')));
+      getButton(t('common.cancel')).click();
+      flushSync();
 
-    expect(getAgentUpdateCalls()).toHaveLength(0);
-    expect(document.body.querySelector('#agent-workspace').value).toBe(
-      'D:/agents/draft',
-    );
-  });
+      if (leaving) {
+        await expect(leaving).resolves.toBe(false);
+      }
+      expect(getAgentUpdateCalls()).toHaveLength(0);
+      expect(document.body.querySelector('#agent-workspace').value).toBe(
+        'D:/agents/draft',
+      );
+      expect(mounted.coordinator.hasPending()).toBe(true);
+    },
+  );
 
   it('resets a custom workspace to the default and hides the action once the default is saved', async () => {
     const defaultWorkspace = 'C:/data/agents/alpha/workspace';
@@ -942,7 +988,9 @@ describe('AgentsView', () => {
     await waitForCondition(() => findSetToDefaultButton() === undefined, 100);
   });
 
-  it('saves the edit-only Project selection independently of Workspace', async () => {
+  // A Project change saves explicitly or on leaving, never automatically,
+  // and holds back the edits made with it.
+  it('saves a Project selection and the edits made with it on leaving', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
         projects: [
@@ -950,17 +998,28 @@ describe('AgentsView', () => {
         ],
       }),
     );
-    mountedComponent = mount(AgentsView, { target: document.body });
-    flushSync();
+    const mounted = mountUnderCoordinator();
+    mountedComponent = mounted.component;
     await waitForCondition(() => document.body.querySelector('#agent-project'));
 
-    openSimpleDropdown('agent-project');
-    selectSimpleOption('agent-project', 'Demo');
-    submitAgentForm();
-    await waitForCondition(() => getAgentUpdateCalls().length === 1, 100);
+    vi.useFakeTimers();
+    try {
+      openSimpleDropdown('agent-project');
+      selectSimpleOption('agent-project', 'Demo');
+      setTextInputValue('agent-name', 'Alpha Prime');
+      await vi.advanceTimersByTimeAsync(800);
+      await flushAsyncUpdates();
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(getAgentUpdateCalls()).toHaveLength(0);
+    expect(mounted.coordinator.hasPending()).toBe(true);
 
+    await expect(mounted.coordinator.flushPending()).resolves.toBe(true);
+    expect(getAgentUpdateCalls()).toHaveLength(1);
     expect(getAgentUpdateCalls()[0][1]).toEqual({
       id: 'alpha',
+      name: 'Alpha Prime',
       root_project_id: 'demo',
     });
   });

@@ -442,6 +442,50 @@ describe('Projects controller editing', () => {
     });
   });
 
+  it("keeps edits made while another Project's removal is in flight", async () => {
+    const removal = deferred();
+    const records = {
+      demo: {
+        project_id: 'demo',
+        display_name: 'Demo',
+        cwd: 'C:/repos/demo',
+        cwd_exists: true,
+      },
+      other: {
+        project_id: 'other',
+        display_name: 'Other',
+        cwd: 'C:/repos/other',
+        cwd_exists: true,
+      },
+    };
+    const { controller, state } = await loadedController(
+      {},
+      {
+        listProjects: vi.fn(async () => ({ projects: Object.values(records) })),
+        removeProject: vi.fn(async (projectId) => {
+          await removal.promise;
+          delete records[projectId];
+          return { project_id: projectId, archived: true };
+        }),
+      },
+    );
+    expect(state.selectedProjectId).toBe('demo');
+
+    controller.openRemove(records.other);
+    const removing = controller.confirmRemove();
+    controller.updateEditField('display_name', 'Draft');
+    removal.resolve();
+    await removing;
+
+    expect(state.projects.map((project) => project.project_id)).toEqual([
+      'demo',
+    ]);
+    expect(state.selectedProjectId).toBe('demo');
+    expect(state.editForm.display_name).toBe('Draft');
+    expect(controller.pendingChanges()).toEqual({ display_name: 'Draft' });
+    controller.destroy();
+  });
+
   it('changes whitelist membership idempotently', async () => {
     const { controller, state } = await loadedController({
       allowed_tools: ['read'],
