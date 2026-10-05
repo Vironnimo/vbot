@@ -108,7 +108,8 @@ AREA_HELP = {
     "and Sessions",
     "chat": "Send one message to an Agent Session and print the answer",
     "data-store": (
-        "Inspect, snapshot, verify, recover, and release the canonical SQLite databases"
+        "Inspect, snapshot, verify, recover, and release the canonical SQLite databases, "
+        "and restore configuration backups"
     ),
     "channel": "Inspect and manage channel configs",
     "tool": "Inspect public tool catalog",
@@ -185,10 +186,25 @@ PERMANENT_DELETE_HELP = "Delete now instead of archiving; cannot be undone (requ
 
 
 DATA_STORE_HELP = {
-    "status": "Show database health, data snapshots, and recovery incidents",
+    "status": "Show database health, data snapshots, configuration backups, and recovery incidents",
     "snapshot": "Manage verified data snapshots of every canonical database",
+    "config-backup": (
+        "List, inspect and restore the automatic backups of the configuration files "
+        "(settings, Agents, Projects, Channels, jobs, tokens, .env, SOUL/USER/MEMORY.md, "
+        "prompt overrides)"
+    ),
     "incident": "Manage durable database recovery incidents",
     "unregister": "Release the database of a removed Extension (files move to quarantine)",
+}
+
+
+DATA_STORE_CONFIG_BACKUP_HELP = {
+    "list": "List configuration backups, newest first, with the files each one changed",
+    "show": "Show one configuration backup's files compared with the current ones",
+    "restore": (
+        "Restore named files, or every file, of one configuration backup; the state it "
+        "replaces is backed up first"
+    ),
 }
 
 

@@ -50,6 +50,13 @@ class MemberFrozenError(DatabaseUnavailableError):
     """
 
 
+class OperationLockBusyError(DatabaseUnavailableError):
+    """Another data-store operation, such as a data snapshot, holds the operation lock.
+
+    Expected contention, not a failure: the caller retries later.
+    """
+
+
 class DatabaseCorruptError(DatabaseError):
     """The database, or a snapshot or recovery record of it, cannot be trusted.
 

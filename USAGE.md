@@ -395,7 +395,7 @@ Independent roots keep their established ownership: `agents/` contains Identity 
 Other entries appear at the data root when first needed:
 
 - the canonical databases `sessions.db`, `channels.db`, `provider-usage.db` and `decisions.db`, and Extension databases next to other Extension state under `extension-data/<extension>/`; every database is registered in `data-store.json` (see Data-store maintenance below);
-- `snapshots/`, `incidents/` and `quarantine/` for data snapshots and recovery, `data-store.lock`, and `data-maintenance.json` while an offline data operation is incomplete;
+- `snapshots/`, `config-backups/`, `incidents/` and `quarantine/` for data snapshots, configuration backups and recovery, `data-store.lock`, and `data-maintenance.json` while an offline data operation is incomplete;
 - `runtime/` with the control records of a running server, `speech-engines/` after local speech setup, and `embedding-engines/` after a local embedding Model is installed;
 - `pre-generation-1/` only in a data directory converted from vBot 0.4.4 or earlier (see below).
 
@@ -424,11 +424,19 @@ vbot data-store snapshot restore <snapshot-id> --database sessions --yes
 vbot data-store snapshot restore <snapshot-id> --documents --yes
 vbot data-store snapshot restore <snapshot-id> --all --yes
 vbot data-store unregister ext.<extension>.<name> --yes
+vbot data-store config-backup list
+vbot data-store config-backup show <backup-id>
+vbot data-store config-backup restore <backup-id> --file settings.json --yes
+vbot data-store config-backup restore <backup-id> --all --yes
 ```
 
 `status` reports safe operational metadata per database, including the Session search index state, verified data snapshots, and every unacknowledged recovery incident without returning Session content; for a stopped local server it reads the data directory directly. Snapshot creation is an explicit backup, through the running server, of every canonical database and of the JSON configuration documents (settings, Agents, Projects, Channels, prompt layouts, Cron, Bootstrap and Calendar jobs, the Skill policy, Terminal state, MCP connections and OAuth tokens; attachment and speech metadata stay out, like the files they describe). A recovery incident remains visible until the exact incident is acknowledged; acknowledgement does not delete snapshots or quarantine evidence.
 
 Restore is offline maintenance: it requires `--yes`, checks the snapshot first, stops the exact target server when it runs and starts it again afterwards, and must be rehearsed on a copied data directory first. Without a selector it restores every database in the snapshot; `--database` restores only the named ones; `--documents` restores the JSON documents as one set, alone or together with `--database`; `--all` restores the complete snapshot, moves databases registered after the snapshot to quarantine, and takes no other selector. Restored documents become exactly the snapshot's: documents created after it are removed, and every replaced or removed document is kept under `quarantine/json-documents/`. An interrupted restore keeps the server from starting until a restore is repeated and completes.
+
+Configuration backups protect the configuration files, which change far more often than data snapshots are taken: the JSON configuration documents listed above, the data directory's `.env`, `SOUL.md`, `USER.md` and `MEMORY.md` of each Agent Workspace in its default location (`agents/<id>/workspace/`), and System Prompt overrides under `prompts/` and `agents/<id>/prompts/`. A running server backs them up when it starts, checks every 5 minutes and backs up what changed, and backs up once more when it stops. Each distinct file content is stored once under `config-backups/`, so an unchanged file costs nothing. vBot keeps the newest 10 backups, plus the newest one of every hour for 48 hours, of every day for 30 days and of every week for 52 weeks. A JSON document that could not be read as such when it was backed up is marked as damaged and is never restored from that backup. Workspaces at a custom path, other Workspace files and Skills (which keep their own history) are not covered.
+
+`config-backup list` shows the backups, newest first, with the files each one changed; `show` compares one backup's files with the current ones (`same`, `differs`, `missing`). `restore` requires `--yes` and either `--file <path>` (repeatable, as `show` names it) or `--all`. It stops the target server when it runs, restores, and starts it again; when every selected file already matches, it changes nothing and leaves the server running. Before it changes anything it backs up the current state as `before restore <backup-id>`, so restoring that backup takes the restore back. A restore never deletes files: files created after the backup stay, and files whose folder no longer exists (a deleted or renamed Agent, Project or Channel) or that are damaged in the backup are refused when named and left alone by `--all`.
 
 `unregister` releases the database of a removed Extension. While it stays registered, data snapshots keep copying it, and once its file is gone, snapshot creation and updates refuse until it is released. The files move to `quarantine/` and the registration is dropped. It accepts only Extension databases (`ext.<extension>.<name>`), is refused while an Extension has the database open, and requires `--yes`. Earlier snapshots keep their copy, and restoring that database from one registers it again.
 
@@ -1138,7 +1146,7 @@ Installed commands use `vbot`. From a development checkout, `python cli/main.py`
 | Sessions | `session list`, `session create`, `session fork`, `session rename`, `session policy set`, `session delete`, `session channel link` |
 | Archive | `archive list`, `archive show`, `archive restore`, `archive purge` |
 | Chat | `chat [<prompt>] [--agent ...] [-c \| --session ...] [--model ...] [--thinking-effort ...] [--temperature ...] [--json]` |
-| Data store | `data-store status`, `data-store snapshot list|create|verify|restore`, `data-store incident acknowledge`, `data-store unregister` |
+| Data store | `data-store status`, `data-store snapshot list|create|verify|restore`, `data-store config-backup list|show|restore`, `data-store incident acknowledge`, `data-store unregister` |
 | Channels | `channel add`, `channel list`, `channel update`, `channel token set`, `channel enable`, `channel disable`, `channel status`, `channel identity`, `channel access`, `channel admin grant`, `channel admin revoke`, `channel whatsapp setup/status/pair`, `channel remove` |
 | Tools and Skills | `tool list`, `skill list`, `skill inventory`, `skill inspect`, `skill install`, `skill read`, `skill enable`, `skill disable`, `skill share`, `skill unshare`, `skill create`, `skill update`, `skill delete`, `skill file write`, `skill file remove` |
 | Memory | `memory list`, `memory add`, `memory replace`, `memory remove` |

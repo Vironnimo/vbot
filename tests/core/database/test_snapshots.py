@@ -742,6 +742,49 @@ def test_retention_enforces_the_byte_limit_around_the_published_snapshot(
     assert len(retained) == 2
     assert sum((path / "notes.db").stat().st_size for path in retained) <= snapshot_size * 2
 
+    # A history that outgrows the budget still keeps the minimum number of snapshots.
+    monkeypatch.setattr(snapshots_module, "SNAPSHOT_KEEP_BYTES", snapshot_size)
+    newest = snapshot_with_notes(data_dir)
+
+    assert list_data_snapshots(data_dir) == [newest, published]
+
+
+def test_a_full_disk_removes_the_oldest_snapshots_but_keeps_the_newest(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    oldest = snapshot_with_notes(data_dir, "one")
+    middle = snapshot_with_notes(data_dir, "two")
+    newest = snapshot_with_notes(data_dir, "three")
+    real_disk_usage = snapshots_module.shutil.disk_usage
+
+    def room_once_one_snapshot_is_left(path: Any) -> Any:
+        usage = real_disk_usage(path)
+        published = [
+            child
+            for child in snapshot_root(data_dir).iterdir()
+            if child.is_dir() and not child.name.startswith(".")
+        ]
+        free = usage.free if len(published) <= 1 else 0
+        return usage._replace(free=free)
+
+    monkeypatch.setattr(snapshots_module.shutil, "disk_usage", room_once_one_snapshot_is_left)
+    with caplog.at_level(logging.INFO, logger="vbot.database"):
+        published = snapshot_with_notes(data_dir, "four")
+
+    assert not oldest.exists() and not middle.exists()
+    assert list_data_snapshots(data_dir) == [published, newest]
+    assert f"snapshots={oldest.name},{middle.name}" in caplog.text
+
+    # Without anything left to give way the snapshot fails instead.
+    monkeypatch.setattr(
+        snapshots_module.shutil,
+        "disk_usage",
+        lambda path: real_disk_usage(path)._replace(free=0),
+    )
+    assert create_data_snapshot(data_dir, reason="test") is None
+    assert read_snapshot_health(data_dir)["reason"] == "insufficient snapshot reserve"
+    assert list_data_snapshots(data_dir) == [published]
+
 
 def test_retention_leaves_malformed_directories_untouched(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch

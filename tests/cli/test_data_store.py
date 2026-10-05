@@ -1,4 +1,4 @@
-"""CLI contracts for data-store operations on the canonical SQLite databases."""
+"""CLI contracts for data-store operations on the canonical databases and configuration backups."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from cli.server_management import CommandResult, HealthProbeResult, ServerInstan
 from core.chat import ChatMessage
 from core.database import (
     SnapshotRestore,
+    capture_config_backup,
     create_data_snapshot,
     open_database,
     read_marker,
@@ -93,6 +94,11 @@ def test_remote_data_store_commands_never_inspect_local_data(tmp_path: Path, mon
         data_store_management.data_store_snapshot_list(instance),
         data_store_management.data_store_snapshot_verify(instance, "snapshot"),
         data_store_management.data_store_snapshot_restore(instance, "snapshot", True),
+        data_store_management.data_store_config_backup_list(instance),
+        data_store_management.data_store_config_backup_show(instance, "backup"),
+        data_store_management.data_store_config_backup_restore(
+            instance, "backup", True, complete=True
+        ),
     ):
         assert not result.ok
         assert "local data directory" in result.message
@@ -134,12 +140,57 @@ def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
     documents_args = parse_args(["data-store", "snapshot", "restore", "s-1", "--documents"])
     complete_args = parse_args(["data-store", "snapshot", "restore", "s-1", "--all", "--yes"])
     unregister_args = parse_args(["data-store", "unregister", _EXTENSION, "--yes"])
+    config_args = [
+        parse_args(["data-store", "config-backup", "list"]),
+        parse_args(["data-store", "config-backup", "show", "b-1"]),
+        parse_args(
+            [
+                "data-store",
+                "config-backup",
+                "restore",
+                "b-1",
+                "--file",
+                "settings.json",
+                "--file",
+                ".env",
+                "--yes",
+            ]
+        ),
+        parse_args(["data-store", "config-backup", "restore", "b-1", "--all"]),
+    ]
+
+    def config_list(resolved: ServerInstance) -> CommandResult:
+        calls.append(("config list", None))
+        return CommandResult(ok=True, message="list", instance=resolved)
+
+    def config_show(resolved: ServerInstance, backup_id: str) -> CommandResult:
+        calls.append(("config show", backup_id))
+        return CommandResult(ok=True, message="show", instance=resolved)
+
+    def config_restore(
+        resolved: ServerInstance,
+        backup_id: str,
+        confirm: bool,
+        files: list[str],
+        *,
+        complete: bool,
+    ) -> CommandResult:
+        calls.append(("config restore", (backup_id, confirm, tuple(files), complete)))
+        return CommandResult(ok=True, message="restore", instance=resolved)
 
     assert dispatch_data_store_command(status_args, instance, status_fn=status).ok
     assert dispatch_data_store_command(create_args, instance, snapshot_create_fn=create).ok
     for args in (restore_args, documents_args, complete_args):
         assert dispatch_data_store_command(args, instance, snapshot_restore_fn=restore).ok
     assert dispatch_data_store_command(unregister_args, instance, unregister_fn=unregister).ok
+    for args in config_args:
+        assert dispatch_data_store_command(
+            args,
+            instance,
+            config_backup_list_fn=config_list,
+            config_backup_show_fn=config_show,
+            config_backup_restore_fn=config_restore,
+        ).ok
     assert calls == [
         ("status", instance),
         ("create", "update"),
@@ -147,6 +198,10 @@ def test_dispatch_routes_nested_data_store_commands(tmp_path: Path) -> None:
         ("restore", ("s-1", False, (), True, False)),
         ("restore", ("s-1", True, (), False, True)),
         ("unregister", (_EXTENSION, True)),
+        ("config list", None),
+        ("config show", "b-1"),
+        ("config restore", ("b-1", True, ("settings.json", ".env"), False)),
+        ("config restore", ("b-1", False, (), True)),
     ]
 
 
@@ -508,3 +563,90 @@ def test_local_unregister_refuses_and_keeps_the_registration(
     assert _registered_names(tmp_path) == {name}
     if name == _EXTENSION:
         assert notes_spec(tmp_path, name=_EXTENSION).path.is_file()
+
+
+def _settings(timezone: str) -> str:
+    return json.dumps({"format_version": 1, "timezone": timezone}) + "\n"
+
+
+def test_config_backup_restore_stops_restores_and_restarts_the_running_server(
+    tmp_path: Path, monkeypatch
+) -> None:
+    instance = _instance(tmp_path)
+    write_bootstrap_marker(tmp_path)
+    settings = tmp_path / "settings.json"
+    settings.write_text(_settings("Europe/Berlin"), encoding="utf-8")
+    backup = capture_config_backup(tmp_path, reason="start")
+    assert backup is not None
+    settings.write_text(_settings("UTC"), encoding="utf-8")
+    calls: list[str] = []
+
+    def record(action: str) -> Callable[[ServerInstance], CommandResult]:
+        def run(resolved: ServerInstance) -> CommandResult:
+            calls.append(action)
+            return CommandResult(ok=True, message=action, instance=resolved)
+
+        return run
+
+    _classified(monkeypatch, "running", "absent")
+    monkeypatch.setattr(data_store_management, "stop_server", record("stop"))
+    monkeypatch.setattr(data_store_management, "start_server", record("start"))
+
+    listed = json.loads(data_store_management.data_store_config_backup_list(instance).message)
+    assert [item["backup_id"] for item in listed["config_backups"]] == [backup.backup_id]
+    assert listed["config_backups"][0]["changed"] == ["settings.json"]
+    shown = json.loads(
+        data_store_management.data_store_config_backup_show(instance, backup.backup_id).message
+    )
+    assert shown["files"]["settings.json"]["state"] == "differs"
+
+    result = data_store_management.data_store_config_backup_restore(
+        instance, backup.backup_id, True, ["settings.json"]
+    )
+
+    assert result.ok, result.message
+    assert calls == ["stop", "start"]
+    assert settings.read_text(encoding="utf-8") == _settings("Europe/Berlin")
+    newest = json.loads(data_store_management.data_store_config_backup_list(instance).message)
+    before = newest["config_backups"][0]
+    assert before["reason"] == f"before restore {backup.backup_id}"
+    assert before["backup_id"] in result.message
+    assert "restarted the server" in result.message
+
+
+@pytest.mark.parametrize(
+    ("files", "complete", "confirm", "expected"),
+    [
+        ([], False, True, "--file"),
+        (["settings.json"], True, True, "--file"),
+        (["settings.json"], False, False, "--yes"),
+        (["cron/jobs.json"], False, True, "cannot be restored"),
+        (["settings.json"], False, True, "nothing to restore"),
+    ],
+    ids=["no selector", "both selectors", "unconfirmed", "not in backup", "already equal"],
+)
+def test_config_backup_restore_refuses_or_finishes_before_stopping_the_server(
+    tmp_path: Path,
+    monkeypatch,
+    files: list[str],
+    complete: bool,
+    confirm: bool,
+    expected: str,
+) -> None:
+    instance = _instance(tmp_path)
+    write_bootstrap_marker(tmp_path)
+    (tmp_path / "settings.json").write_text(_settings("UTC"), encoding="utf-8")
+    backup = capture_config_backup(tmp_path, reason="start")
+    assert backup is not None
+    monkeypatch.setattr(
+        data_store_management,
+        "stop_server",
+        lambda *_args: pytest.fail("this restore must not stop the server"),
+    )
+
+    result = data_store_management.data_store_config_backup_restore(
+        instance, backup.backup_id, confirm, files, complete=complete
+    )
+
+    assert result.ok is (expected == "nothing to restore")
+    assert expected in result.message

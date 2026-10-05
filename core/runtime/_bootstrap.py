@@ -747,6 +747,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._start_provider_usage_service()
             runtime._start_recall_indexing()
             runtime._start_archive_retention()
+            runtime._start_config_backups()
             runtime._start_librarian()
         runtime.logger.debug("Runtime started (%s)", runtime._startup_summary.describe())
     except Exception as error:

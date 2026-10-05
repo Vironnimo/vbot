@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.database._connections import classified_error, readonly_sqlite_uri
+from core.database.config_backups import config_backup_summary
 from core.database.errors import DatabaseError, DatabaseUnavailableError
 from core.database.marker import (
     MarkerEntry,
@@ -136,6 +137,7 @@ def data_store_status(
         "snapshots": snapshots,
         "snapshot_health": snapshot_health,
         "incidents": incidents,
+        "config_backups": config_backup_summary(data_dir),
     }
 
 
