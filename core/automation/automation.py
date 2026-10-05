@@ -59,6 +59,8 @@ class _CompletionNotice:
     on_persisted: Callable[[], None] | None = None
     suppress_run: bool = False
     execution_owner: RunExecutionOwner | None = None
+    # False: reach an active Run at its next boundary, but never start one.
+    wake: bool = True
 
 
 @dataclass
@@ -104,6 +106,7 @@ class _CompletionDeliveryCoordinator:
         body: str,
         on_persisted: Callable[[], None] | None,
         execution_owner: RunExecutionOwner | None = None,
+        wake: bool = True,
     ) -> asyncio.Future[None]:
         """Submit one result and return a Future resolved after durable delivery."""
         address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
@@ -136,6 +139,7 @@ class _CompletionDeliveryCoordinator:
             on_persisted=on_persisted,
             suppress_run=suppress_run,
             execution_owner=execution_owner,
+            wake=wake,
         )
         bucket.notices[notice_id] = notice
         if bucket.delivery_task is None or bucket.delivery_task.done():
@@ -244,7 +248,9 @@ class _CompletionDeliveryCoordinator:
 
                 if not pending:
                     continue
-                suppressed = [notice for notice in pending if notice.suppress_run]
+                suppressed = [
+                    notice for notice in pending if notice.suppress_run or not notice.wake
+                ]
                 if suppressed:
                     await self._persist_without_run(address, bucket, suppressed)
                     continue
@@ -754,8 +760,13 @@ class TriggerService:
         project_id: str | None = None,
         on_persisted: Callable[[], None] | None = None,
         execution_owner: RunExecutionOwner | None = None,
+        wake: bool = True,
     ) -> asyncio.Future[None]:
-        """Coalesce one background result at the target Session's next Run boundary."""
+        """Coalesce one background result at the target Session's next Run boundary.
+
+        An idle Session gets a Run that delivers it; with ``wake=False`` it is
+        persisted without one and reaches the Agent with its next Run.
+        """
         return self._completion_delivery.submit(
             agent_id=agent_id,
             session_id=session_id,
@@ -765,6 +776,7 @@ class TriggerService:
             body=body,
             on_persisted=on_persisted,
             execution_owner=execution_owner,
+            wake=wake,
         )
 
     def set_owned_completion_starter(self, starter: Callable[..., Awaitable[Run]]) -> None:

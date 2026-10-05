@@ -31,7 +31,9 @@ function runningSubAgentTool(overrides = {}) {
   };
 }
 
-function queuedSubAgentTool(overrides = {}) {
+// A `run` row restored from History: the Tool result names the Sub-Agent and
+// its Session, but not the Run the live start event announced.
+function reloadedSubAgentTool(overrides = {}) {
   return {
     name: 'subagent',
     status: 'success',
@@ -40,23 +42,39 @@ function queuedSubAgentTool(overrides = {}) {
       agent_id: 'worker',
       content: 'Inspect the project',
     },
-    subAgentSession: {
-      id: 'sub_queued',
-      agent_id: 'worker',
-      session_id: 'session-child',
-      queue_item_id: 'queue-item-1',
-      status: 'queued',
-      delivery: 'automatic',
+    result: {
+      ok: true,
+      error: null,
+      data: {
+        id: 'sub_reloaded',
+        agent_id: 'worker',
+        session_id: 'session-child',
+        status: 'running',
+      },
+      artifacts: [],
+    },
+    ...overrides,
+  };
+}
+
+// A `send` row: another message to the existing Sub-Agent `sub_child`.
+function sendSubAgentTool(overrides = {}) {
+  return {
+    name: 'subagent',
+    status: 'success',
+    arguments: {
+      action: 'send',
+      id: 'sub_child',
+      content: 'Also check the tests',
     },
     result: {
       ok: true,
       error: null,
       data: {
-        id: 'sub_queued',
+        id: 'sub_child',
         agent_id: 'worker',
         session_id: 'session-child',
-        status: 'queued',
-        delivery: 'automatic',
+        status: 'steered',
       },
       artifacts: [],
     },
@@ -87,4 +105,9 @@ function backgroundCommandTool(overrides = {}) {
   };
 }
 
-export { runningSubAgentTool, queuedSubAgentTool, backgroundCommandTool };
+export {
+  backgroundCommandTool,
+  reloadedSubAgentTool,
+  runningSubAgentTool,
+  sendSubAgentTool,
+};

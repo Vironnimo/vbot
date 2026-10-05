@@ -1,4 +1,4 @@
-"""Tests for live Sub-Agent activity-file projection."""
+"""Tests for the live activity file of one Sub-Agent Session."""
 
 from __future__ import annotations
 
@@ -80,7 +80,7 @@ async def test_activity_streams_assistant_and_safe_tool_summary_without_duplicat
 ) -> None:
     activity = await _create(tmp_path)
     run = _child_run()
-    activity.attach(run)
+    activity.follow(run)
     # The follower subscribes on its first step, while the child Run still works.
     await asyncio.sleep(0)
 
@@ -132,7 +132,7 @@ async def test_activity_copies_non_streaming_assistant_output_and_failed_tool_st
 ) -> None:
     activity = await _create(tmp_path)
     run = _child_run()
-    activity.attach(run)
+    activity.follow(run)
     await asyncio.sleep(0)
     run.emit(
         ASSISTANT_OUTPUT_EVENT,
@@ -160,7 +160,7 @@ async def test_activity_copies_non_streaming_assistant_output_and_failed_tool_st
 async def test_activity_records_interrupted_terminal_status(tmp_path: Path) -> None:
     activity = await _create(tmp_path)
     run = _child_run()
-    activity.attach(run)
+    activity.follow(run)
 
     run.mark_interrupted(RunInterruptedError("network"))
 
@@ -178,7 +178,7 @@ async def test_activity_writes_in_order_without_waiting_for_the_writer(
     run = _child_run()
 
     with _busy_writer():
-        activity.attach(run)
+        activity.follow(run)
         await _turns()
         # Each step is handed to the writer as its own chunk.
         for word in ("alpha", "beta", "gamma"):
@@ -226,7 +226,7 @@ async def test_writer_backlog_drops_assistant_text_but_keeps_headings_tools_and_
     run = _child_run()
 
     with _busy_writer():
-        activity.attach(run)
+        activity.follow(run)
         await _turns()
         # A section's first chunk carries its heading and is written in full.
         run.emit(ASSISTANT_OUTPUT_DELTA_EVENT, {"content_delta": "Streaming"})
@@ -262,7 +262,7 @@ async def test_activity_records_the_outcome_after_the_run_evicted_its_watcher(
     caplog.set_level(logging.WARNING, logger="vbot.subagents.activity")
     activity = await _create(tmp_path)
     run = _child_run(subscriber_queue_limit=1)
-    activity.attach(run)
+    activity.follow(run)
     await asyncio.sleep(0)
 
     # Two events before the watcher's next step overflow its queue: the Run
@@ -297,7 +297,7 @@ async def test_activity_write_failure_does_not_change_run_result(
 
     monkeypatch.setattr(Path, "open", fail_activity_append)
     run = _child_run()
-    activity.attach(run)
+    activity.follow(run)
     expected = ChatMessage.assistant(model="test", content="canonical result")
     run.mark_completed(expected)
 
@@ -306,18 +306,30 @@ async def test_activity_write_failure_does_not_change_run_result(
 
 
 @pytest.mark.asyncio
-async def test_attaching_twice_records_the_run_once(tmp_path: Path) -> None:
-    activity = await _create(tmp_path)
-    run = _child_run()
-    activity.attach(run)
-
-    activity.attach(run)
-    run.emit(
-        ASSISTANT_OUTPUT_EVENT,
-        {"message": ChatMessage.assistant(model="test", content="Only once").to_dict()},
+async def test_one_file_records_each_followed_run_in_start_order(tmp_path: Path) -> None:
+    temporary_files = TemporaryFileManager(tmp_path)
+    activity = await SubAgentActivity.create(
+        temporary_files, agent_id="worker", session_id="child-session"
     )
-    run.mark_completed(ChatMessage.assistant(model="test", content="Only once"))
+    assert activity is not None
+    first = Run(run_id="first-run", agent_id="worker", session_id="child-session")
+    second = Run(run_id="second-run", agent_id="worker", session_id="child-session")
+    activity.follow(first)
+    activity.follow(second)
+    second.mark_completed(ChatMessage.assistant(model="test", content="second answer"))
+    first.mark_completed(ChatMessage.assistant(model="test", content="first answer"))
+    await activity.drain()
 
-    text = await _written(activity)
-    assert text.count("Only once") == 1
-    assert text.count("completed (`child-run`)") == 1
+    text = activity.path.read_text(encoding="utf-8")
+    assert text.index("completed (`first-run`)") < text.index("running (`second-run`)")
+    assert text.rstrip().endswith("completed (`second-run`)")
+    # Between Runs the file is no longer protected, so retention can collect it;
+    # the next Run protects it again.
+    assert activity.path not in temporary_files._active  # noqa: SLF001
+    third = Run(run_id="third-run", agent_id="worker", session_id="child-session")
+    activity.follow(third)
+    await _turns()
+    await activity_module._WRITER.drain()  # noqa: SLF001
+    assert activity.path in {path.resolve() for path in temporary_files._active}  # noqa: SLF001
+    third.mark_completed(ChatMessage.assistant(model="test", content="third"))
+    await activity.drain()

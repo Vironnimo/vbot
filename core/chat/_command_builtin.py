@@ -33,7 +33,7 @@ from core.projects import (
 )
 from core.prompts.briefs import learn_brief
 from core.runs import ActiveRunError, ChatRunManager, RunAdmissionBlockedError
-from core.sessions import SessionAddress
+from core.sessions import SUBAGENT_PARENT_META_KEY, SUBAGENT_SESSION_META_KEY, SessionAddress
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
 
 if TYPE_CHECKING:
@@ -47,10 +47,6 @@ if TYPE_CHECKING:
 HANDOFF_FRAGMENT_NAME = "handoff.md"
 
 CHANNEL_SOURCE_META_KEY = "source_channel_id"
-
-SUBAGENT_SESSION_METADATA_FLAG = "is_subagent_session"
-
-SUBAGENT_PARENT_METADATA_KEY = "subagent_parent"
 
 AGENT_TAKEOVER_NOTE = "This session was just moved to you from {source}."
 
@@ -553,7 +549,7 @@ def _reference_phrase(reference: AutomationReference) -> str:
 def _session_move_block_reason(metadata: Mapping[str, object]) -> str | None:
     if metadata.get(CHANNEL_SOURCE_META_KEY):
         return "A channel-bound session cannot be moved to another agent."
-    if metadata.get(SUBAGENT_SESSION_METADATA_FLAG) or metadata.get(SUBAGENT_PARENT_METADATA_KEY):
+    if metadata.get(SUBAGENT_SESSION_META_KEY) or metadata.get(SUBAGENT_PARENT_META_KEY):
         return "A sub-agent session cannot be moved to another agent."
     return None
 

@@ -105,25 +105,6 @@ class ChatLoop:
             session_title_service,
         )
 
-    def child_loop(self, *, nesting_depth: int) -> ChatLoop:
-        """Create a sub-agent child loop sharing this loop's wiring.
-
-        The child reuses the attachment resolver and compaction service so
-        child runs behave like normal live runs; only the nesting depth
-        differs.
-        """
-        child = ChatLoop(
-            self._dependencies,
-            max_tool_iterations=self._max_tool_iterations,
-            streaming=self._streaming,
-            attachment_resolver=self._attachment_resolver,
-            compaction_service=self._compaction_service,
-            reflection_service=self._reflection_service,
-            session_title_service=self._session_title_service,
-        )
-        child._requests.nesting_depth = nesting_depth
-        return child
-
     @property
     def compaction_service(self) -> CompactionService | None:
         """The loop's Compaction service; ``None`` disables Compaction."""
@@ -135,6 +116,7 @@ class ChatLoop:
         *,
         reply_surface: ReplySurface | None = None,
         temporary_parent_binding: TemporarySessionBinding | None = None,
+        parent_agent_input: bool = False,
     ) -> RunExecutor:
         """Return a run-manager executor that runs *content* through this loop.
 
@@ -143,14 +125,17 @@ class ChatLoop:
         closure: an identity run keeps ``run.project_id is None`` and today's
         behavior; a project run executes project-scoped (session under the
         project anchor, tool cwd = repo). The public way for other domains
-        (sub-agents) to hand the run manager an executor.
+        (sub-agents) to hand the run manager an executor. ``parent_agent_input``
+        marks *content* as written by the Parent Agent of a Sub-Agent Session.
+        The executor can steer a running Run when the request allows it.
         """
         request = _RunRequest(
             content=content,
             reply_surface=reply_surface,
             temporary_parent_binding=temporary_parent_binding,
+            parent_agent_input=parent_agent_input,
         )
-        return lambda run: self._execution._execute_run(run, request)
+        return _QueuedRunExecutor(self, request)
 
     async def send(
         self,

@@ -6,13 +6,21 @@ import asyncio
 import json
 import logging
 import sqlite3
+from datetime import datetime, timedelta
 
 import pytest
 
 from core.chat import ChatMessage
 from core.chat.errors import ChatSessionError
 from core.runs import RunKind
-from core.sessions import SESSION_RUN_KINDS_META_KEY, SeenSkillsUpdate, SessionAddress
+from core.sessions import (
+    SESSION_RUN_KINDS_META_KEY,
+    SUBAGENT_PARENT_META_KEY,
+    SUBAGENT_SESSION_META_KEY,
+    SUBAGENT_TAKEN_OVER_AT_META_KEY,
+    SeenSkillsUpdate,
+    SessionAddress,
+)
 from core.sessions.errors import SessionNotFoundError
 from tests.core.sessions.history_fixtures import admit_run, history_revision, settle_run
 from tests.core.sessions.sessions_test_support import _address
@@ -254,6 +262,27 @@ def test_callback_failure_does_not_turn_a_committed_title_into_an_error(
     assert record.name.startswith("vbot.")
     assert record.exc_info is not None
     assert "session-one" in record.getMessage()
+
+
+def test_subagent_takeover_is_recorded_once_and_only_for_a_linked_session(manager) -> None:
+    linked = manager.create("child", session_id="linked").address
+    plain = manager.create("child", session_id="plain").address
+    manager.set_metadata(
+        linked,
+        {
+            SUBAGENT_SESSION_META_KEY: True,
+            SUBAGENT_PARENT_META_KEY: {"id": "sa_1", "agent_id": "parent", "session_id": "root"},
+        },
+    )
+
+    assert manager.mark_subagent_taken_over(linked) is True
+    stamp = manager.get_metadata(linked)[SUBAGENT_TAKEN_OVER_AT_META_KEY]
+    assert datetime.fromisoformat(stamp).utcoffset() == timedelta(0)
+    assert manager.mark_subagent_taken_over(linked) is False
+    assert manager.get_metadata(linked)[SUBAGENT_TAKEN_OVER_AT_META_KEY] == stamp
+
+    assert manager.mark_subagent_taken_over(plain) is False
+    assert SUBAGENT_TAKEN_OVER_AT_META_KEY not in manager.get_metadata(plain)
 
 
 def test_identity_reference_changes_roll_back_together(manager, monkeypatch) -> None:

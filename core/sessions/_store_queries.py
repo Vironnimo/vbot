@@ -60,6 +60,29 @@ def existing_addresses(
     return found
 
 
+def subagent_children(
+    connection: sqlite3.Connection, parent: SessionAddress
+) -> list[SessionAddress]:
+    """Return the live Sub-Agent Sessions whose Parent link names *parent*, oldest first."""
+    rows = connection.execute(
+        "SELECT project_id, agent_id, session_id FROM sessions WHERE state = 'live' "
+        "AND subagent_parent_agent_id = ? AND subagent_parent_session_id = ? "
+        "AND subagent_parent_project_id IS ? ORDER BY created_at, session_key",
+        (parent.agent_id, parent.session_id, parent.project_id),
+    ).fetchall()
+    return [_store_values._address(row) for row in rows]
+
+
+def subagent_session(connection: sqlite3.Connection, subagent_id: str) -> SessionAddress | None:
+    """Return the live Sub-Agent Session whose Parent link carries *subagent_id*."""
+    row = connection.execute(
+        "SELECT project_id, agent_id, session_id FROM sessions WHERE state = 'live' "
+        "AND subagent_parent_id = ? ORDER BY session_key DESC LIMIT 1",
+        (subagent_id,),
+    ).fetchone()
+    return _store_values._address(row) if row is not None else None
+
+
 def _by_scope(addresses: Sequence[SessionAddress]) -> dict[tuple[str, str], list[str]]:
     by_scope: dict[tuple[str, str], list[str]] = {}
     for address in addresses:

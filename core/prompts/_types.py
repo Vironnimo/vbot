@@ -31,6 +31,10 @@ CORE_SYSTEM_REMINDERS_BLOCK_ID = "core:system_reminders"
 # Ships disabled: native Provider definitions already carry Tool descriptions.
 CORE_TOOLS_LIST_BLOCK_ID = "core:tools_list"
 
+# Tells a Sub-Agent who delegated its work and where its answers go. Shown only
+# in Sessions linked to a Parent Agent.
+CORE_SUBAGENT_ROLE_BLOCK_ID = "core:subagent_role"
+
 CORE_CHANNELS_BLOCK_ID = "core:channels"
 
 CORE_SKILLS_BLOCK_ID = "core:skills"
@@ -48,6 +52,8 @@ BLOCK_OWNER_ALWAYS = "always"
 BLOCK_OWNER_CHANNEL = "channel"
 
 BLOCK_OWNER_IDENTITY = "identity"
+
+BLOCK_OWNER_SUBAGENT_SESSION = "subagent_session"
 
 BLOCK_OWNER_SKILL_MANAGE = f"tool:{SKILL_MANAGE_TOOL_NAME}"
 

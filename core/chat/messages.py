@@ -81,6 +81,22 @@ LIVE_VOICE_SYSTEM_REMINDER = (
     "rewording of what the user said. Infer the user's likely intent when appropriate, but do "
     "not mention this unless it matters."
 )
+# Precede input the Parent Agent sends into its Sub-Agent's Session.
+PARENT_AGENT_INPUT_SYSTEM_REMINDER = (
+    "The following message is from your Parent Agent, the Agent that delegated work to you. "
+    "It is not from the user."
+)
+PARENT_AGENT_STEERING_SYSTEM_REMINDER = (
+    "The following message from your Parent Agent, the Agent that delegated work to you, "
+    "arrived while you were working. It is not from the user. Apply its corrections and "
+    "additional instructions to your current task. If it asks a question or requests a "
+    "status update, answer it with `message_parent` and then resume any unfinished work."
+)
+# Precede the first message the user writes in a Sub-Agent Session.
+SUBAGENT_TAKEN_OVER_SYSTEM_REMINDER = (
+    "The user wrote the following message in this Session. From now on vBot no longer sends "
+    "your answers to your Parent Agent: you work for the user, and your answers go to the user."
+)
 ERROR_KIND_RATE_LIMIT = "rate_limit"
 ERROR_KIND_TIMEOUT = "timeout"
 ERROR_KIND_NETWORK = "network_error"

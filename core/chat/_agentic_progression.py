@@ -185,7 +185,7 @@ class AgenticProgression:
             async with self._dependencies.sessions.write_lock(session_address):
 
                 async def persist_input(item: QueuedRunItem) -> None:
-                    await persist_steering_input(context, item)
+                    await persist_steering_input(context, item, self._dependencies)
 
                 delivered = await _finish_visible_boundary(
                     self._dependencies.run_manager.deliver_steering(run, persist_input),
@@ -712,7 +712,6 @@ class AgenticProgression:
                         agent=agent,
                         session=session,
                         run=run,
-                        nesting_depth=self._requests.nesting_depth,
                         vbot_root=Path(self._dependencies.get_system_prompts().vbot_root),
                         data_root=Path(self._dependencies.storage.data_dir),
                         project_cwd=context.project_cwd,

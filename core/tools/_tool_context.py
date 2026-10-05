@@ -155,7 +155,6 @@ class ToolContext:
     # Grants for Session-scoped tools whose authority is derived while building
     # the Session request state, such as an Extension's Session-private Tools.
     session_tool_grants: Sequence[str] = field(default_factory=tuple)
-    nesting_depth: int = 0
     # Exact model-facing contract used for this Provider cycle. Direct callers and
     # legacy execution paths leave it unset and use the Tool's canonical contract.
     input_contract: ToolContract | None = field(
@@ -539,7 +538,6 @@ class ToolExecutionConfig:
     skill_env_keys: Sequence[str] = field(default_factory=tuple)
     tool_settings: Mapping[str, Any] | None = None
     session_tool_grants: Sequence[str] = field(default_factory=tuple)
-    nesting_depth: int = 0
     # Model-facing contracts of the Tools in this cycle's Model request, by registry
     # name; empty when the group runs without a Model request.
     input_contracts: Mapping[str, ToolContract] = field(default_factory=dict)

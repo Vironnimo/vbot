@@ -51,8 +51,8 @@ export function mergeBoundedEntries(entries, updates, maxEntries) {
 
 // A connection snapshot is authoritative only for active sub-agent statuses.
 // Remove locally projected running/queued run and session entries before
-// merging its active set, while preserving terminal results, durations, tool
-// names, and Queue-to-Run mappings used by historical rows.
+// merging its active set, while preserving terminal statuses, durations, tool
+// names, and the Sub-Agent-to-Run mappings used by historical rows.
 export function replaceActiveSubAgentStatuses(entries, updates, maxEntries) {
   const retainedEntries = {};
   const removedKeys = [];
@@ -84,8 +84,6 @@ export function subAgentGuardKeysForEvictedStatuses(evictedKeys) {
     }
     if (key.startsWith('run:')) {
       guardKeys.push(key.slice('run:'.length));
-    } else if (key.startsWith('queue:')) {
-      guardKeys.push(key.slice('queue:'.length));
     } else if (key.startsWith('session:')) {
       guardKeys.push(key.slice('session:'.length));
     }

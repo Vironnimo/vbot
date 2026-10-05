@@ -173,9 +173,7 @@ async def test_an_agent_with_an_active_run_cannot_be_renamed_or_deleted(
 def _open_subagent_relation(busy_agent_id: str) -> Callable[[Any], None]:
     def arrange(state: Any) -> None:
         state.runtime.subagents = SimpleNamespace(
-            batch_tracker=SimpleNamespace(
-                references_identity_agent=lambda agent_id: agent_id == busy_agent_id
-            )
+            references_identity_agent=lambda agent_id: agent_id == busy_agent_id
         )
 
     return arrange

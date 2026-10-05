@@ -63,8 +63,7 @@ DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES = 104_857_600
 
 SUBAGENT_SETTING_DEFAULTS = {
     "max_subagent_depth": 4,
-    "max_subagents_per_turn": 8,
-    "subagent_timeout_minutes": 60,
+    "max_active_subagents": 8,
 }
 
 
@@ -202,8 +201,11 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         )
         for field, description in (
             ("max_subagent_depth", "Maximum nested Sub-Agent depth."),
-            ("max_subagents_per_turn", "Maximum Sub-Agents started in one turn."),
-            ("subagent_timeout_minutes", "Sub-Agent execution timeout in minutes."),
+            (
+                "max_active_subagents",
+                "Maximum Sub-Agents working at the same time in one Agent tree "
+                "(a top-level Session plus all Sub-Agents below it).",
+            ),
         )
     ),
     _static(

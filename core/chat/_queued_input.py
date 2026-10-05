@@ -7,18 +7,28 @@ from typing import TYPE_CHECKING
 
 from core.chat._message_history import _append_input_origin_note
 from core.chat._request_history import _assign_session_image_references
-from core.chat._run_state import RequestBuildInputs, _RunRequest
+from core.chat._run_state import (
+    RequestBuildInputs,
+    _RunRequest,
+    record_subagent_takeover,
+    takes_over_subagent_session,
+)
 from core.chat._skill_activation import _activate_triggered_skills
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.content_blocks import ContentBlock
 from core.chat.errors import ChatError
 from core.chat.events import _visible_message_payload
-from core.chat.messages import ChatMessage, InputOrigin
+from core.chat.messages import (
+    PARENT_AGENT_STEERING_SYSTEM_REMINDER,
+    SUBAGENT_TAKEN_OVER_SYSTEM_REMINDER,
+    ChatMessage,
+    InputOrigin,
+)
 from core.runs import USER_MESSAGE_EVENT, QueuedRunItem, Run
 
 if TYPE_CHECKING:
     from core.chat._request_builder import RequestBuilder
-    from core.chat._run_state import _ModelTarget, _RunExecutionContext
+    from core.chat._run_state import ChatLoopDependencies, _ModelTarget, _RunExecutionContext
     from core.chat.chat import ChatLoop
 
 
@@ -56,7 +66,9 @@ class QueuedChatInput:
         )
 
 
-async def persist_steering_input(context: _RunExecutionContext, item: QueuedRunItem) -> None:
+async def persist_steering_input(
+    context: _RunExecutionContext, item: QueuedRunItem, dependencies: ChatLoopDependencies
+) -> None:
     """Append one user input before the Queue relinquishes it."""
     executor = item.executor
     if not isinstance(executor, QueuedChatInput):
@@ -66,14 +78,23 @@ async def persist_steering_input(context: _RunExecutionContext, item: QueuedRunI
         raise ChatError("steering requires user content")
     session = context.session
     await context.session_snapshot.refresh(session)
+    takeover = await takes_over_subagent_session(context, request, dependencies.sessions)
     session.begin_defer_notes()
     _append_input_origin_note(session, request.input_origin)
-    session.add_note(STEERING_SYSTEM_REMINDER)
+    if takeover:
+        session.add_note(SUBAGENT_TAKEN_OVER_SYSTEM_REMINDER)
+    session.add_note(
+        PARENT_AGENT_STEERING_SYSTEM_REMINDER
+        if request.parent_agent_input
+        else STEERING_SYSTEM_REMINDER
+    )
     message = ChatMessage.user(
         _assign_session_image_references(request.content, context.session_snapshot.active_messages),
         input_origin=request.input_origin,
     )
     await session.append_many_async([*session.take_deferred_notes(), message])
+    if takeover:
+        await record_subagent_takeover(dependencies, session.address)
     context.run.emit(
         USER_MESSAGE_EVENT,
         {

@@ -129,17 +129,12 @@ _DELIVERY = (
     "For terminals attached to this Session, a program's exit arrives as a new message, and so "
     "does an interactive program's screen when its output settles after activity."
 )
-_SUBAGENT_DELIVERY = (
-    "For terminals attached to this Session, an interactive program's exit arrives as a new "
-    "message while you work, and so does its screen when its output settles after activity."
-)
 
 
 @pytest.mark.parametrize(
-    ("depth", "shell_offered", "expected"),
+    ("shell_offered", "expected"),
     [
         (
-            0,
             True,
             "Start and operate programs in a live terminal: interactive programs you drive by "
             "typing, such as REPLs, TUIs and coding-agent CLIs, and commands that {shell} left "
@@ -148,38 +143,15 @@ _SUBAGENT_DELIVERY = (
             f"{_DELIVERY} Screen text is rendered terminal text, not exact file content.",
         ),
         (
-            0,
             False,
             "Start and operate programs in a live terminal: interactive programs you drive by "
             "typing, such as REPLs, TUIs and coding-agent CLIs. A program keeps running after "
             f"your turn ends, until it exits or is stopped. {_DELIVERY} Screen text is rendered "
             "terminal text, not exact file content.",
         ),
-        (
-            1,
-            True,
-            "Start and operate programs in a live terminal: interactive programs you drive by "
-            "typing, such as REPLs, TUIs and coding-agent CLIs, and commands that {shell} left "
-            "running. Run commands that finish on their own with {shell}. A program keeps "
-            f"running after your turn ends, until it exits or is stopped. {_SUBAGENT_DELIVERY} "
-            "A command's result does not arrive on its own. Before your final answer, use wait "
-            "for every program whose result you need. Screen text is rendered terminal text, "
-            "not exact file content.",
-        ),
-        (
-            1,
-            False,
-            "Start and operate programs in a live terminal: interactive programs you drive by "
-            "typing, such as REPLs, TUIs and coding-agent CLIs. A program keeps running after "
-            f"your turn ends, until it exits or is stopped. {_SUBAGENT_DELIVERY} Before your "
-            "final answer, use wait for every program whose result you need. Screen text is "
-            "rendered terminal text, not exact file content.",
-        ),
     ],
 )
-def test_definition_fits_the_session_depth_and_offered_tools(
-    depth: int, shell_offered: bool, expected: str
-) -> None:
+def test_definition_fits_the_offered_tools(shell_offered: bool, expected: str) -> None:
     definitions: list[JsonObject] = [
         {
             "name": TERMINAL_TOOL_NAME,
@@ -189,7 +161,7 @@ def test_definition_fits_the_session_depth_and_offered_tools(
         *([{"name": BASH_TOOL_NAME, "description": "shell"}] if shell_offered else []),
     ]
 
-    projected = project_terminal_tool_definitions(definitions, nesting_depth=depth)
+    projected = project_terminal_tool_definitions(definitions)
 
     terminal = projected[0]
     assert terminal["description"] == expected.format(shell=SHELL)
@@ -206,9 +178,7 @@ def test_definition_fits_the_session_depth_and_offered_tools(
         f"or a {SHELL} result. Required except for start and list."
     )
     without_terminal = definitions[1:]
-    assert project_terminal_tool_definitions(without_terminal, nesting_depth=depth) == (
-        without_terminal
-    )
+    assert project_terminal_tool_definitions(without_terminal) == without_terminal
 
 
 @pytest.mark.asyncio

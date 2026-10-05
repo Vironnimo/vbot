@@ -514,7 +514,11 @@ class TerminalManager:
         return await self._get(terminal_id).command_screen(lines)
 
     async def cancel_run(self, run_id: str) -> None:
-        """Kill the commands a cancelled Run started and reject new ones for it."""
+        """Kill the foreground commands a cancelled Run started and reject new ones for it.
+
+        Commands handed off to the background keep running and deliver their
+        result as usual; stopping them is part of the user's "Stop all".
+        """
         if not run_id:
             return
         self._cancelled_runs.add(run_id)
@@ -527,6 +531,7 @@ class TerminalManager:
             session
             for session in self._sessions.values()
             if session.command is not None
+            and session.hidden
             and session.origin_run_id == run_id
             and not session.finished
         ]

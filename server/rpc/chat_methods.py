@@ -841,6 +841,19 @@ async def _cancel_chat(state: Any, params: JsonObject) -> JsonObject:
     return _run_response(run, file_delivery=state.file_delivery)
 
 
+async def _stop_all_chat(state: Any, params: JsonObject) -> JsonObject:
+    """Stop a Session's Run, its background commands and terminals, and its Sub-Agents."""
+    _reject_unsupported(params, {"agent_id", "session_id"}, "chat.stop_all")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
+    try:
+        stopped = await state.runtime.subagents.stop_tree(address)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"ok": True, "stopped": stopped}
+
+
 async def _cancel_tool_call_chat(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"agent_id", "run_id", "tool_call_id"}, "chat.cancel_tool_call")
 
@@ -1054,6 +1067,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "chat.stream": _stream_chat,
         "chat.edit": _edit_chat,
         "chat.cancel": _cancel_chat,
+        "chat.stop_all": _stop_all_chat,
         "chat.cancel_tool_call": _cancel_tool_call_chat,
         "chat.control_run": _control_run_chat,
         "chat.queue_steer": _chat_queue_steer,

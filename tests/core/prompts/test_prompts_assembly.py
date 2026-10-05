@@ -260,6 +260,22 @@ def test_channels_block_renders_only_with_an_enabled_channel_of_this_agent(
     assert "enabled-fixture-channel" in prompt(StubChannels([_channel("enabled-fixture-channel")]))
 
 
+def test_subagent_role_block_renders_only_in_a_subagent_session(
+    workspace: Path, tmp_path: Path
+) -> None:
+    manager = _manager(tmp_path)
+    agent = _agent(workspace, allowed_tools=["read"])
+    details: list[dict[str, object]] = []
+
+    subagent = manager.build_system_prompt(agent, subagent_session=True, block_details=details)
+
+    role = next(block for block in details if block["id"] == "core:subagent_role")
+    assert role["included"] is True
+    assert str(role["text"]).strip() in subagent
+    assert "Parent Agent" in subagent
+    assert "Parent Agent" not in manager.build_system_prompt(agent)
+
+
 def test_soul_block_frames_the_workspace_soul_file(workspace: Path, tmp_path: Path) -> None:
     # SOUL is identity, not reference material: the framing line sits immediately above
     # the file tag so the model reads it as its core contract.

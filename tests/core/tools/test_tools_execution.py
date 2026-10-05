@@ -65,7 +65,6 @@ async def test_handler_context_carries_the_run_configuration(tmp_path: Path) -> 
         context.add_note("reminder")
         context.on_cancel(lambda: None)
         seen.update(
-            nesting_depth=context.nesting_depth,
             effective_cwd=context.effective_cwd,
             resolved=context.resolve_path("src/main.py"),
             run_cancelled=context.is_cancelled(),
@@ -80,7 +79,6 @@ async def test_handler_context_carries_the_run_configuration(tmp_path: Path) -> 
         "probe",
         workspace=tmp_path / "workspace",
         cwd=tmp_path / "repo",
-        nesting_depth=3,
         emit_hook=emit,
         note_hook=notes.append,
         cancellation_hook=lambda: True,
@@ -92,7 +90,6 @@ async def test_handler_context_carries_the_run_configuration(tmp_path: Path) -> 
 
     assert result == tool_success({})
     assert seen == {
-        "nesting_depth": 3,
         "effective_cwd": tmp_path / "repo",
         "resolved": (tmp_path / "repo" / "src" / "main.py").resolve(),
         "run_cancelled": True,
@@ -113,7 +110,6 @@ async def test_handler_context_without_run_hooks_uses_the_workspace_and_ignores_
         context.add_note("reminder")
         context.on_cancel(lambda: None)
         seen.update(
-            nesting_depth=context.nesting_depth,
             effective_cwd=context.effective_cwd,
             run_cancelled=context.is_cancelled(),
             call_cancelled=context.was_cancelled_by_user(),
@@ -124,7 +120,6 @@ async def test_handler_context_without_run_hooks_uses_the_workspace_and_ignores_
 
     assert await _run_one(registry, "probe") == tool_success({})
     assert seen == {
-        "nesting_depth": 0,
         "effective_cwd": Path("workspace"),
         "run_cancelled": False,
         "call_cancelled": False,

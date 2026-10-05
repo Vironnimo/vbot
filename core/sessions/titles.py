@@ -27,6 +27,7 @@ from core.providers.errors import ProviderError
 from core.sessions._types import (
     SESSION_AUTO_TITLE_INITIALIZED_KEY,
     SESSION_TITLE_KEY,
+    SUBAGENT_SESSION_META_KEY,
     OwnedSessionSummary,
     SessionAddress,
 )
@@ -53,7 +54,6 @@ TITLE_INPUT_HEAD_BYTES = 3 * 1024
 TITLE_INPUT_TAIL_BYTES = 2 * 1024
 TITLE_ATTACHMENT_METADATA_MAX_BYTES = 1024
 TITLE_OMISSION_MARKER = "\n\n[large middle section omitted]\n\n"
-_SUBAGENT_SESSION_METADATA_FLAG = "is_subagent_session"
 _HIDDEN_REASONING_BLOCK_PATTERN = re.compile(
     r"<(think|thinking|analysis|reasoning)>[\s\S]*?(?:</\1>|$)\s*",
     re.IGNORECASE,
@@ -203,7 +203,7 @@ class SessionTitleService:
         metadata = sessions.get_metadata(address)
         if metadata.get(SESSION_AUTO_TITLE_INITIALIZED_KEY) is True:
             return None
-        if metadata.get(_SUBAGENT_SESSION_METADATA_FLAG) is True:
+        if metadata.get(SUBAGENT_SESSION_META_KEY) is True:
             return None
         has_manual_title = isinstance(metadata.get(SESSION_TITLE_KEY), str) and bool(
             metadata[SESSION_TITLE_KEY].strip()

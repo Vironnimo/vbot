@@ -85,21 +85,20 @@ describe('mergeBoundedEntries', () => {
 });
 
 describe('subAgentGuardKeysForEvictedStatuses', () => {
-  it('maps run-, queue-, and session-scoped statuses to verification keys', () => {
+  it('maps run- and session-scoped statuses to verification keys', () => {
     const guardKeys = subAgentGuardKeysForEvictedStatuses([
       'run:run-1',
-      'queue:item-1',
       'session:agent-a::session-b',
     ]);
 
-    expect(guardKeys).toEqual(['run-1', 'item-1', 'agent-a::session-b']);
+    expect(guardKeys).toEqual(['run-1', 'agent-a::session-b']);
   });
 
-  it('ignores duration, queue-mapping, and non-string keys', () => {
+  it('ignores duration, run-mapping, and non-string keys', () => {
     const guardKeys = subAgentGuardKeysForEvictedStatuses([
       'runDuration:run-1',
       'sessionDuration:agent-a::session-b',
-      'queueRun:item-1',
+      'workRun:sub_1',
       42,
     ]);
 
@@ -115,7 +114,7 @@ describe('replaceActiveSubAgentStatuses', () => {
         'session:child::old': 'queued',
         'run:done': 'completed',
         'runDuration:done': 500,
-        'queueRun:item': 'done',
+        'workRun:sub_1': 'run-done',
       },
       {
         'run:current': 'running',
@@ -127,7 +126,7 @@ describe('replaceActiveSubAgentStatuses', () => {
     expect(entries).toEqual({
       'run:done': 'completed',
       'runDuration:done': 500,
-      'queueRun:item': 'done',
+      'workRun:sub_1': 'run-done',
       'run:current': 'running',
       'session:child::current': 'running',
     });

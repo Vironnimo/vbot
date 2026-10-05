@@ -102,11 +102,11 @@ _SESSION_OWNER_HINT = (
     " If that Session belongs to another Agent, such as a Sub-Agent, also pass that "
     "Agent's agent_id."
 )
-# Sub-Agent work ids come from ``subagent`` results; this Tool reports Sessions.
+# Sub-Agent ids come from ``subagent`` results; this Tool reports Sessions.
 _WORK_ID_MESSAGE_TEMPLATE = (
-    "status was not run: {work_id} is a Sub-Agent work id. For that work's progress, call "
-    'subagent with {{"action": "status", "id": "{work_id}"}}. status reports a chat Session '
-    "and takes session_id, with agent_id for another Agent's Session."
+    "status was not run: {work_id} is a Sub-Agent id. To see that Sub-Agent, call subagent "
+    'with {{"action": "list", "id": "{work_id}"}}. status reports a chat Session and takes '
+    "session_id, with agent_id for another Agent's Session."
 )
 _ID_MESSAGE_TEMPLATE = (
     'status was not run: it has no "id" parameter, so {value} is ambiguous. Pass a Session '

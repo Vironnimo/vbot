@@ -320,6 +320,27 @@ export function cancelRun(runId, options = {}, rpcOptions = {}) {
   return rpc('chat.cancel', params, rpcOptions);
 }
 
+// Stops a Session's Run, its background commands and terminals, and every
+// Sub-Agent below it. Resolves to `{ ok, stopped }`.
+export function stopAll(agentId, sessionId, options = {}) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'chat.stop_all',
+  );
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'chat.stop_all',
+  );
+
+  return rpc(
+    'chat.stop_all',
+    { agent_id: agentId, session_id: sessionId },
+    options,
+  );
+}
+
 export function controlRun(
   { agentId, sessionId, runId, action, toolCallId } = {},
   options = {},

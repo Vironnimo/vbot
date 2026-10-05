@@ -110,6 +110,11 @@ SESSION_AUTO_TITLE_INITIALIZED_KEY = "auto_title_initialized"
 SESSION_TITLE_MAX_LENGTH = 200
 SESSION_TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted"})
 FORK_SOURCE_META_KEY = "fork_source"
+# The Sub-Agent Session marker and its Parent link (``subagent_parent``).
+SUBAGENT_SESSION_META_KEY = "is_subagent_session"
+SUBAGENT_PARENT_META_KEY = "subagent_parent"
+# Open key the Sub-Agent coordinator sets when the user writes in a linked Session.
+SUBAGENT_TAKEN_OVER_AT_META_KEY = "subagent_taken_over_at"
 SESSION_RUN_KINDS_META_KEY = "run_kinds"
 SESSION_FORK_ALWAYS_STRIP_META_KEYS = frozenset(
     {
@@ -117,8 +122,9 @@ SESSION_FORK_ALWAYS_STRIP_META_KEYS = frozenset(
         "platform",
         "platform_conv_id",
         "last_reply_target",
-        "is_subagent_session",
-        "subagent_parent",
+        SUBAGENT_SESSION_META_KEY,
+        SUBAGENT_PARENT_META_KEY,
+        SUBAGENT_TAKEN_OVER_AT_META_KEY,
         "reflection_counters",
         SESSION_RUN_KINDS_META_KEY,
     }

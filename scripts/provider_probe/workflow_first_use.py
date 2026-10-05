@@ -37,11 +37,7 @@ async def first_use_trial(
         "first_attempt_success": False,
     }
     with TemporaryDirectory(prefix="vbot-first-use-") as directory:
-        fixture = FirstUseFixture(
-            Path(directory),
-            nested=case.get("nested", False),
-            outside_cwd=case.get("outside_cwd", False),
-        )
+        fixture = FirstUseFixture(Path(directory), outside_cwd=case.get("outside_cwd", False))
         try:
             fixture.write({**BASE_FILES, **case.get("files", {})})
             (fixture.repo / "src/empty").mkdir()

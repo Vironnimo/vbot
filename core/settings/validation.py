@@ -108,8 +108,8 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "keep_awake",
         "librarian",
         "local_models",
+        "max_active_subagents",
         "max_subagent_depth",
-        "max_subagents_per_turn",
         "model_tasks",
         "notifications",
         "port",
@@ -121,7 +121,6 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "skill_directories",
         "speech",
         "speech_upload_max_size_bytes",
-        "subagent_timeout_minutes",
         "timezone",
         "web_search",
         "web_fetch",
@@ -130,8 +129,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
 PORT_SETTING_KEYS = frozenset({"PORT", "SERVER_PORT", "port", "server_port"})
 SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",
-    "max_subagents_per_turn",
-    "subagent_timeout_minutes",
+    "max_active_subagents",
 )
 APPEARANCE_FIELDS = frozenset({"language", "chat_width", "chat_working_mode"})
 ARCHIVE_FIELDS = frozenset({"retention_days"})

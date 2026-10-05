@@ -257,11 +257,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             "chat_working_mode": "normal",
         },
         "defaults": {},
-        "subagents": {
-            "max_subagent_depth": 4,
-            "max_subagents_per_turn": 8,
-            "subagent_timeout_minutes": 60,
-        },
+        "subagents": {"max_subagent_depth": 4, "max_active_subagents": 8},
         "compaction": {
             "enabled": True,
             "trigger": {"type": "context_ratio", "threshold": 0.8},

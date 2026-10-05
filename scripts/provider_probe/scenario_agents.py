@@ -9,12 +9,7 @@ from core.channels import ChannelConfig
 from core.tools import model_tool_name
 from core.tools.channel import CHANNEL_SEND_TOOL_NAME, _channel_send_definition_profile
 from core.tools.project import PROJECT_TOOL_DESCRIPTION, PROJECT_TOOL_NAME, PROJECT_TOOL_PARAMETERS
-from core.tools.shell import (
-    SHELL_TOOL_DESCRIPTION,
-    SHELL_TOOL_NAME,
-    SHELL_TOOL_PARAMETERS,
-    project_shell_tool_definitions,
-)
+from core.tools.shell import SHELL_TOOL_DESCRIPTION, SHELL_TOOL_NAME, SHELL_TOOL_PARAMETERS
 from core.tools.skill import SKILL_TOOL_DESCRIPTION, SKILL_TOOL_NAME, SKILL_TOOL_PARAMETERS
 from core.tools.skill_manage import (
     SKILL_MANAGE_TOOL_DESCRIPTION,
@@ -93,18 +88,6 @@ def _bash_scenario(case_name: str) -> ProbeScenario:
             "workdir": "public",
             "timeout": 600,
         },
-        "sub_foreground_default": {"command": "python --version"},
-        "sub_foreground_unbounded": {"command": "python --version", "timeout": 0},
-        "sub_foreground_description": {
-            "command": "python --version",
-            "description": "Check Python version",
-        },
-        "sub_foreground_all": {
-            "command": "python --version",
-            "description": "Check Python version",
-            "workdir": "src",
-            "timeout": 120,
-        },
     }
     expected_arguments = bash_arguments[case_name]
     definition = {
@@ -112,8 +95,6 @@ def _bash_scenario(case_name: str) -> ProbeScenario:
         "description": SHELL_TOOL_DESCRIPTION,
         "parameters": SHELL_TOOL_PARAMETERS,
     }
-    if case_name.startswith("sub_"):
-        definition = project_shell_tool_definitions([definition], nesting_depth=1)[0]
     rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
     instruction = (
         f"Call {model_tool_name(SHELL_TOOL_NAME)} exactly once with exactly this JSON object "
@@ -282,11 +263,10 @@ def _subagent_scenario(case_name: str) -> ProbeScenario:
             "content": "Inspect the Tool contract and report concise findings.",
             "agent_id": "reviewer",
         },
-        "run_continue": {
-            "action": "run",
+        "send": {
+            "action": "send",
+            "id": "sub_123",
             "content": "Now verify the remaining edge case.",
-            "agent_id": "reviewer",
-            "session_id": "session-123",
         },
         "run_model": {
             "action": "run",
@@ -303,7 +283,6 @@ def _subagent_scenario(case_name: str) -> ProbeScenario:
             "content": "Now verify the remaining edge case.",
             "description": "Verify remaining edge case",
             "agent_id": "reviewer",
-            "session_id": "session-123",
             "model": "openai/gpt-5.6-luna",
             "thinking_effort": "high",
         },
@@ -342,8 +321,8 @@ def _subagent_scenario(case_name: str) -> ProbeScenario:
             "content": "Inspect the Tool contract and report concise findings.",
             "thinking_effort": "none",
         },
-        "status_all": {"action": "status"},
-        "status": {"action": "status", "id": "sub_123"},
+        "list_all": {"action": "list"},
+        "list": {"action": "list", "id": "sub_123"},
         "cancel": {"action": "cancel", "id": "sub_123"},
     }
     expected_arguments = subagent_arguments[case_name]

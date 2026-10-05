@@ -68,10 +68,8 @@
     return (
       normalizedLeft.max_subagent_depth ===
         normalizedRight.max_subagent_depth &&
-      normalizedLeft.max_subagents_per_turn ===
-        normalizedRight.max_subagents_per_turn &&
-      normalizedLeft.subagent_timeout_minutes ===
-        normalizedRight.subagent_timeout_minutes
+      normalizedLeft.max_active_subagents ===
+        normalizedRight.max_active_subagents
     );
   }
 
@@ -133,44 +131,20 @@
   <div class="s-row">
     <div class="s-row-info">
       <div class="s-row-label">
-        {t('settings.subagents.maxPerTurn')}
-        <InfoHint text={t('settings.subagents.maxPerTurnHelp')} />
+        {t('settings.subagents.maxActive')}
+        <InfoHint text={t('settings.subagents.maxActiveHelp')} />
       </div>
     </div>
     <div class="s-row-control s-row-control--number">
       <TextField
-        id="settings-subagents-max-per-run"
+        id="settings-subagents-max-active"
         type="number"
         min="1"
         step="1"
-        value={subAgentSettings.max_subagents_per_turn}
-        ariaLabel={t('settings.subagents.maxPerTurn')}
+        value={subAgentSettings.max_active_subagents}
+        ariaLabel={t('settings.subagents.maxActive')}
         onInput={(_next, event) =>
-          handleSubAgentSettingChange('max_subagents_per_turn', event)}
-      />
-    </div>
-  </div>
-
-  <div class="s-row">
-    <div class="s-row-info">
-      <div class="s-row-label">
-        {t('settings.subagents.timeoutMinutes')}
-        <InfoHint text={t('settings.subagents.timeoutMinutesHelp')} />
-      </div>
-      <div class="s-row-desc">
-        {t('settings.subagents.timeoutMinutesDescription')}
-      </div>
-    </div>
-    <div class="s-row-control s-row-control--number">
-      <TextField
-        id="settings-subagents-timeout"
-        type="number"
-        min="1"
-        step="1"
-        value={subAgentSettings.subagent_timeout_minutes}
-        ariaLabel={t('settings.subagents.timeoutMinutes')}
-        onInput={(_next, event) =>
-          handleSubAgentSettingChange('subagent_timeout_minutes', event)}
+          handleSubAgentSettingChange('max_active_subagents', event)}
       />
     </div>
   </div>

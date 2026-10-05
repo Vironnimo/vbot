@@ -20,7 +20,7 @@
     formatTime,
     isRowCancellable,
     isRunChildWorking,
-    isStartingForegroundSubAgent,
+    isSubAgentSendTool,
     isSubAgentSpawnTool,
     isTextToSpeechTool,
     isToolPreparing,
@@ -31,12 +31,10 @@
     runFooterParts,
     speechArtifactFromTool,
     subAgentAgentId,
-    subAgentDisplayResult,
     subAgentDotStatus,
     subAgentLastToolName,
     subAgentNavigationTarget,
     subAgentPreview,
-    subAgentResultKey,
     subAgentStatusDetails,
     subAgentTask,
     subAgentToolStatusLabel,
@@ -60,7 +58,6 @@
     agentName = '',
     chatWorkingMode = 'normal',
     subAgentStatuses = {},
-    subAgentResults = {},
     isReasoningOpen = () => false,
     onReasoningOpenChange = () => {},
     onNavigateToSubAgent = () => {},
@@ -161,8 +158,11 @@
     for (let index = group.children.length - 1; index >= 0; index -= 1) {
       const child = group.children[index];
       if (child.type === 'tool_call') {
-        return isSubAgentSpawnTool(child)
-          ? t('chat.subagent.label')
+        if (isSubAgentSpawnTool(child)) {
+          return t('chat.subagent.label');
+        }
+        return isSubAgentSendTool(child)
+          ? t('chat.subagent.sendLabel')
           : toolNameForRunTool(child);
       }
     }
@@ -270,8 +270,6 @@
       {:else if child.type === 'tool_call'}
         {#if isSubAgentSpawnTool(child)}
           {@const dotStatus = subAgentDotStatus(child, subAgentStatuses)}
-          {@const subAgentResult =
-            subAgentResults[subAgentResultKey(child, subAgentStatuses)]}
           {@const subAgentTimeLabel = subAgentToolStatusLabel(
             child,
             dotStatus,
@@ -357,15 +355,6 @@
                     <path d="M9 6h4.5v4.5M13.5 6 8 11.5" />
                   </svg>
                 </Button>
-              {:else if dotStatus === 'running' && isStartingForegroundSubAgent(child)}
-                <span class="subagent-state">
-                  {t('chat.subagent.starting')}
-                </span>
-              {/if}
-              {#if subAgentResult?.loading}
-                <span class="subagent-state">
-                  {t('chat.subagent.loadingResult')}
-                </span>
               {/if}
               {#if subAgentTimeLabel}
                 <span
@@ -405,9 +394,100 @@
               toolName={toolNameForRunTool(child)}
               args={toolArguments(child)}
               output={child.output}
-              result={subAgentDisplayResult(child, subAgentResult)}
+              result={child.result}
               resultFailed={toolStatus(child) === 'failed'}
               live={toolStatus(child) === 'running'}
+              viewKey={toolDisclosureKey(child)}
+            />
+          </details>
+        {:else if isSubAgentSendTool(child)}
+          {@const sendStatus = toolStatus(child)}
+          {@const sendTimeLabel = toolStatusLabel(child, nowMs)}
+          {@const sendStatusDetails = () =>
+            toolStatusDetails(child, Date.now())}
+          {@const message = subAgentTask(child)}
+          {@const sendTarget = subAgentNavigationTarget(child)}
+          <details
+            class="tool-event run-tool-event subagent-tool-event"
+            open={viewState.isOpen(toolDisclosureKey(child))}
+            ontoggle={(event) =>
+              viewState.setOpen(
+                toolDisclosureKey(child),
+                event.currentTarget.open,
+              )}
+          >
+            <summary class="tool-event-line subagent-line">
+              <span
+                class:done={sendStatus === 'success'}
+                class:error={sendStatus === 'failed'}
+                class:cancelled={sendStatus === 'cancelled'}
+                class:running={sendStatus === 'running'}
+                class="te-dot"
+                use:tooltip={sendStatusDetails}>●</span
+              >
+              <span class="te-fn">
+                {t('chat.subagent.sendLabel')}
+              </span>
+              {#if sendTarget}
+                <span class="subagent-agent">
+                  {t('agents.form.id')}: {sendTarget.agentId}
+                </span>
+              {/if}
+              {#if subAgentPreview(child)}
+                <!-- The preview must receive focus so the complete message
+                     and its Copy action reach keyboard users. -->
+                <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                <span
+                  class="te-arg subagent-preview"
+                  tabindex={message ? 0 : undefined}
+                >
+                  {subAgentPreview(child)}<CopyableValueCard
+                    value={message}
+                    copyLabel={t('chat.subagent.copyMessage')}
+                    copiedLabel={t('chat.subagent.messageCopied')}
+                    whenTruncated={subAgentPreview(child) === message}
+                    showDelayMs={INTENTIONAL_HOVER_SHOW_DELAY_MS}
+                  />
+                </span>
+              {/if}
+              {#if sendTarget}
+                <Button
+                  variant="tertiary"
+                  icon
+                  class="tool-row-action subagent-session-action subagent-link"
+                  tooltip={t('chat.subagent.openSession')}
+                  ariaLabel={t('chat.subagent.openSession')}
+                  onClick={(event) => handleSubAgentNavigate(event, child)}
+                >
+                  <svg
+                    viewBox="0 0 16 16"
+                    width="14"
+                    height="14"
+                    aria-hidden="true"
+                  >
+                    <path d="M2.5 3.5h7v6h-4l-2.5 2v-2h-.5z" />
+                    <path d="M9 6h4.5v4.5M13.5 6 8 11.5" />
+                  </svg>
+                </Button>
+              {/if}
+              {#if sendTimeLabel}
+                <span
+                  class="te-time"
+                  class:cancelled={sendStatus === 'cancelled'}
+                  use:tooltip={sendStatusDetails}
+                >
+                  {sendTimeLabel}
+                </span>
+              {/if}
+            </summary>
+            <ToolDetails
+              tool={child}
+              toolName={toolNameForRunTool(child)}
+              args={toolArguments(child)}
+              output={child.output}
+              result={child.result}
+              resultFailed={sendStatus === 'failed'}
+              live={sendStatus === 'running'}
               viewKey={toolDisclosureKey(child)}
             />
           </details>

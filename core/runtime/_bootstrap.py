@@ -564,6 +564,11 @@ def bootstrap(runtime: Runtime) -> None:
                 else False
             ),
             get_terminal_manager=lambda: runtime._terminal_manager,
+            subagent_taken_over=lambda address: (
+                runtime._subagent_coordinator.subagent_taken_over(address)
+                if runtime._subagent_coordinator is not None
+                else None
+            ),
         )
         runtime._chat_loop = ChatLoop(
             chat_dependencies,
@@ -642,6 +647,7 @@ def bootstrap(runtime: Runtime) -> None:
             wire_profile_describer=runtime.describe_agent_wire_profile,
             automation_references=runtime._automation_references,
             snapshot_barrier=runtime._snapshot_barrier,
+            stop_all=lambda address: runtime.subagents.stop_tree(address),
         )
         if runtime._extensions is not None:
             runtime._extensions.apply_commands(runtime._command_dispatcher)
@@ -690,11 +696,8 @@ def bootstrap(runtime: Runtime) -> None:
             update_handoffs=runtime._update_handoffs,
             projects=runtime._projects,
         )
-        runtime._subagent_coordinator = SubAgentCoordinator(
-            runtime,
-            runtime._trigger_service,
-            sessions=runtime._chat_sessions,
-        )
+        runtime._subagent_coordinator = SubAgentCoordinator(runtime, runtime._trigger_service)
+        runtime._subagent_coordinator.install(runtime._chat_run_manager)
         register_subagent_tools(
             runtime._tools,
             runtime._subagent_coordinator,

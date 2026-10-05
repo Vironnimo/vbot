@@ -8,6 +8,7 @@ import {
   extractMentionTokens,
   matchMentionCandidates,
 } from '$lib/fileMentions.js';
+import { t } from '$lib/i18n.js';
 
 export function createChatViewActions(context) {
   // Chat-local bottom toast for transient command replies and lifecycle notices.
@@ -245,6 +246,22 @@ export function createChatViewActions(context) {
     );
   };
 
+  // Stop all reports its outcome only while its Session is still displayed.
+  const handleStopAll = async () => {
+    const presentation = captureDisplayedSession();
+    const outcome = await context.chatController.stopAll(
+      context.target.activeSessionState,
+    );
+    if (
+      outcome?.kind === 'stopped' &&
+      isDisplayedSessionCurrent(presentation)
+    ) {
+      showChatToast(
+        outcome.stopped > 0 ? t('chat.stopAllDone') : t('chat.stopAllNothing'),
+      );
+    }
+  };
+
   // Per-tool-call cancel: cancel the bash without aborting the owning run.
   const handleCancelToolCall = async ({ runId, toolCallId } = {}) => {
     const agent = context.target.activeAgent;
@@ -387,6 +404,9 @@ export function createChatViewActions(context) {
     },
     get handleCancelRun() {
       return handleCancelRun;
+    },
+    get handleStopAll() {
+      return handleStopAll;
     },
     get handleCancelToolCall() {
       return handleCancelToolCall;

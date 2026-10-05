@@ -154,10 +154,8 @@ def _loaded_skills(runtime: Any, session_id: str) -> list[tuple[str, str]]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("nesting_depth", [0, 1])
 async def test_project_tool_grants_project_skill_in_current_run_without_prompt_change(
     tmp_path: Path,
-    nesting_depth: int,
 ) -> None:
     resolve_skills, resolutions = _project_skill_resolver(tmp_path)
     tools = ToolRegistry()
@@ -192,10 +190,7 @@ async def test_project_tool_grants_project_skill_in_current_run_without_prompt_c
     )
     runtime.chat_sessions.create("coder", session_id="s1")
 
-    loop = build_chat_loop(runtime)
-    if nesting_depth > 0:
-        loop = loop.child_loop(nesting_depth=nesting_depth)
-    await loop.send("coder", "Deploy the Project", session_id="s1")
+    await build_chat_loop(runtime).send("coder", "Deploy the Project", session_id="s1")
 
     [(name, body)] = _loaded_skills(runtime, "s1")
     assert name == "deploy"
@@ -239,7 +234,7 @@ async def test_persisted_project_load_restores_the_skill_scope_of_its_session_on
             content=json.dumps(tool_success({"status": "loaded", "project_id": "vbot"})),
         )
     )
-    loop = build_chat_loop(runtime).child_loop(nesting_depth=1)
+    loop = build_chat_loop(runtime)
 
     await loop.send("coder", "Continue Project work", session_id="loaded")
     loaded_resolutions = list(resolutions)

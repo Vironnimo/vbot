@@ -12,12 +12,7 @@ import {
   subAgentEffectiveRunId,
   subAgentNavigationTarget,
   subAgentNeedsStatusVerification,
-  subAgentQueueItemId,
   subAgentResultData,
-  subAgentResultEntryAllowsFetch,
-  subAgentResultKey,
-  subAgentResultTextFromMessages,
-  subAgentShouldFetchResult,
   visibleRunChildren,
 } from '../chatTimelinePresentation.js';
 import { isRecord } from './sessionState.js';
@@ -27,13 +22,12 @@ const SUBAGENT_STATUS_CACHE_LIMIT = 2000;
 const COMMAND_STATUS_CACHE_LIMIT = 200;
 const COMMAND_STATUS_RUNNING = 'running';
 const COMMAND_STATUS_STOPPED = 'stopped';
-const SUBAGENT_RESULT_CACHE_LIMIT = 100;
-const RPC_ERROR_QUEUE_ITEM_NOT_FOUND = 'queue_item_not_found';
 const RPC_ERROR_RUN_NOT_FOUND = 'run_not_found';
 
-// Internal child-task lifecycle: bounded status/result caches, exact-work
-// inspection, cancellation races and the live statuses of handed-off shell
-// commands.
+// Internal child-task lifecycle: the bounded Sub-Agent status cache,
+// exact-work inspection, Sub-Agent cancellation and the live statuses of
+// handed-off shell commands. A Sub-Agent's answers reach the Parent Session as
+// delivered messages, so no result is fetched here.
 export function createChatChildTasks({ chatState, operations, errorMessage }) {
   const subAgentStatusVerificationKeys = new Set();
   const subAgentStatusInflightKeys = new Set();
@@ -60,14 +54,6 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     }
   }
 
-  function setSubAgentResultEntry(key, entry) {
-    chatState.subAgentResults = mergeBoundedEntries(
-      chatState.subAgentResults,
-      { [key]: entry },
-      SUBAGENT_RESULT_CACHE_LIMIT,
-    ).entries;
-  }
-
   function normalizedSubAgentStatus(value) {
     const status = trimmedString(value).toLowerCase();
     if (status === 'failed' || status === 'error') {
@@ -89,7 +75,7 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
   }
 
   function applySubAgentInspection(
-    { agentId, sessionId, runId = '', queueItemId = '', workId = '' },
+    { agentId, sessionId, runId = '', workId = '' },
     inspection,
   ) {
     const status = normalizedSubAgentStatus(inspection?.status);
@@ -101,16 +87,10 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
         updates[`workRun:${workId}`] = inspectedRunId;
       }
     }
-    if (queueItemId) {
-      updates[`queue:${queueItemId}`] = status;
-      if (inspectedRunId) {
-        updates[`queueRun:${queueItemId}`] = inspectedRunId;
-      }
-    }
     // Session-scoped keys use the requesting row's address — the child's
     // outside address the row itself reads (`chatRunStream/activity.js`).
     const address = trimmedString(agentId);
-    if (!inspectedRunId && !queueItemId && address) {
+    if (!inspectedRunId && address) {
       updates[`session:${address}::${sessionId}`] = status;
     }
 
@@ -142,9 +122,6 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     sessionId,
     projectId = '',
   }) {
-    if (!workId) {
-      return null;
-    }
     return operations.inspectSubAgentWork({
       id: workId,
       agent_id: qualifyAgentAddress(agentId, projectId),
@@ -152,26 +129,12 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     });
   }
 
-  async function queuedSubAgentStillPending(
-    agentId,
-    sessionId,
-    queueItemId,
-    projectId,
-  ) {
-    const result = await operations.listQueue(
-      qualifyAgentAddress(agentId, projectId),
-      sessionId,
-    );
-    return (Array.isArray(result?.items) ? result.items : []).some(
-      (item) => item?.id === queueItemId,
-    );
-  }
-
+  // Rows from before Sub-Agent ids carry only the child Session: its History
+  // says whether the row's Run (or any Run) is active or how it ended.
   async function legacySubAgentInspection({
     agentId,
     sessionId,
     runId = '',
-    queueItemId = '',
     projectId = '',
   }) {
     const history = await operations.loadChatHistory({
@@ -181,13 +144,7 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     });
     const activeRunId = trimmedString(history?.active_run?.run_id);
     if (history?.active_run && (!runId || activeRunId === runId)) {
-      return {
-        agent_id: agentId,
-        session_id: sessionId,
-        run_id: activeRunId,
-        status: 'running',
-        result: null,
-      };
+      return { run_id: activeRunId, status: 'running' };
     }
 
     const messages = Array.isArray(history?.messages) ? history.messages : [];
@@ -198,41 +155,13 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
       return !runId || trimmedString(message.run_id) === runId;
     });
     if (summary) {
-      const summaryRunId = trimmedString(summary.run_id);
       return {
-        agent_id: agentId,
-        session_id: sessionId,
-        run_id: summaryRunId,
+        run_id: trimmedString(summary.run_id),
         status: normalizedSubAgentStatus(summary.status),
-        result: subAgentResultTextFromMessages(messages, summaryRunId),
         timing: summary.timing,
       };
     }
-    if (
-      !runId &&
-      queueItemId &&
-      (await queuedSubAgentStillPending(
-        agentId,
-        sessionId,
-        queueItemId,
-        projectId,
-      ))
-    ) {
-      return {
-        agent_id: agentId,
-        session_id: sessionId,
-        run_id: null,
-        status: 'queued',
-        result: null,
-      };
-    }
-    return {
-      agent_id: agentId,
-      session_id: sessionId,
-      run_id: runId || null,
-      status: queueItemId ? 'cancelled' : 'completed',
-      result: null,
-    };
+    return { run_id: runId || null, status: 'completed' };
   }
 
   async function resolveSubAgentInspection(target) {
@@ -252,14 +181,13 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     agentId,
     sessionId,
     runId = '',
-    queueItemId = '',
     workId = '',
     projectId = '',
   }) {
     if (!agentId || !sessionId) {
       return false;
     }
-    const guardKey = runId || queueItemId || `${agentId}::${sessionId}`;
+    const guardKey = runId || `${agentId}::${sessionId}`;
     if (
       subAgentStatusVerificationKeys.has(guardKey) ||
       subAgentStatusInflightKeys.has(guardKey)
@@ -272,25 +200,13 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
         agentId,
         sessionId,
         runId,
-        queueItemId,
         workId,
         projectId,
       });
-      const projection = applySubAgentInspection(
-        { agentId, sessionId, runId, queueItemId, workId },
+      applySubAgentInspection(
+        { agentId, sessionId, runId, workId },
         inspection,
       );
-      if (
-        workId &&
-        projection.status !== 'running' &&
-        projection.status !== 'queued'
-      ) {
-        setSubAgentResultEntry(`work:${workId}`, {
-          loading: false,
-          result: trimmedString(inspection?.result),
-          usage: inspection?.usage ?? null,
-        });
-      }
       subAgentStatusVerificationKeys.add(guardKey);
       return true;
     } catch {
@@ -300,55 +216,9 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     }
   }
 
-  async function requestSubAgentResult(tool, projectId = '') {
-    const target = subAgentNavigationTarget(tool);
-    const cacheKey = subAgentResultKey(tool, chatState.subAgentStatuses);
-    if (
-      !target ||
-      !cacheKey ||
-      !subAgentResultEntryAllowsFetch(chatState.subAgentResults[cacheKey])
-    ) {
-      return false;
-    }
-    setSubAgentResultEntry(cacheKey, { loading: true, result: '' });
-    const data = subAgentResultData(tool);
-    const request = {
-      agentId: target.agentId,
-      sessionId: target.sessionId,
-      runId: subAgentEffectiveRunId(tool, chatState.subAgentStatuses),
-      queueItemId: subAgentQueueItemId(tool),
-      workId: trimmedString(data.id),
-      projectId,
-    };
-    try {
-      const inspection = await resolveSubAgentInspection(request);
-      const projection = applySubAgentInspection(request, inspection);
-      if (projection.status === 'running' || projection.status === 'queued') {
-        setSubAgentResultEntry(cacheKey, {
-          loading: false,
-          result: '',
-          error: true,
-          failedAt: Date.now(),
-        });
-        return false;
-      }
-      setSubAgentResultEntry(cacheKey, {
-        loading: false,
-        result: trimmedString(inspection?.result),
-        usage: inspection?.usage ?? null,
-      });
-      return true;
-    } catch {
-      setSubAgentResultEntry(cacheKey, {
-        loading: false,
-        result: '',
-        error: true,
-        failedAt: Date.now(),
-      });
-      return false;
-    }
-  }
-
+  // Cancels the Sub-Agent's current Run: the followed Run while the row knows
+  // it is current, else the Run inspection finds active (for example one a
+  // later message started). A Sub-Agent with nothing running is left alone.
   async function cancelSubAgent({ tool, sessionState, projectId = '' } = {}) {
     if (!tool || !sessionState) {
       return false;
@@ -359,51 +229,23 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
     }
     sessionState.actionError = '';
     try {
-      if (plan.kind === 'run') {
-        await operations.cancelRun(plan.runId, { reason: 'user' });
-        applySubAgentStatusUpdates({ [`run:${plan.runId}`]: 'cancelled' });
-        return true;
-      }
-
-      try {
-        await operations.removeFromQueue(
-          qualifyAgentAddress(plan.agentId, projectId),
-          plan.sessionId,
-          plan.queueItemId,
-        );
-        applySubAgentStatusUpdates({
-          [`queue:${plan.queueItemId}`]: 'cancelled',
-        });
-        return true;
-      } catch (error) {
-        if (error?.code !== RPC_ERROR_QUEUE_ITEM_NOT_FOUND) {
-          throw error;
+      let runId = plan.kind === 'run' ? plan.runId : '';
+      if (!runId) {
+        const request = {
+          agentId: plan.agentId,
+          sessionId: plan.sessionId,
+          workId: plan.workId,
+          projectId,
+        };
+        const inspection = await resolveSubAgentInspection(request);
+        const projection = applySubAgentInspection(request, inspection);
+        if (projection.status !== 'running' || !projection.runId) {
+          return true;
         }
+        runId = projection.runId;
       }
-
-      const target = subAgentNavigationTarget(tool);
-      if (!target) {
-        return false;
-      }
-      const data = subAgentResultData(tool);
-      const request = {
-        agentId: target.agentId,
-        sessionId: target.sessionId,
-        runId: '',
-        queueItemId: plan.queueItemId,
-        workId: trimmedString(data.id),
-        projectId,
-      };
-      const inspection = await resolveSubAgentInspection(request);
-      const projection = applySubAgentInspection(request, inspection);
-      if (projection.status !== 'running' || !projection.runId) {
-        return true;
-      }
-      await operations.cancelRun(projection.runId, { reason: 'user' });
-      applySubAgentStatusUpdates({
-        [`run:${projection.runId}`]: 'cancelled',
-        [`queue:${plan.queueItemId}`]: 'cancelled',
-      });
+      await operations.cancelRun(runId, { reason: 'user' });
+      applySubAgentStatusUpdates({ [`run:${runId}`]: 'cancelled' });
       return true;
     } catch (error) {
       sessionState.actionError = `${t('chat.cancelError')} ${errorMessage(error)}`;
@@ -454,7 +296,6 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
           continue;
         }
         const dotStatus = subAgentDotStatus(tool, chatState.subAgentStatuses);
-        const data = subAgentResultData(tool);
         if (
           subAgentNeedsStatusVerification(
             tool,
@@ -466,13 +307,9 @@ export function createChatChildTasks({ chatState, operations, errorMessage }) {
             agentId: target.agentId,
             sessionId: target.sessionId,
             runId: subAgentEffectiveRunId(tool, chatState.subAgentStatuses),
-            queueItemId: subAgentQueueItemId(tool),
-            workId: trimmedString(data.id),
+            workId: trimmedString(subAgentResultData(tool).id),
             projectId,
           });
-        }
-        if (subAgentShouldFetchResult(tool, dotStatus)) {
-          void requestSubAgentResult(tool, projectId);
         }
       }
     }

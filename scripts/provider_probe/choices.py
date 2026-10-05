@@ -130,10 +130,6 @@ BASH_CASES = (
     "top_background_timeout",
     "top_background_unbounded",
     "top_background_all",
-    "sub_foreground_default",
-    "sub_foreground_unbounded",
-    "sub_foreground_description",
-    "sub_foreground_all",
 )
 
 
@@ -290,7 +286,7 @@ STATUS_CASES = ("current", "session", "agent_session")
 SUBAGENT_CASES = (
     "run_self",
     "run_agent",
-    "run_continue",
+    "send",
     "run_model",
     "run_description",
     "run_all",
@@ -301,8 +297,8 @@ SUBAGENT_CASES = (
     "thinking_xhigh",
     "thinking_max",
     "thinking_none",
-    "status_all",
-    "status",
+    "list_all",
+    "list",
     "cancel",
 )
 

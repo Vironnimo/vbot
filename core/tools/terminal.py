@@ -106,8 +106,8 @@ _FINISHED_MINUTES = int(TERMINAL_FINISHED_TTL.total_seconds() // 60)
 _SHELL_NAME = model_tool_name(BASH_TOOL_NAME)
 
 
-def _terminal_description(*, shell: str | None, nesting_depth: int) -> str:
-    """The description for one request: the shell Tool's name when offered, and depth."""
+def _terminal_description(*, shell: str | None) -> str:
+    """The description for one request: the shell Tool's name when offered."""
     commands = f", and commands that {shell} left running" if shell else ""
     sentences = [
         "Start and operate programs in a live terminal: interactive programs you drive by "
@@ -116,25 +116,11 @@ def _terminal_description(*, shell: str | None, nesting_depth: int) -> str:
     if shell:
         sentences.append(f"Run commands that finish on their own with {shell}.")
     sentences.append("A program keeps running after your turn ends, until it exits or is stopped.")
-    if nesting_depth < 1:
-        sentences.append(
-            "For terminals attached to this Session, a program's exit arrives as a new "
-            "message, and so does an interactive program's screen when its output settles "
-            "after activity."
-        )
-    else:
-        # A Sub-Agent Session receives an interactive program's messages only while
-        # its Run is active, and a command's result never.
-        sentences.append(
-            "For terminals attached to this Session, an interactive program's exit arrives "
-            "as a new message while you work, and so does its screen when its output "
-            "settles after activity."
-        )
-        if shell:
-            sentences.append("A command's result does not arrive on its own.")
-        sentences.append(
-            "Before your final answer, use wait for every program whose result you need."
-        )
+    sentences.append(
+        "For terminals attached to this Session, a program's exit arrives as a new "
+        "message, and so does an interactive program's screen when its output settles "
+        "after activity."
+    )
     sentences.append("Screen text is rendered terminal text, not exact file content.")
     return " ".join(sentences)
 
@@ -144,7 +130,7 @@ def _terminal_id_description(shell: str | None) -> str:
     return f"The terminal's id from {sources}. Required except for start and list."
 
 
-TERMINAL_TOOL_DESCRIPTION = _terminal_description(shell=_SHELL_NAME, nesting_depth=0)
+TERMINAL_TOOL_DESCRIPTION = _terminal_description(shell=_SHELL_NAME)
 
 TERMINAL_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -272,20 +258,15 @@ TERMINAL_UNADVERTISED_PARAMETERS: JsonObject = {
 }
 
 
-def project_terminal_tool_definitions(
-    definitions: list[JsonObject], *, nesting_depth: int
-) -> list[JsonObject]:
-    """Fit the terminal definition to one request: its Session depth and the Tools offered.
+def project_terminal_tool_definitions(definitions: list[JsonObject]) -> list[JsonObject]:
+    """Fit the terminal definition to one request: the Tools offered with it.
 
     The shell Tool is named by its Model name, and only when it is offered.
     """
     offered = frozenset(str(definition.get("name")) for definition in definitions)
-    if TERMINAL_TOOL_NAME not in offered:
+    if TERMINAL_TOOL_NAME not in offered or BASH_TOOL_NAME in offered:
         return definitions
-    shell = _SHELL_NAME if BASH_TOOL_NAME in offered else None
-    description = _terminal_description(shell=shell, nesting_depth=nesting_depth)
-    if description == TERMINAL_TOOL_DESCRIPTION and shell is not None:
-        return definitions
+    description = _terminal_description(shell=None)
     projected: list[JsonObject] = []
     for definition in definitions:
         if definition.get("name") != TERMINAL_TOOL_NAME:
@@ -295,7 +276,7 @@ def project_terminal_tool_definitions(
         fitted["description"] = description
         properties = fitted.get("parameters", {}).get("properties", {})
         if "terminal_id" in properties:
-            properties["terminal_id"]["description"] = _terminal_id_description(shell)
+            properties["terminal_id"]["description"] = _terminal_id_description(None)
         projected.append(fitted)
     return projected
 
@@ -794,7 +775,7 @@ async def _handle_input(
         if pattern is not None:
             data["wait_ended"] = ended
         elif ended == "timeout":
-            data["next"] = _reply_pending_text(context, terminal_id)
+            data["next"] = _reply_pending_text(terminal_id)
     result = _with_notes({**data, **typed}, notes)
     if "next" in result:
         # What to do next closes the result, after what was typed.
@@ -861,14 +842,11 @@ async def _command_result(
     return data
 
 
-def _reply_pending_text(context: ToolContext, terminal_id: str) -> str:
+def _reply_pending_text(terminal_id: str) -> str:
     """What to do when an interactive program still printed output as input's wait ended."""
-    wait = f"terminal {_call('wait', terminal_id)}"
-    if context.nesting_depth >= 1:
-        return f"To see its reply, call {wait}."
     return (
         "Its screen arrives as a new message when its output settles; continue other work or "
-        f"end your turn. To wait for it now instead, call {wait}."
+        f"end your turn. To wait for it now instead, call terminal {_call('wait', terminal_id)}."
     )
 
 

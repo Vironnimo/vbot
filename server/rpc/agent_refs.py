@@ -32,4 +32,4 @@ def _guard_agent_lifecycle(handler: MutationHandler) -> MutationHandler:
 
 def _subagents_reference_identity_agent(state: Any, agent_id: str) -> bool:
     """Return whether live Sub-Agent coordination still addresses an identity."""
-    return bool(state.runtime.subagents.batch_tracker.references_identity_agent(agent_id))
+    return bool(state.runtime.subagents.references_identity_agent(agent_id))

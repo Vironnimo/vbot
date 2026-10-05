@@ -470,17 +470,15 @@ def test_status_tool_reads_clear_targets_written_other_ways(
     [
         (
             {"id": "sub_abcdefghijkl"},
-            "status was not run: sub_abcdefghijkl is a Sub-Agent work id. For that work's "
-            'progress, call subagent with {"action": "status", "id": "sub_abcdefghijkl"}. '
-            "status reports a chat Session and takes session_id, with agent_id for another "
-            "Agent's Session.",
+            "status was not run: sub_abcdefghijkl is a Sub-Agent id. To see that Sub-Agent, "
+            'call subagent with {"action": "list", "id": "sub_abcdefghijkl"}. status reports '
+            "a chat Session and takes session_id, with agent_id for another Agent's Session.",
         ),
         (
             {"work_id": "sub_abcdefghijkl", "agent_id": "worker"},
-            "status was not run: sub_abcdefghijkl is a Sub-Agent work id. For that work's "
-            'progress, call subagent with {"action": "status", "id": "sub_abcdefghijkl"}. '
-            "status reports a chat Session and takes session_id, with agent_id for another "
-            "Agent's Session.",
+            "status was not run: sub_abcdefghijkl is a Sub-Agent id. To see that Sub-Agent, "
+            'call subagent with {"action": "list", "id": "sub_abcdefghijkl"}. status reports '
+            "a chat Session and takes session_id, with agent_id for another Agent's Session.",
         ),
         (
             {"id": "worker"},

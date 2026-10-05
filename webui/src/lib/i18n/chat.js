@@ -71,6 +71,17 @@ export default Object.freeze({
   'chat.voice.startFailed': 'Microphone recording could not start.',
   'chat.voice.transcriptionFailed': 'Speech transcription failed.',
   'chat.cancelRun': 'Cancel run',
+  'chat.cancelRunHint':
+    'Stops only this Run. Background commands and Sub-Agents keep running.',
+  'chat.stopOptions': 'Stop options',
+  'chat.stopOptionsHint':
+    'Stop only this Run, or stop all work of this Session.',
+  'chat.stopAll': 'Stop all',
+  'chat.stopAllHint':
+    'Stops the Run, background commands, terminals and Sub-Agents of this Session. Queued messages stay.',
+  'chat.stopAllNothing': 'Nothing is running in this Session.',
+  'chat.stopAllDone': 'Stopped all work in this Session.',
+  'chat.stopAllError': 'Could not stop everything.',
   'chat.moveToBackground': 'Move to background',
   'chat.compactNow': 'Compact now',
   'chat.contextCardTitle': 'Context',
@@ -292,11 +303,12 @@ export default Object.freeze({
   'chat.tokenTooltipSessionEstimatedTurns':
     'Turns with estimated token fields: {count}; those fields are excluded',
   'chat.subagent.label': 'Subagent',
-  'chat.subagent.starting': 'starting',
-  'chat.subagent.loadingResult': 'loading result…',
+  'chat.subagent.sendLabel': 'Message to Subagent',
   'chat.subagent.openSession': 'Open Sub-Agent Session',
   'chat.subagent.copyTask': 'Copy task',
   'chat.subagent.taskCopied': 'Task copied',
+  'chat.subagent.copyMessage': 'Copy message',
+  'chat.subagent.messageCopied': 'Message copied',
   'chat.activity.title': 'Session',
   'chat.activity.open': 'Open session info',
   'chat.activity.openOneRunning': 'Open session info · 1 task running',

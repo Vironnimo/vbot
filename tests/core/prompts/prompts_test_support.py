@@ -23,6 +23,7 @@ _CORE_FRAGMENT_NAMES = (
     "working_project.md",
     "tools.md",
     "system_reminders.md",
+    "subagent_role.md",
     "tools_list.md",
     "channels.md",
     "skills.md",

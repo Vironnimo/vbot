@@ -122,6 +122,16 @@ CREATE INDEX sessions_by_fork_parent
   ON sessions (fork_parent_key)
   WHERE fork_parent_key IS NOT NULL;
 
+-- Sub-Agent Sessions of one Parent Session (Sub-Agent lists, tree control).
+CREATE INDEX sessions_by_subagent_parent
+  ON sessions (subagent_parent_agent_id, subagent_parent_session_id)
+  WHERE state = 'live' AND subagent_parent_session_id IS NOT NULL;
+
+-- The live Sub-Agent Session with one public Sub-Agent id.
+CREATE INDEX sessions_by_subagent_id
+  ON sessions (subagent_parent_id)
+  WHERE state = 'live' AND subagent_parent_id IS NOT NULL;
+
 CREATE TABLE session_run_kinds (
   session_key INTEGER NOT NULL REFERENCES sessions (session_key) ON DELETE CASCADE,
   run_kind TEXT NOT NULL,

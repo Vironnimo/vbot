@@ -1,9 +1,9 @@
 """The ``subagent`` Tool: its definition, the call shapes it accepts, and its display.
 
 Other harness dialects, action synonyms, placeholder fields and copied result
-fields reach exactly the Agent, Session and task the call meant. Calls whose
-meaning is unclear, or that ask for something vBot cannot do, are refused
-before any work starts, with the corrected call.
+fields reach exactly the Agent and task the call meant. Calls whose meaning is
+unclear, or that ask for something vBot cannot do, are refused before any work
+starts, with the corrected call.
 """
 
 from __future__ import annotations
@@ -13,13 +13,13 @@ import copy
 import pytest
 
 from core.subagents._constants import (
-    SUBAGENT_CANCEL_NOTHING_TRACKED_MESSAGE,
+    SUBAGENT_BACKGROUND_IGNORED_NOTE,
     SUBAGENT_MISSING_TASK_MESSAGE,
-    SUBAGENT_STATUS_LIST_NOTE,
-    SUBAGENT_STATUS_RUNNING_NOTE,
-    TOP_LEVEL_BACKGROUND_NOTE,
+    SUBAGENT_STARTED_NOTE,
 )
+from core.tools.availability import MESSAGE_PARENT_TOOL_NAME
 from core.tools.subagent import (
+    MESSAGE_PARENT_TOOL_DESCRIPTION,
     SUBAGENT_TOOL_DESCRIPTION,
     SUBAGENT_TOOL_NAME,
     SUBAGENT_TOOL_PARAMETERS,
@@ -35,19 +35,15 @@ from tests.core.subagents.subagents_test_support import (
 pytestmark = pytest.mark.asyncio
 
 BRIEF = 'Read-only review of src/a.py. Preserve literal {"action":"CANCEL"}.\nReference R-17.'
-DEFAULT_TITLE = " ".join(BRIEF.split())[:48]
 PARAMETER_LIST = (
-    "subagent parameters: action, content, description, agent_id, session_id, model, "
-    "thinking_effort, id."
+    "subagent parameters: action, content, description, agent_id, id, model, thinking_effort."
 )
 
 
-async def test_tool_definition_is_one_flat_open_contract(harness: SubAgentHarness) -> None:
-    assert [tool.name for tool in harness.registry.list_tools()] == [SUBAGENT_TOOL_NAME]
+async def test_tool_definitions_are_flat_open_contracts(harness: SubAgentHarness) -> None:
     subagent = harness.registry.get(SUBAGENT_TOOL_NAME)
     assert subagent.description == SUBAGENT_TOOL_DESCRIPTION
     assert subagent.parameters == SUBAGENT_TOOL_PARAMETERS
-    assert "oneOf" not in subagent.parameters
     assert "additionalProperties" not in subagent.parameters
     assert subagent.parameters["required"] == []
     properties = subagent.parameters["properties"]
@@ -56,45 +52,41 @@ async def test_tool_definition_is_one_flat_open_contract(harness: SubAgentHarnes
         "content",
         "description",
         "agent_id",
-        "session_id",
+        "id",
         "model",
         "thinking_effort",
-        "id",
     ]
-    assert all(
-        isinstance(schema.get("description"), str) and schema["description"]
-        for schema in properties.values()
-    )
-    assert properties["action"]["enum"] == ["run", "status", "cancel"]
-    assert properties["description"]["type"] == "string"
-    assert "maxLength" not in properties["description"]
-    assert properties["thinking_effort"]["enum"] == [
-        "high",
-        "low",
-        "max",
-        "medium",
-        "minimal",
-        "none",
-        "xhigh",
-    ]
+    assert all(schema.get("description") for schema in properties.values())
+    assert properties["action"]["enum"] == ["run", "send", "list", "cancel"]
+
+    message_parent = harness.registry.get(MESSAGE_PARENT_TOOL_NAME)
+    assert message_parent.description == MESSAGE_PARENT_TOOL_DESCRIPTION
+    assert message_parent.parameters["required"] == ["content"]
+    # Offered only through the grant of a Sub-Agent Session, never from the catalog.
+    assert message_parent.catalog_visible is False
+    assert message_parent.session_scoped is True
 
 
 @pytest.mark.parametrize(
     ("arguments", "target", "title"),
     [
-        ({"content": BRIEF}, "parent", None),
-        ({"action": "run", "content": BRIEF}, "parent", None),
+        ({"content": BRIEF, "description": "Review source"}, "parent", "Review source"),
         (
-            {"agent_id": "worker", "content": BRIEF, "description": "Review source"},
+            {"action": "run", "agent_id": "worker", "content": BRIEF, "description": "Review"},
             "worker",
-            "Review source",
+            "Review",
         ),
         # Wrapped and aliased payloads.
-        ({"arguments": {"Agent-ID": "worker", "content": BRIEF}}, "worker", None),
-        ({"request": {"operation": "RUN", "content": BRIEF}}, "parent", None),
-        ({"run": {"content": BRIEF}}, "parent", None),
-        ({"request": BRIEF}, "parent", None),
-        ({"request": {"content": BRIEF, "agent_id": "worker", "background": True}}, "worker", None),
+        (
+            {"arguments": {"Agent-ID": "worker", "content": BRIEF, "title": "Review"}},
+            "worker",
+            "Review",
+        ),
+        (
+            {"request": {"operation": "RUN", "content": BRIEF, "label": "Review"}},
+            "parent",
+            "Review",
+        ),
         # Claude Code / opencode Task
         (
             {"description": "Review imports", "prompt": BRIEF, "subagent_type": "worker"},
@@ -102,32 +94,28 @@ async def test_tool_definition_is_one_flat_open_contract(harness: SubAgentHarnes
             "Review imports",
         ),
         (
-            {
-                "description": "Review imports",
-                "prompt": BRIEF,
-                "subagent_type": "worker",
-                "background": True,
-            },
-            "worker",
+            {"description": "Review imports", "prompt": BRIEF, "run_in_background": True},
+            "parent",
             "Review imports",
         ),
-        ({"prompt": BRIEF, "run_in_background": True}, "parent", None),
         # pi, OpenClaw, Hermes
-        ({"agent": "worker", "task": BRIEF}, "worker", None),
         (
             {"task": BRIEF, "label": "Review imports", "agentId": "worker"},
             "worker",
             "Review imports",
         ),
-        ({"goal": BRIEF}, "parent", None),
         ({"instructions": BRIEF, "title": "Review imports"}, "parent", "Review imports"),
         # Action synonyms
-        ({"action": "spawn", "message": BRIEF}, "parent", None),
-        ({"action": "Delegate", "content": BRIEF, "target": "worker"}, "worker", None),
+        ({"action": "spawn", "message": BRIEF, "summary": "Review"}, "parent", "Review"),
+        (
+            {"action": "Delegate", "content": BRIEF, "target": "worker", "title": "Review"},
+            "worker",
+            "Review",
+        ),
     ],
 )
 async def test_call_shapes_reach_the_exact_agent_and_task(
-    harness: SubAgentHarness, arguments: JsonObject, target: str, title: str | None
+    harness: SubAgentHarness, arguments: JsonObject, target: str, title: str
 ) -> None:
     before = copy.deepcopy(arguments)
 
@@ -135,12 +123,19 @@ async def test_call_shapes_reach_the_exact_agent_and_task(
 
     assert result["ok"], result
     assert arguments == before
-    [child] = await harness.started()
-    assert child.run.agent_id == target == result["data"]["agent_id"]
-    assert child.run.session_id == result["data"]["session_id"]
-    assert await child.task() == BRIEF
-    assert result["data"]["note"] == TOP_LEVEL_BACKGROUND_NOTE
-    assert harness.sessions.list_summaries(target)[0]["auto_title"] == (title or DEFAULT_TITLE)
+    assert result["data"]["agent_id"] == target
+    assert [turn.content for turn in harness.loop.turns] == [BRIEF]
+    assert harness.sessions.list_summaries(target)[0]["auto_title"] == title
+    assert result["data"]["note"] == SUBAGENT_STARTED_NOTE
+
+
+async def test_requested_foreground_run_is_named_as_ignored(harness: SubAgentHarness) -> None:
+    result = await harness.call(
+        {"content": BRIEF, "description": "Review", "run_in_background": False}
+    )
+
+    assert result["ok"], result
+    assert result["data"]["note"] == f"{SUBAGENT_BACKGROUND_IGNORED_NOTE} {SUBAGENT_STARTED_NOTE}"
 
 
 @pytest.mark.parametrize(
@@ -156,9 +151,10 @@ async def test_call_shapes_reach_the_exact_agent_and_task(
 async def test_hermes_context_travels_with_its_goal(
     harness: SubAgentHarness, arguments: JsonObject, task: str
 ) -> None:
-    assert (await harness.call(arguments))["ok"]
-    [child] = await harness.started()
-    assert await child.task() == task
+    result = await harness.call({**arguments, "title": "Fix test"})
+
+    assert result["ok"], result
+    assert [turn.content for turn in harness.loop.turns] == [task]
 
 
 @pytest.mark.parametrize(
@@ -169,7 +165,6 @@ async def test_hermes_context_travels_with_its_goal(
                 "action": "run",
                 "agent_id": "worker",
                 "content": BRIEF,
-                "description": "Audit",
                 "id": "unused",
                 "model": "",
                 "session_id": "invalid-placeholder",
@@ -177,44 +172,32 @@ async def test_hermes_context_travels_with_its_goal(
             },
             "worker",
         ),
-        (
-            {"action": "run", "agent_id": "worker", "content": BRIEF, "id": " ", "session_id": " "},
-            "worker",
-        ),
-        (
-            {"action": "run", "content": BRIEF, "id": ".", "session_id": ".", "agent_id": "."},
-            "parent",
-        ),
+        ({"content": BRIEF, "id": ".", "session_id": ".", "agent_id": "."}, "parent"),
         (
             {
                 "content": BRIEF,
                 "id": "placeholder",
-                "session_id": "__omit__",
                 "model": "default",
                 "thinking_effort": "inherit",
             },
             "parent",
         ),
         ({"content": BRIEF, "agent_id": "", "action": ""}, "parent"),
-        ({"content": BRIEF, "agent_id": "   "}, "parent"),
         ({"content": BRIEF, "agent_id": None, "action": None}, "parent"),
         ({"content": BRIEF, "agent_id": "worker", "session_id": "new"}, "worker"),
-        ({"content": BRIEF, "agent_id": "worker", "session_id": ""}, "worker"),
     ],
 )
 async def test_placeholder_fields_count_as_omitted(
     harness: SubAgentHarness, arguments: JsonObject, target: str
 ) -> None:
-    result = await harness.call(arguments)
+    result = await harness.call({**arguments, "description": "Audit"})
 
     assert result["ok"], result
-    [child] = await harness.started()
-    assert child.run.agent_id == target
-    assert await child.task() == BRIEF
-    # A new Session, the Agent's own model and effort, and no notes about the placeholders.
-    assert len(harness.sessions.list(target)) == 1
-    assert harness.stored_overrides(target, child.run.session_id) is None
-    assert result["data"]["note"] == TOP_LEVEL_BACKGROUND_NOTE
+    assert result["data"]["agent_id"] == target
+    assert [turn.content for turn in harness.loop.turns] == [BRIEF]
+    child = harness.subagent_session(result["data"]["id"])
+    assert harness.sessions.metadata_value(child, "agent_overrides") is None
+    assert result["data"]["note"] == SUBAGENT_STARTED_NOTE
 
 
 def _unknown(name: str, hint: str = "") -> str:
@@ -228,20 +211,12 @@ def _conflict(field: str, first: str, second: str, first_value: str, second_valu
     )
 
 
-def _id_without_action(work_id: str) -> str:
+def _id_without_action(subagent_id: str) -> str:
     return (
-        f"subagent was not run: it received work id {work_id} but no action. To inspect that "
-        f'work, call {{"action": "status", "id": "{work_id}"}}; to stop it, call '
-        f'{{"action": "cancel", "id": "{work_id}"}}. To delegate new work, send the task as '
-        '"content" without "id".'
+        f"subagent was not run: it received Sub-Agent id {subagent_id} but no action. To "
+        f'message that Sub-Agent, call {{"action": "send", "id": "{subagent_id}", "content": '
+        f'"<message>"}}; to stop it, call {{"action": "cancel", "id": "{subagent_id}"}}.'
     )
-
-
-CONTINUE_WITHOUT_SESSION = (
-    "subagent was not run: continuing a Sub-Agent needs its Session. Send the agent_id and "
-    'session_id from that Sub-Agent\'s result with the follow-up as "content", or omit '
-    '"action" to start new work.'
-)
 
 
 @pytest.mark.parametrize(
@@ -250,20 +225,22 @@ CONTINUE_WITHOUT_SESSION = (
         # No task, or a decision is missing.
         ({}, SUBAGENT_MISSING_TASK_MESSAGE),
         ({"description": "Review source"}, SUBAGENT_MISSING_TASK_MESSAGE),
-        ({"content": ""}, SUBAGENT_MISSING_TASK_MESSAGE),
         ({"content": " "}, SUBAGENT_MISSING_TASK_MESSAGE),
-        ({"content": "."}, SUBAGENT_MISSING_TASK_MESSAGE),
-        ({"id": "existing-work"}, _id_without_action("existing-work")),
         ({"id": "sub_abcdefghijkl", "agent_id": "worker"}, _id_without_action("sub_abcdefghijkl")),
+        (
+            {"goal": "Check links."},
+            'subagent was not run: a new Sub-Agent needs "description", a 3-5 word title that '
+            'the user sees. Repeat the call with it: {"description": "<3-5 word title>", '
+            '"content": "Check links."}.',
+        ),
         # An explicit invalid choice never counts as omission.
         (
             {"content": BRIEF, "action": "rn"},
-            'subagent was not run: "action" must be one of "run", "status", "cancel"; '
+            'subagent was not run: "action" must be one of "run", "send", "list", "cancel"; '
             'received "rn".',
         ),
-        ({"content": BRIEF, "action": "cancel"}, SUBAGENT_CANCEL_NOTHING_TRACKED_MESSAGE),
         (
-            {"content": BRIEF, "thinking_effort": "extreme"},
+            {"content": BRIEF, "description": "Audit", "thinking_effort": "extreme"},
             'subagent was not run: "thinking_effort" must be one of "high", "low", "max", '
             '"medium", "minimal", "none", "xhigh"; received "extreme".',
         ),
@@ -273,23 +250,12 @@ CONTINUE_WITHOUT_SESSION = (
             _conflict("agent_id", "agent_id", "Agent-ID", "worker", "parent"),
         ),
         (
-            {"content": "Task.", "prompt": "Another task."},
-            _conflict("content", "content", "prompt", "Task.", "Another task."),
-        ),
-        (
-            {"content": BRIEF, "action": "run", "operation": "cancel"},
-            _conflict("action", "action", "operation", "run", "cancel"),
-        ),
-        (
             {"content": BRIEF, "background": True, "blocking": True},
             'Conflicting "background" and "blocking" values; provide one intended value.',
         ),
         # Requests vBot cannot honor as written.
         ({"content": BRIEF, "priority": "high"}, _unknown("priority")),
         ({"content": BRIEF, "run_id": "private-run"}, _unknown("run_id", ' Did you mean "id"?')),
-        ({"content": BRIEF, "unexpected": True}, _unknown("unexpected")),
-        ({"action": "status", "id": "sub_test", "unexpected": True}, _unknown("unexpected")),
-        ({"action": "cancel", "id": "sub_test", "unexpected": True}, _unknown("unexpected")),
         (
             {"goal": BRIEF, "toolsets": ["terminal", "web"]},
             "subagent was not run: a Sub-Agent always works with its Agent's own Tools, so "
@@ -303,12 +269,9 @@ CONTINUE_WITHOUT_SESSION = (
             "concurrently.",
         ),
         (
-            {"action": "resume", "content": "Go on.", "agent_id": "worker"},
-            CONTINUE_WITHOUT_SESSION,
-        ),
-        (
-            {"action": "continue", "content": "Go on.", "session_id": "new"},
-            CONTINUE_WITHOUT_SESSION,
+            {"action": "resume", "content": "Go on."},
+            'send needs "id", the Sub-Agent to message; nothing was sent. You have no '
+            'Sub-Agents. Call {"action": "send", "id": "<id>", "content": "<message>"}.',
         ),
     ],
 )
@@ -321,66 +284,32 @@ async def test_unclear_or_unsupported_calls_are_refused_before_any_work(
 
     assert result["error"] == {"code": "invalid_arguments", "message": message}
     assert arguments == before
-    await harness.settle()
-    assert harness.manager.started == []
-    assert harness.manager.enqueued == []
-    assert harness.sessions.list("parent") == []
+    assert harness.loop.turns == []
     assert harness.sessions.list("worker") == []
-
-
-async def test_empty_toolsets_request_nothing(harness: SubAgentHarness) -> None:
-    result = await harness.call({"goal": BRIEF, "toolsets": []})
-    assert result["ok"], result
 
 
 @pytest.mark.parametrize(
     "arguments",
     [
-        {"action": "status"},
-        {"action": "status", "ids": []},
+        {"action": "list"},
         {"action": "status", "content": "spawn"},
-        {"action": "list", "id": ""},
+        {"action": "check", "id": ""},
     ],
 )
-async def test_status_without_tracked_work_is_an_empty_listing(
+async def test_list_without_subagents_is_an_empty_listing(
     harness: SubAgentHarness, arguments: JsonObject
 ) -> None:
     result = await harness.call(arguments)
 
     assert result == {"ok": True, "error": None, "data": {"subagents": []}, "artifacts": []}
-    assert harness.manager.started == []
-
-
-async def test_status_ignores_fields_it_does_not_use(harness: SubAgentHarness) -> None:
-    child = await harness.spawn({"content": BRIEF, "agent_id": "worker"})
-
-    single = await harness.call(
-        {
-            "action": "status",
-            "agent_id": "worker",
-            "content": "status",
-            "description": "Audit progress",
-            "id": child["id"],
-            "model": "openai/x",
-            "session_id": child["session_id"],
-            "thinking_effort": "high",
-        }
-    )
-    listing = await harness.call({"action": "list", "id": "", "agent_id": "worker"})
-
-    assert single["ok"], single
-    assert (single["data"]["id"], single["data"]["status"]) == (child["id"], "running")
-    assert single["data"]["note"] == SUBAGENT_STATUS_RUNNING_NOTE
-    assert [entry["id"] for entry in listing["data"]["subagents"]] == [child["id"]]
-    assert listing["data"]["note"] == SUBAGENT_STATUS_LIST_NOTE
-    assert len(harness.manager.started) == 1
 
 
 @pytest.mark.parametrize("action", ["cancel", "stop", "Kill"])
-async def test_cancel_words_ignore_echoed_fields_and_stop_the_exact_work(
+async def test_cancel_words_ignore_echoed_fields_and_stop_the_exact_subagent(
     harness: SubAgentHarness, action: str
 ) -> None:
-    child = await harness.spawn({"content": BRIEF, "agent_id": "worker"})
+    harness.loop.hold(BRIEF)
+    child = await harness.spawn(BRIEF, agent_id="worker")
 
     result = await harness.call(
         {
@@ -389,14 +318,11 @@ async def test_cancel_words_ignore_echoed_fields_and_stop_the_exact_work(
             "agent_id": "worker",
             "content": "stop the audit",
             "session_id": child["session_id"],
-            "thinking_effort": "high",
         }
     )
 
     assert result["ok"], result
     assert result["data"]["status"] == "cancelled"
-    [started] = await harness.started()
-    assert started.run.status.value == "cancelled"
 
 
 @pytest.mark.parametrize(
@@ -410,20 +336,15 @@ async def test_cancel_words_ignore_echoed_fields_and_stop_the_exact_work(
             {"action": "run", "content": "Inspect the Tool contract.", "agent_id": "reviewer"},
             [("text", "Inspect the Tool contract."), ("identifier", "reviewer")],
         ),
-        ({"action": "spawn", "task": "Check links"}, [("text", "Check links")]),
         (
-            {"goal": "Check links", "title": "Links", "agent": "worker"},
-            [("description", "Links"), ("identifier", "worker")],
+            {"action": "message", "id": "sub_abcdefghijkl", "content": "More."},
+            [("text", "send"), ("identifier", "sub_abcdefghijkl")],
         ),
         (
             {"action": "stop", "work_id": "sub_abcdefghijkl"},
             [("text", "cancel"), ("identifier", "sub_abcdefghijkl")],
         ),
-        (
-            {"action": "status", "id": "unused", "agent_id": "worker"},
-            [("text", "status"), ("identifier", "worker")],
-        ),
-        ({"action": "status"}, [("text", "status")]),
+        ({"action": "status"}, [("text", "list")]),
     ],
 )
 async def test_display_labels_what_the_call_meant(
@@ -434,7 +355,7 @@ async def test_display_labels_what_the_call_meant(
     assert [(part.get("kind", "text"), part["value"]) for part in display["primary"]] == expected
 
 
-async def test_details_show_the_task_the_response_and_how_the_run_ended(
+async def test_details_show_the_task_the_message_and_the_listed_subagents(
     harness: SubAgentHarness,
 ) -> None:
     display = harness.registry.get(SUBAGENT_TOOL_NAME).display
@@ -444,38 +365,33 @@ async def test_details_show_the_task_the_response_and_how_the_run_ended(
         shown: list[JsonObject] = display.to_payload(arguments, result=result)["details"]
         return shown
 
-    response: JsonObject = {
-        "type": "text",
-        "label": "response",
-        "source": {"from": "result", "path": ["data", "result"]},
-    }
-    # A spawn row reads the response once the completed result replaces the descriptor.
     assert details(
-        {"task": "Check links", "agent": "worker"},
-        {"id": "sub_a", "status": "queued", "delivery": "automatic"},
-    ) == [{"type": "text", "label": "task", "text": "Check links"}, response]
+        {"task": "Check links", "title": "Links"}, {"id": "sub_a", "status": "running"}
+    ) == [{"type": "text", "label": "task", "text": "Check links"}]
     assert details(
-        {"action": "status", "id": "sub_a"}, {"id": "sub_a", "status": "cancelled", "result": None}
-    ) == [response, {"type": "notice", "level": "info", "text": "The sub-agent run was cancelled."}]
+        {"action": "send", "id": "sub_a", "content": "Also docs."},
+        {"id": "sub_a", "status": "steered"},
+    ) == [
+        {"type": "text", "label": "content", "text": "Also docs."},
+        {
+            "type": "notice",
+            "level": "info",
+            "text": "The sub-agent receives the message at its next step.",
+        },
+    ]
     assert details(
-        {"action": "status"},
+        {"action": "list"},
         {
             "subagents": [
                 {
                     "id": "sub_a",
+                    "title": "Check links",
                     "agent_id": "worker",
-                    "status": "running",
-                    "tool_name": "bash",
-                    "started_at": "2026-09-30T12:00:00Z",
-                    "usage": {"input_tokens": 10},
+                    "state": "working",
+                    "last_tool": "bash",
                 }
             ]
         },
     ) == [
-        {
-            "type": "results",
-            "items": [
-                {"title": "worker", "meta": "running · bash", "time": "2026-09-30T12:00:00Z"}
-            ],
-        }
+        {"type": "results", "items": [{"title": "Check links", "meta": "worker · working · bash"}]}
     ]

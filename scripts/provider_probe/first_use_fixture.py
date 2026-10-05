@@ -41,7 +41,7 @@ class FixtureBoundaryError(ValueError):
 
 
 class FirstUseFixture:
-    def __init__(self, root: Path, *, nested: bool = False, outside_cwd: bool = False):
+    def __init__(self, root: Path, *, outside_cwd: bool = False):
         self.root = root.resolve()
         self.cwd = self.root / "workspace" if outside_cwd else self.root / "repo"
         self.repo = self.root / "repo"
@@ -78,15 +78,18 @@ class FirstUseFixture:
                 resolve_agent_async=self.resolve_agent_async,
                 require_model_configured_async=self.require_model_configured_async,
                 update_session_overrides=self.update_session_overrides,
+                session_overrides_async=self.session_overrides_async,
             ),
             chat_sessions=self.sessions,
             chat_run_manager=self.runs,
+            terminal_manager=self.terminals,
             storage=SimpleNamespace(
                 temporary_files=self.temporary, load_subagent_settings=lambda: {}
             ),
             streaming_chat_loop=self,
         )
-        self.coordinator = SubAgentCoordinator(runtime, self, sessions=self.sessions)
+        self.coordinator = SubAgentCoordinator(runtime, self)
+        self.coordinator.install(self.runs)
         self.registry = ToolRegistry()
         register_search_files_tool(self.registry)
         register_subagent_tools(self.registry, self.coordinator)
@@ -113,7 +116,6 @@ class FirstUseFixture:
             cwd=self.cwd,
             vbot_root=PROJECT_ROOT,
             data_root=self.data,
-            nesting_depth=int(nested),
             tool_settings={"subagent": {"allowed_agents": ["reviewer"]}},
         )
 
@@ -157,44 +159,51 @@ class FirstUseFixture:
                 stored[name] = value
         return AgentOverrides.from_stored(stored or None)
 
-    def child_loop(self, *, nesting_depth):
-        fixture = self
+    async def session_overrides_async(self, address):
+        return AgentOverrides.from_stored(self.session_overrides.get(address) or None)
 
-        def run_executor(content):
-            started = asyncio.Event()
-            fixture.started_events.append(started)
+    def run_executor(
+        self,
+        content,
+        *,
+        reply_surface=None,
+        temporary_parent_binding=None,
+        parent_agent_input=False,
+    ):
+        """Stand in for the streaming Chat loop: record the child Run instead of a Model turn."""
+        del reply_surface, temporary_parent_binding
+        started = asyncio.Event()
+        self.started_events.append(started)
 
-            async def execute(run):
-                address = SessionAddress(
-                    project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
-                )
-                overrides = fixture.session_overrides.get(address, {})
-                fixture.received.append(
-                    {
-                        "agent_id": run.agent_id,
-                        "session_id": run.session_id,
-                        "run_id": run.id,
-                        "content": content,
-                        "depth": nesting_depth,
-                        "model": overrides.get("model"),
-                        "thinking_effort": overrides.get("thinking_effort"),
-                    }
-                )
-                started.set()
-                if fixture.hold_children:
-                    await fixture.release.wait()
-                message = ChatMessage.assistant(
-                    model="fixture/child", content="Fixture review completed: CHECK-42."
-                )
-                session = fixture.sessions.get(address)
-                # A real child Run and Session receive the delegation. Its Model's
-                # reasoning/review quality is deliberately outside this interface test.
-                session.append(message)
-                return message
+        async def execute(run):
+            address = SessionAddress(
+                project_id=run.project_id, agent_id=run.agent_id, session_id=run.session_id
+            )
+            overrides = self.session_overrides.get(address, {})
+            self.received.append(
+                {
+                    "agent_id": run.agent_id,
+                    "session_id": run.session_id,
+                    "run_id": run.id,
+                    "content": content,
+                    "parent_agent_input": parent_agent_input,
+                    "model": overrides.get("model"),
+                    "thinking_effort": overrides.get("thinking_effort"),
+                }
+            )
+            started.set()
+            if self.hold_children:
+                await self.release.wait()
+            message = ChatMessage.assistant(
+                model="fixture/child", content="Fixture review completed: CHECK-42."
+            )
+            session = self.sessions.get(address)
+            # A real child Run and Session receive the delegation. Its Model's
+            # reasoning/review quality is deliberately outside this interface test.
+            session.append(message)
+            return message
 
-            return execute
-
-        return SimpleNamespace(run_executor=run_executor)
+        return execute
 
     def submit_completion(self, *args, **kwargs):
         future = asyncio.get_running_loop().create_future()
@@ -207,11 +216,7 @@ class FirstUseFixture:
 
     def system_prompt(self) -> str:
         block = _render_subagent_prompt_block(
-            SimpleNamespace(
-                agent=self.agents["parent"],
-                agent_project_id=None,
-                nesting_depth=self.context.nesting_depth,
-            ),
+            SimpleNamespace(agent=self.agents["parent"], agent_project_id=None),
             self.coordinator,
         )
         return "\n\n".join(
@@ -226,9 +231,7 @@ class FirstUseFixture:
     def offered_definitions(self, dialect: EditDialect) -> list[dict[str, Any]]:
         """Return the definitions a Model of ``dialect`` is offered, as Chat routes them."""
         definitions = offer_edit_dialect(self.registry.provider_definitions(), dialect)
-        definitions = project_shell_tool_definitions(
-            definitions, nesting_depth=self.context.nesting_depth
-        )
+        definitions = project_shell_tool_definitions(definitions)
         self.context = replace(
             self.context,
             offered_tools=frozenset(str(definition["name"]) for definition in definitions),
@@ -294,7 +297,15 @@ class FirstUseFixture:
         context = replace(self.context, tool_name=name, tool_call_id=call.get("id", "fixture"))
         previously_started = len(self.started_events)
         result = await self.registry.dispatch(context, arguments)
-        if name == "subagent" and result["ok"] and result["data"].get("status") == "running":
+        if (
+            name == "subagent"
+            and result["ok"]
+            and result["data"].get("status")
+            in {
+                "running",
+                "started",
+            }
+        ):
             for started in self.started_events[previously_started:]:
                 await asyncio.wait_for(started.wait(), timeout=10)
         await asyncio.sleep(0)
@@ -303,8 +314,16 @@ class FirstUseFixture:
     async def close(self):
         self.release.set()
         await self.runs.aclose()
-        # Drain the completion watchers scheduled by real coordinator dispatch.
-        await asyncio.sleep(0)
+        # Let the coordinator's forwarding and activity tasks for the ended child
+        # Runs finish before their Sessions close.
+        followers = [
+            task
+            for task in asyncio.all_tasks()
+            if task.get_name().startswith(("subagent-forwarding:", "subagent-activity:"))
+        ]
+        if followers:
+            await asyncio.wait(followers, timeout=10)
+        await self.coordinator.drain_activity()
         for future in self.deliveries:
             future.cancel()
         await self.terminals.aclose()

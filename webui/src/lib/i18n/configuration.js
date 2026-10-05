@@ -243,14 +243,9 @@ export default Object.freeze({
   'settings.subagents.maxDepth': 'Maximum nesting depth',
   'settings.subagents.maxDepthHelp':
     'Sub-Agents can start Sub-Agents of their own. This sets how many levels deep that can go; at the limit, a Sub-Agent has to do the work itself. Default: 4.',
-  'settings.subagents.maxPerTurn': 'Maximum Sub-Agents per Run',
-  'settings.subagents.maxPerTurnHelp':
-    'The most Sub-Agents an Agent may start during one Run. Further requests in that Run are refused, and the Agent is told to wait for results or do the work itself. Default: 8.',
-  'settings.subagents.timeoutMinutes': 'Nested Sub-Agent timeout',
-  'settings.subagents.timeoutMinutesDescription':
-    'Minutes a Sub-Agent waits for its own Sub-Agent.',
-  'settings.subagents.timeoutMinutesHelp':
-    'When a Sub-Agent starts a Sub-Agent of its own, it waits for the result. After this many minutes the nested Sub-Agent is cancelled and reported as failed. Default: 60.\n\nSub-Agents started directly by the Agent you talk to run in the background and have no time limit.',
+  'settings.subagents.maxActive': 'Maximum working Sub-Agents',
+  'settings.subagents.maxActiveHelp':
+    'The most Sub-Agents that may work at the same time for one conversation: the Sub-Agents its Agent started, plus the Sub-Agents those started in turn. While the limit is reached, further requests are refused, and the Agent is told to wait for results, stop a Sub-Agent, or do the work itself. Default: 8.',
   'settings.reflection.title': 'Reflection',
   'settings.reflection.enabled': 'Background reflection',
   'settings.reflection.enabledDescription':

@@ -50,7 +50,6 @@
     // in History. Passive restoration does not send this request.
     followSessionRequest = null,
     subAgentStatuses = {},
-    subAgentResults = {},
     backgroundCommandStatuses = {},
     commandStatuses = {},
     onNavigateToSubAgent = () => {},
@@ -593,7 +592,6 @@
         {agentName}
         {chatWorkingMode}
         {subAgentStatuses}
-        {subAgentResults}
         {backgroundCommandStatuses}
         {commandStatuses}
         {nowMs}

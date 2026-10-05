@@ -7,7 +7,8 @@
    "name": "subagent: canonical brief",
    "tool": "subagent",
    "arguments": {
-    "content": "Review src/app.py for unused imports and report file:line findings. Do not edit."
+    "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "description": "Review imports"
    },
    "expect": {
     "ok": true,
@@ -84,7 +85,8 @@
    "tool": "subagent",
    "arguments": {
     "goal": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
-    "context": "The repository uses Python 3.12."
+    "context": "The repository uses Python 3.12.",
+    "description": "Review imports"
    },
    "expect": {
     "ok": true,
@@ -98,7 +100,8 @@
    "tool": "subagent",
    "arguments": {
     "agent": "main",
-    "task": "Review src/app.py for unused imports and report file:line findings. Do not edit."
+    "task": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "label": "Review imports"
    },
    "expect": {
     "ok": true,
@@ -141,7 +144,8 @@
    "tool": "subagent",
    "arguments": {
     "action": "spawn",
-    "content": "Review src/app.py for unused imports and report file:line findings. Do not edit."
+    "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "description": "Review imports"
    },
    "expect": {
     "ok": true,
@@ -155,7 +159,8 @@
    "tool": "subagent",
    "arguments": {
     "action": "delegate",
-    "message": "Review src/app.py for unused imports and report file:line findings. Do not edit."
+    "message": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "description": "Review imports"
    },
    "expect": {
     "ok": true,
@@ -170,7 +175,8 @@
    "arguments": {
     "request": {
      "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
-     "agent_id": "main"
+     "agent_id": "main",
+     "description": "Review imports"
     }
    },
    "expect": {
@@ -184,7 +190,8 @@
    "name": "subagent: request string is the task",
    "tool": "subagent",
    "arguments": {
-    "request": "Review src/app.py for unused imports and report file:line findings. Do not edit."
+    "request": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "description": "Review imports"
    },
    "expect": {
     "ok": true,
@@ -199,7 +206,8 @@
    "arguments": {
     "agent_id": "main",
     "blocking": true,
-    "content": "Review src/app.py for unused imports and report file:line findings. Do not edit."
+    "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
+    "description": "Review imports"
    },
    "expect": {
     "ok": true,
@@ -255,7 +263,8 @@
     "agent_id": "main",
     "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
     "id": ".",
-    "session_id": "."
+    "session_id": ".",
+    "description": "Review imports"
    },
    "expect": {
     "ok": true,
@@ -290,7 +299,8 @@
    "arguments": {
     "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
     "id": "placeholder",
-    "session_id": "__omit__"
+    "session_id": "__omit__",
+    "description": "Review imports"
    },
    "expect": {
     "ok": true,
@@ -304,7 +314,8 @@
    "tool": "subagent",
    "arguments": {
     "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
-    "agent_id": ""
+    "agent_id": "",
+    "description": "Review imports"
    },
    "expect": {
     "ok": true,
@@ -412,7 +423,7 @@
    }
   },
   {
-   "name": "subagent: unknown id says nothing is tracked",
+   "name": "subagent: unknown id lists your Sub-Agents",
    "tool": "subagent",
    "arguments": {
     "action": "status",
@@ -422,7 +433,7 @@
     "ok": false,
     "error_code": "subagent_not_found",
     "contains": [
-     "No Sub-Agent work is tracked"
+     "You have no Sub-Agents"
     ]
    }
   },
@@ -436,7 +447,7 @@
     "ok": false,
     "error_code": "invalid_arguments",
     "contains": [
-     "\"action\": \"status\"",
+     "\"action\": \"send\"",
      "\"action\": \"cancel\""
     ]
    }
@@ -473,7 +484,7 @@
    }
   },
   {
-   "name": "subagent: session_id without agent_id",
+   "name": "subagent: session_id of no Sub-Agent",
    "tool": "subagent",
    "arguments": {
     "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
@@ -481,9 +492,9 @@
    },
    "expect": {
     "ok": false,
-    "error_code": "session_not_found",
+    "error_code": "invalid_arguments",
     "contains": [
-     "agent_id",
+     "not one of your Sub-Agents",
      "without \"session_id\""
     ]
    }
@@ -493,7 +504,8 @@
    "tool": "subagent",
    "arguments": {
     "content": "Review src/app.py for unused imports and report file:line findings. Do not edit.",
-    "agent_id": "nobody"
+    "agent_id": "nobody",
+    "description": "Review imports"
    },
    "expect": {
     "ok": false,
@@ -576,7 +588,7 @@
    }
   },
   {
-   "name": "status: Sub-Agent work id points to subagent",
+   "name": "status: Sub-Agent id points to subagent",
    "tool": "status",
    "arguments": {
     "id": "sub_aaaaaaaaaaaa"
@@ -585,7 +597,7 @@
     "ok": false,
     "contains": [
      "subagent",
-     "\"action\": \"status\"",
+     "\"action\": \"list\"",
      "sub_aaaaaaaaaaaa"
     ],
     "absent": [

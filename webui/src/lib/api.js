@@ -182,6 +182,7 @@ export {
   deleteSession,
   listQueue,
   cancelRun,
+  stopAll,
   controlRun,
   cancelToolCall,
   removeFromQueue,

@@ -105,7 +105,6 @@ class ToolDispatchHarness:
                 agent=self.agent,
                 session=self.session,
                 run=active_run,
-                nesting_depth=0,
                 vbot_root=Path.cwd(),
                 data_root=self.tmp_path,
                 project_cwd=project_cwd,
