@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import io
 import re
 import subprocess
 import sys
@@ -340,28 +341,22 @@ def test_a_user_cancellation_kills_a_silent_child(tmp_path, monkeypatch):
 def test_finished_child_is_drained_when_process_monitor_misses_it(
     tmp_path, monkeypatch, exit_code, diagnostics, failure
 ):
-    original = subprocess.Popen
-    children = []
-
-    def launch(_command, **kwargs):
-        child = original(
-            [
-                sys.executable,
-                "-c",
-                f"import sys; print('found'); "
-                f"sys.stderr.write({diagnostics!r}); "
-                f"sys.exit({exit_code})",
-            ],
-            **kwargs,
-        )
-        child.wait(timeout=5)
-        children.append(child)
-        return child
+    child = SimpleNamespace(
+        pid=1234,
+        stdout=io.BytesIO(b"found\n"),
+        stderr=io.BytesIO(diagnostics.encode()),
+        returncode=exit_code,
+        poll=lambda: exit_code,
+        wait=lambda **_kwargs: exit_code,
+    )
 
     def gone(pid):
+        assert pid == child.pid
         raise psutil.NoSuchProcess(pid)
 
-    monkeypatch.setattr("core.tools._search_execution.subprocess.Popen", launch)
+    monkeypatch.setattr(
+        "core.tools._search_execution.subprocess.Popen", lambda *_args, **_kw: child
+    )
     monkeypatch.setattr("core.tools._search_execution.psutil.Process", gone)
     ctx = context(tmp_path)
     lines = native_lines(Path(sys.executable), [], ctx, SearchBudget(ctx))
@@ -371,8 +366,7 @@ def test_finished_child_is_drained_when_process_monitor_misses_it(
             next(lines)
     else:
         assert list(lines) == []
-    assert children[0].returncode == exit_code
-    assert children[0].stdout.closed and children[0].stderr.closed
+    assert child.stdout.closed and child.stderr.closed
 
 
 def test_child_memory_is_bounded_and_polled_at_an_interval(tmp_path, monkeypatch):

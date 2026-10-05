@@ -351,13 +351,13 @@ async def test_cancel_stops_a_subagent_and_everything_below_it(
     outer = await harness.spawn("outer")
     harness.loop.hold("inner")
     inner = await harness.spawn("inner", session=harness.subagent_session(outer["id"]))
+    runs = harness.manager.active_runs()
 
     result = await harness.call({"action": "cancel", "id": outer["id"]})
     await harness.settle()
 
     assert result["data"]["status"] == "cancelled"
-    statuses = {turn.content: turn.run and turn.run.status for turn in harness.loop.turns}
-    assert statuses == {"outer": RunStatus.CANCELLED, "inner": RunStatus.CANCELLED}
+    assert [run.status for run in runs] == [RunStatus.CANCELLED, RunStatus.CANCELLED]
     # The Parent learned the outcome from its own Tool result.
     assert harness.triggers.to(harness.parent) == []
     assert harness.triggers.to(harness.subagent_session(outer["id"])) == []
@@ -374,12 +374,13 @@ async def test_user_stop_all_stops_the_tree_without_waking_anyone(
     outer_session = harness.subagent_session(outer["id"])
     harness.loop.hold("inner")
     await harness.spawn("inner", session=outer_session)
+    runs = harness.manager.active_runs()
 
     stopped = await harness.coordinator.stop_tree(outer_session)
     await harness.settle()
 
     assert stopped == 2
-    assert all(turn.run and turn.run.status is RunStatus.CANCELLED for turn in harness.loop.turns)
+    assert [run.status for run in runs] == [RunStatus.CANCELLED, RunStatus.CANCELLED]
     assert harness.triggers.to(outer_session) == []
     [notice] = harness.triggers.to(harness.parent)
     assert "Its turn was cancelled by the user." in notice.body
