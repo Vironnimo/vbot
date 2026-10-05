@@ -92,7 +92,10 @@ SNAPSHOT_MANIFEST_NAME = "manifest.json"
 SNAPSHOT_HEALTH_FILE_NAME = "health.json"
 SNAPSHOT_PARTIAL_SUFFIX = ".partial"
 SNAPSHOT_KEEP_COUNT = 5
-SNAPSHOT_KEEP_BYTES = 512 * 1024 * 1024
+#: Retention's byte budget. It never prunes below :data:`SNAPSHOT_KEEP_MINIMUM`
+#: snapshots, so a Session history that outgrows the budget still keeps a fallback.
+SNAPSHOT_KEEP_BYTES = 10 * 1024 * 1024 * 1024
+SNAPSHOT_KEEP_MINIMUM = 2
 SNAPSHOT_RESERVE_BYTES = 64 * 1024 * 1024
 MANIFEST_VERSION = 1
 _SNAPSHOT_ID_PATTERN = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{8}$")
@@ -831,7 +834,7 @@ def create_data_snapshot(
                 for name in marker.databases
                 if exists_strict(canonical_database_path(data_dir, name))
             ) + documents_size(data_dir)
-            if shutil.disk_usage(root).free < needed + SNAPSHOT_RESERVE_BYTES:
+            if not _make_room(data_dir, needed):
                 _record_snapshot_health(
                     data_dir, "degraded", reason="insufficient snapshot reserve"
                 )
@@ -949,6 +952,46 @@ def create_data_snapshot(
         lock.release()
 
 
+def _make_room(data_dir: Path, needed: int) -> bool:
+    """Whether ``needed`` bytes fit beside the reserve, removing the oldest snapshots for them.
+
+    A new snapshot is worth more than the oldest retained one, so a full disk
+    never blocks a snapshot (and the update that takes it) while older ones
+    could give way. The newest snapshot always stays. Raises ``OSError`` when
+    the free space cannot be read or a snapshot cannot be removed.
+    """
+    root = snapshot_root(data_dir)
+    if shutil.disk_usage(root).free >= needed + SNAPSHOT_RESERVE_BYTES:
+        return True
+    try:
+        children = _published_children(data_dir)
+    except DatabaseUnavailableError:
+        return False
+    oldest_first = sorted(
+        (
+            (child, manifest)
+            for child in children
+            if (manifest := _shallow_manifest(data_dir, child)) is not None
+        ),
+        key=lambda item: (item[1].created_instant(), item[1].snapshot_id),
+    )
+    removed: list[str] = []
+    try:
+        while shutil.disk_usage(root).free < needed + SNAPSHOT_RESERVE_BYTES:
+            if len(oldest_first) <= 1:
+                return False
+            child, manifest = oldest_first.pop(0)
+            remove_tree(child, within=root)
+            removed.append(manifest.snapshot_id)
+    finally:
+        if removed:
+            _LOGGER.info(
+                "Removed the oldest data snapshots to make room for a new one (snapshots=%s)",
+                ",".join(removed),
+            )
+    return True
+
+
 def _prune_snapshots(data_dir: Path, *, protected_snapshot: Path) -> None:
     """Apply count and byte retention around the snapshot just published."""
     try:
@@ -972,7 +1015,8 @@ def _prune_snapshots(data_dir: Path, *, protected_snapshot: Path) -> None:
     retained = 1
     root = snapshot_root(data_dir)
     for child, manifest in others:
-        if retained >= SNAPSHOT_KEEP_COUNT or total + manifest.total_size > SNAPSHOT_KEEP_BYTES:
+        over_budget = total + manifest.total_size > SNAPSHOT_KEEP_BYTES
+        if retained >= SNAPSHOT_KEEP_COUNT or (over_budget and retained >= SNAPSHOT_KEEP_MINIMUM):
             with suppress(OSError):
                 remove_tree(child, within=root)
         else:
