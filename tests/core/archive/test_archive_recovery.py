@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from core.agents import AgentError
 from core.sessions import (
     ARCHIVE_KIND_AGENT,
     ARCHIVE_KIND_PROJECT,
@@ -163,9 +164,23 @@ async def test_a_failed_agent_cleanup_keeps_the_archive_and_completes_at_the_nex
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("left", ["payload", "live-files", "invalid-live-files", "committed"])
+@pytest.mark.parametrize(
+    "left",
+    [
+        "payload",
+        "live-files",
+        "invalid-live-files",
+        "committed",
+        "unreadable-live-files",
+        "unreadable-payload",
+    ],
+)
 async def test_an_interrupted_restore_finishes_from_live_files_and_never_moves_them_back(
-    world: ArchiveWorld, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, left: str
+    world: ArchiveWorld,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    left: str,
+    deny_access: Callable[[Path], None],
 ) -> None:
     agents, ledger = world.agents, world.sessions.archive_ledger
     coder = agents.create("coder")
@@ -179,17 +194,47 @@ async def test_an_interrupted_restore_finishes_from_live_files_and_never_moves_t
             await world.service.restore(entry_id)
         monkeypatch.undo()
         assert world.entry(entry_id).state == "restored"
+    elif left == "unreadable-live-files":
+        # The actual restore moved the files; its commit and compensation stop.
+        monkeypatch.setattr(ledger, "commit_restore", _fail)
+        from core.agents import _archive
+
+        move = _archive.move_tree
+
+        def interrupted_move(source: Path, destination: Path) -> None:
+            if source == home:
+                _fail()
+            move(source, destination)
+
+        monkeypatch.setattr(_archive, "move_tree", interrupted_move)
+        with pytest.raises(AgentError):
+            await world.service.restore(entry_id)
+        monkeypatch.undo()
     else:
         # Stopped before the files moved, or after they did and before the commit.
         ledger.begin_restore(entry_id, {"target_id": None, "strip_channel_keys": False})
-        if left != "payload":
+        if left not in {"payload", "unreadable-payload"}:
             os.replace(payload, home)
         if left == "invalid-live-files":
             (home / "agent.json").write_text("{ not json", encoding="utf-8")
 
+    plan = world.entry(entry_id).facts.get("restore_plan")
+    if left == "unreadable-live-files":
+        deny_access(home.parent)
+    elif left == "unreadable-payload":
+        deny_access(payload.parent)
+
     world.service.recover()
 
-    if left == "payload":
+    if left.startswith("unreadable-"):
+        assert world.entry(entry_id).state == "restoring"
+        assert world.entry(entry_id).facts["restore_plan"] == plan
+        with pytest.raises(ArchiveEntryBusyError):
+            await world.service.purge([entry_id])
+        assert world.session_rows("coder") == [(coder.current_session_id, "archived")]
+        monkeypatch.undo()
+        world.service.recover()
+    if left in {"payload", "unreadable-payload"}:
         assert world.entry(entry_id).state == "archived"
         assert not agents.exists("coder")
         assert (payload / "agent.json").is_file()

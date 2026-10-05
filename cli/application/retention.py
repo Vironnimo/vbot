@@ -37,6 +37,7 @@ from cli.application.state import (
     contained,
     operations,
 )
+from core.utils.file_status import is_dir_strict
 from core.utils.ids import is_safe_id
 
 _LOGGER = logging.getLogger("vbot.application.retention")
@@ -154,12 +155,21 @@ def _environment_versions(install: Installation) -> set[str]:
         from core.storage.layout import DataDirectoryLayout
 
         layout = DataDirectoryLayout(Path(install.server_data_directory))
-        configurations += layout.speech_engines.glob("*/pyvenv.cfg")
-        configurations += layout.embedding_engines.glob("*/pyvenv.cfg")
+        # glob suppresses directory-read errors; an incomplete inventory cannot
+        # establish that a version's runtime is unused.
+        for root in (layout.speech_engines, layout.embedding_engines):
+            if is_dir_strict(root):
+                configurations.extend(
+                    path / "pyvenv.cfg" for path in root.iterdir() if is_dir_strict(path)
+                )
     versions = contained(install.root, "versions").resolve()
     needed: set[str] = set()
     for configuration in configurations:
-        for line in configuration.read_text(encoding="utf-8").splitlines():
+        try:
+            lines = configuration.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            continue  # An engine folder without a virtual environment owns no runtime.
+        for line in lines:
             key, _, value = line.partition("=")
             if key.strip().casefold() == "home":
                 version = _version_of(Path(value.strip()).resolve(), versions)

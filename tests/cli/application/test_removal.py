@@ -17,7 +17,7 @@ from cli.parser import parse_args
 
 
 def _install(root: Path) -> Installation:
-    install = Installation(root, "server", "127.0.0.1", 8420, str((root / "data").resolve()))
+    install = Installation(root, "server", "127.0.0.1", 8420, str((root.parent / "data").resolve()))
     (root / "versions" / "rel_current").mkdir(parents=True)
     (root / "active-version").write_text("rel_current\n", encoding="ascii")
     (root / "unins000.exe").write_bytes(b"")
@@ -119,6 +119,32 @@ def test_begin_removal_claims_dispatch_and_operation_with_actual_parent_identity
         "pid": 517,
         "process_created": 42.25,
     }
+
+
+def test_native_removal_refuses_overlapping_data_before_reserving_deletion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install = _install(tmp_path / "app")
+    data = install.root / "data"
+    data.mkdir()
+    sentinel = data / "state.db"
+    sentinel.write_bytes(b"keep")
+    install = Installation(
+        install.root,
+        "server",
+        "127.0.0.1",
+        8420,
+        str(tmp_path / "elsewhere" / ".." / "app" / "data"),
+    )
+    monkeypatch.setattr(
+        integration, "exclusive", lambda *args, **kwargs: pytest.fail("must not reserve removal")
+    )
+
+    with pytest.raises(ApplicationError):
+        integration.begin_removal(install)
+
+    assert not (install.root / "removal-pending.json").exists()
+    assert sentinel.read_bytes() == b"keep"
 
 
 def test_begin_removal_rejects_pending_update_before_writing_a_marker(

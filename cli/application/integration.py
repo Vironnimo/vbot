@@ -10,6 +10,7 @@ import sys
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,8 @@ from cli.application.state import (
     write_json,
 )
 from cli.server_management import ServerState
-from core.utils.server_control import process_started
+from core.utils.file_status import exists_strict
+from core.utils.server_control import live_server_ports, process_started
 
 _LOGGER = logging.getLogger("vbot.application.integration")
 
@@ -139,6 +141,23 @@ def _remove_tree(path: Path) -> None:
     shutil.rmtree(path)
 
 
+def _normalized_removal_installation(install: Installation) -> Installation:
+    """Resolve removal targets and refuse overlapping application and server data."""
+    root = install.root.expanduser().resolve()
+    data = (
+        Path(install.server_data_directory).expanduser().resolve()
+        if install.owns_server and install.server_data_directory is not None
+        else None
+    )
+    if data is not None and (data.is_relative_to(root) or root.is_relative_to(data)):
+        raise ApplicationError("Application and server data directories must be separate")
+    return replace(
+        install,
+        root=root,
+        server_data_directory=str(data) if data is not None else install.server_data_directory,
+    )
+
+
 def uninstall(
     install: Installation,
     *,
@@ -164,6 +183,21 @@ def uninstall(
         raise ApplicationError(f"Packaged application removal is not supported on {platform}")
     if remove_data and data_only:
         raise ApplicationError("Choose application-and-data removal or data-only reset")
+    # Check before locks, process stops or uninstaller launch: application-only
+    # removal must not erase data recorded inside the application either.
+    install = _normalized_removal_installation(install)
+    data = (
+        Path(install.server_data_directory)
+        if install.owns_server and install.server_data_directory is not None
+        else None
+    )
+    if remove_data or data_only:
+        if data is None:
+            raise ApplicationError("This Desktop Client does not own server data")
+        if data in {data.parent, Path.home().resolve()} or Path.cwd().resolve().is_relative_to(
+            data
+        ):
+            raise ApplicationError("Refusing to remove an unsafe application data directory")
     uninstaller = (
         registered_uninstaller(install.root) if platform == "win32" and not data_only else None
     )
@@ -206,22 +240,18 @@ def uninstall(
                     )
             removed_data = False
             if remove_data or data_only:
-                if not install.owns_server or install.server_data_directory is None:
-                    raise ApplicationError("This Desktop Client does not own server data")
-                data = Path(install.server_data_directory).resolve()
-                home = Path.home().resolve()
-                root = install.root.resolve()
-                cwd = Path.cwd().resolve()
-                if (
-                    data in {data.parent, home, root}
-                    or data.is_relative_to(root)
-                    or root.is_relative_to(data)
-                    or cwd.is_relative_to(data)
-                ):
+                assert data is not None  # Validated before any changes above.
+                try:
+                    claims = live_server_ports(data)
+                except OSError as exc:
                     raise ApplicationError(
-                        "Refusing to remove an unsafe application data directory"
+                        "Application data removal aborted: server claims could not be checked"
+                    ) from exc
+                if claims:
+                    raise ApplicationError(
+                        f"Application data is still in use by a server on ports: {claims}"
                     )
-                if data.exists():
+                if exists_strict(data):
                     remove_tree(data)
                     removed_data = True
             if data_only:
@@ -273,6 +303,7 @@ def begin_removal(install: Installation) -> dict[str, Any]:
     """Reserve actual Inno deletion after its normal stop/exit preflight."""
     import psutil  # type: ignore[import-untyped]
 
+    install = _normalized_removal_installation(install)
     with exclusive(install.root, "dispatch", timeout=15), exclusive(install.root):
         if any(not operation.terminal for operation in operations(install)):
             raise ApplicationError("An update is still pending; wait before removing vBot")

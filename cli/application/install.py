@@ -50,8 +50,8 @@ def install_payload(
     public_key: str = "",
     channel: str = "release",
 ) -> Installation:
-    root, payload = root.expanduser().absolute(), payload.expanduser().resolve()
-    resolved_root = root.resolve()
+    root, payload = root.expanduser().resolve(), payload.expanduser().resolve()
+    resolved_root = root
     if (
         resolved_root == resolved_root.parent
         or resolved_root == Path.home().resolve()
@@ -94,7 +94,7 @@ def install_payload(
         for path in root.iterdir()
     ):
         raise ApplicationError("The application destination is not empty")
-    resolved_data = (data_dir or Path.home() / ".vbot").expanduser().absolute()
+    resolved_data = (data_dir or Path.home() / ".vbot").expanduser().resolve()
     if shape != "desktop-client" and (
         resolved_data == root
         or resolved_data.is_relative_to(root)

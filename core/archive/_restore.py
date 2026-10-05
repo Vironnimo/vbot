@@ -50,6 +50,7 @@ from core.sessions import (
     ArchiveTree,
     SessionAddress,
 )
+from core.utils.file_status import exists_strict, is_dir_strict
 from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.logging import get_logger
 from core.utils.tree_move import move_tree
@@ -209,7 +210,9 @@ def settle_interrupted(services: ArchiveServices, entry: ArchiveEntry) -> str:
     tree = _tree(entry, ARCHIVE_TREE_AGENT if agent else ARCHIVE_TREE_PROJECT)
     payload = None if tree is None else stored_path(services, tree.path)
     live = services.data_dir / ("agents" if agent else "projects") / target
-    if (payload is not None and payload.is_dir()) or not os.path.lexists(live):
+    payload_present = payload is not None and is_dir_strict(payload)
+    live_present = exists_strict(live, follow_symlinks=False)
+    if payload_present or not live_present:
         _return_moved_workspace(services, entry)
         ledger.abort_restore(entry.entry_key)
         return "rolled_back"
@@ -259,7 +262,11 @@ def _return_moved_workspace(services: ArchiveServices, entry: ArchiveEntry) -> N
     moved = stored_path(services, workspace_tree.path)
     placed = Path(destination)
     archive_root = (services.data_dir / ARCHIVE_ROOT).resolve()
-    if not moved.exists() and placed.is_dir() and placed.resolve().is_relative_to(archive_root):
+    if (
+        not exists_strict(moved)
+        and is_dir_strict(placed)
+        and placed.resolve().is_relative_to(archive_root)
+    ):
         move_tree(placed, moved)
 
 
