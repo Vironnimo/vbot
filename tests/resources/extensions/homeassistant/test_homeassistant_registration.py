@@ -99,9 +99,12 @@ def test_provider_schemas_are_open_and_leave_identifier_grammar_to_the_tools() -
 @pytest.mark.parametrize(
     ("tool_name", "arguments"),
     [
-        (HA_LIST_SERVICES_NAME, {"domain": []}),
+        (HA_LIST_SERVICES_NAME, {"domain": ["light", "switch"]}),
         (HA_GET_STATE_NAME, {"entity_id": {"id": "light.kitchen"}}),
-        (HA_CALL_SERVICE_NAME, {"domain": "light", "service": "turn_on", "data": []}),
+        (
+            HA_CALL_SERVICE_NAME,
+            {"domain": "light", "service": "turn_on", "data": [{"brightness_pct": 50}]},
+        ),
     ],
 )
 async def test_wrong_typed_arguments_fail_at_dispatch_before_any_request(

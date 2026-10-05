@@ -98,11 +98,14 @@ def _mock_services() -> respx.Route:
 # ha_list_services
 @respx.mock
 @pytest.mark.asyncio
-async def test_list_services_without_domain_names_services_per_domain() -> None:
+@pytest.mark.parametrize("arguments", [{}, {"domain": []}])
+async def test_list_services_without_domain_names_services_per_domain(
+    arguments: dict[str, Any],
+) -> None:
     _mock_services()
     tools = tools_with_token()
 
-    result = await dispatch(tools, HA_LIST_SERVICES_NAME, {})
+    result = await dispatch(tools, HA_LIST_SERVICES_NAME, arguments)
 
     data = assert_success_envelope(result)
     assert data["count"] == 4
@@ -259,6 +262,12 @@ async def test_call_service_reports_changed_states_as_lines() -> None:
         ({"service": "Light.Turn_On"}, "/api/services/light/turn_on", {}),
         ({"domain": "light.turn_on"}, "/api/services/light/turn_on", {}),
         ({"domain": "light", "service": "light.turn_on"}, "/api/services/light/turn_on", {}),
+        # Empty optional data requests the same service without extra fields.
+        (
+            {"domain": "light", "service": "turn_on", "data": []},
+            "/api/services/light/turn_on",
+            {},
+        ),
         # Identifier spelling, JSON-string data, and a service without its domain
         (
             {"domain": " LIGHT ", "service": "Turn On", "entity_id": "Light.Kitchen"},
