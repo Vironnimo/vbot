@@ -22,8 +22,10 @@ from core.runs import (
 )
 from core.sessions import SessionAddress
 from core.subagents._constants import (
+    FACTS_NO_SIBLINGS_PENDING_TEXT,
     FACTS_NOTHING_RUNNING_TEXT,
     FACTS_RUNNING_TEMPLATE,
+    FACTS_SIBLINGS_PENDING_TEMPLATE,
     FORWARDED_FAILURE_TEXT_TEMPLATE,
     FORWARDED_NO_ANSWER_TEXT,
     FORWARDED_RUN_KINDS,
@@ -169,7 +171,10 @@ class SubAgentForwarding:
                 run.id,
             )
             return
-        facts = await running_entries(self._runtime, address)
+        facts = facts_text(await running_entries(self._runtime, address))
+        siblings = await self._siblings_text(link, run.id)
+        if siblings is not None:
+            facts = f"{facts}\n{siblings}"
         body = FORWARDED_SECTION_TEMPLATE.format(
             id=link.id,
             title=link.title or link.id,
@@ -177,7 +182,7 @@ class SubAgentForwarding:
             session_id=address.session_id,
             outcome=outcome,
             answer=answer,
-            facts=facts_text(facts),
+            facts=facts,
         )
         parent = link.parent
         delivery = self._trigger_service.submit_completion(
@@ -191,6 +196,35 @@ class SubAgentForwarding:
             on_persisted=lambda: self._mark_read(address, run.id),
         )
         delivery.add_done_callback(lambda done: _log_delivery(done, link, run.id))
+
+    async def _siblings_text(self, link: SubAgentLink, run_id: str) -> str | None:
+        """Name the Parent's other Sub-Agents whose answers are still to come, as of now.
+
+        A sibling counts while it works or while a followed Run of it has not yet
+        handed its answer to delivery. ``None`` when the Parent has no other
+        Sub-Agent that is not taken over.
+        """
+        sessions = self._runtime.chat_sessions
+        siblings = [
+            sibling
+            for sibling in await sessions.run_async(children, sessions, link.parent)
+            if sibling.id != link.id and sibling.taken_over_at is None
+        ]
+        if not siblings:
+            return None
+        forwarding = {
+            _run_address(run)
+            for followed_id, (run, _task) in self._followed.items()
+            if followed_id != run_id and followed_id not in self._silenced
+        }
+        pending = [
+            f"{sibling.id} ({_single_line(sibling.title)})" if sibling.title else sibling.id
+            for sibling in siblings
+            if sibling.session in forwarding or is_working(self._runtime, sibling.session)
+        ]
+        if not pending:
+            return FACTS_NO_SIBLINGS_PENDING_TEXT
+        return FACTS_SIBLINGS_PENDING_TEMPLATE.format(entries="; ".join(pending))
 
     def _mark_read(self, address: SessionAddress, run_id: str) -> None:
         try:

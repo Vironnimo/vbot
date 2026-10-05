@@ -147,6 +147,9 @@ FORWARDED_NO_ANSWER_TEXT = "(The turn ended without an answer.)"
 FORWARDED_FAILURE_TEXT_TEMPLATE = "(The turn failed: {error})"
 FACTS_RUNNING_TEMPLATE = "Still running for this Sub-Agent: {entries}."
 FACTS_NOTHING_RUNNING_TEXT = "Nothing is still running for this Sub-Agent."
+# Only when the Parent has other Sub-Agents, so it knows whether more answers follow.
+FACTS_SIBLINGS_PENDING_TEMPLATE = "Answers still to come from your other Sub-Agents: {entries}."
+FACTS_NO_SIBLINGS_PENDING_TEXT = "No answers from your other Sub-Agents are still to come."
 TAKEN_OVER_NOTICE_TEMPLATE = (
     "### Sub-Agent {id} — {title}\n"
     "The user took over this Sub-Agent by writing in its Session. vBot no longer sends you its "

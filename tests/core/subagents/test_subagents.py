@@ -15,6 +15,7 @@ from core.projects import AgentResolutionError, ResolutionProjectNotFoundError
 from core.runs import RunKind, RunStatus
 from core.sessions import SUBAGENT_PARENT_META_KEY
 from core.subagents._constants import (
+    FACTS_NO_SIBLINGS_PENDING_TEXT,
     FACTS_NOTHING_RUNNING_TEXT,
     MESSAGE_PARENT_NOT_SUBAGENT_MESSAGE,
 )
@@ -224,6 +225,26 @@ async def test_answer_names_working_subagents_of_the_subagent(harness: SubAgentH
 
     body = harness.triggers.to(harness.parent)[1].body
     assert f"Still running for this Sub-Agent: Sub-Agent {inner['id']} (Do inner)." in body
+
+
+async def test_answer_names_the_parents_other_subagents_whose_answers_are_still_to_come(
+    harness: SubAgentHarness,
+) -> None:
+    gate = harness.loop.hold("slow")
+    slow = await harness.spawn("slow")
+    await harness.spawn("fast")
+    await harness.until(lambda: len(harness.triggers.to(harness.parent)) == 1)
+
+    first = harness.triggers.to(harness.parent)[0].body
+    assert first.endswith(
+        f"{FACTS_NOTHING_RUNNING_TEXT}\n"
+        f"Answers still to come from your other Sub-Agents: {slow['id']} (Do slow)."
+    )
+
+    gate.set()
+    await harness.settle()
+    last = harness.triggers.to(harness.parent)[1].body
+    assert last.endswith(f"{FACTS_NOTHING_RUNNING_TEXT}\n{FACTS_NO_SIBLINGS_PENDING_TEXT}")
 
 
 async def test_send_to_a_working_subagent_reaches_its_running_turn(
