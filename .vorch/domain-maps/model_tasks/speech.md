@@ -61,12 +61,13 @@ Each engine has its own cached model and bounded worker, serializing its loading
 inference and unloading outside the Event Loop. Other engines remain independent:
 STT can be unloaded while TTS is busy. Changing load options replaces only that
 engine's model; switching bindings or using a Provider does not evict other models.
-Runtime shutdown closes all engines. A cancelled STT request that is still queued
-never starts; a running one starts no further chunk, and its caller waits until the
-running chunk has finished, so the engine is never reported idle while it works.
-A managed STT child that has not answered that chunk within `_CANCEL_GRACE_S`
-(30 s) is ended (`abort()`, optional on `LocalTranscriptionEngine`) and its model
-unloaded; an in-process engine cannot be interrupted and always finishes. Memory status is metadata-only; targeted manual
+Runtime shutdown closes all engines. A cancelled STT or TTS request that is still
+queued never starts (`LocalSpeechExecutor._run`); a running one starts no further
+engine call (STT: no further chunk), and its caller waits until the running call has
+finished, so the engine is never reported idle while it works. A worker child (managed
+STT, every TTS engine) that has not answered that call within `_CANCEL_GRACE_S` (30 s)
+is ended (`abort()`, optional on both engine protocols) and its model unloaded; an
+in-process engine cannot be interrupted and always finishes. Memory status is metadata-only; targeted manual
 release refuses a busy engine immediately and keeps the installed Model files. Coverage:
 `test_speech_local.py` checks independent residency, busy TTS during STT release,
 cancellation, no-op release and loading again.
@@ -85,9 +86,9 @@ starts the same load regardless of the option and returns at once with `loaded`,
 the engine's worker, so a transcription arriving meanwhile queues behind it and
 reuses the model; a pending load with the same load identity is not started
 twice; failures are logged and left for the next transcription to report.
-Shutdown cancels a preload that has not started and kills every managed STT child
-the server is waiting on, loading or transcribing (`_WaitingWorkers`); its request fails
-as closed. An in-process load or inference (development checkout) cannot be interrupted
+Shutdown cancels a preload that has not started and kills every worker child the
+server is waiting on, loading, transcribing or synthesizing (`_WaitingWorkers`); its
+request fails as closed. An in-process load or inference (development checkout) cannot be interrupted
 and delays shutdown until it finishes. The real load, including a managed
 child's, logs one INFO line with the engine and load seconds after it completes
 (its start only at DEBUG). Coverage: `test_speech_local.py` (prepare states, dedupe, waiting
@@ -219,13 +220,16 @@ PROJECT.md -> Development -> Python version), reports `loading`/`synthesizing` p
 mono PCM16 WAV to a parent-owned temporary path. The parent retains one process per TTS target
 while that target's load options (`device`) match, bounds requests to 5,000 characters / 64 MiB output,
 and owns timeouts and whole-process-tree cleanup (Windows launchers have child
-interpreters). Sentence/word chunking bounds each generation context. No voice
+interpreters): `_TtsEngine` and `_ManagedSttEngine` share `_WorkerProcess`, so a TTS
+child that has not answered within `_SYNTHESIS_DEADLINE_S` (1800 s, its load plus the
+text) is ended like an STT child (deadline, cancellation grace, shutdown above), and the
+request fails with `LocalSpeechExecutionError`. Sentence/word chunking bounds each generation context. No voice
 cloning input is exposed. The child loads only from the `model_path` it receives
 (the installed Model directory) and disables Hub networking for SDK loading and
 inference. The pinned Chatterbox tokenizer's mapping lookup resolves directly from
 that directory instead of probing a nested Hub cache. Native Chatterbox watermarking remains enabled. Coverage: `test_speech_tts.py` covers
-SDK calls, playable WAV chunks, process boundaries, setup isolation, sizes sharing an
-environment with their own Models, and availability.
+SDK calls, playable WAV chunks, process boundaries, ending a child that stops answering,
+setup isolation, sizes sharing an environment with their own Models, and availability.
 
 ## Provider Wire Behavior
 
@@ -257,7 +261,7 @@ Executable TTS targets send JSON to `/audio/speech` and return raw audio bytes. 
 - With `Accept: application/x-ndjson`, the same upload streams request-local
   progress heartbeats and one terminal result/error. `server/app.py` owns this
   transport and cancels/reaps work on disconnect; local worker cancellation
-  waits for the running chunk, bounded for managed STT (Local engines). Ordinary JSON clients remain supported.
+  waits for the running engine call, bounded for worker children (Local engines). Ordinary JSON clients remain supported.
   Coverage: `tests/server/test_speech_endpoints.py`.
 - Status and install of every local speech target go through the generic
   `task_model.local_setup_status/install {target}` (`model_tasks.md` -> Contracts),
