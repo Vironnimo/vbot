@@ -88,16 +88,31 @@
   height: calc(28px + var(--chat-overlay-height, 0px));
 }
 
-/* Chat reading column width. `.messages` stays full-width (scrollbar at the
-   edge); only the inner content column is capped and centered. The live width
-   comes from `--chat-measure`, which `.chat-view[data-chat-width]` overrides
-   below (Phase 3 supplies the persisted value). `full` disables the cap. */
+/* Chat column width. `.messages` stays full-width (scrollbar at the edge);
+   only the inner content column is capped and centered. The live width comes
+   from `--chat-measure`, which `.chat-view[data-chat-width]` overrides below.
+   `full` disables the cap. */
 .chat-view[data-chat-width='wide'] {
   --chat-measure: var(--chat-measure-wide);
 }
 
 .chat-view[data-chat-width='full'] {
   --chat-measure: none;
+}
+
+/* Prose keeps its reading measure at every Chat width; code, tables, images
+   and Tool rows take the whole column. Chat-scoped, so Markdown reused in
+   other views keeps its own layout. */
+.messages__content
+  .msg-markdown
+  > :is(p, ul, ol, h1, h2, h3, h4, h5, h6, blockquote, hr),
+.messages__content .msg.assistant > .msg-content > .msg-body-text {
+  max-width: var(--chat-prose-measure);
+}
+
+.messages__content .msg-body-text--user,
+.messages__content .message-block.user {
+  max-width: min(75%, var(--chat-prose-measure));
 }
 
 .chat-timeline-empty {

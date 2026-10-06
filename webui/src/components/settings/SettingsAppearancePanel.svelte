@@ -195,6 +195,9 @@
       <div class="s-row-label">
         {t('settings.appearance.chatWidth.label')}
       </div>
+      <div class="s-row-desc">
+        {t('settings.appearance.chatWidth.description')}
+      </div>
     </div>
     <div class="s-row-control s-row-control--appearance">
       <Dropdown

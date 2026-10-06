@@ -1182,6 +1182,8 @@ export default Object.freeze({
   'settings.appearance.title': 'Appearance',
   'settings.appearance.language': 'Language',
   'settings.appearance.chatWidth.label': 'Chat width',
+  'settings.appearance.chatWidth.description':
+    'Room for code, tables, images and Tool activity on large screens. Text keeps a comfortable line length at every width.',
   'settings.appearance.chatWidth.comfortable': 'Comfortable',
   'settings.appearance.chatWidth.wide': 'Wide',
   'settings.appearance.chatWidth.full': 'Full width',

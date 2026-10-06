@@ -152,13 +152,17 @@
 
   /* Content-width / reading-measure layer. Single source of truth for how wide
      the current measured content columns grow on large monitors.
-     `--chat-measure` is the live chat reading column; it defaults to the
-     comfortable tier and is overridden per `[data-chat-width]` on `.chat-view`.
+     `--chat-measure` is the live chat column; it defaults to the comfortable
+     tier and is overridden per `[data-chat-width]` on `.chat-view`. Chat
+     prose never grows past `--chat-prose-measure` (about 88 characters of
+     prose text, the comfortable column's text width), so wider tiers give
+     room to code, tables, images and Tool rows without lengthening lines.
      The `--content-max-*` tokens cap non-chat views (settings/forms vs.
      detail/wide panels) and are not user-configurable. */
   --chat-measure-comfortable: 780px;
   --chat-measure-wide: 1100px;
   --chat-measure: var(--chat-measure-comfortable);
+  --chat-prose-measure: 46em;
   --content-max-narrow: 920px;
   --content-max-wide: 1180px;
 
