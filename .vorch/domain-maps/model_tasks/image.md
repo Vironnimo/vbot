@@ -68,7 +68,7 @@ When response entries omit their MIME type, local result metadata uses the `outp
   a1b2c3d4....png
 ```
 
-Artifact ids use `img_` plus 12 lowercase base32 characters, and exclusive file creation retries an id collision rather than overwriting an existing file. The filename extension is inferred from the result media type (`png`, `jpg`, `webp`, `gif`, `bmp`, `svg`, fallback `png`), not from provider filenames. The image Tool owns root selection: Identity Agents always use `<Workspace>/image-gen/`, including while Rooted; Project Config Agents use `<Project cwd>/image-gen/`. Chat file presentation uses the ordinary signed `/api/files/` path when an Assistant references the returned absolute path, so image generation needs no image-specific HTTP endpoint or central copy.
+Artifact ids use `img_` plus 12 lowercase base32 characters, and exclusive file creation retries an id collision rather than overwriting an existing file. The filename extension is inferred from the result media type (`png`, `jpg`, `webp`, `gif`, `bmp`, `svg`, fallback `png`), not from provider filenames. The image Tool owns root selection: Identity Agents always use `<Workspace>/image-gen/`, also in a Session working in a Project; Project Config Agents use `<Project cwd>/image-gen/`. Chat file presentation uses the ordinary signed `/api/files/` path when an Assistant references the returned absolute path, so image generation needs no image-specific HTTP endpoint or central copy.
 
 ## Agent-facing text
 

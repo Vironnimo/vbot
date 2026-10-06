@@ -163,19 +163,28 @@ class FakeApp:
         rows.sort(key=lambda row: row["last_active_at"], reverse=True)
         return {"sessions": rows[: params["limit"]]}
 
-    def _session_create(self, params: JsonObject) -> JsonObject:
-        self.created += 1
-        session_id = f"ses_new{self.created}"
-        self.sessions.append(session_row(session_id, params["agent_id"], last_active_at=AFTER))
-        return {"agent_id": params["agent_id"].split("@")[0], "session_id": session_id}
-
     def _chat_stream(self, params: JsonObject) -> JsonObject:
+        if str(params["content"]).startswith("/"):
+            # A slash command runs without a Run; for a new Session it creates none.
+            return {"command_handled": True, "reply": "Commands: /help, /status"}
+        session_id = params.get("session_id")
+        if "new_session" in params:
+            # The server creates the new Session together with the task's Run.
+            self.created += 1
+            session_id = f"ses_new{self.created}"
+            self.sessions.append(session_row(session_id, params["agent_id"], last_active_at=AFTER))
         for row in self.sessions:
-            if row["id"] == params["session_id"]:
+            if row["id"] == session_id:
                 row["has_active_run"] = True
         if self.queued:
-            return {"queued": True, "item": {"item_id": "q1"}}
-        return {"run_id": "run_1", "status": "running", "events": [], "sse_url": "/x"}
+            return {"queued": True, "session_id": session_id, "item": {"item_id": "q1"}}
+        return {
+            "run_id": "run_1",
+            "session_id": session_id,
+            "status": "running",
+            "events": [],
+            "sse_url": "/x",
+        }
 
     def _chat_history(self, params: JsonObject) -> JsonObject:
         return self.histories.get(params["session_id"], {"messages": []})

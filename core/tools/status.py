@@ -30,7 +30,7 @@ from core.projects import (
 )
 from core.providers.providers import ProviderRegistry
 from core.runs import ChatRunManager
-from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import SESSION_WORKING_PROJECT_META_KEY, ChatSessionManager, SessionAddress
 from core.tools.arguments import optional_string
 from core.tools.call_syntax import (
     PLACEHOLDER_WORDS,
@@ -252,12 +252,12 @@ def make_status_handler(
                 retryable=False,
             )
 
+        address = SessionAddress(
+            project_id=context.project_id, agent_id=agent_id, session_id=session_id
+        )
         try:
-            snapshot = sessions.get(
-                SessionAddress(
-                    project_id=context.project_id, agent_id=agent_id, session_id=session_id
-                )
-            ).status_snapshot()
+            snapshot = sessions.get(address).status_snapshot()
+            working_project_id = sessions.metadata_value(address, SESSION_WORKING_PROJECT_META_KEY)
         except ChatSessionError:
             message = _SESSION_NOT_FOUND_MESSAGE_TEMPLATE.format(
                 session_id=session_id, agent_id=agent_id
@@ -293,7 +293,7 @@ def make_status_handler(
                     model_details=model_details,
                     describe_render=reasoning_render_describer,
                 ),
-                project_label=resolve_status_project_label(projects, context.project_id),
+                project_label=resolve_status_project_label(projects, working_project_id),
                 sampling_status=resolve_status_sampling(agent, model_details),
                 timezone=_configured_zone(timezone_name_loader),
             )

@@ -98,6 +98,8 @@ class RuntimeAgent(Protocol):
 
 
 AGENT_OVERRIDE_FIELDS = ("model", "thinking_effort", "temperature", "top_p")
+# The Session metadata key holding a Session's Agent overrides.
+AGENT_OVERRIDES_META_KEY = "agent_overrides"
 
 
 @dataclass(frozen=True)
@@ -161,6 +163,10 @@ class AgentOverrides:
         """Return the runtime Agent fields these overrides replace, keyed by field name."""
         return self.as_dict()
 
+    def session_metadata(self) -> dict[str, Any]:
+        """Return the Session metadata that stores these overrides (empty for none)."""
+        return {} if self.is_empty else {AGENT_OVERRIDES_META_KEY: self.as_dict()}
+
 
 @dataclass(frozen=True)
 class ConfigAgent:
@@ -223,6 +229,24 @@ class ResolutionAgentNotFoundError(AgentResolutionError):
 
 class ResolutionProjectNotFoundError(AgentResolutionError):
     """The addressed Project has no Anchor with exactly this id."""
+
+
+# A Session keeps the Project it was created with; it never moves to another one.
+WORKING_PROJECT_MISSING_MESSAGE = (
+    "This Session works in Project {project_id}, which no longer exists. "
+    "Restore the Project to continue this Session, or start a new Session."
+)
+
+
+class WorkingProjectMissingError(AgentResolutionError):
+    """The Project a Session works in no longer exists, so the Session cannot run.
+
+    The Session stays readable; it runs again once the Project is restored.
+    """
+
+    def __init__(self, project_id: str) -> None:
+        super().__init__(WORKING_PROJECT_MISSING_MESSAGE.format(project_id=project_id))
+        self.project_id = project_id
 
 
 class GlobalAgentDefaultsProvider(Protocol):

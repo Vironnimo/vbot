@@ -492,7 +492,7 @@ def _detail_lines(details: object) -> list[str]:
     if details.get("cwd"):
         lines.append(f"repo: {details['cwd']}")
     if details.get("root_project_id"):
-        lines.append(f"rooted in project: {details['root_project_id']}")
+        lines.append(f"default project: {details['root_project_id']}")
     workspace = details.get("workspace")
     if isinstance(workspace, dict) and workspace.get("external") and workspace.get("path"):
         lines.append(
@@ -504,7 +504,8 @@ def _detail_lines(details: object) -> list[str]:
     unrooted = _strings(details.get("unrooted_agents"))
     if unrooted:
         lines.append(
-            f"rooted agents: {', '.join(unrooted)} (rooted in the project again on restore)"
+            f"agents with this default project: {', '.join(unrooted)} "
+            "(their default project again on restore)"
         )
     if details.get("reason"):
         lines.append(f"reason: {details['reason']}")

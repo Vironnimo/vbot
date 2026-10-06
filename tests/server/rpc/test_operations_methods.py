@@ -18,7 +18,7 @@ from typing import Any, cast
 
 import pytest
 
-from core.projects import ResolutionAgentNotFoundError
+from core.projects import AgentResolver, ResolutionAgentNotFoundError
 from core.projects.resolver import ConfigAgent
 from core.prompts import (
     BlockDefinition,
@@ -26,6 +26,7 @@ from core.prompts import (
     PromptAgentStore,
     SystemPromptManager,
 )
+from core.sessions import SessionNotFoundError
 from core.tools import ToolAccess, ToolRegistry
 from core.utils.log_viewer import LogViewer
 from core.utils.paths import model_path
@@ -231,24 +232,53 @@ def _state(manager: SystemPromptManager, *, runtime_extra: JsonObject | None = N
     return SimpleNamespace(runtime=runtime)
 
 
+class _SessionProjects:
+    """Session store double: the working Project each existing Session stores."""
+
+    def __init__(self, projects: dict[str, str | None]) -> None:
+        self._projects = projects
+
+    def metadata_value(self, address: Any, key: str) -> str | None:
+        if address.session_id not in self._projects:
+            raise SessionNotFoundError(f"session does not exist: {address.session_id}")
+        return address.project_id or self._projects[address.session_id]
+
+
 def _preview_state(
     manager: SystemPromptManager,
     agent: Any,
     *,
     projects: Any = None,
     skills_for: Any = None,
+    session_projects: dict[str, str | None] | None = None,
 ) -> Any:
-    """State whose resolver serves one Agent and fails like the real one otherwise."""
+    """State whose resolver serves one Agent and fails like the real one otherwise.
 
-    def resolve_agent(_project_id: str | None, agent_id: str) -> Any:
+    Every Project exists; ``session_projects`` names the Project each existing
+    Session works in.
+    """
+
+    def resolve_agent(
+        _project_id: str | None, agent_id: str, *, session_id: str | None = None
+    ) -> Any:
         if agent_id != agent.id:
             raise ResolutionAgentNotFoundError(f"agent not found: {agent_id}")
         return agent
 
+    working_projects = AgentResolver(
+        cast(Any, None),
+        cast(Any, SimpleNamespace(exists=lambda _project_id: True)),
+        cast(Any, None),
+        dict,
+        sessions=cast(Any, _SessionProjects(session_projects or {})),
+    )
     return _state(
         manager,
         runtime_extra={
-            "agent_resolver": SimpleNamespace(resolve_agent=resolve_agent),
+            "agent_resolver": SimpleNamespace(
+                resolve_agent=resolve_agent,
+                resolve_working_project=working_projects.resolve_working_project,
+            ),
             "projects": projects if projects is not None else SimpleNamespace(),
             "skills_for": skills_for or (lambda _project, _agent=None: StubSkills()),
         },
@@ -667,9 +697,22 @@ async def test_preview_renders_the_requested_scope_and_validates_it_off_the_even
 
 
 @pytest.mark.asyncio
-async def test_preview_resolves_rooted_identity_skill_pool(tmp_path: Path) -> None:
-    # A Rooted Identity Agent previews against its explicitly selected Project's
-    # skill pool, matching live Run scope rather than the bare global registry.
+@pytest.mark.parametrize(
+    ("default_project", "params", "skill_project"),
+    [
+        pytest.param("vbot", {}, "vbot", id="draft-in-the-default-project"),
+        pytest.param("vbot", {"working_project_id": None}, None, id="draft-in-the-workspace"),
+        pytest.param(None, {"working_project_id": "vbot"}, "vbot", id="draft-in-a-project"),
+        pytest.param(None, {"session_id": "in-vbot"}, "vbot", id="session-in-a-project"),
+        pytest.param("vbot", {"session_id": "in-workspace"}, None, id="session-in-workspace"),
+    ],
+)
+async def test_preview_renders_the_working_project_of_an_identity_agent(
+    tmp_path: Path, default_project: str | None, params: JsonObject, skill_project: str | None
+) -> None:
+    # An Identity Agent previews in the Project its Session works in, or a draft's
+    # new Session would work in: its Working Project block and Skill pool, matching
+    # live Run scope.
     repo = tmp_path / "repo"
     repo.mkdir()
     identity_workspace = tmp_path / "identity"
@@ -678,7 +721,7 @@ async def test_preview_resolves_rooted_identity_skill_pool(tmp_path: Path) -> No
         id="coder",
         name="Coder",
         workspace=str(identity_workspace),
-        root_project_id="vbot",
+        root_project_id=default_project,
     )
     home_project = SimpleNamespace(
         project_id="vbot",
@@ -697,15 +740,18 @@ async def test_preview_resolves_rooted_identity_skill_pool(tmp_path: Path) -> No
         agent,
         projects=SimpleNamespace(get=lambda _project_id: home_project),
         skills_for=skills_for,
+        session_projects={"in-vbot": "vbot", "in-workspace": None},
     )
 
-    result = await _preview_prompt(state, {"agent_id": "coder"})
+    result = await _preview_prompt(state, {"agent_id": "coder", **params})
 
-    assert skills_for_calls == [("vbot", "coder")]
+    assert skills_for_calls == [(skill_project, "coder")]
     assert "## Identity Environment" in result["text"]
     assert f"Identity Workspace {model_path(identity_workspace)}" in result["text"]
-    assert "## Working Project" in result["text"]
-    assert f"Project Workspace {model_path(repo)}" in result["text"]
+    assert ("## Working Project" in result["text"]) is (skill_project is not None)
+    assert (f"Project Workspace {model_path(repo)}" in result["text"]) is (
+        skill_project is not None
+    )
 
 
 @pytest.mark.asyncio
@@ -798,6 +844,16 @@ async def test_preview_missing_rooted_project_cwd_maps_error_without_fallback(
         ),
         pytest.param(
             {"agent_id": "coder", "include_tools": 1}, "invalid_request", id="number-inspection"
+        ),
+        pytest.param(
+            {"agent_id": "coder", "session_id": "s1", "working_project_id": None},
+            "invalid_request",
+            id="session-and-draft-project",
+        ),
+        pytest.param(
+            {"agent_id": "coder@vbot", "working_project_id": "other"},
+            "invalid_request",
+            id="team-agent-draft-project",
         ),
     ],
 )

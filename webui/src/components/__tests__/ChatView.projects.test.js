@@ -151,7 +151,7 @@ describe('ChatView Projects', () => {
       ]);
     });
 
-    it('creates a Session for the first Team member when the Project has no default Agent', async () => {
+    it('shows a draft for the first Team member without a Session and creates it with the first send', async () => {
       serveProject({
         defaultAgent: '',
         team: [
@@ -159,15 +159,49 @@ describe('ChatView Projects', () => {
           ['second', 'Second'],
         ],
       });
-      // No listed Session: `session.create` returns `created-first@vbot`.
+      // No listed Session: the Team member shows a draft.
       rpcMock.mockImplementation(
-        createChatRpcMock({ sessionMessages: { 'created-first@vbot': [] } }),
+        createChatRpcMock({
+          streamHandler: () => ({
+            ...runningRun('run-first'),
+            session_id: 'first-session',
+          }),
+        }),
       );
-      await chat.mountChat(projectChatProps(), { ready: null });
+      const onSessionNavigation = vi.fn();
+      await chat.mountChat(projectChatProps({ onSessionNavigation }), {
+        ready: null,
+      });
+      const draftPlace = {
+        agentId: 'first@vbot',
+        sessionId: '',
+        subAgent: false,
+      };
 
-      await waitForCondition(() => activeTeamTabName().includes('First'));
-      // Created with the full address and without `make_current`.
-      expect(rpcCalls('session.create')).toEqual([{ agent_id: 'first@vbot' }]);
+      await waitForCondition(
+        () =>
+          activeTeamTabName().includes('First') &&
+          onSessionNavigation.mock.calls.at(-1)?.[0].agentId === 'first@vbot',
+      );
+      expect(onSessionNavigation).toHaveBeenLastCalledWith(draftPlace, {
+        replace: true,
+      });
+      expect(rpcCalls('session.create')).toEqual([]);
+      expect(projectHistoryAgents()).toEqual([]);
+
+      sendComposerMessage('Hello first');
+      await waitForCondition(
+        () =>
+          onSessionNavigation.mock.calls.at(-1)[0].sessionId ===
+          'first-session',
+      );
+      expect(rpcCalls('chat.stream')).toEqual([
+        { agent_id: 'first@vbot', new_session: {}, content: 'Hello first' },
+      ]);
+      expect(onSessionNavigation).toHaveBeenLastCalledWith(
+        { ...draftPlace, sessionId: 'first-session' },
+        { replace: true },
+      );
     });
 
     it('renders an empty Team bar without an error and keeps the Identity Agent', async () => {

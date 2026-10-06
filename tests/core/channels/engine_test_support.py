@@ -253,36 +253,26 @@ def make_command_dispatcher(
 
 
 def make_new_only_dispatcher() -> SimpleNamespace:
-    """Dispatcher whose core execution creates the preferred `/new` Session."""
+    """Dispatcher whose `/new` asks for a new Session, as the core `/new` does.
 
-    dispatcher = SimpleNamespace(chat_sessions=None)
+    Like the core command it creates no Session: the Channel's next inbound
+    message starts it.
+    """
+
+    dispatcher = SimpleNamespace()
 
     def prepare(text: str) -> PreparedCommand | None:
         if text.strip() != "/new":
             return None
-        return PreparedCommand(
-            name="new",
-            argument=None,
-            execution_mode="serialized",
-            accepts_preferred_session_id=True,
-        )
+        return PreparedCommand(name="new", argument=None, execution_mode="serialized")
 
     async def execute(_prepared: PreparedCommand, context: Any) -> CommandOutcome:
-        if dispatcher.chat_sessions is None:
-            raise AssertionError("new-only dispatcher was not bound to ChatSessionManager")
-        session = dispatcher.chat_sessions.create(
-            context.agent_id,
-            session_id=context.preferred_new_session_id,
-        )
         return CommandOutcome(
             command="new",
-            feedback=CommandFeedback(kind="notice", text=f"New session started: {session.id}"),
-            facts={"session_id": session.id},
-            navigation=CommandNavigation(
-                kind="continue_in_session",
-                agent_id=context.agent_id,
-                session_id=session.id,
+            feedback=CommandFeedback(
+                kind="notice", text="New session: it starts with your next message."
             ),
+            navigation=CommandNavigation(kind="new_session", agent_id=context.agent_id),
         )
 
     dispatcher.prepare = Mock(side_effect=prepare)
@@ -408,8 +398,6 @@ def make_engine(
     )
     resolved_transport = transport or FakeTransport()
     resolved_dispatcher = command_dispatcher or make_command_dispatcher()
-    if hasattr(resolved_dispatcher, "chat_sessions"):
-        resolved_dispatcher.chat_sessions = chat_sessions
     engine = ChannelConversationEngine(
         make_config(
             dm_scope=dm_scope,

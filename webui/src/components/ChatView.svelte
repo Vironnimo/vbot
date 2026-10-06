@@ -24,6 +24,7 @@
   import ChatTimeline from './ChatTimeline.svelte';
   import QueuedMessages from './QueuedMessages.svelte';
   import ChatComposer from './ChatComposer.svelte';
+  import ComposerSessionSettings from './chat/ComposerSessionSettings.svelte';
   import ComputerUseControl from './ComputerUseControl.svelte';
   import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
   import { agentActivityTooltip } from './chat/agentActivityTooltip.js';
@@ -35,13 +36,14 @@
   import { listConnections, listModels, subscribeRunEvents } from '$lib/api.js';
   import { getDraft } from '$lib/composerMemory.js';
   import { agentNeedsModel } from '$lib/onboarding.js';
-  import { formatAgentAddress } from '$lib/agentAddress.js';
+  import { formatAgentAddress, parseAgentAddress } from '$lib/agentAddress.js';
   import { createChatRunStream } from '../lib/chatRunStream.js';
   import { createChatViewTarget } from './chat/view/target.svelte.js';
   import { createChatViewNavigation } from './chat/view/navigation.svelte.js';
   import { createChatViewActions } from './chat/view/actions.svelte.js';
   import { createChatViewLayout } from './chat/view/layout.svelte.js';
   import { createSessionChanges } from './chat/view/sessionChanges.svelte.js';
+  import { createSessionSettings } from './chat/view/sessionSettings.svelte.js';
   import './chat/view/chatView.css';
 
   let {
@@ -50,6 +52,9 @@
     interactive = true,
     composerAvailable = true,
     preserveSessionSelection = false,
+    // Keeps this Chat area's unsaved drafts apart from another area's: each
+    // area remembers its own draft per Agent.
+    draftScope = 0,
     initialSessionFilters = null,
     onSessionFiltersChange,
     onDisplayedSession = () => {},
@@ -67,6 +72,9 @@
     // the persisted selection; ChatView reflects it back through
     // `onProjectSelected` so the localStorage mirror stays current.
     projects = [],
+    // Whether `projects` has been read: until then a Project missing from it
+    // is unknown, not unregistered.
+    projectsLoaded = false,
     selectedProjectId = '',
     onProjectSelected = () => {},
     // The agent to restore inside the selected project on the initial mount.
@@ -130,6 +138,9 @@
   const target = createChatViewTarget({
     get selectedProjectId() {
       return selectedProjectId;
+    },
+    get draftScope() {
+      return draftScope;
     },
     get projects() {
       return projects;
@@ -255,6 +266,9 @@
     get navigation() {
       return navigation;
     },
+    get sessionSettings() {
+      return sessionSettings;
+    },
   });
   const layout = createChatViewLayout({
     get active() {
@@ -286,7 +300,46 @@
     },
   });
 
+  // The composer footer's Project, Model and thinking effort.
+  const sessionSettings = createSessionSettings({
+    get active() {
+      return active;
+    },
+    get target() {
+      return target;
+    },
+    get chatController() {
+      return chatController;
+    },
+    get selectedProjectId() {
+      return selectedProjectId;
+    },
+    get sessionsRefreshToken() {
+      return sessionsRefreshToken;
+    },
+    get sessionInvalidations() {
+      return sessionInvalidations;
+    },
+    loadModelCatalog: () => loadModelCatalog(),
+    onError: (message, sessionKey) =>
+      actions.setSessionActionError(
+        message,
+        chatState.sessions[sessionKey] ?? null,
+      ),
+    // `/model` changed the Agent's Model: read its defaults again.
+    refreshAgentDefaults: (agentAddress) => {
+      if (parseAgentAddress(agentAddress).projectId) {
+        void target.refreshProjectTeam();
+        return;
+      }
+      void chatController.loadAgents({ silent: true });
+    },
+  });
+
   let showSessionDrawer = $state(false);
+  // Counts the Sessions this area's drafts created; each one refreshes the
+  // Session list.
+  let createdSessions = $state(0);
   const componentId = $props.id();
   const chatTitleId = `${componentId}-title`;
 
@@ -351,12 +404,8 @@
     })),
   );
 
-  // While New session is pending, the displayed Session is about to be
-  // replaced; a message sent now would land in the Session being left.
   let composerDisabled = $derived(
-    !target.activeAgent ||
-      chatState.loadingHistory ||
-      navigation.creatingDisplayedSession,
+    !target.activeAgent || chatState.loadingHistory,
   );
   // Provider availability is the first prerequisite for every current Agent.
   // Do not infer it from Models: App supplies Settings' authoritative usable-
@@ -373,10 +422,11 @@
       hasConnectedProvider === true &&
       agentNeedsModel(target.activeAgent),
   );
-  // The composer's per-session draft is keyed by the full displayed-session key;
-  // its per-agent input history is keyed by the agent part alone (bare id for an
-  // identity agent, `agent@projekt` for a project agent), so sessions of the
-  // same agent share one history.
+  // The composer's per-session draft is keyed by the full displayed-session key
+  // (a draft's own key while no Session exists); its per-agent input history is
+  // keyed by the agent part alone (bare id for an identity agent,
+  // `agent@projekt` for a project agent), so sessions of the same agent share
+  // one history.
   let composerDraftKey = $derived(target.displayedSessionKey());
   let composerHistoryKey = $derived.by(() => {
     const separator = composerDraftKey.indexOf('::');
@@ -387,23 +437,43 @@
   // @-mention lookup, so navigation cannot redirect an older submit.
   let composerSendMessage = $derived.by(() => {
     const agent = target.activeAgent;
+    if (!agent) {
+      return null;
+    }
+    const draft = target.activeDraft();
+    if (draft) {
+      // The draft's Project and overrides as they are when it is sent.
+      return async (content, options = {}) =>
+        await actions.sendDraft(
+          agent,
+          sessionSettings.draftWithSettings(draft),
+          content,
+          options,
+        );
+    }
     const sessionState = target.activeSessionState;
-    if (!agent || !sessionState) {
+    if (!sessionState) {
       return null;
     }
     return async (content, options = {}) =>
       await actions.sendStream(agent, sessionState, content, options);
   });
   let composerListFiles = $derived.by(() => {
-    const agentId = target.activeSessionState?.agentId ?? '';
+    const agentId =
+      target.activeSessionState?.agentId ??
+      target.activeDraft()?.agentAddress ??
+      '';
     if (!agentId) {
       return null;
     }
-    return async () => await chatController.listFiles(agentId);
+    // A Session lists the Project it works in; a draft the Project it chose.
+    const scope = sessionSettings.readScope();
+    return async () => await chatController.listFiles(agentId, scope);
   });
-  // The model catalog is global (not agent/session-scoped), so the loader is
-  // always available. The composer fetches on demand when `/model ` is typed.
-  let composerLoadModelCatalog = $derived(async () => {
+  // The model catalog is global (not agent/session-scoped). The composer
+  // fetches it when `/model ` is typed, the footer when it first shows and
+  // whenever its Model picker opens.
+  async function loadModelCatalog() {
     const [modelsResult, connectionsResult] = await Promise.all([
       listModels(),
       listConnections(),
@@ -414,7 +484,8 @@
         ? connectionsResult.connections
         : [],
     };
-  });
+  }
+  const composerLoadModelCatalog = () => sessionSettings.loadCatalog();
   const displayedSessionIsEmpty = () =>
     isSessionEmpty(target.activeSessionState) &&
     getDraft(composerDraftKey).trim().length === 0 &&
@@ -594,20 +665,20 @@
     };
   });
 
-  // Reload command/skill suggestions whenever the active address or live command
-  // catalog changes. The token does not disturb the draft or active selection.
+  // Reload command/skill suggestions whenever the active address, the
+  // Project its Skills come from (the Session's, or the one a draft chose) or
+  // the live command catalog changes. The token does not disturb the draft or
+  // active selection.
   $effect(() => {
     const { agentAddress } = target.activeAddressing();
-    const commandsKey = `${commandsRefreshToken}:${agentAddress}`;
+    const scope = sessionSettings.readScope();
+    const commandsKey = `${commandsRefreshToken}:${agentAddress}:${JSON.stringify(scope)}`;
     if (commandsKey === lastCommandsAddress) {
       return;
     }
     lastCommandsAddress = commandsKey;
-    loadCommands(agentAddress);
+    chatController.loadCommands(agentAddress, scope);
   });
-
-  const loadCommands = (agentAddress) =>
-    chatController.loadCommands(agentAddress);
 
   const loadAgents = (options = {}) => chatController.loadAgents(options);
 
@@ -635,6 +706,13 @@
       !navigation.viewingSessionId && !target.projectAgentActive,
     onAgentsChanged: (agents) => onAgentsChanged?.(agents),
     onAgentSelected: reportAgentSelected,
+    onSessionCreated: (sessionState) => {
+      navigation.adoptCreatedSession(
+        sessionState.agentId,
+        sessionState.sessionId,
+      );
+      createdSessions += 1;
+    },
     onRestartQueueDiscarded: (count) => {
       actions.showChatToast(
         count === 1
@@ -809,8 +887,7 @@
             class="chat-view__new-session-fab"
             ariaLabel={t('chat.newSession')}
             tooltip={t('chat.newSession')}
-            disabled={chatState.loadingHistory || !target.activeSessionState}
-            loading={navigation.creatingSession}
+            disabled={chatState.loadingHistory}
             onClick={navigation.handleNewSession}
           >
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
@@ -832,7 +909,7 @@
             agentId={target.activeAgentAddress}
             currentSessionId={navigation.viewingSessionId ||
               target.activeAgent.current_session_id}
-            reloadToken={sessionsRefreshToken}
+            reloadToken={`${sessionsRefreshToken}:${createdSessions}`}
             invalidations={sessionInvalidations}
             agents={target.sessionDrawerAgents}
             liveActivity={sessionDrawerActivity}
@@ -1010,7 +1087,8 @@
                 focusRequest={layout.composerFocusRequest}
                 availableSkills={chatState.availableSkills}
                 contextUsage={target.activeSessionState?.contextUsage}
-                compactionState={composerSendMessage
+                compactionState={composerSendMessage &&
+                target.activeSessionState
                   ? contextCompactionState(target.activeSessionState)
                   : 'unavailable'}
                 compactionSubmitting={actions.isCompactionSubmitting(
@@ -1036,6 +1114,20 @@
                     onError={actions.showChatToast}
                     subscribeInvalidations={subscribeExtensionInvalidations}
                   />
+                {/snippet}
+                {#snippet footer()}
+                  {#if sessionSettings.view}
+                    <ComposerSessionSettings
+                      view={sessionSettings.view}
+                      {projects}
+                      {projectsLoaded}
+                      onSelectProject={sessionSettings.selectProject}
+                      onSelectModel={sessionSettings.selectModel}
+                      onSelectThinkingEffort={sessionSettings.selectThinkingEffort}
+                      onModelPickerOpen={() =>
+                        void sessionSettings.loadCatalog().catch(() => {})}
+                    />
+                  {/if}
                 {/snippet}
               </ChatComposer>
             {:else}

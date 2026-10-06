@@ -185,7 +185,7 @@ async def test_memory_refusals_write_and_publish_nothing(
     tmp_path: Path, method: str, params: dict[str, object], code: str, named: str
 ) -> None:
     state = make_state(tmp_path, StubAdapter())
-    agents = AgentStore(tmp_path / "data")
+    agents = AgentStore(tmp_path, sessions=state.runtime.chat_sessions)
     state.runtime.agents = agents
     try:
         workspace = Path(agents.create("coder").workspace)

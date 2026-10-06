@@ -8,8 +8,14 @@ from typing import Any, Literal, cast
 from core.chat import ChatError
 from core.chat.content_blocks import ContentBlock, ContentBlockError, content_block_from_dict
 from core.chat.model_resolution import parse_model_with_connection
-from core.projects import InvalidAgentAddressError, parse_agent_address
-from core.settings import is_valid_agent_id
+from core.projects import (
+    AGENT_OVERRIDE_FIELDS,
+    AgentOverrides,
+    InvalidAgentAddressError,
+    parse_agent_address,
+)
+from core.sessions import AGENT_DEFAULT_PROJECT, WorkingProjectChoice
+from core.settings import is_valid_agent_id, is_valid_project_id
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 
 JsonObject = dict[str, Any]
@@ -218,3 +224,77 @@ def _validate_string_list(key: str, value: Any) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a list of strings")
     return list(value)
+
+
+def _optional_agent_overrides(
+    container: JsonObject, *, allow_clear: bool, label: str = "params"
+) -> JsonObject | None:
+    """Read ``<label>.agent_overrides``: a map of Agent override fields to values.
+
+    With *allow_clear* a ``null`` value clears that field; otherwise every value
+    must be set. Values are validated here, the Model's usability by the resolver.
+    """
+    if "agent_overrides" not in container or container["agent_overrides"] is None:
+        return None
+    raw = container["agent_overrides"]
+    key = f"{label}.agent_overrides"
+    if not isinstance(raw, dict):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{key} must be an object")
+    unknown = sorted(set(raw) - set(AGENT_OVERRIDE_FIELDS))
+    if unknown:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"{key} has unsupported fields: "
+            + ", ".join(unknown)
+            + "; supported: "
+            + ", ".join(AGENT_OVERRIDE_FIELDS),
+        )
+    if not allow_clear and any(value is None for value in raw.values()):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{key} values must not be null here")
+    try:
+        AgentOverrides(**{name: value for name, value in raw.items() if value is not None})
+    except ValueError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{key}: {exc}") from exc
+    return dict(raw)
+
+
+def _optional_working_project(
+    container: JsonObject, project_id: str | None, *, label: str = "params"
+) -> WorkingProjectChoice:
+    """Read ``<label>.working_project_id``: the working Project a new Session starts in.
+
+    Left out, the Session starts in its Agent's default Project; ``null`` names
+    the Agent's Workspace, a string a Project (whose existence the resolver
+    checks). A Team Agent address takes none: its Sessions work in its Project.
+    """
+    if "working_project_id" not in container:
+        return AGENT_DEFAULT_PROJECT
+    key = f"{label}.working_project_id"
+    if project_id is not None:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"{key} is not accepted for a Team Agent: its Sessions work in Project {project_id}",
+        )
+    value = container["working_project_id"]
+    if value is None:
+        return None
+    if not isinstance(value, str) or not is_valid_project_id(value):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{key} must be null or a valid Project id")
+    return value
+
+
+def _draft_working_project(
+    params: JsonObject, project_id: str | None, session_id: str | None
+) -> WorkingProjectChoice:
+    """Read ``params.working_project_id`` for a request about a Session not created yet.
+
+    An existing Session (``params.session_id``) works in its own Project, so a
+    request names at most one of the two; see :func:`_optional_working_project`.
+    """
+    if session_id is not None and "working_project_id" in params:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.working_project_id and params.session_id exclude each other: "
+            "an existing Session works in its own Project",
+        )
+    return _optional_working_project(params, project_id)

@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from core.chat import ChatError
+from core.projects import AgentOverrides
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
@@ -158,6 +159,29 @@ async def test_session_agent_overrides_apply_to_every_run_of_only_that_session(
         ("gpt-mini", "high", 0.7),
         ("gpt-5.2", "low", 0.1),
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_new_session_starts_with_its_agent_overrides_and_keeps_them(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(
+        id="coder", model="openai/gpt-5.2", thinking_effort="low", allowed_tools=["*"]
+    )
+    adapter = StubAdapter([{"content": "Overridden", "tool_calls": None}])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    overrides = AgentOverrides(model="openai/gpt-mini", thinking_effort="high")
+
+    run = await build_chat_loop(runtime).start_run_in_new_session(
+        "coder", "First", agent_overrides=overrides
+    )
+    await run.wait()
+
+    # The first Run already uses the overrides, and the new Session stores them.
+    request = adapter.requests[0]
+    assert (request["model_id"], request["kwargs"]["thinking_effort"]) == ("gpt-mini", "high")
+    metadata = runtime.chat_sessions.get_metadata(session_address("coder", run.session_id))
+    assert metadata["agent_overrides"] == {"model": "openai/gpt-mini", "thinking_effort": "high"}
 
 
 @pytest.mark.asyncio

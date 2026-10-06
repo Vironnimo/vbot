@@ -164,6 +164,7 @@ def test_session_list_page_is_bounded_filtered_and_keeps_required_session(manage
             "last_active_at",
             "title",
             "run_kinds",
+            "working_project_id",
             "latest_completion_run_id",
             "has_unread_completion",
             "unread_run_id",

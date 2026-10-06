@@ -326,14 +326,6 @@ export function createChatRpcMock({
       };
     }
 
-    if (method === 'session.create') {
-      // Deterministic Session id derived from the address:
-      // `builder@vbot` -> `created-builder@vbot`.
-      const agentId =
-        typeof params?.agent_id === 'string' ? params.agent_id : '';
-      return { agent_id: agentId, session_id: `created-${agentId}` };
-    }
-
     if (method === 'session.mark_read') {
       return {
         agent_id: params.agent_id,

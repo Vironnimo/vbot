@@ -20,7 +20,7 @@ from core.agents import (
     InvalidAgentIdError,
 )
 from core.sessions import ChatSessionManager, SessionAddress
-from tests.core.agents.agents_test_support import persisted
+from tests.core.agents.agents_test_support import create_with_session, persisted
 from tests.core.agents.agents_test_support import store as store
 from tests.core.agents.agents_test_support import template_dir as template_dir
 
@@ -55,7 +55,7 @@ def _seed(store: AgentStore) -> Agent:
     )
     sessions.create("librarian", session_id="curating")
     sessions.set_metadata(_CURATING, {SKILL_AGENT_ID_KEY: "coder"})
-    return created
+    return store.update(created.id, current_session_id="kept")
 
 
 def _link_to(store: AgentStore, session_id: str, parent_agent_id: str) -> SessionAddress:
@@ -102,7 +102,7 @@ def _assert_agent_is(store: AgentStore, created: Agent, agent_id: str, other_id:
 def test_rename_moves_complete_agent_tree_and_rebases_internal_workspace(
     store: AgentStore,
 ) -> None:
-    created = store.create("coder", "Coder Agent")
+    created = create_with_session(store, "coder", "Coder Agent")
     old_dir = store.data_dir / "agents" / "coder"
     custom_workspace = old_dir / "homes" / "primary"
     store.update("coder", workspace=custom_workspace)

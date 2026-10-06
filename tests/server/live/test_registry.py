@@ -145,7 +145,7 @@ class FakeRpc:
             raise self.error
         answers: dict[str, JsonObject] = {
             "chat.run_result": {"content": "Done.", "truncated": True},
-            "session.create": {"session_id": "ses_new"},
+            "chat.stream": {"run_id": "run_1", "session_id": "ses_new"},
             "agent.list": {"agents": [{"id": "joel", "name": "Joel"}]},
             "project.list": {"projects": []},
             "terminal.list": {"terminals": [], "groups": []},

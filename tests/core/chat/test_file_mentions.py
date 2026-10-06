@@ -22,6 +22,8 @@ from core.chat.file_mentions import (
     list_mention_files,
     resolve_mention_root,
 )
+from core.projects import AgentResolutionError, AgentResolver, WorkingProjectMissingError
+from core.sessions import SessionAddress, SessionNotFoundError
 from core.tools.file_state import FileReadState
 from tests.directory_links import link_directory
 
@@ -221,8 +223,13 @@ class _FakeProject:
 
 
 class _FakeProjects:
+    """The single Project ``vbot``, whose repo is *cwd*."""
+
     def __init__(self, cwd: str) -> None:
         self._cwd = cwd
+
+    def exists(self, project_id: str) -> bool:
+        return project_id == "vbot"
 
     def get(self, project_id: str) -> _FakeProject:
         if project_id != "vbot":
@@ -231,17 +238,44 @@ class _FakeProjects:
 
 
 class _FakeAgent:
-    def __init__(self, workspace: str, root_project_id: str | None = None) -> None:
+    def __init__(self, agent_id: str, workspace: str, root_project_id: str | None) -> None:
+        self.id = agent_id
         self.workspace = workspace
         self.root_project_id = root_project_id
 
 
-class _FakeResolver:
-    def __init__(self, agent: _FakeAgent) -> None:
-        self._agent = agent
+class _SessionProjects:
+    """Session store double: the working Project each existing Session stores."""
 
-    def resolve_agent(self, project_id: str | None, agent_id: str) -> _FakeAgent:
+    def __init__(self, projects: dict[str, str | None]) -> None:
+        self._projects = projects
+
+    def metadata_value(self, address: SessionAddress, key: str) -> str | None:
+        if address.session_id not in self._projects:
+            raise SessionNotFoundError(f"session does not exist: {address.session_id}")
+        return self._projects[address.session_id]
+
+
+class _FakeResolver:
+    """Serves one Agent; the working-Project policy is the real resolver's."""
+
+    def __init__(
+        self, agent: _FakeAgent, projects: _FakeProjects, sessions: _SessionProjects
+    ) -> None:
+        self._agent = agent
+        self._working_projects = AgentResolver(
+            cast(Any, None),
+            cast(Any, projects),
+            cast(Any, None),
+            dict,
+            sessions=cast(Any, sessions),
+        )
+
+    def resolve_agent(self, project_id: str | None, agent_id: str) -> Any:
         return self._agent
+
+    def resolve_working_project(self, project_id: str | None, agent: Any, **options: Any) -> Any:
+        return self._working_projects.resolve_working_project(project_id, agent, **options)
 
 
 class _FakeStorage:
@@ -250,64 +284,108 @@ class _FakeStorage:
 
 
 class _FakeRuntime:
-    def __init__(self, *, projects: _FakeProjects, agent: _FakeAgent, data_dir: Path) -> None:
+    def __init__(
+        self,
+        *,
+        projects: _FakeProjects,
+        agent: _FakeAgent,
+        data_dir: Path,
+        session_projects: dict[str, str | None],
+    ) -> None:
         self.projects = projects
-        self.agent_resolver = _FakeResolver(agent)
+        self.agent_resolver = _FakeResolver(agent, projects, _SessionProjects(session_projects))
         self.storage = _FakeStorage(data_dir)
 
 
-def _runtime(tmp_path: Path, *, workspace: str, root_project_id: str | None) -> Any:
+def _runtime(
+    tmp_path: Path,
+    *,
+    agent_id: str = "main",
+    workspace: str,
+    root_project_id: str | None,
+    session_projects: dict[str, str | None] | None = None,
+) -> Any:
     (tmp_path / "repo").mkdir()
     return cast(
         Any,
         _FakeRuntime(
             projects=_FakeProjects(str(tmp_path / "repo")),
-            agent=_FakeAgent(workspace, root_project_id),
+            agent=_FakeAgent(agent_id, workspace, root_project_id),
             data_dir=tmp_path,
+            session_projects=session_projects or {},
         ),
     )
 
 
 @pytest.mark.parametrize(
-    ("agent_id", "project_id", "workspace", "root_project_id", "expected"),
+    ("agent_id", "project_id", "workspace", "root_project_id", "options", "expected"),
     [
-        ("builder", "vbot", "workspace", None, "repo"),
-        ("main", None, "workspace", None, "workspace"),
-        ("main", None, "workspace", "vbot", "repo"),
-        ("main", None, "", None, "agents/main/workspace"),
+        ("builder", "vbot", "workspace", None, {}, "repo"),
+        ("main", None, "workspace", None, {}, "workspace"),
+        ("main", None, "workspace", "vbot", {}, "repo"),
+        ("main", None, "workspace", "vbot", {"working_project_id": None}, "workspace"),
+        ("main", None, "workspace", None, {"working_project_id": "vbot"}, "repo"),
+        ("main", None, "workspace", None, {"session_id": "in-vbot"}, "repo"),
+        ("main", None, "workspace", "vbot", {"session_id": "in-workspace"}, "workspace"),
+        ("main", None, "", None, {}, "agents/main/workspace"),
     ],
-    ids=["project-cwd", "identity-workspace", "rooted-identity", "no-workspace-data-dir"],
+    ids=[
+        "project-cwd",
+        "identity-workspace",
+        "draft-in-the-default-project",
+        "draft-in-the-workspace",
+        "draft-in-a-project",
+        "session-in-a-project",
+        "session-in-the-workspace",
+        "no-workspace-data-dir",
+    ],
 )
-def test_mention_root_follows_the_address(
+def test_mention_root_follows_the_working_project(
     tmp_path: Path,
     agent_id: str,
     project_id: str | None,
     workspace: str,
     root_project_id: str | None,
+    options: dict[str, Any],
     expected: str,
 ) -> None:
     runtime = _runtime(
         tmp_path,
+        agent_id=agent_id,
         workspace=str(tmp_path / workspace) if workspace else "",
         root_project_id=root_project_id,
+        session_projects={"in-vbot": "vbot", "in-workspace": None},
     )
 
-    assert resolve_mention_root(runtime, agent_id, project_id) == tmp_path / expected
+    assert resolve_mention_root(runtime, agent_id, project_id, **options) == tmp_path / expected
 
 
 @pytest.mark.parametrize(
-    ("root_project_id", "remove_repo", "error"),
-    [("missing", False, KeyError), ("vbot", True, ChatError)],
-    ids=["missing-project", "missing-cwd"],
+    ("root_project_id", "options", "remove_repo", "error"),
+    [
+        ("missing", {}, False, AgentResolutionError),
+        (None, {"session_id": "in-removed"}, False, WorkingProjectMissingError),
+        ("vbot", {}, True, ChatError),
+    ],
+    ids=["missing-default-project", "missing-session-project", "missing-cwd"],
 )
-def test_rooted_identity_never_falls_back_to_the_workspace(
-    tmp_path: Path, root_project_id: str, remove_repo: bool, error: type[Exception]
+def test_mention_root_never_falls_back_to_the_workspace(
+    tmp_path: Path,
+    root_project_id: str | None,
+    options: dict[str, Any],
+    remove_repo: bool,
+    error: type[Exception],
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    runtime = _runtime(tmp_path, workspace=str(workspace), root_project_id=root_project_id)
+    runtime = _runtime(
+        tmp_path,
+        workspace=str(workspace),
+        root_project_id=root_project_id,
+        session_projects={"in-removed": "removed"},
+    )
     if remove_repo:
         (tmp_path / "repo").rmdir()
 
     with pytest.raises(error):
-        resolve_mention_root(runtime, "main", None)
+        resolve_mention_root(runtime, "main", None, **options)

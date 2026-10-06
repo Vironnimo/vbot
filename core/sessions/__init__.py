@@ -33,6 +33,7 @@ from core.sessions._archive_types import (
     ArchiveTree,
 )
 from core.sessions._types import (
+    AGENT_DEFAULT_PROJECT,
     CHANNEL_MESSAGE_NOTE_PREFIX,
     FORK_SOURCE_META_KEY,
     PROMPT_BLOCK_CHANGE_NOTE_PREFIX,
@@ -40,6 +41,7 @@ from core.sessions._types import (
     SESSION_AUTO_TITLE_KEY,
     SESSION_ID_PATTERN,
     SESSION_RUN_KINDS_META_KEY,
+    SESSION_WORKING_PROJECT_META_KEY,
     SKILL_AVAILABLE_NOTE_PREFIX,
     SUBAGENT_PARENT_META_KEY,
     SUBAGENT_SESSION_META_KEY,
@@ -72,6 +74,8 @@ from core.sessions._types import (
     TemporarySessionBinding,
     ToolResultFacts,
     ToolResultPayload,
+    WorkingProjectChoice,
+    WorkingProjectDefault,
     recall_visibilities,
 )
 from core.sessions.archive_ledger import SessionArchiveLedger
@@ -104,7 +108,7 @@ from core.sessions.history import (
     skill_tool_activation_name,
 )
 from core.sessions.session import ChatSession
-from core.sessions.sessions import ChatSessionManager
+from core.sessions.sessions import ChatSessionManager, new_session_id
 
 __all__ = [
     "ARCHIVE_ENTRIES_DIR",
@@ -142,6 +146,7 @@ __all__ = [
     "ArchiveScope",
     "ArchiveTree",
     "SessionArchiveLedger",
+    "AGENT_DEFAULT_PROJECT",
     "CHANNEL_MESSAGE_NOTE_PREFIX",
     "FORK_SOURCE_META_KEY",
     "SUBAGENT_PARENT_META_KEY",
@@ -151,6 +156,7 @@ __all__ = [
     "SESSION_ID_PATTERN",
     "SESSION_AUTO_TITLE_KEY",
     "SESSION_RUN_KINDS_META_KEY",
+    "SESSION_WORKING_PROJECT_META_KEY",
     "SKILL_AVAILABLE_NOTE_PREFIX",
     "PROMPT_BLOCK_CHANGE_NOTE_PREFIX",
     "TOOL_CHANGE_NOTE_PREFIX",
@@ -189,7 +195,10 @@ __all__ = [
     "TemporarySessionBinding",
     "ToolResultFacts",
     "ToolResultPayload",
+    "WorkingProjectChoice",
+    "WorkingProjectDefault",
     "recall_visibilities",
+    "new_session_id",
     "is_channel_message_note",
     "editable_session_message_index",
     "is_skill_available_note",

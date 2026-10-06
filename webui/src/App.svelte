@@ -477,6 +477,7 @@
         return;
       }
       chatRestoreRequestId += 1;
+      // A place naming only an Agent is that Agent's unsaved draft.
       pendingSessionNavigation = {
         ...(agentId && sessionId
           ? {
@@ -485,7 +486,9 @@
               subAgent,
               followSession: subAgent && location.origin === 'app',
             }
-          : { returnToCurrent: true }),
+          : agentId
+            ? { agentId, draft: true }
+            : { returnToCurrent: true }),
         selection: location.extra?.selection ?? null,
         requestId: chatRestoreRequestId,
       };
@@ -498,8 +501,9 @@
   });
 
   // `session` is the Session Chat's first area shows now (`{agentId,
-  // sessionId, subAgent}`). A report while Chat is hidden corrects the place
-  // Chat returns to and never pulls the app back to Chat.
+  // sessionId, subAgent}`; no `sessionId` for a draft, whose place names only
+  // the Agent). A report while Chat is hidden corrects the place Chat returns
+  // to and never pulls the app back to Chat.
   const handleChatSessionNavigation = (session, { replace = false } = {}) => {
     chatShownSession = session ?? null;
     if (!session) return false;
@@ -922,6 +926,7 @@
         chatWidth={appearancePrefs.chatWidth}
         chatWorkingMode={appearancePrefs.chatWorkingMode}
         projects={selection.projects}
+        projectsLoaded={selection.projectsLoaded}
         selectedProjectId={selection.selectedProjectId}
         onProjectSelected={selection.selectProject}
         sharedSelectedProjectAgentId={selection.selectedProjectAgentId}

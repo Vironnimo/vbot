@@ -88,9 +88,10 @@ def _run_response(
     return response
 
 
-def _queued_response(item: QueuedRunItem) -> JsonObject:
+def _queued_response(item: QueuedRunItem, session_id: str) -> JsonObject:
     return {
         "queued": True,
+        "session_id": session_id,
         "item": item.to_dict(),
     }
 
@@ -217,7 +218,8 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         "effective_compaction_policy": effective_compaction_policy(
             None, agent_policy, _global_compaction_policy_loader(state)
         ),
-        "current_session_id": agent.current_session_id,
+        # ``None`` while the Agent has no current Session (a new conversation).
+        "current_session_id": agent.current_session_id or None,
         "context_window": _resolve_context_window(state, agent.model),
         # Raw own values (pre-default-bake), so the editor can distinguish an
         # explicit per-agent value from an inherited global default. Top-level keys

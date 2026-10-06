@@ -18,7 +18,7 @@ from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import ProviderRegistry
 from core.runtime._configuration import _VBOT_ROOT
 from core.runtime.runtime import Runtime
-from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import ChatSessionManager
 from core.skills.skills import SkillRegistry
 from core.statistics import StatisticsIndex
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
@@ -196,11 +196,8 @@ def test_start_bootstraps_main_agent_when_data_dir_is_empty(shared_runtime: Runt
     assert [agent.id for agent in agents] == ["main"]
     main_agent = agents[0]
     assert main_agent.name == "Main"
-    assert main_agent.current_session_id
-    address = SessionAddress(
-        project_id=None, agent_id="main", session_id=main_agent.current_session_id
-    )
-    assert shared_runtime.chat_sessions.get(address).load() == []
+    # The bootstrap creates no Session; the first message to main creates one.
+    assert main_agent.current_session_id == ""
 
 
 def test_start_creates_the_hidden_librarian_that_can_only_maintain_skills(

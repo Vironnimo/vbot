@@ -160,8 +160,8 @@ class BlockRenderContext:
     # ``USER.md``/``MEMORY.md`` from the workspace.
     memory_files_context: str | None = None
     # Addressing scope of the Agent itself. This is deliberately separate from
-    # ``project_context``: a Rooted Identity Agent may receive Working Project
-    # context while remaining identity-scoped for Sub-Agent routing.
+    # ``project_context``: an Identity Session working in a Project receives
+    # Working Project context while remaining identity-scoped for Sub-Agent routing.
     agent_project_id: str | None = None
     # The prompt is built for a Session linked to a Parent Agent (a Sub-Agent
     # Session); Tool-owned guidance can depend on that role.

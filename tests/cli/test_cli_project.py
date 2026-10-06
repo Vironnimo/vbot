@@ -331,7 +331,7 @@ def test_project_override_set_coerces_the_value(
                 "copied_files": {"librarian": ["SOUL.md", "MEMORY.md"]},
                 "backed_up_files": {"librarian": ["SOUL.md"]},
             },
-            ["affected_rooted_agents: librarian", "  librarian: SOUL.md,MEMORY.md"],
+            ["default_project_cleared_for: librarian", "  librarian: SOUL.md,MEMORY.md"],
             id="rooted-agent-files-copied",
         ),
     ],

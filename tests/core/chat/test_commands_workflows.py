@@ -28,7 +28,12 @@ from core.chat import (
 from core.projects import ResolutionAgentNotFoundError, format_agent_address
 from core.prompts.briefs import learn_brief, reflection_brief
 from core.runs import RunKind
-from core.sessions import SessionAddress
+from core.sessions import (
+    AGENT_DEFAULT_PROJECT,
+    SESSION_WORKING_PROJECT_META_KEY,
+    SessionAddress,
+    WorkingProjectChoice,
+)
 from core.tools.availability import ToolAccess
 from tests.core.chat.commands_test_support import _execute
 
@@ -108,13 +113,28 @@ class _Resolver:
 
 
 class _NewSessions:
+    """Records each created Session with its working Project choice.
+
+    ``working_projects`` names the Project each existing Identity Session works in.
+    """
+
     def __init__(self) -> None:
-        self.created: list[tuple[str, str | None]] = []
+        self.created: list[tuple[str, str | None, WorkingProjectChoice]] = []
+        self.working_projects: dict[str, str | None] = {}
+
+    def metadata_value(self, address: SessionAddress, key: str) -> str | None:
+        assert key == SESSION_WORKING_PROJECT_META_KEY
+        return address.project_id or self.working_projects.get(address.session_id)
 
     def create(
-        self, agent_id: str, *, project_id: str | None = None, actor: str | None = None
+        self,
+        agent_id: str,
+        *,
+        project_id: str | None = None,
+        actor: str | None = None,
+        working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
     ) -> SimpleNamespace:
-        self.created.append((agent_id, project_id))
+        self.created.append((agent_id, project_id, working_project_id))
         return SimpleNamespace(id="new-session")
 
 
@@ -164,23 +184,40 @@ class _Handoff:
 
 
 @pytest.mark.parametrize(
-    ("message", "source_project", "target", "target_project", "instruction"),
+    ("message", "source_project", "source_working", "target", "target_project", "instruction"),
     [
-        pytest.param("/handoff", None, "builder", None, None, id="same-agent"),
+        pytest.param("/handoff", None, None, "builder", None, None, id="same-agent"),
         pytest.param(
             "/handoff agent:reviewer don't forget the plates!",
             None,
+            "alpha",
             "reviewer",
             None,
             "don't forget the plates!",
             id="identity-target-with-instruction",
         ),
         pytest.param(
-            "/handoff agent:orchestrator@vbot", None, "orchestrator", "vbot", None, id="project"
+            "/handoff agent:reviewer",
+            "vbot",
+            None,
+            "reviewer",
+            None,
+            None,
+            id="identity-target-from-a-project-session",
+        ),
+        pytest.param(
+            "/handoff agent:orchestrator@vbot",
+            None,
+            "alpha",
+            "orchestrator",
+            "vbot",
+            None,
+            id="project",
         ),
         pytest.param(
             "/handoff keep the deployment notes",
             "vbot",
+            None,
             "builder",
             "vbot",
             "keep the deployment notes",
@@ -191,11 +228,13 @@ class _Handoff:
 async def test_handoff_starts_the_target_on_the_written_handoff_in_a_new_session(
     message: str,
     source_project: str | None,
+    source_working: str | None,
     target: str,
     target_project: str | None,
     instruction: str | None,
 ) -> None:
     handoff = _Handoff()
+    handoff.sessions.working_projects["s1"] = source_working
 
     result = await handoff.run(message, project_id=source_project)
 
@@ -218,7 +257,12 @@ async def test_handoff_starts_the_target_on_the_written_handoff_in_a_new_session
     else:
         assert handoff.resolver.resolved == []
     # The receiver starts in its fresh Session with the written handoff as its message.
-    assert handoff.sessions.created == [(target, target_project)]
+    # An Identity target continues in the Project the source Session works in; a
+    # Team target works in its Team's Project.
+    working_project = (
+        (source_project or source_working) if target_project is None else AGENT_DEFAULT_PROJECT
+    )
+    assert handoff.sessions.created == [(target, target_project, working_project)]
     assert receiver == {
         "agent_id": target,
         "message": handoff.trigger.answer,

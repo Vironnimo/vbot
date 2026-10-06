@@ -376,7 +376,7 @@ def _publish_restored(state: Any, outcome: RestoreOutcome) -> None:
     if outcome.kind == ARCHIVE_KIND_AGENT:
         publish_resource_changed(state, RESOURCE_KIND_AGENTS)
     elif outcome.kind == ARCHIVE_KIND_PROJECT:
-        # Re-rooted Identity Agents change with their Project.
+        # Identity Agents get their default Project back with it.
         publish_resource_changed(state, RESOURCE_KIND_PROJECTS)
         publish_resource_changed(state, RESOURCE_KIND_AGENTS)
     else:

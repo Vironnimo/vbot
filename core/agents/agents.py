@@ -235,8 +235,9 @@ class AgentStore:
         # the lock (``_change``), and a read that repairs retries through that
         # admission when a snapshot is being taken (``_repairing_read``).
         self._write_lock = RLock()
-        # Create, rename and delete change Sessions and ``agent.json`` together; a
-        # data snapshot of the Runtime's barrier never copies between the two.
+        # Rename and delete change Sessions and ``agent.json`` together, and create
+        # writes the Agent tree with its ``agent.json``; a data snapshot of the
+        # Runtime's barrier never copies between the steps of one of them.
         self._snapshot_barrier = (
             snapshot_barrier if snapshot_barrier is not None else SnapshotBarrier()
         )
@@ -284,7 +285,7 @@ class AgentStore:
         compaction_policy: dict[str, Any] | None = None,
         librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED,
     ) -> Agent:
-        """Create and persist a new Agent, initial Session, and Workspace.
+        """Create and persist a new Agent and its Workspace; it has no Session yet.
 
         The id must be free and may not be one vBot reserves (:class:`InvalidAgentIdError`).
         """
@@ -374,14 +375,8 @@ class AgentStore:
                 workspace_value = self._default_workspace(agent_id)
             workspace_path = _resolve_workspace(workspace_value, data_dir=self._data_dir)
 
-            # Create the Session first so a failure cannot leave a ghost Agent directory.
-            session = self._session_manager().create(agent_id)
-            try:
-                agent_dir.mkdir(parents=True)
-            except Exception:
-                with suppress(Exception):
-                    session.delete()
-                raise
+            # A new Agent has no Session: its first message creates one.
+            agent_dir.mkdir(parents=True)
             agent = Agent(
                 id=agent_id,
                 name=validated_name,
@@ -400,7 +395,6 @@ class AgentStore:
                 custom_system_prompt_enabled=validated_custom_system_prompt_enabled,
                 compaction_policy=validated_compaction_policy,
                 librarian_enabled=validated_librarian_enabled,
-                current_session_id=session.id,
                 created_at=now,
                 updated_at=now,
                 builtin=builtin,
@@ -411,7 +405,6 @@ class AgentStore:
                 self._seed_workspace(Path(agent.workspace))
                 self._write_agent(agent)
             except Exception:
-                session.delete()
                 shutil.rmtree(agent_dir, ignore_errors=True)
                 raise
             # ``list_with_order`` appends this newly valid Agent after every existing
@@ -422,7 +415,7 @@ class AgentStore:
             return _apply_defaults(agent, self._agent_defaults())
 
     def get(self, agent_id: str) -> Agent:
-        """Load an agent from disk by its exact id, with a verified current Session."""
+        """Load an agent from disk by its exact id, with a verified current-Session pointer."""
 
         def read() -> Agent:
             agent_path = self._require_agent_path(agent_id)
@@ -599,8 +592,8 @@ class AgentStore:
         agents: list[Agent] = []
         for agent_path, raw_agent in loaded:
             try:
-                if raw_agent.id not in live:
-                    raw_agent = self._replace_current_session(raw_agent)
+                if raw_agent.current_session_id and raw_agent.id not in live:
+                    raw_agent = self._clear_current_session(raw_agent)
                 agents.append(_apply_defaults(raw_agent, defaults))
             except (AgentError, OSError) as error:
                 _LOGGER.warning("Skipping invalid Agent config %s: %s", agent_path, error)
@@ -762,12 +755,11 @@ class AgentStore:
 
             if "name" in changes:
                 changes["name"] = _normalize_agent_name(agent_id, changes["name"])
+            # An empty current_session_id clears the pointer: the Agent opens a new Session.
             string_fields = {"model", "current_session_id"}
             for field_name in sorted(string_fields & set(changes)):
                 changes[field_name] = _validate_string_field(
-                    field_name,
-                    changes[field_name],
-                    allow_empty=field_name == "model",
+                    field_name, changes[field_name], allow_empty=True
                 )
             if "fallback_models" in changes:
                 changes["fallback_models"] = _validate_fallback_models(
@@ -816,7 +808,7 @@ class AgentStore:
                 changes["compaction_policy"] = (
                     normalize_compaction_policy(policy) if policy is not None else None
                 )
-            if "current_session_id" in changes:
+            if changes.get("current_session_id"):
                 self._validate_current_session(agent_id, changes["current_session_id"])
 
             if not changes:
@@ -1248,14 +1240,14 @@ class AgentStore:
         Invoked as the final step of removing a session from this home — a move
         to another agent, or a deletion. If the removed session was this agent's
         current session, the pointer lands on the most recently active
-        *remaining* session (max ``last_active_at``), or a fresh empty session
-        when none remain. If the removed session was not the current one, the
-        pointer is left untouched.
+        *remaining* session (max ``last_active_at``), or is cleared when none
+        remain: the Agent then opens a new Session with its next message. If the
+        removed session was not the current one, the pointer is left untouched.
 
         Reads the stored config side-effect-free (not through :meth:`get`):
-        ``get`` would auto-create a fresh empty current session the instant it
-        sees the pointer dangling at the just-removed id, preempting the
-        last-active landing this method exists to provide.
+        ``get`` would clear the pointer the instant it sees it dangling at the
+        just-removed id, preempting the last-active landing this method exists
+        to provide.
         """
         with self._change():
             agent_path = self._require_agent_path(agent_id)
@@ -1263,23 +1255,11 @@ class AgentStore:
             if agent.current_session_id != removed_session_id:
                 return _apply_defaults(agent, self._agent_defaults())
 
-            newest_session_id = self._session_manager().newest_session_id(agent_id)
-            created_session = None
-            if newest_session_id is not None:
-                landing_session_id = newest_session_id
-            else:
-                created_session = self._session_manager().create(agent_id)
-                landing_session_id = created_session.id
-
+            landing_session_id = self._session_manager().newest_session_id(agent_id) or ""
             updated_agent = replace(
                 agent, current_session_id=landing_session_id, updated_at=utc_now_timestamp()
             )
-            try:
-                self._write_agent(updated_agent)
-            except Exception:
-                if created_session is not None:
-                    created_session.delete()
-                raise
+            self._write_agent(updated_agent)
             return _apply_defaults(updated_agent, self._agent_defaults())
 
     @contextmanager
@@ -1449,7 +1429,7 @@ class AgentStore:
         return AgentDefaults.from_dict(defaults)
 
     def _load_verified_agent(self, agent_path: Path) -> Agent:
-        """Load a seeded config whose current-Session pointer names a live Session."""
+        """Load a seeded config whose current-Session pointer is empty or names a live Session."""
         with self._write_lock:
             return self._with_live_current_sessions([self._load_seeded_agent(agent_path)])[0]
 
@@ -1485,7 +1465,10 @@ class AgentStore:
     def _with_live_current_sessions(self, agents: builtins.list[Agent]) -> builtins.list[Agent]:
         live = self._live_current_session_agent_ids(agents)
         return [
-            agent if agent.id in live else self._replace_current_session(agent) for agent in agents
+            agent
+            if agent.id in live or not agent.current_session_id
+            else self._clear_current_session(agent)
+            for agent in agents
         ]
 
     def _live_current_session_agent_ids(self, agents: builtins.list[Agent]) -> set[str]:
@@ -1508,20 +1491,13 @@ class AgentStore:
         live = self._session_manager().existing_addresses(builtins.list(pointers))
         return {pointers[address] for address in live}
 
-    def _replace_current_session(self, agent: Agent) -> Agent:
-        """Point *agent* at a fresh empty Session; its stored pointer is missing or dangling."""
-        # Admitted before the Session exists, so a repair that a data snapshot
-        # defers creates none (see ``_repairing_read``).
+    def _clear_current_session(self, agent: Agent) -> Agent:
+        """Clear *agent*'s dangling current-Session pointer; no Session is created."""
+        # A repair that a data snapshot defers retries after it (``_repairing_read``).
         with document_change(self._agent_path(agent.id), wait=False):
-            session = self._session_manager().create(agent.id)
-            updated_agent = replace(
-                agent, current_session_id=session.id, updated_at=utc_now_timestamp()
-            )
-            try:
-                self._write_agent(updated_agent)
-            except Exception:
-                session.delete()
-                raise
+            updated_agent = replace(agent, current_session_id="", updated_at=utc_now_timestamp())
+            self._write_agent(updated_agent)
+        _LOGGER.info("Dangling current Session pointer cleared (agent=%s)", agent.id)
         return updated_agent
 
     def _validate_current_session(self, agent_id: str, session_id: Any) -> None:

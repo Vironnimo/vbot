@@ -924,18 +924,22 @@ class ChannelConversationEngine:
     ) -> None:
         continued = False
         navigation = outcome.navigation
-        if navigation is not None and navigation.kind == "continue_in_session":
+        if navigation is not None and navigation.kind in {"continue_in_session", "new_session"}:
             if navigation.agent_id != self._config.agent_id or navigation.project_id is not None:
                 raise ValueError(
                     "Channel continuation navigation must stay on its configured Agent"
                 )
-            route = RouteFacts(agent_id=navigation.agent_id, session_id=navigation.session_id)
-            await self._routing._apply_continuation_navigation_async(
-                route,
-                conversation,
-                reply_plan,
-                conversation_key,
-            )
+            if navigation.kind == "new_session":
+                # The conversation's next message creates the Session (``/new``).
+                await self._routing._move_to_new_session_async(conversation, conversation_key)
+            else:
+                route = RouteFacts(agent_id=navigation.agent_id, session_id=navigation.session_id)
+                await self._routing._apply_continuation_navigation_async(
+                    route,
+                    conversation,
+                    reply_plan,
+                    conversation_key,
+                )
             await self._send_reply(reply_plan, _NEW_SESSION_STARTED_REPLY)
             continued = True
 

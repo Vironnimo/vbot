@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from core.runs import RunExecutionOwner
 
@@ -89,6 +90,8 @@ class SessionRunAdmission:
     owner: RunExecutionOwner | None = None
     input_id: str | None = None
     expected_generation_id: str | None = None
+    # The working Project a Session this admission creates starts in.
+    working_project_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -116,6 +119,23 @@ SUBAGENT_PARENT_META_KEY = "subagent_parent"
 # Open key the Sub-Agent coordinator sets when the user writes in a linked Session.
 SUBAGENT_TAKEN_OVER_AT_META_KEY = "subagent_taken_over_at"
 SESSION_RUN_KINDS_META_KEY = "run_kinds"
+# The Session's working Project: its address Project, or for a Session of an
+# Identity Agent the Project chosen when it was created (absent: the Workspace).
+# Sessions manage it; a metadata write may repeat it but never change it.
+SESSION_WORKING_PROJECT_META_KEY = "working_project_id"
+
+
+class WorkingProjectDefault(Enum):
+    """The working Project choice of a creator that names none."""
+
+    AGENT_DEFAULT = "agent_default"
+
+
+# A new Session of an Identity Agent starts in the Agent's default Project.
+AGENT_DEFAULT_PROJECT: Final = WorkingProjectDefault.AGENT_DEFAULT
+# The working Project a creator asks for: a Project id, ``None`` for the
+# Workspace, or the Agent's default Project.
+type WorkingProjectChoice = str | None | Literal[WorkingProjectDefault.AGENT_DEFAULT]
 SESSION_FORK_ALWAYS_STRIP_META_KEYS = frozenset(
     {
         "source_channel_id",

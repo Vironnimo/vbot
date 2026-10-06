@@ -190,6 +190,41 @@ describe('RPC wrappers', () => {
       { agent_id: 'agent-1', session_id: 'session-1' },
     ],
     [
+      'files.list for a draft',
+      (o) => api.listFiles('agent-1', {}, o),
+      { agent_id: 'agent-1' },
+    ],
+    [
+      'files.list for a draft in a chosen Project',
+      (o) => api.listFiles('agent-1', { workingProjectId: 'vbot' }, o),
+      { agent_id: 'agent-1', working_project_id: 'vbot' },
+    ],
+    [
+      'files.list for a draft in the Workspace',
+      (o) => api.listFiles('agent-1', { workingProjectId: null }, o),
+      { agent_id: 'agent-1', working_project_id: null },
+    ],
+    [
+      'files.list for a Session',
+      (o) => api.listFiles('agent-1', { sessionId: 'session-1' }, o),
+      { agent_id: 'agent-1', session_id: 'session-1' },
+    ],
+    [
+      'session.set_agent_overrides',
+      (o) =>
+        api.setSessionAgentOverrides(
+          'agent-1',
+          'session-1',
+          { model: null, thinking_effort: 'high' },
+          o,
+        ),
+      {
+        agent_id: 'agent-1',
+        session_id: 'session-1',
+        agent_overrides: { model: null, thinking_effort: 'high' },
+      },
+    ],
+    [
       'chat.queue_remove',
       (o) => api.removeFromQueue('agent-1', 'session-1', 'queue-1', o),
       { agent_id: 'agent-1', session_id: 'session-1', item_id: 'queue-1' },

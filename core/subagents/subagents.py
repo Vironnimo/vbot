@@ -20,9 +20,9 @@ from core.projects import (
     ModelConfigurationError,
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
+    WorkingProjectMissingError,
     format_agent_address,
     parse_agent_address,
-    resolve_working_project_id,
 )
 from core.runs import (
     ActiveRunError,
@@ -32,7 +32,7 @@ from core.runs import (
     RunKind,
     RunNotFoundError,
 )
-from core.sessions import SessionAddress, TemporarySessionBinding
+from core.sessions import AGENT_DEFAULT_PROJECT, SessionAddress, TemporarySessionBinding
 from core.settings import SettingsValidationError, validate_thinking_effort
 from core.subagents._constants import (
     DEFAULT_MAX_ACTIVE_SUBAGENTS,
@@ -69,6 +69,7 @@ from core.subagents._constants import (
     SUBAGENT_SEND_WITHOUT_ID_MESSAGE_TEMPLATE,
     SUBAGENT_SESSION_MODEL_UNUSABLE_MESSAGE_TEMPLATE,
     SUBAGENT_SESSION_NOT_SUBAGENT_MESSAGE_TEMPLATE,
+    SUBAGENT_SESSION_PROJECT_MISSING_MESSAGE_TEMPLATE,
     SUBAGENT_SESSION_SETTINGS_UNREADABLE_MESSAGE_TEMPLATE,
     SUBAGENT_SESSION_STARTED_EVENT,
     SUBAGENT_SESSION_TITLE_MAX_CHARACTERS,
@@ -121,7 +122,6 @@ from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from core.projects import RuntimeAgent
     from core.runtime.interfaces import RuntimeServices
     from core.sessions.session import ChatSession
 
@@ -469,11 +469,14 @@ class SubAgentCoordinator:
                 parent_agent_input=True,
                 temporary_parent_binding=temporary_parent,
             )
-            target_agent = await _resolve_child_agent(runtime, address, temporary_parent)
             run = await runtime.chat_run_manager.start(
                 address,
                 executor,
-                admission=_admission(context, target_agent, address, new_subagent_id),
+                admission=_admission(
+                    context,
+                    new_subagent_id,
+                    _child_working_project(context, target_project_id),
+                ),
             )
 
         activity_file = self._activities.path(address)
@@ -575,6 +578,16 @@ class SubAgentCoordinator:
         failure = await _validate_continued_session(runtime, link, model=overrides.get("model"))
         if failure is not None:
             return failure
+        try:
+            working_project_id = await runtime.agent_resolver.session_working_project_async(address)
+        except WorkingProjectMissingError as error:
+            return tool_failure(
+                "project_not_found",
+                SUBAGENT_SESSION_PROJECT_MISSING_MESSAGE_TEMPLATE.format(
+                    id=link.id, project_id=error.project_id
+                ),
+                retryable=False,
+            )
         content = cast(str, arguments["content"])
         steerable = context.execution_owner is None and temporary_parent is None
         manager = runtime.chat_run_manager
@@ -593,13 +606,12 @@ class SubAgentCoordinator:
             executor = runtime.streaming_chat_loop.run_executor(
                 content, parent_agent_input=True, temporary_parent_binding=temporary_parent
             )
-            target_agent = await _resolve_child_agent(runtime, address, temporary_parent)
             item = await manager.enqueue(
                 address,
                 executor,
                 display_content=content,
                 steerable=steerable,
-                admission=_admission(context, target_agent, address, link.id),
+                admission=_admission(context, link.id, working_project_id),
             )
         status, note = "queued", SUBAGENT_SEND_QUEUED_NOTE
         if item.future.done() and not item.future.cancelled():
@@ -851,10 +863,10 @@ def _caller(context: ToolContext) -> SessionAddress:
 
 
 def _admission(
-    context: ToolContext, target_agent: RuntimeAgent, address: SessionAddress, subagent_id: str
+    context: ToolContext, subagent_id: str, working_project_id: str | None
 ) -> RunAdmission:
     return RunAdmission(
-        working_project_id=resolve_working_project_id(address.project_id, target_agent),
+        working_project_id=working_project_id,
         run_kind=RunKind.SUBAGENT,
         work_id=subagent_id,
         owner=context.execution_owner,
@@ -953,10 +965,19 @@ def _open_subagent_session(
     """Create the Sub-Agent Session, title it, link it to its Parent and store *overrides*.
 
     Blocking. One unit of Session work, so a cancelled Parent never leaves a
-    created Sub-Agent Session without its Parent link.
+    created Sub-Agent Session without its Parent link. The Session works in
+    :func:`_child_working_project`.
     """
     sessions = runtime.chat_sessions
-    session = sessions.create(agent_id, project_id=project_id)
+    session = sessions.create(
+        agent_id,
+        project_id=project_id,
+        working_project_id=(
+            AGENT_DEFAULT_PROJECT
+            if project_id is not None
+            else _child_working_project(context, project_id)
+        ),
+    )
     address = session.address
     sessions.set_auto_title(address, title)
     link_session(
@@ -973,21 +994,14 @@ def _open_subagent_session(
     return session
 
 
-async def _resolve_child_agent(
-    runtime: RuntimeServices,
-    address: SessionAddress,
-    temporary_parent_binding: TemporarySessionBinding | None,
-) -> RuntimeAgent:
-    """Resolve the target Agent as the Sub-Agent Session runs it."""
-    if temporary_parent_binding is not None:
-        return await runtime.agent_resolver.resolve_temporary_agent_async(
-            temporary_parent_binding.address,
-            generation_id=temporary_parent_binding.generation_id,
-            session=address,
-        )
-    return await runtime.agent_resolver.resolve_agent_async(
-        address.project_id, address.agent_id, session_id=address.session_id
-    )
+def _child_working_project(context: ToolContext, target_project_id: str | None) -> str | None:
+    """Return the Project a new Sub-Agent Session works in.
+
+    A Team target works in its Team's Project. An Identity target, including a
+    copy of the Parent itself, works where the Parent's Run works, so delegated
+    work stays in the Parent's working Project (or its Workspace).
+    """
+    return target_project_id if target_project_id is not None else context.working_project_id
 
 
 def _load_subagent_settings(runtime: RuntimeServices) -> dict[str, int]:

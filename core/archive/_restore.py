@@ -158,9 +158,9 @@ def restore(services: ArchiveServices, entry_id: str, target_id: str | None) -> 
 def follow_up(services: ArchiveServices, entry: ArchiveEntry) -> tuple[str, ...]:
     """Finish a ``restored`` entry, then delete it.
 
-    Roster position, delegation grants, Project roots, Sub-Agent links and
-    empty payload directories. Returns the Agents whose delegation lists name a
-    restored Agent again.
+    Roster position, delegation grants, default Projects, the working Project
+    of Sessions, Sub-Agent links and empty payload directories. Returns the
+    Agents whose delegation lists name a restored Agent again.
     """
     ledger = services.sessions.archive_ledger
     target = _restore_target(entry)
@@ -181,6 +181,8 @@ def follow_up(services: ArchiveServices, entry: ArchiveEntry) -> tuple[str, ...]
         if renamed:
             for agent_id in services.sessions.list_agent_ids(target):
                 _retarget_links(services, entry.subject_id, agent_id, target, agent_id)
+            # Identity Sessions that worked in the Project work in it under its new id.
+            services.sessions.retarget_working_project(entry.subject_id, target, entry.archived_at)
     for tree in entry.trees:
         path = stored_path(services, tree.path)
         if not path.exists():

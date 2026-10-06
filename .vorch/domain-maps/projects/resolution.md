@@ -16,7 +16,7 @@ Resolution failures are `AgentResolutionError`. A missing address part keeps its
 
 ### Session Agent overrides
 
-A Session can override its Agent's `model`, `thinking_effort`, `temperature` and `top_p` (`AGENT_OVERRIDE_FIELDS`, frozen `AgentOverrides` in `_runtime_agent.py`). The resolver owns them end to end: `resolve_agent(..., session_id=...)`, `resolve_agent_async(..., session_id=...)` and the temporary variants' `session=` read the Session's stored overrides and return a replaced runtime dataclass; they never mutate the stored Identity Agent, repository Agent, Project overrides or other Sessions. Without a Session, for a Session that does not exist yet, or with nothing stored, resolution is the ordinary path. `effective_config(..., session_id=...)` reports an overridden field with source `session`.
+A Session can override its Agent's `model`, `thinking_effort`, `temperature` and `top_p` (`AGENT_OVERRIDE_FIELDS`, frozen `AgentOverrides` in `_runtime_agent.py`). The resolver owns them end to end: `resolve_agent(..., session_id=...)`, `resolve_agent_async(..., session_id=...)` and the temporary variants' `session=` read the Session's stored overrides and return a replaced runtime dataclass; they never mutate the stored Identity Agent, repository Agent, Project overrides or other Sessions. Without a Session, for a Session that does not exist yet, or with nothing stored, resolution is the ordinary path. `new_session_overrides=` (exclusive with `session_id`) resolves the Agent as the first Run of a Session that does not exist yet would run it, so a new Session's override Model is checked before the Session is created. `effective_config(..., session_id=...)` reports an overridden field with source `session`.
 
 ### Librarian Skill subject
 
@@ -24,7 +24,7 @@ A Session of the built-in Librarian (`agent.md` -> Built-in Librarian) is bound 
 
 `update_session_overrides(address, changes)` (async: `update_session_overrides_async`) is the only writer: unknown fields raise `ValueError`, values validate like Agent settings, a Model must pass `require_configured`, `None` clears one field, other fields and keys an unknown newer version stored survive, and an empty result removes the stored value. Storage is the Session metadata key `agent_overrides` (`sessions.md`), so forks inherit it. A stored Model that can no longer run fails that Session's resolution with `ModelConfigurationError` instead of silently falling back.
 
-Writers: `session.create` / `session.set_agent_overrides` (`server.md`, used by `vbot chat`), Sub-Agent spawns (`subagents.md`), and `/model`, which clears the Session's Model override after writing the Agent's Model (`chat/commands.md`). Every Run producer (Chat admission and execution, Queue, Compaction, Sub-Agents, `/status`, Tool status, Extension Tool Agents) resolves with the Run's Session, so a continuation keeps its Session's Model and the Provider prompt cache.
+Writers: `session.create` / `session.set_agent_overrides` (`server.md`), a new Session's creating write from `chat.send`/`chat.stream` `new_session.agent_overrides` or a command that creates the Session (`AgentOverrides.session_metadata()`; `vbot chat` uses `new_session` for a new Session and `session.set_agent_overrides` for an existing one), Sub-Agent spawns (`subagents.md`), and `/model`, which clears the Session's Model override after writing the Agent's Model (`chat/commands.md`). Every Run producer (Chat admission and execution, Queue, Compaction, Sub-Agents, `/status`, Tool status, Extension Tool Agents) resolves with the Run's Session, so a continuation keeps its Session's Model and the Provider prompt cache.
 
 ## Model & Scalar Resolution
 
@@ -76,13 +76,24 @@ Effective Skills are:
 
 The disabled-name subtraction applies to the combined set, so a disabled Project Skill cannot be resurrected by a bundled or global Skill with the same name. The `"*"` sentinel is configuration syntax, never an effective Skill name.
 
-The same exact effective names form the temporary Skill grant when an Identity Agent works through Rooting or explicitly loaded Project Context. Runtime layers those names into the Identity-scoped `SkillRegistry.always_allowed` set beside the Agent's private Skills, so neither an empty personal `allowed_skills` nor its `excluded_skills` can prevent the Agent or its Self-Subagent from using what the Project requires; the persisted Agent configuration is not mutated.
+The same exact effective names form the temporary Skill grant when an Identity Session works in a Project (its Working Project) or through explicitly loaded Project Context. Runtime layers those names into the Identity-scoped `SkillRegistry.always_allowed` set beside the Agent's private Skills, so neither an empty personal `allowed_skills` nor its `excluded_skills` can prevent the Agent or its Self-Subagent from using what the Project requires; the persisted Agent configuration is not mutated.
 
 Effective additional Agent targets are the current Project Team, excluding the calling Agent, filtered by the repository Agent's ordered `AgentTargetRule` list, with the last matching rule winning. No target rules means every other Team member; a result with no members means self-only, not that either Sub-Agent Tool is unavailable. When a Sub-Agent Tool is available, the resolver projects these additional targets into the synthesized config Agent's root `tools.subagent.allowed_agents` block; Tool availability remains owned by the effective `tool_access`, and disabling the Tool omits that runtime block without altering the repository target rules that will be applied again when the Tool returns. A Project Agent cannot address an Identity Agent or another Project even if its source policy is broad, because Project scope is the hard outer boundary.
 
-## Working-Project Helpers
+## Working Project resolution
 
-The working-Project functions in `core/projects/resolver.py` derive the admitted Project from an explicit Session/address Project or an Identity Agent's saved `root_project_id`. They hold no process-global selection. Prompt lookup validates the selected repository; Skill scope uses that same resolved Project. Workspace equality does not establish Project identity or replace explicit `project_id` routing.
+`AgentResolver` decides which Project a Run works in (`sessions.md` -> Terms -> Working Project). There is no process-global selection, and Workspace equality never establishes Project identity or replaces explicit `project_id` routing.
+
+- `new_session_working_project(project_id, agent, requested=AGENT_DEFAULT_PROJECT)` returns where a new Session works (`None`: the Workspace). A Project Agent works in its address Project and takes no other choice (`TEAM_WORKING_PROJECT_MESSAGE`, `AgentResolutionError`). For an Identity Agent, a Project id must exist (`ResolutionProjectNotFoundError`, RPC `project_not_found`), `None` names the Workspace, and `AGENT_DEFAULT_PROJECT` the Agent's `root_project_id`, which must exist too (`DEFAULT_PROJECT_MISSING_MESSAGE`, `AgentResolutionError`, RPC `domain_error`).
+- `resolve_working_project(project_id, agent, *, session_id=None, requested=AGENT_DEFAULT_PROJECT)` and its `_async` twin: an existing Session of an Identity Agent works in its stored Working Project; without a Session, or for one that does not exist yet, the result is `new_session_working_project`'s. A stored Project that no longer exists raises `WorkingProjectMissingError` (an `AgentResolutionError` with `.project_id`, `WORKING_PROJECT_MISSING_MESSAGE`, RPC `domain_error`); it never falls back to the Workspace. The async twin reads the Session on the Session database's pool and checks the Project on the `agent-resolution` pool.
+- `session_working_project_async(address)` does the same for one Session address (a missing Session: the Workspace); Sub-Agent `send` uses it (`subagents.md`).
+- Chat admission and Compaction, prompt preview, `chat.commands`, `files.list` and `@`-mentions, `session.create` and commands for a new Session resolve through these; Runtime's Extension cwd, which has no Session, uses `new_session_working_project`. `resolve_prompt_project` validates the resolved Project's repository for the prompt, and `resolve_skill_scope` uses that same Project for Project Skills.
+
+Texts (Agent- and user-visible; `_runtime_agent.py`, `resolver.py`):
+
+- `WORKING_PROJECT_MISSING_MESSAGE`: `This Session works in Project {project_id}, which no longer exists. Restore the Project to continue this Session, or start a new Session.`
+- `DEFAULT_PROJECT_MISSING_MESSAGE`: `Agent {agent_id} starts new Sessions in Project {project_id}, which no longer exists. Choose another default Project for the Agent.`
+- `TEAM_WORKING_PROJECT_MESSAGE`: `A Session of Team Agent {agent_id}@{project_id} works in Project {project_id}; it cannot work in another Project.`
 
 ## Change Rules
 
@@ -107,4 +118,4 @@ no Session binding. Evidence: `core/projects/resolver.py`,
 - Model usability and Connection gating: `ModelConfigurationChecker` in `core/projects/_model_configuration.py` (public imports remain available through `core.projects` and `resolver.py`)
 - Project entity and override contract: `core/projects/projects.py`
 - Repository inputs: `core/projects/scanners/`
-- Primary tests: `tests/core/projects/test_resolver_config_chains.py` (resolution chains and effective-config provenance), `tests/core/projects/test_resolver_config_agent.py`, `tests/core/projects/test_resolver_connections.py`, and `tests/core/projects/test_resolver_scan_identity.py` (scan findings, Identity resolution, prompt and Skill scopes); RPC codes for missing addresses: `tests/server/rpc/test_address_resolution_errors.py`
+- Primary tests: `tests/core/projects/test_resolver_config_chains.py` (resolution chains and effective-config provenance), `tests/core/projects/test_resolver_config_agent.py`, `tests/core/projects/test_resolver_connections.py`, and `tests/core/projects/test_resolver_scan_identity.py` (scan findings, Identity resolution, Working Project resolution, prompt and Skill scopes); RPC codes for missing addresses: `tests/server/rpc/test_address_resolution_errors.py`

@@ -112,15 +112,23 @@ class FakeAgents:
 
 
 class FakeAgentResolver:
-    """Resolves every known Agent; Session overrides are the real resolver's."""
+    """Resolves every known Agent; Session overrides and working Projects are the real resolver's.
+
+    ``projects`` holds the ids of the Projects that exist.
+    """
 
     def __init__(self, agents: FakeAgents, sessions: ChatSessionManager) -> None:
         self._agents = agents
         self.unusable_models: set[str] = set()
         # Agent id -> the resolution error its resolution raises.
         self.failures: dict[str, Exception] = {}
+        self.projects: set[str] = set()
         self._overrides = AgentResolver(
-            cast(Any, agents), cast(Any, None), cast(Any, self), dict, sessions=sessions
+            cast(Any, agents),
+            cast(Any, SimpleNamespace(exists=self.projects.__contains__)),
+            cast(Any, self),
+            dict,
+            sessions=sessions,
         )
 
     def require_configured(self, model: str) -> None:
@@ -151,6 +159,9 @@ class FakeAgentResolver:
         self, target: SessionAddress, changes: dict[str, Any]
     ) -> AgentOverrides:
         return self._overrides.update_session_overrides(target, changes)
+
+    async def session_working_project_async(self, target: SessionAddress) -> str | None:
+        return await self._overrides.session_working_project_async(target)
 
 
 @dataclass
@@ -246,6 +257,7 @@ class SubAgentHarness:
         run_id: str = "parent-run",
         allowed_agents: list[str] | None = None,
         execution_owner: Any | None = None,
+        working_project_id: str | None = None,
     ) -> ToolContext:
         session = session or self.parent
         # Chat grants message_parent to Sub-Agent Sessions; the Tool itself checks the link.
@@ -262,6 +274,7 @@ class SubAgentHarness:
             vbot_root=Path("app"),
             data_root=Path("data"),
             execution_owner=execution_owner,
+            working_project_id=working_project_id,
             session_tool_grants=grants,
             emit_hook=self._record_event,
             tool_settings=(

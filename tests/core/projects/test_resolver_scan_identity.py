@@ -5,9 +5,11 @@ from types import SimpleNamespace
 from typing import Any
 
 from core.database import DatabaseUnavailableError
-from core.sessions import ChatSessionManager, SessionAddress
+from core.projects import WorkingProjectMissingError
+from core.sessions import AGENT_DEFAULT_PROJECT, ChatSessionManager, SessionAddress
 
 from .resolver_test_support import (
+    AgentResolutionError,
     AgentStore,
     ConfigAgent,
     FindingType,
@@ -312,6 +314,83 @@ def test_resolve_prompt_project_uses_only_the_explicit_project(
     assert resolve_prompt_project(projects, None) is None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("session_id", "requested", "expected"),
+    [
+        pytest.param(None, AGENT_DEFAULT_PROJECT, "vbot", id="new-session-in-the-default"),
+        pytest.param(None, None, None, id="new-session-in-the-workspace"),
+        pytest.param(None, "other", "other", id="new-session-in-a-named-project"),
+        pytest.param("not-yet", AGENT_DEFAULT_PROJECT, "vbot", id="session-not-created-yet"),
+        pytest.param("in-workspace", AGENT_DEFAULT_PROJECT, None, id="session-in-the-workspace"),
+        # An existing Session works where it was created; a requested Project is moot.
+        pytest.param("in-other", None, "other", id="session-in-its-project"),
+    ],
+)
+async def test_an_identity_run_works_in_the_project_of_its_session(
+    agents: AgentStore,
+    projects: ProjectStore,
+    repo: Path,
+    session_id: str | None,
+    requested: Any,
+    expected: str | None,
+) -> None:
+    _project(projects, repo)
+    other_repo = repo.parent / "other"
+    other_repo.mkdir()
+    projects.create("other", "Other", other_repo)
+    agent = SimpleNamespace(id="main", root_project_id="vbot")
+    sessions = agents._session_manager()
+    sessions.create("main", session_id="in-workspace", working_project_id=None)
+    sessions.create("main", session_id="in-other", working_project_id="other")
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    resolved = resolver.resolve_working_project(
+        None, agent, session_id=session_id, requested=requested
+    )
+    resolved_async = await resolver.resolve_working_project_async(
+        None, agent, session_id=session_id, requested=requested
+    )
+
+    assert resolved == resolved_async == expected
+    if session_id in ("in-workspace", "in-other"):
+        address = SessionAddress(None, "main", session_id)
+        assert await resolver.session_working_project_async(address) == expected
+    # A Team Agent works in its Team's Project.
+    assert resolver.resolve_working_project("vbot", SimpleNamespace(id="builder")) == "vbot"
+
+
+@pytest.mark.asyncio
+async def test_a_working_project_that_cannot_be_used_is_refused(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _project(projects, repo)
+    agents._session_manager().create("main", session_id="in-gone", working_project_id="gone")
+    resolver = _resolver(agents, projects, _openai_configured())
+    main = SimpleNamespace(id="main", root_project_id="gone")
+
+    with pytest.raises(ResolutionProjectNotFoundError):
+        resolver.new_session_working_project(None, main, "ghost")
+    with pytest.raises(AgentResolutionError) as team:
+        resolver.new_session_working_project("vbot", SimpleNamespace(id="builder"), None)
+    assert str(team.value) == (
+        "A Session of Team Agent builder@vbot works in Project vbot; "
+        "it cannot work in another Project."
+    )
+    with pytest.raises(AgentResolutionError) as default:
+        resolver.new_session_working_project(None, main)
+    assert str(default.value) == (
+        "Agent main starts new Sessions in Project gone, which no longer exists. "
+        "Choose another default Project for the Agent."
+    )
+    # A Session whose Project is gone stays where it is and refuses to run.
+    with pytest.raises(WorkingProjectMissingError) as missing:
+        await resolver.resolve_working_project_async(None, main, session_id="in-gone")
+    assert missing.value.project_id == "gone"
+    with pytest.raises(WorkingProjectMissingError):
+        await resolver.session_working_project_async(SessionAddress(None, "main", "in-gone"))
+
+
 @pytest.mark.parametrize(
     ("project_id", "prompt_project", "agent", "scope"),
     [
@@ -320,9 +399,9 @@ def test_resolve_prompt_project_uses_only_the_explicit_project(
         pytest.param(
             "vbot", "vbot", SimpleNamespace(id="builder"), ("vbot", None), id="project-run"
         ),
-        # A rooted Identity Run sees its home Project's Skills plus its private layer.
+        # An Identity Run working in a Project sees its Skills plus its private layer.
         pytest.param(
-            None, "vbot", SimpleNamespace(id="main"), ("vbot", "main"), id="rooted-identity"
+            None, "vbot", SimpleNamespace(id="main"), ("vbot", "main"), id="identity-in-a-project"
         ),
         pytest.param(None, None, SimpleNamespace(id="main"), (None, "main"), id="plain-identity"),
         # A Librarian Session works on the Skills of the Agent it is bound to.

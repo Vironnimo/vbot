@@ -101,7 +101,7 @@ Runtime preserves `get_adapter(ConnectionRef)`, token getter/extra access, Reaso
 
 ## Constraints & Gotchas
 
-- First-start recovery creates a bootstrap Agent (`main`/`Main`, shifting to free `main-N` when an invalid preserved directory occupies the name), including first empty Session as current pointer. Existing directories with any valid Agent are preserved - no second `main`.
+- First-start recovery creates a bootstrap Agent (`main`/`Main`, shifting to free `main-N` when an invalid preserved directory occupies the name), with no Session yet: its first message creates one (`agent.md`). Existing directories with any valid Agent are preserved - no second `main`.
 - Invalid individual Agent/Project configs skip individually; Projects need only `project_id` + `cwd`.
 - The bootstrap Agent ensures **before** ChannelService starts so a channel targeting `main` recovers on first start. A pending Agent rename finishes its Agent-owned half before the first roster read and that ensure, and moves its references before any reference owner starts (`test_runtime_agent_rename.py`).
 - Channel/Cron starts, the usage collector and the performance monitor share the event-loop guard: wired but not started when no loop exists. Channel startup failures isolate to failed health state; Cron storage corruption disables scheduling without failing startup and protects state from overwrite.

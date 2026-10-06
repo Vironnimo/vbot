@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -31,7 +32,13 @@ from tests.server.rpc.chat_methods_test_support import (
     finished_run,
     resource_changes,
 )
-from tests.server.rpc_test_support import JsonObject, StubAdapter, StubRuntime, make_state
+from tests.server.rpc_test_support import (
+    JsonObject,
+    StubAdapter,
+    StubProject,
+    StubRuntime,
+    make_state,
+)
 
 WEBUI = ReplySurface.webui()
 
@@ -142,13 +149,28 @@ async def test_submission_parses_content_blocks_and_forwards_the_input_origin(
 @pytest.mark.parametrize(
     ("method", "params", "named_field"),
     [
-        ("chat.send", {"agent_id": "coder", "content": 123}, None),
+        ("chat.send", {"session_id": "s1", "content": 123}, None),
         (
             "chat.stream",
-            {"agent_id": "coder", "content": "Hi", "input_origin": "paste"},
+            {"session_id": "s1", "content": "Hi", "input_origin": "paste"},
             "input_origin",
         ),
-        ("chat.send", {"agent_id": "builder@bad project", "content": "hi"}, None),
+        ("chat.send", {"agent_id": "builder@bad project", "session_id": "s1"}, None),
+        # Exactly one target: an existing Session or a new one.
+        ("chat.send", {}, "exactly one of session_id"),
+        ("chat.stream", {"session_id": "s1", "new_session": {}}, "exactly one of session_id"),
+        ("chat.send", {"new_session": "yes"}, "params.new_session must be an object"),
+        ("chat.send", {"new_session": {"title": "Plan"}}, "params.new_session"),
+        (
+            "chat.stream",
+            {"new_session": {"agent_overrides": {"speed": 1}}},
+            "params.new_session.agent_overrides has unsupported fields: speed",
+        ),
+        (
+            "chat.send",
+            {"new_session": {"agent_overrides": {"model": None}}},
+            "params.new_session.agent_overrides values must not be null",
+        ),
     ],
 )
 async def test_submission_rejects_malformed_params_before_starting_anything(
@@ -157,7 +179,7 @@ async def test_submission_rejects_malformed_params_before_starting_anything(
     loop = _RecordingLoop()
     state = chat_state(loop)
 
-    response = await call(state, method, session_id="s1", **params)
+    response = await call(state, method, **({"agent_id": "coder", "content": "hi"} | params))
 
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_request"
@@ -180,7 +202,8 @@ async def test_send_snapshots_mentioned_files_into_the_content(tmp_path: Path) -
         loop,
         projects=SimpleNamespace(get=lambda project_id: SimpleNamespace(cwd="")),
         agent_resolver=SimpleNamespace(
-            resolve_agent=lambda project_id, agent_id: SimpleNamespace(workspace=str(workspace))
+            resolve_agent=lambda project_id, agent_id: SimpleNamespace(workspace=str(workspace)),
+            resolve_working_project=lambda project_id, agent, **_: None,
         ),
         storage=SimpleNamespace(data_dir=str(tmp_path)),
         file_read_state=file_state,
@@ -250,7 +273,10 @@ async def test_busy_session_queues_the_message_and_signals_the_queue(
     response = await call(state, method, **params)
 
     item = loop.queued_items[0]
-    assert response == {"ok": True, "result": {"queued": True, "item": item.to_dict()}}
+    assert response == {
+        "ok": True,
+        "result": {"queued": True, "session_id": "s1", "item": item.to_dict()},
+    }
     expected_origin = {} if origin is None else {"input_origin": origin}
     assert loop.queue_calls == [
         {
@@ -497,6 +523,112 @@ async def test_send_to_a_missing_session_is_a_domain_error(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["chat.send", "chat.stream"])
+async def test_new_session_is_created_with_its_first_message_and_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    adapter = StubAdapter(
+        stream_deltas=[
+            {"type": "content_delta", "text": "OK"},
+            {"type": "finish", "reason": "stop"},
+        ]
+    )
+    state = make_state(tmp_path, adapter)
+    state.runtime.projects.add(StubProject("vbot", "vBot", str(tmp_path)))
+
+    response = await call(
+        state,
+        method,
+        agent_id="coder",
+        new_session={
+            "agent_overrides": {"model": "openai/gpt-4.1-mini"},
+            "working_project_id": "vbot",
+        },
+        content="Hi",
+    )
+
+    result = response["result"]
+    session_id = result["session_id"]
+    await state.chat_runs.get(result["run_id"]).wait()
+    address = SessionAddress(project_id=None, agent_id="coder", session_id=session_id)
+    sessions = state.runtime.chat_sessions
+    assert [address.session_id for address in sessions.list_addresses(None, agent_id="coder")] == [
+        session_id
+    ]
+    assert [
+        message.content for message in sessions.get(address).load() if message.role == "user"
+    ] == ["Hi"]
+    # The first Run already uses the overrides, which stay on the Session.
+    [request] = adapter.requests or adapter.stream_requests
+    assert request["model_id"] == "gpt-4.1-mini"
+    assert state.runtime.agent_resolver.session_overrides(address).model == "openai/gpt-4.1-mini"
+    # The Session works in the chosen Project for its whole life.
+    assert sessions.metadata_value(address, "working_project_id") == "vbot"
+    # The Identity Agent's new Session becomes current; other windows list it
+    # (later changes come from the Run itself).
+    assert state.runtime.agents.get("coder").current_session_id == session_id
+    assert [change["kind"] for change in resource_changes(state)][:2] == ["sessions", "agents"]
+
+
+def _unusable_override(state: SimpleNamespace) -> JsonObject:
+    state.runtime.agent_resolver.models.unusable.add("openai/gpt-4.1-mini")
+    return {
+        "agent_id": "coder",
+        "new_session": {"agent_overrides": {"model": "openai/gpt-4.1-mini"}},
+    }
+
+
+def _unknown_agent(_state: SimpleNamespace) -> JsonObject:
+    return {"agent_id": "ghost", "new_session": {}}
+
+
+def _agent_without_model(state: SimpleNamespace) -> JsonObject:
+    state.runtime.agents.update("coder", model="")
+    return {"agent_id": "coder", "new_session": {}}
+
+
+def _unknown_working_project(_state: SimpleNamespace) -> JsonObject:
+    return {"agent_id": "coder", "new_session": {"working_project_id": "ghost"}}
+
+
+def _team_working_project(_state: SimpleNamespace) -> JsonObject:
+    return {"agent_id": "builder@vbot", "new_session": {"working_project_id": "other"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arrange", "code"),
+    [
+        pytest.param(_unusable_override, "invalid_request", id="unusable-override-model"),
+        pytest.param(_unknown_agent, "agent_not_found", id="unknown-agent"),
+        pytest.param(_agent_without_model, "domain_error", id="no-provider"),
+        pytest.param(_unknown_working_project, "project_not_found", id="unknown-project"),
+        pytest.param(_team_working_project, "invalid_request", id="team-agent-project"),
+    ],
+)
+async def test_a_refused_message_for_a_new_session_leaves_no_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    arrange: Callable[[SimpleNamespace], JsonObject],
+    code: str,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    adapter = StubAdapter()
+    state = make_state(tmp_path, adapter)
+    params = arrange(state)
+
+    response = await call(state, "chat.send", content="Hi", **params)
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == code
+    assert state.runtime.chat_sessions.list_addresses(None) == []
+    assert state.runtime.agents.get("coder").current_session_id == ""
+    assert resource_changes(state) == []
+    assert adapter.requests == []
+
+
+@pytest.mark.asyncio
 async def test_busy_session_queues_while_other_sessions_keep_running(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -591,7 +723,7 @@ def test_http_send_persists_the_run_and_serves_its_timeline_and_history(
 
     assert create_response.json() == {
         "ok": True,
-        "result": {"agent_id": "coder", "session_id": "session-one"},
+        "result": {"agent_id": "coder", "session_id": "session-one", "working_project_id": None},
     }
     assert send_result["message"]["content"] == "Lookup complete."
     timeline = [

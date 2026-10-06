@@ -50,6 +50,71 @@ describe('send and edit admission', () => {
     );
   });
 
+  it('creates the Session of a draft with its first send and announces it before the Run attaches', async () => {
+    const startChatRun = vi
+      .fn()
+      .mockResolvedValueOnce({
+        command_handled: true,
+        output: 'transient',
+        reply: 'Status',
+        data: { command: 'status', session_id: null },
+      })
+      .mockResolvedValueOnce({
+        run_id: 'run-one',
+        session_id: 'created',
+        sse_url: '/events/run-one',
+      })
+      .mockRejectedValueOnce(new Error('provider down'));
+    let displayedKey = '';
+    const onSessionCreated = vi.fn((sessionState) => {
+      displayedKey = sessionState.key;
+    });
+    const { chatState, controller, runStream } = setupController({
+      isDisplayedSession: (agentId, sessionId) =>
+        `${agentId}::${sessionId}` === displayedKey,
+      onSessionCreated,
+      operationOverrides: { startChatRun },
+    });
+    const draft = { agentAddress: 'builder@vbot', key: 'builder@vbot::~d' };
+
+    // A command that needs no Session leaves the draft in place.
+    expect(await controller.sendToNewSession(draft, '/status')).toEqual({
+      kind: 'transient',
+      reply: 'Status',
+      sessionState: null,
+    });
+    expect(onSessionCreated).not.toHaveBeenCalled();
+
+    const outcome = await controller.sendToNewSession(draft, 'Hello', {
+      fileMentions: ['notes.md'],
+    });
+    expect(startChatRun).toHaveBeenLastCalledWith({
+      agent_id: 'builder@vbot',
+      new_session: {},
+      content: 'Hello',
+      file_mentions: ['notes.md'],
+    });
+    const created = chatState.sessions['builder@vbot::created'];
+    expect(onSessionCreated).toHaveBeenCalledWith(created);
+    expect(outcome).toEqual({
+      kind: 'started',
+      runId: 'run-one',
+      sessionState: created,
+    });
+    expect(created.currentRun?.runId).toBe('run-one');
+    expect(runStream.subscribeToRun).toHaveBeenCalledWith(
+      created,
+      '/events/run-one',
+      { afterSequence: 0 },
+    );
+
+    // Without a Session, a failure reports beside the draft's composer.
+    expect(await controller.sendToNewSession(draft, 'Again')).toEqual({
+      kind: 'failed',
+    });
+    expect(chatState.actionError).toBe(`${t('chat.sendError')} provider down`);
+  });
+
   it('attaches send admission errors only to the addressed Session', async () => {
     const startChatRun = vi.fn().mockRejectedValue(new Error('provider down'));
     const { chatState, controller } = setupController({

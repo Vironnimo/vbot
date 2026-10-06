@@ -30,6 +30,7 @@ from tests.server.rpc.session_methods_test_support import FakeSessions, stub_ses
 from tests.server.rpc_test_support import (
     JsonObject,
     StubAdapter,
+    StubProject,
     call,
     make_state,
     resource_changes,
@@ -194,10 +195,20 @@ async def test_session_create_resolves_the_address_and_publishes_a_scoped_change
 
     result = await rpc_result(state, "session.create", agent_id=agent_id, make_current=True)
 
-    assert result == {"agent_id": "builder", "session_id": "new-session"}
+    assert result == {
+        "agent_id": "builder",
+        "session_id": "new-session",
+        "working_project_id": project_id,
+    }
     assert resolver.resolved == [(project_id, "builder")]
+    # A Team Agent's Session works in its Team's Project and stores no other.
     assert sessions.created == [
-        {"agent_id": "builder", "session_id": None, "project_id": project_id}
+        {
+            "agent_id": "builder",
+            "session_id": None,
+            "project_id": project_id,
+            "working_project_id": None,
+        }
     ]
     assert state._updates == current_updates
     # Scoped to the new Session with the bare Agent id (the Project rides
@@ -218,10 +229,67 @@ async def test_session_create_stores_an_explicit_id_and_makes_it_current(tmp_pat
         state, "session.create", agent_id="coder", session_id="session-one", make_current=True
     )
 
-    assert result == {"agent_id": "coder", "session_id": "session-one"}
+    assert result == {"agent_id": "coder", "session_id": "session-one", "working_project_id": None}
     address = SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
     assert state.runtime.chat_sessions.get(address).id == "session-one"
     assert state.runtime.agents.get("coder").current_session_id == "session-one"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("default_project", "params", "working_project_id"),
+    [
+        pytest.param("vbot", {}, "vbot", id="the-agents-default-project"),
+        pytest.param(None, {}, None, id="the-workspace-without-a-default"),
+        pytest.param("vbot", {"working_project_id": None}, None, id="explicitly-the-workspace"),
+        pytest.param(None, {"working_project_id": "vbot"}, "vbot", id="an-explicit-project"),
+    ],
+)
+async def test_session_create_pins_the_working_project_of_the_new_session(
+    tmp_path: Path, default_project: str | None, params: JsonObject, working_project_id: str | None
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.projects.add(StubProject("vbot", "vBot", str(tmp_path)))
+    state.runtime.agents.update("coder", root_project_id=default_project)
+    sessions = state.runtime.chat_sessions
+
+    result = await rpc_result(
+        state, "session.create", agent_id="coder", session_id="session-one", **params
+    )
+    # A later change of the Agent's default Project leaves the Session where it works.
+    state.runtime.agents.update("coder", root_project_id=None if default_project else "vbot")
+
+    assert result["working_project_id"] == working_project_id
+    address = SessionAddress(None, "coder", "session-one")
+    assert sessions.metadata_value(address, "working_project_id") == working_project_id
+    [summary] = (await rpc_result(state, "session.list", agent_id="coder"))["sessions"]
+    assert summary["working_project_id"] == working_project_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("agent_id", "working_project_id", "code"),
+    [
+        pytest.param("coder", "ghost", "project_not_found", id="unknown-project"),
+        pytest.param("coder", "Not A Project!", "invalid_request", id="invalid-project-id"),
+        pytest.param("builder@vbot", "other", "invalid_request", id="team-agent"),
+    ],
+)
+async def test_session_create_refuses_a_working_project_it_cannot_use(
+    tmp_path: Path, agent_id: str, working_project_id: str, code: str
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    error = await rpc_error(
+        state,
+        "session.create",
+        agent_id=agent_id,
+        session_id="session-one",
+        working_project_id=working_project_id,
+    )
+
+    assert error["code"] == code
+    assert not state.runtime.chat_sessions.exists(SessionAddress(None, "coder", "session-one"))
 
 
 @pytest.mark.asyncio
@@ -253,10 +321,14 @@ async def test_session_create_stores_its_agent_overrides(tmp_path: Path) -> None
     assert result == {
         "agent_id": "coder",
         "session_id": "session-one",
+        "working_project_id": None,
         "agent_overrides": overrides,
     }
     address = SessionAddress(None, "coder", "session-one")
     assert sessions.metadata_value(address, "agent_overrides") == overrides
+    # The Session's row reports its overrides, so accessors can show them.
+    row = await rpc_result(state, "session.get", agent_id="coder", session_id="session-one")
+    assert row["session"]["agent_overrides"] == overrides
 
 
 # ---------------------------------------------------------------------------
@@ -675,10 +747,21 @@ async def test_session_agent_overrides_change_only_the_fields_named(tmp_path: Pa
         },
     }
     assert sessions.metadata_value(address, "agent_overrides") == result["agent_overrides"]
+    [row] = (await rpc_result(state, "session.list", agent_id="coder"))["sessions"]
+    assert row["agent_overrides"] == result["agent_overrides"]
     assert resource_changes(state, "sessions")[-1]["scope"] == {
         "project_id": None,
         **session,
     }
+    # Clearing the last override leaves the row without any.
+    await rpc_result(
+        state,
+        "session.set_agent_overrides",
+        **session,
+        agent_overrides={"model": None, "temperature": None},
+    )
+    [row] = (await rpc_result(state, "session.list", agent_id="coder"))["sessions"]
+    assert "agent_overrides" not in row
 
 
 @pytest.mark.asyncio

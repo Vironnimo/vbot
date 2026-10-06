@@ -293,6 +293,11 @@ def bootstrap(runtime: Runtime) -> None:
             sessions=runtime._chat_sessions,
             snapshot_barrier=runtime._snapshot_barrier,
         )
+        # A Session of an Identity Agent whose creator names no working Project
+        # (Channels, Automation, wake word) works in the Agent's default Project.
+        runtime._chat_sessions.set_agent_default_project(
+            partial(_agent_default_project, runtime._agents)
+        )
         # An Identity Agent rename interrupted by the last process ends before any
         # roster read or bootstrap Agent: its Agent-owned half first, its references
         # once their owners exist and before any of them starts.
@@ -761,6 +766,12 @@ def bootstrap(runtime: Runtime) -> None:
     # startup traceback as its context.
     clean_up_failed_startup(runtime)
     raise startup_error
+
+
+def _agent_default_project(agents: AgentStore, agent_id: str) -> str | None:
+    """Return the default Project of an Identity Agent, ``None`` for none or no Agent."""
+    agent = agents.find(agent_id)
+    return None if agent is None else agent.root_project_id
 
 
 def _librarian_service(runtime: Runtime) -> LibrarianService:

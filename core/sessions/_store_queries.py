@@ -231,9 +231,14 @@ def _summary(state: sqlite3.Row, metadata_keys: Sequence[str] = ()) -> JsonObjec
     if parent is not None:
         summary["subagent_parent"] = parent
     summary.update(_store_values._derived_metadata_from_state(state))
+    summary.setdefault(_store_values._WORKING_PROJECT_KEY, None)
     if state["compaction_policy_json"] is not None:
         summary["compaction_policy"] = _store_values._json_from_payload(
             str(state["compaction_policy_json"]), "Session compaction policy"
+        )
+    if state["agent_overrides_json"] is not None:
+        summary[_store_values._AGENT_OVERRIDES_KEY] = _store_values._json_from_payload(
+            str(state["agent_overrides_json"]), "Session agent overrides"
         )
     summary.update(_completion_activity_from_state(state))
     for key in metadata_keys:

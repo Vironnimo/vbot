@@ -22,7 +22,11 @@ from core.sessions import (
     ArchiveTree,
     SessionAddress,
 )
-from tests.core.archive.archive_test_support import ArchiveWorld, legacy_agent_entry
+from tests.core.archive.archive_test_support import (
+    ArchiveWorld,
+    agent_with_session,
+    legacy_agent_entry,
+)
 from tests.core.archive.archive_test_support import world as world
 
 
@@ -32,7 +36,7 @@ def _fail(*_args: Any, **_kwargs: Any) -> Any:
 
 def test_interrupted_archives_are_rolled_back(world: ArchiveWorld, tmp_path: Path) -> None:
     agents, ledger = world.agents, world.sessions.archive_ledger
-    coder = agents.create("coder")
+    coder = agent_with_session(world, "coder")
     repo = tmp_path / "repo"
     repo.mkdir()
     world.projects.create("vbot", "vBot", repo)
@@ -183,7 +187,7 @@ async def test_an_interrupted_restore_finishes_from_live_files_and_never_moves_t
     deny_access: Callable[[Path], None],
 ) -> None:
     agents, ledger = world.agents, world.sessions.archive_ledger
-    coder = agents.create("coder")
+    coder = agent_with_session(world, "coder")
     agents.create("manager", tools={"subagent": {"allowed_agents": ["coder"]}})
     entry_id = (await world.service.archive_agent("coder")).entry_id
     payload, home = world.payload(entry_id, "agent"), world.data_dir / "agents" / "coder"

@@ -27,6 +27,7 @@ async def _archived(tmp_path: Path) -> tuple[SimpleNamespace, dict[str, str]]:
     runtime = state.runtime
     runtime.agents.create("manager", "Manager", tools={"subagent": {"allowed_agents": ["coder"]}})
     runtime.agents.create("coder", "Coder")
+    runtime.sessions.create("coder", session_id="work")
     notes = runtime.sessions.create("manager", session_id="notes").address
     runtime.sessions.set_title(notes, "Notes")
     await rpc_result(

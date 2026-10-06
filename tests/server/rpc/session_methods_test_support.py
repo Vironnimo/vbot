@@ -19,6 +19,7 @@ from core.chat import ChatSessionError
 from core.database import SnapshotBarrier
 from core.runs import ChatRunManager
 from core.sessions import (
+    AGENT_DEFAULT_PROJECT,
     FORK_SOURCE_META_KEY,
     ArchiveEntryRef,
 )
@@ -35,6 +36,14 @@ class FakeResolver:
 
     async def resolve_agent_async(self, project_id: str | None, agent_id: str) -> Any:
         return self.resolve_agent(project_id, agent_id)
+
+    async def resolve_working_project_async(
+        self, project_id: str | None, agent: Any, *, requested: Any = AGENT_DEFAULT_PROJECT
+    ) -> str | None:
+        # Agents here have no default Project.
+        if project_id is not None:
+            return project_id
+        return None if requested is AGENT_DEFAULT_PROJECT else cast(str | None, requested)
 
 
 class FakeSessions:
@@ -91,9 +100,15 @@ class FakeSessions:
         session_id: Any = None,
         project_id: Any = None,
         actor: str | None = None,
+        working_project_id: Any = None,
     ) -> Any:
         self.created.append(
-            {"agent_id": agent_id, "session_id": session_id, "project_id": project_id}
+            {
+                "agent_id": agent_id,
+                "session_id": session_id,
+                "project_id": project_id,
+                "working_project_id": working_project_id,
+            }
         )
         return SimpleNamespace(id="new-session")
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -10,6 +11,7 @@ from core.chat import (
     CommandExecutionContext,
     CommandOutcome,
     CommandResourceChange,
+    NewSessionCommandContext,
     PreparedCommand,
     ReplySurface,
     latest_session_context_usage,
@@ -19,12 +21,15 @@ from core.chat.content_blocks import ContentBlock
 from core.chat.file_mentions import expand_file_mentions, resolve_mention_root
 from core.chat.usage import with_context_window
 from core.compaction import COMPACTION_POLICY_META_KEY, effective_compaction_policy
-from core.projects import AgentResolutionError, format_agent_address
+from core.projects import AgentOverrides, AgentResolutionError, format_agent_address
 from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem, Run, RunCancelledError
 from core.sessions import (
+    AGENT_DEFAULT_PROJECT,
     ChatSession,
     SessionAddress,
     SessionChatHistorySnapshot,
+    WorkingProjectChoice,
+    new_session_id,
 )
 from core.tools.shell import (
     COMMAND_STATUS_NOTE_MARKER,
@@ -47,6 +52,7 @@ from server.rpc.event_bridge import (
     _bridge_queued_item_to_event_bus,
     _bridge_run_to_event_bus,
     publish_resource_changed,
+    publish_session_changed,
 )
 from server.rpc.payloads import (
     _queued_response,
@@ -61,10 +67,13 @@ from server.rpc.runtime_access import (
     _streaming_chat_loop,
 )
 from server.rpc.validation import (
+    ChatInputOrigin,
+    _optional_agent_overrides,
     _optional_chat_input_origin,
     _optional_file_mentions,
     _optional_positive_integer,
     _optional_string,
+    _optional_working_project,
     _parse_chat_content,
     _reject_unsupported,
     _required_agent_address,
@@ -149,7 +158,10 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     """Read one History page of a Session.
 
     Without ``before`` or ``after`` the response is the newest page with the
-    Session's whole-Session facts, reflection Runs and Compaction Policy. An
+    Session's whole-Session facts, reflection Runs and Compaction Policy.
+    Without ``session_id`` an Identity Agent's current Session is read; an
+    Identity Agent without one (a new conversation, no Session yet) returns an
+    empty page with ``session_id: null``. An
     ``after`` read appends to the caller's page (``incremental``); its
     ``background_command_statuses`` then cover only the appended records, for the
     caller to merge. An ``after`` read with nothing appended returns an empty
@@ -178,6 +190,8 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
             session_id = await state.runtime.chat_sessions.run_async(
                 _current_session_id, state, agent_id
             )
+            if session_id is None:
+                return _empty_chat_history(agent_id)
         address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id)
         chat_runs = _state_chat_runs(state)
         while True:
@@ -462,9 +476,25 @@ def _project_chat_history(
     )
 
 
-def _current_session_id(state: Any, agent_id: str) -> str:
-    """An Identity Agent's History defaults to its current Session."""
-    return cast(str, state.runtime.agents.get(agent_id).current_session_id)
+def _current_session_id(state: Any, agent_id: str) -> str | None:
+    """An Identity Agent's History defaults to its current Session, if it has one."""
+    return cast(str, state.runtime.agents.get(agent_id).current_session_id) or None
+
+
+def _empty_chat_history(agent_id: str) -> JsonObject:
+    """The History page of a new conversation, whose Session does not exist yet."""
+    return {
+        "agent_id": agent_id,
+        "session_id": None,
+        "messages": [],
+        "history_generation": None,
+        "runs": [],
+        "next_after": None,
+        "incremental": False,
+        "history_reset": False,
+        "has_newer": False,
+        "has_more": False,
+    }
 
 
 async def _subagent_inspect(state: Any, params: JsonObject) -> JsonObject:
@@ -503,12 +533,19 @@ def _publish_command_change(state: Any, change: CommandResourceChange) -> None:
     publish_resource_changed(state, change.kind, scope=dict(change.scope) or None)
 
 
-def _command_outcome_response(outcome: CommandOutcome) -> JsonObject:
+def _command_outcome_response(outcome: CommandOutcome, session_id: str | None) -> JsonObject:
+    """Project a command outcome; ``session_id`` is the Session the command ran in.
+
+    A command sent for a new Session runs in none unless it created one, and
+    its response then carries no ``session_id``.
+    """
     response: JsonObject = {
         "command_handled": True,
         "reply": outcome.feedback.text if outcome.feedback is not None else "",
         "output": _command_output(outcome),
     }
+    if session_id is not None:
+        response["session_id"] = session_id
     data: JsonObject = {"command": outcome.command, **dict(outcome.facts)}
     if outcome.navigation is not None:
         navigation = outcome.navigation
@@ -518,6 +555,11 @@ def _command_outcome_response(outcome: CommandOutcome) -> JsonObject:
                 "extension": navigation.extension,
                 "page": navigation.page,
                 "route": navigation.route,
+            }
+        elif navigation.kind == "new_session":
+            data["navigation"] = {
+                "kind": navigation.kind,
+                "agent_id": format_agent_address(navigation.agent_id, navigation.project_id),
             }
         else:
             data.setdefault("session_id", navigation.session_id)
@@ -539,15 +581,8 @@ def _primary_command_run(outcome: CommandOutcome) -> Run | None:
     return primary_runs[0] if primary_runs else None
 
 
-async def _execute_chat_command(
-    state: Any,
-    agent_id: str,
-    session_id: str,
-    prepared: PreparedCommand,
-    *,
-    project_id: str | None = None,
-) -> Run | JsonObject:
-    dispatcher = _state_command_dispatcher(state)
+def _command_change_publisher(state: Any) -> Callable[[CommandResourceChange], None]:
+    """Publish each distinct resource change of one command once."""
     emitted_changes: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
 
     def on_change(change: CommandResourceChange) -> None:
@@ -557,6 +592,19 @@ async def _execute_chat_command(
         emitted_changes.add(key)
         _publish_command_change(state, change)
 
+    return on_change
+
+
+async def _execute_chat_command(
+    state: Any,
+    agent_id: str,
+    session_id: str,
+    prepared: PreparedCommand,
+    *,
+    project_id: str | None = None,
+) -> Run | JsonObject:
+    dispatcher = _state_command_dispatcher(state)
+    on_change = _command_change_publisher(state)
     try:
         outcome = await dispatcher.execute(
             prepared,
@@ -576,7 +624,49 @@ async def _execute_chat_command(
     primary_run = _primary_command_run(outcome)
     if primary_run is not None:
         return primary_run
-    return _command_outcome_response(outcome)
+    return _command_outcome_response(outcome, session_id)
+
+
+@dataclass(frozen=True)
+class _NewSessionTarget:
+    """A chat submission's new Session: its Agent overrides and working Project."""
+
+    agent_overrides: AgentOverrides
+    working_project_id: WorkingProjectChoice = AGENT_DEFAULT_PROJECT
+
+
+async def _execute_new_session_chat_command(
+    state: Any,
+    agent_id: str,
+    prepared: PreparedCommand,
+    target: _NewSessionTarget,
+    *,
+    project_id: str | None,
+) -> Run | JsonObject:
+    """Run a command sent for a new Session; the command decides whether it creates one."""
+    on_change = _command_change_publisher(state)
+    try:
+        result = await _state_command_dispatcher(state).execute_for_new_session(
+            prepared,
+            NewSessionCommandContext(
+                agent_id=agent_id,
+                project_id=project_id,
+                reply_surface=WEBUI_REPLY_SURFACE,
+                agent_overrides=target.agent_overrides,
+                working_project_id=target.working_project_id,
+                on_change=on_change,
+            ),
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    for change in result.outcome.resource_changes:
+        on_change(change)
+    if result.session_id is not None and project_id is None:
+        await _mark_current_session(state, agent_id, result.session_id)
+    primary_run = _primary_command_run(result.outcome)
+    if primary_run is not None:
+        return primary_run
+    return _command_outcome_response(result.outcome, result.session_id)
 
 
 async def _expand_content_file_mentions(
@@ -586,20 +676,30 @@ async def _expand_content_file_mentions(
     session_id: str,
     content: str | list[ContentBlock],
     file_mentions: list[str],
+    *,
+    new_session_project: WorkingProjectChoice = AGENT_DEFAULT_PROJECT,
 ) -> str | list[ContentBlock]:
     """Snapshot ``@``-mentioned files into the outgoing content, if any.
 
     Runs before Run start *and* before busy-session enqueue, so a queued message
-    carries the files as they were when the user hit send. The root resolution
-    reads the Agent (whose current-Session pointer it verifies) on the Session
-    database's pool; the file I/O runs on the Chat RPC pool.
+    carries the files as they were when the user hit send. The files resolve in
+    the Session's working Project; for a Session the submission creates, in
+    *new_session_project*. The root resolution reads the Agent (whose
+    current-Session pointer it verifies) on the Session database's pool; the
+    file I/O runs on the Chat RPC pool.
     """
     if not file_mentions:
         return content
     runtime = state.runtime
     try:
         root = await runtime.chat_sessions.run_async(
-            resolve_mention_root, runtime, agent_id, project_id
+            lambda: resolve_mention_root(
+                runtime,
+                agent_id,
+                project_id,
+                session_id=session_id,
+                working_project_id=new_session_project,
+            )
         )
         return await _CHAT_RPC_WORKERS.run(
             expand_file_mentions,
@@ -672,16 +772,33 @@ async def _submit_chat(
     its final message and ``chat.stream`` returns the SSE location immediately.
     Everything before that presentation split is one submission path so command
     dispatch, file snapshots, queue fallback, and busy-to-idle handling cannot
-    drift between the two RPC methods.
+    drift between the two RPC methods. The target is an existing Session
+    (``session_id``) or a new one (``new_session``, see :func:`_chat_target`).
     """
 
     agent_id, project_id = _required_agent_address(params, "agent_id")
-    session_id = _required_string(params, "session_id")
+    target = _chat_target(params, project_id)
     content = _parse_chat_content(params, "content")
     input_origin = _optional_chat_input_origin(params)
     file_mentions = _optional_file_mentions(params)
 
     prepared_command = _state_command_dispatcher(state).prepare(content)
+    if isinstance(target, _NewSessionTarget):
+        if prepared_command is not None:
+            return await _execute_new_session_chat_command(
+                state, agent_id, prepared_command, target, project_id=project_id
+            )
+        return await _start_chat_in_new_session(
+            state,
+            agent_id,
+            project_id,
+            content,
+            target,
+            input_origin=input_origin,
+            file_mentions=file_mentions,
+            streaming=streaming,
+        )
+    session_id = target
     if prepared_command is not None:
         return await _execute_chat_command(
             state,
@@ -747,12 +864,94 @@ async def _submit_chat(
         if started_run is None:
             _bridge_queued_item_to_event_bus(state, queued_item)
             _publish_queue_changed(state, agent_id, session_id)
-            return _queued_response(queued_item)
+            return _queued_response(queued_item, session_id)
         run = started_run
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
     return run
+
+
+def _chat_target(params: JsonObject, project_id: str | None) -> str | _NewSessionTarget:
+    """Read where a chat submission goes: exactly one of two fields.
+
+    ``session_id`` names an existing Session and is returned. ``new_session``
+    is an object asking for a new Session that the submission creates; its
+    optional ``agent_overrides`` and ``working_project_id`` (validated like
+    ``session.create``'s) are what the new Session starts with.
+    """
+    session_id = _optional_string(params, "session_id")
+    new_session = params.get("new_session")
+    if (session_id is None) == (new_session is None):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params must name exactly one of session_id (an existing Session) "
+            "and new_session (a new Session)",
+        )
+    if session_id is not None:
+        return session_id
+    if not isinstance(new_session, dict):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.new_session must be an object")
+    _reject_unsupported(
+        new_session, {"agent_overrides", "working_project_id"}, "params.new_session"
+    )
+    overrides = _optional_agent_overrides(
+        new_session, allow_clear=False, label="params.new_session"
+    )
+    return _NewSessionTarget(
+        AgentOverrides(**overrides) if overrides else AgentOverrides(),
+        _optional_working_project(new_session, project_id, label="params.new_session"),
+    )
+
+
+async def _start_chat_in_new_session(
+    state: Any,
+    agent_id: str,
+    project_id: str | None,
+    content: str | list[ContentBlock],
+    target: _NewSessionTarget,
+    *,
+    input_origin: ChatInputOrigin | None,
+    file_mentions: list[str],
+    streaming: bool,
+) -> Run:
+    """Create the Session of a new conversation with its first Run, or nothing.
+
+    Chat core validates the target before it creates the Session, so a
+    rejected message leaves no Session. The new Session becomes an Identity
+    Agent's current one, like a message to an existing Session does.
+    """
+    # A file snapshot stamps the Session that read the file, so the id comes first.
+    session_id = new_session_id() if file_mentions else None
+    if session_id is not None:
+        content = await _expand_content_file_mentions(
+            state,
+            agent_id,
+            project_id,
+            session_id,
+            content,
+            file_mentions,
+            new_session_project=target.working_project_id,
+        )
+    chat_loop = _streaming_chat_loop(state) if streaming else state.chat_loop
+    try:
+        run = await chat_loop.start_run_in_new_session(
+            agent_id,
+            content,
+            session_id=session_id,
+            agent_overrides=target.agent_overrides,
+            working_project_id=target.working_project_id,
+            actor="rpc",
+            input_origin=input_origin,
+            reply_surface=WEBUI_REPLY_SURFACE,
+            project_id=project_id,
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    publish_session_changed(state, project_id, agent_id, run.session_id)
+    if project_id is None:
+        await _mark_current_session(state, agent_id, run.session_id)
+    return cast(Run, run)
 
 
 async def _send_chat(state: Any, params: JsonObject) -> JsonObject:

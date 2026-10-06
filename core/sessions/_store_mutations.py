@@ -33,13 +33,33 @@ if TYPE_CHECKING:
     from core.sessions._types import SessionAddress
 
 
+def _new_working_project(address: SessionAddress, working_project_id: str | None) -> str | None:
+    """Return the working Project column of a new Session at *address*.
+
+    A Project Session works in its address Project, so only a Session of an
+    Identity Agent stores one.
+    """
+    if working_project_id is not None and address.project_id is not None:
+        raise ChatSessionError("A Project Session works in its own Project")
+    return working_project_id
+
+
 def _insert_session(
-    connection: sqlite3.Connection, address: SessionAddress, created_at: str
+    connection: sqlite3.Connection,
+    address: SessionAddress,
+    created_at: str,
+    working_project_id: str | None = None,
 ) -> int:
     cursor = connection.execute(
         "INSERT INTO sessions (generation_id, project_id, agent_id, session_id, state, "
-        "created_at, last_activity_at) VALUES (?, ?, ?, ?, 'live', ?, ?)",
-        (uuid.uuid4().hex, *_store_values._scope(address), created_at, created_at),
+        "created_at, last_activity_at, working_project_id) VALUES (?, ?, ?, ?, 'live', ?, ?, ?)",
+        (
+            uuid.uuid4().hex,
+            *_store_values._scope(address),
+            created_at,
+            created_at,
+            _new_working_project(address, working_project_id),
+        ),
     )
     if cursor.lastrowid is None:
         raise SessionStoreCorruptError("SQLite did not return a Session key")
@@ -54,11 +74,14 @@ def create(
     generate_id: bool = False,
     run_kind: str | None = None,
     metadata: JsonObject | None = None,
+    working_project_id: str | None = None,
 ) -> SessionAddress:
     """Create a live Session; with *generate_id*, allocate a fresh id in its scope.
 
     A *run_kind* labels the Session and *metadata* sets facade values from its
-    first write, so no reader sees the Session without them.
+    first write, so no reader sees the Session without them. A Session of an
+    Identity Agent works in *working_project_id* (``None``: its Workspace) for
+    its whole life.
     """
     timestamp = (
         utc_now_timestamp()
@@ -68,7 +91,7 @@ def create(
     if generate_id:
         address = _store_values._allocate_address(connection, address)
     try:
-        session_key = _insert_session(connection, address, timestamp)
+        session_key = _insert_session(connection, address, timestamp, working_project_id)
     except sqlite3.IntegrityError as exc:
         raise ChatSessionError(f"session already exists: {address.session_id}") from exc
     if run_kind is not None:
@@ -79,10 +102,23 @@ def create(
     return address
 
 
-def ensure_live(connection: sqlite3.Connection, address: SessionAddress) -> None:
-    """Keep an existing live Session or create a new generation at *address*."""
+def ensure_live(
+    connection: sqlite3.Connection,
+    address: SessionAddress,
+    working_project_id: str | None = None,
+) -> None:
+    """Keep an existing live Session or create a new generation at *address*.
+
+    A created Session of an Identity Agent works in *working_project_id*; a
+    Project Session ignores it and works in its address Project.
+    """
     if _store_values._find_live(connection, address) is None:
-        _insert_session(connection, address, utc_now_timestamp())
+        _insert_session(
+            connection,
+            address,
+            utc_now_timestamp(),
+            None if address.project_id is not None else working_project_id,
+        )
 
 
 # -- Metadata facade ---------------------------------------------------------
@@ -142,10 +178,14 @@ def ensure_metadata(
     mutation: Callable[[JsonObject], None],
     *,
     create_missing: bool,
+    working_project_id: str | None = None,
 ) -> tuple[JsonObject, JsonObject]:
-    """Optionally create the live Session, then apply one metadata mutation."""
+    """Optionally create the live Session, then apply one metadata mutation.
+
+    A Session this creates works in *working_project_id* (see :func:`ensure_live`).
+    """
     if create_missing:
-        ensure_live(connection, address)
+        ensure_live(connection, address, working_project_id)
     return mutate_metadata(connection, address, mutation)
 
 
@@ -250,11 +290,25 @@ def _same_scope(source: SessionAddress, target: SessionAddress) -> bool:
     )
 
 
+def _carried_working_project(state: sqlite3.Row, target: SessionAddress) -> str | None:
+    """Return the working Project column a Session at *target* takes over from *state*.
+
+    A Project target works in its address Project; an Identity target keeps
+    working where the source Session worked, in its address Project or its own.
+    """
+    if target.project_id is not None:
+        return None
+    return _store_values._working_project_from_state(state)
+
+
 def move(connection: sqlite3.Connection, source: SessionAddress, target: SessionAddress) -> None:
     """Give one live Session a new address, history and relations unchanged.
 
     A move into another scope leaves the Agent-bound prompt state behind and
-    starts a new prompt-cache lineage.
+    starts a new prompt-cache lineage. The Session keeps working where it
+    worked: moved into an Identity scope it keeps its working Project (a
+    Project Session's address Project becomes its own), and moved into a
+    Project scope it works in that Project.
     """
     state = _store_values._require_live(connection, source)
     _store_values._reject_owner_managed_mutation(connection, state)
@@ -263,8 +317,8 @@ def move(connection: sqlite3.Connection, source: SessionAddress, target: Session
     session_key = int(state["session_key"])
     connection.execute(
         "UPDATE sessions SET project_id = ?, agent_id = ?, session_id = ?, "
-        "state_revision = state_revision + 1 WHERE session_key = ?",
-        (*_store_values._scope(target), session_key),
+        "working_project_id = ?, state_revision = state_revision + 1 WHERE session_key = ?",
+        (*_store_values._scope(target), _carried_working_project(state, target), session_key),
     )
     _store_prompts.carry_prompt_state(
         connection, source=state, target_key=session_key, same_scope=_same_scope(source, target)
@@ -296,7 +350,7 @@ def fork(
     lineage; no entry is copied. Channel, Sub-Agent and reflection bindings and
     the Run kinds stay behind; *run_kind* classifies the fork instead. A given
     *title* replaces the source's title, and an empty one clears it. Prompt
-    state carries over by the scope rules of a move.
+    state and the working Project carry over by the scope rules of a move.
     """
     if run_kind is not None and run_kind not in _RUN_KIND_VALUES:
         raise ChatSessionError(f"unknown run kind: {run_kind}")
@@ -307,7 +361,11 @@ def fork(
     source_key = int(state["session_key"])
     point = fork_point(connection, state)
     metadata = _store_values._session_metadata_from_state(state)
-    for key in (*SESSION_FORK_ALWAYS_STRIP_META_KEYS, _store_values._FORK_SOURCE_KEY):
+    for key in (
+        *SESSION_FORK_ALWAYS_STRIP_META_KEYS,
+        _store_values._FORK_SOURCE_KEY,
+        _store_values._WORKING_PROJECT_KEY,
+    ):
         metadata.pop(key, None)
     if title is not None:
         if title:
@@ -322,9 +380,9 @@ def fork(
     cursor = connection.execute(
         "INSERT INTO sessions (generation_id, project_id, agent_id, session_id, state, "
         "created_at, next_seq, last_activity_at, last_entry_id, fork_parent_key, forked_at, "
-        "fork_point_seq, "
+        "fork_point_seq, working_project_id, "
         + ", ".join(_store_values._METADATA_WRITE_COLUMNS)
-        + ") VALUES (?, ?, ?, ?, 'live', ?, ?, ?, ?, ?, ?, ?, "
+        + ") VALUES (?, ?, ?, ?, 'live', ?, ?, ?, ?, ?, ?, ?, ?, "
         + ", ".join("?" for _ in _store_values._METADATA_WRITE_COLUMNS)
         + ")",
         (
@@ -337,6 +395,7 @@ def fork(
             source_key,
             utc_now_timestamp(),
             point,
+            _carried_working_project(state, target),
             *storage.columns,
         ),
     )
@@ -449,6 +508,23 @@ def retarget_identity_agent(
         "WHERE project_id = '' AND agent_id = ? AND state = 'live'",
         (new_agent_id, old_agent_id),
     )
+
+
+def retarget_working_project(
+    connection: sqlite3.Connection, old_project_id: str, new_project_id: str, archived_at: str
+) -> int:
+    """Move Sessions that worked in a Project archived at *archived_at* to its new id.
+
+    Live and archived Sessions created before that archive follow the Project;
+    a Session created later works in another Project that took the old id.
+    Returns how many Sessions changed.
+    """
+    cursor = connection.execute(
+        "UPDATE sessions SET working_project_id = ?, state_revision = state_revision + 1 "
+        "WHERE working_project_id = ? AND created_at < ?",
+        (new_project_id, old_project_id, _store_values._timestamp(archived_at, "Archive time")),
+    )
+    return int(cursor.rowcount)
 
 
 def retarget_metadata_value(

@@ -34,7 +34,7 @@ from core.projects import (
     RuntimeAgent,
 )
 from core.runs import ChatRunManager, Run
-from core.sessions import ChatSessionManager, SessionAddress
+from core.sessions import SESSION_WORKING_PROJECT_META_KEY, ChatSessionManager, SessionAddress
 from core.settings.settings import SettingsValidationError
 from core.tools import ToolAccess, ToolContext, ToolRegistry
 from core.tools.status import STATUS_TOOL_NAME, register_status_tool
@@ -131,13 +131,18 @@ class _StubSession:
 
 
 class _StubSessions:
-    def __init__(self, messages: list[ChatMessage]) -> None:
+    def __init__(self, messages: list[ChatMessage], working_project_id: str | None = None) -> None:
         self._session = _StubSession(messages)
+        self._working_project_id = working_project_id
         self.calls: list[tuple[str, str, str | None]] = []
 
     def get(self, address: SessionAddress) -> _StubSession:
         self.calls.append((address.agent_id, address.session_id, address.project_id))
         return self._session
+
+    def metadata_value(self, address: SessionAddress, key: str) -> Any:
+        assert key == SESSION_WORKING_PROJECT_META_KEY
+        return address.project_id or self._working_project_id
 
 
 class _NotFoundSessions:
@@ -284,12 +289,22 @@ def test_status_tool_reports_the_current_session_like_the_status_command(tmp_pat
     assert "Session cache: read 800 / 1234 (64.8% hit), write 100, turns 1" in data["text"]
 
 
-def test_status_tool_reports_through_the_services_it_was_registered_with(tmp_path: Path) -> None:
-    # A project run: the resolver and the Session lookup receive the Project and the Session
-    # (whose Agent overrides the report must reflect), and the Model
-    # registry, the Project store and the reasoning describer each feed their report line.
+@pytest.mark.parametrize(
+    "project_id",
+    [
+        pytest.param("vbot", id="project-run"),
+        pytest.param(None, id="identity-session-working-in-the-project"),
+    ],
+)
+def test_status_tool_reports_through_the_services_it_was_registered_with(
+    tmp_path: Path, project_id: str | None
+) -> None:
+    # The resolver and the Session lookup receive the address and the Session (whose
+    # Agent overrides the report must reflect), and the Model registry, the Project
+    # store and the reasoning describer each feed their report line. The Project
+    # reported is the one the Session works in, for an Identity Session too.
     resolver = _StubResolver(_make_agent(thinking_effort="xhigh", temperature=None))
-    sessions = _StubSessions([])
+    sessions = _StubSessions([], working_project_id="vbot")
     described: list[tuple[str, str | None]] = []
 
     def describe_render(agent: RuntimeAgent) -> ReasoningIntent:
@@ -304,11 +319,11 @@ def test_status_tool_reports_through_the_services_it_was_registered_with(tmp_pat
         reasoning_render_describer=describe_render,
     )
 
-    result = _dispatch(registry, tmp_path, project_id="vbot")
+    result = _dispatch(registry, tmp_path, project_id=project_id)
 
     text = result["data"]["text"]
-    assert resolver.calls == [("vbot", "coder", "session-one")]
-    assert sessions.calls == [("coder", "session-one", "vbot")]
+    assert resolver.calls == [(project_id, "coder", "session-one")]
+    assert sessions.calls == [("coder", "session-one", project_id)]
     assert described == [("openai/gpt-5.2", "xhigh")]
     for line in (
         "Project: vBot (vbot)",

@@ -92,7 +92,6 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     listChatCommands: (params = {}) => call('chat.commands', params),
     loadChatHistory: (params) => call('chat.history', params),
     loadReflectionRuns: (params) => call('chat.reflections', params),
-    createSession: (params) => call('session.create', params),
     deleteSession: (agentId, sessionId, { permanent = false } = {}) =>
       call('session.delete', {
         agent_id: agentId,
@@ -130,7 +129,21 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
       }),
     stopAll: (agentId, sessionId) =>
       call('chat.stop_all', { agent_id: agentId, session_id: sessionId }),
-    listFiles: (agentId) => call('files.list', { agent_id: agentId }),
+    listFiles: (agentId, { sessionId = '', workingProjectId } = {}) =>
+      call('files.list', {
+        agent_id: agentId,
+        ...(sessionId
+          ? { session_id: sessionId }
+          : workingProjectId !== undefined
+            ? { working_project_id: workingProjectId }
+            : {}),
+      }),
+    setSessionAgentOverrides: (agentId, sessionId, agentOverrides) =>
+      call('session.set_agent_overrides', {
+        agent_id: agentId,
+        session_id: sessionId,
+        agent_overrides: agentOverrides,
+      }),
     listPrompts: (params = {}) => call('prompt.list', params),
     updatePromptBlock: (params) => call('prompt.update', params),
     resetPromptBlock: (params) => call('prompt.reset', params),

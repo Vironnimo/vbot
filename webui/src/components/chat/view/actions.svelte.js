@@ -154,6 +154,9 @@ export function createChatViewActions(context) {
     setSessionActionError(message);
   };
 
+  const isSent = (outcome) =>
+    outcome.kind !== 'failed' && outcome.kind !== 'ignored';
+
   const sendStream = async (agent, sessionState, content, options = {}) => {
     const presentation = captureDisplayedSession(sessionState?.key ?? '');
     const outcome = await context.chatController.sendMessage(
@@ -161,9 +164,56 @@ export function createChatViewActions(context) {
       content,
       options,
     );
-    if (!isDisplayedSessionCurrent(presentation)) {
-      return outcome.kind !== 'failed' && outcome.kind !== 'ignored';
+    if (outcome.modelChanged) {
+      context.sessionSettings.modelCommandApplied({
+        agentAddress: sessionState.agentId,
+        sessionKey: sessionState.key,
+      });
     }
+    if (isDisplayedSessionCurrent(presentation)) {
+      await presentSendOutcome(outcome, agent, sessionState);
+    }
+    return isSent(outcome);
+  };
+
+  // The first send from a draft creates its Session, which then shows in the
+  // draft's place and starts with the draft's Project and overrides. The
+  // Composer continues in that Session (`draftKey`); a command that needed no
+  // Session leaves the draft displayed.
+  const sendDraft = async (agent, draft, content, options = {}) => {
+    const presentation = captureDisplayedSession(draft.key);
+    const outcome = await context.chatController.sendToNewSession(
+      draft,
+      content,
+      options,
+    );
+    const sessionState = outcome.sessionState ?? null;
+    if (sessionState) {
+      context.sessionSettings.draftSent(draft, sessionState);
+    }
+    if (outcome.modelChanged) {
+      context.sessionSettings.modelCommandApplied({
+        agentAddress: draft.agentAddress,
+        draftKey: sessionState ? '' : draft.key,
+        sessionKey: sessionState?.key ?? '',
+      });
+    }
+    const shown = sessionState
+      ? context.target.isDisplayedSession(
+          sessionState.agentId,
+          sessionState.sessionId,
+        )
+      : isDisplayedSessionCurrent(presentation);
+    if (shown) {
+      await presentSendOutcome(outcome, agent, sessionState);
+    }
+    if (!isSent(outcome)) {
+      return false;
+    }
+    return sessionState ? { draftKey: sessionState.key } : true;
+  };
+
+  const presentSendOutcome = async (outcome, agent, sessionState) => {
     if (outcome.kind === 'move') {
       await context.navigation.moveSessionToAgent(outcome.move);
       context.layout.requestComposerFocus({ includeMobile: true });
@@ -178,6 +228,12 @@ export function createChatViewActions(context) {
         outcome.sessionSwitch.sessionId,
       );
       context.layout.requestComposerFocus({ includeMobile: true });
+    } else if (outcome.kind === 'draft') {
+      if (context.navigation.showAgentDraft(outcome.agentAddress)) {
+        context.layout.requestComposerFocus({ includeMobile: true });
+      } else {
+        showChatToast(outcome.reply);
+      }
     } else if (outcome.kind === 'extension_page') {
       window.dispatchEvent(
         new CustomEvent('vbot-extension-page', { detail: outcome.navigation }),
@@ -189,7 +245,6 @@ export function createChatViewActions(context) {
     } else if (outcome.kind === 'started') {
       submittedTurnScrollKey += 1;
     }
-    return outcome.kind !== 'failed' && outcome.kind !== 'ignored';
   };
 
   // Sessions whose manual `/compact` submission is still being admitted.
@@ -316,6 +371,7 @@ export function createChatViewActions(context) {
     const fileMentions = await collectQueueEditFileMentions(
       newContent,
       sessionState.agentId,
+      sessionState.sessionId,
     );
     return await context.chatController.updateQueued(
       sessionState,
@@ -325,7 +381,11 @@ export function createChatViewActions(context) {
     );
   };
 
-  const collectQueueEditFileMentions = async (text, agentAddress) => {
+  const collectQueueEditFileMentions = async (
+    text,
+    agentAddress,
+    sessionId,
+  ) => {
     const tokens = extractMentionTokens(typeof text === 'string' ? text : '');
     if (tokens.length === 0) {
       return [];
@@ -334,7 +394,9 @@ export function createChatViewActions(context) {
       if (!agentAddress) {
         return [];
       }
-      const result = await context.chatController.listFiles(agentAddress);
+      const result = await context.chatController.listFiles(agentAddress, {
+        sessionId,
+      });
       return matchMentionCandidates(
         tokens,
         Array.isArray(result?.files) ? result.files : [],
@@ -399,6 +461,9 @@ export function createChatViewActions(context) {
     },
     get sendStream() {
       return sendStream;
+    },
+    get sendDraft() {
+      return sendDraft;
     },
     get handleEditMessage() {
       return handleEditMessage;

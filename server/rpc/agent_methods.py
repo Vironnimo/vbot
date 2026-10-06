@@ -433,8 +433,13 @@ def _validate_agent_field(key: str, value: Any) -> Any:
             )
         return value
     if key == "current_session_id":
+        # ``null`` clears the pointer: the Agent opens a new conversation.
+        if value is None:
+            return ""
         if not isinstance(value, str) or not value:
-            raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a non-empty string")
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a non-empty string or null"
+            )
         return value
     if key == "root_project_id":
         if value is None:

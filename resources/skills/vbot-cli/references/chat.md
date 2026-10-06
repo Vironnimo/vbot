@@ -3,7 +3,7 @@
 `vbot chat` sends one message to an Agent Session, waits until the Run it starts ends, and prints the answer.
 
 ```bash
-vbot chat [<prompt>] [--agent <agent>] [-c | --session <session-id>] [--model <provider/model-id>] [--thinking-effort <effort>] [--temperature <0.0-2.0>] [--json]
+vbot chat [<prompt>] [--agent <agent>] [-c | --session <session-id> | --project <project-id> | --workspace] [--model <provider/model-id>] [--thinking-effort <effort>] [--temperature <0.0-2.0>] [--json]
 ```
 
 - `<prompt>` is the message. With `-` or without `<prompt>`, the message is read from piped stdin; without `<prompt>` and without piped stdin the command fails with a usage error and sends nothing. Pipe or redirect long or multiline text: `vbot chat --agent reviewer - < notes.md`.
@@ -12,7 +12,8 @@ vbot chat [<prompt>] [--agent <agent>] [-c | --session <session-id>] [--model <p
   - Neither `-c` nor `--session`: every call creates a fresh Session.
   - `-c` (`--continue`): continues the Agent's most recently active conversation Session. Sub-Agent, reflection, Cron and Channel Sessions are never selected. Without a conversation Session the command fails before sending.
   - `--session <session-id>`: continues that Session of the Agent. `vbot session list <agent>` lists Session ids.
-  - `-c` and `--session` cannot be combined.
+  - A new Session works in one place for its whole life: by default the Agent's default Project (`vbot agent show` prints it as `default_project`), or its Workspace when it has none. `--project <project-id>` starts it in that registered Project instead, and `--workspace` in the Agent's Workspace. A continued Session keeps working where it started. An `agent@project` address always works in that Project and refuses both flags.
+  - `-c`, `--session`, `--project` and `--workspace` cannot be combined.
 - `--model`, `--thinking-effort` (`none|minimal|low|medium|high|xhigh|max`) and `--temperature` are saved on the Session and apply to every later Run in that Session, whichever client sends the message. Omitting them keeps the Session's saved values. They never change the Agent's configuration; `vbot agent update` does that.
 - A message that starts with `/` is a Built-in Command such as `/status`; its reply is printed instead of an answer and no Run starts.
 
@@ -21,6 +22,7 @@ vbot chat "Summarize today's calendar"
 vbot chat --agent coder@vbot -c "Continue with the next step"
 git diff | vbot chat --agent reviewer --model openrouter/anthropic/claude-sonnet-4
 vbot chat --agent researcher --session <session-id> --json "List the sources you used"
+vbot chat --agent coder --project my-repo "Run the tests and fix failures"
 ```
 
 ## Output and exit codes

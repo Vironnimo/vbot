@@ -222,7 +222,12 @@ async def test_new_detaches_the_conversation_after_a_bound_tap(tmp_path: Path) -
     detached_session_id = storage.active_session_id("tg-assistant", SESSION_ID)
     assert detached_session_id is not None
     assert detached_session_id not in {SESSION_ID, "origin-session"}
+    # /new creates no Session; the conversation's next message starts it.
+    assert not sessions.exists(_address(detached_session_id))
+    await engine.handle_inbound_text(conversation, "next")
+    await drain(engine, 12345)
     assert sessions.exists(_address(detached_session_id))
+    assert trigger_mock.await_args_list[-1].args[1:3] == ("next", detached_session_id)
     await engine.stop()
 
 

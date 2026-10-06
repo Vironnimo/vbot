@@ -16,6 +16,7 @@ from core.chat.commands import (
     CommandOutcome,
     CommandResourceChange,
     CommandRun,
+    NewSessionCommandContext,
     _command_session_io,
     _extract_text,
     _notice,
@@ -33,7 +34,13 @@ from core.projects import (
 )
 from core.prompts.briefs import learn_brief
 from core.runs import ActiveRunError, ChatRunManager, RunAdmissionBlockedError
-from core.sessions import SUBAGENT_PARENT_META_KEY, SUBAGENT_SESSION_META_KEY, SessionAddress
+from core.sessions import (
+    AGENT_DEFAULT_PROJECT,
+    SESSION_WORKING_PROJECT_META_KEY,
+    SUBAGENT_PARENT_META_KEY,
+    SUBAGENT_SESSION_META_KEY,
+    SessionAddress,
+)
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
 
 if TYPE_CHECKING:
@@ -170,6 +177,19 @@ async def _execute_handoff(
     if not handoff_text:
         return _notice("handoff", "Handoff could not be generated.")
 
+    # A Team target works in its Team's Project; an Identity target continues
+    # in the Project the handed-off Session works in.
+    working_project_id = (
+        await _command_session_io(
+            sessions,
+            "metadata_value_async",
+            "metadata_value",
+            SessionAddress(context.project_id, context.agent_id, context.session_id),
+            SESSION_WORKING_PROJECT_META_KEY,
+        )
+        if target_project_id is None
+        else AGENT_DEFAULT_PROJECT
+    )
     target_session = await _command_session_io(
         sessions,
         "create_async",
@@ -177,6 +197,7 @@ async def _execute_handoff(
         target_agent_id,
         project_id=target_project_id,
         actor="command",
+        working_project_id=working_project_id,
     )
     if target_project_id is None:
         agents = _require_dependency(agents, "AgentStore")
@@ -561,10 +582,13 @@ async def _execute_new(
     agent_resolver: AgentResolver | None,
     agents: AgentStore | None,
     chat_runs: ChatRunManager,
-    sessions: ChatSessionManager | None,
 ) -> CommandOutcome:
+    """Open a new conversation with the Agent; its next message creates the Session.
+
+    No Session is created here. An Identity Agent's current-Session pointer is
+    cleared, so the Agent opens the new conversation too.
+    """
     resolver = _require_dependency(agent_resolver, "AgentResolver")
-    sessions = _require_dependency(sessions, "ChatSessionManager")
     if (
         chat_runs.active_run(
             agent_id=context.agent_id,
@@ -574,39 +598,29 @@ async def _execute_new(
         is not None
     ):
         return _notice("new", "A new session can be started after the current run finishes.")
-    await _COMMAND_WORKERS.run(
-        resolver.resolve_agent,
-        context.project_id,
-        context.agent_id,
-    )
-    session = await _command_session_io(
-        sessions,
-        "create_async",
-        "create",
-        context.agent_id,
-        session_id=context.preferred_new_session_id,
-        project_id=context.project_id,
-        actor="command",
-    )
-    if context.project_id is None:
+    agent = await resolver.resolve_agent_async(context.project_id, context.agent_id)
+    changes: tuple[CommandResourceChange, ...] = ()
+    if context.project_id is None and agent.current_session_id:
         agents = _require_dependency(agents, "AgentStore")
-        await _COMMAND_WORKERS.run(
-            agents.update,
-            context.agent_id,
-            current_session_id=session.id,
-        )
+        await _COMMAND_WORKERS.run(agents.update, context.agent_id, current_session_id="")
+        changes = (CommandResourceChange(kind="agents"),)
     return CommandOutcome(
         command="new",
-        feedback=CommandFeedback(kind="notice", text=f"New session started: {session.id}"),
-        facts={"session_id": session.id},
-        navigation=CommandNavigation(
-            kind="continue_in_session",
-            agent_id=context.agent_id,
-            session_id=session.id,
-            project_id=context.project_id,
+        feedback=CommandFeedback(
+            kind="notice", text="New session: it starts with your next message."
         ),
-        resource_changes=(_session_change(context.project_id, context.agent_id, session.id),),
+        navigation=CommandNavigation(
+            kind="new_session", agent_id=context.agent_id, project_id=context.project_id
+        ),
+        resource_changes=changes,
     )
+
+
+async def _execute_new_without_session(
+    context: NewSessionCommandContext, argument: str | None
+) -> CommandOutcome:
+    """``/new`` in a conversation that has no Session yet changes nothing."""
+    return _notice("new", "This is already a new session: it starts with your first message.")
 
 
 async def _execute_rename(

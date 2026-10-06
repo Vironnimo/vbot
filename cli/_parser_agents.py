@@ -249,12 +249,18 @@ def _add_agent_change_arguments(
         parser.add_argument(
             "--project",
             metavar="<project-id>",
-            help="Select the Project used for relative file and shell work",
+            help=(
+                "Set the default Project: new Sessions of the Agent work in it; "
+                "existing Sessions keep their Project"
+            ),
         )
         parser.add_argument(
             "--clear-project",
             action="store_true",
-            help="Clear the selected Project without changing Workspace or Memory",
+            help=(
+                "Clear the default Project: new Sessions work in the Agent's Workspace; "
+                "existing Sessions keep their Project"
+            ),
         )
     if include_session:
         parser.add_argument("--current-session-id", help="Switch the agent's current session")
@@ -472,8 +478,8 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         "--copy-rooted-agent-files",
         action="store_true",
         help=(
-            "Copy SOUL.md, USER.md, and MEMORY.md from custom Workspaces before rooted "
-            "Identity Agents are reset to their default Workspace"
+            "Copy SOUL.md, USER.md, and MEMORY.md from custom Workspaces before "
+            "Identity Agents with this default Project are reset to their default Workspace"
         ),
     )
     rm_parser.add_argument("--permanent", action="store_true", help=PERMANENT_DELETE_HELP)
@@ -753,7 +759,8 @@ def _add_chat_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         help=AREA_HELP["chat"],
         description=(
             f"{AREA_HELP['chat']}. Without -c or --session the message starts a new "
-            "Session. --model, --thinking-effort, --temperature and --top-p are saved on the "
+            "Session; the server creates it only for a message it accepts. "
+            "--model, --thinking-effort, --temperature and --top-p are saved on the "
             "Session and apply to its later messages too. The answer goes to stdout; "
             "Tool calls and retries are reported on stderr. "
             'Example: vbot chat --agent coder@vbot -c "Continue with the next step"'
@@ -777,10 +784,27 @@ def _add_chat_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         "--continue",
         dest="continue_latest",
         action="store_true",
-        help="Continue the Agent's most recently active conversation Session",
+        help=(
+            "Continue the Agent's most recently active conversation Session "
+            "(a new Session when it has none)"
+        ),
     )
     session_choice.add_argument(
         "--session", metavar="<session-id>", help="Continue this Session of the Agent"
+    )
+    session_choice.add_argument(
+        "--project",
+        dest="working_project",
+        metavar="<project-id>",
+        help=(
+            "Start the new Session in this Project; it keeps working there "
+            "(default: the Agent's default Project)"
+        ),
+    )
+    session_choice.add_argument(
+        "--workspace",
+        action="store_true",
+        help="Start the new Session in the Agent's Workspace instead of its default Project",
     )
     chat_parser.add_argument(
         "--model",

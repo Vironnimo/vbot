@@ -21,7 +21,6 @@ from core.agents import (
     is_librarian,
     validate_agent_file,
 )
-from core.sessions import SessionAddress
 from core.tools.availability import ToolAccess
 from core.utils.timestamps import is_canonical_timestamp
 from tests.core.agents.agents_test_support import (
@@ -34,7 +33,7 @@ from tests.core.agents.agents_test_support import store as store
 from tests.core.agents.agents_test_support import template_dir as template_dir
 
 
-def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> None:
+def test_create_writes_agent_json_and_workspace_without_a_session(store: AgentStore) -> None:
     agent = store.create("coder", "Coder Agent")
 
     data = persisted(store, "coder")
@@ -58,16 +57,14 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
     assert agent.excluded_skills == []
     assert data["custom_system_prompt_enabled"] is False
     assert data["librarian_enabled"] is True
-    assert isinstance(data["current_session_id"], str)
-    assert data["current_session_id"]
+    # A new Agent has no Session: its first message creates one.
+    assert data["current_session_id"] == ""
     assert is_canonical_timestamp(data["created_at"])
     assert data["updated_at"] == data["created_at"]
-    assert (store.data_dir / "sessions.db").is_file()
-    assert store._session_manager().exists(
-        SessionAddress(project_id=None, agent_id="coder", session_id=data["current_session_id"])
-    )
-    assert agent.current_session_id == data["current_session_id"]
+    assert store._session_manager().list_addresses(None, agent_id="coder") == []
+    assert agent.current_session_id == ""
     assert agent == store.get("coder")
+    assert persisted(store, "coder") == data
 
     workspace_path = Path(agent.workspace)
     for filename in TEMPLATE_FILES:
@@ -155,7 +152,8 @@ def test_minimal_agent_config_loads_all_optional_field_defaults(store: AgentStor
     assert agent.memory_prompt_mode == "agent_user"
     assert agent.custom_system_prompt_enabled is False
     assert agent.root_project_id is None
-    assert agent.current_session_id
+    # A missing current-Session pointer stays empty: no Session is created for it.
+    assert agent.current_session_id == ""
     assert agent.created_at
     assert agent.updated_at
     assert Path(agent.workspace) == agent_dir / "workspace"
@@ -390,7 +388,6 @@ def test_workspace_inside_data_dir_persists_relative_and_follows_a_moved_data_di
     assert persisted(original_store, "researcher")["workspace"] == "shared-workspaces/researcher"
 
     moved_data_dir = tmp_path / "moved-data"
-    original_store._session_manager().close()
     shutil.move(str(original_data_dir), str(moved_data_dir))
     moved_store = AgentStore(moved_data_dir, template_dir=template_dir)
     loaded = moved_store.get("coder")

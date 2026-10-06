@@ -7,7 +7,6 @@ from typing import Any
 import pytest
 
 from core.agents import AgentStore
-from core.sessions import SessionAddress
 from tests.core.agents.agents_test_support import persisted, rewrite
 from tests.core.agents.agents_test_support import store as store
 from tests.core.agents.agents_test_support import template_dir as template_dir
@@ -67,27 +66,24 @@ def test_reads_resolve_live_defaults_while_files_and_raw_reads_keep_own_values(
     assert persisted(store, "inherits")["model"] == ""
 
 
-def test_missing_session_pointer_and_workspace_are_repaired_and_persisted_on_load(
+def test_missing_session_pointer_stays_empty_and_missing_workspace_is_repaired_on_load(
     store: AgentStore,
 ) -> None:
-    agent = store.create("legacy", "Legacy Agent")
+    store.create("legacy", "Legacy Agent")
     workspace_path = store.data_dir / "agents" / "legacy" / "workspace"
     shutil.rmtree(workspace_path)
     rewrite(store, "legacy", "current_session_id", "workspace")
 
     loaded = store.get("legacy")
 
-    # A missing Session pointer gets a fresh live Session.
-    assert loaded.current_session_id
-    assert loaded.current_session_id != agent.current_session_id
-    assert store._session_manager().exists(
-        SessionAddress(project_id=None, agent_id="legacy", session_id=loaded.current_session_id)
-    )
+    # A missing Session pointer stays empty: no Session is created for it.
+    assert loaded.current_session_id == ""
+    assert store._session_manager().list_addresses(None, agent_id="legacy") == []
     # A missing workspace becomes the recreated and seeded default workspace.
     assert loaded.workspace == str(workspace_path.resolve())
     assert (workspace_path / "SOUL.md").exists()
     data = persisted(store, "legacy")
-    assert data["current_session_id"] == loaded.current_session_id
+    assert data.get("current_session_id", "") == ""
     assert data["workspace"] == "agents/legacy/workspace"
 
 

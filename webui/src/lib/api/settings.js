@@ -247,13 +247,26 @@ export function listProviderRoutingOptions(params = {}, options = {}) {
   return rpc('provider.routing_options', params, options);
 }
 
-export function listFiles(agentId, options = {}) {
+// Files of the directory an existing Session works in (`sessionId`), or the
+// one a new Session of the Agent would work in: in `workingProjectId` when
+// given (`null` names the Workspace), else in the Agent's default Project.
+export function listFiles(
+  agentId,
+  { sessionId = '', workingProjectId } = {},
+  options = {},
+) {
   requireNonEmptyString(
     agentId,
     'Agent id must be a non-empty string',
     'files.list',
   );
-  return rpc('files.list', { agent_id: agentId }, options);
+  const params = { agent_id: agentId };
+  if (sessionId) {
+    params.session_id = sessionId;
+  } else if (workingProjectId !== undefined) {
+    params.working_project_id = workingProjectId;
+  }
+  return rpc('files.list', params, options);
 }
 
 export function setProviderKey(params = {}, options = {}) {

@@ -190,9 +190,10 @@ class ArchiveService:
     ) -> ProjectArchiveOutcome:
         """Move a Project's Anchor and Sessions into a new entry; its repo is never touched.
 
-        Identity Agents rooted in the Project are unrooted first; an Agent whose
-        Workspace was elsewhere gets its default Workspace back, copying the
-        identity files along with ``copy_identity_files``. Refuses with
+        Identity Agents whose default Project it is lose that default first; an
+        Agent whose Workspace was elsewhere gets its default Workspace back,
+        copying the identity files along with ``copy_identity_files``. Identity
+        Sessions working in the Project keep it and refuse Runs until a restore. Refuses with
         :class:`ArchiveSubjectInUseError` while a live automation targets the
         Project and with ``RunAdmissionBlockedError`` while it has Runs.
         """
@@ -237,7 +238,8 @@ class ArchiveService:
         """Move one live Session into a new entry.
 
         For an Identity Agent whose current Session it was, the current Session
-        moves to the most recently active remaining one, or a new empty one.
+        moves to the most recently active remaining one; with none left the
+        pointer is cleared and ``next_session_id`` is ``None``.
         Refuses with :class:`ArchiveSubjectInUseError` while a live automation
         runs in the Session and with ``RunAdmissionBlockedError`` while it has Runs.
         """
@@ -274,7 +276,7 @@ class ArchiveService:
                         address.agent_id,
                         address.session_id,
                     )
-                    next_session_id = agent.current_session_id
+                    next_session_id = agent.current_session_id or None
             await services.remove_session_from_recall(
                 address.agent_id, address.session_id, address.project_id
             )

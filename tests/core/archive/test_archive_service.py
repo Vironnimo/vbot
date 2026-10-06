@@ -28,13 +28,18 @@ from core.chat import ChatSessionError
 from core.sessions import (
     ARCHIVE_KIND_FILES,
     ARCHIVE_TREE_FILES,
+    SESSION_WORKING_PROJECT_META_KEY,
     ArchiveEntry,
     ArchiveEntryFilter,
     ArchiveTree,
     SessionAddress,
 )
 from core.utils.timestamps import format_canonical_timestamp, utc_now_timestamp
-from tests.core.archive.archive_test_support import ArchiveWorld, legacy_agent_entry
+from tests.core.archive.archive_test_support import (
+    ArchiveWorld,
+    agent_with_session,
+    legacy_agent_entry,
+)
 from tests.core.archive.archive_test_support import world as world
 
 
@@ -50,7 +55,7 @@ async def test_an_archived_agent_returns_with_its_sessions_grants_and_roster_pos
 ) -> None:
     agents, sessions = world.agents, world.sessions
     agents.create("manager", "Manager", tools={"subagent": {"allowed_agents": ["x", "coder"]}})
-    coder = agents.create("coder", "Coder")
+    coder = agent_with_session(world, "coder", "Coder")
     agents.create("beta", "Beta")
     second = sessions.create("coder", session_id="second").address
     agents.reorder(
@@ -211,14 +216,16 @@ async def test_a_moved_legacy_workspace_returns_to_its_folder_or_the_default_one
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("target_id", [None, "vbot-2"], ids=["same-id", "new-id"])
 async def test_an_archived_project_returns_and_roots_its_agents_again(
-    world: ArchiveWorld, tmp_path: Path
+    world: ArchiveWorld, tmp_path: Path, target_id: str | None
 ) -> None:
     repo = _repo(tmp_path)
     world.projects.create("vbot", "vBot", repo)
     workspace = world.agents.create("coder", workspace=tmp_path / "identity-home").workspace
     world.agents.update("coder", root_project_id="vbot")
     build = world.sessions.create("builder", session_id="build", project_id="vbot").address
+    notes = world.sessions.create("coder", session_id="notes", working_project_id="vbot").address
 
     archived = await world.service.archive_project("vbot")
 
@@ -231,13 +238,18 @@ async def test_an_archived_project_returns_and_roots_its_agents_again(
     assert unrooted.root_project_id is None
     assert unrooted.workspace == world.agents.default_workspace("coder")
     assert repo.is_dir()
+    # An Identity Session stays where it works; it cannot run until the Project returns.
+    assert world.sessions.metadata_value(notes, SESSION_WORKING_PROJECT_META_KEY) == "vbot"
 
-    await world.service.restore(archived.entry_id)
+    await world.service.restore(archived.entry_id, target_id=target_id)
 
-    assert world.projects.get("vbot").display_name == "vBot"
-    assert world.sessions.exists(build)
+    project_id = target_id or "vbot"
+    assert world.projects.get(project_id).display_name == "vBot"
+    assert world.sessions.exists(replace(build, project_id=project_id))
     rooted = world.agents.get("coder")
-    assert (rooted.root_project_id, rooted.workspace) == ("vbot", workspace)
+    assert (rooted.root_project_id, rooted.workspace) == (project_id, workspace)
+    # Its Sessions work in the Project again, under its new id too.
+    assert world.sessions.metadata_value(notes, SESSION_WORKING_PROJECT_META_KEY) == project_id
 
 
 @pytest.mark.asyncio
@@ -271,7 +283,7 @@ async def test_a_failed_project_archive_leaves_the_project_its_agents_and_no_ent
 async def test_a_session_archive_moves_the_current_pointer_and_restore_as_avoids_a_taken_address(
     world: ArchiveWorld,
 ) -> None:
-    coder = world.agents.create("coder")
+    coder = agent_with_session(world, "coder")
     current = SessionAddress(None, "coder", coder.current_session_id)
     world.sessions.create("coder", session_id="other")
     world.sessions.set_title(current, "Planning")
@@ -390,7 +402,7 @@ async def test_a_session_scope_blocker_names_the_entry_that_restores_its_agent(
 async def test_purge_deletes_the_sessions_payload_and_entry_after_importing_usage(
     world: ArchiveWorld,
 ) -> None:
-    coder = world.agents.create("coder")
+    coder = agent_with_session(world, "coder")
     archived = await world.service.archive_agent("coder")
     assert world.session_rows("coder") == [(coder.current_session_id, "archived")]
 
@@ -470,7 +482,7 @@ async def test_purging_an_agent_whose_cleanup_did_not_finish_completes_it_first(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("refusal", ["unknown-entry", "busy-entry", "usage-import-fails"])
 async def test_a_refused_purge_deletes_nothing(world: ArchiveWorld, refusal: str) -> None:
-    coder = world.agents.create("coder")
+    coder = agent_with_session(world, "coder")
     archived = await world.service.archive_agent("coder")
 
     if refusal == "unknown-entry":
@@ -503,7 +515,7 @@ async def test_a_refused_purge_deletes_nothing(world: ArchiveWorld, refusal: str
 async def test_an_entry_taken_before_the_claim_is_skipped_or_gone(
     world: ArchiveWorld, monkeypatch: pytest.MonkeyPatch, taken_by: str
 ) -> None:
-    coder = world.agents.create("coder")
+    coder = agent_with_session(world, "coder")
     entry_id = (await world.service.archive_agent("coder")).entry_id
     ledger = world.sessions.archive_ledger
     begin_purge = ledger.begin_purge
@@ -541,7 +553,7 @@ async def test_entries_list_with_labels_and_show_their_sessions_files_and_restor
     world: ArchiveWorld,
 ) -> None:
     world.agents.create("manager")
-    coder = world.agents.create("coder", "Coder Agent")
+    coder = agent_with_session(world, "coder", "Coder Agent")
     notes = world.sessions.create("manager", session_id="notes").address
     world.sessions.set_title(notes, "Notes")
     agent_entry = await world.service.archive_agent("coder")
