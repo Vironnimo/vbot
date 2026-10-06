@@ -22,11 +22,10 @@ def _assistant(usage: JsonObject | None) -> ChatMessage:
 
 
 NO_TURNS = {
-    "measured_turns": 0,
-    "estimated_turns": 0,
-    "cache_turns": 0,
     "input_tokens": 0,
     "output_tokens": 0,
+    "cache_turns": 0,
+    "cache_input_tokens": 0,
     "cache_read_tokens": 0,
     "cache_write_tokens": 0,
 }
@@ -51,11 +50,10 @@ NO_TURNS = {
                 _assistant({"input_tokens": 2000, "output_tokens": 150, "cache_read_tokens": 1900}),
             ],
             {
-                "measured_turns": 2,
-                "estimated_turns": 0,
-                "cache_turns": 2,
                 "input_tokens": 3000,
                 "output_tokens": 200,
+                "cache_turns": 2,
+                "cache_input_tokens": 3000,
                 "cache_read_tokens": 2700,
                 "cache_write_tokens": 100,
                 "reasoning_turns": 1,
@@ -63,7 +61,8 @@ NO_TURNS = {
             },
         ),
         (
-            # Reported zeros count as cache and reasoning turns; absent fields do not.
+            # Reported zeros count as cache and reasoning turns; absent fields
+            # do not, and a turn without cache data stays out of the cache input.
             [
                 _assistant(
                     {
@@ -77,48 +76,47 @@ NO_TURNS = {
             ],
             {
                 **NO_TURNS,
-                "measured_turns": 2,
-                "cache_turns": 1,
                 "input_tokens": 600,
                 "output_tokens": 25,
+                "cache_turns": 1,
+                "cache_input_tokens": 100,
                 "reasoning_turns": 1,
                 "reasoning_tokens": 0,
             },
         ),
         (
+            # Estimated counters join the totals but never the cache or
+            # reasoning figures.
             [
                 _assistant({"input_tokens": 1000, "output_tokens": 10}),
                 _assistant(
                     {
-                        "input_tokens": 9999,
-                        "output_tokens": 9999,
-                        "reasoning_tokens": 5000,
+                        "input_tokens": 9000,
+                        "output_tokens": 90,
+                        "cache_read_tokens": 500,
+                        "reasoning_tokens": 50,
                         "input_tokens_estimated": True,
                         "output_tokens_estimated": True,
+                        "estimated": True,
+                    }
+                ),
+                _assistant(
+                    {
+                        "input_tokens": 400,
+                        "input_tokens_estimated": True,
+                        "output_tokens": 30,
+                        "reasoning_tokens": 20,
                         "estimated": True,
                     }
                 ),
             ],
             {
                 **NO_TURNS,
-                "measured_turns": 1,
-                "estimated_turns": 1,
-                "input_tokens": 1000,
-                "output_tokens": 10,
+                "input_tokens": 10_400,
+                "output_tokens": 130,
+                "reasoning_turns": 1,
+                "reasoning_tokens": 20,
             },
-        ),
-        (
-            [
-                _assistant(
-                    {
-                        "input_tokens": 9999,
-                        "input_tokens_estimated": True,
-                        "output_tokens": 2572,
-                        "estimated": True,
-                    }
-                )
-            ],
-            {**NO_TURNS, "estimated_turns": 1, "output_tokens": 2572},
         ),
         (
             [
@@ -134,21 +132,18 @@ NO_TURNS = {
                     }
                 ),
             ],
-            {**NO_TURNS, "measured_turns": 1, "cache_turns": 1},
+            {**NO_TURNS, "cache_turns": 1},
         ),
     ],
     ids=[
         "empty",
-        "measured-field-by-field",
+        "field-by-field",
         "reported-zeros",
-        "estimated-never-summed",
-        "partial-estimated-input",
+        "estimated-counters",
         "junk-ignored",
     ],
 )
-def test_session_usage_sums_only_measured_counters(
-    messages: list[ChatMessage], totals: JsonObject
-) -> None:
+def test_session_usage_totals(messages: list[ChatMessage], totals: JsonObject) -> None:
     assert aggregate_session_usage(messages) == totals
 
 

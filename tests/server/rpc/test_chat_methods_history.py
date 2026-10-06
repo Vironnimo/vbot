@@ -269,9 +269,8 @@ async def test_history_reports_usage_per_message_and_for_the_whole_session(
     assert [message["content"] for message in page["messages"]] == ["Two"]
     for result in (full, page):
         assert result["session_usage"] == {
-            "measured_turns": 2,
-            "estimated_turns": 0,
             "cache_turns": 2,
+            "cache_input_tokens": 3000,
             "input_tokens": 3000,
             "output_tokens": 150,
             "cache_read_tokens": 2300,

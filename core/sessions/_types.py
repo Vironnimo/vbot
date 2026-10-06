@@ -344,7 +344,6 @@ class SessionStatusSnapshot:
     user_message_count: int
     latest_assistant_usage: JsonObject | None
     session_usage: JsonObject
-    cache_input_tokens: int
 
 
 @dataclass(frozen=True)

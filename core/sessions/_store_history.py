@@ -125,64 +125,62 @@ def _own_audit(connection: sqlite3.Connection, state: sqlite3.Row, lower: int) -
 # -- Usage -------------------------------------------------------------------
 
 
-_INPUT_ESTIMATED = "COALESCE(a.input_tokens_estimated, 0)"
-_OUTPUT_ESTIMATED = "COALESCE(a.output_tokens_estimated, 0)"
+_INPUT_MEASURED = "COALESCE(a.input_tokens_estimated, 0) = 0"
+_OUTPUT_MEASURED = "COALESCE(a.output_tokens_estimated, 0) = 0"
+_CACHE_TURN = (
+    f"a.usage_present = 1 AND {_INPUT_MEASURED} "
+    "AND (a.cache_read_tokens IS NOT NULL OR a.cache_write_tokens IS NOT NULL)"
+)
+_REASONING_TURN = f"a.usage_present = 1 AND {_OUTPUT_MEASURED} AND a.reasoning_tokens IS NOT NULL"
 _USAGE_SQL = f"""
 SELECT
   COALESCE(SUM(CASE WHEN a.usage_present = 1
-    AND ({_INPUT_ESTIMATED}) = 0 AND ({_OUTPUT_ESTIMATED}) = 0 THEN 1 ELSE 0 END), 0)
-    AS measured_turns,
-  COALESCE(SUM(CASE WHEN a.usage_present = 1
-    AND (({_INPUT_ESTIMATED}) = 1 OR ({_OUTPUT_ESTIMATED}) = 1) THEN 1 ELSE 0 END), 0)
-    AS estimated_turns,
-  COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({_INPUT_ESTIMATED}) = 0
-    AND (a.cache_read_tokens IS NOT NULL OR a.cache_write_tokens IS NOT NULL)
-    THEN 1 ELSE 0 END), 0) AS cache_turns,
-  COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({_OUTPUT_ESTIMATED}) = 0
-    AND a.reasoning_tokens IS NOT NULL THEN 1 ELSE 0 END), 0) AS reasoning_turns,
-  COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({_INPUT_ESTIMATED}) = 0
     THEN COALESCE(a.input_tokens, 0) ELSE 0 END), 0) AS input_tokens,
-  COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({_OUTPUT_ESTIMATED}) = 0
+  COALESCE(SUM(CASE WHEN a.usage_present = 1
     THEN COALESCE(a.output_tokens, 0) ELSE 0 END), 0) AS output_tokens,
-  COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({_INPUT_ESTIMATED}) = 0
+  COALESCE(SUM(CASE WHEN {_CACHE_TURN} THEN 1 ELSE 0 END), 0) AS cache_turns,
+  COALESCE(SUM(CASE WHEN {_CACHE_TURN}
+    THEN COALESCE(a.input_tokens, 0) ELSE 0 END), 0) AS cache_input_tokens,
+  COALESCE(SUM(CASE WHEN {_CACHE_TURN}
     THEN COALESCE(a.cache_read_tokens, 0) ELSE 0 END), 0) AS cache_read_tokens,
-  COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({_INPUT_ESTIMATED}) = 0
+  COALESCE(SUM(CASE WHEN {_CACHE_TURN}
     THEN COALESCE(a.cache_write_tokens, 0) ELSE 0 END), 0) AS cache_write_tokens,
-  COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({_OUTPUT_ESTIMATED}) = 0
-    THEN COALESCE(a.reasoning_tokens, 0) ELSE 0 END), 0) AS reasoning_tokens,
-  COALESCE(SUM(CASE WHEN a.usage_present = 1 AND ({_INPUT_ESTIMATED}) = 0
-    AND (a.cache_read_tokens IS NOT NULL OR a.cache_write_tokens IS NOT NULL)
-    THEN COALESCE(a.input_tokens, 0) ELSE 0 END), 0) AS cache_input_tokens
+  COALESCE(SUM(CASE WHEN {_REASONING_TURN} THEN 1 ELSE 0 END), 0) AS reasoning_turns,
+  COALESCE(SUM(CASE WHEN {_REASONING_TURN} THEN a.reasoning_tokens ELSE 0 END), 0)
+    AS reasoning_tokens
 FROM entries AS e
 JOIN assistant_entries AS a ON a.entry_key = e.entry_key
 WHERE e.session_key = ? AND e.role = 'assistant' AND e.seq >= ?
 """
 
 
-def session_usage(connection: sqlite3.Connection, state: sqlite3.Row) -> tuple[JsonObject, int]:
+def session_usage(connection: sqlite3.Connection, state: sqlite3.Row) -> JsonObject:
     """Sum the Session's own spend: its Assistant usage, superseded turns included.
 
-    A fork's inherited prefix is the origin's spend and is not counted.
+    A fork's inherited prefix is the origin's spend and is not counted. The
+    shape matches ``core.chat.usage.aggregate_session_usage``.
     """
     row = connection.execute(_USAGE_SQL, (state["session_key"], own_floor(state))).fetchone()
     usage: JsonObject = {
-        "measured_turns": int(row["measured_turns"]),
-        "estimated_turns": int(row["estimated_turns"]),
-        "cache_turns": int(row["cache_turns"]),
-        "input_tokens": int(row["input_tokens"]),
-        "output_tokens": int(row["output_tokens"]),
-        "cache_read_tokens": int(row["cache_read_tokens"]),
-        "cache_write_tokens": int(row["cache_write_tokens"]),
+        key: int(row[key])
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "cache_turns",
+            "cache_input_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens",
+        )
     }
     if int(row["reasoning_turns"]) > 0:
         usage["reasoning_turns"] = int(row["reasoning_turns"])
         usage["reasoning_tokens"] = int(row["reasoning_tokens"])
-    return usage, int(row["cache_input_tokens"])
+    return usage
 
 
 def status_snapshot(
     connection: sqlite3.Connection, address: SessionAddress
-) -> Callable[[], tuple[str | None, int, JsonObject | None, JsonObject, int]]:
+) -> Callable[[], tuple[str | None, int, JsonObject | None, JsonObject]]:
     """Read the status facts: first entry time, User count, latest usage and spend."""
     state, ranges = current_view(connection, address)
     first = _store_lineage.ordered_rows(connection, ranges, columns="e.created_at", limit=1)
@@ -206,13 +204,12 @@ def status_snapshot(
         descending=True,
         limit=1,
     )
-    usage, cache_input_tokens = session_usage(connection, state)
+    usage = session_usage(connection, state)
     return lambda: (
         None if not first else str(first[0][0]),
         user_count,
         None if not latest.rows else latest.message(latest.rows[0]).usage,
         usage,
-        cache_input_tokens,
     )
 
 

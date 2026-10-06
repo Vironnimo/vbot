@@ -508,8 +508,8 @@ def test_status_session_facts_match_the_persisted_status_snapshot(tmp_path: Path
     in_memory = status_session_facts(messages)
     sessions.close()
 
-    assert persisted.cache_input_tokens == in_memory.cache_input_tokens == 1500
     assert persisted.session_usage == in_memory.session_usage
+    assert persisted.session_usage["cache_input_tokens"] == 1500
     assert persisted.latest_assistant_usage == in_memory.latest_assistant_usage
 
 

@@ -407,15 +407,14 @@ class ChatSession:
         )
 
     def status_snapshot(self) -> SessionStatusSnapshot:
-        first_message_at, user_count, latest_usage, usage, cache_input_tokens = (
-            self._store.status_snapshot(self.address)
+        first_message_at, user_count, latest_usage, usage = self._store.status_snapshot(
+            self.address
         )
         return SessionStatusSnapshot(
             first_message_at=first_message_at,
             user_message_count=user_count,
             latest_assistant_usage=latest_usage,
             session_usage=usage,
-            cache_input_tokens=cache_input_tokens,
         )
 
     async def status_snapshot_async(self) -> SessionStatusSnapshot:

@@ -155,7 +155,7 @@ def test_run_started_event_carries_the_run_address_and_attribution(
     }
 
 
-_SESSION_USAGE = {"measured_turns": 3, "input_tokens": 1200, "cache_read_tokens": 900}
+_SESSION_USAGE = {"input_tokens": 1200, "cache_read_tokens": 900}
 _CONTEXT_USAGE = {"tokens": 1245, "estimated": False}
 _CHANGE_STATS = {
     "files": 1,
@@ -242,7 +242,7 @@ def test_terminal_events_project_only_their_completion_facts(
             MODEL_STEP_USAGE_EVENT,
             {
                 "usage": {"input_tokens": 1200, "output_tokens": 45},
-                "session_usage": {"measured_turns": 3, "input_tokens": 4200},
+                "session_usage": {"input_tokens": 4200},
             },
             id="model-step-usage",
         ),

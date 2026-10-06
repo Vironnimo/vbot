@@ -281,7 +281,6 @@ async def _execute_status(
                 user_message_count=snapshot.user_message_count,
                 latest_assistant_usage=snapshot.latest_assistant_usage,
                 session_usage=snapshot.session_usage,
-                cache_input_tokens=snapshot.cache_input_tokens,
             )
             working_project_id = await _command_session_io(
                 sessions,
