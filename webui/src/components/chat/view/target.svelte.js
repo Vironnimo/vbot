@@ -31,6 +31,10 @@ export function createChatViewTarget(context) {
   // The Project `projectTeam` and `projectReport` belong to, '' for none.
   let teamProjectId = $state('');
 
+  // The cached scan present when this Team was opened or last refreshed.
+  // A later Project-list scan supersedes the older live projection.
+  let listedProjectScan = $state.raw(null);
+
   let projectReport = $state(null);
 
   let projectScanError = $state('');
@@ -87,6 +91,22 @@ export function createChatViewTarget(context) {
       })
       .filter((group) => group.members.length > 0),
   );
+
+  $effect(() => {
+    const projectId = teamProjectId;
+    if (!projectId || projectId !== lastLoadedProjectId) return;
+    const scan = context.projects.find(
+      (project) => project.project_id === projectId,
+    )?.scan;
+    if (!scan || scan === listedProjectScan) return;
+
+    listedProjectScan = scan;
+    projectTeamLoadVersion += 1;
+    projectTeam = normalizeProjectTeam(scan);
+    projectReport = normalizeScanReport(scan.report);
+    projectScanError = '';
+    loadingProjectTeam = false;
+  });
 
   let activeAgent = $derived(getActiveAgent());
 
@@ -446,6 +466,7 @@ export function createChatViewTarget(context) {
     projectTeamLoadVersion += 1;
     projectTeam = [];
     teamProjectId = '';
+    listedProjectScan = null;
     projectReport = null;
     projectScanError = '';
     selectedProjectAgentId = '';
@@ -467,6 +488,9 @@ export function createChatViewTarget(context) {
     projectId,
     { restoreAgentId = null, keepOverride = false } = {},
   ) => {
+    listedProjectScan =
+      context.projects.find((project) => project.project_id === projectId)
+        ?.scan ?? null;
     const requestVersion = ++projectTeamLoadVersion;
     const isCurrent = () =>
       requestVersion === projectTeamLoadVersion &&
@@ -689,6 +713,7 @@ export function createChatViewTarget(context) {
     const listed = context.projects.find(
       (project) => project.project_id === projectId,
     );
+    listedProjectScan = listed?.scan ?? null;
     const requestVersion = ++projectTeamLoadVersion;
     const isCurrent = () =>
       requestVersion === projectTeamLoadVersion &&

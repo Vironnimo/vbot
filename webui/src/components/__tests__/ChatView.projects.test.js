@@ -34,6 +34,7 @@ import {
   waitForText,
 } from './ChatView.support.js';
 import { createChatViewParentHarness } from './ChatView.parent.support.svelte.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 // The Identity Agent Alpha with the `vbot` Project listed but not open.
 const identityProps = () => ({
@@ -390,6 +391,61 @@ describe('ChatView Projects', () => {
   });
 
   describe('Project Agent selection', () => {
+    it('adopts a refreshed Project Team without resetting its held Sessions', async () => {
+      serveProject();
+      listSessionsMock.mockImplementation(async (address) => ({
+        sessions: [
+          {
+            id:
+              address === 'builder@vbot'
+                ? 'builder-session'
+                : 'reviewer-session',
+          },
+        ],
+      }));
+      rpcMock.mockImplementation(
+        createChatRpcMock({
+          sessionMessages: {
+            ...builderReply,
+            'reviewer-session': [
+              message('reviewer-reply', 'Reviewer project reply'),
+            ],
+          },
+        }),
+      );
+      const props = reactiveProps(projectChatProps());
+      await chat.mountChat(props, { ready: 'Builder project reply' });
+      const builderLandings = () =>
+        listSessionsMock.mock.calls.filter(
+          ([address]) => address === 'builder@vbot',
+        ).length;
+      expect(builderLandings()).toBe(1);
+
+      serveProject({ team: [['reviewer', 'Reviewer']] });
+      props.projects = [vbotProject()];
+      flushSync();
+      await selectProjectAgentFromPicker('Reviewer');
+      await waitForText('Reviewer project reply');
+      expect(showProjectMock).toHaveBeenCalledTimes(1);
+
+      // A further scan leaves the selected Session in place. A returning
+      // member keeps its held Session instead of resolving another landing.
+      serveProject({
+        team: [
+          ['builder', 'Builder'],
+          ['reviewer', 'Reviewer'],
+        ],
+      });
+      props.projects = [vbotProject()];
+      flushSync();
+      expect(showsProjectAgent('Reviewer')).toBe(true);
+      await selectProjectAgentFromPicker('Builder');
+      await waitForText('Builder project reply');
+      expect(builderLandings()).toBe(1);
+      expect(showProjectMock).toHaveBeenCalledTimes(1);
+      expect(projectHistoryAgents()).toEqual(['builder@vbot', 'reviewer@vbot']);
+    });
+
     it('opens a Project Agent from the picker and leaves the Project for an Identity Agent', async () => {
       serveProject({
         team: [
