@@ -357,6 +357,36 @@ export const backgroundTasks = (
     .map(({ order: _order, ...task }) => task);
 };
 
+// The Session-info panel lists all background work in two sections: what still
+// runs, then what finished. Sub-Agents, commands and Reflections mix within
+// each, newest start first; entries without a known start sink to the end in
+// their incoming order.
+export const activitySections = (tasks = [], reflectionRows = []) => {
+  const entries = [
+    ...(tasks ?? []).map((task) => ({
+      key: task.id,
+      kind: task.kind,
+      task,
+      running: task.dotStatus === 'running',
+      startedMs: timestampToMs(toolStartedTimestamp(task.tool)),
+    })),
+    ...(reflectionRows ?? []).map((row) => ({
+      key: `reflection:${row.runId}`,
+      kind: 'reflection',
+      row,
+      running: row.status === 'running',
+      startedMs: timestampToMs(row.startedAt),
+    })),
+  ].sort(
+    (left, right) =>
+      (right.startedMs ?? -Infinity) - (left.startedMs ?? -Infinity) || 0,
+  );
+  return {
+    running: entries.filter((entry) => entry.running),
+    finished: entries.filter((entry) => !entry.running),
+  };
+};
+
 // Dot status of a handed-off command by its reported status.
 const COMMAND_DOT_STATUSES = {
   running: 'running',

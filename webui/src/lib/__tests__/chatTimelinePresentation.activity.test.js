@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  activitySections,
   backgroundCommandRowState,
   backgroundCommandStatusDetails,
   backgroundCommandToolStatusLabel,
@@ -733,6 +734,50 @@ describe('background command rows', () => {
         { term_one: 'completed' },
       ),
     ).toBe(0);
+  });
+
+  it('splits Activity panel work into running and finished, newest start first', () => {
+    const task = (id, dotStatus, startedAt) => ({
+      id,
+      kind: id.startsWith('command') ? 'command' : 'subagent',
+      dotStatus,
+      tool: startedAt ? { timing: { started_at: startedAt } } : {},
+    });
+    const reflection = (runId, status, startedAt) => ({
+      runId,
+      status,
+      startedAt,
+    });
+
+    const sections = activitySections(
+      [
+        task('subagent:late', 'running', '2026-10-06T10:03:00Z'),
+        task('command:early', 'running', '2026-10-06T10:01:00Z'),
+        task('subagent:untimed', 'success', ''),
+        task('subagent:done', 'failed', '2026-10-06T10:00:00Z'),
+      ],
+      [
+        reflection('mid', 'running', '2026-10-06T10:02:00Z'),
+        reflection('old', 'completed', '2026-10-06T09:00:00Z'),
+      ],
+    );
+
+    const keys = (entries) => entries.map((entry) => entry.key);
+    expect(keys(sections.running)).toEqual([
+      'subagent:late',
+      'reflection:mid',
+      'command:early',
+    ]);
+    expect(keys(sections.finished)).toEqual([
+      'subagent:done',
+      'reflection:old',
+      'subagent:untimed',
+    ]);
+    expect(sections.running.map((entry) => entry.kind)).toEqual([
+      'subagent',
+      'reflection',
+      'command',
+    ]);
   });
 
   it('lists handed-off commands as Activity panel tasks', () => {

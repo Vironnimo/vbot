@@ -251,7 +251,7 @@ describe('ChatActivityPanel', () => {
     };
   }
 
-  it('opens the current Session tasks grouped by kind with their states', () => {
+  it('lists running work above finished work, each row naming its kind and state', () => {
     const { props } = sessionTasks();
     mountPanel(props);
     expect(rail().getAttribute('aria-expanded')).toBe('false');
@@ -262,72 +262,61 @@ describe('ChatActivityPanel', () => {
 
     expect(rail().getAttribute('aria-expanded')).toBe('true');
     expect(document.querySelector('.chat-activity__title')).not.toBeNull();
-    const subagents = document.querySelector(
-      '.chat-activity__group--subagents',
-    );
-    const commands = document.querySelector('.chat-activity__group--commands');
+    const running = document.querySelector('.chat-activity__group--running');
+    const finished = document.querySelector('.chat-activity__group--finished');
     expect([...document.querySelectorAll('.chat-activity__group')]).toEqual([
-      subagents,
-      commands,
+      running,
+      finished,
     ]);
-    expect(subagents.querySelector('[data-status]').dataset.status).toBe(
-      'running',
-    );
-    expect(commands.open).toBe(false);
-    expect(
-      commands.querySelector('.chat-activity__running-count'),
-    ).not.toBeNull();
-    commands.querySelector('summary').click();
-    expect(commands.open).toBe(true);
+    const sectionRows = (section) =>
+      [...section.querySelectorAll('.chat-activity__task-row')].map((row) => [
+        row.querySelector('.chat-activity__task-title').textContent.trim(),
+        row.querySelector('.chat-activity__task-kind').textContent,
+        row.querySelector('[data-status]').dataset.status,
+      ]);
+    const subagent = t('chat.activity.kind.subagent');
+    const bash = t('chat.activity.kind.command');
+    // Work started later comes first; kinds mix within a section.
+    expect(sectionRows(running)).toEqual([
+      ['npm run dev', bash, 'running'],
+      ['Sidebar work', subagent, 'running'],
+    ]);
+    expect(sectionRows(finished)).toEqual([
+      ['npm test', bash, 'failed'],
+      ['tester', subagent, 'failed'],
+      ['writer', subagent, 'cancelled'],
+      ['reviewer', subagent, 'success'],
+    ]);
 
     // A message to a Sub-Agent stays in the timeline only.
     expect(document.body.textContent).not.toContain('Also check the docs');
-    const subAgentRows = Object.fromEntries(
-      [...subagents.querySelectorAll('.chat-activity__task-row')].map((row) => [
-        row
-          .querySelector('.chat-activity__task-name')
-          .firstChild.textContent.trim(),
-        [
-          row
-            .querySelector('.chat-activity__task-link')
-            .getAttribute('aria-label'),
-          row.querySelector('[data-status]').dataset.status,
-        ],
-      ]),
-    );
-    expect(subAgentRows).toEqual(
-      Object.fromEntries(
-        [
-          ['builder', 'running', 'running'],
-          ['reviewer', 'completed', 'success'],
-          ['writer', 'cancelled', 'cancelled'],
-          ['tester', 'failed', 'failed'],
-        ].map(([agent, statusKey, dot]) => [
-          agent,
-          [
-            t('chat.activity.taskAria', {
-              agent,
-              status: status(statusKey),
-            }),
-            dot,
-          ],
-        ]),
-      ),
-    );
-    // A Sub-Agent shows its title, never its task.
+    for (const [agent, statusKey] of [
+      ['builder', 'running'],
+      ['reviewer', 'completed'],
+      ['writer', 'cancelled'],
+      ['tester', 'failed'],
+    ]) {
+      expect(
+        rowContaining(agent)
+          .querySelector('.chat-activity__task-link')
+          .getAttribute('aria-label'),
+      ).toBe(t('chat.activity.taskAria', { agent, status: status(statusKey) }));
+    }
+    // A Sub-Agent shows its title, never its task; its Agent moves to the
+    // second line.
+    const builder = rowContaining('Sidebar work');
     expect(
-      rowContaining('builder').querySelector('.chat-activity__task-description')
-        .textContent,
+      builder.querySelector('.chat-activity__task-description').textContent,
     ).toBe('Sidebar work');
+    expect(builder.querySelector('.chat-activity__task-name').textContent).toBe(
+      'builder',
+    );
     expect(
       rowContaining('reviewer').querySelector(
         '.chat-activity__task-description',
       ),
     ).toBeNull();
     expect(document.body.textContent).not.toContain('Implement the sidebar');
-    expect(
-      subagents.querySelector('.chat-activity__running-count').textContent,
-    ).toBe(t('chat.activity.runningCount', { count: 1 }));
     // Each complete command sits in a copy card.
     const cards = Object.fromEntries(
       [...document.querySelectorAll('.copyable-value-card')].map((card) => [
@@ -340,26 +329,39 @@ describe('ChatActivityPanel', () => {
       'npm test': t('chat.copyCommand'),
     });
 
-    // Bash rows are plain rows that show only their command.
-    for (const [command, statusKey, dot] of [
-      ['npm run dev', 'running', 'running'],
-      ['npm test', 'failed', 'failed'],
+    // Bash rows are plain rows that show their command and kind.
+    for (const [command, statusKey] of [
+      ['npm run dev', 'running'],
+      ['npm test', 'failed'],
     ]) {
       const row = rowContaining(command);
       expect(row.tagName).toBe('DIV');
-      expect(row.textContent.replace(/\s+/g, ' ').trim()).toBe(command);
       expect(row.getAttribute('aria-label')).toBe(
         t('chat.activity.commandTaskAria', {
           command,
           status: status(statusKey),
         }),
       );
-      expect(row.querySelector(`[data-status="${dot}"]`)).not.toBeNull();
     }
 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     flushSync();
     expect(document.querySelector('.chat-activity__panel')).toBeNull();
+  });
+
+  it('closes from its header button and moves focus between rail and panel', () => {
+    mountPanel();
+    rail().focus();
+    rail().click();
+    flushSync();
+
+    const close = document.querySelector('.chat-activity__close');
+    expect(document.activeElement).toBe(close);
+    expect(close.getAttribute('aria-label')).toBe(t('chat.activity.close'));
+    close.click();
+    flushSync();
+    expect(document.querySelector('.chat-activity__panel')).toBeNull();
+    expect(document.activeElement).toBe(rail());
   });
 
   it('cancels only active work and navigates only from Sub-Agent links', async () => {
@@ -405,28 +407,6 @@ describe('ChatActivityPanel', () => {
       terminalId: 'term_bash-running',
     });
     expect(onNavigateToSubAgent).toHaveBeenCalledTimes(1);
-  });
-
-  it('preserves the Bash disclosure choice while running work updates the clock', async () => {
-    vi.useFakeTimers();
-    openPanel({
-      timelineItems: [
-        runItem([
-          subAgentTask({ id: 'a', agentId: 'alba', status: 'running' }),
-          backgroundCommandTask({ id: 'b', command: 'npm run dev' }),
-        ]),
-      ],
-      commandStatuses: { term_b: 'running' },
-    });
-
-    const commands = document.querySelector('details');
-    expect(commands.open).toBe(false);
-    for (const open of [true, false]) {
-      commands.querySelector('summary').click();
-      await vi.advanceTimersByTimeAsync(1100);
-      flushSync();
-      expect(commands.open).toBe(open);
-    }
   });
 
   it('keeps panel identities separate in split Chat and restores focus on Escape', async () => {
@@ -595,15 +575,12 @@ describe('ChatActivityPanel', () => {
       onNavigateToSubAgent,
     });
 
-    const reflections = document.querySelector(
-      '.chat-activity__group--reflections',
-    );
+    expect(taskRows()).toHaveLength(2);
     expect(
-      reflections.querySelectorAll('.chat-activity__task-row'),
-    ).toHaveLength(2);
-    expect(reflections.querySelector('[data-status]').dataset.status).toBe(
-      'running',
-    );
+      document
+        .querySelector('.chat-activity__group--running')
+        .querySelector('[data-status]').dataset.status,
+    ).toBe('running');
     const memoryScope = t('chat.activity.reflectionScope.memory');
     const runningRow = rowContaining(memoryScope);
     const runningLink = runningRow.querySelector('.chat-activity__task-link');
@@ -615,7 +592,7 @@ describe('ChatActivityPanel', () => {
     );
     expect(runningRow.querySelector('[data-status="running"]')).not.toBeNull();
     // Running reviews show coarse elapsed time from their start timestamp.
-    expect(runningRow.textContent).toMatch(/·\s*\d+s/);
+    expect(runningRow.textContent).toMatch(/\d+s/);
     const finishedRow = rowContaining(t('chat.activity.reflectionScope.skill'));
     expect(finishedRow.textContent).not.toMatch(/\d+s/);
     expect(finishedRow.querySelector('[data-status="success"]')).not.toBeNull();
@@ -644,11 +621,7 @@ describe('ChatActivityPanel', () => {
       ]),
     });
 
-    const lines = [
-      ...document.querySelectorAll(
-        '.chat-activity__group--reflections .chat-activity__outcome',
-      ),
-    ];
+    const lines = [...document.querySelectorAll('.chat-activity__outcome')];
     // Newest first; a running review and one without a reported outcome
     // show no summary.
     expect(lines.map((line) => line.textContent.trim())).toEqual([
@@ -658,7 +631,7 @@ describe('ChatActivityPanel', () => {
       t('chat.activity.outcome.nothing'),
     ]);
     // A review that saved nothing has nothing to open or undo.
-    expect(lines.at(-1).tagName).toBe('P');
+    expect(lines.at(-1).tagName).toBe('SPAN');
     expect(
       lines.slice(0, -1).map((line) => line.getAttribute('aria-expanded')),
     ).toEqual(['false', 'false', 'false']);

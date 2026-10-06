@@ -35,6 +35,7 @@ export {
   liveClockCadenceMs,
   isRowCancellable,
   backgroundTasks,
+  activitySections,
   backgroundCommandRowState,
   backgroundCommandToolStatusLabel,
   backgroundCommandStatusDetails,

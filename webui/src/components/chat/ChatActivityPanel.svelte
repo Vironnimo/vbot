@@ -1,8 +1,9 @@
 <script>
-  import { onDestroy, onMount, tick } from 'svelte';
+  import { flushSync, onDestroy, onMount, tick } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
 
   import {
+    activitySections,
     backgroundCommandStatusDetails,
     backgroundTasks,
     reflectionChangeItems,
@@ -44,10 +45,6 @@
   } = $props();
 
   let open = $state(false);
-  let commandsExpanded = $state(null);
-  let defaultCommandsOpen = $derived(
-    subagentTasks.length === 0 && reflectionTasks.length === 0,
-  );
   const cancellingTaskIds = new SvelteSet();
   // Finished reviews whose change list is open, and those asking to confirm
   // their undo; both are view state only.
@@ -62,49 +59,39 @@
       nowMs,
     ),
   );
-  let activeTasks = $derived(
-    tasks.filter((task) => task.dotStatus === 'running'),
-  );
-  let subagentTasks = $derived(
-    tasks.filter((task) => task.kind === 'subagent'),
-  );
-  let activeSubagentCount = $derived(
-    subagentTasks.filter((task) => task.dotStatus === 'running').length,
-  );
-  let commandTasks = $derived(tasks.filter((task) => task.kind === 'command'));
-  let activeCommandCount = $derived(
-    commandTasks.filter((task) => task.dotStatus === 'running').length,
-  );
-  let activeReflections = $derived(
-    reflectionTasks.filter((row) => row.status === 'running'),
-  );
-  let finishedReflections = $derived(
-    reflectionTasks.filter((row) => row.status !== 'running'),
-  );
-  let runningTaskCount = $derived(
-    activeTasks.length + activeReflections.length,
-  );
+  // Running work first, then finished work; each entry names its kind.
+  let sections = $derived(activitySections(tasks, reflectionTasks));
+  let runningTaskCount = $derived(sections.running.length);
   $effect(() => {
     onSessionStatsWanted(open);
   });
 
   const panelId = $props.id();
-  const runningLabel = (count) => t('chat.activity.runningCount', { count });
+  const railElement = () => document.getElementById(`${panelId}-toggle`);
 
-  const togglePanel = () => {
-    open = !open;
+  // The rail hides while the panel is open, and the panel's own close button
+  // takes its place; focus moves between the two so keyboard users keep it.
+  const openPanel = () => {
+    const railHadFocus = document.activeElement === railElement();
+    open = true;
+    flushSync();
+    if (railHadFocus) {
+      document.getElementById(`${panelId}-close`)?.focus();
+    }
   };
 
   const closePanel = () => {
+    const rail = railElement();
+    const focusInside = rail?.parentElement?.contains(document.activeElement);
     open = false;
+    flushSync();
+    if (focusInside) {
+      rail.focus();
+    }
   };
 
   const handleKeydown = (event) => {
     if (open && event.key === 'Escape') {
-      const railElement = document.getElementById(`${panelId}-toggle`);
-      if (railElement?.parentElement?.contains(document.activeElement)) {
-        railElement.focus();
-      }
       closePanel();
     }
   };
@@ -123,9 +110,7 @@
   // running (background Bash rows or reflections). The effect depends on the
   // value-stable `needsClock` boolean — depending on the task lists directly
   // would re-fire on every tick because those lists recompute with `nowMs`.
-  let needsClock = $derived(
-    open && (activeTasks.length > 0 || activeReflections.length > 0),
-  );
+  let needsClock = $derived(open && runningTaskCount > 0);
   let nowMs = $state(Date.now());
   $effect(() => {
     if (!needsClock) {
@@ -215,6 +200,7 @@
     });
 
   const outcomeToggleId = (row) => `${panelId}-${row.runId}-outcome`;
+  const changesId = (row) => `${panelId}-${row.runId}-changes`;
 
   const toggleReviewChanges = (row) => {
     if (expandedReviews.has(row.runId)) {
@@ -284,13 +270,11 @@
   };
 
   let railLabel = $derived(
-    open
-      ? t('chat.activity.close')
-      : runningTaskCount === 1
-        ? t('chat.activity.openOneRunning')
-        : runningTaskCount > 1
-          ? t('chat.activity.openManyRunning', { count: runningTaskCount })
-          : t('chat.activity.open'),
+    runningTaskCount === 1
+      ? t('chat.activity.openOneRunning')
+      : runningTaskCount > 1
+        ? t('chat.activity.openManyRunning', { count: runningTaskCount })
+        : t('chat.activity.open'),
   );
 </script>
 
@@ -302,26 +286,25 @@
     class:chat-activity__status--failed={task.dotStatus === 'failed'}
     class:chat-activity__status--cancelled={task.dotStatus === 'cancelled'}
     data-status={task.dotStatus}
-    use:tooltip={() => statusDetails(task)}
     aria-hidden="true"
   >
     {#if task.dotStatus === 'running'}
       <span class="chat-activity__working-dot"></span>
     {:else if task.dotStatus === 'success'}
-      <svg viewBox="0 0 16 16" width="14" height="14">
+      <svg viewBox="0 0 16 16" width="11" height="11">
         <path d="m3.5 8.2 2.8 2.8 6.2-6.2" />
       </svg>
     {:else if task.dotStatus === 'cancelled'}
-      <svg viewBox="0 0 16 16" width="14" height="14">
+      <svg viewBox="0 0 16 16" width="11" height="11">
         <path d="M4 8h8" />
       </svg>
     {:else if task.dotStatus === 'failed'}
-      <svg viewBox="0 0 16 16" width="14" height="14">
+      <svg viewBox="0 0 16 16" width="11" height="11">
         <path d="M8 3.2 13 12H3L8 3.2Z" />
         <path d="M8 6.3v2.8m0 1.6v.1" />
       </svg>
     {:else}
-      <svg viewBox="0 0 16 16" width="14" height="14">
+      <svg viewBox="0 0 16 16" width="11" height="11">
         <circle cx="8" cy="8" r="2" />
       </svg>
     {/if}
@@ -347,38 +330,50 @@
   {/if}
 {/snippet}
 
+<!-- Every row reads as two lines: what the work is about, then a quiet line
+     with its state symbol, its kind and how long it ran. -->
 {#snippet taskRow(task)}
   {#if task.kind === 'command'}
     <div
       class="chat-activity__task-row chat-activity__task-row--bash"
       aria-label={taskLabel(task)}
     >
-      <!-- The command must receive focus so its complete text and Copy
-           action reach keyboard users. -->
-      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-      <span
-        class="chat-activity__task-name"
-        tabindex={task.fullCommand ? 0 : undefined}
-      >
-        {task.command}
-        {#if task.timeLabel}
-          <span class="chat-activity__task-time">· {task.timeLabel}</span>
-        {/if}
-        <CopyableValueCard
-          value={task.fullCommand}
-          mono
-          copyLabel={t('chat.copyCommand')}
-          copiedLabel={t('chat.commandCopied')}
-          whenTruncated={task.command === task.fullCommand}
-          placement="left"
-        />
+      <span class="chat-activity__task-copy">
+        <!-- The command must receive focus so its complete text and Copy
+             action reach keyboard users. -->
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+        <span
+          class="chat-activity__task-title chat-activity__task-command"
+          tabindex={task.fullCommand ? 0 : undefined}
+        >
+          {task.command}
+          <CopyableValueCard
+            value={task.fullCommand}
+            mono
+            copyLabel={t('chat.copyCommand')}
+            copiedLabel={t('chat.commandCopied')}
+            whenTruncated={task.command === task.fullCommand}
+            placement="left"
+          />
+        </span>
+        <span
+          class="chat-activity__task-meta"
+          use:tooltip={() => statusDetails(task)}
+        >
+          {@render statusIcon(task)}
+          <span class="chat-activity__task-kind"
+            >{t('chat.activity.kind.command')}</span
+          >
+          {#if task.timeLabel}
+            <span class="chat-activity__task-time">· {task.timeLabel}</span>
+          {/if}
+        </span>
       </span>
-      {@render statusIcon(task)}
       {@render cancelButton(task)}
     </div>
   {:else}
     <!-- The whole row shows the Sub-Agent's status details, not only its
-         small status icon. -->
+         status symbol. -->
     <!-- A new function whenever the Sub-Agent's work was read again, so an
          open card shows what arrived. Pointer and focus only ask for that
          work; the row's controls stay the interactive elements. -->
@@ -400,168 +395,191 @@
         onClick={() => task.target && onNavigateToSubAgent(task.target)}
       >
         <span class="chat-activity__task-copy">
-          <span class="chat-activity__task-name">
-            {task.agentId}
+          {#if task.description}
+            <span
+              id={`${panelId}-${task.id}-description`}
+              class="chat-activity__task-title chat-activity__task-description"
+              >{task.description}</span
+            >
+          {:else}
+            <span class="chat-activity__task-title">{task.agentId}</span>
+          {/if}
+          <span class="chat-activity__task-meta">
+            {@render statusIcon(task)}
+            <span class="chat-activity__task-kind"
+              >{t('chat.activity.kind.subagent')}</span
+            >
+            {#if task.description}
+              <span class="chat-activity__task-name">{task.agentId}</span>
+            {/if}
             {#if task.timeLabel}
               <span class="chat-activity__task-time">· {task.timeLabel}</span>
             {/if}
           </span>
-          {#if task.description}
-            <span
-              id={`${panelId}-${task.id}-description`}
-              class="chat-activity__task-description">{task.description}</span
-            >
-          {/if}
         </span>
       </Button>
-      {@render statusIcon(task)}
       {@render cancelButton(task)}
     </div>
   {/if}
 {/snippet}
 
+<!-- A Reflection's title already names its kind; its second line holds the
+     outcome, which opens the changes when there are any. -->
 {#snippet reflectionRow(row)}
-  <div class="chat-activity__task-row">
-    <Button
-      variant="tertiary"
-      class="chat-activity__task-link"
-      ariaLabel={reflectionRowLabel(row)}
-      disabled={!row.sessionId}
-      onClick={() => row.sessionId && onOpenReflection(row)}
-    >
-      <span class="chat-activity__task-name">
-        {reflectionScopeLabel(row)}
-        {#if row.status === 'running' && reflectionElapsedLabel(row.startedAt, nowMs)}
-          <span class="chat-activity__reflection-elapsed">
-            · {reflectionElapsedLabel(row.startedAt, nowMs)}
-          </span>
+  {@const statusTask = {
+    kind: 'reflection',
+    row,
+    dotStatus: reflectionDotStatus(row.status),
+  }}
+  <div class="chat-activity__task-row chat-activity__task-row--reflection">
+    <span class="chat-activity__task-copy">
+      <Button
+        variant="tertiary"
+        class="chat-activity__task-link"
+        ariaLabel={reflectionRowLabel(row)}
+        disabled={!row.sessionId}
+        onClick={() => row.sessionId && onOpenReflection(row)}
+      >
+        <span class="chat-activity__task-title">
+          {reflectionScopeLabel(row)}
+        </span>
+      </Button>
+      <span class="chat-activity__task-meta">
+        <span
+          class="chat-activity__task-state"
+          use:tooltip={() => statusDetails(statusTask)}
+        >
+          {@render statusIcon(statusTask)}
+          {#if row.status === 'running' && reflectionElapsedLabel(row.startedAt, nowMs)}
+            <span class="chat-activity__task-time">
+              {reflectionElapsedLabel(row.startedAt, nowMs)}
+            </span>
+          {:else if row.status !== 'running' && row.outcome && !reflectionHasChanges(row.outcome)}
+            <span class="chat-activity__outcome"
+              >{reflectionOutcomeLabel(row.outcome)}</span
+            >
+          {/if}
+        </span>
+        {#if row.status !== 'running' && reflectionHasChanges(row.outcome)}
+          {@render outcomeToggle(row)}
         {/if}
       </span>
-    </Button>
-    {@render statusIcon({
-      kind: 'reflection',
-      row,
-      dotStatus: reflectionDotStatus(row.status),
-    })}
+    </span>
   </div>
-  {#if row.status !== 'running' && row.outcome}
-    {@render reviewOutcome(row)}
+  {#if row.status !== 'running' && reflectionHasChanges(row.outcome) && expandedReviews.has(row.runId)}
+    {@render reviewChanges(row)}
   {/if}
 {/snippet}
 
-{#snippet reviewOutcome(row)}
-  {#if !reflectionHasChanges(row.outcome)}
-    <p class="chat-activity__outcome">{reflectionOutcomeLabel(row.outcome)}</p>
-  {:else}
-    {@const expanded = expandedReviews.has(row.runId)}
-    {@const changesId = `${panelId}-${row.runId}-changes`}
-    <Button
-      id={outcomeToggleId(row)}
-      variant="tertiary"
-      class="chat-activity__outcome chat-activity__outcome-toggle"
-      aria-expanded={expanded}
-      aria-controls={expanded ? changesId : undefined}
-      onClick={() => toggleReviewChanges(row)}
+{#snippet outcomeToggle(row)}
+  {@const expanded = expandedReviews.has(row.runId)}
+  <Button
+    id={outcomeToggleId(row)}
+    variant="tertiary"
+    class="chat-activity__outcome chat-activity__outcome-toggle"
+    aria-expanded={expanded}
+    aria-controls={expanded ? changesId(row) : undefined}
+    onClick={() => toggleReviewChanges(row)}
+  >
+    {reflectionOutcomeLabel(row.outcome)}
+    <svg
+      class="chat-activity__disclosure"
+      viewBox="0 0 16 16"
+      width="10"
+      height="10"
+      aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg
     >
-      <svg
-        class="chat-activity__disclosure"
-        viewBox="0 0 16 16"
-        width="12"
-        height="12"
-        aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg
-      >
-      {reflectionOutcomeLabel(row.outcome)}
-    </Button>
-    {#if expanded}
-      <div id={changesId} class="chat-activity__changes">
-        {#if row.details?.changes}
-          <ul class="chat-activity__change-list">
-            {#each reflectionChangeItems(row.details?.changes) as item (item.key)}
-              <li
-                class="chat-activity__change"
-                class:chat-activity__change--undone={item.undone}
+  </Button>
+{/snippet}
+
+{#snippet reviewChanges(row)}
+  <div id={changesId(row)} class="chat-activity__changes">
+    {#if row.details?.changes}
+      <ul class="chat-activity__change-list">
+        {#each reflectionChangeItems(row.details?.changes) as item (item.key)}
+          <li
+            class="chat-activity__change"
+            class:chat-activity__change--undone={item.undone}
+          >
+            <span class="chat-activity__change-head">
+              <span class="chat-activity__change-kind">{item.kind}</span>
+              <span
+                class="chat-activity__change-place"
+                class:chat-activity__change-place--mono={item.mono}
+                >{item.place}</span
               >
-                <span class="chat-activity__change-head">
-                  <span class="chat-activity__change-kind">{item.kind}</span>
-                  <span
-                    class="chat-activity__change-place"
-                    class:chat-activity__change-place--mono={item.mono}
-                    >{item.place}</span
-                  >
-                  {#if item.undone}
-                    <span class="chat-activity__change-undone"
-                      >{t('chat.activity.change.undone')}</span
-                    >
-                  {/if}
-                </span>
-                {#if item.detail}
-                  <span
-                    class="chat-activity__change-detail"
-                    class:chat-activity__change-detail--mono={item.mono}
-                    >{item.detail}</span
-                  >
-                {/if}
-              </li>
-            {/each}
-          </ul>
-        {:else if row.details?.loading}
-          <p class="chat-activity__changes-note">
-            {t('chat.activity.changes.loading')}
-          </p>
-        {/if}
-        {#if row.details?.loadError}
-          <p class="chat-activity__changes-error" role="alert">
-            {t('chat.activity.changes.loadError', {
-              message: row.details?.loadError,
-            })}
-          </p>
-        {/if}
-        {#if !row.outcome.undone}
-          {#if confirmingUndo.has(row.runId)}
-            <div
-              class="chat-activity__undo-confirm"
-              role="group"
-              aria-label={t('chat.activity.undoConfirm')}
-            >
-              <span class="chat-activity__undo-question"
-                >{t('chat.activity.undoConfirm')}</span
+              {#if item.undone}
+                <span class="chat-activity__change-undone"
+                  >{t('chat.activity.change.undone')}</span
+                >
+              {/if}
+            </span>
+            {#if item.detail}
+              <span
+                class="chat-activity__change-detail"
+                class:chat-activity__change-detail--mono={item.mono}
+                >{item.detail}</span
               >
-              <Button
-                variant="danger"
-                class="chat-activity__undo-action"
-                loading={row.details?.undoing}
-                onClick={() => confirmUndo(row)}
-              >
-                {t('chat.activity.undoConfirmAction')}
-              </Button>
-              <Button
-                variant="tertiary"
-                class="chat-activity__undo-action"
-                disabled={row.details?.undoing}
-                onClick={() => leaveUndoConfirmation(row)}
-              >
-                {t('chat.activity.undoKeep')}
-              </Button>
-            </div>
-          {:else}
-            <Button
-              variant="secondary"
-              class="chat-activity__undo-action chat-activity__undo"
-              loading={row.details?.undoing}
-              onClick={() => confirmingUndo.add(row.runId)}
-            >
-              {t('chat.activity.undo')}
-            </Button>
-          {/if}
-        {/if}
-        {#if row.details?.undoError}
-          <p class="chat-activity__changes-error" role="alert">
-            {row.details?.undoError}
-          </p>
-        {/if}
-      </div>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    {:else if row.details?.loading}
+      <p class="chat-activity__changes-note">
+        {t('chat.activity.changes.loading')}
+      </p>
     {/if}
-  {/if}
+    {#if row.details?.loadError}
+      <p class="chat-activity__changes-error" role="alert">
+        {t('chat.activity.changes.loadError', {
+          message: row.details?.loadError,
+        })}
+      </p>
+    {/if}
+    {#if !row.outcome.undone}
+      {#if confirmingUndo.has(row.runId)}
+        <div
+          class="chat-activity__undo-confirm"
+          role="group"
+          aria-label={t('chat.activity.undoConfirm')}
+        >
+          <span class="chat-activity__undo-question"
+            >{t('chat.activity.undoConfirm')}</span
+          >
+          <Button
+            variant="danger"
+            class="chat-activity__undo-action"
+            loading={row.details?.undoing}
+            onClick={() => confirmUndo(row)}
+          >
+            {t('chat.activity.undoConfirmAction')}
+          </Button>
+          <Button
+            variant="tertiary"
+            class="chat-activity__undo-action"
+            disabled={row.details?.undoing}
+            onClick={() => leaveUndoConfirmation(row)}
+          >
+            {t('chat.activity.undoKeep')}
+          </Button>
+        </div>
+      {:else}
+        <Button
+          variant="secondary"
+          class="chat-activity__undo-action chat-activity__undo"
+          loading={row.details?.undoing}
+          onClick={() => confirmingUndo.add(row.runId)}
+        >
+          {t('chat.activity.undo')}
+        </Button>
+      {/if}
+    {/if}
+    {#if row.details?.undoError}
+      <p class="chat-activity__changes-error" role="alert">
+        {row.details?.undoError}
+      </p>
+    {/if}
+  </div>
 {/snippet}
 
 <div class:chat-activity--open={open} class="chat-activity">
@@ -573,7 +591,7 @@
     tooltip={{ text: railLabel, placement: 'left' }}
     aria-expanded={open}
     aria-controls={panelId}
-    onClick={togglePanel}
+    onClick={() => (open ? closePanel() : openPanel())}
   >
     <svg
       class="chat-activity__rail-arrow"
@@ -599,6 +617,21 @@
         <h2 id={`${panelId}-title`} class="chat-activity__title">
           {t('chat.activity.title')}
         </h2>
+        <Button
+          id={`${panelId}-close`}
+          variant="tertiary"
+          icon
+          class="chat-activity__close"
+          ariaLabel={t('chat.activity.close')}
+          tooltip={{ text: t('chat.activity.close'), placement: 'left' }}
+          aria-expanded="true"
+          aria-controls={panelId}
+          onClick={closePanel}
+        >
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <path d="m6 4 4 4-4 4" />
+          </svg>
+        </Button>
       </header>
 
       <div class="chat-activity__body">
@@ -667,85 +700,35 @@
               {t('chat.activity.empty')}
             </p>
           {:else}
-            {#if subagentTasks.length > 0}
-              <section
-                class="chat-activity__group chat-activity__group--subagents"
-                aria-labelledby={`${panelId}-subagents`}
-              >
-                <h3
-                  id={`${panelId}-subagents`}
-                  class="chat-activity__group-title"
+            {#each [['running', sections.running], ['finished', sections.finished]] as [section, entries] (section)}
+              {#if entries.length > 0}
+                <section
+                  class={`chat-activity__group chat-activity__group--${section}`}
+                  aria-labelledby={`${panelId}-${section}`}
                 >
-                  {t('chat.activity.subagents')}
-                  <span class="chat-activity__count"
-                    >{subagentTasks.length}</span
+                  <h3
+                    id={`${panelId}-${section}`}
+                    class="chat-activity__group-title"
                   >
-                  {#if activeSubagentCount > 0}
-                    <span class="chat-activity__running-count"
-                      >{runningLabel(activeSubagentCount)}</span
-                    >
-                  {/if}
-                </h3>
-                <ul class="chat-activity__task-list">
-                  {#each subagentTasks as task (task.id)}
-                    <li>{@render taskRow(task)}</li>
-                  {/each}
-                </ul>
-              </section>
-            {/if}
-            {#if reflectionTasks.length > 0}
-              <section
-                class="chat-activity__group chat-activity__group--reflections"
-                aria-labelledby={`${panelId}-reflections`}
-              >
-                <h3
-                  id={`${panelId}-reflections`}
-                  class="chat-activity__group-title"
-                >
-                  {t('chat.activity.reflections')}
-                  <span class="chat-activity__count"
-                    >{reflectionTasks.length}</span
-                  >
-                </h3>
-                <ul class="chat-activity__task-list">
-                  {#each [...activeReflections, ...finishedReflections] as row (row.runId)}
-                    <li>{@render reflectionRow(row)}</li>
-                  {/each}
-                </ul>
-              </section>
-            {/if}
-            {#if commandTasks.length > 0}
-              <details
-                class="chat-activity__group chat-activity__group--commands"
-                bind:open={
-                  () => commandsExpanded ?? defaultCommandsOpen,
-                  (value) => (commandsExpanded = value)
-                }
-              >
-                <summary class="chat-activity__group-title">
-                  <svg
-                    class="chat-activity__disclosure"
-                    viewBox="0 0 16 16"
-                    width="12"
-                    height="12"
-                    aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg
-                  >
-                  {t('chat.activity.commands')}
-                  <span class="chat-activity__count">{commandTasks.length}</span
-                  >
-                  {#if activeCommandCount > 0}
-                    <span class="chat-activity__running-count"
-                      >{runningLabel(activeCommandCount)}</span
-                    >
-                  {/if}
-                </summary>
-                <ul class="chat-activity__task-list">
-                  {#each commandTasks as task (task.id)}
-                    <li>{@render taskRow(task)}</li>
-                  {/each}
-                </ul>
-              </details>
-            {/if}
+                    {section === 'running'
+                      ? t('chat.activity.running')
+                      : t('chat.activity.finished')}
+                    <span class="chat-activity__count">{entries.length}</span>
+                  </h3>
+                  <ul class="chat-activity__task-list">
+                    {#each entries as entry (entry.key)}
+                      <li>
+                        {#if entry.kind === 'reflection'}
+                          {@render reflectionRow(entry.row)}
+                        {:else}
+                          {@render taskRow(entry.task)}
+                        {/if}
+                      </li>
+                    {/each}
+                  </ul>
+                </section>
+              {/if}
+            {/each}
           {/if}
         </div>
       </div>
@@ -764,11 +747,13 @@
     transform: translateY(-50%);
   }
 
+  /* The panel grows with the Chat area (about 70% of its height) but never
+     below a usable height nor past the area itself. */
   .chat-activity--open {
     display: flex;
     align-items: center;
-    width: min(308px, calc(100% - 40px));
-    height: min(480px, calc(100% - 24px));
+    width: min(264px, calc(100% - 16px));
+    height: min(calc(100% - 24px), max(70%, 360px));
   }
 
   :global(.chat-activity__rail.btn-tertiary) {
@@ -789,12 +774,9 @@
     transform: translateY(-50%);
   }
 
+  /* The open panel carries its own close button in its header. */
   .chat-activity--open :global(.chat-activity__rail.btn-tertiary) {
-    right: 100%;
-    width: 20px;
-    min-width: 20px;
-    border-right: 0;
-    border-radius: var(--r-sm) 0 0 var(--r-sm);
+    display: none;
   }
 
   :global(.chat-activity__rail.btn-tertiary:hover) {
@@ -812,9 +794,6 @@
     stroke-width: 1.5;
     stroke-linecap: round;
     stroke-linejoin: round;
-  }
-  .chat-activity--open .chat-activity__rail-arrow {
-    transform: rotate(180deg);
   }
   .chat-activity__rail-dot {
     position: absolute;
@@ -838,8 +817,31 @@
     box-shadow: var(--floating-elevation);
   }
   .chat-activity__header {
+    display: flex;
     flex: 0 0 auto;
-    padding: 14px 16px 8px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 8px 6px 16px;
+  }
+  :global(.chat-activity__close.btn-tertiary.btn-icon) {
+    width: 24px;
+    min-width: 24px;
+    height: 24px;
+    min-height: 24px;
+    border: 0;
+    color: var(--text-lo);
+  }
+  :global(.chat-activity__close.btn-tertiary.btn-icon:hover) {
+    background: var(--surface-2);
+    color: var(--text-hi);
+  }
+  :global(.chat-activity__close svg) {
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.5;
   }
   .chat-activity__title {
     margin: 0;
@@ -915,28 +917,6 @@
     font-variant-numeric: tabular-nums;
     font-weight: 400;
   }
-  .chat-activity__running-count {
-    margin-left: auto;
-    color: var(--amber);
-    font-size: var(--fs-label-sm);
-    font-variant-numeric: tabular-nums;
-    font-weight: 400;
-  }
-  summary.chat-activity__group-title {
-    cursor: pointer;
-    list-style: none;
-    border-radius: var(--r-sm);
-  }
-  summary::-webkit-details-marker {
-    display: none;
-  }
-  summary:hover {
-    background: var(--surface-2);
-    color: var(--text-hi);
-  }
-  details[open] .chat-activity__disclosure {
-    transform: rotate(90deg);
-  }
   .chat-activity__task-list {
     margin: 0;
     padding: 0;
@@ -945,10 +925,9 @@
   .chat-activity__task-row {
     display: flex;
     width: 100%;
-    min-height: 34px;
     align-items: center;
-    gap: 6px;
-    padding: 6px 8px;
+    gap: 4px;
+    padding: 5px 8px;
     border-radius: var(--r-sm);
     color: var(--text-med);
     text-align: left;
@@ -959,60 +938,88 @@
   }
   :global(.chat-activity__task-link.btn-tertiary) {
     min-width: 0;
-    min-height: 24px;
+    min-height: 0;
     flex: 1;
     justify-content: flex-start;
     padding: 0;
     border: 0;
     border-radius: var(--r-sm);
     color: var(--text-hi);
+    font-weight: 400;
     text-align: left;
   }
   :global(.chat-activity__task-link.btn-tertiary:hover) {
     background: transparent;
   }
+  .chat-activity__task-row--reflection :global(.chat-activity__task-link) {
+    flex: 0 1 auto;
+    align-self: flex-start;
+    max-width: 100%;
+  }
   .chat-activity__task-copy {
     display: flex;
     min-width: 0;
-    flex-direction: column;
-    gap: 3px;
-  }
-  .chat-activity__task-name {
-    min-width: 0;
     flex: 1;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .chat-activity__task-title {
+    min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    color: var(--text-hi);
+    font-family: var(--font-ui);
     font-size: var(--fs-body-sm);
     font-weight: 500;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .chat-activity__task-description {
     display: -webkit-box;
-    overflow: hidden;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
-    color: var(--text-med);
-    font-family: var(--font-ui);
-    font-size: var(--fs-body-sm);
-    line-height: 1.4;
-    font-weight: 400;
     overflow-wrap: anywhere;
     white-space: normal;
   }
-  .chat-activity__task-row--bash .chat-activity__task-name {
+  .chat-activity__task-command {
     font-family: var(--font-mono);
     font-size: var(--fs-mono-xs);
-  }
-  .chat-activity__task-time,
-  .chat-activity__reflection-elapsed {
-    color: var(--text-med);
-    font-variant-numeric: tabular-nums;
     font-weight: 400;
   }
-  /* The Bash command itself stays mono; its elapsed time is UI metadata. */
-  .chat-activity__task-row--bash .chat-activity__task-time {
+  /* The quiet second line: state symbol, kind, name and time, small enough
+     that the symbol never makes the line taller. */
+  .chat-activity__task-meta {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-lo);
     font-family: var(--font-ui);
     font-size: var(--fs-label-sm);
+    font-variant-numeric: tabular-nums;
+    font-weight: 400;
+    line-height: 1.35;
+    white-space: nowrap;
+  }
+  .chat-activity__task-state {
+    display: inline-flex;
+    min-width: 0;
+    align-items: center;
+    gap: 4px;
+  }
+  .chat-activity__task-kind {
+    flex: 0 0 auto;
+    color: var(--text-med);
+  }
+  .chat-activity__task-name,
+  .chat-activity__task-time,
+  .chat-activity__outcome {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .chat-activity__task-time {
+    flex: 0 0 auto;
   }
   :global(.chat-activity__cancel.btn-danger.btn-icon) {
     width: 24px;
@@ -1037,9 +1044,9 @@
   }
   .chat-activity__status {
     display: inline-flex;
-    width: 18px;
-    height: 18px;
-    flex: 0 0 18px;
+    width: 12px;
+    height: 12px;
+    flex: 0 0 12px;
     align-items: center;
     justify-content: center;
     color: var(--text-med);
@@ -1049,11 +1056,11 @@
     stroke: currentColor;
     stroke-linecap: round;
     stroke-linejoin: round;
-    stroke-width: 1.6;
+    stroke-width: 1.8;
   }
   .chat-activity__working-dot {
-    width: 6px;
-    height: 6px;
+    width: 5px;
+    height: 5px;
     border-radius: 50%;
     background: var(--amber);
   }
@@ -1063,22 +1070,18 @@
   .chat-activity__status--failed {
     color: var(--red);
   }
-  .chat-activity__outcome {
-    margin: 0;
-    padding: 0 8px 6px;
-    color: var(--text-med);
-    font-size: var(--fs-body-sm);
-    font-variant-numeric: tabular-nums;
-  }
   :global(.chat-activity__outcome-toggle.btn-tertiary) {
-    min-height: 24px;
-    gap: 6px;
-    margin: 0 0 4px;
-    padding: 2px 8px;
+    min-width: 0;
+    min-height: 0;
+    gap: 3px;
+    margin: 0 0 0 -3px;
+    padding: 0 3px;
     border: 0;
     border-radius: var(--r-sm);
     color: var(--text-med);
+    font-size: inherit;
     font-weight: 400;
+    line-height: inherit;
   }
   :global(.chat-activity__outcome-toggle.btn-tertiary:hover) {
     background: var(--surface-2);
@@ -1093,7 +1096,7 @@
     flex-direction: column;
     align-items: flex-start;
     gap: 8px;
-    padding: 0 8px 10px 26px;
+    padding: 2px 8px 10px 24px;
   }
   .chat-activity__change-list {
     display: flex;
@@ -1179,8 +1182,8 @@
     font-size: var(--fs-body-sm);
   }
   :global(.chat-activity__rail.btn-tertiary:focus-visible),
+  :global(.chat-activity__close.btn-tertiary:focus-visible),
   :global(.chat-activity__outcome-toggle.btn-tertiary:focus-visible),
-  summary:focus-visible,
   :global(.chat-activity__task-link.btn-tertiary:focus-visible),
   :global(.chat-activity__parent-link.btn-tertiary:focus-visible) {
     outline: 1px solid var(--accent);
@@ -1192,9 +1195,6 @@
     }
     :global(.chat-activity__rail.btn-tertiary) {
       height: 44px;
-    }
-    .chat-activity--open {
-      width: min(308px, calc(100% - 40px));
     }
   }
 </style>
