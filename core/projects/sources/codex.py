@@ -10,12 +10,27 @@ from typing import Any
 from core.projects.sources import _reading as reading
 from core.projects.sources._translation import (
     FILE_TOOLS,
+    SHELL_TOOLS,
     profile,
     restrict,
     unavailable,
     unsupported,
 )
-from core.projects.sources.profile import AgentProfile
+from core.projects.sources.profile import AgentProfile, Translation
+
+# What each sandbox leaves out that vBot's unconfined Tools would allow. vBot's
+# file Tools can be closed exactly; its shell cannot be confined, so any sandbox
+# closes it.
+_SANDBOXES = {
+    "read-only": frozenset({"apply_patch", *SHELL_TOOLS}),
+    "workspace-write": SHELL_TOOLS,
+    "danger-full-access": frozenset(),
+}
+_PERMISSION_PROFILES = {
+    ":read-only": "read-only",
+    ":workspace": "workspace-write",
+    ":danger-no-sandbox": "danger-full-access",
+}
 
 
 class CodexAdapter:
@@ -45,6 +60,9 @@ class CodexAdapter:
                         "network",
                         "skills",
                         "features",
+                        "default_permissions",
+                        "permissions",
+                        "web_search",
                     )
                     if key in config
                 }
@@ -88,22 +106,7 @@ class CodexAdapter:
                 if "model_reasoning_effort" in fields:
                     normalized["effort"] = fields["model_reasoning_effort"]
                 agent = profile(self.source, path, normalized, body)
-                if "sandbox_mode" in fields:
-                    agent = restrict(
-                        agent,
-                        "sandbox_mode",
-                        FILE_TOOLS,
-                        "Sandbox isolation is unavailable; file and shell Tools are disabled.",
-                    )
-                if "approval_policy" in fields and fields["approval_policy"] != "never":
-                    agent = replace(agent, allowed_tools=frozenset())
-                    agent = restrict(
-                        agent,
-                        "approval_policy",
-                        FILE_TOOLS,
-                        "Approval policies are unavailable; Tools are disabled until "
-                        "explicitly overridden in vBot.",
-                    )
+                agent = _restrictions(agent, fields)
                 agent = unsupported(
                     agent,
                     fields,
@@ -115,6 +118,9 @@ class CodexAdapter:
                         "model_reasoning_effort",
                         "sandbox_mode",
                         "approval_policy",
+                        "default_permissions",
+                        "permissions",
+                        "web_search",
                     },
                 )
                 result.append(agent)
@@ -129,3 +135,62 @@ class CodexAdapter:
                     )
                 )
         return result
+
+
+def _restrictions(agent: AgentProfile, fields: dict[str, Any]) -> AgentProfile:
+    """Translate Codex sandbox, approval and capability switches without widening."""
+    sandbox = fields.get("sandbox_mode")
+    profile_name = fields.get("default_permissions")
+    if isinstance(profile_name, str) and profile_name in _PERMISSION_PROFILES:
+        sandbox = _PERMISSION_PROFILES[profile_name]
+    elif profile_name is not None or "permissions" in fields:
+        agent = restrict(
+            agent,
+            "default_permissions",
+            FILE_TOOLS,
+            "Custom permission profiles are unavailable; file and shell Tools are disabled.",
+        )
+    if sandbox is not None:
+        closed = _SANDBOXES.get(sandbox) if isinstance(sandbox, str) else None
+        if closed is None:
+            agent = restrict(
+                agent,
+                "sandbox_mode",
+                FILE_TOOLS,
+                "Unknown sandbox; file and shell Tools are disabled.",
+            )
+        elif closed:
+            agent = restrict(
+                agent,
+                "sandbox_mode",
+                closed,
+                "vBot cannot confine its shell; Tools this sandbox forbids are disabled.",
+            )
+        else:
+            agent = _translated(agent, "sandbox_mode", "No sandbox; vBot Tool access applies.")
+    approval = fields.get("approval_policy")
+    if approval is not None and approval != "never":
+        closed = SHELL_TOOLS | ({"apply_patch"} if approval == "untrusted" else set())
+        agent = restrict(
+            agent,
+            "approval_policy",
+            frozenset(closed),
+            "vBot asks no approvals; Tools that would ask are disabled.",
+        )
+    web_search = fields.get("web_search")
+    if web_search == "disabled":
+        agent = restrict(
+            agent, "web_search", frozenset({"web_search", "web_fetch"}), "Web access is disabled."
+        )
+    elif web_search is not None:
+        agent = _translated(agent, "web_search", "Web search stays available.")
+    features = fields.get("features")
+    if isinstance(features, dict) and features.get("shell_tool") is False:
+        agent = restrict(agent, "features.shell_tool", SHELL_TOOLS, "The shell is disabled.")
+    return agent
+
+
+def _translated(agent: AgentProfile, setting: str, detail: str) -> AgentProfile:
+    return replace(
+        agent, translations=(*agent.translations, Translation(setting, "translated", detail))
+    )

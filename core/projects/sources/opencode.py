@@ -26,11 +26,21 @@ _MAPPING = {
     "bash": SHELL_TOOLS,
     "grep": frozenset({"search_files"}),
     "glob": frozenset({"search_files"}),
+    "list": frozenset({"search_files"}),
     "webfetch": frozenset({"web_fetch"}),
     "websearch": frozenset({"web_search"}),
     "task": frozenset({"subagent"}),
     "skill": frozenset({"skill"}),
 }
+# Configuration entries under these names adjust OpenCode's own Agents; they
+# define no Agent of their own.
+_BUILT_IN_AGENTS = frozenset({"build", "plan", "general", "explore"})
+CONFIG_FILES = (
+    "opencode.json",
+    "opencode.jsonc",
+    ".opencode/opencode.json",
+    ".opencode/opencode.jsonc",
+)
 
 
 class OpenCodeAdapter:
@@ -41,7 +51,7 @@ class OpenCodeAdapter:
         global_fields: dict[str, Any] = {}
         definitions: list[tuple[Path, str, dict[str, Any]]] = []
         problem = None
-        for relative in ("opencode.json", ".opencode/opencode.json"):
+        for relative in CONFIG_FILES:
             path = root / relative
             try:
                 if not reading.is_file_strict(path):
@@ -71,6 +81,8 @@ class OpenCodeAdapter:
                                 self.source, path, name, "Agent configuration must be an object."
                             )
                         )
+                    elif name in _BUILT_IN_AGENTS and "prompt" not in fields:
+                        continue
                     else:
                         definitions.append((path, name, fields))
             except (OSError, ValueError) as error:
@@ -111,10 +123,14 @@ class OpenCodeAdapter:
         body: str,
         global_fields: dict[str, Any],
     ) -> AgentProfile:
+        merged = {**global_fields, **fields}
+        if fields.get("mode") == "subagent" and "model" not in fields:
+            # Subagents run on the calling Agent's Model unless they name one.
+            merged["model"] = "inherit"
         agent = profile(
             self.source,
             path,
-            {**global_fields, **fields},
+            merged,
             body,
             name=name,
             effort_key="reasoningEffort",
@@ -199,13 +215,17 @@ class OpenCodeAdapter:
                     reports.append(
                         Translation(
                             f"permission.{pattern}",
-                            "translated" if matches and value != "ask" else "not_supported",
-                            "Applied to matching capabilities; approval requests disable Tools.",
+                            "translated"
+                            if (matches or value != "allow") and value != "ask"
+                            else "not_supported",
+                            "Applied to matching capabilities; approval requests disable Tools."
+                            if matches
+                            else "vBot has no such capability.",
                         )
                     )
-                if not matches and value != "allow":
-                    default_access = False
-                    blocked.update(tool for mapped in _MAPPING.values() for tool in mapped)
+                if pattern == "external_directory" and value != "allow":
+                    # vBot's file Tools are not confined to the repository.
+                    blocked.update(FILE_TOOLS)
         # Several foreign capabilities can share one vBot Tool. Every capability
         # it supplies must be allowed, so a later Glob allow cannot undo Grep deny.
         requirements: dict[str, list[str]] = {}

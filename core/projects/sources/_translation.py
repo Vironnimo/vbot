@@ -35,6 +35,10 @@ def profile(
     translations = [
         Translation("instructions", "applied", "Repository instructions are included verbatim.")
     ]
+    raw_model = fields.get("model", model_default)
+    if isinstance(raw_model, list) and raw_model and isinstance(raw_model[0], str):
+        # A prioritized list names the preferred Model first.
+        fields = {**fields, "model": raw_model[0]}
     model = string(fields, "model", model_default)
     if model:
         translations.append(
@@ -44,8 +48,17 @@ def profile(
         )
     effort = None
     if effort_key in fields:
-        effort = validate_thinking_effort(fields[effort_key], label=effort_key, allow_none=False)
-        translations.append(Translation(effort_key, "translated", "Used as thinking effort."))
+        try:
+            effort = validate_thinking_effort(
+                fields[effort_key], label=effort_key, allow_none=False
+            )
+        except ValueError:
+            # A foreign effort level vBot lacks is a lost wish, not broken metadata.
+            translations.append(
+                Translation(effort_key, "not_supported", "No matching vBot thinking effort.")
+            )
+        else:
+            translations.append(Translation(effort_key, "translated", "Used as thinking effort."))
     temperature = None
     if "temperature" in fields:
         temperature = validate_temperature(
@@ -137,7 +150,13 @@ def tool_list(
     setting: str = "tools",
     compound: dict[str, frozenset[str]] | None = None,
     wildcard: bool = False,
+    covers: dict[str, frozenset[str]] | None = None,
 ) -> AgentProfile:
+    """Map a foreign Tool list onto vBot Tools.
+
+    ``covers`` names further vBot Tools a denial of a foreign Tool also closes,
+    because they reach the same data (a file read denial also covers search and shell).
+    """
     entries = names(value, comma_separated=True)
     targets: list[AgentTargetRule] = list(agent.agent_target_rules)
     reports = list(agent.translations)
@@ -150,6 +169,9 @@ def tool_list(
     for entry in entries:
         base, separator, rest = entry.strip().lower().partition("(")
         base = "agent" if base == "task" else base
+        if base not in mapping and "/" in base:
+            # Qualified names (``read/readFile``) belong to their Tool set.
+            base = base.partition("/")[0]
         if wildcard and base == "*" and not separator:
             if deny:
                 return replace(agent, tool_rules=(*agent.tool_rules, ToolRule("*", False)))
@@ -184,6 +206,8 @@ def tool_list(
             denied.update(mapped)
             if "bash" in mapped:
                 denied.update(SHELL_TOOLS)
+            if deny:
+                denied.update((covers or {}).get(base, frozenset()))
             reports.append(
                 Translation(
                     f"{setting}.{entry}",
@@ -193,6 +217,7 @@ def tool_list(
             )
         elif deny:
             denied.update(mapped)
+            denied.update((covers or {}).get(base, frozenset()))
             if "bash" in mapped:
                 denied.update(SHELL_TOOLS)
             if base == "agent":
@@ -204,7 +229,7 @@ def tool_list(
         for tool, required in (compound or {}).items():
             if not required <= found:
                 allowed.discard(tool)
-                if required & found:
+                if any(tool in mapping[name] for name in found):
                     reports.append(
                         Translation(
                             setting,

@@ -142,8 +142,46 @@ def write(root: Path, path: str, content: str) -> Path:
             "codex",
             ".codex/agents/reviewer.toml",
             'name="reviewer"\ndescription="Review"\ndeveloper_instructions="Review."\nsandbox_mode="read-only"',
-            {"status", "skill", "subagent"},
+            {"read", "search_files", "status", "skill", "subagent"},
             "limited",
+        ),
+        (
+            "codex",
+            ".codex/config.toml",
+            'approval_policy="never"\n[features]\nshell_tool=false\n[agents.reviewer]\ndescription="Review"',
+            {"read", "search_files", "apply_patch", "status", "skill", "subagent"},
+            "limited",
+        ),
+        (
+            "claude",
+            ".claude/agents/reviewer.md",
+            "---\ndisallowedTools: Read(./.env)\n---\nReview.",
+            {"apply_patch", "status", "skill", "subagent"},
+            "limited",
+        ),
+        (
+            "opencode",
+            "opencode.jsonc",
+            '{\n  // Shared\n  "permission": {"bash": "deny"},\n'
+            '  "agent": {"reviewer": {"prompt": "Review.",},},\n}',
+            {"read", "search_files", "apply_patch", "status", "skill", "subagent"},
+            "ready",
+        ),
+        (
+            "opencode",
+            ".opencode/agents/reviewer.md",
+            "---\npermission:\n  todowrite: deny\n---\nReview.",
+            {
+                "read",
+                "search_files",
+                "apply_patch",
+                "bash",
+                "terminal",
+                "status",
+                "skill",
+                "subagent",
+            },
+            "ready",
         ),
         (
             "copilot",
@@ -203,12 +241,15 @@ def test_mixed_sources_priority_and_new_detection_preserve_winners(repo):
         SourceSelection("shared.skills"),
     ]
     write(repo, ".opencode/agents/reviewer.md", "OpenCode.")
+    # Neither documentation nor settings for OpenCode's own Agents define Team members.
+    write(repo, ".claude/agents/README.md", "Our agents.")
+    write(repo, "opencode.json", '{"agent":{"plan":{"model":"anthropic/x"}}}')
     result = scan_project(repo, sources=sources)
     assert [agent.agent_id for agent in result.team] == ["builder", "reviewer"]
     assert result.team[1].source == "claude"
     assert result.shadowed[0].source == "opencode"
     assert result.report.findings_of(FindingType.SLUG_COLLISION)
-    write(repo, ".cursor/agents/reviewer.md", "Cursor.")
+    write(repo, ".cursor/agents/reviewer.md", "---\nname: reviewer\n---\nCursor.")
     refreshed = refresh_sources(sources, detect_sources(repo))
     assert next(item for item in refreshed if item.id == "cursor.agents").enabled is False
     reordered = scan_project(repo, sources=[sources[1], sources[0], sources[2]])
@@ -241,25 +282,12 @@ def test_mixed_sources_priority_and_new_detection_preserve_winners(repo):
 )
 def test_claude_project_hooks_disable_only_the_tools_they_gate(repo, hooks, expected, status):
     write(repo, ".claude/settings.json", json.dumps({"hooks": hooks}))
-    write(repo, ".claude/agents/reviewer.md", "Review.")
+    write(repo, ".claude/agents/reviewer.md", "---\nname: reviewer\n---\nReview.")
     profile = scan_project(repo, sources=[SourceSelection("claude.agents")]).team[0]
     assert profile.status == status
     policy = profile_tool_access(
         profile,
-        tuple(
-            sorted(
-                {
-                    "read",
-                    "search_files",
-                    "apply_patch",
-                    "bash",
-                    "terminal",
-                    "status",
-                    "skill",
-                    "subagent",
-                }
-            )
-        ),
+        ("read", "search_files", "apply_patch", "bash", "terminal", "status", "skill", "subagent"),
     )
     assert set(policy.allowed) == expected
 
@@ -287,7 +315,7 @@ def test_legacy_anchor_preserves_unknown_fields_overrides_and_sessions(
     projects, repo, data_dir, ecosystem
 ):
     write(repo, f".{ecosystem}/agents/reviewer.md", "---\nname: reviewer\n---\nReview.")
-    write(repo, f".{ecosystem}/agents/nested/new.md", "New nested definition.")
+    write(repo, f".{ecosystem}/agents/nested/new.md", "---\nname: new\n---\nNew.")
     write(repo, "opencode.json", '{"agent":{"json-only":{"prompt":"JSON definition."}}}')
     other = "opencode" if ecosystem == "claude" else "claude"
     write(repo, f".{other}/agents/builder.md", "Build.")

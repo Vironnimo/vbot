@@ -18,7 +18,7 @@ from core.projects.sources._translation import (
     unavailable,
     unsupported,
 )
-from core.projects.sources.profile import AgentProfile, Translation
+from core.projects.sources.profile import AgentProfile, AgentTargetRule, Translation
 
 _CLAUDE_TOOLS = {
     "read": frozenset({"read"}),
@@ -27,10 +27,17 @@ _CLAUDE_TOOLS = {
     "glob": frozenset({"search_files"}),
     "grep": frozenset({"search_files"}),
     "bash": frozenset({"bash"}),
+    "powershell": frozenset({"bash"}),
     "webfetch": frozenset({"web_fetch"}),
     "websearch": frozenset({"web_search"}),
     "agent": frozenset({"subagent"}),
     "skill": frozenset({"skill"}),
+}
+# Claude applies Read and Edit rules to every Tool reaching the same files.
+_CLAUDE_COVERS = {
+    "read": frozenset({"search_files", *SHELL_TOOLS}),
+    "edit": SHELL_TOOLS,
+    "write": SHELL_TOOLS,
 }
 # Claude's own Tool names, which hook matchers are written against.
 _CLAUDE_TOOL_NAMES = {
@@ -42,6 +49,7 @@ _CLAUDE_TOOL_NAMES = {
     "Glob": "glob",
     "Grep": "grep",
     "Bash": "bash",
+    "PowerShell": "powershell",
     "WebFetch": "webfetch",
     "WebSearch": "websearch",
     "Agent": "agent",
@@ -72,6 +80,7 @@ _GEMINI_TOOLS = {
     "list_directory": frozenset({"search_files"}),
     "glob": frozenset({"search_files"}),
     "grep_search": frozenset({"search_files"}),
+    "search_file_content": frozenset({"search_files"}),
     "run_shell_command": frozenset({"bash"}),
     "replace": frozenset({"apply_patch"}),
     "write_file": frozenset({"apply_patch"}),
@@ -108,12 +117,17 @@ class MarkdownAdapter:
                                 settings[key] = value
                         if data.get("hooks"):
                             settings["hooks"] = [*settings.get("hooks", []), data["hooks"]]
+                        sandbox = data.get("sandbox")
+                        if isinstance(sandbox, dict) and sandbox.get("enabled") is not False:
+                            settings["sandbox"] = True
             except (OSError, ValueError) as error:
                 problem = str(error)
         result: list[AgentProfile] = []
         for path in paths:
             name = path.stem.removesuffix(".agent")
             try:
+                if not reading.has_frontmatter(path) and not path.name.endswith(".agent.md"):
+                    continue  # Agent definitions declare frontmatter; other files document.
                 fields, body = reading.markdown(path)
                 name = reading.string(fields, "name", name)
                 if problem:
@@ -131,7 +145,8 @@ class MarkdownAdapter:
             path,
             fields,
             body,
-            model_default="inherit" if self.source in {"cursor", "gemini"} else "",
+            # Claude, Cursor and Gemini subagents use the caller's Model unless named.
+            model_default="inherit" if self.source != "copilot" else "",
         )
         known = {"name", "description", "model", "temperature", "top_p", "effort", "tools"}
         if self.source == "claude":
@@ -144,12 +159,25 @@ class MarkdownAdapter:
                     _CLAUDE_TOOLS,
                     deny=True,
                     setting="disallowedTools",
+                    covers=_CLAUDE_COVERS,
                 )
             for key in ("deny", "ask"):
                 if key in settings:
                     agent = tool_list(
-                        agent, settings[key], _CLAUDE_TOOLS, deny=True, setting=f"permissions.{key}"
+                        agent,
+                        settings[key],
+                        _CLAUDE_TOOLS,
+                        deny=True,
+                        setting=f"permissions.{key}",
+                        covers=_CLAUDE_COVERS,
                     )
+            if settings.get("sandbox"):
+                agent = restrict(
+                    agent,
+                    "sandbox",
+                    SHELL_TOOLS,
+                    "The shell sandbox is unavailable; shell Tools are disabled.",
+                )
             if "skills" in fields:
                 agent = replace(
                     agent,
@@ -218,6 +246,22 @@ class MarkdownAdapter:
         elif self.source == "copilot":
             if "tools" in fields:
                 agent = tool_list(agent, fields["tools"], _COPILOT_TOOLS, wildcard=True)
+            if "agents" in fields:
+                targets = reading.names(fields["agents"])
+                if "*" not in targets:
+                    agent = replace(
+                        agent,
+                        agent_target_rules=(
+                            *agent.agent_target_rules,
+                            AgentTargetRule("*", False),
+                            *(AgentTargetRule(target, True) for target in targets),
+                        ),
+                        translations=(
+                            *agent.translations,
+                            Translation("agents", "translated", "Limits delegation targets."),
+                        ),
+                    )
+            known.add("agents")
         elif self.source == "cursor":
             known.discard("tools")
             if reading.boolean(fields, "readonly"):
