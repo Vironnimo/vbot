@@ -31,8 +31,10 @@ export function mcpCatalogMatches(entries, { query = '', category = '' }) {
   });
 }
 
-// A tile's mark without a vendor logo: the name's initials and a hue that
-// the entry id fixes, so a service keeps its color across catalog changes.
+// A tile's mark without a vendor logo: the name's initials, in white, on a
+// background whose hue the entry id fixes, so a service keeps its color
+// across catalog changes. The saturation and lightness keep the white
+// initials at a contrast of at least 4.5:1 for every hue.
 export function mcpCatalogMark(entry) {
   const words = entry.name.split(/\s+/).filter(Boolean);
   const initials =
@@ -42,7 +44,7 @@ export function mcpCatalogMark(entry) {
   let hash = 0;
   for (const character of entry.id)
     hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
-  return { initials, hue: hash % 360 };
+  return { initials, background: `hsl(${hash % 360} 50% 30%)` };
 }
 
 // Where the sign-in of a connection stands, from its `status`:

@@ -349,7 +349,7 @@
                 <div class="mcp-catalog__head">
                   <span
                     class="mcp-catalog__mark"
-                    style:--mcp-catalog-hue={mark.hue}
+                    style:background={mark.background}
                     aria-hidden="true">{mark.initials}</span
                   >
                   <div class="mcp-catalog__title">

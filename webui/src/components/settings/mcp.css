@@ -278,7 +278,6 @@
   width: 36px;
   height: 36px;
   border-radius: var(--r-md);
-  background: hsl(var(--mcp-catalog-hue) 55% 42%);
   color: #fff;
   font-weight: 600;
 }
@@ -310,7 +309,13 @@
   margin-left: auto;
 }
 .mcp-catalog__docs {
+  color: var(--accent);
   font-size: var(--fs-body-sm);
+  text-decoration: none;
+}
+.mcp-catalog__docs:hover,
+.mcp-catalog__docs:focus-visible {
+  text-decoration: underline;
 }
 .mcp-catalog__agents > li {
   display: flex;
