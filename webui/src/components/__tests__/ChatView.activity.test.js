@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { t } from '../../lib/i18n.js';
 import {
@@ -110,9 +110,16 @@ describe('ChatView Agent activity', () => {
           createChatRpcMock({ agents, sessionMessages }),
         );
         serveSessionActivity({ beta: activity });
-        await chat.mountChat({ sharedAgents: agents });
+        const onNavigationIndicator = vi.fn();
+        await chat.mountChat({ sharedAgents: agents, onNavigationIndicator });
 
         await waitForCondition(() => agentShowsUnread('Beta'));
+        // The Main menu's Chat entry counts the unread result.
+        expect(onNavigationIndicator).toHaveBeenLastCalledWith({
+          count: 1,
+          tone: 'unread',
+          label: t('chat.agentActivity.stateUnreadOne'),
+        });
         const betaPill = agentPill('Beta');
         expect(betaPill.getAttribute('aria-label')).toBe(
           t('chat.agentActivity.unreadOne', {
@@ -136,6 +143,7 @@ describe('ChatView Agent activity', () => {
         // The displayed Agent shows no unread result.
         expect(historyReads('beta-current')).toBe(0);
         expect(agentShowsUnread('Beta')).toBe(false);
+        expect(onNavigationIndicator).toHaveBeenLastCalledWith(null);
       },
     );
 

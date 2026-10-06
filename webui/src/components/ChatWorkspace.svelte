@@ -654,6 +654,7 @@
               pendingSessionNavigation={secondNavigation}
               navigateToSubAgent={navigateSecond}
               onSessionNavigation={() => {}}
+              onNavigationIndicator={() => {}}
               onDisplayedSession={(session) => (sessions[index] = session)}
             />
           {/if}

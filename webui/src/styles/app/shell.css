@@ -205,6 +205,38 @@
   padding: 0;
 }
 
+/* A view's indicator on its Main menu entry: a count at the row's end, or a
+   solid count at the icon's corner where the entry shows no label. */
+.app-shell__nav-item {
+  position: relative;
+}
+
+.app-shell__nav-indicator {
+  margin-left: auto;
+}
+
+.app-shell__nav-indicator--running {
+  color: var(--amber);
+  background: var(--amber-dim);
+}
+
+.app-shell[data-sidebar-collapsed='true'] .app-shell__nav-indicator {
+  position: absolute;
+  top: 4px;
+  left: calc(50% + 2px);
+  min-width: 16px;
+  height: 15px;
+  padding: 0 4px;
+  color: var(--bg);
+  background: var(--blue);
+  box-shadow: 0 0 0 2px var(--secondary-surface);
+  font-size: 10px;
+}
+
+.app-shell[data-sidebar-collapsed='true'] .app-shell__nav-indicator--running {
+  background: var(--amber);
+}
+
 .app-shell__nav-sigil,
 .tab-indicator {
   width: 7px;

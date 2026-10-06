@@ -25,6 +25,7 @@
   import ComposerSessionSettings from './chat/ComposerSessionSettings.svelte';
   import ComputerUseControl from './ComputerUseControl.svelte';
   import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
+  import { agentActivityState } from './chat/agentActivityTooltip.js';
   import {
     backgroundTasks,
     reflectionTaskRows,
@@ -55,6 +56,9 @@
     initialSessionFilters = null,
     onSessionFiltersChange,
     onDisplayedSession = () => {},
+    // Reports this Chat's Main menu indicator: `{count, tone, label}` while
+    // Agents hold unread results, otherwise null.
+    onNavigationIndicator = () => {},
     sharedAgents = [],
     sharedSelectedAgentId = '',
     // Chat reading-column width preference: 'comfortable' | 'wide' | 'full'.
@@ -758,6 +762,32 @@
       sessionId: session?.sessionId || agent?.current_session_id || '',
     };
     untrack(() => onDisplayedSession(selection));
+  });
+
+  // Unread results across every Agent on the Agent bar and in its All agents
+  // list. While this Chat is shown, the displayed Session's result is being
+  // read and does not count, like on the Agent bar.
+  let unreadResultCount = $derived.by(() => {
+    const displayedSessionKey = active ? target.displayedSessionKey() : '';
+    return pickerAgentAddresses.reduce(
+      (count, address) =>
+        count +
+        agentUnreadResults(chatState, address, displayedSessionKey).count,
+      0,
+    );
+  });
+
+  $effect(() => {
+    const count = unreadResultCount;
+    const indicator =
+      count > 0
+        ? {
+            count,
+            tone: 'unread',
+            label: agentActivityState('unread', count),
+          }
+        : null;
+    untrack(() => onNavigationIndicator(indicator));
   });
 </script>
 

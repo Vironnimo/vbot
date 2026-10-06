@@ -16,6 +16,10 @@
 
   let {
     items = [],
+    // A view's indicator on its Main menu entry, by view id: `{count, tone,
+    // label}` with tone 'unread' (blue) or 'running' (amber) and a label
+    // saying in words what the count means.
+    indicators = {},
     activeViewId,
     onSelectView,
     connectionStatus = CONNECTION_STATUS_RECONNECTING,
@@ -200,6 +204,26 @@
     { id: 'configure', label: () => t('nav.section.configure') },
     { id: 'insights', label: () => t('nav.section.insights') },
   ];
+
+  // An entry with an indicator names it, since the badge alone is a number.
+  function navItemName(item, compact) {
+    const indicator = indicators[item.id];
+    if (indicator) {
+      return t('navigation.itemIndicator', {
+        label: item.label(),
+        indicator: indicator.label,
+      });
+    }
+    return compact ? item.label() : undefined;
+  }
+
+  function navItemTooltip(item, compact) {
+    const indicator = indicators[item.id];
+    if (compact) {
+      return navItemName(item, compact);
+    }
+    return indicator?.label ?? '';
+  }
 
   const navGroups = $derived(
     NAV_SECTIONS.map((section) => ({
@@ -411,9 +435,9 @@
               class="app-shell__nav-item"
               type="button"
               aria-current={item.id === activeViewId ? 'page' : undefined}
-              aria-label={railCompact ? item.label() : undefined}
+              aria-label={navItemName(item, railCompact)}
               use:tooltip={{
-                text: railCompact ? item.label() : '',
+                text: navItemTooltip(item, railCompact),
                 placement: 'right',
               }}
               onclick={() => handleSelectView(item.id)}
@@ -472,6 +496,15 @@
               <span class="app-shell__nav-label">
                 {item.label()}
               </span>
+              {#if indicators[item.id]}
+                {@const indicator = indicators[item.id]}
+                <span
+                  class="count-badge app-shell__nav-indicator app-shell__nav-indicator--{indicator.tone}"
+                  aria-hidden="true"
+                >
+                  {indicator.count > 99 ? '99+' : indicator.count}
+                </span>
+              {/if}
             </button>
           {/each}
         </div>
