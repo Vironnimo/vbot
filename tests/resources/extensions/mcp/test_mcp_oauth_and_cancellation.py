@@ -36,10 +36,22 @@ CLIENT = "VBOT_MCP_EXAMPLE_OAUTH_CLIENT"
 
 
 class FakeServers:
-    """A protected MCP endpoint and its authorization server, answered in memory."""
+    """A protected MCP endpoint and its authorization server, answered in memory.
+
+    Like some firewalls, both refuse OAuth requests that do not identify their client.
+    """
 
     def __init__(self) -> None:
         self.issuer = ISSUER
+        # The issuer the resource metadata lists, when not exactly ``issuer``.
+        self.listed: str | None = None
+        # Fields added to the resource metadata, the server metadata and a registration
+        # (a registration field set to None is left out).
+        self.resource_metadata: dict = {}
+        self.server_metadata: dict = {}
+        self.registration: dict = {}
+        # Scopes a registration may not ask for.
+        self.unregistrable: set[str] = set()
         self.requests: list[httpx2.Request] = []
         self.accepted: set[str] = set()
         self.issued = 0
@@ -51,10 +63,20 @@ class FakeServers:
     def handle(self, request: httpx2.Request) -> httpx2.Response:
         self.requests.append(request)
         url = request.url
+        if url.path != "/mcp" and (
+            not request.headers.get("user-agent", "").startswith("vBot")
+            or request.headers.get("accept") != "application/json"
+        ):
+            return httpx2.Response(403)
         if url.host == "mcp.example.com":
             if url.path == "/.well-known/oauth-protected-resource/mcp":
                 return httpx2.Response(
-                    200, json={"resource": RESOURCE, "authorization_servers": [self.issuer]}
+                    200,
+                    json={
+                        "resource": RESOURCE,
+                        "authorization_servers": [self.listed or self.issuer],
+                        **self.resource_metadata,
+                    },
                 )
             token = request.headers.get("authorization", "").removeprefix("Bearer ")
             if url.path == "/mcp" and token in self.accepted:
@@ -74,15 +96,20 @@ class FakeServers:
                         "token_endpoint": f"{self.issuer}/token",
                         "registration_endpoint": f"{self.issuer}/register",
                         "code_challenge_methods_supported": ["S256"],
+                        **self.server_metadata,
                     },
                 )
             if url.path == "/register":
+                body = json.loads(request.content)
+                if self.unregistrable & set(body.get("scope", "").split()):
+                    return httpx2.Response(400, json={"error": "invalid_client_metadata"})
                 self.registered += 1
                 client_id = "registered-client" + (
                     f"-{self.registered}" if self.registered > 1 else ""
                 )
+                registered = {**body, "client_id": client_id, **self.registration}
                 return httpx2.Response(
-                    201, json={**json.loads(request.content), "client_id": client_id}
+                    201, json={key: value for key, value in registered.items() if value is not None}
                 )
             if url.path == "/token":
                 form = parse_qs(request.content.decode())
@@ -105,10 +132,13 @@ class FakeServers:
 
     def form(self, path: str) -> dict[str, list[str]]:
         """The form of the last request to the authorization server's *path*."""
-        request = next(
+        return parse_qs(self.last(path).content.decode())
+
+    def last(self, path: str) -> httpx2.Request:
+        """The last request with a body to the authorization server's *path*."""
+        return next(
             item for item in reversed(self.requests) if item.url.path == path and item.content
         )
-        return parse_qs(request.content.decode())
 
     def sent(self, host: str) -> list[str]:
         return [request.url.path for request in self.requests if request.url.host == host]
@@ -145,11 +175,12 @@ async def pending_sign_in(inputs: InputRequests, request: asyncio.Task) -> dict:
     }
 
 
-def complete_sign_in(inputs: InputRequests, sign_in: dict) -> None:
+def complete_sign_in(inputs: InputRequests, sign_in: dict, iss: str | None = None) -> None:
     """Answer *sign_in* with the address the browser went to, as the user pastes it."""
+    issuer = f"&iss={iss}" if iss else ""
     inputs.respond(
         sign_in["id"],
-        {"redirect_url": f"{PASTE_REDIRECT_URI}?code=code&state={sign_in['state']}"},
+        {"redirect_url": f"{PASTE_REDIRECT_URI}?code=code&state={sign_in['state']}{issuer}"},
     )
 
 
@@ -311,6 +342,70 @@ async def test_a_registration_the_server_no_longer_accepts_is_replaced(host, ref
         complete_sign_in(inputs, sign_in)
         assert (await asyncio.wait_for(request, 5)).status_code == 200
     assert json.loads(host.resolve_credential(CLIENT))["client_id"] == registration
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deviation", ["issuer_slash", "offline_access", "secret_basic", "secret_post", "no_scopes"]
+)
+async def test_sign_in_tolerates_authorization_servers_that_deviate_from_the_sdk(host, deviation):
+    servers = FakeServers()
+    if deviation == "issuer_slash":
+        # The resource lists the issuer with a trailing slash the server's own metadata omits.
+        servers.listed = f"{ISSUER}/"
+    elif deviation == "offline_access":
+        servers.server_metadata = {"scopes_supported": ["files", "offline_access"]}
+        servers.unregistrable = {"offline_access"}
+    elif deviation.startswith("secret"):
+        # A client secret without token_endpoint_auth_method, although the
+        # registration asked for none.
+        servers.registration = {
+            "client_secret": "secret-sentinel",
+            "token_endpoint_auth_method": None,
+        }
+        if deviation == "secret_post":
+            servers.server_metadata = {
+                "token_endpoint_auth_methods_supported": ["none", "client_secret_post"]
+            }
+    else:
+        servers.resource_metadata = {"scopes_supported": []}
+        servers.server_metadata = {"scopes_supported": ["offline_access"]}
+    inputs = InputRequests()
+    async with signed_client(oauth_connection(), host, inputs, servers) as client:
+        request = asyncio.create_task(client.get(RESOURCE))
+        sign_in = await pending_sign_in(inputs, request)
+        complete_sign_in(inputs, sign_in, iss=ISSUER)
+        assert (await asyncio.wait_for(request, 5)).status_code == 200
+
+    registration = json.loads(servers.last("/register").content)
+    token = servers.last("/token")
+    if deviation == "issuer_slash":
+        stored = json.loads(host.resolve_credential(TOKENS))
+        assert stored["authorization_server"]["issuer"] == f"{ISSUER}/"
+    elif deviation == "offline_access":
+        # Registered once more without it, and still asked for at authorization.
+        assert servers.sent("auth.example.com").count("/register") == 2
+        assert registration["scope"] == "files"
+        assert sign_in["scope"] == "files offline_access"
+    elif deviation == "secret_basic":
+        basic = base64.b64encode(b"registered-client:secret-sentinel").decode()
+        assert token.headers["authorization"] == f"Basic {basic}"
+    elif deviation == "secret_post":
+        assert servers.form("/token")["client_secret"] == ["secret-sentinel"]
+        assert "authorization" not in token.headers
+    else:
+        assert registration["scope"] == sign_in["scope"] == "offline_access"
+
+
+@pytest.mark.asyncio
+async def test_sign_in_refuses_an_authorization_server_with_another_issuer(host):
+    servers = FakeServers()
+    servers.server_metadata = {"issuer": "https://example.com"}
+    inputs = InputRequests()
+    async with signed_client(oauth_connection(), host, inputs, servers) as client:
+        with pytest.raises(OAuthFlowError, match="issuer mismatch"):
+            await asyncio.wait_for(client.get(RESOURCE), 5)
+    assert "/register" not in servers.sent("auth.example.com")
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,20 @@ any reason but a spent grant, deletes it with its tokens. Authorization servers
 expire and revoke dynamic registrations, and the next sign-in then registers
 again instead of presenting a client the server no longer knows.
 
+Authorization servers that deviate from what the SDK expects. Every request of
+the flow identifies vBot (``_FLOW_HEADERS``): some firewalls refuse requests
+without a User-Agent. Issuers compare as strings except for one trailing slash
+more on either side (``_issuers_match``), which several servers write in their
+protected resource metadata and leave out of their own metadata; the metadata
+is then read with the issuer as the resource lists it, and the issuer an
+authorization response names (RFC 9207) is compared the same way. A
+registration refused (HTTP 400) while it asked for ``offline_access`` is sent
+once more without it; authorization still asks for it. A registration that
+returns a client secret without ``token_endpoint_auth_method`` gets the RFC 7591
+default ``client_secret_basic``, or ``client_secret_post`` when the server lists
+only that, instead of being used as a public client that never sends its secret.
+An empty scope list produces no blank scope.
+
 Client registration, in order: a pre-registered client from the configuration
 (``oauth_client_id``, an optional ``oauth_client_secret`` credential reference,
 ``oauth_scopes``), else dynamic registration. Client ID metadata documents are
@@ -40,15 +54,18 @@ import asyncio
 import json
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass, fields
 from typing import Any, override
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urljoin, urlsplit
 
 import httpx2
 from mcp.client.auth import OAuthClientProvider, OAuthFlowError
 from mcp.client.auth.oauth2 import OAuthContext
-from mcp.client.auth.utils import issuers_match, union_scopes
+from mcp.client.auth.utils import (
+    build_oauth_authorization_server_metadata_discovery_urls,
+    union_scopes,
+)
 from mcp.shared.auth import (
     AuthorizationCodeResult,
     OAuthClientInformationFull,
@@ -76,6 +93,9 @@ _GRANT_TYPES = ["authorization_code", "refresh_token"]
 # Fields of the stored token and client documents that are credentials themselves.
 _SECRET_FIELDS = frozenset({"access_token", "refresh_token", "id_token", "client_secret"})
 _ERROR_CODE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+# Headers of every request the sign-in flow sends (discovery, registration, token).
+_FLOW_HEADERS = {"User-Agent": "vBot", "Accept": "application/json"}
+_OFFLINE_ACCESS = "offline_access"
 
 
 def _credential_keys(connection: str) -> tuple[str, str]:
@@ -131,6 +151,58 @@ def oauth_secrets(host: ExtensionHost, connection: str) -> list[str]:
     return secrets
 
 
+def _issuers_match(first: str, second: str) -> bool:
+    """Whether two issuer identifiers name the same authorization server.
+
+    RFC 8414 compares them as strings; one trailing slash more on either side is
+    accepted too, and nothing else.
+    """
+    return first == second or first == f"{second}/" or second == f"{first}/"
+
+
+def _json_object(response: httpx2.Response) -> dict[str, Any] | None:
+    try:
+        body = json.loads(response.content)
+    except ValueError:
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def _json_response(response: httpx2.Response, body: dict[str, Any]) -> httpx2.Response:
+    """*response* with *body* in place of its own."""
+    return httpx2.Response(
+        response.status_code,
+        headers={"Content-Type": "application/json"},
+        content=json.dumps(body).encode(),
+        request=response.request,
+    )
+
+
+def _registration_without_offline_access(
+    request: httpx2.Request, response: httpx2.Response
+) -> httpx2.Request | None:
+    """*request* again without ``offline_access``, when the server refused it with that scope."""
+    if response.status_code != 400:
+        return None
+    try:
+        body = json.loads(request.content)
+    except ValueError:
+        return None
+    scope = body.get("scope") if isinstance(body, dict) else None
+    if not isinstance(scope, str) or _OFFLINE_ACCESS not in scope.split():
+        return None
+    remaining = " ".join(item for item in scope.split() if item != _OFFLINE_ACCESS)
+    retry = {key: value for key, value in body.items() if key != "scope"}
+    if remaining:
+        retry["scope"] = remaining
+    headers = {
+        name: value
+        for name, value in request.headers.items()
+        if name.lower() not in {"content-length", "host"}
+    }
+    return httpx2.Request(request.method, request.url, json=retry, headers=headers)
+
+
 def _refresh_due(expires_at: float, lifetime: float) -> float:
     return expires_at - min(REFRESH_MARGIN_SECONDS, lifetime / 2)
 
@@ -151,7 +223,9 @@ class _ClientMetadata(OAuthClientMetadata):
     """Client metadata whose requested scope always includes the configured scopes.
 
     The SDK replaces ``scope`` with the scopes the server challenges for before
-    each authorization; the configured ones are added to whatever it sets.
+    each authorization; the configured ones are added to whatever it sets. From
+    an empty scope list the SDK builds a blank scope or one that starts with a
+    space; a blank scope becomes none, and the space is dropped.
     """
 
     _configured_scope: str | None = PrivateAttr(default=None)
@@ -160,6 +234,7 @@ class _ClientMetadata(OAuthClientMetadata):
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "scope":
             value = union_scopes(value, self._configured_scope)
+            value = (" ".join(value.split()) or None) if value is not None else None
         super().__setattr__(name, value)
 
 
@@ -200,7 +275,7 @@ class OAuthStorage:
         client = self._document(self._client_key)
         issuer = self.bound_issuer(document)
         registered = client.get("issuer") if client is not None else None
-        if issuer and registered and not issuers_match(issuer, registered):
+        if issuer and registered and not _issuers_match(issuer, registered):
             return None
         return document
 
@@ -347,6 +422,85 @@ class _Provider(OAuthClientProvider):
         self._storage.restore(self.context)
 
     @override
+    async def _auth_flow(
+        self, request: httpx2.Request
+    ) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
+        """The SDK flow, tolerating the authorization server deviations the module names."""
+        flow = super()._auth_flow(request)
+        try:
+            outgoing = await anext(flow)
+            while True:
+                if outgoing is request:
+                    response = yield outgoing
+                else:
+                    for name, value in _FLOW_HEADERS.items():
+                        outgoing.headers.setdefault(name, value)
+                    response = yield outgoing
+                    if self._registers(outgoing):
+                        retry = _registration_without_offline_access(outgoing, response)
+                        if retry is not None:
+                            response = yield retry
+                        response = self._with_secret_auth_method(response)
+                    elif self._discovers_server(outgoing):
+                        response = self._with_listed_issuer(response)
+                outgoing = await flow.asend(response)
+        except StopAsyncIteration:
+            return
+        finally:
+            await flow.aclose()
+
+    def _registers(self, request: httpx2.Request) -> bool:
+        """Whether *request* is the flow's dynamic client registration."""
+        if request.method != "POST" or self.context.client_info is not None:
+            return False
+        metadata = self.context.oauth_metadata
+        if metadata is not None and metadata.registration_endpoint is not None:
+            endpoint = str(metadata.registration_endpoint)
+        else:
+            base = self.context.get_authorization_base_url(self.context.server_url)
+            endpoint = urljoin(base, "/register")
+        return request.url == httpx2.URL(endpoint)
+
+    def _discovers_server(self, request: httpx2.Request) -> bool:
+        """Whether *request* asks for the listed authorization server's metadata."""
+        listed = self.context.auth_server_url
+        if request.method != "GET" or listed is None:
+            return False
+        urls = build_oauth_authorization_server_metadata_discovery_urls(
+            listed, self.context.server_url
+        )
+        return any(request.url == httpx2.URL(url) for url in urls)
+
+    def _with_listed_issuer(self, response: httpx2.Response) -> httpx2.Response:
+        """The metadata *response* naming its issuer as the resource lists it, if they match."""
+        listed = self.context.auth_server_url
+        body = _json_object(response)
+        if response.status_code != 200 or listed is None or body is None:
+            return response
+        issuer = body.get("issuer")
+        if not isinstance(issuer, str) or issuer == listed or not _issuers_match(issuer, listed):
+            return response
+        return _json_response(response, {**body, "issuer": listed})
+
+    def _with_secret_auth_method(self, response: httpx2.Response) -> httpx2.Response:
+        """The registration *response* naming how its client secret is sent, if it does not."""
+        body = _json_object(response)
+        if (
+            response.status_code not in {200, 201}
+            or body is None
+            or not body.get("client_secret")
+            or body.get("token_endpoint_auth_method") is not None
+        ):
+            return response
+        metadata = self.context.oauth_metadata
+        supported = metadata.token_endpoint_auth_methods_supported if metadata else None
+        # RFC 7591 section 2 and RFC 8414 section 2: client_secret_basic is the default.
+        method = "client_secret_basic"
+        if supported and method not in supported and "client_secret_post" in supported:
+            method = "client_secret_post"
+        return _json_response(response, {**body, "token_endpoint_auth_method": method})
+
+    @override
     async def _handle_refresh_response(self, response: httpx2.Response) -> bool:
         refreshed = await super()._handle_refresh_response(response)
         if not refreshed:
@@ -386,7 +540,7 @@ class _Provider(OAuthClientProvider):
     def _expected_issuer(self) -> str:
         issuer = super()._expected_issuer()
         bound = self._storage.bound_issuer()
-        if self._preregistered and bound is not None and not issuers_match(bound, issuer):
+        if self._preregistered and bound is not None and not _issuers_match(bound, issuer):
             raise OAuthFlowError(
                 f"The MCP server now uses the authorization server {issuer} instead of "
                 f"{bound}. The configured OAuth client ID belongs to {bound}: register vBot "
@@ -476,11 +630,15 @@ class ConnectionOAuth:
             await asyncio.gather(pasted, return_exceptions=True)
 
     def _result(self, params: dict[str, str]) -> AuthorizationCodeResult:
+        server = self._provider.context.oauth_metadata if self._provider else None
+        iss = params.get("iss")
+        # RFC 9207: the SDK compares the issuer as a string; one that matches
+        # the server's is handed on in the server's form.
+        if iss is not None and server is not None and _issuers_match(iss, str(server.issuer)):
+            iss = str(server.issuer)
         if "error" in params:
-            server = self._provider.context.oauth_metadata if self._provider else None
-            iss = params.get("iss")
             # RFC 9207: an error from another issuer is not acted on or shown.
-            if iss is not None and (server is None or not issuers_match(iss, str(server.issuer))):
+            if iss is not None and (server is None or iss != str(server.issuer)):
                 raise OAuthFlowError("MCP sign-in failed: the response came from another server")
             code = params["error"]
             detail = f" ({code})" if _ERROR_CODE.fullmatch(code) else ""
@@ -489,9 +647,7 @@ class ConnectionOAuth:
             raise ValueError(
                 "OAuth response requires the complete redirected URL containing the code"
             )
-        return AuthorizationCodeResult(
-            code=params["code"], state=params.get("state"), iss=params.get("iss")
-        )
+        return AuthorizationCodeResult(code=params["code"], state=params.get("state"), iss=iss)
 
 
 async def _error_code(response: httpx2.Response) -> str | None:
