@@ -356,7 +356,7 @@
                   <summary>{t('swarm.board.goal')}</summary>
                   <MarkdownContent
                     source={model.selectedSwarm.prompt}
-                    class="msg-markdown"
+                    class="msg-markdown md-chat"
                   />
                 </details>
                 {#if model.selectedSwarm.effective_configuration?.cwd}
@@ -444,7 +444,7 @@
                         </div>
                       {:else}<MarkdownContent
                           source={post.text}
-                          class="msg-markdown"
+                          class="msg-markdown md-chat"
                         />{/if}
                       {#if post.reply_sequence != null}<small
                           ><a href="#post/{post.reply_sequence}"

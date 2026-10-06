@@ -304,7 +304,7 @@
       {:else if inspected}
         {#if contentTab === 'original'}<pre>{inspected.content}</pre>
         {:else}<MarkdownContent
-            class="msg-markdown"
+            class="msg-markdown md-document"
             source={skillInstructionBody(inspected.content)}
           />{/if}
       {/if}

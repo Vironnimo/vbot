@@ -487,7 +487,10 @@
           {#if selected.deleted}<Banner>{t('swarm.wiki.deletedHelp')}</Banner
             >{/if}
           <div use:contentLinks>
-            <MarkdownContent source={content} class="msg-markdown" />
+            <MarkdownContent
+              source={content}
+              class="msg-markdown md-document"
+            />
           </div>
         {:else}<p>
             {t('swarm.wiki.choose')}

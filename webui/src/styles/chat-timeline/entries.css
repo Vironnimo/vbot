@@ -101,19 +101,16 @@
   --chat-measure: 100%;
 }
 
-/* Prose keeps its reading measure at every Chat width; code, tables, images
-   and Tool rows take the whole column. Chat-scoped, so Markdown reused in
-   other views keeps its own layout. */
-.messages__content
-  .msg-markdown
-  > :is(p, ul, ol, h1, h2, h3, h4, h5, h6, blockquote, hr),
+/* Prose keeps its reading measure at every Chat width (Markdown through
+   `--md-measure`, see markdown.css); code, tables, images and Tool rows take
+   the whole column. */
 .messages__content .msg.assistant > .msg-content > .msg-body-text {
-  max-width: var(--chat-prose-measure);
+  max-width: var(--prose-measure);
 }
 
 .messages__content .msg-body-text--user,
 .messages__content .message-block.user {
-  max-width: min(75%, var(--chat-prose-measure));
+  max-width: min(75%, var(--prose-measure));
 }
 
 .chat-timeline-empty {

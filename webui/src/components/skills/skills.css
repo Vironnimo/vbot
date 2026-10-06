@@ -502,9 +502,6 @@
   overflow-wrap: anywhere;
   font: 400 var(--fs-body-lg)/1.65 var(--font-ui);
 }
-.skills-content .msg-markdown {
-  color: var(--text-hi);
-}
 .skills-content pre {
   margin: 0;
   white-space: pre-wrap;
