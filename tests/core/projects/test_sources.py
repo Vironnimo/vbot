@@ -182,15 +182,15 @@ def test_imports_grant_the_tools_an_agent_may_use(repo, source, path, document, 
     assert profile.status == status
     policy = profile_tool_access(profile, tuple(sorted(ALL_TOOLS)))
     assert set(policy.allowed) == expected
-    # The actual Tool resolver must not add followers or Session grants to an
-    # imported exact list, including the empty list.
+    # A Profile selects the Agent's own Tools; the Session's grants still apply to
+    # every runnable Profile, including one with an empty Tool list.
     from types import SimpleNamespace
 
     tools = [SimpleNamespace(name=name, activation="configurable") for name in policy.allowed]
     tools += [SimpleNamespace(name="message_parent", activation="session_grant")]
     actual = resolve_tool_access(policy, tools, "off", session_tool_grants=("message_parent",))
     assert set(actual.allowed_tools) == expected | (
-        {"message_parent"} if not policy.fixed else set()
+        {"message_parent"} if status != "needs_attention" else set()
     )
 
 
@@ -329,7 +329,7 @@ def test_profiles_preload_skills_map_models_and_snapshot_temporary_participants(
         participant = registry.resolve(binding.address, generation_id=binding.generation_id)
         assert participant.model == "openai/gpt-5.2"
         assert participant.tool_access.allowed == ("read",)
-        assert participant.tool_access.fixed
+        assert not participant.tool_access.fixed
         assert "Check regression risks." in participant.instructions
         path.write_text("---\ntools: Bash\n---\nChanged.", encoding="utf-8")
         assert (

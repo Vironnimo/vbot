@@ -62,7 +62,7 @@ participant's Agent-level Policy (`compaction.md` -> Policy Resolution). The bin
 config stores the key only when set, so inheriting participants and bindings that
 predate the key are identical and resolve to `None` (`test_temporary.py`).
 
-A temporary configuration can name `repository_profile`, a Team Agent id in its selected Project. Projects resolves the neutral Profile against the owner's selection, then Agents persists its resolved configuration and original creation request. Model/scalars, instructions and fixed Tool policy stay immutable in the binding. Replayed creation returns that snapshot after repository edits. Swarm formations expose the selection (`extensions/swarm.md`); no Agent kind is added.
+A temporary configuration can name `repository_profile`, a Team Agent id in its selected Project. Projects resolves the neutral Profile against the owner's selection, then Agents persists its resolved configuration and original creation request. Model/scalars, instructions and the resolved Tool policy stay immutable in the binding. Replayed creation returns that snapshot after repository edits. Swarm formations expose the selection (`extensions/swarm.md`); no Agent kind is added.
 
 Run paths resolve through one seam, `AgentResolver.resolve_agent(project_id, agent_id)` (owned by `core/projects/`; details in `projects/resolution.md`) - never `runtime.agents.get(...)` directly. Identity branch (`project_id=None`): this domain's store, unchanged behavior. Project branch synthesizes a workspace-less Config Agent from the Team scan whose policy computes inside the Project Tool Whitelist (repository denials narrow; a vBot override fully replaces scanned policy within the ceiling).
 
