@@ -1,0 +1,18 @@
+# MCP connector catalog
+
+Read for work on the connector catalog: `resources/extensions/mcp/catalog.json`, `_connectors.py`, the `catalog` and `add_from_catalog` management operations, or the WebUI Catalog dialog. Connection ownership, saving, OAuth sign-in and Agent access stay as described in `extensions/mcp.md`.
+
+## Entries (`catalog.json`)
+
+A read-only resource shipped with the Extension: `{"entries": [...]}`. Each entry is a vendor-run MCP server reached over Streamable HTTP that needs either no sign-in (`auth: "none"`) or an OAuth sign-in vBot completes by itself (`auth: "oauth"`: dynamic client registration that accepts vBot's loopback redirect URI). Services that need a pre-registered client, a pasted API key or a Client ID Metadata Document do not belong here. Entries carry no logo: tiles show initials and a color derived from the id (user decision, 2026-10). The 2026-10 entries are provisional until a live probe of each service confirms it.
+
+Fields (`_connectors.ENTRY_SCHEMA`, no others): `id` (`CONNECTION_ID_PATTERN`, unique), `name`, `description` (English, one line, at most `MAX_ENTRY_DESCRIPTION_CHARACTERS` 120), `category` (`CATEGORIES`: knowledge, productivity, design, development, analytics, business), `url`, `auth`; optional `read_only_url` (the service's read-only address), `notes` (English one-line hints shown on the tile, such as a required plan or role) and `docs_url`. All URLs are `https://`. The texts are not translated: the WebUI shows them as written.
+
+`load_connectors` validates the file when `MCPService.start` runs: an entry that fails the schema, has a line break in a text, a non-https URL, or does not yield connections (`url` and `read_only_url`) that pass `validate_connection` is left out with an issue (`invalid_entry`), every entry of a duplicated id is left out (`duplicate_id`), and an unreadable file leaves the catalog empty (`invalid_catalog`). Each issue logs one WARNING `MCP catalog entry left out: <issue>`; the Extension starts regardless. There is no per-entry redirect host: the redirect URI comes from the server's callback (`extensions/mcp.md` -> OAuth sign-in), and freezing a host-specific `oauth_redirect_uri` into a connection would also freeze the server's port.
+
+## Operations
+
+- `catalog` (read-only): `{"entries": [...]}`, each entry as in the file plus `connections`, the ids of saved connections whose `url` names the entry's `url` or `read_only_url` (scheme and host compared in any case, a trailing slash ignored, the query compared exactly).
+- `add_from_catalog {entry, read_only?}`: saves an enabled Streamable HTTP connection with the entry's `description`, `oauth: true` for an oauth entry, and `read_only_url` when `read_only` is true (refused when the entry has none). The id is the entry's id, else `<id>_2`, `<id>_3` and so on (cut to 32 characters); ids of saved connections and of rejected records in `connections.json` count as taken, and the save never replaces (`_save(replace=False)`), so it logs `MCP connection configured` like `save`. Returns the connection's `status`, including `pending_requests`. An unknown entry is refused with a pointer to `catalog`. The new connection starts at once; an oauth entry's sign-in then appears as an `oauth` pending input of that connection (`pending_inputs` change). Like any connection, it reaches no Agent until `mcp_<id>` is enabled for that Agent.
+
+Coverage: `test_the_shipped_catalog_loads_completely_and_a_broken_entry_is_left_out` and `test_adding_from_the_catalog_creates_a_connection_and_never_replaces_one` (`tests/resources/extensions/mcp/test_mcp_management.py`).
