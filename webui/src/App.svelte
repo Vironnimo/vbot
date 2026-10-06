@@ -165,6 +165,10 @@
       : extensions.allNavigationItems.filter((item) => item.id !== 'debug'),
   );
 
+  // Main menu indicators by view id (`{count, tone, label}`), each reported
+  // by the view that owns its meaning.
+  const navigationIndicators = $state({});
+
   const isKnownView = (viewId) =>
     extensions.allNavigationItems.some((item) => item.id === viewId);
 
@@ -810,6 +814,7 @@
 
 <AppShell
   items={visibleNavigationItems}
+  indicators={navigationIndicators}
   {activeViewId}
   onSelectView={openView}
   connectionStatus={connectionState.status}
@@ -947,6 +952,8 @@
           : setup.operational}
         onConnectProvider={navigateToProviders}
         onPickModel={navigateToAgentModel}
+        onNavigationIndicator={(indicator) =>
+          (navigationIndicators.chat = indicator)}
       />
       {#if activeViewId.startsWith('extension:')}
         {@const page = extensions.extensionPages.find(

@@ -111,6 +111,7 @@ export default Object.freeze({
   'navigation.primary': 'Primary navigation',
   'navigation.sections': 'Sections',
   'navigation.more': 'More',
+  'navigation.itemIndicator': '{label}, {indicator}',
   'navigation.chat': 'Chat',
   'navigation.agents': 'Agents',
   'navigation.terminals': 'Terminals',

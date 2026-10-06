@@ -19,6 +19,11 @@ AppShell's optional `sidebarFooter` snippet precedes the existing microphone and
 - At tablet width the Main menu always renders the compact rail. Its toggle (`aria-expanded`, not `aria-pressed`) opens the full menu as an overlay (`data-tablet-menu-open`) above a light scrim; the shell reserves the rail width while it is open, so the content - including fitted Terminals - never resizes. Focus moves to the current destination and the content is `inert`.
 - The overlay closes on any navigation (including history and deep links), a backdrop click, the toggle, leaving the tablet range, or an Escape no floating layer consumed (`defaultPrevented`); Escape returns focus to the toggle. The phone More sheet follows the same Escape rule. Coverage: `components/__tests__/AppShell.test.js`.
 
+## Main menu indicators
+
+- A view can show an indicator on its Main menu entry: App keeps `navigationIndicators` by view id and passes it to `AppShell.svelte` as `indicators`. Each entry is `{count, tone, label}` or null: tone `unread` (blue) or `running` (amber), and a label saying in words what the count means. The view that owns the meaning reports it; the shell only renders it. Chat is the first reporter (`webui/chat.md` -> Selection and Sessions); another view adds its own entry the same way.
+- The count (capped at `99+`, `aria-hidden`) sits at the row's end in the full menu and in the phone More sheet, and as a solid count at the icon's corner in the compact rail and the phone bottom bar. The entry's accessible name becomes `<label>, <indicator label>` (`navigation.itemIndicator`); the tooltip shows the indicator label, in the compact rail together with the entry name (`AppShell.test.js`).
+
 ## Desktop context menu
 
 - `App.svelte` enables the custom menu only after the live Desktop bridge advertises `contextMenu`; an ordinary browser never has its native `contextmenu` event cancelled by AppShell. Only a component that opens its own menu cancels it there.

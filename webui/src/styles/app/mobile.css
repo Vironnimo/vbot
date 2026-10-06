@@ -167,6 +167,26 @@
     white-space: nowrap;
   }
 
+  .app-shell__nav-indicator,
+  .app-shell[data-sidebar-collapsed='true'] .app-shell__nav-indicator {
+    position: absolute;
+    top: 4px;
+    left: calc(50% + 3px);
+    min-width: 16px;
+    height: 15px;
+    margin: 0;
+    padding: 0 4px;
+    color: var(--bg);
+    background: var(--blue);
+    box-shadow: 0 0 0 2px var(--secondary-surface);
+    font-size: 10px;
+  }
+
+  .app-shell__nav-indicator--running,
+  .app-shell[data-sidebar-collapsed='true'] .app-shell__nav-indicator--running {
+    background: var(--amber);
+  }
+
   .app-shell__navigation .app-shell__nav-item--mobile-secondary,
   .app-shell[data-sidebar-collapsed='true']
     .app-shell__navigation
@@ -256,6 +276,12 @@
     padding: 8px 12px;
     color: var(--text-med);
     font-size: var(--fs-body-md);
+  }
+
+  .app-shell[data-mobile-nav-open='true'] .app-shell__nav-indicator {
+    position: static;
+    margin-left: auto;
+    box-shadow: none;
   }
 
   .app-shell[data-mobile-nav-open='true'] .app-shell__nav-item--active {

@@ -145,6 +145,29 @@ describe('AppShell sidebar', () => {
     expect(localStorage.getItem(SIDEBAR_COLLAPSED_KEY)).toBe('false');
   });
 
+  it('shows a view indicator as a count that the entry names in words', () => {
+    mountShell({
+      activeViewId: 'settings',
+      items: [CHAT, SETTINGS],
+      indicators: {
+        chat: { count: 3, tone: 'unread', label: '3 unread results' },
+      },
+    });
+    const chat = navItem(CHAT);
+    const badge = chat.querySelector('.app-shell__nav-indicator');
+    expect(badge.textContent.trim()).toBe('3');
+    expect(badge.getAttribute('aria-hidden')).toBe('true');
+    expect(chat.getAttribute('aria-label')).toBe('Chat, 3 unread results');
+    expect(navItem(SETTINGS).querySelector('.app-shell__nav-indicator')).toBe(
+      null,
+    );
+
+    sidebarToggle().click();
+    flushSync();
+    expect(chat.getAttribute('aria-label')).toBe('Chat, 3 unread results');
+    expect(chat.querySelector('.app-shell__nav-indicator')).not.toBeNull();
+  });
+
   it('renders a visible symbol for Extension pages in expanded and collapsed navigation', () => {
     const onSelectView = vi.fn();
     mountShell({
