@@ -328,6 +328,36 @@ def test_readiness_is_evaluated_live_for_offered_tools_only() -> None:
     ]
 
 
+def test_registry_changes_during_a_listing_leave_that_listing_intact() -> None:
+    # Prompt assembly lists Tools on a worker thread while the loop registers
+    # Extension and MCP Tools; a readiness check that changes the registry
+    # stands in for that overlap deterministically.
+    registry = _file_tools()
+
+    def change_registry() -> bool:
+        registry.register(
+            name="late_tool",
+            description="Registered during a listing.",
+            parameters={"type": "object"},
+            handler=read_file_handler,
+        )
+        registry.unregister("write_file")
+        return True
+
+    registry.register(
+        name="a_gate",
+        description="Changes the registry while it is listed.",
+        parameters={"type": "object"},
+        handler=read_file_handler,
+        ready=change_registry,
+    )
+
+    listed = [definition["name"] for definition in registry.prompt_definitions()]
+
+    assert listed == ["a_gate", "read_file", "write_file"]
+    assert [tool.name for tool in registry.list_tools()] == ["a_gate", "late_tool", "read_file"]
+
+
 def test_raising_readiness_predicate_counts_as_not_ready_and_warns(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

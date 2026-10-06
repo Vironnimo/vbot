@@ -195,16 +195,19 @@ class ToolRegistry:
     """Register, filter, describe, and dispatch agent tools."""
 
     def __init__(self) -> None:
+        # Prompt assembly reads the registry from worker threads while the loop
+        # registers Extension and MCP Tools. Mutations therefore publish a new
+        # dict instead of changing the current one, so a reader iterating a
+        # snapshot never sees it change size.
         self._tools: dict[str, Tool] = {}
         self.revision = 0
         self._families: dict[str, ToolFamily] = {
             family_id: ToolFamily(id=family_id, label=label)
             for family_id, label in BUILTIN_TOOL_FAMILY_LABELS.items()
         }
-        self._definition_profile_cache: dict[
-            tuple[str, str],
-            tuple[str, ToolContract],
-        ] = {}
+        # Compiled definition profiles by Tool name, then profile key, so
+        # removing a Tool drops its entries without iterating the cache.
+        self._definition_profiles: dict[str, dict[str, tuple[str, ToolContract]]] = {}
 
     def register(
         self,
@@ -298,7 +301,7 @@ class ToolRegistry:
             definition_profile_resolver=definition_profile_resolver,
             definition_change_note=definition_change_note,
         )
-        self._tools[name] = tool
+        self._tools = {**self._tools, name: tool}
         self.revision += 1
         return tool
 
@@ -313,7 +316,7 @@ class ToolRegistry:
         family = ToolFamily(id=family_id, label=label, extension=extension)
         if family.id in self._families:
             raise ValueError(f"Tool family already registered: {family.id}")
-        self._families[family.id] = family
+        self._families = {**self._families, family.id: family}
         return family
 
     def unregister_family(self, family_id: str, *, extension: str | None = None) -> None:
@@ -325,7 +328,7 @@ class ToolRegistry:
             return
         if any(tool.family == family_id for tool in self._tools.values()):
             return
-        self._families.pop(family_id, None)
+        self._families = {key: value for key, value in self._families.items() if key != family_id}
 
     def get_family(self, family_id: str) -> ToolFamily:
         """Return one registered family definition."""
@@ -377,20 +380,21 @@ class ToolRegistry:
             ) or reserved_model_name(tool.name):
                 # A reserved name is how the Model already sees another Tool.
                 raise DuplicateToolError(f"Tool already registered: {tool.name}")
+        tools = dict(self._tools)
         for name, tool in owned.items():
-            if self._tools.get(name) is tool:
-                self.unregister(name)
-        self._tools.update({tool.name: tool for tool in candidates})
+            if tools.get(name) is tool:
+                del tools[name]
+                self._definition_profiles.pop(name, None)
+        tools.update({tool.name: tool for tool in candidates})
+        self._tools = tools
         self.revision += 1
 
     def unregister(self, name: str) -> None:
         """Remove a registered tool when it exists."""
-        if self._tools.pop(name, None) is not None:
+        if name in self._tools:
+            self._tools = {key: tool for key, tool in self._tools.items() if key != name}
             self.revision += 1
-        for cache_key in [
-            cache_key for cache_key in self._definition_profile_cache if cache_key[0] == name
-        ]:
-            self._definition_profile_cache.pop(cache_key, None)
+        self._definition_profiles.pop(name, None)
 
     def is_parallel_safe(self, name: str) -> bool:
         """Return whether a requested Tool Call may overlap a sibling call.
@@ -746,8 +750,8 @@ class ToolRegistry:
         if profile is None:
             return None
 
-        cache_key = (tool.name, profile.key)
-        cached = self._definition_profile_cache.get(cache_key)
+        profiles = self._definition_profiles.setdefault(tool.name, {})
+        cached = profiles.get(profile.key)
         if cached is not None:
             return cached
         contract = compile_tool_contract(
@@ -758,7 +762,7 @@ class ToolRegistry:
             require_closed_input=not tool.open_input_schema,
         )
         resolved = (profile.description, contract)
-        self._definition_profile_cache[cache_key] = resolved
+        profiles[profile.key] = resolved
         return resolved
 
 
