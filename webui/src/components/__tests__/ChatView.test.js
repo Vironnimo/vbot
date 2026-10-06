@@ -339,8 +339,6 @@ describe('ChatView', () => {
             cache_write_tokens: 200,
           },
           sessionUsage: {
-            cache_turns: 12,
-            cache_input_tokens: 40000,
             input_tokens: 40000,
             output_tokens: 1500,
             cache_read_tokens: 32000,
@@ -374,7 +372,13 @@ describe('ChatView', () => {
         [
           {
             title: 'Last turn',
-            rows: ['Input: 3,886', 'Output: 92'],
+            rows: [
+              'Input: 3,886',
+              '· Read from cache: 0 (0%)',
+              '· Written to cache: 0',
+              '· Uncached: 3,886',
+              'Output: 92',
+            ],
           },
         ],
       ],

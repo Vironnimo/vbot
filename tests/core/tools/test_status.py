@@ -286,7 +286,7 @@ def test_status_tool_reports_the_current_session_like_the_status_command(tmp_pat
     assert not any(line.startswith(wire_lines) for line in data["text"].splitlines())
     assert "Agent: Coder (openai/gpt-5.2)" in data["text"]
     assert "Activity: idle" in data["text"]
-    assert "Session cache: read 800 / 1234 (64.8% hit), write 100, turns 1" in data["text"]
+    assert "Session cache: read 800 / 1234 (64.8% hit), write 100" in data["text"]
 
 
 @pytest.mark.parametrize(

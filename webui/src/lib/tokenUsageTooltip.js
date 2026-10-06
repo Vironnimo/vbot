@@ -177,6 +177,7 @@ function contextSummary(contextUsage, contextWindow, format) {
     : format(tokens);
 }
 
+// Every turn counts; a counter the usage does not report counts as zero.
 function sessionSection(sessionUsage, format) {
   const input = nonNegative(sessionUsage?.input_tokens);
   const output = nonNegative(sessionUsage?.output_tokens);
@@ -184,27 +185,19 @@ function sessionSection(sessionUsage, format) {
     return null;
   }
   const rows = [];
-  // Only turns that report caching form the hit rate, so a Provider without
-  // cache reporting never reads as a 0% hit rate.
-  const cacheInput = nonNegative(sessionUsage.cache_input_tokens);
-  if (nonNegative(sessionUsage.cache_turns) > 0 && cacheInput > 0) {
+  if (input > 0) {
     rows.push(
       row(
         t('chat.contextCard.cacheHitRate'),
-        percent(nonNegative(sessionUsage.cache_read_tokens), cacheInput),
+        percent(nonNegative(sessionUsage.cache_read_tokens), input),
       ),
     );
   }
   rows.push(row(t('chat.contextCard.totalInput'), format(input)));
   rows.push(row(t('chat.contextCard.totalOutput'), format(output)));
-  if (nonNegative(sessionUsage.reasoning_turns) > 0) {
-    rows.push(
-      row(
-        t('chat.contextCard.reasoning'),
-        format(nonNegative(sessionUsage.reasoning_tokens)),
-        true,
-      ),
-    );
+  const reasoning = nonNegative(sessionUsage.reasoning_tokens);
+  if (reasoning > 0) {
+    rows.push(row(t('chat.contextCard.reasoning'), format(reasoning), true));
   }
   return { id: 'session', title: '', rows };
 }
@@ -212,36 +205,28 @@ function sessionSection(sessionUsage, format) {
 function lastTurnSection(usage, format) {
   const input = nonNegative(usage.input_tokens);
   const output = nonNegative(usage.output_tokens);
-  const cacheRead = nonNegativeOrNull(usage.cache_read_tokens);
-  const cacheWrite = nonNegativeOrNull(usage.cache_write_tokens);
-  const reasoning = nonNegativeOrNull(usage.reasoning_tokens);
+  const cacheRead = nonNegative(usage.cache_read_tokens);
+  const cacheWrite = nonNegative(usage.cache_write_tokens);
+  const reasoning = nonNegative(usage.reasoning_tokens);
 
-  const rows = [row(t('chat.contextCard.input'), format(input))];
-  if (cacheRead !== null) {
-    rows.push(
-      row(
-        t('chat.contextCard.cacheRead'),
-        input > 0
-          ? `${format(cacheRead)} (${percent(cacheRead, input)})`
-          : format(cacheRead),
-        true,
-      ),
-    );
-  }
-  if (cacheWrite !== null) {
-    rows.push(row(t('chat.contextCard.cacheWrite'), format(cacheWrite), true));
-  }
-  if (cacheRead !== null || cacheWrite !== null) {
-    rows.push(
-      row(
-        t('chat.contextCard.uncached'),
-        format(Math.max(0, input - (cacheRead ?? 0) - (cacheWrite ?? 0))),
-        true,
-      ),
-    );
-  }
-  rows.push(row(t('chat.contextCard.output'), format(output)));
-  if (reasoning !== null) {
+  const rows = [
+    row(t('chat.contextCard.input'), format(input)),
+    row(
+      t('chat.contextCard.cacheRead'),
+      input > 0
+        ? `${format(cacheRead)} (${percent(cacheRead, input)})`
+        : format(cacheRead),
+      true,
+    ),
+    row(t('chat.contextCard.cacheWrite'), format(cacheWrite), true),
+    row(
+      t('chat.contextCard.uncached'),
+      format(Math.max(0, input - cacheRead - cacheWrite)),
+      true,
+    ),
+    row(t('chat.contextCard.output'), format(output)),
+  ];
+  if (reasoning > 0) {
     rows.push(row(t('chat.contextCard.reasoning'), format(reasoning), true));
   }
   return { id: 'last-turn', title: t('chat.contextCard.lastTurn'), rows };
@@ -249,10 +234,6 @@ function lastTurnSection(usage, format) {
 
 function finiteOrNull(value) {
   return Number.isFinite(value) ? value : null;
-}
-
-function nonNegativeOrNull(value) {
-  return Number.isFinite(value) && value >= 0 ? value : null;
 }
 
 function nonNegative(value) {

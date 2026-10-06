@@ -125,32 +125,19 @@ def _own_audit(connection: sqlite3.Connection, state: sqlite3.Row, lower: int) -
 # -- Usage -------------------------------------------------------------------
 
 
-_INPUT_MEASURED = "COALESCE(a.input_tokens_estimated, 0) = 0"
-_OUTPUT_MEASURED = "COALESCE(a.output_tokens_estimated, 0) = 0"
-_CACHE_TURN = (
-    f"a.usage_present = 1 AND {_INPUT_MEASURED} "
-    "AND (a.cache_read_tokens IS NOT NULL OR a.cache_write_tokens IS NOT NULL)"
+_SESSION_USAGE_KEYS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "reasoning_tokens",
 )
-_REASONING_TURN = f"a.usage_present = 1 AND {_OUTPUT_MEASURED} AND a.reasoning_tokens IS NOT NULL"
+# Every Assistant turn counts; a counter it does not report counts as zero.
 _USAGE_SQL = f"""
-SELECT
-  COALESCE(SUM(CASE WHEN a.usage_present = 1
-    THEN COALESCE(a.input_tokens, 0) ELSE 0 END), 0) AS input_tokens,
-  COALESCE(SUM(CASE WHEN a.usage_present = 1
-    THEN COALESCE(a.output_tokens, 0) ELSE 0 END), 0) AS output_tokens,
-  COALESCE(SUM(CASE WHEN {_CACHE_TURN} THEN 1 ELSE 0 END), 0) AS cache_turns,
-  COALESCE(SUM(CASE WHEN {_CACHE_TURN}
-    THEN COALESCE(a.input_tokens, 0) ELSE 0 END), 0) AS cache_input_tokens,
-  COALESCE(SUM(CASE WHEN {_CACHE_TURN}
-    THEN COALESCE(a.cache_read_tokens, 0) ELSE 0 END), 0) AS cache_read_tokens,
-  COALESCE(SUM(CASE WHEN {_CACHE_TURN}
-    THEN COALESCE(a.cache_write_tokens, 0) ELSE 0 END), 0) AS cache_write_tokens,
-  COALESCE(SUM(CASE WHEN {_REASONING_TURN} THEN 1 ELSE 0 END), 0) AS reasoning_turns,
-  COALESCE(SUM(CASE WHEN {_REASONING_TURN} THEN a.reasoning_tokens ELSE 0 END), 0)
-    AS reasoning_tokens
+SELECT {", ".join(f"COALESCE(SUM(a.{key}), 0) AS {key}" for key in _SESSION_USAGE_KEYS)}
 FROM entries AS e
 JOIN assistant_entries AS a ON a.entry_key = e.entry_key
-WHERE e.session_key = ? AND e.role = 'assistant' AND e.seq >= ?
+WHERE e.session_key = ? AND e.role = 'assistant' AND e.seq >= ? AND a.usage_present = 1
 """
 
 
@@ -161,21 +148,7 @@ def session_usage(connection: sqlite3.Connection, state: sqlite3.Row) -> JsonObj
     shape matches ``core.chat.usage.aggregate_session_usage``.
     """
     row = connection.execute(_USAGE_SQL, (state["session_key"], own_floor(state))).fetchone()
-    usage: JsonObject = {
-        key: int(row[key])
-        for key in (
-            "input_tokens",
-            "output_tokens",
-            "cache_turns",
-            "cache_input_tokens",
-            "cache_read_tokens",
-            "cache_write_tokens",
-        )
-    }
-    if int(row["reasoning_turns"]) > 0:
-        usage["reasoning_turns"] = int(row["reasoning_turns"])
-        usage["reasoning_tokens"] = int(row["reasoning_tokens"])
-    return usage
+    return {key: int(row[key]) for key in _SESSION_USAGE_KEYS}
 
 
 def status_snapshot(

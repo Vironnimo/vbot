@@ -669,39 +669,25 @@ def _latest_assistant_usage(messages: list[ChatMessage]) -> dict[str, Any] | Non
 
 def _last_request_cache_text_from_facts(facts: StatusSessionFacts) -> str:
     usage = facts.latest_assistant_usage
-    if usage is None or usage_token_is_estimated(usage, "input_tokens"):
+    if usage is None:
         return STATUS_PLACEHOLDER
-
-    cache_data = _cache_data_from_usage(usage)
-    if cache_data is None:
-        return STATUS_PLACEHOLDER
-    return _format_cache_data(cache_data)
+    return _cache_text_from_usage(usage)
 
 
 def _session_cache_text_from_facts(facts: StatusSessionFacts) -> str:
-    totals = facts.session_usage
-    cache_turns = _coerce_non_negative_int(totals.get("cache_turns")) or 0
-    if cache_turns <= 0:
+    if facts.first_message_at is None:
         return STATUS_PLACEHOLDER
-
-    cache_data = (
-        _coerce_non_negative_int(totals.get("cache_input_tokens")) or 0,
-        _coerce_non_negative_int(totals.get("cache_read_tokens")) or 0,
-        _coerce_non_negative_int(totals.get("cache_write_tokens")) or 0,
-    )
-    return f"{_format_cache_data(cache_data)}, turns {cache_turns}"
+    return _cache_text_from_usage(facts.session_usage)
 
 
-def _cache_data_from_usage(usage: dict[str, Any]) -> tuple[int, int, int] | None:
-    if "cache_read_tokens" not in usage and "cache_write_tokens" not in usage:
-        return None
-    input_tokens = _coerce_non_negative_int(usage.get("input_tokens"))
-    if input_tokens is None:
-        return None
-    return (
-        input_tokens,
-        _coerce_non_negative_int(usage.get("cache_read_tokens")) or 0,
-        _coerce_non_negative_int(usage.get("cache_write_tokens")) or 0,
+def _cache_text_from_usage(usage: dict[str, Any]) -> str:
+    """Format cache figures; a counter the usage does not report counts as zero."""
+    return _format_cache_data(
+        (
+            _coerce_non_negative_int(usage.get("input_tokens")) or 0,
+            _coerce_non_negative_int(usage.get("cache_read_tokens")) or 0,
+            _coerce_non_negative_int(usage.get("cache_write_tokens")) or 0,
+        )
     )
 
 
