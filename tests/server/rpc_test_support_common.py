@@ -309,6 +309,10 @@ class StubProject:
     cwd: str
     auto_load: tuple[str, ...] = ()
 
+    @property
+    def instruction_files(self) -> list[str]:
+        return list(self.auto_load)
+
 
 class StubProjects:
     """``runtime.projects`` slice the prompt-preview path reads (cwd + auto-load)."""
