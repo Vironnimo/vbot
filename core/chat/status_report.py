@@ -157,7 +157,6 @@ class StatusSessionFacts:
     user_message_count: int
     latest_assistant_usage: dict[str, Any] | None
     session_usage: dict[str, Any]
-    cache_input_tokens: int
 
 
 def resolve_status_model_details(
@@ -651,27 +650,13 @@ def _turn_count_text_from_facts(facts: StatusSessionFacts) -> str:
 
 
 def status_session_facts(messages: list[ChatMessage]) -> StatusSessionFacts:
-    """Build the status read model from an already available in-memory transcript.
-
-    Cache figures describe the prompt, so only turns with measured input count
-    toward them, as in the persisted Session totals.
-    """
-    cache_input_tokens = 0
-    for message in messages:
-        if message.role != "assistant" or not isinstance(message.usage, dict):
-            continue
-        if usage_token_is_estimated(message.usage, "input_tokens"):
-            continue
-        cache_data = _cache_data_from_usage(message.usage)
-        if cache_data is not None:
-            cache_input_tokens += cache_data[0]
+    """Build the status read model from an already available in-memory transcript."""
     latest_usage = _latest_assistant_usage(messages)
     return StatusSessionFacts(
         first_message_at=messages[0].timestamp if messages else None,
         user_message_count=sum(1 for message in messages if message.role == "user"),
         latest_assistant_usage=None if latest_usage is None else dict(latest_usage),
         session_usage=aggregate_session_usage(messages),
-        cache_input_tokens=cache_input_tokens,
     )
 
 
@@ -700,7 +685,7 @@ def _session_cache_text_from_facts(facts: StatusSessionFacts) -> str:
         return STATUS_PLACEHOLDER
 
     cache_data = (
-        facts.cache_input_tokens,
+        _coerce_non_negative_int(totals.get("cache_input_tokens")) or 0,
         _coerce_non_negative_int(totals.get("cache_read_tokens")) or 0,
         _coerce_non_negative_int(totals.get("cache_write_tokens")) or 0,
     )

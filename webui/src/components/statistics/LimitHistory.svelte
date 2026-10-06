@@ -27,6 +27,7 @@
     buildUsageHistorySeries,
     formatUsageDelta,
     runActivityTotals,
+    runTokens,
     usageHistoryIntervalTooltip,
     usageHistoryIntervals,
     usageHistoryPointCoordinates,
@@ -299,18 +300,6 @@
     const next = Math.max(0, Math.min(count - 1, target));
     activeSlots[seriesKey] = next;
     event.currentTarget.parentElement?.children[next]?.focus();
-  }
-
-  function runMeasuredTokens(run) {
-    return (
-      (run?.measured_input_tokens ?? 0) + (run?.measured_output_tokens ?? 0)
-    );
-  }
-
-  function runEstimatedTokens(run) {
-    return (
-      (run?.estimated_input_tokens ?? 0) + (run?.estimated_output_tokens ?? 0)
-    );
   }
 </script>
 
@@ -604,20 +593,8 @@
                   <dd>{formatInteger(activityTotals.runs, locale)}</dd>
                 </div>
                 <div>
-                  <dt>
-                    {t('statistics.limits.measuredTokens')}
-                  </dt>
-                  <dd>
-                    {formatTokensExact(activityTotals.measuredTokens, locale)}
-                  </dd>
-                </div>
-                <div>
-                  <dt>
-                    {t('statistics.limits.estimatedTokens')}
-                  </dt>
-                  <dd>
-                    {formatTokensExact(activityTotals.estimatedTokens, locale)}
-                  </dd>
+                  <dt>{t('statistics.limits.tokens')}</dt>
+                  <dd>{formatTokensExact(activityTotals.tokens, locale)}</dd>
                 </div>
               </dl>
 
@@ -669,18 +646,10 @@
                       </div>
                       <div class="limit-run__tokens">
                         <span>
-                          {t('statistics.limits.measuredShort')}
-                          {formatTokensExact(runMeasuredTokens(run), locale)}
+                          {t('statistics.tokens.count', {
+                            count: formatTokensExact(runTokens(run), locale),
+                          })}
                         </span>
-                        {#if runEstimatedTokens(run) > 0}
-                          <span>
-                            {t('statistics.limits.estimatedShort')}
-                            ~{formatTokensExact(
-                              runEstimatedTokens(run),
-                              locale,
-                            )}
-                          </span>
-                        {/if}
                       </div>
                     </li>
                   {/each}

@@ -46,7 +46,7 @@ describe('Swarm participant Activity', () => {
     });
     await tick();
     expect(document.querySelector('.context-usage').textContent).toContain(
-      '~2,468',
+      '2,468',
     );
     button(t('swarm.newRun')).click();
     await tick();
@@ -152,7 +152,7 @@ describe('Swarm participant Activity', () => {
       document.querySelector('.context-usage')?.textContent ?? '';
     for (const [id, name, , count] of stopped) {
       button(name).click();
-      await vi.waitFor(() => expect(context()).toContain(`~${count}`));
+      await vi.waitFor(() => expect(context()).toContain(`Context: ${count}`));
       button(RESUME_PARTICIPANT).click();
       await vi.waitFor(() =>
         expect(operation).toHaveBeenCalledWith(

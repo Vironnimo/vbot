@@ -322,7 +322,7 @@ def chat_history_snapshot(
             excluded_roles=excluded_roles,
             complete_run_segment=complete_run_segment,
         )
-    usage, _cache_input_tokens = _store_history.session_usage(connection, state)
+    usage = _store_history.session_usage(connection, state)
     context = _context_batch(connection, ranges)
     background = _background_records(
         connection,

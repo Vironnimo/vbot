@@ -61,11 +61,11 @@ from core.providers._messages_wire import (
     _extract_anthropic_reasoning_meta,
     _extract_anthropic_text,
     _extract_anthropic_tool_calls,
-    _extract_anthropic_usage,
     _merge_anthropic_system_parts,
     _to_anthropic_messages,
     apply_anthropic_cache_usage,
     apply_anthropic_reasoning_usage,
+    extract_anthropic_usage,
     messages_returned_reasoning,
 )
 from core.providers._tool_calls import WIRE_TOOL_CALL_ID_PROFILES
@@ -122,6 +122,7 @@ __all__ = [
     "TOOL_USE_BLOCK_TYPE",
     "apply_anthropic_cache_usage",
     "apply_anthropic_reasoning_usage",
+    "extract_anthropic_usage",
 ]
 
 
@@ -229,7 +230,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             response.get("stop_reason"),
             has_tool_calls=bool(normalized["tool_calls"]),
         )
-        usage = _extract_anthropic_usage(response)
+        usage = extract_anthropic_usage(response)
         if usage is not None:
             normalized["usage"] = usage
         return normalized

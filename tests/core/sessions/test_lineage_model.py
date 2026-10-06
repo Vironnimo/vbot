@@ -45,8 +45,8 @@ class _Model:
 
     current: list[_Shown] = field(default_factory=list)
     audit: list[tuple[str, str | None]] = field(default_factory=list)
-    # The Assistant usage this Session wrote: (turns, input tokens, output tokens).
-    spend: tuple[int, int, int] = (0, 0, 0)
+    # The Assistant usage this Session wrote: (input tokens, output tokens).
+    spend: tuple[int, int] = (0, 0)
 
 
 class _Scenario:
@@ -88,9 +88,8 @@ class _Scenario:
                 "output_tokens": self.rng.randint(1, 9),
             }
             message = ChatMessage.assistant(model="model", content=text, usage=usage)
-            turns, input_tokens, output_tokens = model.spend
+            input_tokens, output_tokens = model.spend
             model.spend = (
-                turns + 1,
                 input_tokens + usage["input_tokens"],
                 output_tokens + usage["output_tokens"],
             )
@@ -175,12 +174,10 @@ class _Scenario:
         assert status.first_message_at == (current[0].timestamp if current else None), trail
         assert status.user_message_count == len(users), trail
         assert status.latest_assistant_usage == (usages[-1] if usages else None), trail
-        turns, input_tokens, output_tokens = model.spend
         assert (
-            status.session_usage["measured_turns"],
             status.session_usage["input_tokens"],
             status.session_usage["output_tokens"],
-        ) == (turns, input_tokens, output_tokens), trail
+        ) == model.spend, trail
         for limit in (1, 2, _STEPS):
             assert session.active_user_message_count(limit=limit) == min(len(users), limit), trail
         latest = session.latest_note(_NOTE_PREFIX)

@@ -1,14 +1,15 @@
-// Composes the context usage breakdown: a compact context summary
-// ("tokens / contextWindow" plus provider in/out), a "Last turn" block that
-// splits the input into its cache shares, and a whole-session block with the
-// session cache hit rate. `formatTokenUsageTooltip` renders it as text with
-// line breaks and middot-indented sub-lines (Swarm Activity's quick tooltip);
-// `contextUsageCardModel` returns the same figures as label/value rows for
-// the Chat context ring's card.
+// Composes the context usage breakdown: the Context headline
+// ("tokens / contextWindow"), the Session's cache hit rate and token totals,
+// and a "Last turn" block that splits the input into its cache shares.
+// `contextUsageCardModel` returns label/value rows for the Chat context
+// ring's card; `formatTokenUsageTooltip` renders the same model as text with
+// line breaks and middot-indented sub-lines (Swarm Activity's quick tooltip).
 //
 // The cache lines matter for spotting prompt-cache breaks: canonical
 // `input_tokens` already contains the cached tokens, so the sub-lines are
-// shares of the input ("davon"), never additions on top.
+// shares of the input, never additions on top. Whether a Provider reported a
+// figure or vBot estimated it is not shown here; Statistics diagnostics keep
+// that distinction.
 import { activeLocaleTag, t } from './i18n.js';
 
 export function formatTokenUsageTooltip(
@@ -17,16 +18,23 @@ export function formatTokenUsageTooltip(
   sessionUsage,
   contextWindow,
 ) {
-  const numberFormat = new Intl.NumberFormat(activeLocaleTag());
-  const format = (value) => numberFormat.format(value);
-
-  const sections = [
-    contextUsageLines(contextUsage, contextWindow, format),
-    usage ? lastTurnLines(usage, format) : [],
-    sessionUsageLines(sessionUsage, format),
-  ].filter((section) => section.length > 0);
-  return sections.length > 0
-    ? sections.map((section) => section.join('\n')).join('\n\n')
+  const { summary, sections } = contextUsageCardModel(
+    contextUsage,
+    usage,
+    sessionUsage,
+    contextWindow,
+  );
+  const blocks = [
+    summary ? [summary] : [],
+    ...sections.map((section) => [
+      ...(section.title ? [section.title] : []),
+      ...section.rows.map(
+        (row) => `${row.sub ? '  · ' : ''}${row.label}: ${row.value}`,
+      ),
+    ]),
+  ].filter((block) => block.length > 0);
+  return blocks.length > 0
+    ? blocks.map((block) => block.join('\n')).join('\n\n')
     : undefined;
 }
 
@@ -125,11 +133,10 @@ export function contextLimitWarning(
 
 /**
  * Structured model for the Chat context ring's card. `summary` is the
- * "tokens / contextWindow" headline (null without a context measurement);
+ * "tokens / contextWindow" headline (null without a Context projection);
  * `sections` hold label/value rows (`sub` rows are shares of the row above,
- * never additions) plus optional notes, so the card lays figures out in a
- * right-aligned column instead of preformatted text. It reports the same
- * figures as `formatTokenUsageTooltip`.
+ * never additions): first the Session's cache hit rate and totals, then the
+ * last turn. The card lays them out in a right-aligned column.
  */
 export function contextUsageCardModel(
   contextUsage,
@@ -139,73 +146,84 @@ export function contextUsageCardModel(
 ) {
   const numberFormat = new Intl.NumberFormat(activeLocaleTag());
   const format = (value) => numberFormat.format(value);
-  const [summary = null] = contextUsageLines(
-    contextUsage,
-    contextWindow,
-    format,
-  );
   const sections = [
-    contextCardSection(contextUsage, format),
-    usage ? lastTurnCardSection(usage, format) : null,
-    sessionCardSection(sessionUsage, format),
+    sessionSection(sessionUsage, format),
+    usage ? lastTurnSection(usage, format) : null,
   ].filter((section) => section && section.rows.length > 0);
-  return { summary, sections };
+  return {
+    summary: contextSummary(contextUsage, contextWindow, format),
+    sections,
+  };
 }
 
 function row(label, value, sub = false) {
   return { label, value, sub };
 }
 
-function contextCardSection(contextUsage, format) {
-  if (finiteOrNull(contextUsage?.tokens) === null) {
+function percent(part, whole) {
+  return `${Math.round((part / whole) * 100)}%`;
+}
+
+function contextSummary(contextUsage, contextWindow, format) {
+  const tokens = finiteOrNull(contextUsage?.tokens);
+  if (tokens === null) {
+    return null;
+  }
+  return Number.isFinite(contextWindow) && contextWindow > 0
+    ? t('chat.contextCard.summary', {
+        tokens: format(tokens),
+        context: format(contextWindow),
+      })
+    : format(tokens);
+}
+
+function sessionSection(sessionUsage, format) {
+  const input = nonNegative(sessionUsage?.input_tokens);
+  const output = nonNegative(sessionUsage?.output_tokens);
+  if (input <= 0 && output <= 0) {
     return null;
   }
   const rows = [];
-  const providerInput = finiteOrNull(contextUsage.provider_input_tokens);
-  const providerOutput = finiteOrNull(contextUsage.provider_output_tokens);
-  const estimatedDelta = finiteOrNull(contextUsage.estimated_delta_tokens);
-  if (providerInput !== null) {
-    rows.push(row(t('chat.contextCard.providerInput'), format(providerInput)));
-  }
-  if (providerOutput !== null) {
+  // Only turns that report caching form the hit rate, so a Provider without
+  // cache reporting never reads as a 0% hit rate.
+  const cacheInput = nonNegative(sessionUsage.cache_input_tokens);
+  if (nonNegative(sessionUsage.cache_turns) > 0 && cacheInput > 0) {
     rows.push(
-      row(t('chat.contextCard.providerOutput'), format(providerOutput)),
+      row(
+        t('chat.contextCard.cacheHitRate'),
+        percent(nonNegative(sessionUsage.cache_read_tokens), cacheInput),
+      ),
     );
   }
-  if (estimatedDelta !== null) {
+  rows.push(row(t('chat.contextCard.totalInput'), format(input)));
+  rows.push(row(t('chat.contextCard.totalOutput'), format(output)));
+  if (nonNegative(sessionUsage.reasoning_turns) > 0) {
     rows.push(
-      row(t('chat.contextCard.requestChanges'), format(estimatedDelta), true),
+      row(
+        t('chat.contextCard.reasoning'),
+        format(nonNegative(sessionUsage.reasoning_tokens)),
+        true,
+      ),
     );
   }
-  return { id: 'context', title: '', meta: '', rows, notes: [] };
+  return { id: 'session', title: '', rows };
 }
 
-function cacheShareValue(cacheRead, input, format) {
-  return input > 0
-    ? `${format(cacheRead)} (${Math.round((cacheRead / input) * 100)}%)`
-    : format(cacheRead);
-}
-
-function lastTurnCardSection(usage, format) {
+function lastTurnSection(usage, format) {
   const input = nonNegative(usage.input_tokens);
   const output = nonNegative(usage.output_tokens);
-  const inputEstimated = usageFieldIsEstimated(usage, 'input_tokens');
-  const outputEstimated = usageFieldIsEstimated(usage, 'output_tokens');
-  const cacheRead = finiteOrNull(usage.cache_read_tokens);
-  const cacheWrite = finiteOrNull(usage.cache_write_tokens);
+  const cacheRead = nonNegativeOrNull(usage.cache_read_tokens);
+  const cacheWrite = nonNegativeOrNull(usage.cache_write_tokens);
   const reasoning = nonNegativeOrNull(usage.reasoning_tokens);
 
-  const rows = [
-    row(
-      t('chat.contextCard.input'),
-      `${inputEstimated ? '~' : ''}${format(input)}`,
-    ),
-  ];
+  const rows = [row(t('chat.contextCard.input'), format(input))];
   if (cacheRead !== null) {
     rows.push(
       row(
         t('chat.contextCard.cacheRead'),
-        cacheShareValue(cacheRead, input, format),
+        input > 0
+          ? `${format(cacheRead)} (${percent(cacheRead, input)})`
+          : format(cacheRead),
         true,
       ),
     );
@@ -222,267 +240,11 @@ function lastTurnCardSection(usage, format) {
       ),
     );
   }
-  rows.push(
-    row(
-      t('chat.contextCard.output'),
-      `${outputEstimated ? '~' : ''}${format(output)}`,
-    ),
-  );
+  rows.push(row(t('chat.contextCard.output'), format(output)));
   if (reasoning !== null) {
     rows.push(row(t('chat.contextCard.reasoning'), format(reasoning), true));
   }
-  const notes = [];
-  if (inputEstimated && outputEstimated) {
-    notes.push(t('chat.tokenTooltipEstimated'));
-  } else if (inputEstimated) {
-    notes.push(t('chat.tokenTooltipInputEstimated'));
-  } else if (outputEstimated) {
-    notes.push(t('chat.tokenTooltipOutputEstimated'));
-  }
-  return {
-    id: 'last-turn',
-    title: t('chat.tokenTooltipLastTurn'),
-    meta: '',
-    rows,
-    notes,
-  };
-}
-
-function sessionCardSection(sessionUsage, format) {
-  const measuredTurns = nonNegative(sessionUsage?.measured_turns);
-  const input = nonNegative(sessionUsage?.input_tokens);
-  const output = nonNegative(sessionUsage?.output_tokens);
-  if (measuredTurns <= 0 && input <= 0 && output <= 0) {
-    return null;
-  }
-  const cacheRead = nonNegative(sessionUsage.cache_read_tokens);
-  const cacheTurns = nonNegative(sessionUsage.cache_turns);
-  const estimatedTurns = nonNegative(sessionUsage.estimated_turns);
-  const reasoningTurns = nonNegative(sessionUsage.reasoning_turns);
-  const reasoning = nonNegative(sessionUsage.reasoning_tokens);
-
-  const rows = [row(t('chat.contextCard.input'), format(input))];
-  if (cacheTurns > 0) {
-    rows.push(
-      row(
-        t('chat.contextCard.cacheRead'),
-        cacheShareValue(cacheRead, input, format),
-        true,
-      ),
-    );
-  }
-  rows.push(row(t('chat.contextCard.output'), format(output)));
-  if (reasoningTurns > 0) {
-    rows.push(
-      row(
-        t('chat.contextCard.reasoningTurns', {
-          turns: format(reasoningTurns),
-        }),
-        format(reasoning),
-        true,
-      ),
-    );
-  }
-  if (cacheTurns > 0) {
-    rows.push(
-      row(
-        t('chat.contextCard.avgCacheRead'),
-        format(Math.round(cacheRead / cacheTurns)),
-      ),
-    );
-  }
-  const notes = [];
-  if (estimatedTurns > 0) {
-    notes.push(
-      t('chat.tokenTooltipSessionEstimatedTurns', {
-        count: format(estimatedTurns),
-      }),
-    );
-  }
-  return {
-    id: 'session',
-    title: t('chat.contextCard.session'),
-    meta: t('chat.contextCard.measuredTurns', {
-      turns: format(measuredTurns),
-    }),
-    rows,
-    notes,
-  };
-}
-
-function contextUsageLines(contextUsage, contextWindow, format) {
-  const tokens = finiteOrNull(contextUsage?.tokens);
-  if (tokens === null) {
-    return [];
-  }
-  const tokenText = `${contextUsage.estimated === true ? '~' : ''}${format(tokens)}`;
-  const lines = [];
-  if (Number.isFinite(contextWindow) && contextWindow > 0) {
-    lines.push(
-      t('chat.tokenTooltipContextSummary', {
-        tokens: tokenText,
-        context: format(contextWindow),
-      }),
-    );
-  } else {
-    lines.push(
-      t('chat.tokenTooltipContextSummaryNoWindow', {
-        tokens: tokenText,
-      }),
-    );
-  }
-  const providerInput = finiteOrNull(contextUsage.provider_input_tokens);
-  const providerOutput = finiteOrNull(contextUsage.provider_output_tokens);
-  if (providerInput !== null && providerOutput !== null) {
-    lines.push(
-      t('chat.tokenTooltipContextInOut', {
-        input: format(providerInput),
-        output: format(providerOutput),
-      }),
-    );
-  } else if (providerInput !== null) {
-    lines.push(
-      t('chat.tokenTooltipContextInOnly', {
-        input: format(providerInput),
-      }),
-    );
-  } else if (providerOutput !== null) {
-    lines.push(
-      t('chat.tokenTooltipContextOutOnly', {
-        output: format(providerOutput),
-      }),
-    );
-  }
-  const estimatedDelta = finiteOrNull(contextUsage.estimated_delta_tokens);
-  if (estimatedDelta !== null) {
-    lines.push(
-      t('chat.tokenTooltipContextDelta', { tokens: format(estimatedDelta) }),
-    );
-  }
-  return lines;
-}
-
-function lastTurnLines(usage, format) {
-  const input = nonNegative(usage.input_tokens);
-  const output = nonNegative(usage.output_tokens);
-  const inputEstimated = usageFieldIsEstimated(usage, 'input_tokens');
-  const outputEstimated = usageFieldIsEstimated(usage, 'output_tokens');
-  const cacheRead = finiteOrNull(usage.cache_read_tokens);
-  const cacheWrite = finiteOrNull(usage.cache_write_tokens);
-  const reasoning = nonNegativeOrNull(usage.reasoning_tokens);
-
-  const lines = [
-    t('chat.tokenTooltipLastTurn'),
-    t('chat.tokenTooltipInput', {
-      tokens: `${inputEstimated ? '~' : ''}${format(input)}`,
-    }),
-  ];
-  if (cacheRead !== null) {
-    lines.push(cacheReadShareLine(cacheRead, input, format));
-  }
-  if (cacheWrite !== null) {
-    lines.push(
-      t('chat.tokenTooltipCacheWrite', {
-        tokens: format(cacheWrite),
-      }),
-    );
-  }
-  if (cacheRead !== null || cacheWrite !== null) {
-    const uncached = Math.max(0, input - (cacheRead ?? 0) - (cacheWrite ?? 0));
-    lines.push(
-      t('chat.tokenTooltipUncached', {
-        tokens: format(uncached),
-      }),
-    );
-  }
-  lines.push(
-    t('chat.tokenTooltipOutput', {
-      tokens: `${outputEstimated ? '~' : ''}${format(output)}`,
-    }),
-  );
-  if (reasoning !== null) {
-    lines.push(t('chat.tokenTooltipReasoning', { tokens: format(reasoning) }));
-  }
-  if (inputEstimated && outputEstimated) {
-    lines.push(t('chat.tokenTooltipEstimated'));
-  } else if (inputEstimated) {
-    lines.push(t('chat.tokenTooltipInputEstimated'));
-  } else if (outputEstimated) {
-    lines.push(t('chat.tokenTooltipOutputEstimated'));
-  }
-  return lines;
-}
-
-function sessionUsageLines(sessionUsage, format) {
-  const measuredTurns = nonNegative(sessionUsage?.measured_turns);
-  const input = nonNegative(sessionUsage?.input_tokens);
-  const output = nonNegative(sessionUsage?.output_tokens);
-  if (measuredTurns <= 0 && input <= 0 && output <= 0) {
-    return [];
-  }
-  const cacheRead = nonNegative(sessionUsage.cache_read_tokens);
-  // Turns that reported cache fields at all — a session on a provider without
-  // cache reporting must not render as a 0% hit rate.
-  const cacheTurns = nonNegative(sessionUsage.cache_turns);
-  const estimatedTurns = nonNegative(sessionUsage.estimated_turns);
-  const reasoningTurns = nonNegative(sessionUsage.reasoning_turns);
-  const reasoning = nonNegative(sessionUsage.reasoning_tokens);
-
-  const lines = [
-    t('chat.tokenTooltipSession', {
-      turns: format(measuredTurns),
-    }),
-    t('chat.tokenTooltipInput', {
-      tokens: format(input),
-    }),
-  ];
-  if (cacheTurns > 0) {
-    lines.push(cacheReadShareLine(cacheRead, input, format));
-  }
-  lines.push(
-    t('chat.tokenTooltipOutput', {
-      tokens: format(output),
-    }),
-  );
-  if (reasoningTurns > 0) {
-    lines.push(
-      t('chat.tokenTooltipSessionReasoning', {
-        tokens: format(reasoning),
-        turns: format(reasoningTurns),
-      }),
-    );
-  }
-  if (cacheTurns > 0) {
-    lines.push(
-      t('chat.tokenTooltipSessionAvgCacheRead', {
-        tokens: format(Math.round(cacheRead / cacheTurns)),
-      }),
-    );
-  }
-  if (estimatedTurns > 0) {
-    lines.push(
-      t('chat.tokenTooltipSessionEstimatedTurns', {
-        count: format(estimatedTurns),
-      }),
-    );
-  }
-  return lines;
-}
-
-function usageFieldIsEstimated(usage, tokenField) {
-  return usage[`${tokenField}_estimated`] === true;
-}
-
-function cacheReadShareLine(cacheRead, input, format) {
-  if (input > 0) {
-    return t('chat.tokenTooltipCacheReadPct', {
-      tokens: format(cacheRead),
-      percent: Math.round((cacheRead / input) * 100),
-    });
-  }
-  return t('chat.tokenTooltipCacheRead', {
-    tokens: format(cacheRead),
-  });
+  return { id: 'last-turn', title: t('chat.contextCard.lastTurn'), rows };
 }
 
 function finiteOrNull(value) {

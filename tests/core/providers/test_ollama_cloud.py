@@ -270,6 +270,8 @@ async def test_stream_surfaces_reasoning_and_omits_zero_input_usage() -> None:
         return_value=cloud_sse(
             {"choices": [{"delta": {"reasoning": "Check."}}]},
             {"choices": [{"delta": {"content": "OK"}, "finish_reason": "stop"}]},
+            # A chunk whose only counter is the zero input carries no usage.
+            {"choices": [], "usage": {"prompt_tokens": 0}},
             {
                 "choices": [],
                 "usage": {"prompt_tokens": 0, "completion_tokens": 22, "total_tokens": 0},
@@ -287,7 +289,9 @@ async def test_stream_surfaces_reasoning_and_omits_zero_input_usage() -> None:
 
     assert {"type": "reasoning_delta", "text": "Check."} in deltas
     assert {"type": "content_delta", "text": "OK"} in deltas
-    assert {"type": "usage", "output_tokens": 22} in deltas
+    assert [delta for delta in deltas if delta["type"] == "usage"] == [
+        {"type": "usage", "output_tokens": 22}
+    ]
     payload = sent_body(route)
     assert payload["stream"] is True
     assert payload["stream_options"] == {"include_usage": True}

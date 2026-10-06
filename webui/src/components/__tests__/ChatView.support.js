@@ -705,7 +705,7 @@ export async function hoveredContextRingCard() {
   flushSync();
   const card = document.body.querySelector('.context-card');
   expect(card.dataset.floatingOpen).toBe('true');
-  // Sections as { title, meta, rows }; a sub-row (a share of the row above)
+  // Sections as { title, rows }; a sub-row (a share of the row above)
   // is prefixed with "· ".
   const content = {
     summary: card.querySelector('.context-card__usage')?.textContent ?? '',
@@ -713,11 +713,7 @@ export async function hoveredContextRingCard() {
       (section) => ({
         title:
           section
-            .querySelector('.context-card__section-title > span')
-            ?.textContent.trim() ?? '',
-        meta:
-          section
-            .querySelector('.context-card__section-meta')
+            .querySelector('.context-card__section-title')
             ?.textContent.trim() ?? '',
         rows: [...section.querySelectorAll('.context-card__row')].map(
           (row) =>

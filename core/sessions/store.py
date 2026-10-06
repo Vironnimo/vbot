@@ -835,7 +835,7 @@ class SessionStore:
     def status_snapshot(
         self,
         address: SessionAddress,
-    ) -> tuple[str | None, int, JsonObject | None, JsonObject, int]:
+    ) -> tuple[str | None, int, JsonObject | None, JsonObject]:
         return self._read_decoded(
             lambda connection: _store_history.status_snapshot(connection, address)
         )

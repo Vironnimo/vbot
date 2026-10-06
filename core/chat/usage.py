@@ -245,17 +245,18 @@ def latest_context_window(messages: Sequence[ChatMessage]) -> int | None:
 
 
 def aggregate_session_usage(messages: list[ChatMessage]) -> JsonObject:
-    """Sum provider-reported usage across a session's assistant turns.
+    """Sum token usage across a session's assistant turns.
 
     Returns the canonical ``session_usage`` payload carried by the
-    ``chat.history`` response and the terminal Run events. Token totals cover
-    only provider-reported fields; a partially reported turn can contribute
-    measured output while its estimated input remains excluded. Turns with any
-    estimated field are counted separately from fully measured turns.
+    ``chat.history`` response and the terminal Run events. Input and output
+    totals include estimated counters, so they describe the whole Session.
     Canonical ``input_tokens`` already includes cached tokens, so
     ``cache_read_tokens``/``cache_write_tokens`` are informational subsets of
-    the input total, never added on top. Canonical ``reasoning_tokens`` is an
-    optional subset of ``output_tokens`` and likewise never changes totals.
+    the input total, never added on top. Cache figures cover only turns with
+    measured input that report caching (``cache_turns``);
+    ``cache_input_tokens`` is their input, the denominator of the Session's
+    cache hit rate. Canonical ``reasoning_tokens`` is an optional subset of
+    ``output_tokens`` and likewise never changes totals.
     """
     totals = _empty_session_usage()
     for message in messages:
@@ -268,40 +269,38 @@ def aggregate_session_usage(messages: list[ChatMessage]) -> JsonObject:
 def add_session_turn_usage(totals: JsonObject, usage: JsonObject) -> JsonObject:
     """Return canonical session totals with one persisted assistant turn added."""
     updated = dict(totals)
-    input_estimated = usage_token_is_estimated(usage, "input_tokens")
-    output_estimated = usage_token_is_estimated(usage, "output_tokens")
-    if input_estimated or output_estimated:
-        updated["estimated_turns"] = _non_negative_int(updated.get("estimated_turns")) + 1
-    else:
-        updated["measured_turns"] = _non_negative_int(updated.get("measured_turns")) + 1
+    input_tokens = _non_negative_int(usage.get("input_tokens"))
+    updated["input_tokens"] = _non_negative_int(updated.get("input_tokens")) + input_tokens
+    updated["output_tokens"] = _non_negative_int(updated.get("output_tokens")) + _non_negative_int(
+        usage.get("output_tokens")
+    )
     # Field *presence* distinguishes "provider reported zero cache" from
     # "provider does not report caching" — consumers need that to avoid
     # painting a non-caching provider as a 0% hit rate.
-    if not input_estimated and ("cache_read_tokens" in usage or "cache_write_tokens" in usage):
+    if not usage_token_is_estimated(usage, "input_tokens") and (
+        "cache_read_tokens" in usage or "cache_write_tokens" in usage
+    ):
         updated["cache_turns"] = _non_negative_int(updated.get("cache_turns")) + 1
+        updated["cache_input_tokens"] = (
+            _non_negative_int(updated.get("cache_input_tokens")) + input_tokens
+        )
+        for key in ("cache_read_tokens", "cache_write_tokens"):
+            updated[key] = _non_negative_int(updated.get(key)) + _non_negative_int(usage.get(key))
     reasoning_tokens = _optional_non_negative_int(usage.get("reasoning_tokens"))
-    if not output_estimated and reasoning_tokens is not None:
+    if not usage_token_is_estimated(usage, "output_tokens") and reasoning_tokens is not None:
         updated["reasoning_turns"] = _non_negative_int(updated.get("reasoning_turns")) + 1
         updated["reasoning_tokens"] = (
             _non_negative_int(updated.get("reasoning_tokens")) + reasoning_tokens
         )
-    measured_keys: list[str] = []
-    if not input_estimated:
-        measured_keys.extend(("input_tokens", "cache_read_tokens", "cache_write_tokens"))
-    if not output_estimated:
-        measured_keys.append("output_tokens")
-    for key in measured_keys:
-        updated[key] = _non_negative_int(updated.get(key)) + _non_negative_int(usage.get(key))
     return updated
 
 
 def _empty_session_usage() -> JsonObject:
     return {
-        "measured_turns": 0,
-        "estimated_turns": 0,
-        "cache_turns": 0,
         "input_tokens": 0,
         "output_tokens": 0,
+        "cache_turns": 0,
+        "cache_input_tokens": 0,
         "cache_read_tokens": 0,
         "cache_write_tokens": 0,
     }

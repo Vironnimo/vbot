@@ -93,7 +93,13 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
         for delta in deltas:
             if delta.get("type") == "usage":
                 _drop_ollama_cloud_zero_prompt_tokens(delta, raw_usage)
-        return deltas
+        # A usage chunk whose only counter was the dropped zero input carries
+        # nothing; a usage delta must hold a counter.
+        return [
+            delta
+            for delta in deltas
+            if delta.get("type") != "usage" or "input_tokens" in delta or "output_tokens" in delta
+        ]
 
 
 def _drop_ollama_cloud_zero_prompt_tokens(normalized_usage: Any, raw_usage: Any) -> None:

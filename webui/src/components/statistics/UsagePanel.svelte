@@ -80,26 +80,18 @@
     {
       label: t('statistics.usage.input'),
       value: formatTokens(totals.input_tokens, locale),
-      valueTooltip: tokenTooltip(
-        totals.input_tokens,
-        totals.estimated_input_tokens,
-        locale,
-      ),
+      valueTooltip: tokenTooltip(totals.input_tokens, locale),
     },
     {
       label: t('statistics.usage.output'),
       value: formatTokens(totals.output_tokens, locale),
-      valueTooltip: tokenTooltip(
-        totals.output_tokens,
-        totals.estimated_output_tokens,
-        locale,
-      ),
+      valueTooltip: tokenTooltip(totals.output_tokens, locale),
     },
     {
       label: t('statistics.usage.cacheRead'),
       hint: t('statistics.usage.cacheHitHint'),
       value: formatTokens(totals.cache_read_tokens, locale),
-      valueTooltip: tokenTooltip(totals.cache_read_tokens, 0, locale),
+      valueTooltip: tokenTooltip(totals.cache_read_tokens, locale),
       detail: t('statistics.usage.hitRate', {
         rate: formatPercent(cacheHitRate(totals), locale),
       }),
@@ -108,7 +100,7 @@
       label: t('statistics.usage.reasoning'),
       hint: t('statistics.usage.reasoningHint'),
       value: formatTokens(totals.reasoning_tokens, locale),
-      valueTooltip: tokenTooltip(totals.reasoning_tokens, 0, locale),
+      valueTooltip: tokenTooltip(totals.reasoning_tokens, locale),
     },
     {
       label: t('statistics.usage.calls'),
@@ -299,11 +291,11 @@
 {/snippet}
 
 {#snippet inputCell(row)}
-  {@render tokenValue(row.input_tokens, row.estimated_input_tokens ?? 0)}
+  {@render tokenValue(row.input_tokens)}
 {/snippet}
 
 {#snippet outputCell(row)}
-  {@render tokenValue(row.output_tokens, row.estimated_output_tokens ?? 0)}
+  {@render tokenValue(row.output_tokens)}
 {/snippet}
 
 {#snippet tokensCell(row)}

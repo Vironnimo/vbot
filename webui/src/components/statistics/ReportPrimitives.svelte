@@ -191,15 +191,13 @@
   >
 {/snippet}
 
-<!-- Compact tokens with the exact count (and estimated part) on hover or
-     focus. -->
-{#snippet tokenValue(value, estimated = 0)}
+<!-- Compact tokens with the exact count on hover or focus. -->
+{#snippet tokenValue(value)}
   <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the exact count here.) -->
   <span
     class="stats-number"
-    class:stats-number--estimated={estimated > 0}
     tabindex="0"
-    use:tooltip={() => tokenTooltip(value, estimated, activeLocaleTag())}
+    use:tooltip={() => tokenTooltip(value, activeLocaleTag())}
     >{formatTokens(value, activeLocaleTag())}</span
   >
 {/snippet}

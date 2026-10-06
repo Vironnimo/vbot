@@ -59,13 +59,6 @@
     findInsight(section.insights, 'uncached_value'),
   );
 
-  function estimatedTokens(record) {
-    return (
-      (record?.estimated_input_tokens ?? 0) +
-      (record?.estimated_output_tokens ?? 0)
-    );
-  }
-
   function failureRate(record) {
     return shareOf(record?.failed, record?.total);
   }
@@ -98,11 +91,7 @@
     {
       label: t('statistics.overview.tokens'),
       value: formatTokens(totalTokens(totals), locale),
-      valueTooltip: tokenTooltip(
-        totalTokens(totals),
-        estimatedTokens(totals),
-        locale,
-      ),
+      valueTooltip: tokenTooltip(totalTokens(totals), locale),
       change: previous
         ? change(totalTokens(totals), totalTokens(previous), (value) =>
             formatTokens(value, locale),

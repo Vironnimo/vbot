@@ -565,7 +565,7 @@ describe('ChatView slash commands', () => {
       await waitForCondition(() =>
         document
           .querySelector('.compaction-sep')
-          ?.textContent.includes('~69k → ~27k'),
+          ?.textContent.includes('69k → 27k'),
       );
       expect(document.querySelector('.compaction-sep--running')).toBeNull();
       const disclosure = document.querySelector('.compaction-disclosure');

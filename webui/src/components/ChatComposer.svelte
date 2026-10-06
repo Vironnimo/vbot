@@ -1000,12 +1000,7 @@
           {#each contextCard.sections as section (section.id)}
             <section class="context-card__section">
               {#if section.title}
-                <h3 class="context-card__section-title">
-                  <span>{section.title}</span>
-                  {#if section.meta}<span class="context-card__section-meta"
-                      >{section.meta}</span
-                    >{/if}
-                </h3>
+                <h3 class="context-card__section-title">{section.title}</h3>
               {/if}
               <dl class="context-card__rows">
                 {#each section.rows as row, index (index)}
@@ -1018,9 +1013,6 @@
                   </div>
                 {/each}
               </dl>
-              {#each section.notes as note (note)}
-                <p class="context-card__note">{note}</p>
-              {/each}
             </section>
           {/each}
           {#if onForceCompaction}

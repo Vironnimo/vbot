@@ -312,11 +312,7 @@ describe('statisticsView labels and tooltips', () => {
   });
 
   it('explains token and cost values with their exact parts', () => {
-    expect(tokenTooltip(1_234_567, 0, 'en')).toBe('1,234,567');
-    expect(tokenTooltip(1_234_567, 2_000, 'en')).toEqual({
-      title: '1,234,567',
-      rows: [{ label: 'Estimated', value: '2,000', tone: 'warning' }],
-    });
+    expect(tokenTooltip(1_234_567, 'en')).toBe('1,234,567');
 
     const cost = costTooltip(
       {
@@ -360,10 +356,7 @@ describe('statisticsView labels and tooltips', () => {
     expect(byLabel(catalog).Input.value).toBe('$3.00 / 1M');
     expect(byLabel(catalog)['Price tiers'].value).toBe('2');
     expect(byLabel(catalog)['Price source'].value).toBe('models.dev');
-    expect(byLabel(catalog).Tokens).toMatchObject({
-      value: 'Estimated',
-      tone: 'warning',
-    });
+    expect(byLabel(catalog).Tokens.value).toBe('Estimated');
     expect(
       callCostTooltip({ cost: { source: 'unknown', reason: 'missing_price' } }),
     ).toEqual({

@@ -173,7 +173,7 @@ describe('statisticsLimits usage history', () => {
     expect(usageHistorySince('all')).toBeNull();
   });
 
-  it('totals measured and estimated Run tokens separately', () => {
+  it('totals Run tokens, reported and estimated alike', () => {
     expect(
       runActivityTotals([
         {
@@ -185,8 +185,7 @@ describe('statisticsLimits usage history', () => {
       ]),
     ).toEqual({
       runs: 1,
-      measuredTokens: 120,
-      estimatedTokens: 7,
+      tokens: 127,
     });
     expect(formatUsageDelta(12.5, 'en')).toBe('+12.5 pp');
     expect(formatUsageDelta(null, 'en')).toBe('—');

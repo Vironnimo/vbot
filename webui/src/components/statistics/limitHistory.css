@@ -378,7 +378,7 @@
 }
 
 .limit-activity__summary {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .limit-runs {
@@ -498,18 +498,15 @@
     width: 100%;
   }
 
-  .limit-history__summary,
-  .limit-activity__summary {
+  .limit-history__summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .limit-history__summary div:nth-child(2),
-  .limit-activity__summary div:nth-child(2) {
+  .limit-history__summary div:nth-child(2) {
     border-right: 0;
   }
 
-  .limit-history__summary div:nth-child(-n + 2),
-  .limit-activity__summary div:nth-child(-n + 2) {
+  .limit-history__summary div:nth-child(-n + 2) {
     border-bottom: 1px solid var(--border);
   }
 

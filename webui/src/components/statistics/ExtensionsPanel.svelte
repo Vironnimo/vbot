@@ -40,15 +40,9 @@
     );
   }
 
-  // Input plus output tokens of an activity's Totals, and the estimated part.
+  // Input plus output tokens of an activity's Totals.
   function activityTokens(activity) {
-    const totals = activity?.totals;
-    return {
-      total: totalTokens(totals),
-      estimated:
-        (totals?.estimated_input_tokens ?? 0) +
-        (totals?.estimated_output_tokens ?? 0),
-    };
+    return totalTokens(activity?.totals);
   }
 
   function unfinishedRuns(activity) {
@@ -99,8 +93,8 @@
       },
       {
         label: t('statistics.extensions.tokens'),
-        value: formatTokens(tokens.total, locale),
-        valueTooltip: tokenTooltip(tokens.total, tokens.estimated, locale),
+        value: formatTokens(tokens, locale),
+        valueTooltip: tokenTooltip(tokens, locale),
       },
       {
         label: t('statistics.overview.cost'),
@@ -138,7 +132,7 @@
       id: 'tokens',
       label: t('statistics.col.tokens'),
       align: 'end',
-      sortValue: (row) => activityTokens(row.activity).total,
+      sortValue: (row) => activityTokens(row.activity),
       cell: participantTokens,
     },
     {
@@ -159,8 +153,7 @@
 </script>
 
 {#snippet participantTokens(row)}
-  {@const tokens = activityTokens(row.activity)}
-  {@render tokenValue(tokens.total, tokens.estimated)}
+  {@render tokenValue(activityTokens(row.activity))}
 {/snippet}
 
 {#snippet participantCost(row)}
@@ -232,14 +225,9 @@
                 <span class="stats-group__figures">
                   <span
                     class="stats-number"
-                    class:stats-number--estimated={tokens.estimated > 0}
-                    use:tooltip={tokenTooltip(
-                      tokens.total,
-                      tokens.estimated,
-                      locale,
-                    )}
+                    use:tooltip={tokenTooltip(tokens, locale)}
                     >{t('statistics.tokens.count', {
-                      count: formatTokens(tokens.total, locale),
+                      count: formatTokens(tokens, locale),
                     })}</span
                   >
                   <span
