@@ -43,14 +43,16 @@
    pinned area for what stays in place (a search field, pinned navigation rows
    such as Shared defaults or New run), then the scrolling list, whose start a
    hairline always marks. */
+/* 50px, the height of the Chat and Terminals top bars, so pane headers line
+   up with them across tabs. */
 .secondary-pane__header {
   display: flex;
-  min-height: 52px;
+  min-height: 50px;
   flex-shrink: 0;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 10px 10px 10px 16px;
+  padding: 9px 10px 9px 16px;
 }
 
 .secondary-pane__pinned {

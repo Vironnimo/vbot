@@ -329,6 +329,7 @@
           </p>
         {:else if !hasProjects}
           <EmptyState
+            density="compact"
             title={t('projects.emptyTitle')}
             description={t('projects.emptySubtitle')}
           />
