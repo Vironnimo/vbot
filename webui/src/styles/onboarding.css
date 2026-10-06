@@ -426,11 +426,9 @@
   right: 14px;
   margin: 0;
 }
-/* Model id · connection: the Model id makes this a code value. */
+/* Model id · connection under the Model's name. */
 .onboarding-model-menu .searchable-dropdown__option-meta {
   color: var(--onboarding-muted);
-  font-size: var(--fs-mono-sm);
-  font-family: var(--font-mono);
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;

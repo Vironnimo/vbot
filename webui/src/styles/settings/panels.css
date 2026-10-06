@@ -203,10 +203,8 @@
   color: var(--amber);
 }
 
-/* Extension names are package identifiers. */
 .s-ext-name {
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-body);
+  font-size: var(--fs-body-md);
 }
 
 .s-ext-name--off {

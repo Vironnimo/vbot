@@ -51,11 +51,10 @@ export function agentActivityTooltip({
     const effort =
       typeof thinkingEffort === 'string' ? thinkingEffort.trim() : '';
     rows.push(
-      { label: t('chat.agentActivity.model'), value: model, mono: true },
+      { label: t('chat.agentActivity.model'), value: model },
       {
         label: t('chat.agentActivity.thinkingEffort'),
         value: effort || t('chat.agentActivity.thinkingEffortDefault'),
-        mono: Boolean(effort),
       },
     );
   }

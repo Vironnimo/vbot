@@ -110,7 +110,6 @@
   );
   const clippedLabelHint = (option, placement) => ({
     text: [option.label, option.secondaryLabel].filter(Boolean).join('\n'),
-    mono: option.code === true,
     placement,
     whenTruncated: true,
   });
@@ -136,7 +135,7 @@
           label: option,
           searchText: option,
           disabled: false,
-          code: false,
+          labelLead: '',
           ...optionDecorations(null),
         };
       }
@@ -148,17 +147,25 @@
         value: option?.value ?? '',
         label,
         disabled: Boolean(option?.disabled),
-        // Code-like values (Model ids) render in the mono face.
-        code: option?.code === true,
+        // A leading part of `label` shown muted, e.g. a Model id's provider
+        // path, so the rest of the label stands out.
+        labelLead: labelLead(label, option?.labelLead),
         secondaryLabel,
-        // Shown on the trigger in place of `label` while selected, as plain
-        // text even for a code-like option.
+        // Shown on the trigger in place of `label` while selected.
         triggerLabel: option?.triggerLabel ?? '',
         group: option?.group ?? '',
         searchText: option?.searchText ?? `${label} ${secondaryLabel}`.trim(),
         ...optionDecorations(option),
       };
     });
+  }
+
+  function labelLead(label, lead) {
+    return typeof lead === 'string' &&
+      lead.length < label.length &&
+      label.startsWith(lead)
+      ? lead
+      : '';
   }
 
   function normalizeGroups(items) {
@@ -532,9 +539,8 @@
         aria-hidden="true"
       ></span>
     {/if}
-    <span
-      class="searchable-dropdown__option-label"
-      class:searchable-dropdown__label--code={option.code}>{option.label}</span
+    <span class="searchable-dropdown__option-label"
+      >{@render labelText(option)}</span
     >{#if option.marker}<OptionMarker
         label={option.marker.label}
         tooltip={option.marker.tooltip}
@@ -549,6 +555,12 @@
     {/if}
   </button>
 {/snippet}
+
+{#snippet labelText(option)}{#if option.labelLead}<span
+      class="searchable-dropdown__label-lead">{option.labelLead}</span
+    >{option.label.slice(
+      option.labelLead.length,
+    )}{:else}{option.label}{/if}{/snippet}
 
 {#snippet groupRow(row)}
   {@const group = row.group}
@@ -639,10 +651,10 @@
     <span
       class="searchable-dropdown__trigger-label"
       class:searchable-dropdown__trigger-label--placeholder={!hasSelection}
-      class:searchable-dropdown__label--code={selectedOption?.code &&
-        !selectedOption?.triggerLabel}
     >
-      {triggerLabel}
+      {#if selectedOption && !selectedOption.triggerLabel}{@render labelText(
+          selectedOption,
+        )}{:else}{triggerLabel}{/if}
     </span>
     <svg
       class="dropdown-chevron"

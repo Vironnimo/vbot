@@ -63,7 +63,6 @@
     toggleId = undefined,
     contentId = undefined,
     groupToggle = true,
-    plainNames = false,
     onOpenChange = noop,
     onToggle = noop,
     onSetAll = noop,
@@ -110,7 +109,6 @@
     if (!item.detailTitle && !text && rows.length === 0) {
       return {
         text: item.name,
-        mono: !plainNames,
         whenTruncated: true,
         ...placement,
       };
@@ -137,9 +135,7 @@
 </script>
 
 {#snippet memberName(item)}
-  <span class="s-check-row__name" class:s-check-row__name--plain={plainNames}
-    >{item.name}</span
-  >
+  <span class="s-check-row__name">{item.name}</span>
 {/snippet}
 
 {#snippet memberMenu(item)}

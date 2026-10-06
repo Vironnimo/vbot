@@ -85,7 +85,6 @@
         {
           label: t('agents.form.model'),
           value: model || t('agents.details.modelNotConfigured'),
-          mono: Boolean(model),
           tone: model ? undefined : 'muted',
         },
         {

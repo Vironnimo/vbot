@@ -260,13 +260,12 @@
   margin-right: 6px;
   color: var(--text-faint);
 }
-/* Skill names are identifiers. */
 .skills-row-name {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   color: var(--text-hi);
-  font: 500 var(--fs-mono-sm)/1.5 var(--font-mono);
+  font: 500 var(--fs-body-sm)/1.5 var(--font-ui);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -348,7 +347,6 @@
 .skills-crumbs__current {
   overflow: hidden;
   color: var(--text-hi);
-  font-family: var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -360,9 +358,6 @@
   padding: 14px 12px 24px 0;
 }
 .skills-page-title.view-header__title {
-  font-family: var(--font-mono);
-  font-weight: 500;
-  letter-spacing: 0;
   overflow-wrap: anywhere;
 }
 .skills-page-meta {
@@ -502,9 +497,6 @@
   overflow-wrap: anywhere;
   font: 400 var(--fs-body-lg)/1.65 var(--font-ui);
 }
-.skills-content .msg-markdown {
-  color: var(--text-hi);
-}
 .skills-content pre {
   margin: 0;
   white-space: pre-wrap;
@@ -538,7 +530,8 @@
 }
 .skills-history__id {
   color: var(--text-lo);
-  font: 400 var(--fs-mono-sm)/1.5 var(--font-mono);
+  font: 400 var(--fs-body-sm)/1.5 var(--font-ui);
+  font-variant-numeric: tabular-nums;
 }
 .skills-history__what {
   color: var(--text-hi);
@@ -554,7 +547,7 @@
   margin: 2px 0 0;
   padding-left: 20px;
   color: var(--text-med);
-  font: 400 var(--fs-mono-sm)/1.5 var(--font-mono);
+  font: 400 var(--fs-body-sm)/1.5 var(--font-ui);
   overflow-wrap: anywhere;
 }
 /* An Agent's Skill maintenance (the Librarian) above its Skill selection. */

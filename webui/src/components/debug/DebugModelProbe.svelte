@@ -274,8 +274,7 @@
     border-radius: 999px;
     color: var(--text-med);
     background: var(--surface-2);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
+    font-size: var(--fs-label-sm);
   }
 
   .debug-view__probe-model-count {

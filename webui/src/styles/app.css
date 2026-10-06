@@ -9,6 +9,7 @@
 @import './app/controls.css';
 @import './app/view-surfaces.css';
 @import './app/chat-content.css';
+@import './app/markdown.css';
 @import './app/content-primitives.css';
 @import './app/hints.css';
 @import './app/mobile.css';

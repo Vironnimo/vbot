@@ -487,7 +487,10 @@
           {#if selected.deleted}<Banner>{t('swarm.wiki.deletedHelp')}</Banner
             >{/if}
           <div use:contentLinks>
-            <MarkdownContent source={content} class="msg-markdown" />
+            <MarkdownContent
+              source={content}
+              class="msg-markdown md-document"
+            />
           </div>
         {:else}<p>
             {t('swarm.wiki.choose')}
@@ -541,7 +544,7 @@
   }
   .wiki-number {
     color: var(--text-med);
-    font: 600 var(--fs-label-sm) var(--font-mono);
+    font: 600 var(--fs-label-sm) var(--font-ui);
     font-variant-numeric: tabular-nums;
     margin-right: 0.5rem;
   }

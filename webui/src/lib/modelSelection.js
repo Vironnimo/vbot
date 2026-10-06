@@ -217,7 +217,7 @@ export function buildModelSelectOptions({
       ? {
           value: selectedModel.model,
           label: selectedModel.model,
-          code: true,
+          labelLead: modelIdLead(selectedModel.model),
           isUnavailable: false,
           ...modelOptionFields(selectedCatalogModel),
         }
@@ -233,7 +233,7 @@ export function buildModelSelectOptions({
         {
           value: model.id,
           label: model.id,
-          code: true,
+          labelLead: modelIdLead(model.id),
           isUnavailable: false,
           ...modelOptionFields(model),
         },
@@ -355,6 +355,19 @@ export function modelSelectionParts(selectedValue, connections = []) {
   };
 }
 
+// A Model id splits into its provider path and the Model's own name, e.g.
+// `openrouter/nvidia/` and `nemotron-3-nano`; displays mute the first part
+// so the name stands out. An id without a provider path is all name.
+export function modelIdParts(modelId) {
+  const id = typeof modelId === 'string' ? modelId : '';
+  const cut = id.lastIndexOf('/') + 1;
+  return { lead: id.slice(0, cut), name: id.slice(cut) };
+}
+
+function modelIdLead(modelId) {
+  return modelIdParts(modelId).lead;
+}
+
 export function modelShortName(modelValue) {
   const value = typeof modelValue === 'string' ? modelValue.trim() : '';
   const { model } = parseModelSelectionValue(value);
@@ -373,7 +386,7 @@ function connectionModelOptions(model, connection, providerConnectionCount) {
       {
         value: modelSelectionValue(model.id, localId),
         label: modelOptionLabel(model, connection, providerConnectionCount),
-        code: true,
+        labelLead: modelIdLead(model.id),
         isUnavailable: false,
         ...modelFields,
       },
@@ -391,7 +404,7 @@ function connectionModelOptions(model, connection, providerConnectionCount) {
       account.id,
       providerConnectionCount,
     ),
-    code: true,
+    labelLead: modelIdLead(model.id),
     isUnavailable: false,
     ...modelFields,
   }));

@@ -74,6 +74,12 @@
       .map((option) => ({
         value: option.value,
         label: option.label ?? option.value,
+        // The Model id's provider path, shown muted.
+        labelLead:
+          typeof option.labelLead === 'string' &&
+          (option.label ?? option.value).startsWith(option.labelLead)
+            ? option.labelLead
+            : '',
         secondaryLabel: option.secondaryLabel ?? '',
         marker: optionDecorations(option).marker,
         searchText:
@@ -123,7 +129,13 @@
         onclick={() => onSelect(option)}
       >
         <span class="model-autocomplete__head">
-          <span class="model-autocomplete__label">{option.label}</span>
+          <span class="model-autocomplete__label"
+            >{#if option.labelLead}<span class="model-autocomplete__lead"
+                >{option.labelLead}</span
+              >{option.label.slice(
+                option.labelLead.length,
+              )}{:else}{option.label}{/if}</span
+          >
           {#if option.marker}
             <OptionMarker
               label={option.marker.label}
@@ -225,11 +237,14 @@
   .model-autocomplete__label {
     overflow: hidden;
     color: var(--text-hi);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
+    font-size: var(--fs-body-sm);
     line-height: 1.4;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .model-autocomplete__lead {
+    color: var(--text-lo);
   }
 
   .model-autocomplete__meta {

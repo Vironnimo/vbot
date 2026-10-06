@@ -217,8 +217,7 @@
   .skill-autocomplete__name {
     overflow: hidden;
     color: var(--text-hi);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
+    font-size: var(--fs-body-sm);
     line-height: 1.4;
     text-overflow: ellipsis;
     white-space: nowrap;

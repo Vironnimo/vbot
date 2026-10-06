@@ -67,8 +67,7 @@
   margin: 0;
   padding: 5px 8px;
   color: var(--text-hi);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
   font-weight: 500;
   letter-spacing: 0.08em;
   text-transform: uppercase;

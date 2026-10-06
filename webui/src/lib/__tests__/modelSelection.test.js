@@ -100,7 +100,7 @@ describe('buildModelSelectOptions', () => {
       {
         value: 'openai/gpt-5.2::api-key',
         label: 'openai/gpt-5.2',
-        code: true,
+        labelLead: 'openai/',
         isUnavailable: false,
         suitable: true,
         suitabilityReasons: [],

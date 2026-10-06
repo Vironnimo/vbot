@@ -5,6 +5,7 @@
   import { tooltip } from '$lib/tooltip.js';
   import Badge from '../ui/Badge.svelte';
   import DataTable from '../ui/DataTable.svelte';
+  import ModelId from '../ui/ModelId.svelte';
   import {
     agentFilterText,
     formatDurationMs,
@@ -84,7 +85,6 @@
     {
       id: 'primary_model',
       label: t('statistics.col.model'),
-      mono: true,
       cell: modelCell,
     },
   ]);
@@ -140,12 +140,13 @@
             rows: row.models.map((model, index) => ({
               label: String(index + 1),
               value: model,
-              mono: true,
             })),
           }
-        : { text: row.primary_model, mono: true, whenTruncated: true }}
-      >{row.primary_model}{#if (row.models?.length ?? 0) > 1}<span
-          class="stats-model__more">+{row.models.length - 1}</span
+        : { text: row.primary_model, whenTruncated: true }}
+      ><ModelId
+        id={row.primary_model}
+      />{#if (row.models?.length ?? 0) > 1}<span class="stats-model__more"
+          >+{row.models.length - 1}</span
         >{/if}</span
     >
   {:else}

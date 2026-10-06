@@ -24,7 +24,8 @@
   import {
     agentName,
     dateCell,
-    idCell,
+    modelCell,
+    modelName,
     sessionWithAgent,
   } from './ReportPrimitives.svelte';
 
@@ -223,8 +224,7 @@
     {
       id: 'model',
       label: t('statistics.col.model'),
-      mono: true,
-      cell: idCell,
+      cell: modelCell,
     },
     {
       id: 'previous_input_tokens',
@@ -244,8 +244,7 @@
     {
       id: 'model',
       label: t('statistics.col.model'),
-      mono: true,
-      cell: idCell,
+      cell: modelCell,
     },
     { id: 'calls', label: t('statistics.col.calls'), align: 'end' },
     {
@@ -310,7 +309,6 @@
     {
       id: 'models',
       label: t('statistics.col.models'),
-      mono: true,
       sortable: false,
       cell: modelsCell,
     },
@@ -336,7 +334,7 @@
   );
 
   const roleColumns = $derived([
-    { id: 'role', label: t('statistics.col.role'), mono: true },
+    { id: 'role', label: t('statistics.col.role') },
     { id: 'chat', label: t('statistics.col.chatMessages'), align: 'end' },
     {
       id: 'records',
@@ -388,10 +386,7 @@
 {/snippet}
 
 {#snippet burstModel(key)}
-  <span
-    class="stats-id"
-    use:tooltip={{ text: key, mono: true, whenTruncated: true }}>{key}</span
-  >
+  {@render modelName(key)}
 {/snippet}
 
 {#snippet burstEntries(entries, name, label)}

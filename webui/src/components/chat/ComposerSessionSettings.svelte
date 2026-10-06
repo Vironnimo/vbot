@@ -20,6 +20,7 @@
     buildModelSelectOptions,
     filterModelSelectOptions,
     modelFilterFooterLabel,
+    modelIdParts,
     modelSelectionParts,
     parseModelSelectionValue,
     selectModelValue,
@@ -136,7 +137,7 @@
     secondaryLabel: defaultModelName
       ? t('chat.sessionSettings.agentDefault')
       : '',
-    code: Boolean(defaultModelName),
+    labelLead: modelIdParts(defaultModelName).lead,
   });
   let allModelOptions = $derived.by(() => {
     if (!view.catalog) {
@@ -144,7 +145,14 @@
       // chosen Model unavailable.
       const { model } = parseModelSelectionValue(view.model);
       return view.model
-        ? [modelDefaultOption, { value: view.model, label: model, code: true }]
+        ? [
+            modelDefaultOption,
+            {
+              value: view.model,
+              label: model,
+              labelLead: modelIdParts(model).lead,
+            },
+          ]
         : [modelDefaultOption];
     }
     // Canonical `provider/model` values: the Session leaves Connection
@@ -178,14 +186,15 @@
   let modelPickerOptions = $derived(
     modelOptions.map((option) => {
       const value = option.value || view.defaultModel;
-      return value ? { ...option, triggerLabel: modelName(value) } : option;
+      if (!value) return option;
+      const { model } = parseModelSelectionValue(value);
+      const name = modelNames.get(model);
+      // Without a catalog name, an option already labelled with the id shows
+      // it as is, its provider path muted.
+      if (!name && option.labelLead) return option;
+      return { ...option, triggerLabel: name || model };
     }),
   );
-
-  function modelName(value) {
-    const { model } = parseModelSelectionValue(value);
-    return modelNames.get(model) || model;
-  }
   let modelTooltip = $derived.by(() => {
     const value = view.model || view.defaultModel;
     const text = view.model
@@ -201,7 +210,6 @@
         {
           label: t('chat.sessionSettings.model'),
           value: parts.model,
-          mono: true,
         },
         ...(parts.connection
           ? [{ label: t('agents.details.connection'), value: parts.connection }]

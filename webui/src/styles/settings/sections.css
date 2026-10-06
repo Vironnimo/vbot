@@ -442,7 +442,8 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text-hi);
-  font: var(--fs-mono-sm) / 1.5 var(--font-mono);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -462,11 +463,6 @@
 
 .s-check-row__state--warn {
   color: var(--amber);
-}
-
-/* Members that are names rather than identifiers (Agents, Projects). */
-.s-check-row__name--plain {
-  font: var(--fs-body-sm) / 1.5 var(--font-ui);
 }
 
 .s-check-item > .s-check-row {

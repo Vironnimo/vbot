@@ -535,7 +535,9 @@
                 <div class="openrouter-routing__provider-list">
                   {#each currentPolicy.providers as slug, index (slug)}
                     <div class="openrouter-routing__provider-row">
-                      <code>{slug}</code>
+                      <span class="openrouter-routing__provider-name"
+                        >{slug}</span
+                      >
                       <div class="openrouter-routing__provider-actions">
                         {#if currentPolicy.mode === 'ordered'}
                           <Button
@@ -620,7 +622,8 @@
               <div class="openrouter-routing__provider-list">
                 {#each currentPolicy.blocked as slug (slug)}
                   <div class="openrouter-routing__provider-row">
-                    <code>{slug}</code>
+                    <span class="openrouter-routing__provider-name">{slug}</span
+                    >
                     <Button
                       variant="tertiary"
                       icon

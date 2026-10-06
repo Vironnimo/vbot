@@ -619,7 +619,7 @@
               {:else}
                 <MarkdownContent
                   source={scope.previewText}
-                  class="sp-document-content"
+                  class="msg-markdown md-document sp-document-content"
                 />
               {/if}
             </div>

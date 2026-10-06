@@ -115,9 +115,8 @@
   overflow: auto;
   padding: var(--space-sm) var(--space-md) var(--space-sm) 0;
   color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-body);
-  line-height: 1.65;
+  font-size: var(--fs-body-md);
+  line-height: 1.6;
   overflow-wrap: anywhere;
   tab-size: 2;
   white-space: pre-wrap;
@@ -157,7 +156,6 @@
   align-items: center;
   justify-content: center;
   border-radius: var(--r-sm);
-  font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 600;
 }
@@ -206,15 +204,8 @@
 .msg-timestamp,
 .msg-meta-extra {
   color: var(--text-lo);
-  font-family: var(--font-mono);
-}
-
-.msg-timestamp {
-  font-size: 10.5px;
-}
-
-.msg-meta-extra {
-  font-size: 11px;
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .msg-content {
@@ -266,242 +257,6 @@
   color: var(--md-text, var(--text-hi));
   font-size: var(--fs-body-lg);
   line-height: var(--md-line-height, 1.65);
-}
-
-/* Chat reading typography. Markdown is also shown outside Chat (Skill and
-   System Prompt views); those keep the plain `.msg-markdown` values below,
-   while the Chat view sets these `--md-*` properties for its own rhythm in
-   three steps: wrapped lines sit close, a block gap (0.6em) separates
-   paragraphs, lists, quotes, code and tables, and the largest gap sits above
-   a heading so sections read as groups. Prose is dimmed one step so headings
-   and bold stand out at full brightness. */
-.chat-view {
-  --md-text: var(--text-body);
-  --md-emphasis: var(--text-hi);
-  --md-line-height: 1.5;
-  --md-heading-margin: 1.4em 0 0.15em;
-  --md-list-margin: 0 0 0.6em 1.4em;
-  --md-nested-list-margin: 0.2em 0 0 1.4em;
-  --md-block-margin: 0.6em 0;
-}
-
-.msg-markdown {
-  padding: 2px 0;
-  color: var(--md-text, var(--text-hi));
-  font-size: var(--fs-body-lg);
-  line-height: var(--md-line-height, 1.65);
-}
-
-.msg-markdown > *:first-child {
-  margin-top: 0;
-}
-
-.msg-markdown > *:last-child {
-  margin-bottom: 0;
-}
-
-.msg-markdown p {
-  margin: 0 0 0.6em;
-}
-
-/* Chat headings structure an answer rather than title a document: only h1
-   and h2 grow, h3-h6 are bold body text, and the space sits above a heading
-   so it binds to the content it introduces. */
-.msg-markdown h1,
-.msg-markdown h2,
-.msg-markdown h3,
-.msg-markdown h4,
-.msg-markdown h5,
-.msg-markdown h6 {
-  margin: var(--md-heading-margin, 1.1em 0 0.35em);
-  color: var(--md-emphasis, inherit);
-  font-size: 1em;
-  font-weight: 600;
-  line-height: 1.35;
-}
-
-.msg-markdown h1 {
-  font-size: 1.25em;
-}
-
-.msg-markdown h2 {
-  font-size: 1.13em;
-}
-
-.msg-markdown ul,
-.msg-markdown ol {
-  margin: var(--md-list-margin, 0.4em 0 0.4em 1.4em);
-  padding: 0;
-}
-
-.msg-markdown li > ul,
-.msg-markdown li > ol {
-  margin: var(--md-nested-list-margin, 0.4em 0 0.4em 1.4em);
-}
-
-.msg-markdown li {
-  margin-bottom: 0.2em;
-}
-
-.msg-markdown blockquote {
-  margin: var(--md-block-margin, 0.5em 0);
-  padding: 0 0 0 12px;
-  border-left: 3px solid var(--border-2);
-  color: var(--text-med);
-}
-
-.msg-markdown pre {
-  margin: var(--md-block-margin, 0.5em 0);
-  overflow-x: auto;
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-sm);
-  padding: 10px 14px;
-  background: var(--surface-2);
-  font-size: var(--fs-mono-body);
-  line-height: 1.5;
-}
-
-/* Code blocks set size and line height on the pre, not the inline code: a
-   pre inheriting the prose size keeps the prose line height as the minimum
-   height of every code line. */
-.msg-markdown pre code {
-  border: none;
-  padding: 0;
-  background: none;
-  font-family: var(--font-mono);
-  font-size: inherit;
-}
-
-/* Fenced Markdown code is a bounded technical artifact, so it gets the
-   language/copy header defined by the Chat design rather than the plain
-   indented-code treatment above. */
-.msg-code {
-  margin: 0.5em 0;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--bg);
-}
-
-.msg-markdown .msg-code {
-  margin: var(--md-block-margin, 0.5em 0);
-}
-
-.msg-code__header {
-  display: flex;
-  min-height: 30px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 3px 6px 3px 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
-}
-
-.msg-code__language {
-  overflow: hidden;
-  color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.msg-code__copy-slot {
-  display: flex;
-  flex: 0 0 auto;
-}
-
-.btn-tertiary.btn-icon.msg-code__copy {
-  width: 24px;
-  height: 24px;
-  min-height: 24px;
-}
-
-.msg-markdown .msg-code pre,
-.reasoning-body .msg-code pre {
-  margin: 0;
-  overflow-x: auto;
-  border: none;
-  border-radius: 0;
-  padding: 12px 14px;
-  background: var(--bg);
-  font-size: var(--fs-mono-xs);
-  line-height: 1.65;
-}
-
-.msg-markdown .msg-code pre code,
-.reasoning-body .msg-code pre code {
-  border: none;
-  padding: 0;
-  color: var(--text-med);
-  background: none;
-  font-family: var(--font-mono);
-  font-size: inherit;
-  font-style: normal;
-  line-height: inherit;
-  white-space: pre;
-}
-
-.msg-markdown code {
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-sm);
-  padding: 1px 5px;
-  background: var(--surface-2);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-body);
-}
-
-.msg-markdown a,
-.msg-body-text a {
-  color: var(--accent);
-  text-decoration: underline;
-}
-
-.msg-markdown a:hover,
-.msg-body-text a:hover {
-  opacity: 0.8;
-}
-
-.msg-markdown table {
-  margin: var(--md-block-margin, 0.5em 0);
-  border-collapse: collapse;
-  font-size: var(--fs-body-md);
-}
-
-.msg-markdown th,
-.msg-markdown td {
-  border: 1px solid var(--border-2);
-  padding: 4px 10px;
-}
-
-.msg-markdown th {
-  background: var(--surface-2);
-  color: var(--md-emphasis, inherit);
-  font-weight: 600;
-}
-
-.msg-markdown strong {
-  color: var(--md-emphasis, inherit);
-  font-weight: 600;
-}
-
-.msg-markdown hr {
-  margin: 0.8em 0;
-  border: none;
-  border-top: 1px solid var(--border-2);
-}
-
-.msg-markdown img {
-  max-width: 100%;
-  max-height: 320px;
-  margin: 0.4em 0;
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-sm);
-  background: var(--bg);
-  object-fit: contain;
-  cursor: zoom-in;
-  vertical-align: middle;
 }
 
 .msg.error > .msg-content > .msg-body-text {
@@ -658,11 +413,9 @@
   }
 }
 
-/* The collapsed Tool-call line is a code-like trace (Tool name, arguments,
-   diff facts, timing), so it stays mono as one unit. */
-.te-fn,
+/* The collapsed Tool-call line: the Tool's name and its timing read as
+   UI text; its arguments (paths, commands, patterns) are code. */
 .te-arg,
-.te-time,
 .teb-code {
   font-family: var(--font-mono);
 }
@@ -670,7 +423,7 @@
 .te-fn {
   flex-shrink: 0;
   color: var(--text-med);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
   font-weight: 500;
 }
 
@@ -727,8 +480,8 @@
 .te-fact {
   flex-shrink: 0;
   color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -755,7 +508,8 @@
   flex-shrink: 0;
   margin-left: 6px;
   color: var(--text-lo);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .te-time.error,

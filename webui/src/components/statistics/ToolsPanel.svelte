@@ -21,7 +21,7 @@
   import {
     agentName,
     dateCell,
-    idCell,
+    nameCell,
     kpiTile,
   } from './ReportPrimitives.svelte';
 
@@ -84,8 +84,7 @@
     {
       id: 'name',
       label: t('statistics.col.tool'),
-      mono: true,
-      cell: idCell,
+      cell: nameCell,
     },
     { id: 'calls', label: t('statistics.col.calls'), align: 'end' },
     {
@@ -159,7 +158,6 @@
     {
       id: 'name',
       label: t('statistics.col.skill'),
-      mono: true,
       cell: skillNameCell,
     },
     {

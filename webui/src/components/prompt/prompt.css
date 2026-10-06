@@ -135,66 +135,15 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* Readable Markdown uses the shared document variant (`.md-document`); the
+   prompt only adds wrapping for long unbroken tokens and scrolling for wide
+   tables. */
 .sp-view .sp-document .sp-document-content {
-  color: var(--text-hi);
-  font: var(--fs-body-lg)/1.8 var(--font-ui);
   overflow-wrap: anywhere;
-}
-.sp-view .sp-document .sp-document-content h1,
-.sp-view .sp-document .sp-document-content h2,
-.sp-view .sp-document .sp-document-content h3 {
-  color: var(--text-hi);
-  font-weight: 600;
-  line-height: 1.4;
-  margin-top: 28px;
-  margin-bottom: 14px;
-}
-.sp-view .sp-document .sp-document-content h1 {
-  font-size: var(--fs-heading-lg);
-}
-.sp-view .sp-document .sp-document-content h2 {
-  font-size: var(--fs-heading-md);
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border);
-}
-.sp-view .sp-document .sp-document-content h3 {
-  font-size: var(--fs-heading-sm);
-}
-.sp-view .sp-document .sp-document-content > :first-child {
-  margin-top: 0;
-}
-.sp-view .sp-document .sp-document-content p,
-.sp-view .sp-document .sp-document-content ul,
-.sp-view .sp-document .sp-document-content ol {
-  margin-block: 14px;
-}
-.sp-view .sp-document .sp-document-content li {
-  margin-block: 6px;
-}
-.sp-view .sp-document .sp-document-content pre {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  color: var(--text-hi);
-}
-.sp-view .sp-document .sp-document-content code {
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-body);
-  color: var(--text-hi);
-}
-.sp-view .sp-document .sp-document-content img {
-  max-width: 100%;
 }
 .sp-view .sp-document .sp-document-content table {
   display: block;
   overflow-x: auto;
-}
-.sp-view .sp-document .sp-document-content th,
-.sp-view .sp-document .sp-document-content td {
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-}
-.sp-view .sp-document .sp-document-content a {
-  color: var(--accent);
 }
 .sp-view .sp-blocklist-toolbar-actions {
   display: flex;

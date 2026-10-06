@@ -37,7 +37,8 @@
     costValue,
     dateCell,
     kpiTile,
-    idCell,
+    modelCell,
+    modelName,
     originName,
     sessionWithAgent,
     tokenValue,
@@ -117,7 +118,6 @@
       id: 'key',
       label: usageDimensionLabel(activeDimension),
       sortValue: (row) => usageRowLabel(activeDimension, row.key),
-      mono: activeDimension === 'model',
       cell: breakdownName,
     },
     { id: 'calls', label: t('statistics.col.calls'), align: 'end' },
@@ -197,8 +197,7 @@
     {
       id: 'model',
       label: t('statistics.col.model'),
-      mono: true,
-      cell: idCell,
+      cell: modelCell,
     },
     {
       id: 'kind',
@@ -278,12 +277,13 @@
     {@render originName(row.key)}
   {:else if activeDimension === 'project' && !row.key}
     <span class="stats-muted">{usageRowLabel('project', row.key)}</span>
+  {:else if activeDimension === 'model' && row.key}
+    {@render modelName(row.key)}
   {:else}
     <span
       class="stats-name"
       use:tooltip={{
         text: usageRowLabel(activeDimension, row.key),
-        mono: activeDimension === 'model',
         whenTruncated: true,
       }}>{usageRowLabel(activeDimension, row.key)}</span
     >

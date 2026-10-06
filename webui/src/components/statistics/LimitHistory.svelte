@@ -7,6 +7,7 @@
   import Button from '../ui/Button.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
+  import ModelId from '../ui/ModelId.svelte';
   import { agentName } from './ReportPrimitives.svelte';
   import { tooltip } from '$lib/tooltip.js';
   import {
@@ -635,12 +636,12 @@
                       </div>
                       <div class="limit-run__models">
                         {#each run.models as model (model)}
-                          <code
+                          <span
+                            class="limit-run__model"
                             use:tooltip={{
                               text: model,
-                              mono: true,
                               whenTruncated: true,
-                            }}>{model}</code
+                            }}><ModelId id={model} /></span
                           >
                         {/each}
                       </div>

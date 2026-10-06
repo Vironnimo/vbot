@@ -20,7 +20,7 @@
   import {
     costValue,
     kpiTile,
-    idCell,
+    modelCell,
     tokenValue,
   } from './ReportPrimitives.svelte';
 
@@ -118,8 +118,7 @@
     {
       id: 'model',
       label: t('statistics.col.model'),
-      mono: true,
-      cell: idCell,
+      cell: modelCell,
     },
     {
       id: 'runs',

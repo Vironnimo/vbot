@@ -302,11 +302,10 @@
   background: var(--surface-2);
 }
 
-.openrouter-routing__provider-row code {
+.openrouter-routing__provider-name {
   min-width: 0;
   color: var(--text-hi);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-sm);
+  font-size: var(--fs-body-sm);
   overflow-wrap: anywhere;
 }
 
@@ -363,8 +362,7 @@
   min-width: 0;
   flex: 1;
   color: var(--text-hi);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-body-sm);
   overflow-wrap: anywhere;
 }
 
@@ -464,8 +462,7 @@
   display: inline-flex;
   margin-top: 12px;
   color: var(--accent);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-body-sm);
   overflow-wrap: anywhere;
   text-decoration: none;
 }

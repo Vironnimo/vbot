@@ -7,6 +7,7 @@
   import { formatMoment } from '$lib/timeText.js';
   import Badge from '../ui/Badge.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
+  import ModelId from '../ui/ModelId.svelte';
   import {
     agentDisplay,
     agentTooltip,
@@ -24,7 +25,9 @@
     sessionName,
     sessionWithAgent,
     originName,
-    idCell,
+    nameCell,
+    modelCell,
+    modelName,
     dateCell,
     tokenValue,
     costValue,
@@ -169,19 +172,35 @@
 {/snippet}
 
 <!-- Table cells (DataTable `cell`) for the row's value under the column id:
-     a code-like id (Model, Tool) on one line, shortened with the full id on
-     hover when cut; a short date and time on one line, the full moment on
-     hover. -->
-{#snippet idCell(row, column)}
-  {@const id = row?.[column.id]}
-  {#if id}
-    <span
-      class="stats-id"
-      use:tooltip={{ text: id, mono: true, whenTruncated: true }}>{id}</span
+     a name (a Tool's) or a Model id on one line, shortened with the full
+     value on hover when cut; a short date and time on one line, the full
+     moment on hover. -->
+{#snippet nameCell(row, column)}
+  {@const name = row?.[column.id]}
+  {#if name}
+    <span class="stats-id" use:tooltip={{ text: name, whenTruncated: true }}
+      >{name}</span
     >
   {:else}
     —
   {/if}
+{/snippet}
+
+{#snippet modelCell(row, column)}
+  {@const id = row?.[column.id]}
+  {#if id}
+    {@render modelName(id)}
+  {:else}
+    —
+  {/if}
+{/snippet}
+
+<!-- A Model id, its provider path muted, shortened with the full id on
+     hover when cut. -->
+{#snippet modelName(id)}
+  <span class="stats-id" use:tooltip={{ text: id, whenTruncated: true }}
+    ><ModelId {id} /></span
+  >
 {/snippet}
 
 {#snippet dateCell(row, column)}

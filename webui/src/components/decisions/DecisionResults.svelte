@@ -1,6 +1,7 @@
 <script>
   import { formatDateTimeInApplicationZone } from '$lib/dateTimePrefs.svelte.js';
   import { t } from '$lib/i18n.js';
+  import ModelId from '../ui/ModelId.svelte';
   import StatePreview from './StatePreview.svelte';
   let { record } = $props();
   const percent = (n) => `${(n * 100).toFixed(1)}%`;
@@ -72,7 +73,7 @@
             : `$${record.result.usage.cost.toFixed(7)}`}</span
         >
       </div>
-      <p class="jev-help jev-model">{record.result.model}</p>
+      <p class="jev-help jev-model"><ModelId id={record.result.model} /></p>
       {#each record.snapshot.questions as question, index (question.id)}
         {@const answer = record.result.answers[question.id]}
         <article class="jev-answer">
