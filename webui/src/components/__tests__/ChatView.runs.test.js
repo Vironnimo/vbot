@@ -7,7 +7,6 @@ import {
   closeSubscriptionForMock,
   createAgent,
   createChatRpcMock,
-  findButtonByText,
   findCancelRunButton,
   findNewSessionButton,
   flushSync,
@@ -28,6 +27,7 @@ import {
   testChatStateRefs,
   waitForCondition,
   waitForText,
+  sessionListButton,
 } from './ChatView.support.js';
 import { createChatViewParentHarness } from './ChatView.parent.support.svelte.js';
 import { t } from '../../lib/i18n.js';
@@ -42,7 +42,7 @@ const subAgentDot = (status) =>
   subAgentRow()?.querySelector(`.te-dot.${status}`) ?? null;
 
 async function reopenCurrentSessionFromDrawer() {
-  findButtonByText('Sessions').click();
+  sessionListButton().click();
   await waitForCondition(() =>
     Boolean(document.querySelector('.session-row__select')),
   );

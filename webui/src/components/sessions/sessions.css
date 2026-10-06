@@ -1,19 +1,27 @@
 .session-drawer {
-  position: absolute;
-  top: var(--session-controls-inset, 6px);
-  left: var(--session-controls-inset, 6px);
-  /* Above the floating composer overlay (z-index 3): the expanded drawer
-       reaches into that region and must never be covered by its scrim. */
-  z-index: 4;
+  position: relative;
   display: flex;
-  width: min(290px, calc(100% - 12px));
-  max-height: calc(100% - 2 * var(--session-controls-inset, 6px));
+  width: 260px;
+  min-height: 0;
+  flex: 0 0 260px;
   flex-direction: column;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  border-right: 1px solid var(--border);
   background: var(--surface);
-  box-shadow: var(--floating-elevation);
   overflow: hidden;
+}
+
+/* Too narrow for the list beside the chat: it lies over the chat instead,
+   above the floating composer (z-index 3). */
+@container chat-area (max-width: 720px) {
+  .session-drawer {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 4;
+    width: min(290px, calc(100% - 48px));
+    box-shadow: var(--floating-elevation);
+  }
 }
 
 .session-policy-modal__body {
@@ -56,21 +64,17 @@
   background: transparent;
 }
 
-.session-drawer__controls {
-  display: flex;
-  align-items: stretch;
-  gap: 2px;
-  min-width: 0;
-}
-
 .session-drawer__title {
+  min-width: 0;
+  flex: 1;
   margin: 0;
   padding: 5px 8px;
+  overflow: hidden;
   color: var(--text-hi);
-  font-size: var(--fs-label-sm);
+  font-size: var(--fs-label-md);
   font-weight: 500;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-drawer__filter {
@@ -240,7 +244,7 @@
   width: 100%;
   border: 0;
   border-radius: inherit;
-  padding: 5px 28px 5px 6px;
+  padding: 5px 28px 5px 18px;
   text-align: left;
   background: transparent;
   color: var(--text-hi);
@@ -389,6 +393,7 @@
 }
 
 .session-row__heading {
+  position: relative;
   display: flex;
   width: 100%;
   min-width: 0;
@@ -441,26 +446,15 @@
   flex-shrink: 0;
 }
 
-.session-row__unread {
+/* Every title starts at the same edge; the status dot sits in the gutter
+   before it. */
+.session-row__status {
+  position: absolute;
+  top: 50%;
+  left: -12px;
   display: inline-flex;
-  flex-shrink: 0;
   align-items: center;
-  color: var(--blue);
-}
-
-.session-row__unread-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--blue);
-  box-shadow: 0 0 0 2px var(--blue-dim);
-}
-
-.session-row__active-dot {
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-  padding-top: 1px;
+  transform: translateY(-50%);
 }
 
 .session-drawer__state {
@@ -483,14 +477,6 @@
 }
 
 @media (max-width: 640px) {
-  .session-drawer {
-    top: var(--session-controls-inset, 8px);
-    left: 8px;
-    right: 8px;
-    width: auto;
-    max-height: 60%;
-  }
-
   .session-drawer__icon-button {
     width: 40px;
     min-width: 40px;

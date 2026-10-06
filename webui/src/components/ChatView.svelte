@@ -29,7 +29,7 @@
     backgroundTasks,
     reflectionTaskRows,
   } from '../lib/chatTimelinePresentation.js';
-  import { onMount, tick, untrack } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { listConnections, listModels, subscribeRunEvents } from '$lib/api.js';
   import { getDraft } from '$lib/composerMemory.js';
   import { agentNeedsModel } from '$lib/onboarding.js';
@@ -778,6 +778,12 @@
       : ''}
     loadingAgents={chatState.loadingAgents}
     onSelectAgent={handleSelectPickerAgent}
+    sessionListOpen={showSessionDrawer}
+    sessionListDisabled={!target.activeAgent}
+    onToggleSessionList={() => (showSessionDrawer = !showSessionDrawer)}
+    newSessionDisabled={!target.activeAgent || chatState.loadingHistory}
+    onNewSession={navigation.handleNewSession}
+    actions={workspaceActions}
   />
 
   {#if target.projectAgentActive}
@@ -803,71 +809,29 @@
     <EmptyState fill title={t('chat.noAgentSelected')} />
   {:else}
     <div class="chat-view__content-shell">
+      {#if showSessionDrawer}
+        <SessionListDrawer
+          agentId={target.activeAgentAddress}
+          currentSessionId={navigation.viewingSessionId ||
+            target.activeAgent.current_session_id}
+          reloadToken={`${sessionsRefreshToken}:${createdSessions}`}
+          invalidations={sessionInvalidations}
+          agents={target.sessionDrawerAgents}
+          liveActivity={sessionDrawerActivity}
+          initialFilters={sessionFilters}
+          onFiltersChange={(next) => {
+            sessionFilters = next;
+            onSessionFiltersChange(next);
+          }}
+          onSessionSelected={navigation.handleSessionSelected}
+          onSessionDeleted={navigation.handleSessionDeleted}
+          onCompactionPolicyChange={chatController.applySessionCompactionPolicy}
+        />
+      {/if}
       <div
         class="chat-view__surface"
         style={`--chat-overlay-height: ${layout.footerOverlayHeight}px; --chat-scrollbar-width: ${layout.chatScrollbarWidth}px`}
       >
-        {#snippet sessionControls()}
-          <Button
-            variant="secondary"
-            class="chat-view__session-toggle"
-            disabled={!target.activeAgent}
-            aria-expanded={showSessionDrawer}
-            onClick={async (event) => {
-              const surface = event.currentTarget.closest(
-                '.chat-view__surface',
-              );
-              showSessionDrawer = !showSessionDrawer;
-              await tick();
-              surface
-                ?.querySelector('.chat-view__session-toggle')
-                ?.focus({ preventScroll: true });
-            }}
-          >
-            {t('sessions.title')}
-          </Button>
-          <Button
-            variant="secondary"
-            icon
-            class="chat-view__new-session-fab"
-            ariaLabel={t('chat.newSession')}
-            tooltip={t('chat.newSession')}
-            disabled={chatState.loadingHistory}
-            onClick={navigation.handleNewSession}
-          >
-            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-          </Button>
-          {#if workspaceActions}
-            {@render workspaceActions()}
-          {/if}
-        {/snippet}
-        {#if !showSessionDrawer}
-          <div class="chat-view__session-bar">
-            {@render sessionControls()}
-          </div>
-        {/if}
-        {#if showSessionDrawer}
-          <SessionListDrawer
-            headerControls={sessionControls}
-            agentId={target.activeAgentAddress}
-            currentSessionId={navigation.viewingSessionId ||
-              target.activeAgent.current_session_id}
-            reloadToken={`${sessionsRefreshToken}:${createdSessions}`}
-            invalidations={sessionInvalidations}
-            agents={target.sessionDrawerAgents}
-            liveActivity={sessionDrawerActivity}
-            initialFilters={sessionFilters}
-            onFiltersChange={(next) => {
-              sessionFilters = next;
-              onSessionFiltersChange(next);
-            }}
-            onSessionSelected={navigation.handleSessionSelected}
-            onSessionDeleted={navigation.handleSessionDeleted}
-            onCompactionPolicyChange={chatController.applySessionCompactionPolicy}
-          />
-        {/if}
         <div class="chat-view__timeline-shell">
           <ChatTimeline
             timelineItems={activeTimelineItems}

@@ -24,6 +24,7 @@ import {
   testRunStreamRefs,
   waitForCondition,
   waitForText,
+  sessionListButton,
 } from './ChatView.support.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
@@ -62,7 +63,7 @@ describe('ChatView', () => {
         expect(
           document.querySelector('.chat-view').getAttribute('data-chat-width'),
         ).toBe(rendered);
-        expect(findButtonByText(t('sessions.title'))).toBeTruthy();
+        expect(sessionListButton()).toBeTruthy();
         expect(findNewSessionButton()).toBeTruthy();
         expect(document.querySelector('.chat-refresh')).toBeNull();
       },

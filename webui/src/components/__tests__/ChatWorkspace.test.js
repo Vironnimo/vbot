@@ -109,8 +109,8 @@ describe('ChatWorkspace', () => {
     await waitForCondition(() => pane(0)?.textContent.includes('Hello'));
     if (!split) return;
     action(0, 'Split view');
-    await waitForCondition(() => button(pane(1), 'Sessions'));
-    action(1, 'Sessions');
+    await waitForCondition(() => button(pane(1), 'Session list'));
+    action(1, 'Session list');
     await waitForCondition(() => pane(1)?.textContent.includes('Second topic'));
     Array.from(pane(1).querySelectorAll('button'))
       .find((el) => el.textContent.includes('Second topic'))
@@ -126,9 +126,9 @@ describe('ChatWorkspace', () => {
       await start(false);
       if (index === 1) {
         action(0, 'Split view');
-        await waitForCondition(() => button(pane(1), 'Sessions'));
+        await waitForCondition(() => button(pane(1), 'Session list'));
       }
-      action(index, 'Sessions');
+      action(index, 'Session list');
       await waitForCondition(() =>
         pane(index).querySelector('.session-row__select'),
       );
@@ -143,7 +143,7 @@ describe('ChatWorkspace', () => {
       selectedRow.click();
       flushSync();
       expect(pane(index).querySelector('.session-drawer')).toBe(drawer);
-      action(index, 'Sessions');
+      action(index, 'Session list');
       expect(pane(index).querySelector('.session-drawer')).toBeNull();
     },
   );
@@ -158,7 +158,7 @@ describe('ChatWorkspace', () => {
         await waitForCondition(() => pane(1)?.querySelector('iframe'));
         expect(testChatStateRefs).toHaveLength(1);
       }
-      action(0, 'Sessions');
+      action(0, 'Session list');
       const firstDrawer = pane(0).querySelector('.session-drawer');
       firstDrawer.querySelector('button[aria-label="All agents"]').click();
       flushSync();
@@ -178,12 +178,12 @@ describe('ChatWorkspace', () => {
       flushSync();
       if (route === 'split') action(0, 'Split view');
       else action(1, 'Back to chat');
-      await waitForCondition(() => button(pane(1), 'Sessions'));
+      await waitForCondition(() => button(pane(1), 'Session list'));
       expect(pane(1).querySelector('.session-drawer')).toBeNull();
       expect(pane(0).querySelector('.session-drawer')).toBe(firstDrawer);
 
       listSessionsMock.mockClear();
-      action(1, 'Sessions');
+      action(1, 'Session list');
       await waitForCondition(() => listSessionsMock.mock.calls.length > 0);
       expect(listSessionsMock).toHaveBeenLastCalledWith(
         ['alpha'],
@@ -204,17 +204,17 @@ describe('ChatWorkspace', () => {
       // Subsequent choices remain local and survive list/area close and reopen.
       switches()[0].click();
       flushSync();
-      action(1, 'Sessions');
+      action(1, 'Session list');
       action(1, 'Close area');
       action(0, 'Split view');
       expect(pane(1).querySelector('.session-drawer')).toBeNull();
-      action(1, 'Sessions');
+      action(1, 'Session list');
       pane(1).querySelector('.session-drawer__filter-trigger').click();
       flushSync();
       expect(switches()[0].getAttribute('aria-checked')).toBe('false');
-      action(1, 'Sessions');
-      action(0, 'Sessions');
-      action(0, 'Sessions');
+      action(1, 'Session list');
+      action(0, 'Session list');
+      action(0, 'Session list');
       pane(0).querySelector('.session-drawer__filter-trigger').click();
       flushSync();
       expect(
@@ -230,7 +230,7 @@ describe('ChatWorkspace', () => {
       ),
     ];
     const openFilters = (index) => {
-      action(index, 'Sessions');
+      action(index, 'Session list');
       pane(index).querySelector('.session-drawer__filter-trigger').click();
       flushSync();
     };
@@ -242,9 +242,9 @@ describe('ChatWorkspace', () => {
       toggle.click();
       flushSync();
     }
-    action(0, 'Sessions');
+    action(0, 'Session list');
     action(0, 'Split view');
-    await waitForCondition(() => button(pane(1), 'Sessions'));
+    await waitForCondition(() => button(pane(1), 'Session list'));
     openFilters(1);
     button(pane(1), 'All agents').click();
     flushSync();
@@ -272,9 +272,9 @@ describe('ChatWorkspace', () => {
         includeChannels: true,
       }),
     );
-    action(0, 'Sessions');
+    action(0, 'Session list');
     action(0, 'Split view');
-    await waitForCondition(() => button(pane(1), 'Sessions'));
+    await waitForCondition(() => button(pane(1), 'Session list'));
     openFilters(1);
     expect(
       switches().map((toggle) => toggle.getAttribute('aria-checked')),
@@ -372,7 +372,7 @@ describe('ChatWorkspace', () => {
 
   it("keeps each area's draft of the same Agent apart and across navigation", async () => {
     await start();
-    action(1, 'Sessions');
+    action(1, 'Session list');
     button(pane(1), 'New session').click();
     action(0, 'New session');
     await waitForCondition(() =>
@@ -389,7 +389,7 @@ describe('ChatWorkspace', () => {
     flushSync();
 
     // The second area leaves its draft for a Session and comes back to it.
-    action(1, 'Sessions');
+    action(1, 'Session list');
     await waitForCondition(() => pane(1)?.textContent.includes('Second topic'));
     Array.from(pane(1).querySelectorAll('button'))
       .find((el) => el.textContent.includes('Second topic'))
@@ -457,27 +457,27 @@ describe('ChatWorkspace', () => {
       },
       ChatWorkspace,
     );
-    // Other Agents' activity shows as chips beside each area's Agent picker.
-    const chipLabels = (index) =>
-      Array.from(pane(index).querySelectorAll('.agent-chips > button')).map(
-        (chip) => chip.getAttribute('aria-label'),
+    // Each area's Agent bar shows the Agents' activity.
+    const pillLabels = (index) =>
+      Array.from(pane(index).querySelectorAll('button.agent-pill')).map(
+        (pill) => pill.getAttribute('aria-label'),
       );
-    await waitForCondition(() => chipLabels(0).includes('Beta: Running'));
+    await waitForCondition(() => pillLabels(0).includes('Beta: Running'));
 
     // Beta's Run ends; later traffic pushes its terminal event out of App's
     // bounded window, and Gamma's Run starts outside the retained window.
     props.runServerEvents = [lifecycle('run_completed', 'R1', 'beta', 'b-1')];
     props.activeRuns = [];
-    await waitForCondition(() => !chipLabels(0).includes('Beta: Running'));
+    await waitForCondition(() => !pillLabels(0).includes('Beta: Running'));
     props.runServerEvents = [];
     props.activeRuns = [
       { run_id: 'R2', agent_id: 'gamma', session_id: 'g-1', status: 'running' },
     ];
 
     action(0, 'Split view');
-    await waitForCondition(() => chipLabels(1).includes('Gamma: Running'));
+    await waitForCondition(() => pillLabels(1).includes('Gamma: Running'));
 
-    expect(chipLabels(1)).not.toContain('Beta: Running');
+    expect(pillLabels(1)).not.toContain('Beta: Running');
   });
 
   describe('deleting the displayed current Session', () => {
@@ -584,7 +584,7 @@ describe('ChatWorkspace', () => {
     }
 
     async function deleteFromDrawer(index, title) {
-      action(index, 'Sessions');
+      action(index, 'Session list');
       await waitForCondition(() =>
         Array.from(pane(index).querySelectorAll('.session-row')).some((row) =>
           row.textContent.includes(title),
@@ -829,9 +829,7 @@ describe('ChatWorkspace', () => {
       expect(pane(index).querySelector('.chat-workspace__toolbar')).toBeNull();
       expect(pane(index).querySelector('[role="tablist"]')).toBeNull();
       expect(
-        button(pane(index), 'Close area').closest(
-          '.chat-view__session-bar, .session-drawer__controls',
-        ),
+        button(pane(index), 'Close area').closest('.chat-header'),
       ).not.toBeNull();
     }
     mockPreviewOpening();

@@ -23,8 +23,8 @@ export function agentActivityState(status, unreadCount = 0) {
 }
 
 /**
- * Quick-tooltip details for an Agent's activity marker (header picker and its
- * options, activity chips, Project Team tabs): the Agent's name leads, then
+ * Quick-tooltip details for an Agent's activity marker (the Chat header's
+ * Agent bar and its All agents list): the Agent's name leads, then
  * its activity in words, the effective Model as canonical `provider/model`
  * with its thinking effort (no effort leaves the Provider default in place),
  * and its id when the name does not already say it.

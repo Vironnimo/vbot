@@ -33,6 +33,10 @@
     triggerClass = '',
     // Optional quick tooltip on the trigger (e.g. details of the selection).
     triggerTooltip = '',
+    // Optional trigger content replacing the selection label and chevron,
+    // for a compact trigger such as an icon. The trigger keeps its
+    // accessible name (`ariaLabel`) and its keyboard contract.
+    triggerContent = undefined,
     // The panel is at least this wide even under a narrower trigger.
     panelMinWidth = 0,
     panelClass = '',
@@ -642,29 +646,33 @@
     onclick={toggleOpen}
     onkeydown={handleTriggerKeyDown}
   >
-    {#if selectedOption?.statusDot}
+    {#if triggerContent}
+      {@render triggerContent()}
+    {:else}
+      {#if selectedOption?.statusDot}
+        <span
+          class="dropdown-status-dot tab-indicator tab-indicator--{selectedOption.statusDot}"
+          aria-hidden="true"
+        ></span>
+      {/if}
       <span
-        class="dropdown-status-dot tab-indicator tab-indicator--{selectedOption.statusDot}"
+        class="searchable-dropdown__trigger-label"
+        class:searchable-dropdown__trigger-label--placeholder={!hasSelection}
+      >
+        {#if selectedOption && !selectedOption.triggerLabel}{@render labelText(
+            selectedOption,
+          )}{:else}{triggerLabel}{/if}
+      </span>
+      <svg
+        class="dropdown-chevron"
+        viewBox="0 0 12 12"
+        width="10"
+        height="10"
         aria-hidden="true"
-      ></span>
+      >
+        <path d="M2 4l4 4 4-4" />
+      </svg>
     {/if}
-    <span
-      class="searchable-dropdown__trigger-label"
-      class:searchable-dropdown__trigger-label--placeholder={!hasSelection}
-    >
-      {#if selectedOption && !selectedOption.triggerLabel}{@render labelText(
-          selectedOption,
-        )}{:else}{triggerLabel}{/if}
-    </span>
-    <svg
-      class="dropdown-chevron"
-      viewBox="0 0 12 12"
-      width="10"
-      height="10"
-      aria-hidden="true"
-    >
-      <path d="M2 4l4 4 4-4" />
-    </svg>
   </button>
 
   {#if isOpen}

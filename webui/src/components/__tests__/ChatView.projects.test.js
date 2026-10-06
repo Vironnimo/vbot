@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { t } from '../../lib/i18n.js';
 import {
-  agentPickerTrigger,
   createAgent,
   createChatRpcMock,
   findButtonByText,
@@ -32,6 +31,9 @@ import {
   vbotProject,
   waitForCondition,
   waitForText,
+  sessionListButton,
+  allAgentsTrigger,
+  agentPill,
 } from './ChatView.support.js';
 import { createChatViewParentHarness } from './ChatView.parent.support.svelte.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
@@ -73,9 +75,9 @@ describe('ChatView Projects', () => {
       );
       await chat.mountChat({ ...identityProps(), selectedProjectId: '' });
 
-      // The picker offers the listed Project's Team from its cached scan
+      // "All agents" offers the listed Project's Team from its cached scan
       // without opening the Project.
-      expect(agentPickerTrigger().getAttribute('aria-haspopup')).toBe('tree');
+      expect(allAgentsTrigger().getAttribute('aria-haspopup')).toBe('tree');
       expect(selectedAgentName()).toBe('Alpha');
       expect(showProjectMock).not.toHaveBeenCalled();
       expect(rpcMock).toHaveBeenCalledWith('chat.history', {
@@ -218,9 +220,8 @@ describe('ChatView Projects', () => {
       await settle(2);
       expect(document.querySelector('.chat-view__error')).toBeNull();
       expect(selectedAgentName()).toBe('Alpha');
-      expect(agentPickerTrigger().getAttribute('aria-haspopup')).toBe(
-        'listbox',
-      );
+      // The bar shows every Agent, so it offers no "All agents" list.
+      expect(allAgentsTrigger()).toBeNull();
     });
 
     it.each([
@@ -284,12 +285,14 @@ describe('ChatView Projects', () => {
         }),
         { ready: null },
       );
-      // The picker trigger carries the selected Agent's tooltip: first the
-      // Project default, then the Identity Agent.
+      // The displayed Agent's button carries its tooltip: first the Project
+      // default, then the Identity Agent.
       await waitForCondition(() => showsProjectAgent('Builder Bot'));
       vi.useFakeTimers();
       // An id the name does not already say follows as its own row.
-      expect(await hoveredTooltipText(agentPickerTrigger())).toBe(
+      expect(
+        await hoveredTooltipText(agentPill(projectAgentName('Builder Bot'))),
+      ).toBe(
         `${projectAgentName('Builder Bot')}\nActivity: Idle\nModel: openai/gpt-5.2\nThinking effort: medium\nAgent ID: builder`,
       );
       vi.useRealTimers();
@@ -297,7 +300,7 @@ describe('ChatView Projects', () => {
       await selectAgentFromPicker('Alpha');
       await waitForCondition(() => selectedAgentName() === 'Alpha');
       vi.useFakeTimers();
-      expect(await hoveredTooltipText(agentPickerTrigger())).toBe(
+      expect(await hoveredTooltipText(agentPill('Alpha'))).toBe(
         'Alpha\nActivity: Idle\nModel: openrouter/anthropic/claude-sonnet-4\nThinking effort: Provider default',
       );
     });
@@ -675,7 +678,7 @@ describe('ChatView Projects', () => {
         ready: 'Builder project reply',
       });
 
-      findButtonByText(t('sessions.title')).click();
+      sessionListButton().click();
       await waitForCondition(
         () => document.querySelectorAll('.session-row__select').length === 2,
       );
@@ -733,7 +736,7 @@ describe('ChatView Projects', () => {
       });
       await chat.mountChat(projectChatProps(), { ready: 'Newest reply' });
 
-      findButtonByText(t('sessions.title')).click();
+      sessionListButton().click();
       await waitForCondition(
         () => document.querySelectorAll('.session-row').length === 2,
       );
