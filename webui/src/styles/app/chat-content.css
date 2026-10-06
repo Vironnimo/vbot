@@ -290,17 +290,17 @@
 }
 
 /* Chat headings structure an answer rather than title a document: only h1
-   and h2 grow noticeably, h3-h6 stay a hair above body size, and the space
-   sits above a heading so it binds to the content it introduces. */
+   and h2 grow, h3-h6 are bold body text, and the space sits above a heading
+   so it binds to the content it introduces. */
 .msg-markdown h1,
 .msg-markdown h2,
 .msg-markdown h3,
 .msg-markdown h4,
 .msg-markdown h5,
 .msg-markdown h6 {
-  margin: 1.8em 0 0.35em;
+  margin: 1.35em 0 0.15em;
   color: var(--text-hi);
-  font-size: 1.07em;
+  font-size: 1em;
   font-weight: 600;
   line-height: 1.35;
 }
