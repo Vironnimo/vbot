@@ -161,11 +161,11 @@
      lengthening lines.
      Every other page is one of three types (user decision 2026-10-06):
      configuration pages - every view with a Secondary pane, plus System
-     Prompt - center their content at `--content-max-narrow`; the overview
-     page (Statistics) at `--content-max-wide`; work areas (Terminals,
-     Calendar, Jev, Logs, Debug) start at the page edge and use the full
-     width. Pages share one inset
-     (`--page-inset-*`), so their titles sit at the same height. */
+     Prompt - center their content at `--content-max-narrow`; overview
+     pages (Statistics, Logs) at `--content-max-wide`; work areas
+     (Terminals, Calendar, Jev, Debug) start at the page edge and use the
+     full width. Pages share one inset (`--page-inset-*`), so their titles
+     sit at the same height. */
   --chat-measure-comfortable: 780px;
   --chat-measure-wide: 1100px;
   --chat-measure: var(--chat-measure-comfortable);

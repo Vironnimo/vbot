@@ -794,6 +794,14 @@
     overflow: hidden;
     background: var(--bg);
   }
+
+  /* An overview page like Statistics: header, toolbar and the framed list
+     share the wide measure, centered. */
+  .logs-view > :global(*) {
+    width: 100%;
+    max-width: var(--content-max-wide);
+    margin-inline: auto;
+  }
   .logs-view__stream-status {
     border-radius: var(--r-md);
     cursor: default;
