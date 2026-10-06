@@ -23,10 +23,13 @@ import { reactiveProps } from './reactiveProps.support.svelte.js';
 const SONNET = 'openrouter/anthropic/claude-sonnet-4';
 const MINI = 'openrouter/openai/gpt-4o-mini';
 const R1 = 'openrouter/deepseek/deepseek-r1';
+// The row names a Model by its catalog name and falls back to its id.
+const SONNET_NAME = 'Anthropic: Claude Sonnet 4';
 
-function catalogModel(id, reasoning) {
+function catalogModel(id, reasoning, name) {
   return {
     id,
+    name,
     provider_id: 'openrouter',
     context_window: 200000,
     capabilities: { tools: true, reasoning },
@@ -34,7 +37,11 @@ function catalogModel(id, reasoning) {
 }
 
 const MODELS = [
-  catalogModel(SONNET, { supported: true, levels: ['low', 'medium', 'high'] }),
+  catalogModel(
+    SONNET,
+    { supported: true, levels: ['low', 'medium', 'high'] },
+    SONNET_NAME,
+  ),
   catalogModel(MINI, { supported: false }),
   catalogModel(R1, {
     supported: true,
@@ -140,8 +147,8 @@ describe('ChatView Session settings', () => {
         );
         await chat.mountChat({ projects: PROJECTS }, { ready: null });
         await waitForCondition(() => pickerText('Project') === 'vBot');
-        expect(pickerText('Model')).toBe(SONNET);
         await waitForCondition(() => pickerText('Thinking effort') !== '');
+        expect(pickerText('Model')).toBe(SONNET_NAME);
         expect(pickerText('Thinking effort')).toBe('medium');
 
         await choose('Project', projectLabel);
@@ -209,7 +216,7 @@ describe('ChatView Session settings', () => {
       const agentReads = rpcCalls('agent.list').length;
 
       sendComposerMessage(`/model ${R1}`);
-      await waitForCondition(() => pickerText('Model') === SONNET);
+      await waitForCondition(() => pickerText('Model') === SONNET_NAME);
       await waitForCondition(() => rpcCalls('agent.list').length > agentReads);
       sendComposerMessage('First message');
       await waitForCondition(() => rpcCalls('chat.stream').length === 2);
@@ -236,7 +243,7 @@ describe('ChatView Session settings', () => {
         settingsRpcMock({ agents: [createAgent({ model: `${R1}::default` })] }),
       );
       await chat.mountChat({ projects: PROJECTS });
-      await waitForCondition(() => pickerText('Model') === SONNET);
+      await waitForCondition(() => pickerText('Model') === SONNET_NAME);
       expect(readOnlyProject().textContent.trim()).toBe('vBot');
       await waitForCondition(() => picker('Thinking effort') !== null);
       expect(await pickerOptions('Thinking effort')).toEqual([
@@ -358,7 +365,7 @@ describe('ChatView Session settings', () => {
     expect(
       readOnlyProject().closest('.session-settings__field--warning'),
     ).toBeNull();
-    expect(pickerText('Model')).toBe(SONNET);
     await waitForCondition(() => pickerText('Thinking effort') === 'low');
+    expect(pickerText('Model')).toBe(SONNET_NAME);
   });
 });

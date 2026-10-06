@@ -163,6 +163,10 @@
   --chat-measure-wide: 1100px;
   --chat-measure: var(--chat-measure-comfortable);
   --chat-prose-measure: 46em;
+  /* A Chat message's side gutter and the indent of its content past the
+     avatar. The composer stack lines up with the text these leave. */
+  --chat-msg-gutter: 28px;
+  --chat-msg-indent: 34px;
   --content-max-narrow: 920px;
   --content-max-wide: 1180px;
 

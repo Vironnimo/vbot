@@ -158,9 +158,9 @@
 <style>
   .skill-autocomplete {
     position: absolute;
-    right: 20px;
+    right: var(--composer-pad-x, 0px);
     bottom: calc(100% - 8px);
-    left: 20px;
+    left: var(--composer-pad-x, 0px);
     z-index: 20;
     display: flex;
     flex-direction: column;

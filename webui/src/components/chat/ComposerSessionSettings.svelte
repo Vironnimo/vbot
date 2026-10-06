@@ -6,7 +6,8 @@
   //
   // - Project: a picker in a draft of an Identity Agent; afterwards, and for
   //   a Project team Agent, a read-only name.
-  // - Model: "Agent default" (naming the Agent's Model) or a catalog Model.
+  // - Model: "Agent default" (naming the Agent's Model) or a catalog Model;
+  //   the row names the Model by its catalog name, the tooltip by its id.
   // - Thinking effort: the Agent's effort or a level the effective Model
   //   offers; hidden for a Model without reasoning.
   import {
@@ -169,6 +170,22 @@
     }),
   );
   let modelValue = $derived(selectModelValue(view.model, modelOptions));
+  // The quiet row shows a Model's catalog name (its id until the catalog
+  // answers); the list keeps the ids it is searched by.
+  let modelNames = $derived(
+    new Map(models.map((model) => [model.id, model.name])),
+  );
+  let modelPickerOptions = $derived(
+    modelOptions.map((option) => {
+      const value = option.value || view.defaultModel;
+      return value ? { ...option, triggerLabel: modelName(value) } : option;
+    }),
+  );
+
+  function modelName(value) {
+    const { model } = parseModelSelectionValue(value);
+    return modelNames.get(model) || model;
+  }
   let modelTooltip = $derived.by(() => {
     const value = view.model || view.defaultModel;
     const text = view.model
@@ -296,7 +313,7 @@
     >
       <SearchableDropdown
         value={modelValue}
-        options={modelOptions}
+        options={modelPickerOptions}
         ariaLabel={t('chat.sessionSettings.model')}
         searchPlaceholder={t('agents.form.modelSearchPlaceholder')}
         emptyLabel={t('agents.form.modelSearchEmpty')}
@@ -325,7 +342,10 @@
           height="13"
           aria-hidden="true"
         >
-          <path d="M2.5 11.5a5.5 5.5 0 1 1 11 0M8 11.5l2.5-3.5" />
+          <path
+            d="M8 2a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V11h4V9.5A4 4 0 0 0 12 6a4 4 0 0 0-4-4z"
+          />
+          <path d="M6 13h4" />
         </svg>
         <Dropdown
           value={view.thinkingEffort}
@@ -416,8 +436,13 @@
     max-width: 240px;
   }
 
+  /* The Model name takes the room the row has and truncates only without it. */
+  .session-settings__field--model {
+    flex: 0 1 auto;
+  }
+
   .session-settings__field--model :global(.session-settings__picker) {
-    max-width: 300px;
+    max-width: 100%;
   }
 
   .session-settings__field :global(.session-settings__picker .dropdown-trigger),
@@ -461,11 +486,6 @@
   .session-settings__field--icon:has(:global(.session-settings__picker.open))
     .session-settings__icon {
     color: var(--text-hi);
-  }
-
-  .session-settings__field
-    :global(.session-settings__picker .searchable-dropdown__label--code) {
-    font-size: var(--fs-mono-sm);
   }
 
   .session-settings__field

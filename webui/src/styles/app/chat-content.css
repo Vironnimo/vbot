@@ -135,12 +135,12 @@
 }
 
 .msg {
-  --msg-content-indent: 34px;
+  --msg-content-indent: var(--chat-msg-indent);
 
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 6px 28px;
+  padding: 6px var(--chat-msg-gutter);
 }
 
 .msg-header {
@@ -263,19 +263,33 @@
 .msg.assistant > .msg-content > .msg-body-text,
 .message-block.assistant {
   padding: 2px 0;
-  color: var(--text-body);
+  color: var(--md-text, var(--text-hi));
   font-size: var(--fs-body-lg);
-  line-height: 1.5;
+  line-height: var(--md-line-height, 1.65);
 }
 
-/* Vertical rhythm in three steps: wrapped lines sit close, a block gap
-   (0.6em) separates paragraphs, lists, quotes, code and tables, and the
-   largest gap sits above a heading so sections read as groups. */
+/* Chat reading typography. Markdown is also shown outside Chat (Skill and
+   System Prompt views); those keep the plain `.msg-markdown` values below,
+   while the Chat view sets these `--md-*` properties for its own rhythm in
+   three steps: wrapped lines sit close, a block gap (0.6em) separates
+   paragraphs, lists, quotes, code and tables, and the largest gap sits above
+   a heading so sections read as groups. Prose is dimmed one step so headings
+   and bold stand out at full brightness. */
+.chat-view {
+  --md-text: var(--text-body);
+  --md-emphasis: var(--text-hi);
+  --md-line-height: 1.5;
+  --md-heading-margin: 1.4em 0 0.15em;
+  --md-list-margin: 0 0 0.6em 1.4em;
+  --md-nested-list-margin: 0.2em 0 0 1.4em;
+  --md-block-margin: 0.6em 0;
+}
+
 .msg-markdown {
   padding: 2px 0;
-  color: var(--text-body);
+  color: var(--md-text, var(--text-hi));
   font-size: var(--fs-body-lg);
-  line-height: 1.5;
+  line-height: var(--md-line-height, 1.65);
 }
 
 .msg-markdown > *:first-child {
@@ -299,8 +313,8 @@
 .msg-markdown h4,
 .msg-markdown h5,
 .msg-markdown h6 {
-  margin: 1.4em 0 0.15em;
-  color: var(--text-hi);
+  margin: var(--md-heading-margin, 1.1em 0 0.35em);
+  color: var(--md-emphasis, inherit);
   font-size: 1em;
   font-weight: 600;
   line-height: 1.35;
@@ -316,13 +330,13 @@
 
 .msg-markdown ul,
 .msg-markdown ol {
-  margin: 0 0 0.6em 1.4em;
+  margin: var(--md-list-margin, 0.4em 0 0.4em 1.4em);
   padding: 0;
 }
 
 .msg-markdown li > ul,
 .msg-markdown li > ol {
-  margin: 0.2em 0 0 1.4em;
+  margin: var(--md-nested-list-margin, 0.4em 0 0.4em 1.4em);
 }
 
 .msg-markdown li {
@@ -330,14 +344,14 @@
 }
 
 .msg-markdown blockquote {
-  margin: 0.6em 0;
+  margin: var(--md-block-margin, 0.5em 0);
   padding: 0 0 0 12px;
   border-left: 3px solid var(--border-2);
   color: var(--text-med);
 }
 
 .msg-markdown pre {
-  margin: 0.6em 0;
+  margin: var(--md-block-margin, 0.5em 0);
   overflow-x: auto;
   border: 1px solid var(--border-2);
   border-radius: var(--r-sm);
@@ -370,7 +384,7 @@
 }
 
 .msg-markdown .msg-code {
-  margin: 0.6em 0;
+  margin: var(--md-block-margin, 0.5em 0);
 }
 
 .msg-code__header {
@@ -450,7 +464,7 @@
 }
 
 .msg-markdown table {
-  margin: 0.6em 0;
+  margin: var(--md-block-margin, 0.5em 0);
   border-collapse: collapse;
   font-size: var(--fs-body-md);
 }
@@ -463,12 +477,12 @@
 
 .msg-markdown th {
   background: var(--surface-2);
-  color: var(--text-hi);
+  color: var(--md-emphasis, inherit);
   font-weight: 600;
 }
 
 .msg-markdown strong {
-  color: var(--text-hi);
+  color: var(--md-emphasis, inherit);
   font-weight: 600;
 }
 

@@ -151,7 +151,8 @@
         // Code-like values (Model ids) render in the mono face.
         code: option?.code === true,
         secondaryLabel,
-        // Shown on the trigger in place of `label` while selected.
+        // Shown on the trigger in place of `label` while selected, as plain
+        // text even for a code-like option.
         triggerLabel: option?.triggerLabel ?? '',
         group: option?.group ?? '',
         searchText: option?.searchText ?? `${label} ${secondaryLabel}`.trim(),
@@ -638,7 +639,8 @@
     <span
       class="searchable-dropdown__trigger-label"
       class:searchable-dropdown__trigger-label--placeholder={!hasSelection}
-      class:searchable-dropdown__label--code={selectedOption?.code}
+      class:searchable-dropdown__label--code={selectedOption?.code &&
+        !selectedOption?.triggerLabel}
     >
       {triggerLabel}
     </span>

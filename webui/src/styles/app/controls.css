@@ -316,12 +316,6 @@
   padding: 8px 12px;
 }
 
-.input-area {
-  flex-shrink: 0;
-  padding: 14px 20px;
-  background: var(--bg);
-}
-
 .input-wrap {
   display: flex;
   align-items: flex-start;

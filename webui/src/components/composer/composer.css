@@ -1,21 +1,15 @@
+/* The Chat view places the composer on the message text edges, so the area
+   adds no side padding of its own except on phones; its popups and toast
+   follow the same edges (`--composer-pad-x`). */
 .input-area {
+  --composer-pad-x: 0px;
+
   position: relative;
   width: 100%;
   min-width: 0;
-}
-
-/* Center the composer on the same axis as the capped message column. The
-     unbordered `.input-area` stays full-width on the chat background; only the
-     input box, attachment tray and footer row are capped to `--chat-measure`
-     and centered.
-     With the area's symmetric 20px padding this lines the input's left edge up
-     with the message column exactly. `full` disables the cap. */
-.input-area .input-wrap,
-.input-area .attachment-tray,
-.input-area .composer-footer {
-  width: 100%;
-  max-width: var(--chat-measure);
-  margin-inline: auto;
+  flex-shrink: 0;
+  padding: 14px var(--composer-pad-x);
+  background: var(--bg);
 }
 
 .input-area .msg-input {
@@ -297,7 +291,7 @@
 
 .input-area .composer-toast {
   position: absolute;
-  right: 0;
+  right: var(--composer-pad-x);
   bottom: calc(100% + 10px);
   z-index: 20;
   min-width: 220px;
@@ -375,6 +369,8 @@
 
 @media (max-width: 640px) {
   .input-area {
-    padding: 12px 14px;
+    --composer-pad-x: 14px;
+
+    padding-block: 12px;
   }
 }
