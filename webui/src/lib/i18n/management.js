@@ -788,7 +788,10 @@ export default Object.freeze({
     'Enable sources and drag them into priority order. The first active definition of each name wins.',
   'projects.sources.detected':
     '{count} sources detected. Configure their priority after adding the Project.',
-  'projects.sources.counts': '{agents} agents, {skills} Skills',
+  'projects.sources.agentCount.one': '1 Agent',
+  'projects.sources.agentCount.many': '{count} Agents',
+  'projects.sources.skillCount.one': '1 Skill',
+  'projects.sources.skillCount.many': '{count} Skills',
   'projects.sources.absent': 'Not detected in this repository',
   'projects.sources.modelMappings': 'Model mappings',
   'projects.sources.shared': 'Shared conventions',
