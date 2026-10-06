@@ -343,7 +343,7 @@ export default Object.freeze({
   'statistics.compactions.averageAfter': 'Average remaining tokens',
   'statistics.compactions.averageBefore': 'Average tokens before',
   'statistics.compactions.coverage':
-    '{known} of {total} checkpoints have before/after context estimates.',
+    '{known} of {total} checkpoints record the context size before and after Compaction.',
   'statistics.compactions.diagnosticHint':
     'Rapid recurrence or growing context can help locate ineffective Compactions. Older checkpoints may have no duration or Model usage; missing data stays unknown.',
   'statistics.compactions.duration': 'Average duration',
@@ -402,8 +402,6 @@ export default Object.freeze({
     'All stored hourly Subscription snapshots will be permanently deleted. Live limit cards and Provider connections are not affected.',
   'statistics.limits.deleteHistoryConfirm': 'Delete history',
   'statistics.limits.deleteHistoryTitle': 'Delete limit history?',
-  'statistics.limits.estimatedShort': 'Estimated',
-  'statistics.limits.estimatedTokens': 'Estimated tokens',
   'statistics.limits.gap': 'Data gap',
   'statistics.limits.historyClearError': 'Limit history could not be deleted.',
   'statistics.limits.historyCleared': '{count} historical snapshots deleted.',
@@ -417,8 +415,6 @@ export default Object.freeze({
   'statistics.limits.largestChangesNote':
     'Comparable windows rank by percentage-point increase; resets and gaps break the series.',
   'statistics.limits.lastSnapshot': 'Last snapshot {time}',
-  'statistics.limits.measuredShort': 'Measured',
-  'statistics.limits.measuredTokens': 'Measured tokens',
   'statistics.limits.noHistory':
     'The first automatic snapshot appears when a supported Subscription is available. Further points are recorded at most once per hour.',
   'statistics.limits.noHistoryTitle': 'The flight recorder is ready',
@@ -433,6 +429,7 @@ export default Object.freeze({
   'statistics.limits.remainingUnits': '{remaining} of {total} {unit} remaining',
   'statistics.limits.reset': 'Reset / discontinuity',
   'statistics.limits.runs': 'Runs',
+  'statistics.limits.tokens': 'Tokens',
   'statistics.limits.since': 'Since',
   'statistics.limits.snapshots': 'Snapshots',
   'statistics.limits.toolCalls': '{count} Tool calls',

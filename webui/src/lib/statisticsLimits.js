@@ -253,20 +253,21 @@ export function usageHistorySummary(samples) {
   };
 }
 
+/** A Run's input and output tokens, reported and estimated alike. */
+export function runTokens(run) {
+  return (
+    toFiniteNumber(run?.measured_input_tokens) +
+    toFiniteNumber(run?.measured_output_tokens) +
+    toFiniteNumber(run?.estimated_input_tokens) +
+    toFiniteNumber(run?.estimated_output_tokens)
+  );
+}
+
 export function runActivityTotals(runs) {
-  const totals = {
-    runs: 0,
-    measuredTokens: 0,
-    estimatedTokens: 0,
-  };
+  const totals = { runs: 0, tokens: 0 };
   for (const run of Array.isArray(runs) ? runs : []) {
     totals.runs += 1;
-    totals.measuredTokens +=
-      toFiniteNumber(run?.measured_input_tokens) +
-      toFiniteNumber(run?.measured_output_tokens);
-    totals.estimatedTokens +=
-      toFiniteNumber(run?.estimated_input_tokens) +
-      toFiniteNumber(run?.estimated_output_tokens);
+    totals.tokens += runTokens(run);
   }
   return totals;
 }

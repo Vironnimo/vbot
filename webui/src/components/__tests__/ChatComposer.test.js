@@ -56,7 +56,7 @@ describe('ChatComposer', () => {
         t('chat.contextCardTitle'),
       );
       expect(card.querySelector('.context-card__usage').textContent).toBe(
-        '~4,000 / 10,000',
+        '4,000 / 10,000',
       );
       expect(card.querySelector('.context-card__percent').textContent).toBe(
         '40%',
@@ -66,7 +66,7 @@ describe('ChatComposer', () => {
       );
       expect(
         card.querySelector('.context-card__section-title').textContent,
-      ).toContain(t('chat.tokenTooltipLastTurn'));
+      ).toContain(t('chat.contextCard.lastTurn'));
       expect(card.querySelector('.context-card__level')).toBeNull();
     });
 

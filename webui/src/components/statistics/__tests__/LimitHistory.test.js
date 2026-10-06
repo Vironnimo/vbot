@@ -146,7 +146,7 @@ describe('LimitHistory', () => {
       until: '2026-07-25T11:00:00+00:00',
     });
     expect(document.querySelector('.limit-run__tokens').textContent).toContain(
-      '120',
+      '127',
     );
     expect(document.querySelector('.limit-run__head').textContent).toContain(
       'Completed',

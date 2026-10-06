@@ -306,8 +306,6 @@ describe('ChatView', () => {
           output: {
             usage: { input_tokens: 3886, output_tokens: 92 },
             session_usage: {
-              measured_turns: 2,
-              estimated_turns: 0,
               input_tokens: 4886,
               output_tokens: 142,
             },
@@ -341,9 +339,8 @@ describe('ChatView', () => {
             cache_write_tokens: 200,
           },
           sessionUsage: {
-            measured_turns: 12,
-            estimated_turns: 0,
             cache_turns: 12,
+            cache_input_tokens: 40000,
             input_tokens: 40000,
             output_tokens: 1500,
             cache_read_tokens: 32000,
@@ -352,24 +349,21 @@ describe('ChatView', () => {
         },
         [
           {
+            title: '',
+            rows: [
+              'Cache hit rate: 80%',
+              'Total input: 40,000',
+              'Total output: 1,500',
+            ],
+          },
+          {
             title: 'Last turn',
-            meta: '',
             rows: [
               'Input: 3,886',
               '· Read from cache: 3,000 (77%)',
               '· Written to cache: 200',
               '· Uncached: 686',
               'Output: 92',
-            ],
-          },
-          {
-            title: 'Session',
-            meta: '12 measured turns',
-            rows: [
-              'Input: 40,000',
-              '· Read from cache: 32,000 (80%)',
-              'Output: 1,500',
-              'Avg cache read per turn: 2,667',
             ],
           },
         ],
@@ -380,7 +374,6 @@ describe('ChatView', () => {
         [
           {
             title: 'Last turn',
-            meta: '',
             rows: ['Input: 3,886', 'Output: 92'],
           },
         ],

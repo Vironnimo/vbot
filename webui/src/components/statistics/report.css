@@ -380,11 +380,6 @@
   cursor: default;
 }
 
-.stats-view .stats-number--estimated {
-  text-decoration: underline dotted var(--amber);
-  text-underline-offset: 4px;
-}
-
 /* The Agent name shortens; its Project or Extension badge never does. */
 .stats-view .stats-agent {
   display: inline-flex;

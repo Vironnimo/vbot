@@ -699,21 +699,9 @@ export function sessionTooltip(row) {
   return { text: id, mono: true, selectable: true, whenTruncated: true };
 }
 
-/** A compact token value's exact count, with the estimated part when some
- *  calls reported no usage. */
-export function tokenTooltip(value, estimated, locale = 'en') {
-  const exact = formatTokensExact(value, locale);
-  if (toFiniteNumber(estimated) <= 0) return exact;
-  return {
-    title: exact,
-    rows: [
-      {
-        label: t('statistics.tokens.estimatedPart'),
-        value: formatTokensExact(estimated, locale),
-        tone: 'warning',
-      },
-    ],
-  };
+/** A compact token value's exact count. */
+export function tokenTooltip(value, locale = 'en') {
+  return formatTokensExact(value, locale);
 }
 
 /**
@@ -820,7 +808,6 @@ export function callCostTooltip(call, locale = 'en') {
     rows.push({
       label: t('statistics.col.tokens'),
       value: t('statistics.tokens.estimatedPart'),
-      tone: 'warning',
     });
   }
   return { title, rows };

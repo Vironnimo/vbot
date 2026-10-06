@@ -159,20 +159,10 @@
 }
 
 .context-card__section-title {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
   margin: 0 0 4px;
   color: var(--text-hi);
   font-size: var(--fs-label-sm);
   font-weight: 600;
-}
-
-.context-card__section-meta {
-  color: var(--text-lo);
-  font-weight: 400;
-  font-variant-numeric: tabular-nums;
 }
 
 .context-card__rows {
@@ -210,13 +200,6 @@
 
 .context-card__row--sub dd {
   color: var(--text-med);
-}
-
-.context-card__note {
-  margin: 4px 0 0;
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  line-height: 1.4;
 }
 
 .context-card__footer {

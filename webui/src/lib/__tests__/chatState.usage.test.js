@@ -13,8 +13,6 @@ import { setupController } from './chatState.support.js';
 
 describe('turn usage from Run events', () => {
   const measuredSessionUsage = {
-    measured_turns: 5,
-    estimated_turns: 1,
     cache_turns: 5,
     input_tokens: 9000,
     output_tokens: 800,
@@ -107,8 +105,6 @@ describe('turn usage from Run events', () => {
       status: 'running',
     });
     const sessionUsage = {
-      measured_turns: 4,
-      estimated_turns: 0,
       input_tokens: 20000,
       output_tokens: 900,
     };
@@ -151,8 +147,6 @@ describe('usage from History', () => {
       'session-one',
     );
     const sessionUsage = {
-      measured_turns: 3,
-      estimated_turns: 0,
       cache_turns: 3,
       input_tokens: 4200,
       output_tokens: 300,

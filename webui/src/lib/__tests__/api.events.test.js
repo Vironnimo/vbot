@@ -102,7 +102,7 @@ describe('subscribeRunEvents()', () => {
       'model_step_usage',
       {
         usage: { input_tokens: 12, output_tokens: 3 },
-        session_usage: { measured_turns: 1, input_tokens: 12 },
+        session_usage: { input_tokens: 12 },
         context_usage: { tokens: 15, estimated: false },
       },
     ],
