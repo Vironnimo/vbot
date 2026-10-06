@@ -124,10 +124,10 @@
     </Button>
   </div>
 
-  <div class="agent-list-defaults">
+  <div class="agent-list-defaults secondary-pane__pinned">
     <Button
       variant="tertiary"
-      class={`secondary-list__item ${sharedDefaultsOpen ? 'active' : ''}`}
+      class={`secondary-list__item secondary-pane__pinned-item ${sharedDefaultsOpen ? 'active' : ''}`}
       aria-pressed={sharedDefaultsOpen}
       onClick={onOpenSharedDefaults}>{t('agents.shared.title')}</Button
     >

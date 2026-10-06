@@ -106,29 +106,8 @@
   display: flex;
   flex-direction: column;
 }
-.agent-list-defaults {
-  flex: 0 0 auto;
-  padding: 12px;
-  border-bottom: 1px solid var(--border);
-}
-.agent-list-defaults .btn-tertiary {
-  width: 100%;
-  justify-content: flex-start;
-  padding: 9px 10px;
-  color: var(--text-hi);
-  font: 500 var(--fs-label-md) var(--font-ui);
-}
-.agent-list-defaults .btn-tertiary.active {
-  color: var(--text-hi);
-}
 @media (max-width: 960px) {
-  .agent-list-defaults {
-    padding: 10px 20px;
-    display: flex;
-    align-items: center;
-    gap: 16px;
-  }
-  .agent-list-defaults .btn-tertiary {
+  .agent-list-defaults .secondary-pane__pinned-item {
     width: auto;
   }
 }

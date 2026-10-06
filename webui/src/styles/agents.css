@@ -40,7 +40,7 @@
 .agents-view .agent-item-inner {
   min-width: 0;
   flex: 1;
-  padding: 7px 10px;
+  padding: 8px 10px;
 }
 
 .agents-view .agent-item-name {
@@ -55,7 +55,7 @@
 /* The sub line shows the Model's name (or the Agent id as fallback). */
 .agents-view .agent-item-sub {
   overflow: hidden;
-  margin-top: 1px;
+  margin-top: 3px;
   color: var(--text-lo);
   font-size: var(--fs-label-sm);
   text-overflow: ellipsis;

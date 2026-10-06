@@ -142,20 +142,21 @@
         tooltip={t('swarm.newProfile')}
         loading={model.pending === 'profile'}
         onClick={() => model.navigate(() => model.openProfile())}
-        >{@render actionIcon('plus')}</Button
+        ><svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true">
+          <path d="M7 1.5v11M1.5 7h11" />
+        </svg></Button
       >
     </div>
-    <div class="swarm-sidebar-start">
+    <div class="secondary-pane__pinned">
       <button
         type="button"
-        class="secondary-list__item swarm-new-run"
+        class="secondary-list__item secondary-pane__pinned-item swarm-new-run"
         class:active={startVisible}
         aria-current={startVisible ? 'page' : undefined}
-        onclick={() => model.newSwarm()}
-        >{@render actionIcon('play')}<span>{t('swarm.newRun')}</span></button
+        onclick={() => model.newSwarm()}>{t('swarm.newRun')}</button
       >
     </div>
-    <div class="secondary-pane__scroll">
+    <div class="secondary-pane__scroll swarm-pane-scroll">
       <nav class="secondary-list" aria-label={t('swarm.profiles')}>
         {#each model.profiles as profile (profile.id)}
           <button
@@ -181,7 +182,7 @@
       </nav>
       {#each model.runGroups as group (group.id)}
         <section class="run-group" aria-labelledby={`swarm-runs-${group.id}`}>
-          <h3 class="run-group__title" id={`swarm-runs-${group.id}`}>
+          <h3 class="secondary-list__group" id={`swarm-runs-${group.id}`}>
             {group.label}
           </h3>
           <nav class="secondary-list" aria-label={group.label}>
