@@ -933,13 +933,18 @@
     color: var(--text-med);
   }
 
+  /* The list sits in one bordered group, like the configuration groups and
+     the Skill list, instead of floating on the page background. */
   .logs-view__scroll {
     display: flex;
     min-height: 0;
     flex: 1;
     flex-direction: column;
     overflow: auto;
-    padding-right: 4px;
+    padding: 6px 4px 6px 0;
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    background: var(--surface);
   }
 
   .logs-view__list {

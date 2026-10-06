@@ -141,7 +141,7 @@
 
   .logs-entry:hover,
   .logs-entry--expanded {
-    background: var(--surface);
+    background: var(--surface-2);
   }
 
   .logs-entry--warn {
@@ -155,7 +155,7 @@
 
   .logs-entry--error:hover,
   .logs-entry--error.logs-entry--expanded {
-    background: color-mix(in srgb, var(--red-dim), var(--surface));
+    background: color-mix(in srgb, var(--red-dim), var(--surface-2));
   }
 
   .logs-entry__timestamp,
