@@ -1059,10 +1059,22 @@
 
 <section class={SETTINGS_LAYOUT_CLASS} aria-label={t('settings.title')}>
   <nav class="settings-nav secondary-pane" aria-label={t('settings.sections')}>
-    <div class="settings-nav-title secondary-pane__title">
-      {t('settings.title')}
+    <div class="settings-nav-head secondary-pane__header">
+      <span class="settings-nav-title secondary-pane__title">
+        {t('settings.title')}
+      </span>
     </div>
-    <div class="settings-search">
+    <div class="settings-search secondary-pane__pinned">
+      <svg
+        class="settings-search-icon"
+        viewBox="0 0 16 16"
+        width="16"
+        height="16"
+        fill="none"
+        stroke="currentColor"
+        aria-hidden="true"
+        ><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg
+      >
       <input
         class="settings-search-input"
         type="search"
@@ -1075,11 +1087,11 @@
         aria-label={t('settings.search.label')}
       />
     </div>
-    <div class="settings-desktop-index">
+    <div class="settings-desktop-index secondary-pane__scroll secondary-list">
       {#each pages as page (page.id)}
         <button
-          class="snav-item"
-          class:snav-item--active={!searchActive && page.id === activePageId}
+          class="snav-item secondary-list__item"
+          class:active={!searchActive && page.id === activePageId}
           type="button"
           aria-current={!searchActive && page.id === activePageId
             ? 'page'
@@ -1101,7 +1113,7 @@
   <!-- Keyboard interaction releases scroll restoration for this scrollable region. -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
   <div
-    class="settings-content"
+    class="settings-content page-scroll"
     role="region"
     aria-label={t('settings.content')}
     tabindex="0"
@@ -1125,8 +1137,8 @@
       {:else}
         {#if searchActive}
           <header class="settings-page-heading">
-            <h2>{t('settings.search.results')}</h2>
-            <p role="status">
+            <h2 class="view-header__title">{t('settings.search.results')}</h2>
+            <p class="view-header__subtitle" role="status">
               {t('settings.search.resultCount', {
                 count: searchResults.length,
               })}
@@ -1165,10 +1177,14 @@
               aria-labelledby={'settings-page-' + page.id}
             >
               <header class="settings-page-heading" hidden={subPage}>
-                <h2 id={'settings-page-' + page.id} tabindex="-1">
+                <h2
+                  id={'settings-page-' + page.id}
+                  class="view-header__title"
+                  tabindex="-1"
+                >
                   {page.label()}
                 </h2>
-                <p>{page.description()}</p>
+                <p class="view-header__subtitle">{page.description()}</p>
               </header>
               {#if page.id === 'providers'}
                 <p class="settings-related">

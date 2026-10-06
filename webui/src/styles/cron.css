@@ -89,8 +89,8 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text-hi);
-  font-size: var(--fs-label-md);
-  font-weight: 600;
+  font-size: var(--fs-body-sm);
+  font-weight: 500;
   line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -99,7 +99,7 @@
 .cron-view .cron-item-detail {
   overflow: hidden;
   padding-left: 15px;
-  color: var(--text-med);
+  color: var(--text-lo);
   font-size: var(--fs-label-sm);
   font-variant-numeric: tabular-nums;
   line-height: 1.35;
@@ -141,26 +141,11 @@
   overflow: hidden;
 }
 
-/* One continuous configuration page (section grammar in
+/* One continuous configuration page (`.page-scroll`, section grammar in
    styles/settings/sections.css): header, operational overview, the Task /
    Timing / Session sections and the final Save. */
-.cron-view .cron-detail-scroll {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex: 1;
-  flex-direction: column;
-  overflow-y: auto;
-  padding: 26px 30px;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-}
-
-.cron-view .cron-detail-scroll > * {
-  width: 100%;
-  max-width: 860px;
-  flex-shrink: 0;
-  margin-inline: auto;
+.cron-view {
+  --page-measure: var(--content-max-narrow);
 }
 
 .cron-view .detail-top {
@@ -185,14 +170,6 @@
   color: var(--text-lo);
   font-size: var(--fs-label-sm);
   font-weight: 500;
-  line-height: 1.2;
-}
-
-.cron-view .detail-heading {
-  color: var(--text-hi);
-  font-size: var(--fs-display);
-  font-weight: 600;
-  letter-spacing: -0.02em;
   line-height: 1.2;
 }
 
@@ -456,10 +433,6 @@
 @media (max-width: 960px) {
   .cron-view .detail-top {
     flex-direction: column;
-  }
-
-  .cron-view .cron-detail-scroll {
-    padding: 22px 18px;
   }
 
   .cron-view .cron-summary {

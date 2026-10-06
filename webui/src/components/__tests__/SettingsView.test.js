@@ -1054,9 +1054,7 @@ describe('SettingsView', () => {
         document.querySelector('[data-settings-section="desktop_connection"]'),
       ).toBeTruthy();
       await waitForCondition(
-        () =>
-          buttonByText('Voice')?.classList.contains('snav-item--active') ===
-          true,
+        () => buttonByText('Voice')?.getAttribute('aria-current') === 'page',
       );
 
       // Navigating elsewhere moves the index highlight; the Voice section stays
@@ -1064,13 +1062,9 @@ describe('SettingsView', () => {
       buttonByText('System').click();
       flushSync();
       await waitForCondition(
-        () =>
-          buttonByText('System')?.classList.contains('snav-item--active') ===
-          true,
+        () => buttonByText('System')?.getAttribute('aria-current') === 'page',
       );
-      expect(
-        buttonByText('Voice')?.classList.contains('snav-item--active'),
-      ).toBe(false);
+      expect(buttonByText('Voice')?.hasAttribute('aria-current')).toBe(false);
       expect(
         document.querySelector(
           '[role="switch"][aria-label="Enable wakeword listening"]',

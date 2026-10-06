@@ -416,7 +416,7 @@ describe('Skills manager', () => {
 
   it('groups collections into library, Agents and Projects and filters each library source', async () => {
     await render();
-    expect(texts('.skills-nav-label')).toEqual([
+    expect(texts('.skills-nav .secondary-list__group')).toEqual([
       'Library',
       'Agents',
       'Projects',

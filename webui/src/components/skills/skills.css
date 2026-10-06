@@ -5,38 +5,16 @@
   min-height: 0;
   overflow: hidden;
 }
-.skills-nav-label {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font: 600 var(--fs-label-sm)/1.4 var(--font-ui);
-  color: var(--text-lo);
-}
-.skills-nav-label::after {
-  content: '';
-  flex: 1;
-  border-top: 1px solid var(--border-2);
-}
-.skills-nav-label:first-child {
-  margin-top: 8px;
-}
-.skills-nav nav {
-  overflow-y: auto;
-  min-height: 0;
-  flex: 1;
-}
-.skills-nav-label {
-  margin: 28px 6px 10px;
-}
 .skills-collection {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 16px;
+  min-height: 38px;
+  padding: 6px 10px;
   color: var(--text-med);
   text-align: left;
   cursor: pointer;
-  font: 400 var(--fs-body-sm)/1.4 var(--font-ui);
+  font: 400 var(--fs-body-md) / 1.4 var(--font-ui);
 }
 .skills-collection.active {
   color: var(--text-hi);
@@ -60,8 +38,10 @@
   min-width: 0;
   min-height: 0;
   gap: 14px;
-  padding: 28px 32px 20px;
-  max-width: calc(var(--content-max-wide) + 64px);
+  /* A configuration page whose lists scroll inside the column: the column
+     itself carries the page inset and measure. */
+  padding: var(--page-inset-top) var(--page-inset-x) 20px;
+  max-width: calc(var(--content-max-narrow) + 2 * var(--page-inset-x));
   margin: 0 auto;
 }
 /* The collection page and a package page share the content column; the
@@ -710,7 +690,6 @@ button.skills-librarian__skill:focus-visible,
 }
 @media (max-width: 640px) {
   .skills-main {
-    padding: 16px;
     gap: 12px;
   }
   .skills-toolbar {

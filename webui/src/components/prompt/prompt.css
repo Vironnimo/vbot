@@ -10,21 +10,22 @@
 .sp-view .sp-layout {
   flex-direction: column;
 }
-/* The fixed top keeps the shared view-frame rhythm between the header, the
-   Agent context and the tabs. It reserves the same scrollbar gutter as the
-   scrolling area below so both columns line up at every width. */
+/* A configuration page. The fixed top keeps the shared view-frame rhythm
+   between the header, the Agent context and the tabs. It reserves the same
+   scrollbar gutters as the scrolling area below so both columns line up at
+   every width. */
 .sp-view .sp-top {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
   padding-bottom: 0;
   overflow: hidden;
-  scrollbar-gutter: stable;
+  scrollbar-gutter: stable both-edges;
 }
 .sp-view .sp-top > *,
 .sp-view .sp-scroll > * {
   width: 100%;
-  max-width: var(--content-max-wide);
+  max-width: var(--content-max-narrow);
   margin-inline: auto;
 }
 .sp-view .sp-scroll {
@@ -34,7 +35,7 @@
   flex-direction: column;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  scrollbar-gutter: stable both-edges;
 }
 .sp-view .sp-editor {
   display: flex;
@@ -113,12 +114,6 @@
   font-size: var(--fs-body-sm);
   line-height: 1.6;
   margin: 0 0 20px;
-}
-/* The document box follows the reading measure instead of insetting the text
-   inside a full-width frame. */
-.sp-view .sp-document-toolbar,
-.sp-view .sp-document {
-  max-width: var(--content-max-narrow);
 }
 .sp-view .sp-document {
   margin-top: 16px;

@@ -38,16 +38,45 @@
   background: var(--secondary-surface);
 }
 
-/* One header geometry for every Secondary pane: title at the start, a compact
-   icon action (usually "+") at the end. */
+/* Every Secondary pane has the same anatomy: the header (title at the start,
+   an optional compact icon action, usually "+", at the end), an optional
+   pinned area for what stays in place (a search field, pinned navigation rows
+   such as Shared defaults or New run), then the scrolling list, whose start a
+   hairline always marks. */
+/* 50px, the height of the Chat and Terminals top bars, so pane headers line
+   up with them across tabs. */
 .secondary-pane__header {
   display: flex;
-  min-height: 52px;
+  min-height: 50px;
   flex-shrink: 0;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 10px 10px 10px 16px;
+  padding: 9px 10px 9px 16px;
+}
+
+.secondary-pane__pinned {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 4px 12px 12px;
+}
+
+/* A pinned navigation row: always visible above the list, it reads as a
+   destination of the pane, selected like a list row. */
+.secondary-pane__pinned .secondary-pane__pinned-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 0;
+  padding: 9px 10px;
+  color: var(--text-hi);
+  font: 500 var(--fs-label-md) / 1.4 var(--font-ui);
+  text-align: left;
+  cursor: pointer;
 }
 
 .secondary-pane__scroll {
@@ -55,6 +84,7 @@
   flex: 1;
   overflow-y: auto;
   overscroll-behavior: contain;
+  border-top: 1px solid var(--border);
   scrollbar-gutter: stable;
 }
 
@@ -92,12 +122,58 @@
   background: var(--surface-3);
 }
 
+/* A small heading over a group of rows in a pane, set apart by a trailing
+   rule. */
+.secondary-list__group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 20px 6px 8px;
+  color: var(--text-lo);
+  font: 600 var(--fs-label-sm) / 1.4 var(--font-ui);
+}
+
+.secondary-list__group::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--border-2);
+}
+
+.secondary-list__group:first-child {
+  margin-top: 4px;
+}
+
 /* View chrome: the shared vertical rhythm above each view's feature content.
    Views retain their own data layout; these classes own only the frame,
    identity header, and local navigation/control surface. */
 .view-frame {
   gap: var(--space-lg);
-  padding: 28px 32px 32px;
+  padding: var(--page-inset-top) var(--page-inset-x) var(--page-inset-bottom);
+}
+
+/* The scrollport of a centered page (configuration and overview pages): it
+   spans the view, so its scrollbar sits at the window edge, and centers its
+   children at the page's measure. The gutter is reserved on both edges, so
+   the content stays centered and does not move when the page starts to
+   scroll. Set `--page-measure` on the view to `--content-max-narrow` or
+   `--content-max-wide`. */
+.page-scroll {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--page-inset-top) var(--page-inset-x) var(--page-inset-bottom);
+  scrollbar-gutter: stable both-edges;
+}
+
+.page-scroll > * {
+  width: 100%;
+  max-width: var(--page-measure, none);
+  flex-shrink: 0;
+  margin-inline: auto;
 }
 
 .view-header {

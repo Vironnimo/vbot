@@ -329,6 +329,7 @@
           </p>
         {:else if !hasProjects}
           <EmptyState
+            density="compact"
             title={t('projects.emptyTitle')}
             description={t('projects.emptySubtitle')}
           />
@@ -380,12 +381,12 @@
           class="project-detail-pane"
           data-testid={`project-panel-${selectedProject.project_id}`}
         >
-          <div class="project-detail-scroll">
+          <div class="project-detail-scroll page-scroll">
             <div class="management-header">
               <div class="detail-top">
                 <div>
                   <div class="detail-heading-row">
-                    <h2 class="detail-heading">
+                    <h2 class="detail-heading view-header__title">
                       {selectedProject.display_name ||
                         selectedProject.project_id}
                     </h2>

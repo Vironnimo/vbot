@@ -11,10 +11,6 @@
     overflow: visible;
   }
 
-  .settings-search {
-    margin: 0;
-  }
-
   .settings-search-input {
     min-height: 40px;
   }
@@ -39,12 +35,6 @@
   /* Stacked rows keep stretching their content to the full width. */
   .s-row.s-row--stacked {
     align-items: stretch;
-  }
-
-  .settings-content {
-    min-height: 0;
-    overflow-y: auto;
-    padding: 16px;
   }
 
   .s-row-control,

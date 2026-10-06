@@ -27,11 +27,14 @@
   height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
   color: var(--text-hi);
 }
 
-/* Header, toolbar and tab content share the wide content measure, centered;
-   the scroll container itself stays full width (scrollbar at the edge). */
+/* An overview page: header, toolbar and tab content share the wide content
+   measure, centered; the scroll container itself stays full width (scrollbar
+   at the edge) and reserves its gutter on both edges, so the content does not
+   move when a tab starts to scroll. */
 .stats-view > * {
   width: 100%;
   max-width: var(--content-max-wide);
@@ -107,19 +110,24 @@
 }
 
 /* A row of pressed-state buttons choosing one representation (range,
-   period, metric). */
+   period, metric). Pressed buttons, not tabs, so it keeps its own markup but
+   wears the shared segmented treatment of `.tab-list--segmented`. */
 .stats-view .stats-toggle {
   display: inline-flex;
+  align-items: center;
+  gap: 2px;
   max-width: 100%;
   overflow: hidden;
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-md);
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
 }
 
 .stats-view .stats-toggle__option {
-  min-height: 30px;
-  padding: 4px 10px;
+  padding: 5px 9px;
   border: 0;
+  border-radius: 2px;
   background: transparent;
   color: var(--text-med);
   font: inherit;
@@ -132,12 +140,7 @@
     color 120ms ease;
 }
 
-.stats-view .stats-toggle__option + .stats-toggle__option {
-  border-left: 1px solid var(--border);
-}
-
 .stats-view .stats-toggle__option:hover {
-  background: var(--surface-2);
   color: var(--text-hi);
 }
 

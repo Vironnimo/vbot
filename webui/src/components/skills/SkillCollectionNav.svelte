@@ -47,9 +47,9 @@
     onValueChange={onSelect}
   />
 {:else}
-  <nav class="secondary-list">
+  <nav class="secondary-pane__scroll secondary-list">
     {#each sections as section (section.id)}
-      <h3 class="skills-nav-label">{section.label}</h3>
+      <h3 class="secondary-list__group">{section.label}</h3>
       {#each section.items as item (item.key)}
         <button
           type="button"

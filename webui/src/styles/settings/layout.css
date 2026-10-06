@@ -18,34 +18,30 @@
   background: var(--bg);
 }
 
-.settings-nav.secondary-pane {
-  gap: 1px;
-  padding: 20px 12px;
-  overflow-y: auto;
-}
-
+/* The index follows the shared Secondary pane anatomy: header, the search as
+   its pinned area, then the page list. */
 .settings-search {
   position: relative;
-  margin: 2px 2px 6px;
 }
 
 .settings-search-icon {
   position: absolute;
-  top: 50%;
-  left: 9px;
+  top: calc(50% - 4px);
+  left: 22px;
   transform: translateY(-50%);
-  color: var(--text-lo);
+  color: var(--text-med);
   pointer-events: none;
 }
 
 .settings-search-input {
   width: 100%;
   min-width: 0;
-  padding: 7px 10px 7px 28px;
+  padding: 8px 10px 8px 34px;
   border: 1px solid var(--border-2);
   border-radius: var(--r-md);
   color: var(--text-hi);
-  background: var(--surface-2);
+  background: var(--field-surface);
+  font-family: var(--font-ui);
   font-size: var(--fs-body-sm);
   line-height: 1.4;
 }
@@ -68,67 +64,26 @@
   width: 100%;
 }
 
-.settings-desktop-index {
+/* Index entry: a quiet text row; the selected entry reads from the shared
+   rail plus the raised surface, its text stays regular weight. */
+.settings-nav .snav-item {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-/* Index entry: quiet text row with a 2px accent rail as the active marker,
-   rounded only on the free right edge so the rail sits flush left. The
-   selected entry reads from the rail plus the raised surface; its text stays
-   neutral. */
-.snav-item {
-  width: 100%;
+  align-items: center;
+  min-height: 38px;
   padding: 6px 10px;
-  border-left: 2px solid transparent;
-  border-radius: 0 var(--r-md) var(--r-md) 0;
   color: var(--text-med);
-  background: transparent;
-  font-size: var(--fs-body-sm);
-  font-weight: 500;
+  font: 400 var(--fs-body-md) / 1.4 var(--font-ui);
   text-align: left;
-  transition:
-    background 120ms ease,
-    color 120ms ease,
-    border-color 120ms ease;
 }
 
-.snav-item:hover,
-.snav-item:focus-visible {
+.settings-nav .snav-item:hover,
+.settings-nav .snav-item:focus-visible,
+.settings-nav .snav-item.active {
   color: var(--text-hi);
-  background: var(--surface-2);
-  outline: none;
 }
 
-.snav-item:focus-visible {
-  box-shadow: inset 0 0 0 2px var(--accent);
-}
-
-.snav-item--active,
-.snav-item--active:hover,
-.snav-item--active:focus-visible {
-  border-left-color: var(--accent);
-  color: var(--text-hi);
-  background: var(--surface-3);
-}
-
-/* The page keeps its content height (no stretch to the scrollport), so the
-   bottom padding stays below the last section. */
-.settings-content {
-  display: flex;
-  align-items: flex-start;
-  min-width: 0;
-  flex: 1;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 24px 32px;
-  scrollbar-gutter: stable;
-}
-
-/* Topic pages keep one reading measure while the scrollport fills the pane. */
-.s-doc {
-  width: 100%;
-  max-width: var(--content-max-narrow);
-  margin-inline: auto;
+/* A configuration page: `.settings-content` is its `.page-scroll`, and the
+   document keeps the configuration measure. */
+.settings-layout {
+  --page-measure: var(--content-max-narrow);
 }

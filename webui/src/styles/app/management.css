@@ -1,12 +1,8 @@
-/* Continuous configuration pages share one scrollport and a readable measure. */
+/* Continuous configuration pages share one scrollport (`.page-scroll`) and
+   its measure. */
 :is(.agents-view, .projects-view) .management-header {
   flex: 0 0 auto;
   padding: 0;
-}
-:is(.agents-view, .projects-view) .management-header > * {
-  width: 100%;
-  max-width: 860px;
-  margin-inline: auto;
 }
 :is(.agents-view, .projects-view) .management-header .detail-top {
   margin-bottom: 4px;
@@ -82,18 +78,10 @@
   :is(.agents-view, .projects-view) .management-header .detail-top {
     margin-bottom: 14px;
   }
-  :is(.agents-view, .projects-view)
-    :is(.agent-detail-scroll, .project-detail-scroll) {
-    padding: 20px 18px;
-  }
 }
 @media (max-width: 640px) {
   :is(.agents-view, .projects-view) .management-header {
     padding: 0;
-  }
-  :is(.agents-view, .projects-view)
-    :is(.agent-detail-scroll, .project-detail-scroll) {
-    padding: 16px;
   }
   :is(.agents-view, .projects-view)
     :is(.agent-detail-footer, .management-footer) {
@@ -118,43 +106,10 @@
   display: flex;
   flex-direction: column;
 }
-.agent-list-defaults {
-  flex: 0 0 auto;
-  padding: 12px;
-  border-bottom: 1px solid var(--border);
-}
-.agent-list-defaults .btn-tertiary {
-  width: 100%;
-  justify-content: flex-start;
-  padding: 9px 10px;
-  color: var(--text-hi);
-  font: 500 var(--fs-label-md) var(--font-ui);
-}
-.agent-list-defaults .btn-tertiary.active {
-  color: var(--text-hi);
-}
 @media (max-width: 960px) {
-  .agent-list-defaults {
-    padding: 10px 20px;
-    display: flex;
-    align-items: center;
-    gap: 16px;
-  }
-  .agent-list-defaults .btn-tertiary {
+  .agent-list-defaults .secondary-pane__pinned-item {
     width: auto;
   }
-}
-
-/* Page content keeps a readable measure. */
-:is(.agents-view, .projects-view)
-  :is(.agent-detail-scroll, .project-detail-scroll)
-  > * {
-  flex-shrink: 0;
-  max-width: 860px;
-}
-
-:is(.agents-view, .projects-view) .detail-heading {
-  margin: 0;
 }
 
 @media (max-width: 960px) {

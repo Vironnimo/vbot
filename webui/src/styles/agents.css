@@ -40,7 +40,7 @@
 .agents-view .agent-item-inner {
   min-width: 0;
   flex: 1;
-  padding: 7px 10px;
+  padding: 8px 10px;
 }
 
 .agents-view .agent-item-name {
@@ -55,7 +55,7 @@
 /* The sub line shows the Model's name (or the Agent id as fallback). */
 .agents-view .agent-item-sub {
   overflow: hidden;
-  margin-top: 1px;
+  margin-top: 3px;
   color: var(--text-lo);
   font-size: var(--fs-label-sm);
   text-overflow: ellipsis;
@@ -85,26 +85,11 @@
   overflow: hidden;
 }
 
-/* One scrollport per page. The page follows the shared section grammar
-   (sections.css): title, then `.s-section`s; spacing comes from the sections,
-   not from a flex gap. */
-.agents-view .agent-detail-scroll {
-  display: flex;
-  min-height: 0;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 26px 30px;
-  scrollbar-gutter: stable;
-}
-
-/* Center the content; the scroll container stays full-width so the scrollbar
-   stays at the pane edge. The measure comes from management.css. */
-.agents-view .agent-detail-scroll > * {
-  width: 100%;
-  margin-inline: auto;
+/* A configuration page: one `.page-scroll` scrollport per page in the shared
+   section grammar (sections.css): title, then `.s-section`s; spacing comes
+   from the sections, not from a flex gap. */
+.agents-view {
+  --page-measure: var(--content-max-narrow);
 }
 
 .agents-view .agent-detail-scroll > .management-header,
@@ -130,17 +115,9 @@
   gap: var(--space-lg);
 }
 
-.agents-view .detail-heading {
-  color: var(--text-hi);
-  font-size: var(--fs-display);
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  line-height: 1.2;
-}
-
 /* "id: <agent id>" under the heading, or what creating does. */
 .agents-view .detail-sub {
-  margin-top: 4px;
+  margin-top: 6px;
   color: var(--text-lo);
   font-size: var(--fs-body-sm);
 }

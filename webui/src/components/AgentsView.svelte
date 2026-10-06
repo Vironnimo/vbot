@@ -674,13 +674,13 @@
     {#if sharedDefaultsOpen || sharedSettings}
       <div class="agent-shared-pane" hidden={!sharedDefaultsOpen}>
         <div
-          class="agent-detail-scroll agent-shared-content"
+          class="agent-detail-scroll agent-shared-content page-scroll"
           bind:this={sharedContent}
         >
           <div class="management-header agent-shared-header">
             <div class="detail-top agent-shared-title">
               <div>
-                <h2 class="detail-heading">
+                <h2 class="detail-heading view-header__title">
                   {t('agents.shared.title')}
                 </h2>
                 <p class="agent-shared-scope">

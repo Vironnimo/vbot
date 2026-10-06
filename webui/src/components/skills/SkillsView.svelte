@@ -581,6 +581,9 @@
   bind:this={viewElement}
 >
   <aside class="skills-nav secondary-pane" aria-label={t('skills.collections')}>
+    <div class="secondary-pane__header">
+      <span class="secondary-pane__title">{t('skills.title')}</span>
+    </div>
     <SkillCollectionNav {collections} {scope} onSelect={selectCollection} />
   </aside>
 

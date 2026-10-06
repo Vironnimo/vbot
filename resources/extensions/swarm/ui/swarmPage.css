@@ -20,10 +20,6 @@ body {
   align-items: center;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-  .secondary-pane__title {
-  color: var(--text-med);
-}
-:where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .secondary-list__item {
   width: 100%;
   text-align: left;
@@ -45,41 +41,21 @@ body {
   text-overflow: ellipsis;
 }
 /* "New run" opens the goal form, the page's home: a pinned navigation row
-   below the pane header, like the Agents pane's Shared defaults entry. */
-.swarm-page .swarm-sidebar-start {
-  flex-shrink: 0;
-  padding: 0 12px 12px;
-  border-bottom: 1px solid var(--border);
+   below the pane header, like the Agents pane's Shared defaults entry. The
+   list below holds the Swarms, then the Run groups under group headings. */
+.swarm-page .swarm-pane-scroll {
+  padding: 12px;
+  scrollbar-gutter: auto;
 }
-.swarm-page .swarm-new-run {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 10px;
-  color: var(--text-hi);
-  font: 500 var(--fs-label-md) / 1.4 var(--font-ui);
-  cursor: pointer;
+.swarm-page .swarm-pane-scroll .secondary-list {
+  padding: 0;
 }
-.swarm-page .swarm-new-run svg {
-  flex-shrink: 0;
-  color: var(--text-med);
-}
-.swarm-page .swarm-new-run.active svg {
-  color: var(--accent);
-}
-/* Run groups are headed lists inside the pane, not additional pane titles. */
-.swarm-page .run-group__title {
-  margin: 0;
-  padding: 10px 16px 0;
-  color: var(--text-med);
-  font: 600 var(--fs-label-sm) / 1.4 var(--font-ui);
-}
-.swarm-page .run-group > .secondary-list {
-  padding-top: 6px;
+.swarm-page .swarm-pane-scroll .run-group {
+  margin-top: 16px;
 }
 .swarm-page .run-group__empty {
   margin: 0;
-  padding: 6px 14px;
+  padding: 6px 12px;
   color: var(--text-lo);
   font-size: var(--fs-body-sm);
   line-height: 1.4;
@@ -95,14 +71,14 @@ body {
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .workspace
   > .banner {
-  margin: 14px 32px 0;
+  margin: 14px var(--page-inset-x) 0;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .content {
   flex: 1;
   min-width: 0;
   overflow: auto;
-  padding: 28px 32px 32px;
+  padding: var(--page-inset-top) var(--page-inset-x) var(--page-inset-bottom);
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .section-head {
@@ -191,7 +167,7 @@ body {
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .start {
   display: grid;
   gap: 20px;
-  max-width: 760px;
+  max-width: var(--content-max-narrow);
   margin-inline: auto;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
@@ -485,17 +461,6 @@ body {
   align-items: center;
   color: var(--text-med);
 }
-@media (max-width: 960px) {
-  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-    .content {
-    padding: 22px 20px 28px;
-  }
-  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-    .workspace
-    > .banner {
-    margin-inline: 20px;
-  }
-}
 @media (max-width: 640px) {
   /* Narrow pages stack the pane above the work area. The pane keeps its
      natural height until the cap, then its lists scroll inside it; the work
@@ -510,7 +475,7 @@ body {
     border-right: 0;
     border-bottom: 1px solid var(--border);
   }
-  .swarm-page .swarm-sidebar-start {
+  .swarm-page .secondary-pane__pinned {
     padding-bottom: 8px;
   }
   /* The goal form's only header action is one icon: it stays beside the
@@ -530,15 +495,6 @@ body {
   :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
     .usage-summary {
     grid-template-columns: 1fr;
-  }
-  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-    .content {
-    padding: 16px;
-  }
-  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-    .workspace
-    > .banner {
-    margin-inline: 16px;
   }
 }
 
