@@ -1,6 +1,12 @@
 import { expect, test } from "@playwright/test";
 
-import { parkPointer, startIsolatedChat } from "./chat-run-support.js";
+import {
+  chatTimeline,
+  ensureEmptyChat,
+  parkPointer,
+  sendChatMessage,
+  startIsolatedChat,
+} from "./chat-run-support.js";
 
 async function openSessionActions(page, sessionRow) {
   await parkPointer(page);
@@ -11,6 +17,19 @@ test("Session actions rename, override Compaction Policy, and delete a Session",
   page,
 }) => {
   const chat = await startIsolatedChat(page, { agentName: "Main" });
+  // Persist both the deletion landing and the managed Session through first
+  // sends: opening a fresh chat alone no longer creates a Session row.
+  const response = chatTimeline(chat).getByText(
+    "Fake provider streaming response.",
+    {
+      exact: true,
+    },
+  );
+  await sendChatMessage(chat, "E2E_STREAM Seed the deletion landing");
+  await expect(response).toBeVisible();
+  await ensureEmptyChat(chat);
+  await sendChatMessage(chat, "E2E_STREAM Seed the managed Session");
+  await expect(response).toBeVisible();
   const drawer = chat.getByRole("complementary", { name: "Sessions" });
   await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
   await expect(drawer).toBeVisible();

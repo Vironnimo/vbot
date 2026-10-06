@@ -47,9 +47,10 @@ test("slash command discovery, help, status, rename, and new Session work togeth
   const previousSessionCount = await drawer.getByRole("listitem").count();
 
   await sendChatMessage(chat, "/new");
-  await expect(drawer.getByRole("listitem")).toHaveCount(
-    previousSessionCount + 1,
-  );
+  await expect(
+    drawer.locator("button.session-row__select--active"),
+  ).toHaveCount(0);
+  await expect(drawer.getByRole("listitem")).toHaveCount(previousSessionCount);
   await expect(
     chat.getByText("No messages yet", { exact: true }).first(),
   ).toBeVisible();

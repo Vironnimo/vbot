@@ -4,25 +4,38 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// A Project Team member's tab; its accessible name starts with the Agent name.
-export function getAgentTab(container, agentName) {
-  return container.getByRole("button", {
-    name: new RegExp(`^${escapeRegExp(agentName)}:`),
-  });
-}
-
-// The Chat header's personal Agent picker; its trigger shows the selected
-// Agent's name.
+// The Chat header's Agent picker includes Identity Agents and Project Teams;
+// its trigger shows the selected Agent's name.
 export function getAgentPicker(chat) {
   return chat.getByRole("button", { name: /^Select agent/ });
 }
 
-export async function selectPersonalAgent(page, chat, agentName) {
-  await getAgentPicker(chat).click();
+export async function selectChatAgent(
+  page,
+  chat,
+  agentName,
+  { projectName = "" } = {},
+) {
+  const picker = getAgentPicker(chat);
+  await picker.click();
+  const role =
+    (await picker.getAttribute("aria-haspopup")) === "tree"
+      ? "treeitem"
+      : "option";
+  if (projectName) {
+    const group = page.getByRole("treeitem", {
+      name: new RegExp(`^${escapeRegExp(projectName)}(?:\\s|:|$)`),
+    });
+    await expect(group).toBeVisible();
+    if ((await group.getAttribute("aria-expanded")) === "false") {
+      await group.click();
+    }
+  }
+  const name = projectName ? `${agentName} · ${projectName}` : agentName;
   await page
-    .getByRole("option", { name: new RegExp(`^${escapeRegExp(agentName)}:`) })
+    .getByRole(role, { name: new RegExp(`^${escapeRegExp(name)}:`) })
     .click();
-  await expect(getAgentPicker(chat)).toContainText(agentName);
+  await expect(picker).toContainText(name);
 }
 
 export async function ensureEmptyChat(chat) {
@@ -65,7 +78,7 @@ export async function startIsolatedChat(page, { agentName = "" } = {}) {
 
   const chat = page.getByRole("region", { name: "Chat" });
   if (agentName) {
-    await selectPersonalAgent(page, chat, agentName);
+    await selectChatAgent(page, chat, agentName);
   }
   return ensureEmptyChat(chat);
 }
