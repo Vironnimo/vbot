@@ -46,7 +46,15 @@ def test_tree_reports_survivors_and_failed_children_and_kills_every_member() -> 
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             facts = tree.facts()
-            if facts.running and facts.cpu_seconds > 0:
+            # Windows can still list the exited root briefly, and its child
+            # exit notifications arrive independently of the CPU accounting.
+            if (
+                len(facts.running) == 1
+                and facts.running[0].pid != root.pid
+                and facts.running[0].name.lower().startswith("python")
+                and facts.cpu_seconds > 0
+                and (os.name != "nt" or facts.nonzero_exits)
+            ):
                 break
             time.sleep(0.05)
         assert len(facts.running) == 1
