@@ -15,11 +15,14 @@ class _Resolver:
         return list(self._teams[project_id])
 
 
-def _member(agent_id: str, name: str, description: str = "") -> SimpleNamespace:
+def _member(
+    agent_id: str, name: str, description: str = "", unavailable_reason: str | None = None
+) -> SimpleNamespace:
     return SimpleNamespace(
         agent_id=agent_id,
         display_name=name,
         description=description,
+        unavailable_reason=unavailable_reason,
     )
 
 
@@ -66,7 +69,13 @@ def test_identity_wildcard_catalog_qualifies_project_agents_and_excludes_self() 
             SimpleNamespace(id="main", name="Main"),
             SimpleNamespace(id="researcher", name="Researcher"),
         ],
-        teams={"vbot": [_member("builder", "Builder", "Builds features.")]},
+        teams={
+            "vbot": [
+                _member("builder", "Builder", "Builds features."),
+                # A member whose repository definition cannot run is no target.
+                _member("broken", "Broken", unavailable_reason="Invalid YAML metadata."),
+            ]
+        },
     )
     agent = SimpleNamespace(id="main", tools={})
 
