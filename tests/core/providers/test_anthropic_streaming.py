@@ -81,6 +81,7 @@ async def test_stream_yields_text_finish_then_usage_and_skips_bookkeeping_frames
     body = sse({"type": "ping"}, ": keep-alive comment\n\n", *TEXT_EVENTS)
 
     assert await stream_chunks(body) == [
+        {"type": "usage", "input_tokens": 25},
         {"type": "content_delta", "text": "Hello"},
         {"type": "content_delta", "text": " world"},
         {"type": "finish", "reason": "stop"},
@@ -250,25 +251,29 @@ async def test_stream_stop_reason_maps_to_terminal_outcome(stop_reason, expected
 _NO_USAGE = object()
 
 
+_START_WITH_CACHE = {
+    "input_tokens": 25,
+    "cache_read_input_tokens": 1000,
+    "cache_creation_input_tokens": 200,
+}
+_INPUT_WITH_CACHE = {"input_tokens": 1225, "cache_read_tokens": 1000, "cache_write_tokens": 200}
+
+
 @pytest.mark.parametrize(
     ("start_usage", "terminal_usage", "expected"),
     [
         pytest.param(
-            {
-                "input_tokens": 25,
-                "cache_read_input_tokens": 1000,
-                "cache_creation_input_tokens": 200,
-            },
+            _START_WITH_CACHE,
             {"output_tokens": 10},
-            [
-                {
-                    "input_tokens": 1225,
-                    "output_tokens": 10,
-                    "cache_read_tokens": 1000,
-                    "cache_write_tokens": 200,
-                }
-            ],
+            [_INPUT_WITH_CACHE, {**_INPUT_WITH_CACHE, "output_tokens": 10}],
             id="cache-folded-into-input",
+        ),
+        pytest.param(
+            # Counters a later event omits or nulls keep their earlier value.
+            _START_WITH_CACHE,
+            {"input_tokens": 25, "cache_read_input_tokens": None, "output_tokens": 10},
+            [_INPUT_WITH_CACHE, {**_INPUT_WITH_CACHE, "output_tokens": 10}],
+            id="terminal-keeps-start-cache",
         ),
         pytest.param(
             {"input_tokens": 0, "output_tokens": 0},
@@ -291,20 +296,23 @@ _NO_USAGE = object()
         pytest.param(
             _NO_USAGE, {"output_tokens": 10}, [{"output_tokens": 10}], id="output-without-input"
         ),
-        pytest.param({"input_tokens": 25}, _NO_USAGE, [], id="no-terminal-usage"),
+        pytest.param(
+            # A stream cut before its terminal usage keeps the input.
+            {"input_tokens": 25},
+            _NO_USAGE,
+            [{"input_tokens": 25}],
+            id="no-terminal-usage",
+        ),
         pytest.param(
             {"input_tokens": 2589},
             {"output_tokens": 0},
-            [{"input_tokens": 2589, "output_tokens": 0}],
+            [{"input_tokens": 2589}, {"input_tokens": 2589, "output_tokens": 0}],
             id="zero-output",
-        ),
-        pytest.param(
-            {"input_tokens": 17}, {}, [{"input_tokens": 17}], id="terminal-without-output"
         ),
         pytest.param(
             {"input_tokens": 17},
             {"input_tokens": 23},
-            [{"input_tokens": 23}],
+            [{"input_tokens": 17}, {"input_tokens": 23}],
             id="terminal-input-only",
         ),
         pytest.param(
@@ -314,13 +322,13 @@ _NO_USAGE = object()
                 "cache_creation_input_tokens": -20,
             },
             {"output_tokens": 8},
-            [{"input_tokens": 17, "output_tokens": 8}],
+            [{"input_tokens": 17}, {"input_tokens": 17, "output_tokens": 8}],
             id="unusable-cache-counters",
         ),
     ],
 )
 @pytest.mark.asyncio
-async def test_stream_usage_keeps_only_measured_counters(
+async def test_stream_usage_reports_cumulative_measured_counters(
     start_usage, terminal_usage, expected
 ) -> None:
     message: dict[str, Any] = {"id": "msg_01"}

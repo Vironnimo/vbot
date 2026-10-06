@@ -49,7 +49,8 @@ class AnthropicMessagesStreamDecoder:
     ) -> None:
         self.content_blocks_by_index: dict[int, dict[str, Any]] = {}
         self.reasoning_meta_blocks: list[dict[str, Any]] = []
-        self.usage_from_start: dict[str, Any] | None = None
+        # Cumulative raw Messages usage counters seen so far in the stream.
+        self._usage: dict[str, Any] = {}
         self._error_detail = error_detail or self._anthropic_error_detail
         self._reasoning_block_normalizer = reasoning_block_normalizer or self._copy_reasoning_block
         self._text_delta_in_thinking = text_delta_in_thinking
@@ -63,8 +64,11 @@ class AnthropicMessagesStreamDecoder:
         if event_type == "error":
             raise self._stream_error(event)
         if event_type == "message_start":
-            self._capture_message_start_usage(event)
-            return []
+            message = event.get("message")
+            self._merge_usage(message.get("usage") if isinstance(message, dict) else None)
+            # Report input and cache counters at once, so they survive a stream
+            # that ends before its terminal usage; output follows at the end.
+            return self._usage_delta(include_output=False)
         if event_type == "content_block_start":
             return self._normalize_content_block_start(event)
         if event_type == "content_block_delta":
@@ -103,16 +107,36 @@ class AnthropicMessagesStreamDecoder:
     def _copy_reasoning_block(block: Any) -> dict[str, Any]:
         return dict(block) if _is_supported_reasoning_block(block) else {}
 
-    def _capture_message_start_usage(self, event: dict[str, Any]) -> None:
-        message = event.get("message")
-        if not isinstance(message, dict):
-            return
-        usage = message.get("usage")
-        if not isinstance(usage, dict):
-            return
-        usage_from_start = _extract_anthropic_stream_input_usage(usage)
-        if usage_from_start is not None:
-            self.usage_from_start = usage_from_start
+    def _merge_usage(self, usage: Any) -> None:
+        """Fold one event's cumulative counters into the stream's usage.
+
+        Messages streams report usage cumulatively: ``message_start`` carries
+        the input and cache counters, ``message_delta`` the output and, at
+        some compatible gateways, a repeated or more authoritative input
+        snapshot. A counter that an event omits or sends as null keeps its
+        earlier value, so input and its cache shares always stay consistent.
+        """
+        if isinstance(usage, dict):
+            self._usage.update({key: value for key, value in usage.items() if value is not None})
+
+    def _usage_delta(self, *, include_output: bool) -> list[dict[str, Any]]:
+        normalized: dict[str, Any] = {"type": "usage"}
+        input_usage = _extract_anthropic_stream_input_usage(self._usage)
+        if input_usage is not None:
+            normalized.update(input_usage)
+        output_tokens = self._usage.get("output_tokens")
+        if (
+            include_output
+            and isinstance(output_tokens, int)
+            and not isinstance(output_tokens, bool)
+            and output_tokens >= 0
+            and (input_usage is not None or self._emit_usage_without_start)
+        ):
+            normalized["output_tokens"] = output_tokens
+            apply_anthropic_reasoning_usage(normalized, self._usage)
+        if "input_tokens" not in normalized and "output_tokens" not in normalized:
+            return []
+        return [normalized]
 
     def _normalize_content_block_start(self, event: dict[str, Any]) -> list[dict[str, Any]]:
         index = self._stream_index(event)
@@ -208,22 +232,8 @@ class AnthropicMessagesStreamDecoder:
 
         usage = event.get("usage")
         if isinstance(usage, dict):
-            output_tokens = usage.get("output_tokens")
-            terminal_input_usage = _extract_anthropic_stream_input_usage(usage)
-            input_usage = terminal_input_usage or self.usage_from_start
-            normalized_usage: dict[str, Any] = {"type": "usage"}
-            if input_usage is not None:
-                normalized_usage.update(input_usage)
-            if (
-                isinstance(output_tokens, int)
-                and not isinstance(output_tokens, bool)
-                and output_tokens >= 0
-                and (input_usage is not None or self._emit_usage_without_start)
-            ):
-                normalized_usage["output_tokens"] = output_tokens
-            if "input_tokens" in normalized_usage or "output_tokens" in normalized_usage:
-                apply_anthropic_reasoning_usage(normalized_usage, usage)
-                normalized_deltas.append(normalized_usage)
+            self._merge_usage(usage)
+            normalized_deltas.extend(self._usage_delta(include_output=True))
         return normalized_deltas
 
     def _normalize_text_delta(

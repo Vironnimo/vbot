@@ -525,6 +525,19 @@ async def test_send_applies_the_model_thinking_policy(
             },
             id="cache-tokens-fold-into-input",
         ),
+        pytest.param(
+            # A missing counter stays absent so Chat can estimate it.
+            {"content": [{"type": "text", "text": "Use this."}], "usage": {"output_tokens": 7}},
+            {
+                "role": "assistant",
+                "content": "Use this.",
+                "reasoning": None,
+                "reasoning_meta": None,
+                "tool_calls": None,
+                "usage": {"output_tokens": 7},
+            },
+            id="output-without-input",
+        ),
     ],
 )
 def test_normalize_response_maps_messages_content_blocks(
@@ -591,6 +604,7 @@ _TOOL_USE_START = {
                 },
             ],
             [
+                {"type": "usage", "input_tokens": 7},
                 {"type": "content_delta", "text": "Hello"},
                 {"type": "reasoning_delta", "text": "Plan"},
                 {
@@ -717,6 +731,12 @@ _TOOL_USE_START = {
                 },
             ],
             [
+                {
+                    "type": "usage",
+                    "input_tokens": 347,
+                    "cache_read_tokens": 300,
+                    "cache_write_tokens": 40,
+                },
                 {"type": "finish", "reason": TERMINAL_OUTCOME_STOP},
                 {
                     "type": "usage",

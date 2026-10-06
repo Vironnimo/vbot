@@ -418,7 +418,7 @@ def _extract_anthropic_tool_calls(content_blocks: Any) -> list[dict[str, Any]] |
     return tool_calls or None
 
 
-def _extract_anthropic_usage(response: dict[str, Any]) -> dict[str, Any] | None:
+def extract_anthropic_usage(response: dict[str, Any]) -> dict[str, Any] | None:
     """Preserve each usable Messages counter without inventing missing values."""
     usage = response.get("usage")
     if not isinstance(usage, dict):

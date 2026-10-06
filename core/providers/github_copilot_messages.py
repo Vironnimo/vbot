@@ -23,8 +23,7 @@ from core.providers.adapter import (
 )
 from core.providers.anthropic_compatible import (
     AnthropicMessagesStreamDecoder,
-    apply_anthropic_cache_usage,
-    apply_anthropic_reasoning_usage,
+    extract_anthropic_usage,
 )
 from core.providers.errors import ProviderError
 from core.providers.openai_compatible import DEFAULT_MAX_OUTPUT_TOKENS
@@ -160,7 +159,7 @@ def normalize_copilot_messages_response(response: dict[str, Any]) -> dict[str, A
         "reasoning_meta": _extract_messages_reasoning_meta(content_blocks),
         "tool_calls": _extract_messages_tool_calls(content_blocks),
     }
-    usage = _extract_messages_usage(response)
+    usage = extract_anthropic_usage(response)
     if usage is not None:
         normalized["usage"] = usage
     return normalized
@@ -517,23 +516,6 @@ def _extract_messages_tool_calls(content_blocks: Any) -> list[dict[str, Any]] | 
             )
         )
     return tool_calls or None
-
-
-def _extract_messages_usage(response: dict[str, Any]) -> dict[str, Any] | None:
-    usage = response.get("usage")
-    if not isinstance(usage, dict):
-        return None
-    input_tokens = usage.get("input_tokens")
-    output_tokens = usage.get("output_tokens")
-    if not isinstance(input_tokens, int):
-        return None
-    normalized: dict[str, Any] = {
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens if isinstance(output_tokens, int) else 0,
-    }
-    apply_anthropic_cache_usage(normalized, usage)
-    apply_anthropic_reasoning_usage(normalized, usage)
-    return normalized
 
 
 def _content_blocks(content_blocks: list[Any]) -> list[dict[str, Any]]:
