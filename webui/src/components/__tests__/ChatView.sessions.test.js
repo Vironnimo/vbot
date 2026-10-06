@@ -19,7 +19,7 @@ import {
   runningRun,
   projectChatProps,
   selectAgentFromPicker,
-  selectedPersonalAgentName,
+  selectedAgentName,
   sendComposerMessage,
   serveProject,
   setInputValue,
@@ -660,7 +660,7 @@ describe('ChatView Sessions', () => {
           session_id: override.sessionId,
           limit: 100,
         });
-        expect(selectedPersonalAgentName()).toBe(scenario.childAgentName);
+        expect(selectedAgentName()).toBe(scenario.childAgentName);
         const notice = document.querySelector(
           '.chat-view__footer-stack .chat-view__footer-banner',
         );
@@ -685,7 +685,7 @@ describe('ChatView Sessions', () => {
           limit: 100,
         });
         expect(historyReads('beta-current-session')).toBe(0);
-        expect(selectedPersonalAgentName()).toBe('Alpha');
+        expect(selectedAgentName()).toBe('Alpha');
         expect(composerInput().disabled).toBe(false);
       },
     );
@@ -718,7 +718,7 @@ describe('ChatView Sessions', () => {
             content: 'Continue child work',
           },
         ]);
-        expect(selectedPersonalAgentName()).toBe(scenario.childAgentName);
+        expect(selectedAgentName()).toBe(scenario.childAgentName);
         await waitForCondition(
           () => subscribeRunEventsMock.mock.calls.length === 1,
         );
@@ -820,7 +820,7 @@ describe('ChatView Sessions', () => {
         { ready: 'Grandchild history' },
       );
       await waitForCondition(() => Boolean(returnToParentButton()));
-      expect(selectedPersonalAgentName()).toBe('Gamma');
+      expect(selectedAgentName()).toBe('Gamma');
 
       // The notice button returns to the parent sub-agent Session.
       returnToParentButton().click();
@@ -831,7 +831,7 @@ describe('ChatView Sessions', () => {
           Boolean(returnToParentButton()),
       );
       expect(document.body.textContent).toContain(SUB_AGENT_NOTICE());
-      expect(selectedPersonalAgentName()).toBe('Beta');
+      expect(selectedAgentName()).toBe('Beta');
 
       // Session info links the parent by its title; it opens as an ordinary
       // Session without a return notice.
@@ -848,7 +848,7 @@ describe('ChatView Sessions', () => {
       });
       expect(returnToParentButton()).toBeFalsy();
       expect(returnToCurrentButton()).toBeFalsy();
-      expect(selectedPersonalAgentName()).toBe('Alpha');
+      expect(selectedAgentName()).toBe('Alpha');
     });
   });
 

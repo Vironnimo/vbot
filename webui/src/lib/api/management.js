@@ -388,8 +388,14 @@ export function addProject(params = {}, options = {}) {
   return rpc('project.add', params, options);
 }
 
-export function listProjects(options = {}) {
-  return rpc('project.list', {}, options);
+// `includeScan` attaches each Project's cached `scan` (Team + report): the
+// server scans a repository only once, `showProject` re-scans it.
+export function listProjects({ includeScan = false } = {}, options = {}) {
+  return rpc(
+    'project.list',
+    includeScan ? { include_scan: true } : {},
+    options,
+  );
 }
 
 // Probe a cwd for per-format agent/skill presence and context files. Called by

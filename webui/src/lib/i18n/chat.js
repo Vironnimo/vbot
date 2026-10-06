@@ -188,6 +188,10 @@ export default Object.freeze({
   'chat.agentPicker.label': 'Select agent ({activity})',
   'chat.agentPicker.filter': 'Filter agents…',
   'chat.agentPicker.empty': 'No agents match',
+  'chat.agentPicker.projectAgent': '{agent} · {project}',
+  'chat.agentPicker.projectActivity': '{project}: {activity}',
+  'chat.agentPicker.projectScanWarning':
+    'This project’s scan found issues. Some agents may not work as expected.',
   'chat.agentChips.label': 'Other agents with activity',
   'chat.agentChips.moreOne': '1 more agent with activity',
   'chat.agentChips.more': '{count} more agents with activity',
@@ -406,14 +410,6 @@ export default Object.freeze({
   'chat.takenOver': 'Taken over by {from} → {to}',
   'chat.takenOverGeneric': 'Session taken over',
   'chat.transientCard.label': 'Command output',
-  'chat.project.none': 'No project selected',
-  'chat.personalBarLabel': 'Personal',
-  'chat.personalBarHint':
-    'Your personal agents — available with or without a project.',
-  'chat.project.selectAria': 'Select project',
-  'chat.project.teamBarHint': 'Agents discovered in this project’s repository.',
-  'chat.project.teamLabel': 'Project team',
-  'chat.project.teamEmpty': 'This project has no agents yet.',
   'chat.project.loadError': 'The project team could not be loaded.',
   'chat.project.sessionError': 'The project agent session could not be opened.',
   'chat.project.scanBanner':

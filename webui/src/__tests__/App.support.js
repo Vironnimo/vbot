@@ -296,7 +296,7 @@ function agentPickerTrigger() {
 }
 
 // Name of the personal Agent selected in the picker; '' when none is.
-export function selectedPersonalAgentName() {
+export function selectedAgentName() {
   const trigger = agentPickerTrigger();
   if (
     !trigger ||

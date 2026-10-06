@@ -68,7 +68,7 @@ describe('ChatHeader', () => {
       props: {
         agents: AGENTS,
         agentActivity: ACTIVITY,
-        selectedAgentId: 'alpha',
+        selectedAddress: 'alpha',
         ...props,
       },
     });
@@ -117,7 +117,7 @@ describe('ChatHeader', () => {
   }
 
   it('shows the selected Agent with its status on the picker trigger', async () => {
-    mountHeader({ selectedAgentId: 'beta' });
+    mountHeader({ selectedAddress: 'beta' });
 
     const trigger = pickerTrigger();
     expect(trigger.textContent).toContain('Beta');
@@ -140,7 +140,7 @@ describe('ChatHeader', () => {
   });
 
   it('describes every Agent on its picker option', async () => {
-    mountHeader({ selectedAgentId: 'beta' });
+    mountHeader({ selectedAddress: 'beta' });
     const options = await openPicker();
     const alpha = options.find(
       (option) => option.getAttribute('aria-label') === idle('Alpha'),
@@ -189,7 +189,7 @@ describe('ChatHeader', () => {
 
   it('shows activity chips for other Agents, unread first, and selects through them', () => {
     const onSelectAgent = vi.fn();
-    mountHeader({ selectedAgentId: 'delta', onSelectAgent });
+    mountHeader({ selectedAddress: 'delta', onSelectAgent });
 
     // The selected Agent (Delta) is not a chip; idle Alpha has none.
     expect(chipLabels()).toEqual([
@@ -211,7 +211,7 @@ describe('ChatHeader', () => {
   it('renders no chips while no other Agent is running or unread', () => {
     mountHeader({
       agentActivity: { beta: { status: 'running', unreadCount: 0 } },
-      selectedAgentId: 'beta',
+      selectedAddress: 'beta',
     });
 
     expect(document.querySelector('.agent-chips')).toBeNull();
@@ -351,7 +351,7 @@ describe('ChatHeader', () => {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     }));
-    mountHeader({ selectedAgentId: 'gamma' });
+    mountHeader({ selectedAddress: 'gamma' });
 
     const chipRow = document.querySelector('.agent-chips');
     expect(chipRow.classList.contains('agent-chips--compact')).toBe(true);
@@ -367,26 +367,214 @@ describe('ChatHeader', () => {
     }
   });
 
-  it('marks nothing and offers every active Agent as a chip while a Project Agent is selected', () => {
-    mountHeader({
-      selectedAgentId: '',
-      selectedProjectId: 'vbot',
-      projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+  describe('Project Teams', () => {
+    const PROJECT_GROUPS = [
+      {
+        projectId: 'web',
+        name: 'Website',
+        warning: true,
+        members: [
+          { agent_id: 'builder', display_name: 'Builder' },
+          { agent_id: 'reviewer', display_name: 'Reviewer' },
+        ],
+      },
+      {
+        projectId: 'ops',
+        name: 'Infra',
+        warning: false,
+        members: [{ agent_id: 'deployer', display_name: 'Deployer' }],
+      },
+      { projectId: 'empty', name: 'Empty', warning: false, members: [] },
+    ];
+    const SMALL_ROSTER = AGENTS.slice(0, 2);
+    const projectAgent = (agent, project) =>
+      t('chat.agentPicker.projectAgent', { agent, project });
+
+    beforeEach(() => {
+      localStorage.clear();
     });
 
-    expect(
-      document.querySelector('.agent-switcher__personal-label')?.textContent,
-    ).toContain(t('chat.personalBarLabel'));
-    const trigger = pickerTrigger();
-    expect(trigger.getAttribute('aria-label')).toBe(t('chat.selectAgent'));
-    expect(trigger.textContent).toContain(t('chat.selectAgent'));
-    expect(trigger.querySelector('.tab-indicator')).toBeNull();
-    expect(chipLabels()).toEqual([
-      unread('Delta', 1),
-      unread('Gamma', 2),
-      running('Beta'),
-      running('Epsilon'),
-    ]);
+    function mountWithProjects(props = {}) {
+      return mountHeader({
+        agents: SMALL_ROSTER,
+        agentActivity: {},
+        projectGroups: PROJECT_GROUPS,
+        ...props,
+      });
+    }
+
+    async function openTree() {
+      document
+        .querySelector(
+          '.chat-header__agent-picker button[aria-haspopup="tree"]',
+        )
+        .click();
+      await vi.waitFor(() => {
+        expect(document.activeElement?.getAttribute('role')).toBe('combobox');
+      });
+      return document.activeElement;
+    }
+
+    function rows() {
+      return Array.from(
+        document.querySelectorAll('[role="tree"] [role="treeitem"]'),
+        (row) => ({
+          name: row.querySelector('.searchable-dropdown__option-label')
+            .textContent,
+          level: row.getAttribute('aria-level'),
+          expanded: row.getAttribute('aria-expanded'),
+        }),
+      );
+    }
+
+    function activeRowName() {
+      return document
+        .querySelector('[role="treeitem"].active')
+        ?.querySelector('.searchable-dropdown__option-label').textContent;
+    }
+
+    it('lists each Project with a Team as a group after the Identity Agents', async () => {
+      const onSelectAgent = vi.fn();
+      mountWithProjects({
+        selectedAddress: 'reviewer@web',
+        agentActivity: {
+          'deployer@ops': { status: 'unread', unreadCount: 2 },
+        },
+        onSelectAgent,
+      });
+      const trigger = document.querySelector(
+        '.chat-header__agent-picker button[aria-haspopup="tree"]',
+      );
+      expect(trigger.textContent).toContain(
+        projectAgent('Reviewer', 'Website'),
+      );
+
+      await openTree();
+
+      // The selected Agent's Project and a Project with activity are open;
+      // the Project without members is left out.
+      expect(rows()).toEqual([
+        { name: 'Alpha', level: '1', expanded: null },
+        { name: 'Beta', level: '1', expanded: null },
+        { name: 'Website', level: '1', expanded: 'true' },
+        { name: 'Builder', level: '2', expanded: null },
+        { name: 'Reviewer', level: '2', expanded: null },
+        { name: 'Infra', level: '1', expanded: 'true' },
+        { name: 'Deployer', level: '2', expanded: null },
+      ]);
+      expect(activeRowName()).toBe('Reviewer');
+      expect(
+        document
+          .querySelector('.searchable-dropdown__group-warning')
+          .getAttribute('aria-label'),
+      ).toBe(t('chat.agentPicker.projectScanWarning'));
+
+      document.querySelectorAll('[role="treeitem"][aria-level="2"]')[0].click();
+      expect(onSelectAgent).toHaveBeenCalledWith('builder@web');
+    });
+
+    it('summarizes a closed group and offers its active Agents as chips', async () => {
+      // This browser closed Infra earlier.
+      localStorage.setItem(
+        'vbot.chat.agentPicker.expandedProjects',
+        JSON.stringify({ ops: false }),
+      );
+      mountWithProjects({
+        selectedAddress: 'alpha',
+        agentActivity: {
+          'deployer@ops': { status: 'running', unreadCount: 1 },
+        },
+      });
+
+      expect(chipLabels()).toEqual([
+        t('chat.agentActivity.runningUnreadOne', {
+          name: projectAgent('Deployer', 'Infra'),
+        }),
+      ]);
+      await openTree();
+
+      const infra = Array.from(
+        document.querySelectorAll('[role="treeitem"][aria-level="1"]'),
+      ).find((row) => row.textContent.includes('Infra'));
+      expect(infra.getAttribute('aria-expanded')).toBe('false');
+      expect(infra.querySelector('.tab-indicator--running')).toBeTruthy();
+      expect(infra.querySelector('.count-badge')?.textContent).toBe('1');
+      expect(infra.getAttribute('aria-label')).toBe(
+        t('chat.agentPicker.projectActivity', {
+          project: 'Infra',
+          activity: `${t('chat.agentActivity.stateRunning')} · ${t('chat.agentActivity.stateUnreadOne')}`,
+        }),
+      );
+    });
+
+    it('opens and closes groups with tree keys and remembers the choice', async () => {
+      const onSelectAgent = vi.fn();
+      mountWithProjects({ selectedAddress: 'beta', onSelectAgent });
+      const input = await openTree();
+      expect(rows().map((row) => row.name)).toEqual([
+        'Alpha',
+        'Beta',
+        'Website',
+        'Infra',
+      ]);
+      expect(activeRowName()).toBe('Beta');
+
+      key(input, 'ArrowDown');
+      expect(activeRowName()).toBe('Website');
+      key(input, 'ArrowRight');
+      expect(rows().map((row) => row.name)).toEqual([
+        'Alpha',
+        'Beta',
+        'Website',
+        'Builder',
+        'Reviewer',
+        'Infra',
+      ]);
+      key(input, 'ArrowRight');
+      expect(activeRowName()).toBe('Builder');
+      key(input, 'ArrowLeft');
+      expect(activeRowName()).toBe('Website');
+      key(input, 'ArrowLeft');
+      expect(rows().map((row) => row.name)).toEqual([
+        'Alpha',
+        'Beta',
+        'Website',
+        'Infra',
+      ]);
+      key(input, 'ArrowDown');
+      key(input, 'Enter');
+      expect(activeRowName()).toBe('Infra');
+      key(input, 'ArrowDown');
+      expect(activeRowName()).toBe('Deployer');
+      key(input, 'Enter');
+      expect(onSelectAgent).toHaveBeenCalledWith('deployer@ops');
+
+      expect(
+        JSON.parse(
+          localStorage.getItem('vbot.chat.agentPicker.expandedProjects'),
+        ),
+      ).toEqual({ web: false, ops: true });
+    });
+
+    it('finds Project Agents by their name or their Project name', async () => {
+      mountWithProjects({ selectedAddress: 'alpha' });
+      const input = await openTree();
+      const search = (query) => {
+        input.value = query;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        flushSync();
+      };
+
+      search('review');
+      expect(rows().map((row) => [row.name, row.expanded])).toEqual([
+        ['Website', 'true'],
+        ['Reviewer', null],
+      ]);
+      expect(activeRowName()).toBe('Reviewer');
+
+      search('infra');
+      expect(rows().map((row) => row.name)).toEqual(['Infra', 'Deployer']);
+    });
   });
 
   it('disables selection while Agents load and explains an empty roster', async () => {
@@ -399,7 +587,7 @@ describe('ChatHeader', () => {
 
     await unmount(mountedComponent);
     mountedComponent = null;
-    mountHeader({ agents: [], agentActivity: {}, selectedAgentId: '' });
+    mountHeader({ agents: [], agentActivity: {}, selectedAddress: '' });
 
     expect(pickerTrigger()).toBeNull();
     expect(document.querySelector('.agent-switcher')?.textContent).toContain(

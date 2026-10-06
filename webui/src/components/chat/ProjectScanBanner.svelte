@@ -1,5 +1,5 @@
 <script>
-  // Narrow, non-blocking banner shown above the project team bar when the
+  // Narrow, non-blocking banner shown while a Project Agent is active and its
   // project's scan was not clean (`report.clean === false`). It is purely
   // informational — chatting with the project's agents stays available — and
   // offers a callback-prop link into the Projects tab where the full report

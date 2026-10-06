@@ -16,15 +16,20 @@ import {
 } from '../../../lib/projectsView.js';
 
 export function createChatViewTarget(context) {
-  // --- Project (second-bar) state -----------------------------------------
+  // --- Project Agent state -------------------------------------------------
   //
-  // The second bar is a pure projection of `project.show`'s scan team — no
-  // second source of truth. Selecting a project loads its team and report;
-  // selecting a project agent makes it the active agent. A project (config)
-  // agent has NO server `current_session_id` (RPC-contract trap 1), so its
-  // session is chosen locally and held in `projectAgentSessions`, keyed by the
-  // agent's full address (`agent@projekt`).
+  // The Agent picker lists every Project's Team from the Project list's
+  // cached scans. Choosing a Project Agent selects its Project and makes the
+  // Agent active; the selected Project's Team and report are then re-read
+  // live through `project.show` and shown in place of the listed ones. A
+  // project (config) agent has NO server `current_session_id` (RPC-contract
+  // trap 1), so its session is chosen locally and held in
+  // `projectAgentSessions`, keyed by the agent's full address
+  // (`agent@projekt`).
   let projectTeam = $state([]);
+
+  // The Project `projectTeam` and `projectReport` belong to, '' for none.
+  let teamProjectId = $state('');
 
   let projectReport = $state(null);
 
@@ -57,13 +62,30 @@ export function createChatViewTarget(context) {
       selectedProjectAgentId !== '',
   );
 
-  // The chosen project's display name, used as the bold prefix on the team bar.
-  let selectedProjectName = $derived(
-    context.projects.find(
-      (project) => project.project_id === context.selectedProjectId,
-    )?.display_name ||
-      context.selectedProjectId ||
-      '',
+  // Every Project with a Team, as the Agent picker groups it: the selected
+  // Project's live Team once read, the others' cached Teams from the list.
+  let projectGroups = $derived.by(() =>
+    context.projects
+      .map((project) => {
+        const projectId = project.project_id;
+        const live = projectId === teamProjectId;
+        const team = live ? projectTeam : normalizeProjectTeam(project.scan);
+        const report = live
+          ? projectReport
+          : normalizeScanReport(project.scan?.report);
+        return {
+          projectId,
+          name: project.display_name || projectId,
+          warning: report?.clean === false,
+          members: team.map((member) => ({
+            agent_id: member.agent_id,
+            display_name: member.display_name,
+            model: member.effective?.model?.value,
+            thinkingEffort: member.effective?.thinking_effort?.value,
+          })),
+        };
+      })
+      .filter((group) => group.members.length > 0),
   );
 
   let activeAgent = $derived(getActiveAgent());
@@ -95,8 +117,8 @@ export function createChatViewTarget(context) {
   let activeAgentAddress = $derived(activeAddressing().agentAddress);
 
   // Roster the session drawer's All-agents filter lists sessions for: every
-  // identity agent plus the selected project's team — the same addresses the
-  // Chat agent bars offer.
+  // identity agent plus the selected project's team. The other Projects'
+  // Teams stay out, so one bounded request still covers the roster.
   let sessionDrawerAgents = $derived.by(() => {
     const roster = context.chatState.agents.map((agent) => ({
       address: agent.id,
@@ -361,16 +383,15 @@ export function createChatViewTarget(context) {
     return displayedSessionKey() === `${agentId}::${sessionId}`;
   }
 
-  // React to the project dropdown selection. Choosing a project loads its
-  // scan team + report (second bar). Selecting "No project" (Personal) tears the
-  // second bar down and the chat falls back to the identity path — byte-
-  // identical to today. Guarded by `lastLoadedProjectId` so the load runs once
-  // per choice.
+  // React to a selected Project the Chat did not choose itself: the reload
+  // restore and a Project removed meanwhile. The picker, Session moves and
+  // history restores switch Projects imperatively and pre-sync
+  // `lastLoadedProjectId`, so this runs once per outside change.
   //
   // The first run after mount is the reload restore: it honors the remembered
-  // project agent (a team-member id, or '' = an identity agent was active so no
-  // team member is opened, or null = nothing remembered → default). Every later
-  // run is a user-initiated switch, which jumps to the project default —
+  // project agent (a team-member id, or null = nothing remembered → default).
+  // A remembered '' (an identity agent was active) leaves the Project: only a
+  // Project Agent selects one. Every later run jumps to the project default —
   // `restoreAgentId === null` signals that.
   $effect(() => {
     const projectId = isProjectSelected(context.selectedProjectId)
@@ -384,6 +405,11 @@ export function createChatViewTarget(context) {
       ? (context.sharedSelectedProjectAgentId ?? null)
       : null;
     initialProjectRestoreDone = true;
+    if (projectId && restoreAgentId === '') {
+      lastLoadedProjectId = '';
+      context.onProjectSelected?.('');
+      return;
+    }
     lastLoadedProjectId = projectId;
     // A later project switch is a user choice: the Session it lands on is a
     // new history step.
@@ -415,10 +441,11 @@ export function createChatViewTarget(context) {
     });
   });
 
-  // Tear the second bar down: back to the identity-only chat (Personal).
+  // Drop the Project context: back to the identity-only chat.
   const clearProjectContext = () => {
     projectTeamLoadVersion += 1;
     projectTeam = [];
+    teamProjectId = '';
     projectReport = null;
     projectScanError = '';
     selectedProjectAgentId = '';
@@ -426,16 +453,14 @@ export function createChatViewTarget(context) {
     loadingProjectTeam = false;
   };
 
-  // Load a project's scan team (second bar) and report (banner) via
-  // `project.show` (live re-scan), then choose the active agent. An empty team
-  // is valid: the second bar simply renders empty, no error. The report is kept
-  // for the banner, shown only when the scan was not clean.
+  // Load a project's scan team and report (banner) via `project.show` (live
+  // re-scan), then choose the active agent. An empty team is valid, not an
+  // error. The report is kept for the banner, shown only when the scan was
+  // not clean.
   //
   // `restoreAgentId` decides who becomes active:
   //   - `null` — a genuine project switch: jump to the default agent (else the
   //     first team member).
-  //   - `''` — a reload restore where an identity agent was active alongside the
-  //     project: open no team member, the identity bar stays in control.
   //   - a team-member id — a reload restore: reopen that member if it is still
   //     on the team, otherwise fall through to the default.
   const loadProjectTeam = async (
@@ -456,11 +481,9 @@ export function createChatViewTarget(context) {
         return;
       }
       projectTeam = normalizeProjectTeam(result?.scan);
+      teamProjectId = projectId;
       projectReport = normalizeScanReport(result?.scan?.report);
-      if (restoreAgentId !== null) {
-        if (restoreAgentId === '') {
-          return;
-        }
+      if (restoreAgentId) {
         const remembered = projectTeam.find(
           (member) => member.agent_id === restoreAgentId,
         );
@@ -482,6 +505,7 @@ export function createChatViewTarget(context) {
         return;
       }
       projectTeam = [];
+      teamProjectId = projectId;
       projectReport = null;
       projectScanError = `${t('chat.project.loadError')} ${error.message}`;
     } finally {
@@ -498,24 +522,24 @@ export function createChatViewTarget(context) {
 
   // Switch the chat to a project team agent. Clears any identity-side session
   // override and resolves the project agent's session locally (trap 1): on an
-  // explicit Team-bar click (`preferUnread`) its newest unread session first,
+  // explicit picker choice (`preferUnread`) its newest unread session first,
   // else the already held one (or draft), else the most recent from
   // `session.list`, else a draft. The choice is held in `projectAgentSessions`
   // keyed by the agent's full address.
   const openProjectAgent = async (
     agentId,
-    { keepOverride = false, preferUnread = false } = {},
+    {
+      keepOverride = false,
+      preferUnread = false,
+      projectId = context.selectedProjectId,
+    } = {},
   ) => {
     if (!keepOverride) {
       context.navigation.clearSessionOverride();
     }
     selectedProjectAgentId = agentId;
     context.onProjectAgentSelected?.(agentId);
-    const addressing = resolveAgentAddressing(
-      agentId,
-      context.selectedProjectId,
-      true,
-    );
+    const addressing = resolveAgentAddressing(agentId, projectId, true);
     await ensureProjectAgentSession(addressing, { preferUnread });
   };
 
@@ -587,33 +611,49 @@ export function createChatViewTarget(context) {
     ).agentAddress;
   }
 
-  const handleSelectProject = (projectId) => {
-    const next = isProjectSelected(projectId) ? projectId : '';
-    if (
-      next ===
-      (isProjectSelected(context.selectedProjectId)
-        ? context.selectedProjectId
-        : '')
-    ) {
+  // Choosing an identity agent leaves the Project: only a Project Agent
+  // selects one. Pre-syncs the guard, so the effect above does not react.
+  const leaveProject = () => {
+    initialProjectRestoreDone = true;
+    if (!lastLoadedProjectId && !isProjectSelected(context.selectedProjectId)) {
       return;
     }
-    context.onProjectSelected?.(next);
+    lastLoadedProjectId = '';
+    clearProjectContext();
+    context.onProjectSelected?.('');
   };
 
-  const handleSelectProjectAgent = async (agentId) => {
-    if (!agentId) {
+  // A picker choice of a Project Agent, in any Project. Another Project is
+  // selected imperatively (like a Session move): its listed Team shows the
+  // Agent at once while `project.show` re-reads Team and report.
+  const handleSelectProjectAgent = async (agentId, projectId) => {
+    if (!agentId || !isProjectSelected(projectId)) {
       return;
     }
-    const agentAddress = formatAgentAddress(agentId, context.selectedProjectId);
+    const agentAddress = formatAgentAddress(agentId, projectId);
+    const projectChanges = projectId !== lastLoadedProjectId;
     if (
+      !projectChanges &&
       agentId === selectedProjectAgentId &&
+      !context.navigation.viewingSessionId &&
       !newestUnreadSessionForAgent(context.chatState, agentAddress)
     ) {
       return;
     }
-    await context.navigation.asStep(() =>
-      openProjectAgent(agentId, { preferUnread: true }),
-    );
+    await context.navigation.asStep(async () => {
+      if (!projectChanges) {
+        await openProjectAgent(agentId, { preferUnread: true });
+        return;
+      }
+      context.navigation.clearSessionOverride();
+      const reading = openProjectTeam(projectId);
+      await openProjectAgent(agentId, {
+        keepOverride: true,
+        preferUnread: true,
+        projectId,
+      });
+      await reading;
+    });
     context.layout.requestComposerFocus();
   };
 
@@ -639,15 +679,26 @@ export function createChatViewTarget(context) {
     }
   };
 
-  // Load just the team + report for a move target (no agent auto-selection —
-  // the move picks the agent itself). Errors surface as the scan error notice.
-  const loadProjectTeamForMove = async (projectId) => {
+  // Select a Project whose Agent the caller opens itself (picker, Session
+  // move, history restore): no agent auto-selection. The listed Team and
+  // report stand in at once; `project.show` then re-reads both. A failed read
+  // keeps the listed ones and surfaces the scan error notice.
+  const openProjectTeam = async (projectId) => {
+    initialProjectRestoreDone = true;
+    lastLoadedProjectId = projectId;
+    const listed = context.projects.find(
+      (project) => project.project_id === projectId,
+    );
     const requestVersion = ++projectTeamLoadVersion;
     const isCurrent = () =>
       requestVersion === projectTeamLoadVersion &&
       lastLoadedProjectId === projectId;
+    projectTeam = normalizeProjectTeam(listed?.scan);
+    teamProjectId = projectId;
+    projectReport = normalizeScanReport(listed?.scan?.report);
     loadingProjectTeam = true;
     projectScanError = '';
+    context.onProjectSelected?.(projectId);
     try {
       const result = await context.chatController.loadProject(projectId);
       if (!isCurrent()) return;
@@ -655,8 +706,6 @@ export function createChatViewTarget(context) {
       projectReport = normalizeScanReport(result?.scan?.report);
     } catch (error) {
       if (!isCurrent()) return;
-      projectTeam = [];
-      projectReport = null;
       projectScanError = `${t('chat.project.loadError')} ${error.message}`;
     } finally {
       if (isCurrent()) loadingProjectTeam = false;
@@ -702,8 +751,8 @@ export function createChatViewTarget(context) {
     get projectAgentActive() {
       return projectAgentActive;
     },
-    get selectedProjectName() {
-      return selectedProjectName;
+    get projectGroups() {
+      return projectGroups;
     },
     get activeAgent() {
       return activeAgent;
@@ -741,15 +790,13 @@ export function createChatViewTarget(context) {
       return ensureProjectAgentSession;
     },
     currentProjectAgentAddress,
-    get handleSelectProject() {
-      return handleSelectProject;
-    },
     get handleSelectProjectAgent() {
       return handleSelectProjectAgent;
     },
-    get loadProjectTeamForMove() {
-      return loadProjectTeamForMove;
+    get openProjectTeam() {
+      return openProjectTeam;
     },
+    leaveProject,
     refreshProjectTeam,
   };
 }

@@ -17,7 +17,10 @@ unclean under what exists: bad/unconfigured model, slug collision, unslugifiable
 name, or a persisted Tool Whitelist entry unavailable in the live registry).
 ``add`` returns it for the just-created project; ``show`` re-scans live (the repo
 is the source of truth, no copy drift). An empty folder yields an empty team and
-a clean report — that is a valid Project, not an error.
+a clean report — that is a valid Project, not an error. ``project.list`` with
+``include_scan`` attaches each Project's cached ``scan`` (Team + report, without
+the skill pool): it scans a repo only the first time, so a picker can show every
+Team cheaply; ``scan`` is ``null`` when the repo cannot be read.
 
 **Remove lock.** ``project.rm`` moves the anchor and the Project's Sessions into
 an archive entry (never the repo) unless the Project is in use: an atomic Run
@@ -220,17 +223,47 @@ def _add_project_record(state: Any, params: JsonObject) -> tuple[Project, JsonOb
 
 
 async def _list_projects(state: Any, params: JsonObject) -> JsonObject:
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "project.list does not accept params")
-    return await _PROJECT_WORKERS.run(_project_list_response, state)
+    _reject_unsupported(params, {"include_scan"}, "project.list")
+    include_scan = _optional_bool(params, "include_scan", default=False)
+    return await _PROJECT_WORKERS.run(_project_list_response, state, include_scan)
 
 
-def _project_list_response(state: Any) -> JsonObject:
+def _project_list_response(state: Any, include_scan: bool) -> JsonObject:
     try:
         projects = _projects(state).list()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {"projects": [_project_response(project) for project in projects]}
+    if not include_scan:
+        return {"projects": [_project_response(project) for project in projects]}
+    return {
+        "projects": [
+            {**_project_response(project), "scan": _cached_scan_preview(state, project)}
+            for project in projects
+        ]
+    }
+
+
+def _cached_scan_preview(state: Any, project: Project) -> JsonObject | None:
+    """Return one Project's cached Team + report, or ``None`` when its repo is unreadable.
+
+    The list never re-scans a repository already scanned (``project.show`` does), so
+    an accessor can show every Project's Team without walking every repo each time.
+    """
+    resolver = _agent_resolver(state)
+    try:
+        result = resolver.cached_scan(project)
+    except OSError as exc:
+        _LOGGER.warning(
+            "Project Team scan failed while listing (project=%s error=%s)",
+            project.project_id,
+            type(exc).__name__,
+        )
+        return None
+    result = ScanResult(
+        team=result.team,
+        report=result.report.with_findings(_unavailable_project_tool_findings(state, project)),
+    )
+    return _scan_response(resolver, result, project)
 
 
 async def _show_project(state: Any, params: JsonObject) -> JsonObject:

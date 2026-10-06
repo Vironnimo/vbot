@@ -1,100 +1,155 @@
 <script>
+  import { formatAgentAddress } from '$lib/agentAddress.js';
   import { t } from '$lib/i18n.js';
-  import { tooltip } from '$lib/tooltip.js';
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import AgentActivityChips from './AgentActivityChips.svelte';
-  import { agentActivityTooltip } from './agentActivityTooltip.js';
+  import {
+    agentActivityState,
+    agentActivityTooltip,
+  } from './agentActivityTooltip.js';
 
-  // Rosters larger than this get a filter field in the Agent picker.
+  // Pickers with more Agents than this, or with Project Teams, get a filter
+  // field.
   const AGENT_FILTER_THRESHOLD = 6;
   // Room for longer names and unread counts under a compact trigger.
-  const AGENT_PANEL_MIN_WIDTH = 240;
+  const AGENT_PANEL_MIN_WIDTH = 260;
   const ACTIVITY_STATUSES = new Set(['running', 'unread']);
+  // The Project groups this browser opened or closed in the picker.
+  const EXPANDED_PROJECTS_KEY = 'vbot.chat.agentPicker.expandedProjects';
 
   let {
     titleId = 'chat-title',
+    // Identity Agents, listed first.
     agents = [],
-    // Per-Agent activity keyed by Agent id:
-    // { status: 'running' | 'unread' | 'idle', unreadCount, latestUnreadAt }.
+    // Project Teams, each a collapsible group after the Identity Agents:
+    // [{ projectId, name, warning, members: [{ agent_id, display_name,
+    // model, thinkingEffort }] }]. A Project without members is left out.
+    projectGroups = [],
+    // Per-Agent activity keyed by Agent address (a bare Identity Agent id or
+    // `agent@project`): { status: 'running' | 'unread' | 'idle',
+    // unreadCount, latestUnreadAt }.
     agentActivity = {},
-    selectedAgentId = '',
-    // The name of a displayed Agent that is not in `agents` (the hidden
+    // The address of the Agent whose Session is shown.
+    selectedAddress = '',
+    // The name of a displayed Agent that is not in the picker (the hidden
     // Librarian, or an Agent deleted while its Session is shown): the picker
     // shows it in place of its "Select an agent" placeholder.
     displayedAgentName = '',
     loadingAgents = false,
-    // Project context for the compact project picker that lives in the header
-    // (left of the Sessions button). "No project" is Personal/identity chat.
-    projects = [],
-    selectedProjectId = '',
-    onSelectProject = () => {},
     onSelectAgent = () => {},
   } = $props();
 
   let agentPicker = $state();
+  let storedExpansion = $state(readStoredExpansion());
+  // Groups toggled since the panel opened; the selected Agent's Project opens
+  // with every panel unless toggled meanwhile.
+  let toggledWhileOpen = $state(new Set());
 
-  // The identity bar carries a "Personal" label only while a project is
-  // selected, so it visually pairs with the project-name label on the second
-  // (team) bar below. With no project there is just one bar and no label needed.
-  let showPersonalLabel = $derived(
-    typeof selectedProjectId === 'string' &&
-      selectedProjectId.trim().length > 0,
+  let identityEntries = $derived(
+    agents.map((agent, index) =>
+      describeAgent({
+        address: agent.id,
+        id: agent.id,
+        name: agent.name || agent.id,
+        model: agent.model,
+        thinkingEffort: agent.thinking_effort,
+        index,
+      }),
+    ),
   );
-  // "No project" (Personal) plus one option per project, mirroring the chosen
-  // project's display name back into the trigger label.
-  let projectOptions = $derived([
-    { value: '', label: t('chat.project.none') },
-    ...projects.map((project) => ({
-      value: project.project_id,
-      label: project.display_name || project.project_id,
-    })),
+  let groups = $derived(
+    projectGroups
+      .filter((group) => group.members?.length > 0)
+      .map((group) => {
+        const projectName = group.name || group.projectId;
+        const entries = group.members.map((member, index) => {
+          const name = member.display_name || member.agent_id;
+          return describeAgent({
+            address: formatAgentAddress(member.agent_id, group.projectId),
+            id: member.agent_id,
+            name,
+            fullName: t('chat.agentPicker.projectAgent', {
+              agent: name,
+              project: projectName,
+            }),
+            model: member.model,
+            thinkingEffort: member.thinkingEffort,
+            group: group.projectId,
+            index,
+          });
+        });
+        return {
+          projectId: group.projectId,
+          name: projectName,
+          warning: Boolean(group.warning),
+          entries,
+          ...groupActivity(entries),
+        };
+      }),
+  );
+  let allEntries = $derived([
+    ...identityEntries,
+    ...groups.flatMap((group) => group.entries),
   ]);
-
-  let agentEntries = $derived(
-    agents.map((agent, index) => describeAgent(agent, index)),
-  );
   let selectedEntry = $derived(
-    agentEntries.find((entry) => entry.id === selectedAgentId) ?? null,
+    allEntries.find((entry) => entry.address === selectedAddress) ?? null,
   );
-  // Picker order: running Agents, then unread ones (newest result first),
-  // then the rest in roster order.
-  let agentOptions = $derived(
-    [
-      ...agentEntries.filter((entry) => entry.status === 'running'),
-      ...newestResultFirst(
-        agentEntries.filter((entry) => entry.status === 'unread'),
-      ),
-      ...agentEntries.filter((entry) => entry.status === 'idle'),
-    ].map((entry) => ({
-      value: entry.id,
-      label: entry.name,
-      statusDot: entry.status,
-      badge: entry.unreadCount > 0 ? entry.unreadCount : '',
-      ariaLabel: entry.label,
-      tooltip: entry.tooltip,
-    })),
+  let selectedProjectId = $derived(selectedEntry?.group ?? '');
+  let agentOptions = $derived([
+    ...byActivity(identityEntries).map(entryOption),
+    ...groups.flatMap((group) => byActivity(group.entries).map(entryOption)),
+  ]);
+  let groupOptions = $derived(
+    groups.map((group) => {
+      const activity =
+        group.status === 'idle'
+          ? ''
+          : agentActivityState(group.status, group.unreadCount);
+      return {
+        id: group.projectId,
+        label: group.name,
+        statusDot: group.status,
+        badge: group.unreadCount > 0 ? group.unreadCount : '',
+        ariaLabel: activity
+          ? t('chat.agentPicker.projectActivity', {
+              project: group.name,
+              activity,
+            })
+          : '',
+        tooltip: activity,
+        warning: group.warning ? t('chat.agentPicker.projectScanWarning') : '',
+      };
+    }),
+  );
+  let expandedGroups = $derived(
+    groups.filter((group) => isExpanded(group)).map((group) => group.projectId),
   );
   // Chips for every other Agent with activity: unread results first (newest
   // first), then running. The selected Agent's status is on the trigger.
   let chipAgents = $derived(
     [
       ...newestResultFirst(
-        agentEntries.filter(
-          (entry) => entry.status === 'unread' && entry.id !== selectedAgentId,
+        allEntries.filter(
+          (entry) =>
+            entry.status === 'unread' && entry.address !== selectedAddress,
         ),
       ),
-      ...agentEntries.filter(
-        (entry) => entry.status === 'running' && entry.id !== selectedAgentId,
+      ...allEntries.filter(
+        (entry) =>
+          entry.status === 'running' && entry.address !== selectedAddress,
       ),
     ].map((entry) => ({
-      id: entry.id,
-      name: entry.name,
+      id: entry.address,
+      name: entry.fullName,
       status: entry.status,
       unreadCount: entry.unreadCount,
       label: entry.label,
       tooltip: entry.tooltip,
     })),
+  );
+  let searchable = $derived(
+    groups.length > 0 || allEntries.length > AGENT_FILTER_THRESHOLD,
   );
   let pickerLabel = $derived(
     selectedEntry
@@ -104,7 +159,7 @@
       : displayedAgentName || t('chat.selectAgent'),
   );
   let pickerProps = $derived({
-    value: selectedAgentId,
+    value: selectedEntry ? selectedAddress : '',
     options: agentOptions,
     placeholder: displayedAgentName || t('chat.selectAgent'),
     ariaLabel: pickerLabel,
@@ -112,11 +167,20 @@
     triggerTooltip: selectedEntry?.tooltip ?? '',
     panelMinWidth: AGENT_PANEL_MIN_WIDTH,
     disabled: loadingAgents,
-    onValueChange: (agentId) => onSelectAgent(agentId),
+    onValueChange: (address) => onSelectAgent(address),
   });
 
-  function describeAgent(agent, index) {
-    const activity = agentActivity[agent.id] ?? {};
+  function describeAgent({
+    address,
+    id,
+    name,
+    fullName = name,
+    model,
+    thinkingEffort,
+    group = '',
+    index,
+  }) {
+    const activity = agentActivity[address] ?? {};
     const status = ACTIVITY_STATUSES.has(activity.status)
       ? activity.status
       : 'idle';
@@ -124,25 +188,64 @@
       Number.isInteger(activity.unreadCount) && activity.unreadCount > 0
         ? activity.unreadCount
         : 0;
-    const name = agent.name || agent.id;
-    const label = agentActivityLabel(name, status, unreadCount);
     return {
-      id: agent.id,
+      address,
       name,
+      fullName,
+      group,
       status,
       unreadCount,
       latestUnreadAt: Number(activity.latestUnreadAt) || 0,
       index,
-      label,
+      label: agentActivityLabel(fullName, status, unreadCount),
       tooltip: agentActivityTooltip({
-        name,
-        id: agent.id,
+        name: fullName,
+        id,
         status,
         unreadCount,
-        model: agent.model,
-        thinkingEffort: agent.thinking_effort,
+        model,
+        thinkingEffort,
       }),
     };
+  }
+
+  function entryOption(entry) {
+    return {
+      value: entry.address,
+      label: entry.name,
+      triggerLabel: entry.fullName,
+      group: entry.group,
+      statusDot: entry.status,
+      badge: entry.unreadCount > 0 ? entry.unreadCount : '',
+      ariaLabel: entry.label,
+      tooltip: entry.tooltip,
+    };
+  }
+
+  // A closed group shows what its Agents do: running wins over unread.
+  function groupActivity(entries) {
+    const unreadCount = entries.reduce(
+      (sum, entry) => sum + entry.unreadCount,
+      0,
+    );
+    const status = entries.some((entry) => entry.status === 'running')
+      ? 'running'
+      : entries.some((entry) => entry.status === 'unread')
+        ? 'unread'
+        : 'idle';
+    return { status, unreadCount };
+  }
+
+  // Picker order: running Agents, then unread ones (newest result first),
+  // then the rest in roster order.
+  function byActivity(entries) {
+    return [
+      ...entries.filter((entry) => entry.status === 'running'),
+      ...newestResultFirst(
+        entries.filter((entry) => entry.status === 'unread'),
+      ),
+      ...entries.filter((entry) => entry.status === 'idle'),
+    ];
   }
 
   function newestResultFirst(entries) {
@@ -150,6 +253,53 @@
       (left, right) =>
         right.latestUnreadAt - left.latestUnreadAt || left.index - right.index,
     );
+  }
+
+  // Open: the selected Agent's Project (unless toggled since the panel
+  // opened), else the choice this browser remembers, else a Project whose
+  // Agents are running or have unread results.
+  function isExpanded(group) {
+    if (
+      group.projectId === selectedProjectId &&
+      !toggledWhileOpen.has(group.projectId)
+    ) {
+      return true;
+    }
+    const stored = storedExpansion[group.projectId];
+    return typeof stored === 'boolean' ? stored : group.status !== 'idle';
+  }
+
+  function handleGroupToggle(projectId, open) {
+    toggledWhileOpen = new Set([...toggledWhileOpen, projectId]);
+    storedExpansion = { ...storedExpansion, [projectId]: open };
+    writeStoredExpansion(storedExpansion);
+  }
+
+  function handleOpenChange(open) {
+    if (open) {
+      toggledWhileOpen = new Set();
+    }
+  }
+
+  function readStoredExpansion() {
+    try {
+      const parsed = JSON.parse(
+        localStorage.getItem(EXPANDED_PROJECTS_KEY) || '{}',
+      );
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed
+        : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function writeStoredExpansion(value) {
+    try {
+      localStorage.setItem(EXPANDED_PROJECTS_KEY, JSON.stringify(value));
+    } catch {
+      // localStorage unavailable (private browsing, storage quota)
+    }
   }
 
   function agentActivityLabel(name, status, unreadCount) {
@@ -186,21 +336,18 @@
 <header class="chat-header">
   <h2 id={titleId} class="chat-title">{t('chat.title')}</h2>
   <div class="agent-switcher">
-    {#if showPersonalLabel}
-      <span
-        class="agent-switcher__personal-label"
-        use:tooltip={t('chat.personalBarHint')}
-      >
-        {t('chat.personalBarLabel')}
-      </span>
-    {/if}
-    {#if agents.length > 0}
-      {#if agents.length > AGENT_FILTER_THRESHOLD}
+    {#if allEntries.length > 0}
+      {#if searchable}
         <SearchableDropdown
           bind:this={agentPicker}
           {...pickerProps}
           searchPlaceholder={t('chat.agentPicker.filter')}
           emptyLabel={t('chat.agentPicker.empty')}
+          collapsibleGroups={groups.length > 0}
+          groups={groupOptions}
+          {expandedGroups}
+          onGroupToggle={handleGroupToggle}
+          onOpenChange={handleOpenChange}
         />
       {:else}
         <Dropdown bind:this={agentPicker} {...pickerProps} />
@@ -208,7 +355,7 @@
       <AgentActivityChips
         agents={chipAgents}
         disabled={loadingAgents}
-        onSelect={(agentId) => onSelectAgent(agentId)}
+        onSelect={(address) => onSelectAgent(address)}
         onShowMore={() => agentPicker?.open()}
       />
     {:else}
@@ -216,15 +363,6 @@
         {t('chat.noAgents')}
       </span>
     {/if}
-  </div>
-  <div class="header-right">
-    <Dropdown
-      value={selectedProjectId}
-      options={projectOptions}
-      ariaLabel={t('chat.project.selectAria')}
-      triggerClass="chat-header__project-dropdown"
-      onValueChange={(next) => onSelectProject(next)}
-    />
   </div>
 </header>
 
@@ -262,7 +400,7 @@
   .agent-switcher :global(.chat-header__agent-picker) {
     width: auto;
     min-width: 150px;
-    max-width: 240px;
+    max-width: 280px;
     flex: 0 1 auto;
   }
 
@@ -273,51 +411,9 @@
     white-space: nowrap;
   }
 
-  /* Bold "Personal" label before the Agent picker, mirroring the project-name
-     label on the team bar below (.chat-view__project-team-name) so the two
-     bars read as a matched pair when a project is selected. */
-  .agent-switcher__personal-label {
-    display: flex;
-    height: 100%;
-    flex-shrink: 0;
-    align-items: center;
-    margin-right: 6px;
-    padding-right: 12px;
-    border-right: 1px solid var(--border);
-    color: var(--text-hi);
-    font-family: var(--font-ui);
-    font-size: var(--fs-label-md);
-    font-weight: 600;
-    white-space: nowrap;
-  }
-
-  .header-right {
-    display: flex;
-    flex-shrink: 0;
-    align-items: center;
-    gap: 10px;
-  }
-
-  /* Compact project picker in the header: shares the shared Dropdown chrome
-     (same control as the Agents thinking-effort selector), only width-capped so
-     it reads as a single header chip rather than stretching the bar. */
-  :global(.chat-header__project-dropdown) {
-    min-width: 150px;
-    max-width: 220px;
-  }
-
   @media (max-width: 640px) {
     .chat-header {
-      height: auto;
-      flex-wrap: wrap;
-      padding: 10px 14px;
-    }
-
-    .agent-switcher {
-      order: 2;
-      width: 100%;
-      height: 38px;
-      flex-basis: 100%;
+      padding: 0 14px;
     }
 
     /* The picker takes the row; dot-only chips keep their natural width. */
@@ -325,12 +421,6 @@
       min-width: 128px;
       max-width: none;
       flex: 1 1 128px;
-    }
-
-    .header-right {
-      margin-left: auto;
-      flex-wrap: wrap;
-      justify-content: flex-end;
     }
   }
 </style>

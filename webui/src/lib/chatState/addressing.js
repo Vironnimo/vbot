@@ -1,14 +1,14 @@
 import { formatAgentAddress, parseAgentAddress } from '../agentAddress.js';
 import { isSessionHiddenByDefault } from '../sessionListView.js';
 
-// --- Two-bar project chat helpers -----------------------------------------
+// --- Project chat helpers -------------------------------------------------
 //
-// The chat has two agent bars: the always-present identity bar (today's
-// behavior, unchanged) and a second project team bar that appears when a
-// project is chosen from the dropdown. These pure helpers own the project
-// addressing and project-agent session selection so the component stays thin.
+// Chat's one Agent picker lists Identity Agents and, grouped by Project, each
+// Project's Team. Choosing a Team member opens its Project. These pure helpers
+// own the project addressing and project-agent session selection so the
+// component stays thin.
 //
-// The single hard rule: with NO project chosen (Personal, `projectId` empty),
+// The single hard rule: with NO project open (`projectId` empty),
 // an identity agent's outside address equals its bare id (no `@projekt`), so
 // every RPC payload is byte-identical to today. The trap discipline only kicks
 // in once a project agent is in play.

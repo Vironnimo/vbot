@@ -41,6 +41,18 @@
     // revealed options appear in place.
     footerActionLabel = '',
     onFooterAction = noop,
+    // Collapsible groups: options naming a `group` id sit under that group's
+    // header row, which opens and closes them (the panel becomes a tree).
+    // `groups` describes each header: `{ id, label }` plus the option
+    // decorations (`statusDot`, `badge`, `ariaLabel`, `tooltip`), shown while
+    // the group is closed to summarize its hidden options, and `warning`, the
+    // label of a warning sign shown always. The caller owns which groups are
+    // open: `expandedGroups` lists their ids, `onGroupToggle(id, open)` asks
+    // for a change. A search shows every group with a match open.
+    collapsibleGroups = false,
+    groups = [],
+    expandedGroups = [],
+    onGroupToggle = noop,
     onValueChange = noop,
     onOpenChange = noop,
   } = $props();
@@ -55,16 +67,39 @@
   let searchQuery = $state(untrack(() => searchText));
   let panelStyle = $state('');
   let panelPlacement = $state('bottom');
-  let activeOptionValue = $state('');
+  // The row keyboard navigation is on: `option:<value>` or `group:<id>`.
+  let activeKey = $state('');
 
   let normalizedOptions = $derived(normalizeOptions(options));
+  let groupsById = $derived(
+    new Map(normalizeGroups(groups).map((group) => [group.id, group])),
+  );
+  let searching = $derived(searchQuery.trim().length > 0);
   let filteredOptions = $derived(filterOptions(normalizedOptions, searchQuery));
   // Consecutive options that name the same `group` render under its label.
   let optionSections = $derived(groupOptions(filteredOptions));
+  let treeRows = $derived(
+    collapsibleGroups ? buildTreeRows(filteredOptions) : [],
+  );
+  // The rows the arrow keys move through, in display order.
+  let navigableRows = $derived(
+    collapsibleGroups
+      ? treeRows.filter((row) => row.navigable)
+      : filteredOptions
+          .map((option, index) => ({
+            key: optionKey(option.value),
+            kind: 'option',
+            option,
+            domId: `${listboxId}-option-${index}`,
+          }))
+          .filter((row) => !row.option.disabled),
+  );
   let selectedOption = $derived(
     normalizedOptions.find((option) => option.value === value) ?? null,
   );
-  let triggerLabel = $derived(selectedOption?.label || placeholder);
+  let triggerLabel = $derived(
+    selectedOption?.triggerLabel || selectedOption?.label || placeholder,
+  );
   let hasSelection = $derived(Boolean(selectedOption));
   // A clipped selection or option shows in full on hover unless the caller
   // supplies its own tooltip; options sit in a vertical list, so theirs
@@ -80,16 +115,18 @@
     whenTruncated: true,
   });
   let listboxId = $derived(id ? `${id}-listbox` : `${componentId}-listbox`);
-  let activeOptionIndex = $derived(
-    filteredOptions.findIndex(
-      (option) => option.value === activeOptionValue && !option.disabled,
-    ),
+  let activeRow = $derived(
+    navigableRows.find((row) => row.key === activeKey) ?? null,
   );
-  let activeDescendantId = $derived(
-    activeOptionIndex >= 0
-      ? `${listboxId}-option-${activeOptionIndex}`
-      : undefined,
-  );
+  let activeDescendantId = $derived(activeRow?.domId);
+
+  function optionKey(optionValue) {
+    return `option:${optionValue}`;
+  }
+
+  function groupKey(groupId) {
+    return `group:${groupId}`;
+  }
 
   function normalizeOptions(items) {
     return items.map((option) => {
@@ -114,11 +151,68 @@
         // Code-like values (Model ids) render in the mono face.
         code: option?.code === true,
         secondaryLabel,
+        // Shown on the trigger in place of `label` while selected.
+        triggerLabel: option?.triggerLabel ?? '',
         group: option?.group ?? '',
         searchText: option?.searchText ?? `${label} ${secondaryLabel}`.trim(),
         ...optionDecorations(option),
       };
     });
+  }
+
+  function normalizeGroups(items) {
+    return (Array.isArray(items) ? items : [])
+      .filter((group) => typeof group?.id === 'string' && group.id)
+      .map((group) => fallbackGroup(group.id, group));
+  }
+
+  function fallbackGroup(groupId, group = null) {
+    return {
+      id: groupId,
+      label: group?.label ?? groupId,
+      warning: typeof group?.warning === 'string' ? group.warning : '',
+      ...optionDecorations(group),
+    };
+  }
+
+  // One row per shown option and, in collapsible mode, one header row before
+  // each group's options; a closed group's options have no rows. While a
+  // search runs every group with a match is open and its header is only a
+  // label, so the arrow keys move through the matches alone.
+  function buildTreeRows(items) {
+    const rows = [];
+    let openGroup = null;
+    let lastGroup = null;
+    items.forEach((option) => {
+      const groupId = option.group;
+      if (groupId && groupId !== lastGroup) {
+        const expanded = searching || expandedGroups.includes(groupId);
+        rows.push({
+          key: groupKey(groupId),
+          kind: 'group',
+          group: groupsById.get(groupId) ?? fallbackGroup(groupId),
+          expanded,
+          level: 1,
+          navigable: !searching,
+          domId: `${listboxId}-row-${rows.length}`,
+        });
+        openGroup = expanded ? groupId : null;
+      }
+      lastGroup = groupId;
+      if (groupId && groupId !== openGroup) {
+        return;
+      }
+      rows.push({
+        key: optionKey(option.value),
+        kind: 'option',
+        option,
+        groupId,
+        level: groupId ? 2 : 1,
+        navigable: !option.disabled,
+        domId: `${listboxId}-row-${rows.length}`,
+      });
+    });
+    return rows;
   }
 
   function groupOptions(items) {
@@ -141,8 +235,15 @@
       return items;
     }
 
-    return items.filter((option) =>
-      option.searchText.toLowerCase().includes(normalizedQuery),
+    // In collapsible mode a group's name matches all of its options.
+    return items.filter(
+      (option) =>
+        option.searchText.toLowerCase().includes(normalizedQuery) ||
+        (collapsibleGroups &&
+          option.group &&
+          String(groupsById.get(option.group)?.label ?? option.group)
+            .toLowerCase()
+            .includes(normalizedQuery)),
     );
   }
 
@@ -169,7 +270,7 @@
     searchQuery = searchText;
     panelStyle = '';
     panelPlacement = 'bottom';
-    activeOptionValue = '';
+    activeKey = '';
     onOpenChange(false);
   }
 
@@ -182,52 +283,85 @@
     await open();
   }
 
-  function enabledFilteredOptions() {
-    return filteredOptions.filter((option) => !option.disabled);
-  }
-
   function setInitialActiveOption(focus) {
-    const enabledOptions = enabledFilteredOptions();
-    if (enabledOptions.length === 0) {
-      activeOptionValue = '';
+    const rows = navigableRows;
+    if (rows.length === 0) {
+      activeKey = '';
       return;
     }
     if (focus === 'last') {
-      activeOptionValue = enabledOptions.at(-1).value;
+      activeKey = rows.at(-1).key;
       return;
     }
-    const selectedEnabled = enabledOptions.find(
-      (option) => option.value === value,
+    const selectedRow = rows.find(
+      (row) => row.kind === 'option' && row.option.value === value,
     );
-    activeOptionValue = (selectedEnabled ?? enabledOptions[0]).value;
+    activeKey = (selectedRow ?? rows[0]).key;
   }
 
-  async function moveActiveOption(direction) {
-    const enabledOptions = enabledFilteredOptions();
-    if (enabledOptions.length === 0) {
-      activeOptionValue = '';
-      return;
-    }
-    const currentIndex = enabledOptions.findIndex(
-      (option) => option.value === activeOptionValue,
-    );
-    let nextIndex;
-    if (direction === 'first') {
-      nextIndex = 0;
-    } else if (direction === 'last') {
-      nextIndex = enabledOptions.length - 1;
-    } else if (direction === 1) {
-      nextIndex =
-        (currentIndex + 1 + enabledOptions.length) % enabledOptions.length;
-    } else {
-      nextIndex =
-        (currentIndex - 1 + enabledOptions.length) % enabledOptions.length;
-    }
-    activeOptionValue = enabledOptions[nextIndex].value;
+  async function activateKey(key) {
+    activeKey = key;
     await tick();
     document
       .getElementById(activeDescendantId)
       ?.scrollIntoView?.({ block: 'nearest' });
+  }
+
+  async function moveActiveOption(direction) {
+    const rows = navigableRows;
+    if (rows.length === 0) {
+      activeKey = '';
+      return;
+    }
+    const currentIndex = rows.findIndex((row) => row.key === activeKey);
+    let nextIndex;
+    if (direction === 'first') {
+      nextIndex = 0;
+    } else if (direction === 'last') {
+      nextIndex = rows.length - 1;
+    } else if (direction === 1) {
+      nextIndex = (currentIndex + 1 + rows.length) % rows.length;
+    } else {
+      nextIndex = (currentIndex - 1 + rows.length) % rows.length;
+    }
+    await activateKey(rows[nextIndex].key);
+  }
+
+  // Closing a group moves the active row from its options to its header.
+  function toggleGroup(groupId) {
+    onGroupToggle(groupId, !expandedGroups.includes(groupId));
+    activeKey = groupKey(groupId);
+  }
+
+  function handleGroupClick(groupId) {
+    toggleGroup(groupId);
+    searchInputElement?.focus();
+  }
+
+  // Tree keys: Right opens a closed group or moves into an open one; Left
+  // closes an open group or moves from an option to its group. Returns
+  // whether the key acted.
+  async function handleTreeArrow(key) {
+    const row = activeRow;
+    if (!row || searching) {
+      return false;
+    }
+    if (row.kind === 'group') {
+      if (key === 'ArrowRight' && row.expanded) {
+        const child = navigableRows[navigableRows.indexOf(row) + 1];
+        if (child?.groupId === row.group.id) {
+          await activateKey(child.key);
+        }
+      } else if ((key === 'ArrowRight') !== row.expanded) {
+        toggleGroup(row.group.id);
+      }
+      return true;
+    }
+    if (key === 'ArrowLeft' && row.groupId) {
+      await activateKey(groupKey(row.groupId));
+      return true;
+    }
+    return false;
   }
 
   function handleTriggerKeyDown(event) {
@@ -260,12 +394,25 @@
       return;
     }
     if (event.key === 'Enter') {
-      const activeOption = filteredOptions[activeOptionIndex];
-      if (activeOption) {
+      const row = activeRow;
+      if (row?.kind === 'group') {
         event.preventDefault();
-        selectOption(activeOption);
+        toggleGroup(row.group.id);
+        return;
+      }
+      if (row) {
+        event.preventDefault();
+        selectOption(row.option);
         triggerElement?.focus();
       }
+      return;
+    }
+    if (
+      collapsibleGroups &&
+      (event.key === 'ArrowRight' || event.key === 'ArrowLeft') &&
+      (await handleTreeArrow(event.key))
+    ) {
+      event.preventDefault();
       return;
     }
     const directions = {
@@ -361,19 +508,21 @@
   });
 </script>
 
-{#snippet optionButton(option, optionIndex)}
+{#snippet optionButton(option, domId, treeLevel = 0)}
   <button
     class="s-dropdown-opt searchable-dropdown__option"
+    class:searchable-dropdown__option--nested={treeLevel > 1}
     class:selected={option.value === value}
     type="button"
-    role="option"
-    id={`${listboxId}-option-${optionIndex}`}
+    role={treeLevel ? 'treeitem' : 'option'}
+    aria-level={treeLevel || undefined}
+    id={domId}
     tabindex="-1"
     disabled={option.disabled}
     aria-label={option.ariaLabel || undefined}
     aria-selected={option.value === value}
     use:tooltip={option.tooltip || clippedLabelHint(option, 'right')}
-    class:active={option.value === activeOptionValue}
+    class:active={optionKey(option.value) === activeKey}
     onclick={() => selectOption(option)}
   >
     {#if option.statusDot}
@@ -396,6 +545,54 @@
     {/if}
     {#if option.badge}
       <span class="count-badge">{option.badge}</span>
+    {/if}
+  </button>
+{/snippet}
+
+{#snippet groupRow(row)}
+  {@const group = row.group}
+  <button
+    class="s-dropdown-opt searchable-dropdown__group-row"
+    type="button"
+    role="treeitem"
+    aria-level="1"
+    aria-expanded={row.expanded}
+    aria-selected="false"
+    id={row.domId}
+    tabindex="-1"
+    aria-label={(!row.expanded && group.ariaLabel) || undefined}
+    use:tooltip={(!row.expanded && group.tooltip) || ''}
+    class:active={row.key === activeKey}
+    disabled={!row.navigable}
+    onclick={() => handleGroupClick(group.id)}
+  >
+    <span
+      class="disclosure-chevron"
+      class:disclosure-chevron--open={row.expanded}
+      aria-hidden="true"
+    ></span>
+    <span class="searchable-dropdown__option-label">{group.label}</span>
+    {#if group.warning}
+      <span
+        class="searchable-dropdown__group-warning"
+        role="img"
+        aria-label={group.warning}
+        use:tooltip={{ text: group.warning, placement: 'right' }}
+      >
+        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+          <path d="M6 1.5 11 10.5H1Z" />
+          <path d="M6 5v2.5M6 9.2v.1" />
+        </svg>
+      </span>
+    {/if}
+    {#if !row.expanded && group.statusDot && group.statusDot !== 'idle'}
+      <span
+        class="dropdown-status-dot tab-indicator tab-indicator--{group.statusDot}"
+        aria-hidden="true"
+      ></span>
+    {/if}
+    {#if !row.expanded && group.badge}
+      <span class="count-badge">{group.badge}</span>
     {/if}
   </button>
 {/snippet}
@@ -425,7 +622,7 @@
     {disabled}
     aria-label={ariaLabel || placeholder}
     aria-describedby={ariaDescribedby}
-    aria-haspopup="listbox"
+    aria-haspopup={collapsibleGroups ? 'tree' : 'listbox'}
     aria-expanded={isOpen}
     aria-controls={isOpen ? listboxId : undefined}
     use:tooltip={triggerHint}
@@ -489,11 +686,19 @@
       <div
         class="s-dropdown-options searchable-dropdown__options"
         id={listboxId}
-        role="listbox"
+        role={collapsibleGroups ? 'tree' : 'listbox'}
         tabindex="-1"
         aria-label={ariaLabel || placeholder}
       >
-        {#if filteredOptions.length > 0}
+        {#if filteredOptions.length > 0 && collapsibleGroups}
+          {#each treeRows as row (row.key)}
+            {#if row.kind === 'group'}
+              {@render groupRow(row)}
+            {:else}
+              {@render optionButton(row.option, row.domId, row.level)}
+            {/if}
+          {/each}
+        {:else if filteredOptions.length > 0}
           {#each optionSections as section, sectionIndex (sectionIndex)}
             {#if section.label}
               <div
@@ -508,12 +713,18 @@
                   {section.label}
                 </div>
                 {#each section.items as item (item.option.value)}
-                  {@render optionButton(item.option, item.index)}
+                  {@render optionButton(
+                    item.option,
+                    `${listboxId}-option-${item.index}`,
+                  )}
                 {/each}
               </div>
             {:else}
               {#each section.items as item (item.option.value)}
-                {@render optionButton(item.option, item.index)}
+                {@render optionButton(
+                  item.option,
+                  `${listboxId}-option-${item.index}`,
+                )}
               {/each}
             {/if}
           {/each}

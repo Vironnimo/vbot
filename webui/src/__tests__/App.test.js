@@ -19,7 +19,7 @@ import {
   resetAppHarness,
   rpcMock,
   runServerEvent,
-  selectedPersonalAgentName,
+  selectedAgentName,
   settingsPanelButton,
   sidebarNavButton,
   subscribeRunEventsMock,
@@ -197,7 +197,7 @@ describe('App', () => {
     rpcMock.mockImplementation(createAppRpcMock({ agents: ALPHA }));
     const handlers = mountApp();
     await waitForCondition(() => {
-      expect(selectedPersonalAgentName()).toBe('Alpha');
+      expect(selectedAgentName()).toBe('Alpha');
     });
     const agentReads = () =>
       rpcMock.mock.calls.filter(([method]) => method === 'agent.list').length;
@@ -556,7 +556,7 @@ describe('App Run events', () => {
   it('keeps the assistant output of rapid Run events and streams the rest', async () => {
     await mountChat(createAppRpcMock({ agents: ALPHA }));
     await waitForCondition(() => {
-      expect(selectedPersonalAgentName()).toBe('Alpha');
+      expect(selectedAgentName()).toBe('Alpha');
     });
 
     await Promise.all([
@@ -599,7 +599,7 @@ describe('App Run events', () => {
   it('streams only the displayed Session’s active Run from the connection_ready snapshot', async () => {
     await mountChat(createAppRpcMock({ agents: ALPHA }));
     await waitForCondition(() => {
-      expect(selectedPersonalAgentName()).toBe('Alpha');
+      expect(selectedAgentName()).toBe('Alpha');
     });
     const streamedBefore = streamedRuns().length;
 

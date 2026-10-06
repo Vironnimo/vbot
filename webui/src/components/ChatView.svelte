@@ -2,7 +2,6 @@
   import ChatHeader from './chat/ChatHeader.svelte';
   import {
     contextCompactionState,
-    isProjectSelected,
     isRunActive,
     agentActivityStatus,
     agentUnreadResults,
@@ -16,7 +15,6 @@
   } from '../lib/chatState.js';
   import ProjectScanBanner from './chat/ProjectScanBanner.svelte';
   import { t } from '$lib/i18n.js';
-  import { tooltip } from '$lib/tooltip.js';
   import Banner from './ui/Banner.svelte';
   import EmptyState from './ui/EmptyState.svelte';
   import Button from './ui/Button.svelte';
@@ -27,7 +25,6 @@
   import ComposerSessionSettings from './chat/ComposerSessionSettings.svelte';
   import ComputerUseControl from './ComputerUseControl.svelte';
   import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
-  import { agentActivityTooltip } from './chat/agentActivityTooltip.js';
   import {
     backgroundTasks,
     reflectionTaskRows,
@@ -67,8 +64,9 @@
     // Normal renders Thinking and Tool rows inline. Compact groups each
     // contiguous work span behind a Working disclosure.
     chatWorkingMode = 'normal',
-    // Project context (two-bar chat). `projects` feeds the project dropdown;
-    // `selectedProjectId` is the chosen project (empty = Personal). App owns
+    // Project context. `projects` (with cached Team scans) feeds the Agent
+    // picker's Project groups; `selectedProjectId` is the Project of the
+    // active Project Agent (empty = an Identity Agent is active). App owns
     // the persisted selection; ChatView reflects it back through
     // `onProjectSelected` so the localStorage mirror stays current.
     projects = [],
@@ -366,21 +364,31 @@
       chatState.commandStatuses,
     ).some((task) => task.dotStatus === 'running'),
   );
-  let identityAgentActivity = $derived.by(() => {
+  // Every Agent the picker offers: Identity Agents, then each Project Team.
+  let pickerAgentAddresses = $derived([
+    ...chatState.agents.map((agent) => agent.id),
+    ...target.projectGroups.flatMap((group) =>
+      group.members.map((member) =>
+        formatAgentAddress(member.agent_id, group.projectId),
+      ),
+    ),
+  ]);
+
+  let pickerAgentActivity = $derived.by(() => {
     const displayedSessionKey = target.displayedSessionKey();
     return Object.fromEntries(
-      chatState.agents.map((agent) => {
+      pickerAgentAddresses.map((address) => {
         const unreadResults = agentUnreadResults(
           chatState,
-          agent.id,
+          address,
           displayedSessionKey,
         );
         return [
-          agent.id,
+          address,
           {
             status: agentActivityStatus(
               chatState,
-              agent.id,
+              address,
               displayedSessionKey,
             ),
             unreadCount: unreadResults.count,
@@ -390,6 +398,15 @@
       }),
     );
   });
+
+  // A picker choice: an Identity Agent by its id, a Project Agent by its
+  // `agent@project` address.
+  function handleSelectPickerAgent(address) {
+    const { agentId, projectId } = parseAgentAddress(address);
+    return projectId
+      ? target.handleSelectProjectAgent(agentId, projectId)
+      : navigation.handleSelectAgent(agentId);
+  }
 
   let sessionDrawerActivity = $derived.by(() =>
     Object.values(chatState.sessions).map((sessionState) => ({
@@ -574,12 +591,7 @@
   // or a full Session refresh re-reads every address; an address joining the
   // set is read once. Scoped Session invalidations are applied separately.
   $effect(() => {
-    const addresses = [
-      ...chatState.agents.map((agent) => agent.id),
-      ...target.projectTeam.map((member) =>
-        formatAgentAddress(member.agent_id, selectedProjectId),
-      ),
-    ];
+    const addresses = pickerAgentAddresses;
     const reconnectRevision = connectionSnapshot
       ? `${connectionSnapshot.epoch ?? ''}:${connectionSnapshot.last_sequence ?? ''}`
       : '';
@@ -758,97 +770,30 @@
   <ChatHeader
     titleId={chatTitleId}
     agents={chatState.agents}
-    agentActivity={identityAgentActivity}
-    selectedAgentId={target.displayedIdentityAgentId}
-    displayedAgentName={target.displayedIdentityAgentId &&
-    target.activeAgent?.__overrideAddress
+    projectGroups={target.projectGroups}
+    agentActivity={pickerAgentActivity}
+    selectedAddress={target.activeAgentAddress}
+    displayedAgentName={target.activeAgent?.__overrideAddress
       ? target.activeAgent.name
       : ''}
     loadingAgents={chatState.loadingAgents}
-    {projects}
-    {selectedProjectId}
-    onSelectProject={target.handleSelectProject}
-    onSelectAgent={navigation.handleSelectAgent}
+    onSelectAgent={handleSelectPickerAgent}
   />
 
-  {#if isProjectSelected(selectedProjectId)}
+  {#if target.projectAgentActive}
     <ProjectScanBanner report={target.projectReport} {onNavigateToProjects} />
-    <!-- Second bar: the project's scanned team, shown only while a project is
-         chosen in the header picker. Left-aligned like the identity agent bar
-         above and prefixed with the project name so the team's ownership is
-         clear. Empty team renders an empty bar (no error); a config agent is
-         selected and chatted just like an identity agent. -->
-    <div
-      class="chat-view__project-team"
-      aria-label={t('chat.project.teamLabel')}
-    >
-      <div class="chat-view__project-team-inner">
-        <span
-          class="chat-view__project-team-name"
-          use:tooltip={t('chat.project.teamBarHint')}
-          >{target.selectedProjectName}</span
-        >
-        {#if target.loadingProjectTeam}
-          <span class="chat-view__project-team-empty">
-            {t('loading.agents')}
-          </span>
-        {:else if target.projectScanError}
-          <span class="chat-view__project-team-error"
-            >{target.projectScanError}</span
-          >
-        {:else if target.projectTeam.length === 0}
-          <span class="chat-view__project-team-empty">
-            {t('chat.project.teamEmpty')}
-          </span>
-        {:else}
-          {#each target.projectTeam as member (member.agent_id)}
-            {@const memberName = member.display_name || member.agent_id}
-            {@const memberStatus =
-              target.projectAgentStatuses[member.agent_id] ?? 'idle'}
-            {@const memberActivityLabel =
-              memberStatus === 'running'
-                ? t('chat.agentActivity.running', {
-                    name: memberName,
-                  })
-                : memberStatus === 'unread'
-                  ? t('chat.agentActivity.unread', {
-                      name: memberName,
-                    })
-                  : t('chat.agentActivity.idle', {
-                      name: memberName,
-                    })}
-            {@const memberActivityTooltip = agentActivityTooltip({
-              name: memberName,
-              id: member.agent_id,
-              status: memberStatus,
-              model: member.effective?.model?.value,
-              thinkingEffort: member.effective?.thinking_effort?.value,
-            })}
-            <button
-              type="button"
-              class="agent-tab chat-view__project-tab"
-              class:active={member.agent_id === target.displayedProjectAgentId}
-              aria-label={memberActivityLabel}
-              use:tooltip={memberActivityTooltip}
-              onclick={() => target.handleSelectProjectAgent(member.agent_id)}
-            >
-              <span
-                class="tab-indicator tab-indicator--{memberStatus}"
-                aria-hidden="true"
-              ></span>
-              <span>{memberName}</span>
-            </button>
-          {/each}
-        {/if}
-      </div>
-    </div>
+    {#if target.projectScanError}
+      <Banner variant="error" class="chat-view__state-banner">
+        {target.projectScanError}
+      </Banner>
+    {/if}
   {/if}
 
   {#if chatState.loadingAgents}
     <Banner variant="neutral" class="chat-view__state-banner">
       {t('loading.agents')}
     </Banner>
-  {:else if chatState.agents.length === 0}
+  {:else if chatState.agents.length === 0 && target.projectGroups.length === 0}
     <EmptyState
       fill
       title={t('chat.noAgents')}
