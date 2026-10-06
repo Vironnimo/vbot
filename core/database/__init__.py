@@ -74,6 +74,7 @@ from core.database.recovery import (
     active_incidents,
     read_incident,
     restore_data_snapshot,
+    retire_core_databases,
     unregister_database,
 )
 from core.database.snapshot_barrier import SnapshotBarrier
@@ -188,6 +189,7 @@ __all__ = [
     "restore_config_backup",
     "restore_data_snapshot",
     "restore_update_snapshot",
+    "retire_core_databases",
     "snapshot_root",
     "snapshot_summaries",
     "snapshot_summary",

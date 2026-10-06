@@ -163,7 +163,7 @@
      configuration pages - every view with a Secondary pane, plus System
      Prompt - center their content at `--content-max-narrow`; overview
      pages (Statistics, Logs) at `--content-max-wide`; work areas
-     (Terminals, Calendar, Jev, Debug) start at the page edge and use the
+     (Terminals, Calendar, Debug) start at the page edge and use the
      full width. Pages share one inset (`--page-inset-*`), so their titles
      sit at the same height. */
   --chat-measure-comfortable: 780px;

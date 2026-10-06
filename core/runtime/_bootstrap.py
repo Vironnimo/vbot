@@ -28,7 +28,7 @@ from core.channels import ChannelService
 from core.chat import ChatLoop, ChatLoopDependencies, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
 from core.compaction import CompactionService
-from core.database import canonical_database_path
+from core.database import DatabaseError, canonical_database_path, retire_core_databases
 from core.extensions import ExtensionRegistry
 from core.extensions.runtime import ExtensionRuntime
 from core.memory import MemoryService
@@ -77,6 +77,7 @@ from core.runtime._prompt_blocks import (
 )
 from core.runtime._recall import RecallIntegration
 from core.runtime._shutdown import clean_up_failed_startup
+from core.runtime.databases import RETIRED_CANONICAL_DATABASES
 from core.runtime.keep_awake import KeepAwakeController
 from core.sessions import ChatSessionManager
 from core.sessions.titles import SessionTitleService
@@ -115,8 +116,8 @@ from core.tools import (
     register_web_search_tool,
 )
 from core.tools.calendar import register_calendar_tool
+from core.tools.classify import register_classify_tool
 from core.tools.cron import register_cron_tool
-from core.tools.evaluate import register_evaluate_tool
 from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
 from core.tools.terminal_manager import TerminalManager
@@ -155,6 +156,15 @@ def bootstrap(runtime: Runtime) -> None:
         runtime.logger = runtime._open_log_manager().get_logger("core")
         runtime.logger.debug("Runtime startup initiated")
         runtime._storage.temporary_files.start()
+        if runtime.safe_startup_mode is None:
+            # Not in an update's verification start: its rollback needs every
+            # database still registered as the pre-update snapshot recorded it.
+            try:
+                retire_core_databases(runtime._storage.data_dir, RETIRED_CANONICAL_DATABASES)
+            except DatabaseError as exc:
+                runtime.logger.warning(
+                    "Retired databases stay registered until the next start: %s", exc
+                )
         settings = runtime._storage.load_settings()
         timezone_name = effective_timezone_name(settings)
         attachment_max_size_bytes = _positive_size_setting(
@@ -263,10 +273,7 @@ def bootstrap(runtime: Runtime) -> None:
             local_executor=local_embeddings,
         )
         runtime._decisions = DecisionService(
-            runtime._model_tasks,
-            runtime,
-            runtime._storage.layout.decisions_db,
-            usage_recorder=runtime._usage_recorder,
+            runtime._model_tasks, runtime, usage_recorder=runtime._usage_recorder
         )
         runtime._live_voice = LiveVoiceService(
             runtime._model_tasks, runtime, usage_recorder=runtime._usage_recorder
@@ -344,7 +351,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._storage.load_web_search_settings,
         )
         register_text_to_speech_tool(runtime._tools, runtime._speech)
-        register_evaluate_tool(runtime._tools, runtime._decisions)
+        register_classify_tool(runtime._tools, runtime._decisions)
         register_analyze_image_tool(
             runtime._tools, runtime._image, attachment_store=runtime._attachment_store
         )

@@ -1,85 +1,129 @@
-"""Decision execution and the experiment lifecycle, independent of Agents."""
+"""Decision Model execution: typed answers to questions about text, one item at a time."""
 
 from __future__ import annotations
 
 import asyncio
-import json
-from collections.abc import Callable
-from pathlib import Path
-from time import monotonic
 from typing import Any
 
 import httpx
 
-from core.database import Database
-from core.model_tasks.decision_actions import run_command, validate_control
 from core.model_tasks.decision_providers import ProviderDecisionClient
-from core.model_tasks.decision_store import DecisionStore
-from core.model_tasks.decision_types import DecisionError, text, validate_input
+from core.model_tasks.decision_types import (
+    DecisionError,
+    json_copy,
+    validate_questions,
+)
 from core.model_tasks.model_tasks import TaskModelService, parse_task_model_target_id
 from core.model_tasks.task_execution import TaskUsage, TaskUsageContext
 from core.providers.errors import NetworkError, ProviderError, ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
 from core.usage import UsageRecorder
-from core.utils.logging import get_logger
 from core.utils.tls import shared_ssl_context
+from core.utils.tokens import estimate_json_tokens
 
-_LOGGER = get_logger("decisions")
+# The most items one classify call judges.
+ITEM_LIMIT = 100
+# The most tokens the Decision Model reads per request: state plus questions.
+INPUT_TOKEN_LIMIT = 32_000
+# Items judged at the same time; each is one Provider request.
+_ITEM_CONCURRENCY = 8
+
+NOT_CONFIGURED_MESSAGE = (
+    "Configure an available Decision model in Settings → Tools → Decision Model."
+)
 
 
 class DecisionService:
-    """One executor for Tools, experiments, and future internal consumers."""
+    """The one executor of Decision Model requests, for Tools and internal consumers.
+
+    It keeps no state: every call resolves the configured ``decision`` binding,
+    sends one request per item and records each attempt's Usage.
+    """
 
     def __init__(
         self,
         model_tasks: TaskModelService,
         runtime: TaskClientRuntime,
-        store_path: Path,
         *,
         usage_recorder: UsageRecorder | None = None,
     ) -> None:
         self._model_tasks = model_tasks
         self._runtime = runtime
         self._usage_recorder = usage_recorder
-        self._store = DecisionStore(store_path)
-        self._tasks: dict[str, asyncio.Task[None]] = {}
-        self._starts: set[asyncio.Task[dict[str, Any]]] = set()
-        self._admission = asyncio.Lock()
-        self._closed = False
-
-    @property
-    def database(self) -> Database:
-        """The canonical ``decisions.db`` handle, for data snapshots and health."""
-        return self._store.database
-
-    async def _run[Result](
-        self, function: Callable[..., Result], *arguments: Any, **keywords: Any
-    ) -> Result:
-        """Run blocking store work on the ``decisions.db`` worker pool.
-
-        After close it raises :class:`~core.database.DatabaseUnavailableError`.
-        """
-        return await self._store.database.run_async(function, *arguments, **keywords)
 
     def available(self) -> bool:
-        if self._closed or not self._model_tasks.binding_is_usable("decision"):
+        if not self._model_tasks.binding_is_usable("decision"):
             return False
         ref = parse_task_model_target_id(self._model_tasks.binding_for("decision").target)
         return ref.provider_id == "openrouter"
 
     def _target(self) -> str:
         if not self.available():
-            raise DecisionError(
-                "Configure an available Decision model in Settings → Tools → Evaluation.",
-                code="not_configured",
-            )
+            raise DecisionError(NOT_CONFIGURED_MESSAGE, code="not_configured")
         return self._model_tasks.binding_for("decision").target
 
-    async def evaluate(
-        self, state: Any, questions: Any, *, usage_context: TaskUsageContext | None = None
-    ) -> dict[str, Any]:
-        state, questions = validate_input(state, questions)
-        return await self._evaluate(self._target(), state, questions, usage_context=usage_context)
+    async def classify(
+        self,
+        items: Any,
+        questions: Any,
+        *,
+        context: str | None = None,
+        usage_context: TaskUsageContext | None = None,
+    ) -> list[dict[str, Any] | DecisionError]:
+        """Answer every question about each item separately, in item order.
+
+        Each item is one request whose state is the item itself, or
+        ``{"context": context, "item": item}`` when ``context`` is given. A
+        failed item yields its ``DecisionError`` in its place; the other items
+        still complete. Invalid questions, items or a missing binding raise
+        before any request is sent.
+        """
+        questions = validate_questions(questions)
+        if not isinstance(items, list) or not items:
+            raise DecisionError("items must contain at least one item.")
+        if len(items) > ITEM_LIMIT:
+            raise DecisionError(
+                f"{len(items)} items were given; one call classifies at most {ITEM_LIMIT}. "
+                f"Nothing was sent. Split the items into calls of at most {ITEM_LIMIT}."
+            )
+        if context is not None and (not isinstance(context, str) or not context.strip()):
+            raise DecisionError("context must be non-empty text.")
+        states = [item if context is None else {"context": context, "item": item} for item in items]
+        for state in states:
+            if not isinstance(state, str | dict | list):
+                raise DecisionError("Each item must be text, a JSON object, or a JSON array.")
+        target = self._target()
+        slots = asyncio.Semaphore(_ITEM_CONCURRENCY)
+
+        async def judge(
+            state: Any, http_client: httpx.AsyncClient
+        ) -> dict[str, Any] | DecisionError:
+            try:
+                state = json_copy(state)
+                tokens, _ = estimate_json_tokens({"state": state, "questions": questions})
+                if tokens > INPUT_TOKEN_LIMIT:
+                    raise DecisionError(
+                        f"This item has about {tokens} tokens together with context and "
+                        f"questions; the Decision Model reads at most {INPUT_TOKEN_LIMIT}.",
+                        code="too_large",
+                    )
+                async with slots:
+                    return await self._evaluate(
+                        target,
+                        state,
+                        questions,
+                        http_client=http_client,
+                        usage_context=usage_context,
+                    )
+            except DecisionError as exc:
+                return exc
+
+        async with (
+            httpx.AsyncClient(verify=shared_ssl_context()) as http_client,
+            asyncio.TaskGroup() as group,
+        ):
+            tasks = [group.create_task(judge(state, http_client)) for state in states]
+        return [task.result() for task in tasks]
 
     async def _evaluate(
         self,
@@ -90,7 +134,6 @@ class DecisionService:
         http_client: httpx.AsyncClient | None = None,
         usage_context: TaskUsageContext | None = None,
     ) -> dict[str, Any]:
-        started = monotonic()
         ref = parse_task_model_target_id(target)
         try:
             client = ProviderDecisionClient.from_runtime(
@@ -100,235 +143,14 @@ class DecisionService:
                     self._usage_recorder, "decision", ref, context=usage_context
                 ),
             )
-            result = await client.evaluate(state, questions, http_client=http_client)
+            return await client.evaluate(state, questions, http_client=http_client)
         except ProviderOutcomeUnknownError as exc:
             raise DecisionError(
                 (
-                    "The Provider may have processed this evaluation, but no "
-                    "usable result arrived. A new evaluation may incur "
-                    "another charge."
+                    "The Provider may have processed this request, but no usable result "
+                    "arrived. Asking again may incur another charge."
                 ),
                 code="outcome_unknown",
             ) from exc
         except (ProviderError, NetworkError) as exc:
             raise DecisionError(str(exc), code="provider_error") from exc
-        return {**result, "target": target, "duration_ms": round((monotonic() - started) * 1000)}
-
-    async def list_experiments(self) -> dict[str, Any]:
-        return {
-            "experiments": await self._run(self._store.list),
-            "available": self.available(),
-        }
-
-    async def get_experiment(self, identifier: str) -> dict[str, Any]:
-        return await self._run(self._store.get, identifier)
-
-    async def save_experiment(
-        self, draft: Any, identifier: str | None = None, revision: int | None = None
-    ) -> dict[str, Any]:
-        return await self._run(self._store.save, draft, identifier, revision)
-
-    async def delete_experiment(self, identifier: str, revision: int) -> None:
-        await self._run(self._store.delete, identifier, revision)
-
-    async def history(self, identifier: str, before: int | None = None) -> dict[str, Any]:
-        return await self._run(self._store.history, identifier, before)
-
-    async def evaluation(self, identifier: str) -> dict[str, Any]:
-        return await self._run(self._store.evaluation, identifier)
-
-    async def start(
-        self, identifier: str, revision: int, request_id: str, mode: str = "evaluate"
-    ) -> dict[str, Any]:
-        text(request_id, "Request id", maximum=128)
-        if not isinstance(mode, str) or mode not in {"evaluate", "control"}:
-            raise DecisionError("Mode must be evaluate or control.")
-        if self._closed:
-            raise DecisionError("Decision service is stopping.", code="unavailable")
-        # Request cancellation/disconnection must not orphan a persisted evaluation.
-        operation = asyncio.create_task(self._start(identifier, revision, request_id, mode))
-        self._starts.add(operation)
-        operation.add_done_callback(self._start_done)
-        return await asyncio.shield(operation)
-
-    def _start_done(self, task: asyncio.Task[dict[str, Any]]) -> None:
-        self._starts.discard(task)
-        if not task.cancelled():
-            task.exception()  # Retrieved even if the requesting accessor disconnected.
-
-    async def _start(
-        self, identifier: str, revision: int, request_id: str, mode: str
-    ) -> dict[str, Any]:
-        async with self._admission:
-            previous = await self._run(self._store.request, request_id)
-            if previous:
-                if (
-                    previous["experiment_id"] != identifier
-                    or previous["snapshot"]["revision"] != revision
-                    or previous["snapshot"]["mode"] != mode
-                ):
-                    raise DecisionError(
-                        "Request id already belongs to another evaluation.", code="conflict"
-                    )
-                return previous
-            target = self._target()
-            experiment = await self.get_experiment(identifier)
-            draft = experiment["draft"]
-            if mode == "control":
-                draft["control"] = validate_control(draft.get("control"))
-            else:
-                draft["state"], draft["questions"] = validate_input(
-                    draft["state"], draft["questions"]
-                )
-            snapshot = {**draft, "target": target, "revision": revision, "mode": mode}
-            record = await self._run(self._store.begin, identifier, revision, request_id, snapshot)
-            task = asyncio.create_task(self._execute(record), name=f"decision:{record['id']}")
-            self._tasks[record["id"]] = task
-            task.add_done_callback(lambda finished: self._execution_done(record["id"], finished))
-            return record
-
-    def _execution_done(self, identifier: str, task: asyncio.Task[None]) -> None:
-        self._tasks.pop(identifier, None)
-        if not task.cancelled() and task.exception() is not None:
-            _LOGGER.error(
-                "Decision result could not be persisted (id=%s)",
-                identifier,
-                exc_info=task.exception(),
-            )
-
-    async def _execute(self, record: dict[str, Any]) -> None:
-        snapshot = record["snapshot"]
-        result = error = None
-        status = "completed"
-        try:
-            if snapshot["mode"] == "control":
-                result = await self._control(record)
-            else:
-                result = await self._evaluate(
-                    snapshot["target"], snapshot["state"], snapshot["questions"]
-                )
-        except asyncio.CancelledError:
-            status = "cancelled"
-        except DecisionError as exc:
-            status, error = "failed", {"code": exc.code, "message": str(exc)}
-        except Exception:
-            _LOGGER.exception("Decision evaluation failed (id=%s)", record["id"])
-            status, error = (
-                "failed",
-                {
-                    "code": "internal_error",
-                    "message": (
-                        "Evaluation failed unexpectedly. Try again after checking the server logs."
-                    ),
-                },
-            )
-        if not self._closed:
-            await self._run(self._store.finish, record["id"], status, result=result, error=error)
-
-    async def _control(self, record: dict[str, Any]) -> dict[str, Any]:
-        setup = record["snapshot"]["control"]
-        question = {
-            "id": "action",
-            "type": "choice",
-            "instructions": setup["instructions"],
-            "criteria": {key: value["description"] for key, value in setup["actions"].items()},
-        }
-        progress: dict[str, Any] = {
-            "mode": "control",
-            "steps_completed": 0,
-            "steps": [],
-            "phase": "observing",
-        }
-        async with httpx.AsyncClient(verify=shared_ssl_context()) as http_client:
-            while not setup["max_steps"] or progress["steps_completed"] < setup["max_steps"]:
-                progress["phase"] = "observing"
-                await self._run(self._store.progress, record["id"], progress)
-                started = monotonic()
-                raw = await run_command(setup["observe"], setup["timeout_seconds"])
-                try:
-                    observation = json.loads(raw)
-                except (ValueError, RecursionError) as exc:
-                    raise DecisionError(
-                        'Observation must return JSON: {"state": ..., "done": false}.',
-                        code="invalid_observation",
-                    ) from exc
-                if (
-                    not isinstance(observation, dict)
-                    or set(observation) != {"state", "done"}
-                    or not isinstance(observation["done"], bool)
-                ):
-                    raise DecisionError(
-                        "Observation must contain state and a boolean done field only.",
-                        code="invalid_observation",
-                    )
-                if observation["done"]:
-                    progress.update(phase="completed", stop_reason="application_done")
-                    return progress
-                state, questions = validate_input(observation["state"], [question])
-                progress["phase"] = "deciding"
-                await self._run(self._store.progress, record["id"], progress)
-                decision = await self._evaluate(
-                    record["snapshot"]["target"], state, questions, http_client=http_client
-                )
-                action = decision["answers"]["action"]["choice"]
-                step = {
-                    "number": progress["steps_completed"] + 1,
-                    "state": state,
-                    "decision": decision,
-                    "action": action,
-                    "status": "executing",
-                }
-                progress["steps"] = [*progress["steps"][-49:], step]
-                progress["phase"] = "acting"
-                # Persist intent before issuing an action. Interrupted effects are never replayed.
-                await self._run(self._store.progress, record["id"], progress)
-                command = setup["actions"][action]["command"]
-                step["output"] = (
-                    await run_command(command, setup["timeout_seconds"]) if command else ""
-                )
-                step.update(status="completed", duration_ms=round((monotonic() - started) * 1000))
-                progress["steps_completed"] += 1
-                progress["phase"] = "waiting"
-                await self._run(self._store.progress, record["id"], progress)
-                await asyncio.sleep(setup["interval_ms"] / 1000)
-            progress.update(phase="completed", stop_reason="step_limit")
-            return progress
-
-    async def cancel(self, identifier: str) -> dict[str, Any]:
-        record = await self.evaluation(identifier)
-        task = self._tasks.get(identifier)
-        if task is not None and not task.done():
-            if not task.cancelling():
-                task.cancel()
-            await asyncio.gather(asyncio.shield(task), return_exceptions=True)
-            # A task cancelled before its first instruction cannot run cleanup.
-            await self._run(self._store.finish, identifier, "cancelled")
-        return await self.evaluation(record["id"])
-
-    def close(self) -> None:
-        self._closed = True
-        try:
-            for operation in tuple(self._starts):
-                operation.cancel()
-            for identifier, task in tuple(self._tasks.items()):
-                if not task.cancelling():
-                    task.cancel()
-                if not self._store.database.is_closed():
-                    self._store.finish(identifier, "interrupted")
-        finally:
-            self._store.close()
-
-    async def aclose(self) -> None:
-        self._closed = True
-        try:
-            await asyncio.gather(*tuple(self._starts), return_exceptions=True)
-            async with self._admission:
-                tasks = tuple(self._tasks.items())
-                for _, task in tasks:
-                    if not task.cancelling():
-                        task.cancel()
-                await asyncio.gather(*(task for _, task in tasks), return_exceptions=True)
-                for identifier, _ in tasks:
-                    await self._run(self._store.finish, identifier, "interrupted")
-        finally:
-            self._store.close()

@@ -150,8 +150,6 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
         # Every Run has ended; each Sub-Agent activity file records its outcome.
         yield _Step("subagent_activity", None, subagents.drain_activity)
 
-    if (decisions := runtime._decisions) is not None:
-        yield _Step("decisions", decisions.close, decisions.aclose)
     if (speech := runtime._speech) is not None:
         yield _Step("speech", speech.close, speech.aclose)
     if (provider_usage := runtime._provider_usage) is not None:

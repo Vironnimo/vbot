@@ -34,9 +34,9 @@ CANONICAL_BUILTIN_TOOLS = [
     "apply_patch",
     "bash",
     "calendar",
+    "classify",
     "cron",
     "edit",
-    "evaluate",
     "generate_music",
     "generate_video",
     "image_generation",
@@ -126,7 +126,7 @@ def test_builtin_provider_definitions_expose_model_visible_metadata_only(
         definition["name"]: definition for definition in shared_runtime.tools.provider_definitions()
     }
 
-    assert sorted(definitions) == [name for name in CANONICAL_BUILTIN_TOOLS if name != "evaluate"]
+    assert sorted(definitions) == [name for name in CANONICAL_BUILTIN_TOOLS if name != "classify"]
     for tool_name, definition in definitions.items():
         tool = shared_runtime.tools.get(tool_name)
         assert definition == {

@@ -72,7 +72,7 @@ async def test_ambiguous_transport_failure_never_replays_billed_request():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_control_can_reuse_caller_owned_connection_without_losing_timeout_or_auth():
+async def test_a_shared_connection_keeps_timeout_and_auth_for_every_request():
     route = respx.post("https://openrouter.ai/api/alpha/decisions").mock(
         return_value=httpx.Response(
             200,

@@ -216,18 +216,6 @@ export {
 } from './api/automation.js';
 
 export {
-  listDecisionExperiments,
-  getDecisionExperiment,
-  saveDecisionExperiment,
-  deleteDecisionExperiment,
-  getDecisionHistory,
-  startDecisionEvaluation,
-  getDecisionResult,
-  cancelDecisionEvaluation,
-  evaluateDecision,
-} from './api/decisions.js';
-
-export {
   LIVE_SOCKET_ERROR_RESPONSE,
   getLiveVoiceStatus,
   startLiveCall,

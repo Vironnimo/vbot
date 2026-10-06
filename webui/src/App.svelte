@@ -28,11 +28,6 @@
       section: 'work',
     },
     {
-      id: 'jev',
-      label: () => t('navigation.jev'),
-      section: 'work',
-    },
-    {
       id: 'skills',
       label: () => t('navigation.skills'),
       section: 'configure',
@@ -84,7 +79,6 @@
   import AgentsView from './components/AgentsView.svelte';
   import TerminalsView from './components/TerminalsView.svelte';
   import ProjectsView from './components/ProjectsView.svelte';
-  import JevView from './components/decisions/JevView.svelte';
   import CalendarView from './components/CalendarView.svelte';
   import CronView from './components/CronView.svelte';
   import SkillsView from './components/skills/SkillsView.svelte';
@@ -1005,11 +999,6 @@
           {modelsRefreshToken}
           {projectsRefreshToken}
           {skillsRefreshToken}
-        />
-      {:else if activeViewId === 'jev'}
-        <JevView
-          navigation={navigator.view('jev')}
-          onNavigateToSettingsPanel={navigateToSettingsPanel}
         />
       {:else if activeViewId === 'calendar'}
         <CalendarView

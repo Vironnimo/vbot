@@ -32,7 +32,7 @@ from core.database import (
     write_bootstrap_marker,
 )
 from core.database.snapshots import SNAPSHOT_MANIFEST_NAME, snapshot_root
-from core.model_tasks.decision_store import decision_database_spec
+from core.providers.usage_history import provider_usage_database_spec
 from core.utils.server_control import server_control_claim
 from tests.core.database.database_test_support import add_note, notes_spec, stored_bodies
 
@@ -472,10 +472,10 @@ def _alter_a_recorded_owner_fact(data_dir: Path, _stack: ExitStack) -> dict[str,
     assert snapshot_id is not None
     manifest_path = snapshot_root(data_dir) / snapshot_id / SNAPSHOT_MANIFEST_NAME
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    facts = manifest["members"]["decisions"]["facts"]
+    facts = manifest["members"]["provider_usage"]["facts"]
     recorded = dict(facts)
     # A recorded fact the copy disagrees with is caught only by the declaration.
-    facts["experiment_count"] += 1
+    facts["sample_count"] += 1
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     return recorded
 
@@ -489,7 +489,7 @@ def _alter_a_recorded_owner_fact(data_dir: Path, _stack: ExitStack) -> dict[str,
         pytest.param(
             _alter_a_recorded_owner_fact,
             "",
-            {"evaluation_count": 0, "experiment_count": 0},
+            {"sample_count": 0, "snapshot_count": 0, "window_count": 0},
             id="altered-owner-fact",
         ),
     ],
@@ -503,7 +503,9 @@ def test_a_restore_that_cannot_be_proven_safe_keeps_the_candidate_data(
 ) -> None:
     install = _install(tmp_path)
     data_dir = _server_data(install)
-    open_database(decision_database_spec(canonical_database_path(data_dir, "decisions"))).close()
+    open_database(
+        provider_usage_database_spec(canonical_database_path(data_dir, "provider_usage"))
+    ).close()
     operation = Operation(
         id="upd_refused", previous_version="rel_old", package="release.zip", local_package=True
     )

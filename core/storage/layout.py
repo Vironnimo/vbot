@@ -60,10 +60,6 @@ class DataDirectoryLayout:
         object.__setattr__(self, "root", Path(root).expanduser())
 
     @property
-    def decisions_db(self) -> Path:
-        return self.root / "decisions.db"
-
-    @property
     def artifacts(self) -> Path:
         return self.root / "artifacts"
 

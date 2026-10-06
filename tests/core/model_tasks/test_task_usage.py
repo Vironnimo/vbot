@@ -178,23 +178,18 @@ async def test_task_services_record_consumption_before_artifacts_or_experiment_h
         finally:
             await service.aclose()
     else:
-        decisions = DecisionService(
-            cast(TaskModelService, tasks), runtime, tmp_path / "decisions.db", **kwargs
+        decisions = DecisionService(cast(TaskModelService, tasks), runtime, **kwargs)
+        respx.post("https://provider.example/api/alpha/decisions").respond(
+            200,
+            json={
+                "model": "test/model",
+                "answers": {"q": {"type": "noul", "noul": 0.5}},
+                "usage": usage,
+            },
         )
-        try:
-            respx.post("https://provider.example/api/alpha/decisions").respond(
-                200,
-                json={
-                    "model": "test/model",
-                    "answers": {"q": {"type": "noul", "noul": 0.5}},
-                    "usage": usage,
-                },
-            )
-            await decisions.evaluate(
-                "state", [{"id": "q", "type": "noul", "instructions": "Judge"}], usage_context=SCOPE
-            )
-        finally:
-            await decisions.aclose()
+        await decisions.classify(
+            ["state"], [{"id": "q", "type": "noul", "instructions": "Judge"}], usage_context=SCOPE
+        )
 
     _, records = read_ledger(recorder)
     assert len(records) == 1

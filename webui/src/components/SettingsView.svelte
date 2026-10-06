@@ -179,7 +179,7 @@
     },
     {
       id: 'decision_model',
-      label: () => t('settings.sections.evaluation'),
+      label: () => t('settings.sections.decisionModel'),
     },
     {
       id: 'subagents',
