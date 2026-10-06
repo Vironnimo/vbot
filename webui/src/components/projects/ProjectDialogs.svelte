@@ -3,32 +3,11 @@
   import { t } from '$lib/i18n.js';
   import FormField from '../ui/FormField.svelte';
   import TextField from '../ui/TextField.svelte';
-  import {
-    PROJECT_SOURCE_FORMATS,
-    presentFormats,
-    shouldSuggestClaudeMd,
-  } from '$lib/projectsView.js';
   import Toggle from '../ui/Toggle.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
-  import { formatLabel } from './projectLabels.js';
   import ArchiveDeleteOption from '../archive/ArchiveDeleteOption.svelte';
   let { projectsState = $bindable(), projectsController } = $props();
-
-  const addFormatsPresent = $derived(
-    projectsState.addDetect ? presentFormats(projectsState.addDetect) : [],
-  );
-
-  const addShowsFormatChoice = $derived(addFormatsPresent.length > 1);
-
-  const addDetectedFormat = $derived(
-    addFormatsPresent.length === 1 ? addFormatsPresent[0] : '',
-  );
-
-  const addSuggestsClaudeMd = $derived(
-    projectsState.addDetect !== null &&
-      shouldSuggestClaudeMd(projectsState.addDetect),
-  );
 
   let canSubmitAdd = $derived(
     projectsState.addForm.cwd.trim().length > 0 && !projectsState.addingProject,
@@ -110,66 +89,12 @@
             />
           </FormField>
 
-          {#if addShowsFormatChoice}
-            <FormField
-              label={t('projects.add.format')}
-              help={t('projects.add.formatHelp')}
-              role="radiogroup"
-              aria-label={t('projects.add.format')}
-            >
-              <div class="projects-format-choice">
-                {#each PROJECT_SOURCE_FORMATS as formatKey (formatKey)}
-                  <button
-                    type="button"
-                    class="projects-format-option"
-                    class:projects-format-option--selected={projectsState
-                      .addForm.source_format === formatKey}
-                    role="radio"
-                    aria-checked={projectsState.addForm.source_format ===
-                      formatKey}
-                    disabled={projectsState.addingProject}
-                    onclick={() => updateAddField('source_format', formatKey)}
-                  >
-                    <span class="projects-format-option__name">
-                      {formatLabel(formatKey)}
-                    </span>
-                    <span class="projects-format-option__detail">
-                      {t('projects.add.formatCounts', {
-                        agents:
-                          projectsState.addDetect?.formats?.[formatKey]
-                            ?.agents ?? 0,
-                        skills:
-                          projectsState.addDetect?.formats?.[formatKey]
-                            ?.skills ?? 0,
-                      })}
-                    </span>
-                  </button>
-                {/each}
-              </div>
-            </FormField>
-          {:else if addDetectedFormat}
+          {#if projectsState.addDetect?.sources?.length}
             <p class="projects-help">
-              {t('projects.add.formatDetected', {
-                format: formatLabel(addDetectedFormat),
+              {t('projects.sources.detected', {
+                count: projectsState.addDetect.sources.length,
               })}
             </p>
-          {/if}
-
-          {#if addSuggestsClaudeMd}
-            <div class="projects-claude-md-suggestion">
-              <Toggle
-                size="sm"
-                checked={projectsState.addForm.include_claude_md}
-                disabled={projectsState.addingProject}
-                ariaLabel={t('projects.add.claudeMdSuggestionLabel')}
-                onChange={(next) => updateAddField('include_claude_md', next)}
-              />
-              <span>
-                {t('projects.add.claudeMdSuggestion', {
-                  path: projectsState.addDetect?.claude_md ?? 'CLAUDE.md',
-                })}
-              </span>
-            </div>
           {/if}
 
           {#if projectsState.addError}

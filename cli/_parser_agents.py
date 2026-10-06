@@ -17,12 +17,12 @@ from cli._parser_common import (
     THINKING_EFFORTS,
     _add_command_parser,
     _add_target_arguments,
+    _json_array_argument,
     _json_object_argument,
 )
 from core.memory import MEMORY_PROMPT_MODES
 from core.providers.reasoning import THINKING_EFFORT_ORDER
 from core.sessions import ARCHIVE_KINDS
-from core.settings import PROJECT_SOURCE_FORMATS
 
 # The Identity Agent a fresh installation creates first.
 DEFAULT_CHAT_AGENT = "main"
@@ -323,13 +323,14 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         help="Clear the project default thinking effort (fall through to the global default)",
     )
     add_parser.add_argument(
-        "--format",
-        choices=PROJECT_SOURCE_FORMATS,
-        help=(
-            "Source format the project's agents and skills come from "
-            "(.opencode/ or .claude/); omitted: auto-detected from the repo, "
-            "defaulting to opencode when both or neither are present"
-        ),
+        "--sources",
+        type=_json_array_argument,
+        help="Ordered source selections as JSON [{id, enabled}]",
+    )
+    add_parser.add_argument(
+        "--model-mappings",
+        type=_json_object_argument,
+        help="Model wish to vBot Model mapping as JSON",
     )
     add_parser.add_argument(
         "--auto-load",
@@ -408,12 +409,14 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         help="Clear the project default thinking effort (fall through to the global default)",
     )
     set_parser.add_argument(
-        "--format",
-        choices=PROJECT_SOURCE_FORMATS,
-        help=(
-            "Switch the project's source format; team and skills re-derive "
-            "from the new format's directories on the next show/run"
-        ),
+        "--sources",
+        type=_json_array_argument,
+        help="Ordered source selections as JSON [{id, enabled}]",
+    )
+    set_parser.add_argument(
+        "--model-mappings",
+        type=_json_object_argument,
+        help="Model wish to vBot Model mapping as JSON",
     )
     set_parser.add_argument(
         "--auto-load",

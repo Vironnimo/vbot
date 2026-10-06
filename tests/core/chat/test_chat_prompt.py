@@ -141,7 +141,7 @@ def _config_agent(body: str) -> ConfigAgent:
         tools={},
         body=body,
         source_path=Path(".opencode/agents/orchestrator.md"),
-        source_format="opencode",
+        source="opencode",
     )
 
 

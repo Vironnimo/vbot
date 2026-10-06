@@ -45,6 +45,7 @@ from core.tools.availability import (
     BASH_TOOL_SETTINGS_KEY,
     SUBAGENT_ALLOWED_AGENTS_KEY,
     SUBAGENT_TOOL_SETTINGS_KEY,
+    normalize_tool_access,
 )
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
 from core.tools.tools import ToolContext, ToolRegistry
@@ -62,7 +63,9 @@ def _temporary_config_from_binding(binding: Any) -> TemporaryAgentConfig:
         return TemporaryAgentConfig(
             model=raw["model"],
             cwd=Path(raw["cwd"]),
-            tool_access=raw["tool_access"],
+            tool_access=replace(
+                normalize_tool_access(raw["tool_access"]), fixed=raw.get("fixed_tool_access", False)
+            ),
             allowed_skills=raw["allowed_skills"],
             tools=raw["tools"],
             name=raw["name"],
@@ -451,8 +454,13 @@ class ExtensionHostFactory:
     ) -> dict[str, Any]:
         if self._extensions is None or not self._extensions.is_registration_current(identity):
             raise ValueError("Extension registration is no longer current")
+        config = await _RUNTIME_WORKERS.run(
+            self.agent_resolver.prepare_temporary_config, config, project_id
+        )
         agent = await _RUNTIME_WORKERS.run(
-            self.agent_resolver.preview_temporary_agent, config, project_id
+            self.agent_resolver.preview_temporary_agent,
+            replace(config, repository_profile=None),
+            project_id,
         )
         record = next(item for item in self._extensions.records() if item.name == identity.name)
         grants = tuple(
@@ -482,7 +490,7 @@ class ExtensionHostFactory:
         project = self.projects.get(project_id) if project_id else None
         context = (
             ProjectPromptContext.from_project(
-                project.project_id, project.display_name, project.cwd, project.auto_load
+                project.project_id, project.display_name, project.cwd, project.instruction_files
             )
             if project is not None
             else None
@@ -513,6 +521,16 @@ class ExtensionHostFactory:
                     "id": project.project_id,
                     "name": project.display_name,
                     "cwd": project.cwd,
+                    "agent_profiles": [
+                        {
+                            "id": member.agent_id,
+                            "name": member.display_name,
+                            "source": member.source,
+                            "status": member.status,
+                        }
+                        for member in self.agent_resolver.cached_scan(project).team
+                        if not member.unavailable_reason
+                    ],
                     "allowed_tools": list(project.allowed_tools),
                     "allowed_skills": effective_project_allowed_skills(
                         project, self.project_skill_names(project.project_id)

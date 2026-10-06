@@ -1,67 +1,34 @@
-# Project Scanning
+# Project Sources
 
-Read this reference when changing repository Agent discovery, supported source formats, format detection, scan findings, or collision behavior.
+Read for adapters, discovery, translation, source priority or findings.
 
-## Scanner Boundary
+## Ownership and inputs
 
-`core/projects/scanners/base.py` defines the `AgentDetector` contract and `ScannedAgent` representation. The scanner registry has one detector per supported source format and a stable rank: OpenCode first, Claude second. A persisted Project selects exactly one detector through `source_format`; multi-format detection is advisory and does not merge formats into one Team.
+`core/projects/sources/` is an internal part of Projects. `profile.py` defines `AgentProfile`, ordered Tool/target rules, translations and Source selections. `catalog.py` owns detection and collision-safe refresh. `sources.py` assembles the Team and shadowed definitions and reads live Profiles. Downstream code never interprets foreign syntax.
 
-A `ScannedAgent` carries the normalized Agent id and display metadata plus the repository-derived runtime inputs needed by resolution: description, raw model, temperature, top_p, instructions body, source format/path, denied Tools, ordered Agent-target rules, and thinking effort. `AgentTargetRule` is the source-neutral pattern/allow representation; the resolver materializes it only against the current Project Team. A scanned Agent does not contain Project defaults, per-Agent overrides, global defaults, or the final effective capability set.
+`opencode.py` reads Markdown in `.opencode/agents/` and `.opencode/agent/`, plus Agent objects and global rules in `opencode.json` and `.opencode/opencode.json`. Prompt file references stay inside the repository. `markdown.py` reads Claude (`.claude/agents/` and repository settings), Copilot (`.github/agents/`), Cursor (`.cursor/agents/`) and Gemini (`.gemini/agents/`). `codex.py` reads `.codex/agents/*.toml` and role config-file references from `.codex/config.toml`. Discovery is recursive within known folders and never traverses links/junctions. `_reading.py` limits inputs to 128 KiB, accepts UTF-8, rejects duplicate metadata keys and normalizes line endings while retaining instructions.
 
-## Format Mappings
+Skill Sources include `.agents/skills/` and each supported ecosystem's Skill directory. Skills loads these ordered roots, first name wins. Optional instruction Sources include CLAUDE.md, GEMINI.md and Copilot instructions. AGENTS.md remains the creation-seeded auto-load default. Cursor conditional/path rules are excluded, never flattened into always-on instructions.
 
-### OpenCode
+## Translation and access
 
-`core/projects/scanners/opencode.py` reads Agent files directly under `.opencode/agents/`; discovery there is non-recursive. It parses frontmatter and body, retains supported model/temperature/top_p/thinking fields (a `top_p` outside 0-1 is dropped), converts explicit Tool or permission denials into `denied_tools`, and maps ordered scoped Sub-Agent target rules into `agent_target_rules`. Unknown or malformed permission structures fail open rather than accidentally disabling capabilities.
+Every behavior/access setting is applied, translated, not supported or overridden by vBot. Appearance settings can be dropped. Unknown behavior settings are reported; unknown permission/isolation/hook/Tool settings disable Tools conservatively. Status is ready, limited (unsupported settings) or needs_attention (unavailable). Broken/unreadable metadata creates an unavailable Profile with a finding, never default access. Disabled OpenCode Agents remain visible and unavailable.
 
-### Claude
+Claude retains Model wishes, effort and Skill preloads. Explicit Tool lists become exact selections; empty means no Tools. A combined Tool requires all capabilities it supplies (Edit+Write for patches; Grep+Glob for search). Shell restrictions cover bash and terminal. Approval and scoped command/path requirements disable affected Tools; scoped Agent/Skill names can be represented. Hooks, MCP, isolation, memory, background, turn limits and other unsupported behavior remain in the report; no external engine, hook or sandbox is run.
 
-`core/projects/scanners/claude.py` recursively reads `.claude/agents/**/*.md`, never entering a linked folder (Windows junctions included). It maps Claude Tool allow/deny metadata into the common denial representation, maps scoped `Agent(...)`/`Task(...)` entries into ordered `agent_target_rules`, and intentionally drops Claude's model field instead of treating it as a vBot model id. A scoped target denial narrows the Project Team but does not by itself disable the entire Sub-Agent capability.
+OpenCode global rules precede Agent rules with ordered last-match precedence. Wildcard deny cannot be lost. Capability overlap is evaluated before output Tools, so Glob allow cannot undo Grep deny. Codex isolation and approval requirements fail closed. Cursor readonly selects read capabilities. Gemini local Profiles prohibit recursive delegation; remote Profiles are unavailable.
 
-File-mutation denials target active Tools: OpenCode `permission.edit` denies
-`apply_patch`; OpenCode `tools.edit: false` and Claude `Edit` denials
-deny `apply_patch`. A `Write`/`tools.write` denial also denies `apply_patch` because
-patches can create, fully replace, or update files. Claude allow-list inversion uses
-the same mapping, so allowing patches requires both Edit and Write. These scanner
-mappings do not rewrite explicit persisted vBot Tool selections.
+## Priority, refresh and findings
 
-Search denials for either Grep or Glob map to the union `search_files` Tool in
-both scanners. Claude allow-list inversion therefore requires both capabilities
-before the common search Tool remains available.
+Source order decides winners, then stable path order within a Source. The Team is sorted by Agent id. Losing definitions remain in `ScanResult.shadowed`; duplicate Skill names produce findings. Off Sources keep their rows. New Sources append active unless they collide with an existing active name. Existing Projects use the named additive backfill (`configuration.md`). Optional `agent_paths` limits a Source to repository-relative file patterns; the backfill retains old top-level Markdown scope. Excluded definitions stay visible with `source_scope` findings. Explicit expansion removes that limit; adapters and runtime configuration stay format-neutral.
 
-Keep source-specific parsing inside the detector. Downstream Team and resolver code should consume the common `ScannedAgent` shape and must not branch on repository file syntax.
+`ScanReport` owns records only: bad_model, slug_collision, unslugifiable_name, orphan, unavailable_tool, invalid_source, skill_collision and source_scope. Source assembly supplies structural findings; resolution supplies usable-Model and pointer findings; RPC supplies unavailable Project Tools. Each Profile also carries its translation report.
 
-## Format Detection
+Membership can be cached; each Run rereads the selected Profile. Project show/open rescans and refreshes detection. Skill registry/inventory rebuilds also refresh Sources. Mutations of order, activation, cwd or Model mappings invalidate Team/Skill projections.
 
-`detect_project_formats()` is a read-only, fail-soft inspection used before or around Project creation. It reports per-format Agent counts and loadable Project Skill counts, plus relevant `AGENTS.md`/`CLAUDE.md` instruction-file facts. Detection may surface more than one format; selection of the persisted `source_format` remains a separate Project configuration decision.
+## Source and evidence
 
-Failures to inspect one candidate should become detection/report information where possible rather than preventing every other format from being considered.
-
-## Team Assembly & Findings
-
-Team construction and scan reporting are deterministic. Candidates are ordered by detector rank and then filename; the resulting Team is sorted by `agent_id`. Slug normalization determines the runtime Agent id.
-
-`core/projects/scan_report.py` owns scan findings:
-
-- `BAD_MODEL`: a repository model value cannot be used as configured.
-- `SLUG_COLLISION`: multiple source files normalize to the same Agent id.
-- `UNSLUGIFIABLE_NAME`: a source name cannot produce a valid Agent id.
-- `ORPHAN`: persisted per-Agent state references an Agent no longer present in the selected repository source.
-- `UNAVAILABLE_TOOL`: a persisted Project Tool Whitelist entry is not currently a registered Project tool. `server/rpc/project_methods.py` appends this runtime-owned finding through `ScanReport.with_findings`; the repository scanner does not consult the Tool Registry, and the permission remains stored so a disabled Extension can regain it.
-
-Do not silently resolve collisions according to filesystem enumeration order. Preserve stable detector/file ordering and expose findings so callers can explain why a candidate was excluded or degraded.
-
-## Cache Interaction
-
-The resolver may cache Team membership per Project, not repository Agent configuration. `project.show` deliberately reloads Skills, invalidates relevant caches, and rescans. `AgentResolver.cached_scan()` returns the cached scan result (scanning on first use) for listings such as `project.list` with `include_scan`; it can lag the repository until the next rescan. Changes to Project `cwd` or `source_format` must invalidate membership because they change the discovery source.
-
-When adding a source format, implement the detector, register its stable rank, add format detection and Project Skill discovery behavior, extend the accepted `source_format` contract and WebUI choice, and cover cross-format ordering/collision behavior. Do not make the resolver understand the new file syntax.
-
-## Source & Tests
-
-- Shared detector and scanned shape: `core/projects/scanners/base.py`
-- Registry and scan orchestration: `core/projects/scanners/base.py`
-- OpenCode mapping: `core/projects/scanners/opencode.py`
-- Claude mapping: `core/projects/scanners/claude.py`
-- Findings: `core/projects/scan_report.py`
-- Primary tests: `tests/core/projects/scanners/`, `tests/core/projects/test_scan_report.py`, and `tests/core/projects/test_resolver_scan_identity.py`
+- `core/projects/sources/`, `source_migration.py`, `scan_report.py`
+- `tests/core/projects/test_sources.py`: mixed sources, collisions, all adapters, empty/scoped permissions, legacy anchors, Models, preloads and participant snapshots
+- Retained resolver/Store, Skills, RPC and Extension-host tests cover their public contracts.
+- Schema references: https://opencode.ai/docs/agents/, https://code.claude.com/docs/en/sub-agents, https://developers.openai.com/codex/multi-agent, https://docs.github.com/en/copilot/reference/custom-agents-configuration, https://cursor.com/docs/subagents, https://geminicli.com/docs/core/subagents/

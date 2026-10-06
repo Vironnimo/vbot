@@ -17,12 +17,13 @@ from core.projects.resolver import (
     AgentResolver,
     ModelConfigurationChecker,
 )
-from core.projects.scanners.opencode import OPENCODE_AGENTS_SUBPATH
 from core.projects.store import ProjectStore
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
 from server.events import ServerEventBus
 from tests.server.rpc_test_support_runtime import StubCalendarService
+
+OPENCODE_AGENTS_SUBPATH = (".opencode", "agents")
 
 
 # ---------------------------------------------------------------------------

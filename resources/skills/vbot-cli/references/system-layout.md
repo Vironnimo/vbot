@@ -66,7 +66,7 @@ Some directories are created only when their owning feature first writes data.
 | `artifacts/temp/commands/` and `artifacts/temp/subagents/` | Retained diagnostic output with category-specific expiry | Inspect when a Tool points to a retained file; do not treat it as durable application state |
 | `artifacts/temp/atomic/` | Short-lived atomic-write and refresh staging | Never use as a source of truth |
 
-Project Skills do not live in the data directory: they stay in the Project cwd under the directory selected by its Source Format (`.opencode/skills/` or `.claude/skills/`). Bundled Skills live under `vbot_root/resources/skills/`. Configured extra Skill and Extension directories may also be external.
+Project Skills stay in the Project cwd under its enabled Skill Sources, including `.agents/skills/`. Read `project show <project-id>` to see the selected Sources. Bundled Skills live under `vbot_root/resources/skills/`. Configured extra Skill and Extension directories may also be external.
 
 ## Search and edit discipline
 

@@ -466,7 +466,12 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._file_state,
             runtime._tool_prompt_blocks,
         )
-        runtime._temporary_agents = TemporaryAgentRegistry(runtime._chat_sessions)
+        runtime._temporary_agents = TemporaryAgentRegistry(
+            runtime._chat_sessions,
+            prepare_config=lambda config, project_id: (
+                runtime.agent_resolver.prepare_temporary_config(config, project_id)
+            ),
+        )
         runtime._agent_resolver = build_agent_resolver(
             runtime._agents,
             runtime._projects,
@@ -475,6 +480,11 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._provider_credentials,
             lambda: _global_agent_defaults(runtime._storage),
             project_skill_names=runtime.project_skill_names,
+            profile_skill_content=runtime.profile_skill_content,
+            skill_pool_names=lambda project_id: frozenset(
+                skill.name for skill in runtime.skills_for(project_id).list_all()
+            ),
+            tool_names=lambda: tuple(tool.name for tool in runtime.tools.list_tools()),
             temporary_agents=runtime._temporary_agents,
             sessions=runtime._chat_sessions,
         )

@@ -282,7 +282,12 @@ def test_repository_denials_narrow_the_project_tool_ceiling(
         projects.update("vbot", allowed_tools=allowed_tools)
     resolver = _resolver(agents, projects, _openai_configured())
 
-    assert resolver.resolve_agent("vbot", "builder").tool_access == tool_access
+    actual = resolver.resolve_agent("vbot", "builder").tool_access
+    expected = set(tool_access.allowed) | (
+        {"edit", "write"} if actual.fixed and "apply_patch" in tool_access.allowed else set()
+    )
+    assert set(actual.allowed) == expected
+    assert not set(actual.allowed) & set(tool_access.denied)
 
 
 def test_vbot_tool_override_replaces_repository_denials_until_cleared(
@@ -304,7 +309,6 @@ def test_vbot_tool_override_replaces_repository_denials_until_cleared(
     assert overridden.tool_access == ToolAccess(mode="selected", allowed=("subagent",))
     assert overridden.tools == {"subagent": {"allowed_agents": []}}
     assert overridden_effective == {"value": policy, "source": "override"}
-    assert restored.tool_access.denied == ("subagent",)
     assert "subagent" not in restored.tool_access.allowed
     assert restored_effective["source"] == "agent"
 

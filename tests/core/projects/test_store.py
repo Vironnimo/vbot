@@ -30,7 +30,8 @@ from tests.core.database.database_test_support import frozen_members
 
 _SEEDED_FIELDS = (
     "cwd",
-    "source_format",
+    "sources",
+    "model_mappings",
     "auto_load",
     "allowed_tools",
     "skills_bundled_enabled",
@@ -66,7 +67,8 @@ def test_create_writes_the_anchor_with_seeded_defaults(data_dir: Path, repo: Pat
     assert store.get("vbot") == project
     assert {field: payload[field] for field in _SEEDED_FIELDS} == {
         "cwd": str(Path(os.path.realpath(repo))),
-        "source_format": "opencode",
+        "sources": [],
+        "model_mappings": {},
         # AGENTS.md loads with zero config, yet stays a removable entry.
         "auto_load": ["AGENTS.md"],
         # The base Tool Whitelist is the ceiling; Skill rule lists start empty.
@@ -88,7 +90,10 @@ def test_create_persists_explicit_fields(data_dir: Path, repo: Path) -> None:
         default_model="openai/gpt-5",
         default_temperature=0.4,
         default_thinking_effort="high",
-        source_format="claude",
+        sources=[
+            {"id": "claude.agents", "enabled": True},
+            {"id": "claude.skills", "enabled": True},
+        ],
         auto_load=["docs/guide.md", "CONTEXT.md"],
     )
 
@@ -98,8 +103,8 @@ def test_create_persists_explicit_fields(data_dir: Path, repo: Path) -> None:
         project.default_model,
         project.default_temperature,
         project.default_thinking_effort,
-        project.source_format,
-    ) == ("orchestrator", "openai/gpt-5", 0.4, "high", "claude")
+        [item.id for item in project.sources],
+    ) == ("orchestrator", "openai/gpt-5", 0.4, "high", ["claude.agents", "claude.skills"])
     # The caller's list keeps its order behind the seeded AGENTS.md.
     assert project.auto_load == ["AGENTS.md", "docs/guide.md", "CONTEXT.md"]
 
@@ -365,7 +370,10 @@ def test_update_rebuilds_changed_fields_and_keeps_the_rest(
         "vbot",
         display_name="vBot Renamed",
         cwd=str(moved),
-        source_format="claude",
+        sources=[
+            {"id": "claude.agents", "enabled": True},
+            {"id": "claude.skills", "enabled": True},
+        ],
         allowed_tools=["read", "grep"],
         skills_bundled_enabled=["frontend-design"],
         skills_project_disabled=["debugging"],
@@ -379,7 +387,11 @@ def test_update_rebuilds_changed_fields_and_keeps_the_rest(
         **before.to_dict(),
         "display_name": "vBot Renamed",
         "cwd": str(Path(os.path.realpath(moved))),
-        "source_format": "claude",
+        "sources": [
+            {"id": "claude.agents", "enabled": True},
+            {"id": "claude.skills", "enabled": True},
+        ],
+        "model_mappings": {},
         "allowed_tools": ["read", "grep"],
         "skills_bundled_enabled": ["frontend-design"],
         "skills_project_disabled": ["debugging"],
@@ -447,10 +459,10 @@ def test_update_clears_a_field_with_its_empty_value(
             id="update-cwd-collision",
         ),
         pytest.param(
-            lambda store, repos: store.update("vbot", source_format="cursor"),
+            lambda store, repos: store.update("vbot", sources="cursor"),
             ProjectError,
-            "source_format must be one of: opencode, claude",
-            id="update-source-format",
+            "sources must be an ordered list.",
+            id="update-sources",
         ),
         # Overrides have their own set/clear seam.
         pytest.param(

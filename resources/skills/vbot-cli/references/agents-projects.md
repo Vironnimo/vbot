@@ -50,17 +50,17 @@ vbot agent rename coder researcher
 
 `vbot agent create` always creates an Identity Agent with its own Workspace, `SOUL.md`, Memory, private Skills, and Sessions. When the user generically asks to create an Agent, use this kind. To make it work in a Project, create it and then set its default Project with `agent update --project`; when requested, read the Workspace from `agent show` and customize `<workspace>/SOUL.md` with the normal file tools.
 
-A Project Agent is different: it is a workspace-less Config Agent discovered from an existing file under the Project's selected Source Format (`.opencode/agents/` or `.claude/agents/`). It has no `SOUL.md`, Memory, or persistent identity. Do not inspect the repo or create/edit a Project Agent file merely because the user wants an Agent associated with a Project; do that only when the user explicitly asks for a Project Team member or repo-owned agent profile.
+A Project Agent is different: it is a workspace-less Config Agent discovered from the Project's enabled repository Agent Sources. It has no `SOUL.md`, Memory, or persistent identity. Do not inspect the repo or create/edit a Project Agent file merely because the user wants an Agent associated with a Project; do that only when the user explicitly asks for a Project Team member or repo-owned agent profile.
 
 ## Projects
 
 A Project points vBot at a repo directory (its `cwd`) and exposes any agents already discovered in that repo (its Team). Adding a Project does not require a Team. vBot reads the repo but never writes it.
 
 ```bash
-vbot project add <path> [--name <display-name>] [--format opencode|claude] [--default-agent <agent-id>] [--default-model <provider/model-id>] [--default-temperature <0..2>] [--default-thinking-effort <effort>] [--auto-load <file> ...] [capability flags]
+vbot project add <path> [--name <display-name>] [--sources <json-array>] [--model-mappings <json-object>] [--default-agent <agent-id>] [--default-model <provider/model-id>] [--default-temperature <0..2>] [--default-thinking-effort <effort>] [--auto-load <file> ...] [capability flags]
 vbot project list
 vbot project show <project-id>
-vbot project set <project-id> [--cwd <path>] [--format opencode|claude] [add flags] [--clear-default-agent] [--clear-default-model] [--clear-default-temperature] [--clear-default-thinking-effort]
+vbot project set <project-id> [--cwd <path>] [add flags] [--clear-default-agent] [--clear-default-model] [--clear-default-temperature] [--clear-default-thinking-effort]
 vbot project override set <project-id> <agent-id> model|temperature|thinking_effort|compaction_policy|tool_access <value>
 vbot project override clear <project-id> <agent-id> model|temperature|thinking_effort|compaction_policy|tool_access
 vbot project detect [<path>]
@@ -69,10 +69,13 @@ vbot project remove <project-id> [--copy-rooted-agent-files] [--permanent --yes]
 
 - Paths refer to the server machine; prefer absolute paths when it differs from the CLI machine. `detect` without a path inspects the server working directory.
 - `add` needs only the repo path; everything else is optional. An empty folder is a valid project (empty team, clean report) — not an error.
-- Prefer the minimal `project add <path> [--name ...]`. Do not inspect the repo first just to choose `--format`; omission uses vBot's own auto-detection. Inspect or specify the Source Format only when the user asks for it or the reported scan needs correction.
+- Prefer the minimal `project add <path> [--name ...]`; vBot detects Agent, Skill and instruction Sources in the repository. Use `project show <project-id>` to inspect their order, switches, Team status and translation reports.
 - `add` and `show` print the scan preview: the team plus a report of anything unclean (bad or unconfigured model, slug collision, unslugifiable name). `show` re-scans the repo live; `set --cwd` re-points and re-scans.
-- `--format` picks the project's source ecosystem — `opencode` (`.opencode/agents/` + `.opencode/skills/`) or `claude` (`.claude/agents/` + `.claude/skills/`). Exactly one per project; agents and skills come only from that one. On `add` it is optional (omitted → auto-detected from the repo, defaulting to `opencode` when both or neither are present); on `set` it switches the format and the team + skills re-derive from the other ecosystem's directories.
-- `--auto-load` lists repo files folded into project agent prompts; on `set`, the flag with no values clears the list.
+- `--sources` replaces the complete ordered list, for example `[{"id":"claude.agents","enabled":true},{"id":"shared.skills","enabled":true}]`. Copy Source ids from `project detect <path>` or `project show`; earlier enabled Sources win name collisions, and shadowed definitions remain in the report. Newly detected Sources are enabled unless they collide with an enabled Source.
+- Existing Projects retain their previous Agent paths in optional `agent_paths`. Keep that field when changing switches or order; remove it to include all detected definitions. The WebUI offers the same expansion in the Source list.
+- `--model-mappings` replaces the complete Model-wish mapping, for example `{"sonnet":"anthropic/claude-sonnet-4-6"}`; targets must be usable vBot Models. An unmapped wish uses the Project or global default and is reported; `inherit` uses the caller's Model when delegated, otherwise the default.
+- `ready` means all reported settings were applied or translated; `limited` means some are unsupported; `needs_attention` means the definition cannot run. Exact Tool lists, including `[]`, stay exact. Unsupported command, path, approval or isolation restrictions disable affected Tools; an explicit vBot Tool override can replace them within the Project ceiling. External hooks and MCP servers are not started.
+- `--auto-load` lists repo files folded into Project prompts; on `set`, the flag with no values clears the list. `AGENTS.md` is seeded for new Projects. Instruction Sources add Claude, Gemini or Copilot files when enabled.
 - `--default-agent`/`--default-model`/`--default-temperature`/`--default-thinking-effort` are Project defaults for its Agents; the matching `--clear-*` flags remove that Project tier so resolution falls through.
 - Capability flags on `add`/`set` are `--allowed-tools`, `--enabled-bundled-skills`, `--enabled-global-skills`, and `--disabled-project-skills`; each replaces its complete list, and an empty flag value clears it.
 - `override set` changes only one Project Agent's vBot-owned top-tier value; it does not edit the repo profile. `compaction_policy` and `tool_access` take a JSON object as one shell argument. A Tool override replaces the repository Tool policy but remains inside the Project's `--allowed-tools` ceiling; for example, `'{"mode":"selected","allowed":["read"]}'` selects only `read` when the Project permits it. `override clear` removes that one field and resumes the normal Agent → Project → global chain.

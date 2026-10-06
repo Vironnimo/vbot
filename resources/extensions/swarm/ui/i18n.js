@@ -137,6 +137,8 @@ export default Object.freeze({
   'swarm.profile.name': 'Name',
   'swarm.profile.models': 'Models & participants',
   'swarm.profile.addModel': 'Add Model',
+  'swarm.profile.repositoryProfile': 'Repository agent profile',
+  'swarm.profile.repositoryProfileNone': 'Use participant settings',
   'swarm.profile.model': 'Model',
   'swarm.profile.effortHelp':
     'Reasoning effort for these participants. Provider default leaves it to the Provider; shared Agent defaults do not apply.',

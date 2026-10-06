@@ -189,6 +189,11 @@ def test_a_fixed_selection_is_the_whole_tool_set() -> None:
         ("inbox", "memory", "skill", "skill_audit", "skill_manage"),
         ("inbox",),
     )
+    explicit = ToolAccess(mode="selected", allowed=("skill", "skill_audit", "inbox"), fixed=True)
+    assert resolve_tool_access(explicit, tools, "off").allowed_tools == ("skill", "skill_audit")
+    granted = resolve_tool_access(explicit, tools, "off", session_tool_grants=("inbox",))
+    assert granted.allowed_tools == ("inbox", "skill", "skill_audit")
+    assert granted.session_tool_grants == ("inbox",)
     # The mark is never persisted.
     assert ToolAccess(mode="selected", allowed=allowed, fixed=True).to_dict() == {
         "mode": "selected",

@@ -192,6 +192,10 @@ class StubProject:
     auto_load: list[str]
     display_name: str = ""
 
+    @property
+    def instruction_files(self) -> list[str]:
+        return self.auto_load
+
 
 class StubProjects:
     """Project-store stub returning ``StubProject`` by id for prompt context."""
@@ -278,6 +282,12 @@ class StubAgentResolver:
         if agent is None:
             raise AgentResolutionError("temporary Session binding is unavailable")
         return agent if session is None else self._with_overrides(agent, session)
+
+    async def resolve_delegated_agent_async(self, project_id, agent_id, *, caller_model):
+        agent = await self.resolve_agent_async(project_id, agent_id)
+        return (
+            replace(agent, model=caller_model) if getattr(agent, "model_inherit", False) else agent
+        )
 
     async def resolve_agent_async(
         self, project_id: str | None, agent_id: str, **options: Any

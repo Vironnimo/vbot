@@ -6,7 +6,6 @@
   import Button from '../ui/Button.svelte';
   import SamplingSettings from '../sampling/SamplingSettings.svelte';
   import {
-    PROJECT_SOURCE_FORMATS,
     buildDefaultAgentOptions,
     PROJECT_THINKING_EFFORT_NO_DEFAULT,
     PROJECT_THINKING_EFFORT_OPTIONS,
@@ -19,7 +18,7 @@
     modelSelectionValue,
     parseModelSelectionValue,
   } from '$lib/modelSelection.js';
-  import { formatLabel } from './projectLabels.js';
+  import ProjectSourcesPanel from './ProjectSourcesPanel.svelte';
   let {
     projectsState = $bindable(),
     projectsController,
@@ -54,13 +53,6 @@
 
   let modelSelectValue = $derived(
     selectModelValue(projectsState.editForm.default_model, modelOptions),
-  );
-
-  let sourceFormatOptions = $derived(
-    PROJECT_SOURCE_FORMATS.map((formatKey) => ({
-      value: formatKey,
-      label: formatLabel(formatKey),
-    })),
   );
 
   let agentOptions = $derived(
@@ -180,27 +172,6 @@
               />
             </div>
           </div>
-          <div class="s-row">
-            <div class="s-row-info">
-              <label class="s-row-label" for="project-edit-source-format">
-                {t('projects.manage.sourceFormat')}
-              </label>
-              <div class="s-row-desc">
-                {t('projects.manage.sourceFormatHelp')}
-              </div>
-            </div>
-            <div class="s-row-control">
-              <Dropdown
-                id="project-edit-source-format"
-                value={projectsState.editForm.source_format}
-                options={sourceFormatOptions}
-                ariaLabel={t('projects.manage.sourceFormat')}
-                triggerClass="projects-dropdown"
-                onValueChange={(value) =>
-                  updateEditField('source_format', value)}
-              />
-            </div>
-          </div>
           <details class="s-disclosure projects-repository-actions">
             <summary>
               {t('projects.repositoryActions')}
@@ -212,6 +183,12 @@
         </div>
       </div>
     </section>
+
+    <ProjectSourcesPanel
+      {projectsState}
+      {projectsController}
+      modelOptions={allModelOptions}
+    />
 
     <section class="s-section" aria-labelledby="project-section-defaults">
       <header class="s-section__head">

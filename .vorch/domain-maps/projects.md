@@ -4,7 +4,7 @@ The Projects domain turns a repository location into a persistent vBot execution
 
 ## Overview
 
-`core/projects/` owns the Project entity, its persisted `project.json` schema and load gate, its data-dir anchor, repository-format scanning, and the resolution of a Project Agent into effective runtime configuration. A Project points at a repository through `cwd`; vBot reads supported configuration from that repository but never writes Project metadata or Session state into it. The domain consumes shared scalar rules from Settings but does not own Chat or Run lifecycle, the Session store, or the Tool and Skill implementations whose availability it constrains.
+`core/projects/` owns the Project entity, its persisted `project.json` schema and load gate, its data-dir anchor, Source discovery and translation, and the resolution of a Project Agent into effective runtime configuration. A Project points at a repository through `cwd`; vBot reads supported configuration from that repository but never writes Project metadata or Session state into it. The domain consumes shared scalar rules from Settings but does not own Chat or Run lifecycle, the Session store, or the Tool and Skill implementations whose availability it constrains.
 
 ## Terms
 
@@ -34,11 +34,13 @@ Core terms such as Project, Agent, Session, Tool, Skill, and Provider live in `.
 
 **Definition:** The Project-owned selection of bundled and global Skills combined with discovered Project Skills; a Project Skill explicitly disabled by name remains unavailable even when a bundled or global Skill has the same name.
 
-### Source Format
+### Source
 
-**Definition:** The Project's single declared coding-agent ecosystem (`project.json` -> `source_format`: `opencode` = `.opencode/agents|skills/`, `claude` = `.claude/agents|skills/`) that decides where **both** its Team agents (GLOSSARY -> Team) and its project skills come from. Exactly one per Project - no mixing (same-named agents/skills across ecosystems are usually the same tool tuned per harness, so merging would silently discard one copy); every consumer sees only this format's set. Auto-detected at creation (exactly one present wins; both/neither -> `opencode`), changeable later in project settings - Sessions survive, team and skills re-derive from the repo. Context files stay format-independent: `AGENTS.md` is the seeded auto-load convention for every Project; `CLAUDE.md` is never auto-loaded and its `@import` semantics are never emulated.
+An independently detected repository input for Agents, Skills or always-on instructions. A Project stores one ordered list of Sources with on/off switches; the earliest active definition of an Agent or Skill name wins. Sources from several ecosystems can contribute to one Team.
 
-**Not:** The per-member `source_format` provenance tag on a scanned team member (`ScannedAgent.source_format`). Same value set, member-level fact recorded by the scan - while the Source Format is the **project-level** choice deciding which detector runs at all.
+### Agent Profile
+
+The format-neutral repository definition supplied by a Source adapter: Agent id, display name, delegation description, instructions, Model wish, Tool and permission wishes, Skills, provenance and a translation report. The Profile precedes Project defaults and overrides; it is not a stored Identity Agent or a runtime Agent kind.
 
 ### Project Context
 
@@ -49,18 +51,18 @@ Core terms such as Project, Agent, Session, Tool, Skill, and Provider live in `.
 ## Boundary & Invariants
 
 - `project_id` is stable and names the Project Anchor; `cwd` is a mutable pointer to the repository. Repository equality and working-directory equality never establish Project identity.
-- Project-owned state lives under the data directory. The repository is a read-only configuration source: scanners may read its Agent and Skill files, but removal archives only the Project Anchor and never deletes or modifies repository content.
-- A Project selects exactly one supported `source_format` (`opencode` or `claude`) for Agent and Project Skill discovery. Format detection may report multiple candidates but does not make a Project multi-format.
+- Project-owned state lives under the data directory. The repository is a read-only configuration source: adapters may read its Agent and Skill files, but removal archives only the Project Anchor and never deletes or modifies repository content.
+- A Project combines ordered, switchable Sources for Agents, Skills and instructions. Earlier active names win; shadowed definitions and unreadable inputs remain visible. New Sources activate on detection unless an active Agent/Skill name collides.
 - `project.json` owns Project defaults, capability ceilings, Skill selections, and per-Agent overrides. Runtime resolution combines those values with freshly read repository Agent configuration and global defaults; it does not copy repository Agent files into the Project Anchor.
 - Project Agent Sessions use `(project_id, agent_id, session_id)` addresses in `<data-dir>/sessions.db`; the Project Anchor no longer contains canonical Session files. Agent and Project identifiers still pass shared validation before entering either database addresses or filesystem anchors.
-- Without a vBot Tool override, Tool access starts from the Project Tool Whitelist and repository Agent denials remove names. A present `overrides.<agent_id>.tool_access` completely replaces that repository Tool policy and may intentionally re-enable a repo-denied Tool, while still remaining inside the Project Tool Whitelist; mode `none` can remove everything and `selected` can narrow the Project Agent to one Tool. Skill access follows `(project skills + enabled bundled skills + enabled global skills) - disabled project skills - {"*"}`; neither repository configuration nor an Agent override may exceed Project ceilings.
+- Without a vBot Tool override, Tool access starts from the Project Tool Whitelist; Profile allowlists, rules and denials narrow it. Explicit imported allowlists suppress automatic activation. A present `overrides.<agent_id>.tool_access` completely replaces that repository Tool policy and may intentionally re-enable a repo-denied Tool, while still remaining inside the Project Tool Whitelist; mode `none` can remove everything and `selected` can narrow the Project Agent to one Tool. Skill access follows `(project skills + enabled bundled skills + enabled global skills) - disabled project skills - {"*"}`; neither repository configuration nor an Agent override may exceed Project ceilings.
 - Models, temperature, top_p, thinking effort, and compaction policy use the same canonical validators as global settings. Do not create Project-local validation rules or bypass the shared usable-model gate.
 - Temporary Agents with an explicitly selected Project resolve through `resolver.py` without joining its Team. Like an Identity Session working in a Project they use the Project's directory, Skills and context, while their owner's snapshotted Tool selection and Skill allowlist apply as configured: the Project Tool Whitelist and Skill rule bound only the Team (user decision 2026-09-28: a Swarm profile decides what its participants may use). A directory alone does not select a Project. Regression coverage lives in `test_resolver_config_agent.py`, `tests/core/agents/test_temporary.py` and `tests/core/runtime/test_runtime_extension_host.py`.
 
 ## Ownership Routing
 
 - Change persisted Project fields, anchor layout, CRUD behavior, overrides, path normalization, or the Anchor's archive and restore in `core/projects/projects.py`, `core/projects/store.py`, `core/projects/paths.py`, and the Project RPC boundary; the removal workflow itself lives in `core/archive/` (`archive.md`). Read `projects/configuration.md` first.
-- Change repository Agent discovery, supported source formats, format detection, collision handling, or scan findings in `core/projects/scanners/` and `core/projects/scan_report.py`; the Project entity only validates the selected `source_format`. Read `projects/scanning.md` first.
+- Change repository Agent discovery, Source adapters, detection, translation, collisions, or findings in `core/projects/sources/` and `core/projects/scan_report.py`; the Project entity validates Sources and Model mappings. Read `projects/scanning.md` first.
 - Change Project Agent orchestration and working-Project helpers in `core/projects/resolver.py`; `_runtime_agent.py` defines resolved contracts, `_model_configuration.py` owns the usable-Model gate, and `_resolution_values.py` owns capability ceilings, scalar fallback and provenance. These are internal parts of the same Projects owner. Read `projects/resolution.md` first.
 - Change explicit foreign Project Context loading for Identity Agents in `core/tools/project.py`; Projects owns the registered records and repository pointers it reads but does not infer context from arbitrary filesystem paths or own the Tool result (see `tools/project.md`).
 - Change central model availability or scalar-setting validation in Models, Providers, or Settings, not here. Projects consumes those contracts.
@@ -81,5 +83,5 @@ Core terms such as Project, Agent, Session, Tool, Skill, and Provider live in `.
 Read these only when your task matches - not by default.
 
 - Changing `project.json`, Project CRUD/RPC mutations, overrides, paths, anchor seeding, or archive/removal behavior -> `projects/configuration.md`
-- Changing repository scanning, source-format mappings, format detection, Agent collisions, or scan findings -> `projects/scanning.md`
+- Changing repository scanning, Source adapters, detection, Agent collisions, or scan findings -> `projects/scanning.md`
 - Changing Project Agent resolution, model/scalar fallback, effective-config provenance, capability ceilings, or working-Project helpers -> `projects/resolution.md`

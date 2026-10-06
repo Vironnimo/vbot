@@ -45,6 +45,7 @@ def _team(result: JsonObject) -> list[str]:
     return [member["agent_id"] for member in result["scan"]["team"]]
 
 
+@pytest.mark.asyncio
 async def _vbot_state(tmp_path: Path, *agents: str, **fields: Any) -> tuple[SimpleNamespace, Path]:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", *agents)
@@ -99,7 +100,7 @@ async def test_add_derives_the_project_id_from_the_cwd_of_a_bare_repo(tmp_path: 
 
     assert result["project"]["project_id"] == "my-repo"
     # Neither Agent format is present: the non-interactive default is opencode.
-    assert result["project"]["source_format"] == "opencode"
+    assert result["project"]["sources"] == []
     assert result["scan"]["team"] == []
     assert result["scan"]["report"]["clean"] is True
 
@@ -117,56 +118,29 @@ async def test_add_report_flags_unconfigured_model(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("opencode", "explicit", "source_format", "team"),
-    [
-        # Exactly one format present: that one, silently.
-        pytest.param(False, None, "claude", ["reviewer"], id="claude-only"),
-        # Both present: the deterministic default is opencode.
-        pytest.param(True, None, "opencode", ["builder"], id="both-default"),
-        # An explicit choice wins over detection.
-        pytest.param(True, "claude", "claude", ["reviewer"], id="both-explicit"),
-    ],
-)
-async def test_add_detects_or_accepts_the_source_format(
-    tmp_path: Path, opencode: bool, explicit: str | None, source_format: str, team: list[str]
+@pytest.mark.asyncio
+async def test_add_detects_mixed_sources_and_detect_lists_instruction_sources(
+    tmp_path: Path,
 ) -> None:
     state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "repo", *(["builder.md"] if opencode else []))
+    repo = _make_repo(tmp_path, "repo")
+    _write_agent(repo, "builder.md")
     _write_claude_agent(repo, "reviewer.md", "reviewer")
-    params = {"source_format": explicit} if explicit else {}
-
-    result = await rpc_result(state, "project.add", cwd=str(repo), **params)
-
-    assert result["project"]["source_format"] == source_format
-    assert _team(result) == team
-    assert state.runtime.projects.get("repo").source_format == source_format
-
-
-@pytest.mark.asyncio
-async def test_detect_reports_formats_and_context_files(tmp_path: Path) -> None:
-    state = _make_state(tmp_path)
-    repo = _make_repo(tmp_path, "mixed", "builder.md")
-    _write_claude_agent(repo, "reviewer.md", "reviewer")
-    _write_claude_agent(repo, "helper.md", "helper")
-    (repo / "CLAUDE.md").write_text("# Claude\n", encoding="utf-8")
-
-    found = await rpc_result(state, "project.detect", cwd=str(repo))
-    # The add dialog calls this while the user types: never an error envelope.
-    missing = await rpc_result(state, "project.detect", cwd=str(tmp_path / "nope"))
-
-    assert found["cwd_exists"] is True
-    assert found["formats"]["opencode"] == {"agents": 1, "skills": 0}
-    assert found["formats"]["claude"] == {"agents": 2, "skills": 0}
-    assert found["context_files"] == {"agents_md": False, "claude_md": "CLAUDE.md"}
-    assert missing == {
+    (repo / "CLAUDE.md").write_text("Instructions", encoding="utf-8")
+    detected = await rpc_result(state, "project.detect", cwd=str(repo))
+    assert {item["id"] for item in detected["sources"]} == {
+        "opencode.agents",
+        "claude.agents",
+        "claude.instructions",
+    }
+    result = await rpc_result(state, "project.add", cwd=str(repo))
+    assert [member["agent_id"] for member in result["scan"]["team"]] == ["builder", "reviewer"]
+    assert await rpc_result(state, "project.detect", cwd=str(tmp_path / "missing")) == {
         "cwd_exists": False,
-        "formats": {},
-        "context_files": {"agents_md": False, "claude_md": None},
+        "sources": [],
     }
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method", "params", "code", "named"),
     [
@@ -183,9 +157,9 @@ async def test_detect_reports_formats_and_context_files(tmp_path: Path) -> None:
         ("project.add", {"cwd": "{fresh}", "bogus": 1}, "invalid_request", "bogus"),
         (
             "project.add",
-            {"cwd": "{fresh}", "source_format": "cursor"},
+            {"cwd": "{fresh}", "sources": "cursor"},
             "invalid_request",
-            "source_format",
+            "sources",
         ),
         ("project.add", {"cwd": "{fresh}", "default_temperature": 3.0}, "invalid_request", ""),
         ("project.detect", {"cwd": "{fresh}", "bogus": 1}, "invalid_request", "bogus"),
@@ -235,6 +209,7 @@ async def test_detect_reports_formats_and_context_files(tmp_path: Path) -> None:
         ),
     ],
 )
+@pytest.mark.asyncio
 async def test_a_refused_project_request_leaves_the_projects_unchanged(
     tmp_path: Path, method: str, params: JsonObject, code: str, named: str
 ) -> None:
@@ -394,16 +369,27 @@ async def test_set_cwd_rescans_team(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_set_source_format_switches_team_without_restart(tmp_path: Path) -> None:
+async def test_set_sources_switches_team_without_restart(tmp_path: Path) -> None:
     # A format switch invalidates like a cwd change, so the returned scan (and any
     # later show) reflects the other format's team immediately.
     state, repo = await _vbot_state(tmp_path, "builder.md")
     _write_claude_agent(repo, "reviewer.md", "reviewer")
 
-    switched = await rpc_result(state, "project.set", project_id="vbot", source_format="claude")
+    switched = await rpc_result(
+        state,
+        "project.set",
+        project_id="vbot",
+        sources=[
+            {"id": "claude.agents", "enabled": True},
+            {"id": "opencode.agents", "enabled": False},
+        ],
+    )
     shown = await rpc_result(state, "project.show", project_id="vbot")
 
-    assert switched["project"]["source_format"] == "claude"
+    assert switched["project"]["sources"] == [
+        {"id": "claude.agents", "enabled": True},
+        {"id": "opencode.agents", "enabled": False},
+    ]
     assert _team(switched) == ["reviewer"]
     assert _team(shown) == ["reviewer"]
 

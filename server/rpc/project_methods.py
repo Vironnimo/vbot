@@ -31,6 +31,7 @@ automation references and default-Project updates (``RPC_ERROR_PROJECT_IN_USE``)
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -43,12 +44,9 @@ from core.projects import (
 )
 from core.projects.projects import OVERRIDE_FIELDS
 from core.projects.scan_report import FindingType, ScanFinding, ScanReport
-from core.projects.scanners import detect_project_formats
-from core.projects.scanners.base import ProjectFormatDetection, ScannedAgent, ScanResult
+from core.projects.sources import AgentProfile, ScanResult, detect_sources, normalize_sources
 from core.runs import RunAdmissionBlockedError
 from core.settings import (
-    DEFAULT_PROJECT_SOURCE_FORMAT,
-    PROJECT_SOURCE_FORMATS,
     PROJECT_TOOL_ALLOWLIST_WILDCARD,
     SettingsValidationError,
     validate_temperature,
@@ -90,8 +88,8 @@ _PROJECT_WORKERS = BoundedWorkerPool(name="project", max_workers=2)
 # A bare cwd is a valid Project (GLOSSARY → Project; plan: "Minimal-Projekt = nur
 # eine cwd"): the chosen format location's presence is surfaced in the scan
 # preview's Team, never a hard add-time requirement, so add only validates that
-# the folder exists and is not already claimed. ``source_format`` is optional —
-# absent, it is auto-detected from the repo (see ``_auto_detect_source_format``).
+# the folder exists and is not already claimed. Sources are detected from the
+# repository unless an explicit ordered selection is supplied.
 _ADD_FIELDS = frozenset(
     {
         "cwd",
@@ -101,7 +99,8 @@ _ADD_FIELDS = frozenset(
         "default_temperature",
         "default_thinking_effort",
         "default_top_p",
-        "source_format",
+        "sources",
+        "model_mappings",
         "auto_load",
     }
 )
@@ -114,7 +113,8 @@ _SET_MUTABLE_FIELDS = frozenset(
         "default_temperature",
         "default_thinking_effort",
         "default_top_p",
-        "source_format",
+        "sources",
+        "model_mappings",
         "auto_load",
         "allowed_tools",
         "skills_bundled_enabled",
@@ -128,7 +128,8 @@ _SKILL_INVENTORY_FIELDS = frozenset(
     {
         "cwd",
         "display_name",
-        "source_format",
+        "sources",
+        "model_mappings",
         "skills_bundled_enabled",
         "skills_global_enabled",
         "skills_project_disabled",
@@ -161,9 +162,9 @@ async def _add_project(state: Any, params: JsonObject) -> JsonObject:
     project, scan = await _PROJECT_WORKERS.run(_add_project_record, state, params)
     publish_resource_changed(state, RESOURCE_KIND_PROJECTS)
     _LOGGER.info(
-        "Project added (project=%s source_format=%s)",
+        "Project added (project=%s sources=%s)",
         project.project_id,
-        project.source_format,
+        len(project.sources),
     )
     return {"project": _project_response(project), "scan": scan}
 
@@ -195,10 +196,11 @@ def _add_project_record(state: Any, params: JsonObject) -> tuple[Project, JsonOb
     default_top_p = (
         _validate_default_top_p(params["default_top_p"]) if "default_top_p" in params else None
     )
-    source_format = (
-        _validated_source_format(params["source_format"])
-        if "source_format" in params
-        else _auto_detect_source_format(cwd)
+    sources = _validated_sources(params["sources"]) if "sources" in params else None
+    model_mappings = (
+        _validated_model_mappings(state, params["model_mappings"])
+        if "model_mappings" in params
+        else None
     )
     auto_load = _optional_auto_load(params)
     resolved_display_name = display_name or _display_name_from_cwd(cwd)
@@ -214,7 +216,8 @@ def _add_project_record(state: Any, params: JsonObject) -> tuple[Project, JsonOb
             default_temperature=default_temperature,
             default_thinking_effort=default_thinking_effort,
             default_top_p=default_top_p,
-            source_format=source_format,
+            sources=sources,
+            model_mappings=model_mappings,
             auto_load=auto_load,
         )
     except Exception as exc:
@@ -259,8 +262,8 @@ def _cached_scan_preview(state: Any, project: Project) -> JsonObject | None:
             type(exc).__name__,
         )
         return None
-    result = ScanResult(
-        team=result.team,
+    result = replace(
+        result,
         report=result.report.with_findings(_unavailable_project_tool_findings(state, project)),
     )
     return _scan_response(resolver, result, project)
@@ -271,7 +274,7 @@ async def _show_project(state: Any, params: JsonObject) -> JsonObject:
 
     project_id = _required_string(params, "project_id")
     try:
-        project = await _PROJECT_WORKERS.run(_projects(state).get, project_id)
+        project = await _PROJECT_WORKERS.run(_projects(state).refresh_sources, project_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -332,6 +335,8 @@ def _update_project_record(
         )
 
     changes = _set_changes(params)
+    if "model_mappings" in changes:
+        changes["model_mappings"] = _validated_model_mappings(state, changes["model_mappings"])
     if not changes:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST, "project.set requires at least one field to change"
@@ -581,8 +586,8 @@ def _scan_preview(state: Any, project: Project) -> JsonObject:
     """Scan one project into the agent-facing Team + report preview."""
     resolver = _agent_resolver(state)
     result = resolver.scan_project_report(project)
-    result = ScanResult(
-        team=result.team,
+    result = replace(
+        result,
         report=result.report.with_findings(_unavailable_project_tool_findings(state, project)),
     )
     response = _scan_response(resolver, result, project)
@@ -714,8 +719,10 @@ def _set_changes(params: JsonObject) -> JsonObject:
         )
     if "default_top_p" in params:
         changes["default_top_p"] = _validate_default_top_p(params["default_top_p"])
-    if "source_format" in params:
-        changes["source_format"] = _validated_source_format(params["source_format"])
+    if "sources" in params:
+        changes["sources"] = _validated_sources(params["sources"])
+    if "model_mappings" in params:
+        changes["model_mappings"] = params["model_mappings"]
     if "auto_load" in params:
         changes["auto_load"] = _optional_auto_load(params)
     # The Tool/Skill Whitelist fields are lists of non-empty strings; an explicit
@@ -794,72 +801,38 @@ def _validate_default_thinking_effort(value: Any) -> str | None:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
 
-def _validated_source_format(value: Any) -> str:
-    """Validate an explicit ``source_format`` param against the canonical vocabulary."""
-    if not isinstance(value, str) or value not in PROJECT_SOURCE_FORMATS:
-        choices = ", ".join(PROJECT_SOURCE_FORMATS)
+def _validated_sources(value: Any) -> list[dict[str, Any]]:
+    try:
+        return [item.to_dict() for item in normalize_sources(value)]
+    except ValueError as error:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+
+
+def _validated_model_mappings(state: Any, value: Any) -> dict[str, str]:
+    if not isinstance(value, dict) or any(
+        not isinstance(key, str)
+        or not key.strip()
+        or not isinstance(model, str)
+        or not model.strip()
+        for key, model in value.items()
+    ):
         raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"params.source_format must be one of: {choices}",
+            RPC_ERROR_INVALID_REQUEST, "model_mappings must map Model wishes to usable vBot Models"
         )
-    return value
-
-
-def _auto_detect_source_format(cwd: str) -> str:
-    """Pick the format for a creation without an explicit ``source_format``.
-
-    Exactly one format present in the repo → that one (silent, no dialog noise);
-    both or neither → the deterministic default ``opencode`` (decision 2 — a
-    non-interactive creator gets a predictable outcome, and the format stays
-    changeable in the project settings).
-    """
-    detection = detect_project_formats(Path(cwd))
-    present = [
-        format_key
-        for format_key in PROJECT_SOURCE_FORMATS
-        if format_key in detection.formats and detection.formats[format_key].present
-    ]
-    if len(present) == 1:
-        return present[0]
-    return DEFAULT_PROJECT_SOURCE_FORMAT
+    for model in value.values():
+        try:
+            _agent_resolver(state).require_model_configured(model)
+        except ValueError as error:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+    return dict(value)
 
 
 def _detect_project(state: Any, params: JsonObject) -> JsonObject:
-    """``project.detect``: report per-format presence + context files for a cwd.
-
-    The add dialog calls this while the user types a path, so a nonexistent or
-    non-directory cwd is a **success** with ``cwd_exists: false`` and empty data,
-    never an error. For an existing directory it returns per-format agent/skill
-    counts and the context-file facts (``AGENTS.md`` present, ``CLAUDE.md``
-    location or null) the dialog builds its format choice and CLAUDE.md
-    suggestion from.
-    """
     _reject_unsupported(params, {"cwd"}, "project.detect")
-
     cwd = _optional_string(params, "cwd")
     if not cwd or not cwd_exists(cwd):
-        return {
-            "cwd_exists": False,
-            "formats": {},
-            "context_files": {"agents_md": False, "claude_md": None},
-        }
-
-    detection = detect_project_formats(Path(cwd))
-    return {
-        "cwd_exists": True,
-        "formats": _formats_response(detection),
-        "context_files": {
-            "agents_md": detection.agents_md,
-            "claude_md": detection.claude_md,
-        },
-    }
-
-
-def _formats_response(detection: ProjectFormatDetection) -> JsonObject:
-    return {
-        format_key: {"agents": presence.agents, "skills": presence.skills}
-        for format_key, presence in detection.formats.items()
-    }
+        return {"cwd_exists": False, "sources": []}
+    return {"cwd_exists": True, "sources": [item.to_dict() for item in detect_sources(Path(cwd))]}
 
 
 def _display_name_from_cwd(cwd: str) -> str:
@@ -903,7 +876,8 @@ def _project_response(project: Project) -> JsonObject:
         "default_temperature": project.default_temperature,
         "default_thinking_effort": project.default_thinking_effort,
         "default_top_p": project.default_top_p,
-        "source_format": project.source_format,
+        "sources": [item.to_dict() for item in project.sources],
+        "model_mappings": dict(project.model_mappings),
         "auto_load": list(project.auto_load),
         "allowed_tools": list(project.allowed_tools),
         "skills_bundled_enabled": list(project.skills_bundled_enabled),
@@ -918,10 +892,14 @@ def _scan_response(resolver: Any, result: ScanResult, project: Project) -> JsonO
     return {
         "team": [_team_member_response(resolver, member, project) for member in result.team],
         "report": _report_response(result.report),
+        "sources": list(result.sources),
+        "shadowed": [
+            _team_member_response(resolver, member, project) for member in result.shadowed
+        ],
     }
 
 
-def _team_member_response(resolver: Any, member: ScannedAgent, project: Project) -> JsonObject:
+def _team_member_response(resolver: Any, member: AgentProfile, project: Project) -> JsonObject:
     return {
         "agent_id": member.agent_id,
         "display_name": member.display_name,
@@ -930,7 +908,11 @@ def _team_member_response(resolver: Any, member: ScannedAgent, project: Project)
         "temperature": member.temperature,
         "top_p": member.top_p,
         "thinking_effort": member.thinking_effort,
-        "source_format": member.source_format,
+        "source": member.source,
+        "status": member.status,
+        "available": member.unavailable_reason is None,
+        "translations": [item.to_dict() for item in member.translations],
+        "unavailable_reason": member.unavailable_reason,
         "source_path": str(member.source_path),
         # The vBot tools this agent turns off via its OpenCode permissions, sorted.
         # The editor pairs this with the project Tool Whitelist (the ceiling) to show

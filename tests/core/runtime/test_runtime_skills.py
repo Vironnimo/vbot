@@ -151,7 +151,16 @@ def test_project_context_grants_its_enabled_project_and_bundled_skills(
     claude_repo.mkdir()
     write_skill(claude_repo / ".claude" / "skills", "claude-skill", "Claude playbook.")
     write_project_skill(claude_repo, "opencode-skill", "OpenCode playbook.")
-    claude = runtime.projects.create("c", "C", claude_repo, source_format="claude")
+    claude = runtime.projects.create(
+        "c",
+        "C",
+        claude_repo,
+        sources=[
+            {"id": "claude.agents", "enabled": True},
+            {"id": "claude.skills", "enabled": True},
+            {"id": "opencode.skills", "enabled": False},
+        ],
+    )
 
     names = _names(runtime.skills_for(claude.project_id))
     assert "claude-skill" in names

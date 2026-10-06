@@ -27,7 +27,8 @@ def _valid_project_data() -> dict[str, object]:
         "cwd": "/srv/repos/vbot",
         "default_agent": "orchestrator",
         "default_model": "openai/gpt-5",
-        "source_format": "opencode",
+        "sources": [],
+        "model_mappings": {},
         "auto_load": ["AGENTS.md", "PROJECT.md"],
         "allowed_tools": ["read_file", "bash"],
         "created_at": "2026-06-18T10:00:00Z",
@@ -65,7 +66,11 @@ def _diagnostics(data: object) -> list[tuple[str, str, str]]:
             {
                 "default_temperature": 0.4,
                 "default_thinking_effort": "high",
-                "source_format": "claude",
+                "sources": [
+                    {"id": "claude.agents", "enabled": True},
+                    {"id": "claude.skills", "enabled": True},
+                ],
+                "model_mappings": {},
                 # Registry membership is runtime state: a disabled Extension must not
                 # make its persisted Project unloadable.
                 "allowed_tools": ["read", "disabled_extension_tool"],
@@ -135,9 +140,9 @@ def test_validate_project_data_accepts_only_identity_cwd_and_tool_whitelist() ->
             id="default-thinking-effort",
         ),
         pytest.param(
-            {"source_format": "cursor"},
-            [("error", "$.source_format", "must be one of: claude, opencode")],
-            id="source-format",
+            {"sources": "cursor"},
+            [("error", "$.sources", "sources must be an ordered list.")],
+            id="sources",
         ),
         pytest.param(
             {"auto_load": "AGENTS.md"},

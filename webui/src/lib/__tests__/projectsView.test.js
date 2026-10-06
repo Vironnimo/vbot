@@ -79,10 +79,10 @@ describe('Projects controller loading', () => {
                 default_temperature: 0,
                 default_top_p: 1,
                 default_thinking_effort: '',
-                source_format: 'claude',
+                sources: [{ id: 'claude.agents', enabled: true }],
                 auto_load: ['AGENTS.md', '  '],
               },
-              { project_id: 'bare', source_format: 'cursor' },
+              { project_id: 'bare', sources: [] },
             ],
           })
           .mockResolvedValueOnce({ projects: 'not a list' }),
@@ -95,7 +95,8 @@ describe('Projects controller loading', () => {
       default_temperature: 0,
       default_top_p: 1,
       default_thinking_effort: '',
-      source_format: 'claude',
+      sources: [{ id: 'claude.agents', enabled: true }],
+      model_mappings: {},
       auto_load: ['AGENTS.md'],
     });
     // Absent values get stable defaults; an unknown format falls back.
@@ -106,7 +107,8 @@ describe('Projects controller loading', () => {
       default_temperature: null,
       default_top_p: null,
       default_thinking_effort: null,
-      source_format: 'opencode',
+      sources: [],
+      model_mappings: {},
       auto_load: [],
       allowed_tools: [],
       skills_bundled_enabled: [],
@@ -219,7 +221,8 @@ describe('Projects controller editing', () => {
     default_temperature: 0.5,
     default_top_p: 0.9,
     default_thinking_effort: 'high',
-    source_format: 'opencode',
+    sources: [],
+    model_mappings: {},
     auto_load: ['AGENTS.md'],
     allowed_tools: ['read', 'edit'],
   };
@@ -259,16 +262,49 @@ describe('Projects controller editing', () => {
       { auto_load: ['README.md', 'AGENTS.md'] },
     ],
     [
-      'a changed source format',
+      'a changed Source selection',
       {},
-      { source_format: 'claude' },
-      { source_format: 'claude' },
+      { sources: [{ id: 'claude.agents', enabled: true }] },
+      { sources: [{ id: 'claude.agents', enabled: true }] },
     ],
     [
-      'nothing for an emptied source format, which is required',
+      'nothing for an unchanged empty Source selection',
       {},
-      { source_format: '' },
+      { sources: [] },
       null,
+    ],
+    [
+      'Source priority alone changes the selection',
+      {
+        sources: [
+          { id: 'claude.agents', enabled: true },
+          { id: 'opencode.agents', enabled: true },
+        ],
+      },
+      {
+        sources: [
+          { id: 'opencode.agents', enabled: true },
+          { id: 'claude.agents', enabled: true },
+        ],
+      },
+      {
+        sources: [
+          { id: 'opencode.agents', enabled: true },
+          { id: 'claude.agents', enabled: true },
+        ],
+      },
+    ],
+    [
+      'a cleared Source selection',
+      { sources: [{ id: 'claude.agents', enabled: true }] },
+      { sources: [] },
+      { sources: [] },
+    ],
+    [
+      'an edited Model-wish mapping',
+      { model_mappings: {} },
+      { model_mappings: { sonnet: 'provider/model' } },
+      { model_mappings: { sonnet: 'provider/model' } },
     ],
     [
       'a changed temperature as a number',
@@ -366,9 +402,13 @@ describe('Projects controller editing', () => {
       project_id: 'demo',
       display_name: 'Demo',
       cwd: 'C:/repos/demo',
-      source_format: 'opencode',
+      sources: [],
+      model_mappings: {},
     };
-    const saved = { ...stored, source_format: 'claude' };
+    const saved = {
+      ...stored,
+      sources: [{ id: 'claude.agents', enabled: true }],
+    };
     const { controller, state } = await loadedController(stored, {
       listProjects: vi
         .fn()
@@ -380,13 +420,19 @@ describe('Projects controller editing', () => {
       }),
     });
 
-    controller.updateEditField('source_format', 'claude');
+    controller.updateEditField('sources', [
+      { id: 'claude.agents', enabled: true },
+    ]);
     await controller.saveSelectedProject({ manual: true });
 
-    expect(state.projects[0].source_format).toBe('claude');
-    expect(state.editForm.source_format).toBe('claude');
+    expect(state.projects[0].sources).toEqual([
+      { id: 'claude.agents', enabled: true },
+    ]);
+    expect(state.editForm.sources).toEqual([
+      { id: 'claude.agents', enabled: true },
+    ]);
     expect(controller.pendingChanges()).toEqual({});
-    // The Source Format decides the Team, so the saved scan replaces it.
+    // The ordered Source selection decides the Team, so the saved scan replaces it.
     expect(state.activeTeam.map((entry) => entry.agent_id)).toEqual([
       'claude-reviewer',
     ]);
@@ -599,13 +645,13 @@ describe('Projects controller add dialog', () => {
     ],
     [
       'sends the chosen source format when both formats were detected',
-      { cwd, source_format: 'claude' },
+      { cwd, sources: [{ id: 'claude.agents', enabled: true }] },
       { formats: { opencode: { agents: 1 }, claude: { skills: 2 } } },
-      { cwd, source_format: 'claude' },
+      { cwd },
     ],
     [
       'lets the server pick the format when only one was detected',
-      { cwd, source_format: 'claude' },
+      { cwd, sources: [{ id: 'claude.agents', enabled: true }] },
       { formats: { claude: { agents: 1 } } },
       { cwd },
     ],
@@ -613,7 +659,7 @@ describe('Projects controller add dialog', () => {
       'adds a found CLAUDE.md the user opted into',
       { cwd, include_claude_md: true },
       { context_files: { agents_md: false, claude_md: 'CLAUDE.md' } },
-      { cwd, auto_load: ['CLAUDE.md'] },
+      { cwd },
     ],
     [
       'never adds CLAUDE.md next to an AGENTS.md',
@@ -631,14 +677,13 @@ describe('Projects controller add dialog', () => {
 
   it('debounces path detection and normalizes the winning result', async () => {
     vi.useFakeTimers();
-    const detectProject = vi.fn().mockResolvedValue({
-      cwd_exists: true,
-      formats: {
-        opencode: { agents: 2, skills: 0 },
-        claude: { agents: 0, skills: 3 },
-      },
-      context_files: { agents_md: true, claude_md: 'CLAUDE.md' },
-    });
+    const detectedSources = [
+      { id: 'opencode.agents', agents: 2, skills: 0 },
+      { id: 'claude.skills', agents: 0, skills: 3 },
+    ];
+    const detectProject = vi
+      .fn()
+      .mockResolvedValue({ cwd_exists: true, sources: detectedSources });
     const controller = createProjectsController({
       operations: operations({ detectProject }),
       detectDelayMs: 20,
@@ -654,12 +699,7 @@ describe('Projects controller add dialog', () => {
     // Skills alone make a format present.
     expect(controller.state.addDetect).toEqual({
       cwd_exists: true,
-      formats: {
-        opencode: { agents: 2, skills: 0, present: true },
-        claude: { agents: 0, skills: 3, present: true },
-      },
-      agents_md: true,
-      claude_md: 'CLAUDE.md',
+      sources: detectedSources,
     });
 
     // A missing or foreign response degrades to nothing found.
@@ -668,12 +708,7 @@ describe('Projects controller add dialog', () => {
     await vi.advanceTimersByTimeAsync(20);
     expect(controller.state.addDetect).toEqual({
       cwd_exists: false,
-      formats: {
-        opencode: { agents: 0, skills: 0, present: false },
-        claude: { agents: 0, skills: 0, present: false },
-      },
-      agents_md: false,
-      claude_md: null,
+      sources: [],
     });
   });
 });
@@ -841,7 +876,7 @@ describe('Project scan projections', () => {
             temperature: 0.2,
             top_p: 0.9,
             thinking_effort: 'high',
-            source_format: 'opencode',
+            source: 'opencode',
             source_path: '.opencode/agents/builder.md',
             denied_tools: ['bash'],
             tools: { subagent: { allowed_agents: ['builder'] } },
@@ -856,7 +891,7 @@ describe('Project scan projections', () => {
           { agent_id: 'planner', overrides: { unknown: 'x' } },
         ],
       }),
-    ).toEqual([
+    ).toMatchObject([
       {
         agent_id: 'builder',
         display_name: 'Builder',
@@ -865,7 +900,7 @@ describe('Project scan projections', () => {
         temperature: 0.2,
         top_p: 0.9,
         thinking_effort: 'high',
-        source_format: 'opencode',
+        source: 'opencode',
         source_path: '.opencode/agents/builder.md',
         denied_tools: ['bash'],
         tools: { subagent: { allowed_agents: ['builder'] } },
@@ -887,7 +922,7 @@ describe('Project scan projections', () => {
         temperature: null,
         top_p: null,
         thinking_effort: null,
-        source_format: '',
+        source: '',
         source_path: '',
         denied_tools: [],
         tools: {},

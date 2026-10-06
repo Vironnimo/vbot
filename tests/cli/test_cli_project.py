@@ -15,10 +15,16 @@ TEAM_MEMBER = {
     "description": "Routes work",
     "model": "openai/gpt-5.2",
     "temperature": None,
-    "source_format": "opencode",
+    "source": "opencode",
+    "status": "limited",
+    "translations": [
+        {"setting": "model", "status": "not_supported", "detail": "Set a Model mapping."}
+    ],
     "source_path": "/repos/vbot/.opencode/agents/orchestrator.md",
 }
-TEAM_ROW = "    - orchestrator model=openai/gpt-5.2 description=Routes work"
+TEAM_ROW = (
+    "    - orchestrator model=openai/gpt-5.2 description=Routes work source=opencode status=limited"
+)
 
 
 def _project(**overrides: Any) -> dict[str, Any]:
@@ -31,7 +37,7 @@ def _project(**overrides: Any) -> dict[str, Any]:
         "default_model": "openai/gpt-5.2",
         "default_temperature": None,
         "default_thinking_effort": None,
-        "source_format": "opencode",
+        "sources": [],
         "auto_load": ["AGENTS.md"],
         "created_at": "2026-06-18T08:00:00+00:00",
         "updated_at": "2026-06-18T08:00:00+00:00",
@@ -57,7 +63,8 @@ def test_project_add_sends_every_option_and_previews_the_scan(
         "--default-model", "openai/gpt-5.2",
         "--default-temperature", "0.4",
         "--default-thinking-effort", "high",
-        "--format", "claude",
+        "--sources", '[{"id":"claude.agents","enabled":true}]',
+        "--model-mappings", '{"sonnet":"openai/gpt-5.2"}',
         "--auto-load", "AGENTS.md", "docs/guide.md",
         "--allowed-tools", "read", "bash",
         "--enabled-bundled-skills", "vbot-cli",
@@ -74,7 +81,8 @@ def test_project_add_sends_every_option_and_previews_the_scan(
                 "default_model": "openai/gpt-5.2",
                 "default_temperature": 0.4,
                 "default_thinking_effort": "high",
-                "source_format": "claude",
+                "sources": [{"id": "claude.agents", "enabled": True}],
+                "model_mappings": {"sonnet": "openai/gpt-5.2"},
                 "auto_load": ["AGENTS.md", "docs/guide.md"],
                 "allowed_tools": ["read", "bash"],
                 "skills_bundled_enabled": ["vbot-cli"],
@@ -88,16 +96,17 @@ def test_project_add_sends_every_option_and_previews_the_scan(
         "  cwd_exists: yes",
         "  default_agent: orchestrator",
         "  default_model: openai/gpt-5.2",
-        "  format: opencode",
+        "  sources: 0",
         "  auto_load: AGENTS.md",
         TEAM_ROW,
     ):
         assert line in lines
     for text in ("unconfigured_model", "ghost/model", "builder"):
         assert text in out
+    assert "model: not_supported - Set a Model mapping." in out
 
 
-def test_project_add_without_options_lets_the_server_detect_the_format(
+def test_project_add_without_options_lets_the_server_detect_sources(
     rpc: FakeRpc, run_cli: RunCli
 ) -> None:
     rpc.reply(
@@ -112,9 +121,9 @@ def test_project_add_without_options_lets_the_server_detect_the_format(
     assert {"  team: (empty)", "  report: clean"} <= set(out.splitlines())
 
 
-def test_project_add_rejects_an_unknown_format(rpc: FakeRpc, run_cli: RunCli) -> None:
+def test_project_add_rejects_malformed_sources(rpc: FakeRpc, run_cli: RunCli) -> None:
     with pytest.raises(SystemExit) as exc_info:
-        run_cli("project", "add", "./my-repo", "--format", "cursor")
+        run_cli("project", "add", "./my-repo", "--sources", "{")
 
     assert exc_info.value.code == 2
     assert rpc.calls == []
@@ -198,12 +207,12 @@ def test_project_show_renders_the_team_and_the_default_knobs(
             (
                 "--default-temperature", "0.4",
                 "--default-thinking-effort", "high",
-                "--format", "opencode",
+                "--sources", "[]",
             ),
             {
                 "default_temperature": 0.4,
                 "default_thinking_effort": "high",
-                "source_format": "opencode",
+                "sources": [],
             },
             id="default-knobs",
         ),
@@ -263,7 +272,8 @@ def test_project_set_without_changes_lists_every_option(rpc: FakeRpc, run_cli: R
         "--default-model",
         "--default-temperature",
         "--default-thinking-effort",
-        "--format",
+        "--sources",
+        "--model-mappings",
         "--auto-load",
         "--allowed-tools",
         "--enabled-bundled-skills",
@@ -392,24 +402,24 @@ def test_project_remove_surfaces_the_block_reason(
             "C:/repos/demo",
             {
                 "cwd_exists": True,
-                "formats": {
-                    "opencode": {"agents": 2, "skills": 1},
-                    "claude": {"agents": 0, "skills": 0},
-                },
-                "context_files": {"agents_md": True, "claude_md": None},
+                "sources": [
+                    {
+                        "id": "opencode.agents",
+                        "agents": 2,
+                        "skills": 0,
+                        "paths": [".opencode/agents"],
+                    }
+                ],
             },
             [
                 "detected project facts for C:/repos/demo:",
-                "claude: agents=0 skills=0",
-                "opencode: agents=2 skills=1",
-                "AGENTS.md present: yes",
-                "CLAUDE.md: none",
+                "opencode.agents: agents=2 skills=0 paths=.opencode/agents",
             ],
             id="existing-directory",
         ),
         pytest.param(
             "C:/repos/missing",
-            {"cwd_exists": False, "formats": {}, "context_files": {"agents_md": False}},
+            {"cwd_exists": False, "sources": []},
             [
                 "no directory at C:/repos/missing; nothing to detect "
                 "(a nonexistent path is not an error)"
@@ -418,7 +428,7 @@ def test_project_remove_surfaces_the_block_reason(
         ),
     ],
 )
-def test_project_detect_reports_format_and_context_facts(
+def test_project_detect_reports_source_facts(
     rpc: FakeRpc, run_cli: RunCli, cwd: str, facts: dict[str, Any], expected: list[str]
 ) -> None:
     rpc.reply("project.detect", facts)

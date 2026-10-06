@@ -29,6 +29,7 @@ from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING, Any
 
+from core.config_validation import load_validated_json_file
 from core.database import SnapshotBarrier
 from core.json_documents import (
     JsonDocumentWriteError,
@@ -49,9 +50,9 @@ from core.projects.projects import (
     project_format,
     project_from_dict,
     seed_default_auto_load,
+    validate_project_data,
 )
 from core.settings import (
-    DEFAULT_PROJECT_SOURCE_FORMAT,
     is_valid_project_id,
 )
 from core.utils.atomic import atomic_write_bytes
@@ -154,7 +155,8 @@ class ProjectStore:
         default_model: str = "",
         default_temperature: float | None = None,
         default_thinking_effort: str | None = None,
-        source_format: str = DEFAULT_PROJECT_SOURCE_FORMAT,
+        sources: list[dict[str, Any]] | None = None,
+        model_mappings: dict[str, str] | None = None,
         auto_load: list[str] | None = None,
         default_top_p: float | None = None,
     ) -> Project:
@@ -178,7 +180,8 @@ class ProjectStore:
                 default_temperature=default_temperature,
                 default_thinking_effort=default_thinking_effort,
                 default_top_p=default_top_p,
-                source_format=source_format,
+                sources=sources,
+                model_mappings=model_mappings,
                 auto_load=seed_default_auto_load(auto_load),
             )
             _reject_reserved_project_id(project.project_id)
@@ -205,6 +208,24 @@ class ProjectStore:
             if config_path is None:
                 raise ProjectNotFoundError(f"Project not found: {project_id}")
             return self._read_project(config_path)
+
+    def refresh_sources(self, project_id: str) -> Project:
+        """Discover newly present sources under the existing mutation lock."""
+        from core.projects.sources import detect_sources, refresh_sources
+
+        with self._change():
+            project = self.get(project_id)
+            sources = refresh_sources(
+                project.sources, detect_sources(Path(project.cwd)), root=Path(project.cwd)
+            )
+            if sources == project.sources:
+                raw = load_validated_json_file(
+                    self._config_path(project_id), validate_project_data, missing_ok=False
+                )
+                if "sources" not in raw:
+                    self._write_project(project)
+                return project
+            return self.update(project_id, sources=[item.to_dict() for item in sources])
 
     def exists(self, project_id: str) -> bool:
         """Return whether a valid Project with exactly this id can be loaded."""
@@ -280,7 +301,8 @@ class ProjectStore:
                 "default_temperature",
                 "default_thinking_effort",
                 "default_top_p",
-                "source_format",
+                "sources",
+                "model_mappings",
                 "auto_load",
                 "allowed_tools",
                 "skills_bundled_enabled",
@@ -304,7 +326,8 @@ class ProjectStore:
                     "default_thinking_effort", project.default_thinking_effort
                 ),
                 default_top_p=changes.get("default_top_p", project.default_top_p),
-                source_format=changes.get("source_format", project.source_format),
+                sources=changes.get("sources", [item.to_dict() for item in project.sources]),
+                model_mappings=changes.get("model_mappings", project.model_mappings),
                 auto_load=changes.get("auto_load", list(project.auto_load)),
                 allowed_tools=changes.get("allowed_tools", list(project.allowed_tools)),
                 skills_bundled_enabled=changes.get(
@@ -391,7 +414,8 @@ class ProjectStore:
             default_temperature=project.default_temperature,
             default_thinking_effort=project.default_thinking_effort,
             default_top_p=project.default_top_p,
-            source_format=project.source_format,
+            sources=[item.to_dict() for item in project.sources],
+            model_mappings=project.model_mappings,
             auto_load=list(project.auto_load),
             allowed_tools=list(project.allowed_tools),
             skills_bundled_enabled=list(project.skills_bundled_enabled),

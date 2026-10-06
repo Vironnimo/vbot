@@ -8,8 +8,6 @@ export function createProjectAddForm() {
   return {
     cwd: '',
     display_name: '',
-    source_format: 'opencode',
-    include_claude_md: false,
   };
 }
 
@@ -18,7 +16,8 @@ export function createProjectEditForm(project = null) {
     display_name: project?.display_name ?? '',
     default_agent: project?.default_agent ?? '',
     default_model: project?.default_model ?? '',
-    source_format: project?.source_format ?? 'opencode',
+    sources: (project?.sources ?? []).map((source) => ({ ...source })),
+    model_mappings: { ...(project?.model_mappings ?? {}) },
     default_temperature:
       typeof project?.default_temperature === 'number'
         ? String(project.default_temperature)
@@ -68,6 +67,8 @@ export function createProjectsState({ selectedProjectId = '' } = {}) {
     autoLoadDraft: '',
     activeTeam: [],
     activeReport: null,
+    activeSources: [],
+    shadowedTeam: [],
     activeScanSkills: emptyScanSkills(),
     scanLoading: false,
     scanRefreshRequested: false,
@@ -119,6 +120,8 @@ const FINDING_TYPES = Object.freeze([
   FINDING_TYPE_BAD_MODEL,
   FINDING_TYPE_ORPHAN,
   FINDING_TYPE_UNAVAILABLE_TOOL,
+  'invalid_source',
+  'skill_collision',
 ]);
 
 // The mutable fields a manage form can change through project.set. cwd is
@@ -130,26 +133,18 @@ const MANAGE_FIELDS = Object.freeze([
   'display_name',
   'default_agent',
   'default_model',
-  'source_format',
 ]);
 
 // Fields in the generic diff that are required non-empty on the backend: an
 // empty form value is "no change", never a clear-to-null. Display name is
 // intentionally clearable and then falls back to the stable Project id.
-const NON_CLEARABLE_MANAGE_FIELDS = Object.freeze(new Set(['source_format']));
+const NON_CLEARABLE_MANAGE_FIELDS = Object.freeze(new Set());
 
 // The Project's sampling defaults, each a number or null.
 const PROJECT_SAMPLING_FIELDS = Object.freeze([
   'default_temperature',
   'default_top_p',
 ]);
-
-// The per-project source format vocabulary (mirrors the backend
-// PROJECT_SOURCE_FORMATS): which coding-agent ecosystem the project's Team
-// agents and skills come from. Exactly one per project — no mixing.
-export const PROJECT_SOURCE_FORMATS = Object.freeze(['opencode', 'claude']);
-
-const DEFAULT_PROJECT_SOURCE_FORMAT = 'opencode';
 
 // The list-valued whitelist fields, diffed by SET (order-insensitive) so a
 // reorder alone never counts as a change. Tool/skill names are unordered membership
@@ -195,12 +190,9 @@ export function buildAddProjectPayload(formValues) {
     payload.display_name = displayName;
   }
 
-  // Only send an explicit, known format — absent means the server auto-detects
-  // from the repo (exactly one format present → that one, else opencode).
-  const sourceFormat = asText(formValues?.source_format).trim();
-  if (PROJECT_SOURCE_FORMATS.includes(sourceFormat)) {
-    payload.source_format = sourceFormat;
-  }
+  if (Array.isArray(formValues?.sources)) payload.sources = formValues.sources;
+  if (isPlainObject(formValues?.model_mappings))
+    payload.model_mappings = formValues.model_mappings;
 
   const autoLoad = normalizeAutoLoad(formValues?.auto_load);
   if (autoLoad.length > 0) {
@@ -280,6 +272,12 @@ export function buildManageProjectPayload(formValues, project) {
     }
   }
 
+  for (const field of ['sources', 'model_mappings']) {
+    const fallback = field === 'sources' ? [] : {};
+    const next = formValues?.[field] ?? fallback;
+    if (JSON.stringify(next) !== JSON.stringify(project?.[field] ?? fallback))
+      changes[field] = next;
+  }
   return changes;
 }
 
@@ -474,44 +472,11 @@ export function buildDefaultAgentOptions({
   return options;
 }
 
-// Normalize a project.detect response into the add dialog's stable shape:
-// per-format `{agents, skills, present}` (present = ≥1 agent OR ≥1 skill — the
-// creation-time detection rule) plus the context-file facts. A missing/foreign
-// response degrades to "nothing found".
 export function normalizeDetectResult(result) {
-  const rawFormats = isPlainObject(result?.formats) ? result.formats : {};
-  const formats = {};
-  for (const key of PROJECT_SOURCE_FORMATS) {
-    const entry = isPlainObject(rawFormats[key]) ? rawFormats[key] : {};
-    const agents = countOrZero(entry.agents);
-    const skills = countOrZero(entry.skills);
-    formats[key] = { agents, skills, present: agents > 0 || skills > 0 };
-  }
-  const context = isPlainObject(result?.context_files)
-    ? result.context_files
-    : {};
   return {
     cwd_exists: result?.cwd_exists === true,
-    formats,
-    agents_md: context.agents_md === true,
-    claude_md: optionalText(context.claude_md),
+    sources: Array.isArray(result?.sources) ? result.sources : [],
   };
-}
-
-// The formats a detect result found present, in canonical order. Drives the add
-// dialog's three states: none → silent opencode default, one → quiet "Detected"
-// line, both → the informed radio choice.
-export function presentFormats(detect) {
-  return PROJECT_SOURCE_FORMATS.filter(
-    (key) => detect?.formats?.[key]?.present === true,
-  );
-}
-
-// The CLAUDE.md comfort suggestion (decision 4): offer adding the found
-// CLAUDE.md as a normal project file only when the repo has no AGENTS.md —
-// an explicit user opt-in checkbox, nothing automatic.
-export function shouldSuggestClaudeMd(detect) {
-  return Boolean(detect?.claude_md) && detect?.agents_md !== true;
 }
 
 // A project's cwd no longer resolves to a directory → offer Re-Point. The flag
@@ -539,9 +504,18 @@ export function normalizeProject(project) {
     default_temperature: numberOrNull(project?.default_temperature),
     default_top_p: numberOrNull(project?.default_top_p),
     default_thinking_effort: stringOrNull(project?.default_thinking_effort),
-    source_format: PROJECT_SOURCE_FORMATS.includes(project?.source_format)
-      ? project.source_format
-      : DEFAULT_PROJECT_SOURCE_FORMAT,
+    sources: Array.isArray(project?.sources)
+      ? project.sources.map(({ id, enabled, agent_paths }) => ({
+          id,
+          enabled: enabled !== false,
+          ...(Array.isArray(agent_paths)
+            ? { agent_paths: [...agent_paths] }
+            : {}),
+        }))
+      : [],
+    model_mappings: isPlainObject(project?.model_mappings)
+      ? { ...project.model_mappings }
+      : {},
     auto_load: normalizeAutoLoad(project?.auto_load),
     allowed_tools: normalizeStringList(project?.allowed_tools),
     skills_bundled_enabled: normalizeStringList(
@@ -594,7 +568,13 @@ export function projectTeam(scan) {
       typeof member?.temperature === 'number' ? member.temperature : null,
     top_p: typeof member?.top_p === 'number' ? member.top_p : null,
     thinking_effort: stringOrNull(member?.thinking_effort),
-    source_format: asText(member?.source_format),
+    source: asText(member?.source),
+    status: asText(member?.status) || 'ready',
+    available: member?.available !== false,
+    translations: Array.isArray(member?.translations)
+      ? member.translations
+      : [],
+    unavailable_reason: asText(member?.unavailable_reason),
     source_path: asText(member?.source_path),
     denied_tools: normalizeStringList(member?.denied_tools),
     tools:
@@ -827,12 +807,6 @@ function normalizeProjectThinkingEffortForPayload(value) {
   return PROJECT_THINKING_EFFORT_OPTIONS.includes(normalized)
     ? normalized
     : null;
-}
-
-function countOrZero(value) {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : 0;
 }
 
 function numberOrNull(value) {

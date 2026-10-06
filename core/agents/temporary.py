@@ -8,10 +8,11 @@ import hashlib
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
+from core.chat.errors import ChatSessionError
 from core.chat.messages import ChatMessage
 from core.memory import MEMORY_PROMPT_MODE_OFF, MemoryPromptMode
 from core.runs import (
@@ -56,6 +57,7 @@ class TemporaryAgentConfig:
     # ``None`` inherits the global Compaction Policy; a dict is the participant's
     # complete Agent-level Policy for automatic and manual Compaction.
     compaction_policy: dict[str, Any] | None = None
+    repository_profile: str | None = None
 
     def __post_init__(self) -> None:
         """Validate and snapshot caller-owned mutable configuration at the boundary."""
@@ -97,7 +99,13 @@ class TemporaryAgentConfig:
             isinstance(item, str) and item for item in self.fallback_models
         ):
             raise ValueError("temporary fallback_models must contain non-empty strings")
-        normalized_access = normalize_tool_access(self.tool_access)
+        if self.repository_profile is not None and (
+            not isinstance(self.repository_profile, str) or not self.repository_profile
+        ):
+            raise ValueError("repository_profile must name a Team Agent")
+        normalized_access = replace(
+            normalize_tool_access(self.tool_access), fixed=getattr(self.tool_access, "fixed", False)
+        )
         if not isinstance(self.tools, dict):
             raise ValueError("temporary tools must be an object")
         if self.compaction_policy is not None:
@@ -143,8 +151,15 @@ class TemporaryAgent:
 class TemporaryAgentRegistry:
     """Creates and resolves participants without touching Identity Agent storage."""
 
-    def __init__(self, sessions: ChatSessionManager) -> None:
+    def __init__(
+        self,
+        sessions: ChatSessionManager,
+        *,
+        prepare_config: Callable[[TemporaryAgentConfig, str | None], TemporaryAgentConfig]
+        | None = None,
+    ) -> None:
         self._sessions = sessions
+        self._prepare_config = prepare_config
 
     def create(
         self,
@@ -159,7 +174,53 @@ class TemporaryAgentRegistry:
         # A concurrent creator can therefore win without making the same participant
         # fail merely because it generated a different unused address.
         address = SessionAddress(project_id, new_id("tmp"), new_id("ses"))
-        binding_config: dict[str, Any] = {
+        binding_config = self._config_values(config)
+        request = None
+        if config.repository_profile is not None:
+            request = deepcopy(binding_config)
+            existing = self._sessions.temporary_binding_by_participant(
+                owner_name=owner_name, group_id=group_id, participant_id=participant_id
+            )
+            if existing is not None:
+                if (
+                    existing.address.project_id != project_id
+                    or existing.config.get("repository_profile_request") != request
+                ):
+                    raise ValueError(
+                        "temporary participant configuration differs from its snapshot"
+                    )
+                return existing
+            if self._prepare_config is None:
+                raise ValueError("repository profile resolution is unavailable")
+            config = self._prepare_config(config, project_id)
+            binding_config = self._config_values(config)
+            binding_config["repository_profile_request"] = request
+        try:
+            return self._sessions.create_bound_temporary_session(
+                address,
+                owner_name=owner_name,
+                group_id=group_id,
+                participant_id=participant_id,
+                config=binding_config,
+            )
+        except ChatSessionError:
+            # Another creator may have resolved the same request before the
+            # repository changed. Its committed snapshot wins this identity.
+            if request is not None:
+                existing = self._sessions.temporary_binding_by_participant(
+                    owner_name=owner_name, group_id=group_id, participant_id=participant_id
+                )
+                if (
+                    existing is not None
+                    and existing.address.project_id == project_id
+                    and existing.config.get("repository_profile_request") == request
+                ):
+                    return existing
+            raise
+
+    @staticmethod
+    def _config_values(config: TemporaryAgentConfig) -> dict[str, Any]:
+        result: dict[str, Any] = {
             "model": config.model,
             "cwd": str(config.cwd),
             "tool_access": config.tool_access.to_dict(),
@@ -176,16 +237,14 @@ class TemporaryAgentRegistry:
         # configuration of bindings that predate the optional key, so their
         # idempotent re-creation still reconciles.
         if config.compaction_policy is not None:
-            binding_config["compaction_policy"] = deepcopy(config.compaction_policy)
+            result["compaction_policy"] = deepcopy(config.compaction_policy)
         if config.top_p is not None:
-            binding_config["top_p"] = config.top_p
-        return self._sessions.create_bound_temporary_session(
-            address,
-            owner_name=owner_name,
-            group_id=group_id,
-            participant_id=participant_id,
-            config=binding_config,
-        )
+            result["top_p"] = config.top_p
+        if config.tool_access.fixed:
+            result["fixed_tool_access"] = True
+        if config.repository_profile is not None:
+            result["repository_profile"] = config.repository_profile
+        return result
 
     def resolve(self, address: SessionAddress, *, generation_id: str) -> TemporaryAgent | None:
         binding = self._sessions.temporary_binding(address)
@@ -201,7 +260,10 @@ class TemporaryAgentRegistry:
                 name=str(config["name"]),
                 model=str(config["model"]),
                 cwd=Path(str(config["cwd"])),
-                tool_access=normalize_tool_access(config["tool_access"]),
+                tool_access=replace(
+                    normalize_tool_access(config["tool_access"]),
+                    fixed=config.get("fixed_tool_access", False),
+                ),
                 allowed_skills=list(config["allowed_skills"]),
                 tools=dict(config["tools"]),
                 fallback_models=list(config.get("fallback_models", [])),

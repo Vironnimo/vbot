@@ -5,6 +5,11 @@ import { formatMoment } from '$lib/timeText.js';
 const FORMAT_LABELS = Object.freeze({
   opencode: () => t('projects.format.opencode'),
   claude: () => t('projects.format.claude'),
+  codex: () => 'Codex',
+  copilot: () => 'GitHub Copilot',
+  cursor: () => 'Cursor',
+  gemini: () => 'Gemini CLI',
+  shared: () => t('projects.sources.shared'),
 });
 
 export function formatLabel(formatKey) {
@@ -13,7 +18,7 @@ export function formatLabel(formatKey) {
 
 /**
  * Details card of a Project list row: why it needs re-pointing (lead), the
- * complete repository path, source format, id (when a name leads) and when
+ * complete repository path, id (when a name leads) and when
  * it was added. Selectable, so the path can be copied.
  */
 export function projectRowDetails(project, { nowMs = Date.now() } = {}) {
@@ -26,10 +31,6 @@ export function projectRowDetails(project, { nowMs = Date.now() } = {}) {
         label: t('projects.details.repository'),
         value: project?.cwd || '',
         mono: true,
-      },
-      {
-        label: t('projects.manage.sourceFormat'),
-        value: project?.source_format ? formatLabel(project.source_format) : '',
       },
       {
         label: t('projects.details.id'),

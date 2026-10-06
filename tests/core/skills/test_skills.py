@@ -5,12 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from core.settings import PROJECT_SOURCE_FORMATS
 from core.skills import skills as skills_module
 from core.skills.requirements import environment_requirement_names
 from core.skills.skill_validator import MAX_SKILL_DESCRIPTION_LENGTH, MAX_SKILL_NAME_LENGTH
 from core.skills.skills import (
-    PROJECT_SKILLS_SUBPATHS,
     SKILL_ORIGIN_AGENT,
     SKILL_ORIGIN_BUNDLED,
     SKILL_ORIGIN_GLOBAL,
@@ -19,7 +17,6 @@ from core.skills.skills import (
     format_skill_catalog_entries,
     load_project_skill_registry,
     project_skill_origin,
-    project_skills_dir,
     scan_project_skill_names,
     skill_origin_sort_key,
 )
@@ -613,22 +610,18 @@ def test_catalog_groups_skills_by_origin_in_display_order() -> None:
     )
 
 
-def test_project_skill_directories_follow_the_source_format(tmp_path: Path) -> None:
-    # The subpaths are keyed by the core.settings vocabulary; a new format must land in both.
-    assert set(PROJECT_SKILLS_SUBPATHS) == set(PROJECT_SOURCE_FORMATS)
-    assert project_skills_dir(tmp_path, "opencode") == tmp_path / ".opencode" / "skills"
-    assert project_skills_dir(tmp_path, "claude") == tmp_path / ".claude" / "skills"
-    with pytest.raises(KeyError):
-        project_skills_dir(tmp_path, "cursor")
-
-    write_skill(tmp_path / ".opencode" / "skills", "deploy")
-    write_skill(tmp_path / ".claude" / "skills", "review")
-    write_skill(tmp_path / "bundled", "teach")
-
-    assert scan_project_skill_names(tmp_path, "opencode") == frozenset({"deploy"})
-    assert scan_project_skill_names(tmp_path, "claude") == frozenset({"review"})
-    registry = load_project_skill_registry(tmp_path, "claude", [tmp_path / "bundled"])
-    assert {skill.name for skill in registry.list_all()} == {"review", "teach"}
+def test_project_skill_roots_respect_priority_and_keep_other_names(tmp_path: Path) -> None:
+    first, second, bundled = [tmp_path / name for name in ("first", "second", "bundled")]
+    write_skill(first, "deploy", description="First.")
+    write_skill(second, "deploy", description="Shadowed.")
+    write_skill(second, "review")
+    write_skill(bundled, "teach")
+    roots = [first, second]
+    assert scan_project_skill_names(roots) == frozenset({"deploy", "review"})
+    registry = load_project_skill_registry(roots, [bundled])
+    assert {skill.name for skill in registry.list_all()} == {"deploy", "review", "teach"}
+    assert registry.get("deploy").description == "First."
+    assert load_project_skill_registry([], []).list_all() == []
 
 
 def test_find_skill_package_dir_resolves_only_existing_packages(tmp_path: Path) -> None:

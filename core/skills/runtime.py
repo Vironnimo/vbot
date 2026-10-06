@@ -38,7 +38,6 @@ from core.skills.skills import (
     find_skill_package_dir,
     load_project_skill_registry,
     project_skill_origin,
-    project_skills_dir,
     scan_project_skill_names,
     scan_skill_names,
 )
@@ -469,18 +468,15 @@ class SkillRuntime:
     def project_own_skills(self, project_id: str) -> list[SkillMetadata]:
         """Return a Project's own skills for explicit Project Context loading.
 
-        Scans only the Project's own Skill directory (its declared Source Format's
+        Scans only the Project's enabled repository Skill directories (the Source
         location), so the result is exactly the Project-owned Skills with their
         ``SKILL.md`` paths. The Project Tool lists them in its persisted result, and
         Chat routes later Skill activation through that loaded Project context. A
         missing directory yields an empty list.
         """
-        project = self._projects.get(project_id)
+        project = self._projects.refresh_sources(project_id)
         environment = self._skill_environment(self._storage.load_environment())
-        registry = SkillRegistry.load(
-            project_skills_dir(Path(project.cwd), project.source_format),
-            environment=environment,
-        )
+        registry = load_project_skill_registry(project.skill_roots, [], environment)
         return registry.list_all()
 
     def project_context_skills(self, project_id: str) -> list[SkillMetadata]:
@@ -491,7 +487,7 @@ class SkillRuntime:
         lists. This is the same Project policy used for Config Agents and the
         temporary Project grant applied to Identity Runs.
         """
-        project = self._projects.get(project_id)
+        project = self._projects.refresh_sources(project_id)
         bundle = self._project_skill_bundle(project_id)
         allowed_names = set(effective_project_allowed_skills(project, bundle.names))
         return [skill for skill in bundle.registry.list_all() if skill.name in allowed_names]
@@ -509,13 +505,21 @@ class SkillRuntime:
         ]
         sources.extend(
             _ManagerSource(
-                project_skills_dir(Path(project.cwd), project.source_format),
+                root,
                 project_skill_origin(project.display_name),
                 None,
                 project.project_id,
                 "project",
             )
-            for project in (self._projects.list() if projects is None else projects)
+            for project in (
+                [
+                    self._projects.refresh_sources(project.project_id)
+                    for project in self._projects.list()
+                ]
+                if projects is None
+                else projects
+            )
+            for root in project.skill_roots
         )
         sources.extend(
             _ManagerSource(
@@ -608,7 +612,9 @@ class SkillRuntime:
         """
         environment = self._skill_environment(self._storage.load_environment())
         policy = self._policy.load()
-        projects = self._projects.list()
+        projects = [
+            self._projects.refresh_sources(project.project_id) for project in self._projects.list()
+        ]
         project_disabled = {
             project.project_id: frozenset(project.skills_project_disabled) for project in projects
         }
@@ -964,9 +970,9 @@ class SkillRuntime:
         origins: list[str | None] = [SKILL_ORIGIN_AGENT]
         project_allowed_names: set[str] = set()
         if project_id is not None:
-            project = self._projects.get(project_id)
-            roots.append(project_skills_dir(Path(project.cwd), project.source_format))
-            origins.append(project_skill_origin(project.display_name))
+            project = self._projects.refresh_sources(project_id)
+            roots.extend(project.skill_roots)
+            origins.extend([project_skill_origin(project.display_name)] * len(project.skill_roots))
             project_allowed_names.update(
                 effective_project_allowed_skills(
                     project,
@@ -1163,15 +1169,13 @@ class SkillRuntime:
                     return self._project_skills.setdefault(project_id, bundle)
 
     def _build_project_skill_bundle(self, project_id: str) -> _ProjectSkillBundle:
-        project = self._projects.get(project_id)
-        project_cwd = Path(project.cwd)
+        project = self._projects.refresh_sources(project_id)
         settings = self._storage.load_settings()
         global_roots = self._global_roots(settings)
         scan_roots = [root.root for root in global_roots]
         environment = self._skill_environment(self._storage.load_environment())
         registry = load_project_skill_registry(
-            project_cwd,
-            project.source_format,
+            project.skill_roots,
             scan_roots,
             environment,
             project_origin=project_skill_origin(project.display_name),
@@ -1180,7 +1184,7 @@ class SkillRuntime:
         )
         # A Project's own Skills are turned off by the Project itself
         # (``skills_project_disabled``), never by the Skill Policy.
-        names = scan_project_skill_names(project_cwd, project.source_format, environment)
+        names = scan_project_skill_names(project.skill_roots, environment)
         return _ProjectSkillBundle(registry=registry, names=names)
 
 

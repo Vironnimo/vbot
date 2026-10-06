@@ -68,13 +68,6 @@ AGENT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 # import it without an import cycle through the projects package. Creating a
 # Project also refuses names Windows reserves (``core.utils.ids.is_reserved_name``).
 PROJECT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
-# The coding-agent ecosystems a project may declare as its single source format
-# (GLOSSARY → Source Format): where its Team agents *and* its project skills come
-# from. Exactly one per project — no mixing. Lives here (not in core.projects) for
-# the same import-cycle reason as PROJECT_ID_PATTERN: validation.py needs it, and
-# core.projects imports from core.settings.
-PROJECT_SOURCE_FORMATS: tuple[str, ...] = ("opencode", "claude")
-DEFAULT_PROJECT_SOURCE_FORMAT = "opencode"
 # Tool allowlists generally use ``*`` as the all-tools wildcard, but a Project
 # Tool Whitelist is a security ceiling assembled from explicit tool names. Keep
 # the spelling in the low-level settings contract so both raw ``project.json``
