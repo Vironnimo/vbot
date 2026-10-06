@@ -61,6 +61,9 @@
      only for decoration, disabled glyphs, and separators, never for text a
      user must read. */
   --text-hi: #f1ede6;
+  /* Long-form reading prose sits one barely visible step below text-hi, so
+     full-brightness headings and bold stand out and paragraphs do not glare. */
+  --text-body: #e3ded6;
   --text-med: #b3aa9e;
   --text-lo: #9d9387;
   --text-faint: #6b635a;

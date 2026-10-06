@@ -263,16 +263,18 @@
 .msg.assistant > .msg-content > .msg-body-text,
 .message-block.assistant {
   padding: 2px 0;
-  color: var(--text-hi);
+  color: var(--text-body);
   font-size: var(--fs-body-lg);
-  line-height: 1.65;
+  line-height: 1.6;
 }
 
+/* Vertical rhythm: a paragraph break (0.9em) must read clearly larger than
+   the leading between wrapped lines, or paragraphs merge into one block. */
 .msg-markdown {
   padding: 2px 0;
-  color: var(--text-hi);
+  color: var(--text-body);
   font-size: var(--fs-body-lg);
-  line-height: 1.65;
+  line-height: 1.6;
 }
 
 .msg-markdown > *:first-child {
@@ -284,20 +286,21 @@
 }
 
 .msg-markdown p {
-  margin: 0 0 0.6em;
+  margin: 0 0 0.9em;
 }
 
 /* Chat headings structure an answer rather than title a document: only h1
-   and h2 grow, h3-h6 are bold body text, and the space sits above a heading
-   so it binds to the content it introduces. */
+   and h2 grow noticeably, h3-h6 stay a hair above body size, and the space
+   sits above a heading so it binds to the content it introduces. */
 .msg-markdown h1,
 .msg-markdown h2,
 .msg-markdown h3,
 .msg-markdown h4,
 .msg-markdown h5,
 .msg-markdown h6 {
-  margin: 1.1em 0 0.35em;
-  font-size: 1em;
+  margin: 1.8em 0 0.35em;
+  color: var(--text-hi);
+  font-size: 1.07em;
   font-weight: 600;
   line-height: 1.35;
 }
@@ -312,8 +315,13 @@
 
 .msg-markdown ul,
 .msg-markdown ol {
-  margin: 0.4em 0 0.4em 1.4em;
+  margin: 0 0 0.9em 1.4em;
   padding: 0;
+}
+
+.msg-markdown li > ul,
+.msg-markdown li > ol {
+  margin: 0.2em 0 0 1.4em;
 }
 
 .msg-markdown li {
@@ -321,14 +329,14 @@
 }
 
 .msg-markdown blockquote {
-  margin: 0.5em 0;
+  margin: 0.9em 0;
   padding: 0 0 0 12px;
   border-left: 3px solid var(--border-2);
   color: var(--text-med);
 }
 
 .msg-markdown pre {
-  margin: 0.5em 0;
+  margin: 0.9em 0;
   overflow-x: auto;
   border: 1px solid var(--border-2);
   border-radius: var(--r-sm);
@@ -358,6 +366,10 @@
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   background: var(--bg);
+}
+
+.msg-markdown .msg-code {
+  margin: 0.9em 0;
 }
 
 .msg-code__header {
@@ -437,7 +449,7 @@
 }
 
 .msg-markdown table {
-  margin: 0.5em 0;
+  margin: 0.9em 0;
   border-collapse: collapse;
   font-size: var(--fs-body-md);
 }
@@ -450,10 +462,12 @@
 
 .msg-markdown th {
   background: var(--surface-2);
+  color: var(--text-hi);
   font-weight: 600;
 }
 
 .msg-markdown strong {
+  color: var(--text-hi);
   font-weight: 600;
 }
 
