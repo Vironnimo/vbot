@@ -235,3 +235,90 @@
     margin-top: 0;
   }
 }
+/* The catalog dialog: search and category, then a grid of service tiles,
+   each with its initials on a color its id fixes. */
+.modal.mcp-catalog-modal {
+  width: min(960px, calc(100vw - 32px));
+}
+.mcp-catalog__filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 220px);
+  gap: 8px;
+}
+.mcp-catalog__tiles,
+.mcp-catalog__agents {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mcp-catalog__tiles {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+.mcp-catalog__tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  min-width: 0;
+}
+.mcp-catalog__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.mcp-catalog__mark {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-md);
+  background: hsl(var(--mcp-catalog-hue) 55% 42%);
+  color: #fff;
+  font-weight: 600;
+}
+.mcp-catalog__title {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+.mcp-catalog__title > h4 {
+  overflow-wrap: anywhere;
+}
+.mcp-catalog__auth,
+.mcp-catalog__note {
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+}
+.mcp-catalog__tile > p {
+  margin: 0;
+}
+.mcp-catalog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: auto;
+  padding-top: 6px;
+}
+.mcp-catalog__actions > .mcp-catalog__connect {
+  margin-left: auto;
+}
+.mcp-catalog__docs {
+  font-size: var(--fs-body-sm);
+}
+.mcp-catalog__agents > li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+@media (max-width: 640px) {
+  .mcp-catalog__filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

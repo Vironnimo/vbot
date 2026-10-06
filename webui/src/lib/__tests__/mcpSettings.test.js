@@ -303,7 +303,7 @@ describe('MCP settings', () => {
     await Promise.resolve();
     expect(operation).toHaveBeenCalledTimes(count);
   });
-  it('reads again for its own connection and job changes, once after a burst', async () => {
+  it('reads again for its own connection, job and pending input changes, once after a burst', async () => {
     const reads = [];
     const operation = vi.fn(
       () =>
@@ -318,11 +318,15 @@ describe('MCP settings', () => {
     });
     controller.handleInvalidation({
       owner: 'mcp',
-      change: { resource: 'pending_inputs', ids: ['input'], revision: 3 },
+      change: { resource: 'test-owned-resource', ids: ['other'], revision: 3 },
     });
     expect(operation).not.toHaveBeenCalled();
     controller.handleInvalidation({ owner: 'mcp', change: connectionsChange });
     controller.handleInvalidation({ owner: 'mcp', change: jobChange });
+    controller.handleInvalidation({
+      owner: 'mcp',
+      change: { resource: 'pending_inputs', ids: ['input'], revision: 4 },
+    });
     controller.handleInvalidation({ owner: null, change: null });
     expect(operation).toHaveBeenCalledTimes(1);
     reads.shift()({ connections: [] });
