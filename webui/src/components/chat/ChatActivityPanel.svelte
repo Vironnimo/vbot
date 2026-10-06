@@ -176,7 +176,12 @@
               subAgentWork[task.subAgentId],
             )
           : reflectionStatusDetails(task.row);
-    return { ...details, placement: 'left' };
+    // A Sub-Agent's title shows on one line; its card carries it in full.
+    const text =
+      task.kind === 'subagent' && task.description
+        ? task.description
+        : details.text;
+    return { ...details, text, placement: 'left' };
   };
 
   // The row's card; `_work` only marks which reading of the Sub-Agent's work
@@ -898,14 +903,14 @@
     font-size: var(--fs-body-sm);
   }
   .chat-activity__group + .chat-activity__group {
-    margin-top: 16px;
+    margin-top: 10px;
   }
   .chat-activity__group-title {
     display: flex;
     align-items: center;
     gap: 7px;
     margin: 0;
-    padding: 6px 8px;
+    padding: 4px 8px;
     color: var(--text-med);
     font-family: var(--font-ui);
     font-size: var(--fs-body-sm);
@@ -927,7 +932,7 @@
     width: 100%;
     align-items: center;
     gap: 4px;
-    padding: 5px 8px;
+    padding: 3px 8px;
     border-radius: var(--r-sm);
     color: var(--text-med);
     text-align: left;
@@ -969,17 +974,10 @@
     color: var(--text-hi);
     font-family: var(--font-ui);
     font-size: var(--fs-body-sm);
-    font-weight: 500;
-    line-height: 1.35;
+    font-weight: 400;
+    line-height: 1.3;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .chat-activity__task-description {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    overflow-wrap: anywhere;
-    white-space: normal;
   }
   .chat-activity__task-command {
     font-family: var(--font-mono);
@@ -998,7 +996,7 @@
     font-size: var(--fs-label-sm);
     font-variant-numeric: tabular-nums;
     font-weight: 400;
-    line-height: 1.35;
+    line-height: 1.3;
     white-space: nowrap;
   }
   .chat-activity__task-state {

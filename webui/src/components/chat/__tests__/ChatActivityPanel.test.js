@@ -736,7 +736,7 @@ describe('ChatActivityPanel', () => {
     );
   });
 
-  it("shows a Sub-Agent's status details and remaining work when hovering anywhere on its row", async () => {
+  it("shows a Sub-Agent's full title, status details and remaining work when hovering anywhere on its row", async () => {
     const onSubAgentWorkWanted = vi.fn();
     openPanel({
       onSubAgentWorkWanted,
@@ -766,6 +766,10 @@ describe('ChatActivityPanel', () => {
     expect(
       tooltipElement.querySelector('.app-tooltip__title')?.textContent,
     ).toBe(t('chat.toolState.running'));
+    // The one-line title shows in full on hover.
+    expect(
+      tooltipElement.querySelector('.app-tooltip__text')?.textContent,
+    ).toBe('Module check');
     const rows = Array.from(tooltipElement.querySelectorAll('dt'), (term) => [
       term.textContent,
       term.nextElementSibling.textContent,
