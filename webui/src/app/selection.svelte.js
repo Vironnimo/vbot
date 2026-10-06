@@ -73,6 +73,9 @@ export function createAppSelection() {
   // Project context for the two-bar chat. `projects` feeds the chat dropdown;
   // `selectedProjectId` is the chosen project (empty = Personal/identity path).
   let projects = $state([]);
+  // False until the first catalog read succeeds: an empty `projects` before
+  // then says nothing about which Projects exist.
+  let projectsLoaded = $state(false);
 
   let projectsLoadRequestId = 0;
 
@@ -177,6 +180,7 @@ export function createAppSelection() {
         return false;
       }
       projects = Array.isArray(result?.projects) ? result.projects : [];
+      projectsLoaded = true;
       // Drop a stale persisted selection if its project no longer exists. The
       // remembered project agent goes with it — it only means anything within a
       // live project.
@@ -284,6 +288,9 @@ export function createAppSelection() {
     },
     get projects() {
       return projects;
+    },
+    get projectsLoaded() {
+      return projectsLoaded;
     },
     get selectedProjectId() {
       return selectedProjectId;

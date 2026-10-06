@@ -245,6 +245,41 @@ export function setSessionCompactionPolicy(
   );
 }
 
+// Sets or clears (`null`) some of one Session's Agent overrides (`model`,
+// `thinking_effort`, ...); fields left out keep their value. Resolves to the
+// stored `agent_overrides` and their `effective` values.
+export function setSessionAgentOverrides(
+  agentId,
+  sessionId,
+  agentOverrides,
+  options = {},
+) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'session.set_agent_overrides',
+  );
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'session.set_agent_overrides',
+  );
+  requirePlainObject(
+    agentOverrides,
+    'Agent overrides must be an object',
+    'session.set_agent_overrides',
+  );
+  return rpc(
+    'session.set_agent_overrides',
+    {
+      agent_id: agentId,
+      session_id: sessionId,
+      agent_overrides: agentOverrides,
+    },
+    options,
+  );
+}
+
 // Archives the Session; `permanent` deletes it right away instead.
 export function deleteSession(
   agentId,

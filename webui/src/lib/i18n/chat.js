@@ -421,6 +421,31 @@ export default Object.freeze({
   'chat.project.scanBannerCount':
     'This project’s scan found {count} issues. Some agents may not work as expected.',
   'chat.project.scanBannerLink': 'Review in Projects',
+  'chat.sessionSettings.label': 'Session settings',
+  'chat.sessionSettings.project': 'Project',
+  'chat.sessionSettings.model': 'Model',
+  'chat.sessionSettings.thinkingEffort': 'Thinking effort',
+  'chat.sessionSettings.workspace': 'Workspace',
+  'chat.sessionSettings.agentDefault': 'Agent default',
+  'chat.sessionSettings.providerDefault': 'Provider default',
+  'chat.sessionSettings.projectUnavailable': 'Unavailable',
+  'chat.sessionSettings.projectDraftHint':
+    'Where the new Session works: its files, commands and Skills. A Session keeps its Project.',
+  'chat.sessionSettings.projectFixedHint':
+    'Where this Session works. A Session keeps its Project.',
+  'chat.sessionSettings.teamProjectHint':
+    'A Project team Agent always works in its Project.',
+  'chat.sessionSettings.projectMissing':
+    'This Project is no longer registered.',
+  'chat.sessionSettings.modelDefaultHint':
+    'The Agent’s Model. Another choice applies to this Session only.',
+  'chat.sessionSettings.modelOverrideHint':
+    'Chosen for this Session only; the Agent keeps its Model.',
+  'chat.sessionSettings.effortDefaultHint':
+    'The Agent’s thinking effort. Another choice applies to this Session only.',
+  'chat.sessionSettings.effortOverrideHint':
+    'Chosen for this Session only; the Agent keeps its thinking effort.',
+  'chat.sessionSettings.saveError': 'The Session setting could not be saved.',
   'chat.activity.parentSession': 'Parent Session',
   'chat.activity.openParentSession': 'Open parent Session · {session}',
   'sessions.title': 'Sessions',

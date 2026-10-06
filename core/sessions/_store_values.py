@@ -85,6 +85,7 @@ _SESSION_LIST_COLUMNS = f"""
     s.forked_at,
     s.fork_point_seq,
     s.compaction_policy_json,
+    s.agent_overrides_json,
     s.working_project_id,
     {_COMPLETION_ACTIVITY_COLUMNS},
     {_DERIVED_METADATA_COLUMNS}

@@ -6,11 +6,13 @@
 
 /* Center the composer on the same axis as the capped message column. The
      unbordered `.input-area` stays full-width on the chat background; only the
-     input box and attachment tray are capped to `--chat-measure` and centered.
+     input box, attachment tray and footer row are capped to `--chat-measure`
+     and centered.
      With the area's symmetric 20px padding this lines the input's left edge up
      with the message column exactly. `full` disables the cap. */
 .input-area .input-wrap,
-.input-area .attachment-tray {
+.input-area .attachment-tray,
+.input-area .composer-footer {
   width: 100%;
   max-width: var(--chat-measure);
   margin-inline: auto;

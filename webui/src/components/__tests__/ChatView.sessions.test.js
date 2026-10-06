@@ -140,7 +140,13 @@ describe('ChatView Sessions', () => {
           () => document.activeElement === composerInput(),
         );
         await settle();
-        expect(rpcMock.mock.calls).toHaveLength(requests);
+        // At most the draft's commands and Skills are read again: a draft
+        // offers those of the Agent's default Project, not the Session's.
+        expect(
+          rpcMock.mock.calls
+            .slice(requests)
+            .filter(([method]) => method !== 'chat.commands'),
+        ).toEqual([]);
         expect(composerInput().disabled).toBe(false);
         expect(document.body.textContent).not.toContain('Hello');
         if (!project) {

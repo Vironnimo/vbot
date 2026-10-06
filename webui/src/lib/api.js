@@ -178,6 +178,7 @@ export {
   markSessionRead,
   renameSession,
   setSessionCompactionPolicy,
+  setSessionAgentOverrides,
   deleteSession,
   listQueue,
   cancelRun,

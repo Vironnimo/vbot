@@ -7,7 +7,7 @@
   import ContextMenu from './ui/ContextMenu.svelte';
   import { contextMenuAnchor } from './ui/contextMenu.js';
   import { activeLocaleTag, t } from '$lib/i18n.js';
-  import { onDestroy, tick } from 'svelte';
+  import { onDestroy, tick, untrack } from 'svelte';
   import {
     clearDraft,
     flushComposerMemory,
@@ -60,6 +60,8 @@
     onListFiles = null,
     onLoadModelCatalog = null,
     computerControl,
+    // A row under the input box (the Session settings pickers).
+    footer,
   } = $props();
   const media = createComposerMedia({
     get draftKey() {
@@ -253,6 +255,17 @@
         resetInputHeight();
       }
     });
+  });
+
+  // A new file listing (another draft Project) replaces the cached list.
+  let lastListFiles = untrack(() => onListFiles);
+  $effect(() => {
+    const listFiles = onListFiles;
+    if (listFiles === lastListFiles) {
+      return;
+    }
+    lastListFiles = listFiles;
+    untrack(() => picker.resetFileCandidates());
   });
 
   // ChatView issues focus requests only for deliberate user navigation. Keep
@@ -1234,6 +1247,11 @@
           </button>
         </div>
       {/each}
+    </div>
+  {/if}
+  {#if footer}
+    <div class="composer-footer">
+      {@render footer()}
     </div>
   {/if}
 </form>

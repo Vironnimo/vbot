@@ -87,8 +87,10 @@ describe('App selection', () => {
       selection.projects.map((project) => project.project_id);
 
     const initial = selection.loadProjects();
+    expect(selection.projectsLoaded).toBe(false);
     await expect(selection.loadProjects()).resolves.toBe(true);
     expect(projectIds()).toEqual(['newest-project']);
+    expect(selection.projectsLoaded).toBe(true);
 
     stale.resolve({ projects: [{ project_id: 'stale-project' }] });
     await expect(initial).resolves.toBe(false);

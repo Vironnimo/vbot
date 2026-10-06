@@ -215,6 +215,32 @@ describe('command suggestions', () => {
     ]);
   });
 
+  it.each([
+    ['a Session', { sessionId: 'session-1' }, { session_id: 'session-1' }],
+    [
+      'the Project a draft chose',
+      { workingProjectId: 'vbot' },
+      { working_project_id: 'vbot' },
+    ],
+    [
+      'the Workspace a draft chose',
+      { workingProjectId: null },
+      { working_project_id: null },
+    ],
+  ])('asks for the commands and Skills of %s', async (_case, scope, params) => {
+    const listChatCommands = vi.fn().mockResolvedValue({ items: [] });
+    const { controller } = setupController({
+      operationOverrides: { listChatCommands },
+    });
+
+    await controller.loadCommands('alpha', scope);
+
+    expect(listChatCommands).toHaveBeenCalledWith({
+      agent_id: 'alpha',
+      ...params,
+    });
+  });
+
   it('ignores stale command errors after a newer Agent catalog loads', async () => {
     let rejectOlderRequest;
     const listChatCommands = vi

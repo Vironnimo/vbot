@@ -617,6 +617,28 @@ export function createChatViewTarget(context) {
     context.layout.requestComposerFocus();
   };
 
+  // Re-read the open Project's team in place, e.g. after `/model` changed a
+  // member's Model: no loading state, no Agent selection, and a failed read
+  // keeps the team shown.
+  const refreshProjectTeam = async () => {
+    const projectId = lastLoadedProjectId;
+    if (!projectId) {
+      return;
+    }
+    const requestVersion = projectTeamLoadVersion;
+    try {
+      const result = await context.chatController.loadProject(projectId);
+      if (
+        requestVersion === projectTeamLoadVersion &&
+        lastLoadedProjectId === projectId
+      ) {
+        projectTeam = normalizeProjectTeam(result?.scan);
+      }
+    } catch {
+      // Best effort: the team keeps the values it showed.
+    }
+  };
+
   // Load just the team + report for a move target (no agent auto-selection —
   // the move picks the agent itself). Errors surface as the scan error notice.
   const loadProjectTeamForMove = async (projectId) => {
@@ -728,5 +750,6 @@ export function createChatViewTarget(context) {
     get loadProjectTeamForMove() {
       return loadProjectTeamForMove;
     },
+    refreshProjectTeam,
   };
 }

@@ -450,15 +450,21 @@ export function createComposerPicker(context) {
     );
     context.resizeInput();
   };
+  // The file list belongs to one listing (a Session's, or the Project a
+  // draft chose); a different one is fetched again on the next `@`.
+  function resetFileCandidates() {
+    fileCandidates = null;
+    fileListTruncated = false;
+    fileListLoading = false;
+    _fileFetchToken += 1;
+  }
+
   function resetForDraft() {
     triggerContext = null;
     activeSkillIndex = 0;
     _triggerClosed = false;
     // A different session may sit on a different cwd — drop the file list.
-    fileCandidates = null;
-    fileListTruncated = false;
-    fileListLoading = false;
-    _fileFetchToken += 1;
+    resetFileCandidates();
     // Drop the model catalog so a fresh `/model ` fetches the latest list.
     modelCatalog = null;
     modelCatalogLoading = false;
@@ -468,6 +474,7 @@ export function createComposerPicker(context) {
 
   return {
     resetForDraft,
+    resetFileCandidates,
     get autocompleteElement() {
       return autocompleteElement;
     },

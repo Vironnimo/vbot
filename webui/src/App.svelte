@@ -923,6 +923,7 @@
         chatWidth={appearancePrefs.chatWidth}
         chatWorkingMode={appearancePrefs.chatWorkingMode}
         projects={selection.projects}
+        projectsLoaded={selection.projectsLoaded}
         selectedProjectId={selection.selectedProjectId}
         onProjectSelected={selection.selectProject}
         sharedSelectedProjectAgentId={selection.selectedProjectAgentId}

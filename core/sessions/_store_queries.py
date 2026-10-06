@@ -236,6 +236,10 @@ def _summary(state: sqlite3.Row, metadata_keys: Sequence[str] = ()) -> JsonObjec
         summary["compaction_policy"] = _store_values._json_from_payload(
             str(state["compaction_policy_json"]), "Session compaction policy"
         )
+    if state["agent_overrides_json"] is not None:
+        summary[_store_values._AGENT_OVERRIDES_KEY] = _store_values._json_from_payload(
+            str(state["agent_overrides_json"]), "Session agent overrides"
+        )
     summary.update(_completion_activity_from_state(state))
     for key in metadata_keys:
         payload = state[f"metadata_{key}_json"]

@@ -18,6 +18,7 @@ import {
   loadReflectionRuns as requestLoadReflectionRuns,
   markSessionRead as requestMarkSessionRead,
   removeFromQueue as requestRemoveFromQueue,
+  setSessionAgentOverrides as requestSetSessionAgentOverrides,
   showProject as requestShowProject,
   startChatRun as requestStartChatRun,
   updateQueueItem as requestUpdateQueueItem,
@@ -110,6 +111,8 @@ function defaultChatOperations() {
     loadReflectionRuns: (...args) => requestLoadReflectionRuns(...args),
     markSessionRead: (...args) => requestMarkSessionRead(...args),
     removeFromQueue: (...args) => requestRemoveFromQueue(...args),
+    setSessionAgentOverrides: (...args) =>
+      requestSetSessionAgentOverrides(...args),
     showProject: (...args) => requestShowProject(...args),
     startChatRun: (...args) => requestStartChatRun(...args),
     updateQueueItem: (...args) => requestUpdateQueueItem(...args),
@@ -502,11 +505,23 @@ export function createChatController({
     }
   }
 
-  async function loadCommands(agentAddress) {
+  // The commands and Skills offered for `agentAddress`: in its Session
+  // `sessionId`, or in the Project a new Session would work in
+  // (`workingProjectId`, `null` for the Workspace; absent: the Agent's
+  // default Project).
+  async function loadCommands(
+    agentAddress,
+    { sessionId = '', workingProjectId } = {},
+  ) {
     const requestVersion = ++commandsLoadVersion;
     chatState.commandsError = '';
     try {
       const params = agentAddress ? { agent_id: agentAddress } : {};
+      if (agentAddress && sessionId) {
+        params.session_id = sessionId;
+      } else if (agentAddress && workingProjectId !== undefined) {
+        params.working_project_id = workingProjectId;
+      }
       const result = await operations.listChatCommands(params);
       if (requestVersion !== commandsLoadVersion) {
         return false;
@@ -575,7 +590,7 @@ export function createChatController({
     try {
       const response = await operations.startChatRun({
         agent_id: agentAddress,
-        new_session: {},
+        new_session: newSessionParams(draft),
         ...messageParams(content, options),
       });
       const sessionId = createdSessionId(response);
@@ -980,8 +995,8 @@ export function createChatController({
     editMessage,
     handleServerEvents,
     startFromServerState,
-    listFiles: (agentAddress, sessionId) =>
-      operations.listFiles(agentAddress, sessionId),
+    listFiles: (agentAddress, target) =>
+      operations.listFiles(agentAddress, target),
     getSession: (...args) => operations.getSession(...args),
     getSessionChangeStats: (...args) =>
       operations.getSessionChangeStats(...args),
@@ -1003,6 +1018,8 @@ export function createChatController({
     removeQueued,
     steerQueued,
     sendMessage,
+    setSessionAgentOverrides: (...args) =>
+      operations.setSessionAgentOverrides(...args),
     sendToNewSession,
     stopAll,
     syncAgentActivity,
@@ -1017,6 +1034,27 @@ function normalizeBuiltInCommandName(value) {
     return '';
   }
   return value.trim().replace(/^\/+/, '').toLowerCase();
+}
+
+// What a draft asks of its new Session: the Working Project it chose
+// (`workingProjectId`, `null` for the Workspace; absent: the Agent's default
+// Project) and the Agent overrides it holds (`agentOverrides`).
+function newSessionParams(draft) {
+  const params = {};
+  if (draft.workingProjectId !== undefined) {
+    params.working_project_id = draft.workingProjectId;
+  }
+  const overrides = Object.fromEntries(
+    Object.entries(
+      isRecord(draft.agentOverrides) ? draft.agentOverrides : {},
+    ).filter(
+      ([, value]) => value !== undefined && value !== null && value !== '',
+    ),
+  );
+  if (Object.keys(overrides).length > 0) {
+    params.agent_overrides = overrides;
+  }
+  return params;
 }
 
 function messageParams(content, options = {}) {
@@ -1062,10 +1100,17 @@ function commandOutcome(response, agentAddress, { navigation = true } = {}) {
       return { kind: 'draft', agentAddress, reply: response.reply };
     }
   }
+  // `/model <value|reset>` wrote the Agent's Model (`data.model`) and cleared
+  // the Session's own Model; bare `/model` only reports it.
+  const modelChange =
+    response.data?.command === 'model' &&
+    typeof response.data.model === 'string'
+      ? { modelChanged: true }
+      : {};
   if (response.output === 'transient') {
-    return { kind: 'transient', reply: response.reply };
+    return { kind: 'transient', reply: response.reply, ...modelChange };
   }
-  return { kind: 'toast', reply: response.reply };
+  return { kind: 'toast', reply: response.reply, ...modelChange };
 }
 
 function trimmedText(value) {

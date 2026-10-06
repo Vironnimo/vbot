@@ -326,6 +326,9 @@ async def test_session_create_stores_its_agent_overrides(tmp_path: Path) -> None
     }
     address = SessionAddress(None, "coder", "session-one")
     assert sessions.metadata_value(address, "agent_overrides") == overrides
+    # The Session's row reports its overrides, so accessors can show them.
+    row = await rpc_result(state, "session.get", agent_id="coder", session_id="session-one")
+    assert row["session"]["agent_overrides"] == overrides
 
 
 # ---------------------------------------------------------------------------
@@ -744,10 +747,21 @@ async def test_session_agent_overrides_change_only_the_fields_named(tmp_path: Pa
         },
     }
     assert sessions.metadata_value(address, "agent_overrides") == result["agent_overrides"]
+    [row] = (await rpc_result(state, "session.list", agent_id="coder"))["sessions"]
+    assert row["agent_overrides"] == result["agent_overrides"]
     assert resource_changes(state, "sessions")[-1]["scope"] == {
         "project_id": None,
         **session,
     }
+    # Clearing the last override leaves the row without any.
+    await rpc_result(
+        state,
+        "session.set_agent_overrides",
+        **session,
+        agent_overrides={"model": None, "temperature": None},
+    )
+    [row] = (await rpc_result(state, "session.list", agent_id="coder"))["sessions"]
+    assert "agent_overrides" not in row
 
 
 @pytest.mark.asyncio

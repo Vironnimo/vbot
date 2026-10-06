@@ -24,6 +24,7 @@
   import ChatTimeline from './ChatTimeline.svelte';
   import QueuedMessages from './QueuedMessages.svelte';
   import ChatComposer from './ChatComposer.svelte';
+  import ComposerSessionSettings from './chat/ComposerSessionSettings.svelte';
   import ComputerUseControl from './ComputerUseControl.svelte';
   import ChatActivityPanel from './chat/ChatActivityPanel.svelte';
   import { agentActivityTooltip } from './chat/agentActivityTooltip.js';
@@ -35,13 +36,14 @@
   import { listConnections, listModels, subscribeRunEvents } from '$lib/api.js';
   import { getDraft } from '$lib/composerMemory.js';
   import { agentNeedsModel } from '$lib/onboarding.js';
-  import { formatAgentAddress } from '$lib/agentAddress.js';
+  import { formatAgentAddress, parseAgentAddress } from '$lib/agentAddress.js';
   import { createChatRunStream } from '../lib/chatRunStream.js';
   import { createChatViewTarget } from './chat/view/target.svelte.js';
   import { createChatViewNavigation } from './chat/view/navigation.svelte.js';
   import { createChatViewActions } from './chat/view/actions.svelte.js';
   import { createChatViewLayout } from './chat/view/layout.svelte.js';
   import { createSessionChanges } from './chat/view/sessionChanges.svelte.js';
+  import { createSessionSettings } from './chat/view/sessionSettings.svelte.js';
   import './chat/view/chatView.css';
 
   let {
@@ -70,6 +72,9 @@
     // the persisted selection; ChatView reflects it back through
     // `onProjectSelected` so the localStorage mirror stays current.
     projects = [],
+    // Whether `projects` has been read: until then a Project missing from it
+    // is unknown, not unregistered.
+    projectsLoaded = false,
     selectedProjectId = '',
     onProjectSelected = () => {},
     // The agent to restore inside the selected project on the initial mount.
@@ -261,6 +266,9 @@
     get navigation() {
       return navigation;
     },
+    get sessionSettings() {
+      return sessionSettings;
+    },
   });
   const layout = createChatViewLayout({
     get active() {
@@ -289,6 +297,42 @@
     },
     get timelineItems() {
       return activeTimelineItems;
+    },
+  });
+
+  // The composer footer's Project, Model and thinking effort.
+  const sessionSettings = createSessionSettings({
+    get active() {
+      return active;
+    },
+    get target() {
+      return target;
+    },
+    get chatController() {
+      return chatController;
+    },
+    get selectedProjectId() {
+      return selectedProjectId;
+    },
+    get sessionsRefreshToken() {
+      return sessionsRefreshToken;
+    },
+    get sessionInvalidations() {
+      return sessionInvalidations;
+    },
+    loadModelCatalog: () => loadModelCatalog(),
+    onError: (message, sessionKey) =>
+      actions.setSessionActionError(
+        message,
+        chatState.sessions[sessionKey] ?? null,
+      ),
+    // `/model` changed the Agent's Model: read its defaults again.
+    refreshAgentDefaults: (agentAddress) => {
+      if (parseAgentAddress(agentAddress).projectId) {
+        void target.refreshProjectTeam();
+        return;
+      }
+      void chatController.loadAgents({ silent: true });
     },
   });
 
@@ -398,8 +442,14 @@
     }
     const draft = target.activeDraft();
     if (draft) {
+      // The draft's Project and overrides as they are when it is sent.
       return async (content, options = {}) =>
-        await actions.sendDraft(agent, draft, content, options);
+        await actions.sendDraft(
+          agent,
+          sessionSettings.draftWithSettings(draft),
+          content,
+          options,
+        );
     }
     const sessionState = target.activeSessionState;
     if (!sessionState) {
@@ -416,13 +466,14 @@
     if (!agentId) {
       return null;
     }
-    // A Session lists the Project it works in; a draft the Agent's default.
-    const sessionId = target.activeSessionState?.sessionId ?? null;
-    return async () => await chatController.listFiles(agentId, sessionId);
+    // A Session lists the Project it works in; a draft the Project it chose.
+    const scope = sessionSettings.readScope();
+    return async () => await chatController.listFiles(agentId, scope);
   });
-  // The model catalog is global (not agent/session-scoped), so the loader is
-  // always available. The composer fetches on demand when `/model ` is typed.
-  let composerLoadModelCatalog = $derived(async () => {
+  // The model catalog is global (not agent/session-scoped). The composer
+  // fetches it when `/model ` is typed, the footer when it first shows and
+  // whenever its Model picker opens.
+  async function loadModelCatalog() {
     const [modelsResult, connectionsResult] = await Promise.all([
       listModels(),
       listConnections(),
@@ -433,7 +484,8 @@
         ? connectionsResult.connections
         : [],
     };
-  });
+  }
+  const composerLoadModelCatalog = () => sessionSettings.loadCatalog();
   const displayedSessionIsEmpty = () =>
     isSessionEmpty(target.activeSessionState) &&
     getDraft(composerDraftKey).trim().length === 0 &&
@@ -613,20 +665,20 @@
     };
   });
 
-  // Reload command/skill suggestions whenever the active address or live command
-  // catalog changes. The token does not disturb the draft or active selection.
+  // Reload command/skill suggestions whenever the active address, the
+  // Project its Skills come from (the Session's, or the one a draft chose) or
+  // the live command catalog changes. The token does not disturb the draft or
+  // active selection.
   $effect(() => {
     const { agentAddress } = target.activeAddressing();
-    const commandsKey = `${commandsRefreshToken}:${agentAddress}`;
+    const scope = sessionSettings.readScope();
+    const commandsKey = `${commandsRefreshToken}:${agentAddress}:${JSON.stringify(scope)}`;
     if (commandsKey === lastCommandsAddress) {
       return;
     }
     lastCommandsAddress = commandsKey;
-    loadCommands(agentAddress);
+    chatController.loadCommands(agentAddress, scope);
   });
-
-  const loadCommands = (agentAddress) =>
-    chatController.loadCommands(agentAddress);
 
   const loadAgents = (options = {}) => chatController.loadAgents(options);
 
@@ -1062,6 +1114,20 @@
                     onError={actions.showChatToast}
                     subscribeInvalidations={subscribeExtensionInvalidations}
                   />
+                {/snippet}
+                {#snippet footer()}
+                  {#if sessionSettings.view}
+                    <ComposerSessionSettings
+                      view={sessionSettings.view}
+                      {projects}
+                      {projectsLoaded}
+                      onSelectProject={sessionSettings.selectProject}
+                      onSelectModel={sessionSettings.selectModel}
+                      onSelectThinkingEffort={sessionSettings.selectThinkingEffort}
+                      onModelPickerOpen={() =>
+                        void sessionSettings.loadCatalog().catch(() => {})}
+                    />
+                  {/if}
                 {/snippet}
               </ChatComposer>
             {:else}

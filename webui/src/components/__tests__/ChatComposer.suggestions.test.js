@@ -18,6 +18,7 @@ import {
   suggestionOptions,
   typeInComposer,
 } from './ChatComposer.support.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 const statusCommand = {
   name: 'status',
@@ -285,6 +286,30 @@ describe('ChatComposer suggestions', () => {
         '@"notes/meeting notes.md" @docs/Übersicht.md ',
         { fileMentions: ['notes/meeting notes.md', 'docs/Übersicht.md'] },
       );
+    });
+
+    it('checks mentions against a changed file listing', async () => {
+      const onSendMessage = vi.fn().mockResolvedValue(true);
+      const listing = (files) =>
+        vi.fn().mockResolvedValue({ files, truncated: false });
+      const props = reactiveProps({
+        onSendMessage,
+        onListFiles: listing(['vbot.md']),
+      });
+      composer.mount(props);
+      typeInComposer('@vb');
+      await settle();
+
+      // Another draft Project lists other files.
+      props.onListFiles = listing(['docs.md']);
+      typeInComposer('see @docs.md now');
+      submitComposer();
+      await settle(2);
+
+      expect(props.onListFiles).toHaveBeenCalledTimes(1);
+      expect(onSendMessage).toHaveBeenCalledWith('see @docs.md now', {
+        fileMentions: ['docs.md'],
+      });
     });
 
     it('does not open the file picker inside an email address', async () => {

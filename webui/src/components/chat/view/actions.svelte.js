@@ -164,6 +164,12 @@ export function createChatViewActions(context) {
       content,
       options,
     );
+    if (outcome.modelChanged) {
+      context.sessionSettings.modelCommandApplied({
+        agentAddress: sessionState.agentId,
+        sessionKey: sessionState.key,
+      });
+    }
     if (isDisplayedSessionCurrent(presentation)) {
       await presentSendOutcome(outcome, agent, sessionState);
     }
@@ -171,8 +177,9 @@ export function createChatViewActions(context) {
   };
 
   // The first send from a draft creates its Session, which then shows in the
-  // draft's place. The Composer continues in that Session (`draftKey`); a
-  // command that needed no Session leaves the draft displayed.
+  // draft's place and starts with the draft's Project and overrides. The
+  // Composer continues in that Session (`draftKey`); a command that needed no
+  // Session leaves the draft displayed.
   const sendDraft = async (agent, draft, content, options = {}) => {
     const presentation = captureDisplayedSession(draft.key);
     const outcome = await context.chatController.sendToNewSession(
@@ -181,6 +188,16 @@ export function createChatViewActions(context) {
       options,
     );
     const sessionState = outcome.sessionState ?? null;
+    if (sessionState) {
+      context.sessionSettings.draftSent(draft, sessionState);
+    }
+    if (outcome.modelChanged) {
+      context.sessionSettings.modelCommandApplied({
+        agentAddress: draft.agentAddress,
+        draftKey: sessionState ? '' : draft.key,
+        sessionKey: sessionState?.key ?? '',
+      });
+    }
     const shown = sessionState
       ? context.target.isDisplayedSession(
           sessionState.agentId,
@@ -377,10 +394,9 @@ export function createChatViewActions(context) {
       if (!agentAddress) {
         return [];
       }
-      const result = await context.chatController.listFiles(
-        agentAddress,
+      const result = await context.chatController.listFiles(agentAddress, {
         sessionId,
-      );
+      });
       return matchMentionCandidates(
         tokens,
         Array.isArray(result?.files) ? result.files : [],
