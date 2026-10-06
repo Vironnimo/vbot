@@ -169,7 +169,7 @@ pytest runs with work-stealing xdist and a 30 s per-test timeout; pass `-n 0` fo
 
 **Commit hook:** `.githooks/pre-commit` and `.githooks/pre-merge-commit` run `scripts/commit_check.py` on every commit and merge commit, in every checkout: the static checks on the staged files (Ruff fix, format and lint; mypy for Windows and Linux; Prettier and ESLint for WebUI and Extension page `ui/` sources) and no tests. It re-stages its fixes only for completely staged files and checks partially staged files as they are in the working tree. A mypy error blocks when it is in a staged file or in a file without uncommitted changes; one in unstaged or untracked work is reported without blocking. The WebUI checks block while `webui/node_modules` differs from `package-lock.json`; run `npm ci` in `webui/` then, as the hook never installs packages. The first mypy run in a new worktree builds its caches (~45 s). Before changing the hook, its checks or the authorship enforcement, read `development.md` -> Commit hook.
 
-**CI:** `ci.yml` runs the static checks, the complete suites on Linux and Windows, the WebUI checks and E2E; `main-build.yml` runs it on every push to `main` and publishes the main-channel packages once it passed, and it gates releases. Read push runs with `gh run list --workflow=main-build.yml` and failures with `gh run view <run-id> --log-failed`. Before changing the push check, the CI workflows or the test core pool, read `development.md`.
+**CI:** `ci.yml` runs the static checks, the complete suites on Linux and Windows and the WebUI checks; `main-build.yml` runs it on every push to `main` and publishes the main-channel packages once it passed, and it gates releases. Read push runs with `gh run list --workflow=main-build.yml` and failures with `gh run view <run-id> --log-failed`. Before changing the push check, the CI workflows or the test core pool, read `development.md`.
 
 **Performance:** Manual, outside the test suites and CI: `python scripts/perf_load.py` (concurrent-Agent load test), `python scripts/perf_bench.py` (hot-path microbenchmarks), and the always-on server metrics and Recordings (`vbot performance`, `performance.md`). Prove optimizations with `--compare` against a baseline from the same machine; read `scripts/README-perf.md` first.
 
@@ -179,7 +179,7 @@ Before live tests, fully read `.vorch/workflows/web-test-workflow.md` for browse
 
 ## End-to-End Testing
 
-Playwright `tests/e2e/` is excluded from the pytest and Vitest suites; the release gate requires it before publishing (`.github/workflows/e2e.yml`). Local runs require explicit user request and a full read of `.vorch/workflows/e2e-test-workflow.md` before every run.
+Playwright `tests/e2e/` is excluded from the pytest and Vitest suites; neither CI nor the release gate runs it. The maintainer starts it occasionally, locally or by dispatching `.github/workflows/e2e.yml`. Local runs require explicit user request and a full read of `.vorch/workflows/e2e-test-workflow.md` before every run.
 
 ## Context
 

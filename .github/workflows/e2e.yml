@@ -1,9 +1,8 @@
 name: E2E
 
-# The reusable CI workflow calls this suite as a release gate. Maintainers can
-# still dispatch it directly when they need an isolated E2E result.
+# Not part of CI or the release gate: the maintainer dispatches it by hand
+# (gh workflow run e2e.yml) when they want an E2E result.
 on:
-  workflow_call:
   workflow_dispatch:
 
 permissions:

@@ -2,7 +2,7 @@
 
 How to push `main` to GitHub. Commits and merges run static checks only, so `main` may hold a commit that breaks a test elsewhere. The push is where every such failure is found and fixed: `python scripts/push.py` checks the commit `main` points to completely and pushes exactly that commit only when every check passes. Nothing red reaches the remote.
 
-A push is finished only when the `main-build` CI run it starts is green: CI also runs E2E and builds the packages the user installs, and only a green run publishes them. Never use a plain `git push`.
+A push is finished only when the `main-build` CI run it starts is green: CI also runs the Linux and Windows suites and builds the packages the user installs, and only a green run publishes them. Never use a plain `git push`.
 
 ## Steps
 
@@ -14,7 +14,7 @@ From the primary checkout:
 python scripts/push.py
 ```
 
-It checks the commit in a private checkout, not the working tree, so other sessions' uncommitted work does not affect the result: Ruff, mypy for Windows and Linux, the complete pytest suite, and the WebUI's format check, lint, Vitest and build. On Windows the complete pytest suite also runs on Linux in WSL (`linux pytest`), alongside the WebUI checks; E2E stays with CI. Every step runs, whatever failed before it. A run takes several minutes, most of them the pytest suite, which first waits for the test cores other runs hold; use a shell timeout of at least 30 minutes. An interrupted run pushes nothing.
+It checks the commit in a private checkout, not the working tree, so other sessions' uncommitted work does not affect the result: Ruff, mypy for Windows and Linux, the complete pytest suite, and the WebUI's format check, lint, Vitest and build. On Windows the complete pytest suite also runs on Linux in WSL (`linux pytest`), alongside the WebUI checks. E2E runs neither here nor in CI. Every step runs, whatever failed before it. A run takes several minutes, most of them the pytest suite, which first waits for the test cores other runs hold; use a shell timeout of at least 30 minutes. An interrupted run pushes nothing.
 
 Exit code 0 means the commit is pushed, or origin's `main` already had it. Continue with step 4.
 
@@ -36,7 +36,7 @@ Then run `python scripts/push.py` again. Repeat steps 2 and 3 until it pushes.
 
 ### 4. Watch CI to the end
 
-A push to `main` that changes more than development documentation starts the `main-build` workflow (complete CI, E2E included, and the packages). Find its run and check that its `headSha` is the pushed commit:
+A push to `main` that changes more than development documentation starts the `main-build` workflow (complete CI and the packages). Find its run and check that its `headSha` is the pushed commit:
 
 ```bash
 gh run list --workflow=main-build.yml --branch=main --event=push --limit 1 --json databaseId,headSha,status
