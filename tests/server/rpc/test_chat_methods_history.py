@@ -269,13 +269,10 @@ async def test_history_reports_usage_per_message_and_for_the_whole_session(
     assert [message["content"] for message in page["messages"]] == ["Two"]
     for result in (full, page):
         assert result["session_usage"] == {
-            "cache_turns": 2,
-            "cache_input_tokens": 3000,
             "input_tokens": 3000,
             "output_tokens": 150,
             "cache_read_tokens": 2300,
             "cache_write_tokens": 300,
-            "reasoning_turns": 2,
             "reasoning_tokens": 60,
         }
         # A Context that records no window fills the one of the Agent's Model.
