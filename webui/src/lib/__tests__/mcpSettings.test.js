@@ -30,6 +30,7 @@ const oauthConfiguration = {
   transport: 'http',
   url: 'https://mcp.example.com/mcp',
   oauth: true,
+  oauth_redirect_host: 'localhost',
   oauth_client_id: 'vbot-client',
   oauth_client_secret: 'REMOTE_CLIENT_SECRET',
   oauth_scopes: ['files:read', 'files:write'],
@@ -152,6 +153,7 @@ describe('MCP settings', () => {
     ]);
     const signedOut = mcpConfiguration({ ...draft, oauth: false });
     for (const field of [
+      'oauth_redirect_host',
       'oauth_client_id',
       'oauth_client_secret',
       'oauth_scopes',
@@ -301,7 +303,7 @@ describe('MCP settings', () => {
     await Promise.resolve();
     expect(operation).toHaveBeenCalledTimes(count);
   });
-  it('reads again for its own connection and job changes, once after a burst', async () => {
+  it('reads again for its own connection, job and pending input changes, once after a burst', async () => {
     const reads = [];
     const operation = vi.fn(
       () =>
@@ -316,11 +318,15 @@ describe('MCP settings', () => {
     });
     controller.handleInvalidation({
       owner: 'mcp',
-      change: { resource: 'pending_inputs', ids: ['input'], revision: 3 },
+      change: { resource: 'test-owned-resource', ids: ['other'], revision: 3 },
     });
     expect(operation).not.toHaveBeenCalled();
     controller.handleInvalidation({ owner: 'mcp', change: connectionsChange });
     controller.handleInvalidation({ owner: 'mcp', change: jobChange });
+    controller.handleInvalidation({
+      owner: 'mcp',
+      change: { resource: 'pending_inputs', ids: ['input'], revision: 4 },
+    });
     controller.handleInvalidation({ owner: null, change: null });
     expect(operation).toHaveBeenCalledTimes(1);
     reads.shift()({ connections: [] });

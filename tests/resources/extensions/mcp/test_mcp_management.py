@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import replace
 
@@ -12,6 +13,7 @@ from core.database import write_bootstrap_marker
 from core.extensions import ExtensionRegistrationIdentity
 from core.extensions.databases import ExtensionDatabases
 from core.tools.tools import tool_success
+from resources.extensions.mcp._connectors import load_connectors
 from resources.extensions.mcp.client import ConnectionRunner
 from resources.extensions.mcp.config import validate_connection
 from resources.extensions.mcp.extension import remote_tool_name
@@ -360,3 +362,119 @@ async def test_connection_and_job_changes_reach_accessors_in_revision_order(host
     ]
     assert [revision for *_change, revision in changes] == [1, 2, 3]
     assert len(changes) == closed
+
+
+def _entry(identifier: str, **fields) -> dict:
+    return {
+        "id": identifier,
+        "name": identifier.title(),
+        "description": f"test-owned {identifier} service",
+        "category": "development",
+        "url": f"https://{identifier}.example.com/mcp",
+        "auth": "oauth",
+        **fields,
+    }
+
+
+def test_the_shipped_catalog_loads_completely_and_a_broken_entry_is_left_out(tmp_path):
+    shipped = load_connectors()
+    assert shipped.issues == ()
+    assert shipped.entries
+
+    path = tmp_path / "catalog.json"
+    broken = [
+        _entry("plain", url="http://plain.example.com/mcp"),
+        _entry("twice"),
+        _entry("twice"),
+        _entry("lines", description="first\nsecond"),
+        {**_entry("extra"), "unknown": True},
+        # A redirect host belongs to an OAuth sign-in.
+        _entry("local", auth="none", redirect_host="localhost"),
+    ]
+    path.write_text(json.dumps({"entries": [_entry("docs", auth="none"), *broken]}))
+    catalog = load_connectors(path)
+
+    assert [entry["id"] for entry in catalog.entries] == ["docs"]
+    assert [(issue["entry"], issue["code"]) for issue in catalog.issues] == [
+        ("plain", "invalid_entry"),
+        ("twice", "duplicate_id"),
+        ("twice", "duplicate_id"),
+        ("lines", "invalid_entry"),
+        ("extra", "invalid_entry"),
+        ("local", "invalid_entry"),
+    ]
+    path.write_text("[]")
+    assert load_connectors(path).issues[0]["code"] == "invalid_catalog"
+
+
+@pytest.mark.asyncio
+async def test_adding_from_the_catalog_creates_a_connection_and_never_replaces_one(
+    host, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(ConnectionRunner, "start", lambda runner: None)
+    # A rejected record keeps its id: adding never overwrites it either.
+    (host.state_dir / "connections.json").write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "connections": [{"id": "docs_2", "transport": "http", "url": "ftp://x"}],
+            }
+        )
+    )
+    path = tmp_path / "catalog.json"
+    path.write_text(
+        json.dumps(
+            {
+                "entries": [
+                    _entry("docs", auth="none"),
+                    _entry(
+                        "tracker",
+                        read_only_url="https://tracker.example.com/mcp/readonly",
+                        redirect_host="localhost",
+                    ),
+                ]
+            }
+        )
+    )
+    service, _registry = await start_service(host)
+    service.connectors = load_connectors(path)
+    mine = {"id": "docs", "transport": "http", "url": "https://docs.example.com/mcp/"}
+    try:
+        await service.manage("save", {"connection": mine})
+
+        added = await service.manage("add_from_catalog", {"entry": "docs"})
+        read_only = await service.manage(
+            "add_from_catalog", {"entry": "tracker", "read_only": True}
+        )
+
+        # The first free id; the saved connection under the entry's id is untouched.
+        assert added["configuration"] == {
+            "id": "docs_3",
+            "transport": "http",
+            "url": "https://docs.example.com/mcp",
+            "description": "test-owned docs service",
+            "enabled": True,
+            "timeout": 120,
+            "sampling": "off",
+            "roots": "off",
+        }
+        assert added["pending_requests"] == []
+        assert service.connections["docs"] == validate_connection(mine)
+        assert read_only["configuration"]["url"] == "https://tracker.example.com/mcp/readonly"
+        assert read_only["configuration"]["oauth"] is True
+        assert read_only["configuration"]["oauth_redirect_host"] == "localhost"
+        assert read_only["oauth"]["signed_in"] is False
+        listing = {
+            entry["id"]: entry["connections"]
+            for entry in (await service.manage("catalog", {}))["entries"]
+        }
+        # A trailing slash still names the same server.
+        assert listing == {"docs": ["docs", "docs_3"], "tracker": ["tracker"]}
+
+        with pytest.raises(ValueError, match="No MCP catalog entry is named missing"):
+            await service.manage("add_from_catalog", {"entry": "missing"})
+        with pytest.raises(ValueError, match="has no read-only variant"):
+            await service.manage("add_from_catalog", {"entry": "docs", "read_only": True})
+        assert sorted(service.connections) == ["docs", "docs_3", "tracker"]
+    finally:
+        await service.close()

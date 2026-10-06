@@ -61,6 +61,15 @@ _DESCRIPTIONS = {
         "Preview connections from another client's MCP setup, a command line or a URL; "
         "apply saves the selected ones."
     ),
+    "catalog": (
+        "List hosted MCP services that add_from_catalog adds in one step, with the ids of "
+        "saved connections that already reach each one."
+    ),
+    "add_from_catalog": (
+        "Add a catalog service as a new enabled connection under a free id, never replacing "
+        "one. An oauth service waits for the user to sign in in a browser (see requests). "
+        "No Agent can use the connection until its mcp_<id> Tool is enabled for that Agent."
+    ),
     "events": "Read sequenced connection events after a cursor; inspect reported gaps.",
     "inspect": "Read the cached Tool catalog and guidance without connecting or calling Tools.",
     "credential": "Set or clear a referenced credential and reset the client; use JSON stdin.",
@@ -119,6 +128,24 @@ _IMPORT_PROPERTIES: dict[str, Any] = {
     },
 }
 
+_ADD_FROM_CATALOG_PROPERTIES: dict[str, Any] = {
+    "entry": {"type": "string", "description": "The id of an entry that catalog lists."},
+    "read_only": {
+        "type": "boolean",
+        "description": "Use the service's read-only address; only for entries with read_only_url.",
+    },
+}
+
+# Required arguments where not every listed property is required.
+_REQUIRED: dict[str, list[str]] = {
+    "explore": ["id", "agent", "action"],
+    "inspect": ["id"],
+    "import": ["source"],
+    "add_from_catalog": ["entry"],
+    "events": ["id"],
+    "invoke": ["id", "agent", "operation"],
+}
+
 
 def register_management(
     api: ExtensionAPI, manage: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -126,7 +153,7 @@ def register_management(
     """Register every management operation; each one calls *manage* with its name."""
     base = {"id": {"type": "string"}}
     schemas: dict[str, dict[str, Any]] = {
-        **{name: {} for name in ("list", "requests")},
+        **{name: {} for name in ("list", "requests", "catalog")},
         **dict.fromkeys(
             (
                 "status",
@@ -143,6 +170,7 @@ def register_management(
         ),
         "save": {"connection": CONNECTION_SCHEMA},
         "import": _IMPORT_PROPERTIES,
+        "add_from_catalog": _ADD_FROM_CATALOG_PROPERTIES,
         "events": {**base, "after": {"type": "integer", "minimum": 0}},
         "inspect": {
             **base,
@@ -161,15 +189,7 @@ def register_management(
         },
     }
     for name, properties in schemas.items():
-        required = (
-            ["id", "agent", "action"]
-            if name == "explore"
-            else ["id"]
-            if name == "inspect"
-            else ["source"]
-            if name == "import"
-            else [key for key in properties if key not in {"after", "arguments"}]
-        )
+        required = _REQUIRED.get(name, list(properties))
 
         async def handler(arguments: dict[str, Any], operation: str = name) -> dict[str, Any]:
             return await manage(operation, arguments)

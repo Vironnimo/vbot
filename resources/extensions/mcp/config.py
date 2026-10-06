@@ -47,7 +47,12 @@ OAUTH_SCOPE_PATTERN = r"^[!#-\[\]-~]+$"
 SAMPLING_POLICIES = ("off", "ask", "allow")
 # Whether the server may list the invoking Agent's work directory as its root.
 ROOTS_POLICIES = ("off", "workspace")
-_OAUTH_CLIENT_FIELDS = ("oauth_client_id", "oauth_client_secret", "oauth_scopes")
+_OAUTH_CLIENT_FIELDS = (
+    "oauth_redirect_host",
+    "oauth_client_id",
+    "oauth_client_secret",
+    "oauth_scopes",
+)
 MAX_TIMEOUT_SECONDS = 86400
 # The user's one-line description of a connection, shown in its Tool description.
 MAX_DESCRIPTION_CHARACTERS = 200
@@ -68,6 +73,8 @@ CONNECTION_SCHEMA: dict[str, Any] = {
         "timeout": {"type": "number", "exclusiveMinimum": 0, "maximum": MAX_TIMEOUT_SECONDS},
         "oauth": {"type": "boolean"},
         "oauth_redirect_uri": {"type": "string"},
+        # The server callback's host in the redirect URI: its loopback address, or this name.
+        "oauth_redirect_host": {"enum": ["localhost"]},
         "oauth_client_id": {"type": "string", "minLength": 1},
         # The name of the credential holding the client secret, never the secret.
         "oauth_client_secret": {"type": "string"},

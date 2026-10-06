@@ -30,6 +30,7 @@ from core.tools.tools import (
 
 from ._arguments import browse_normalizer
 from ._catalog import CatalogSummaries, catalog_summary
+from ._connectors import ConnectorCatalog, load_connectors
 from ._definitions import (
     GUIDANCE_PREVIEW_CHARACTERS,
     MAX_FINISHED_JOBS,
@@ -127,6 +128,8 @@ class MCPService:
         self._runner_locks: dict[str, _ConnectionLock] = {}
         # Per connection, the server title and Tool names its description shows.
         self.catalogs = CatalogSummaries(api.logger)
+        # The hosted services the user can add in one step (``catalog.json``).
+        self.connectors = ConnectorCatalog(())
         self._closed = False
         self._startup_error: str | None = None
 
@@ -136,6 +139,11 @@ class MCPService:
         self.host = host
         self.store = ConnectionStore(host.state_dir)
         self.content = ContentStore(host)
+        self.connectors = await run_tool_worker(load_connectors)
+        for issue in self.connectors.issues:
+            self.api.logger.warning(
+                "MCP catalog entry left out: %s", json.dumps(issue, ensure_ascii=True)
+            )
         try:
             self.connections = await run_tool_worker(self.store.load)
         except (ValueError, OSError) as error:
@@ -640,6 +648,10 @@ class MCPService:
             return await self._save(arguments["connection"])
         if operation == "import":
             return await self._import(arguments)
+        if operation == "catalog":
+            return {"entries": self.connectors.listing(self.connections)}
+        if operation == "add_from_catalog":
+            return await self._add_from_catalog(arguments)
         identifier = arguments["id"]
         config = self._connection(identifier)
         if operation == "status":
@@ -856,6 +868,21 @@ class MCPService:
             "credentials": credentials,
             "warnings": copy.deepcopy(draft.warnings),
         }
+
+    async def _add_from_catalog(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Save a catalog entry as a new enabled connection; never replaces a saved one."""
+        # A rejected record keeps its id too: saving under it would overwrite the record.
+        rejected = {
+            issue["connection_id"]
+            for issue in (self.store.issues if self.store else [])
+            if "connection_id" in issue
+        }
+        connection = self.connectors.connection(
+            arguments["entry"],
+            read_only=arguments.get("read_only", False),
+            taken=set(self.connections) | rejected,
+        )
+        return await self._save(connection, replace=False)
 
     async def _save(self, value: dict[str, Any], *, replace: bool = True) -> dict[str, Any]:
         config = validate_connection(value)

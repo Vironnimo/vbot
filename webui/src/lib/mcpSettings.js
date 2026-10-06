@@ -1,4 +1,5 @@
 import { extensionOperation } from './api.js';
+import { PENDING_INPUTS_RESOURCE } from './extensionInputs.js';
 import { t, tOr } from './i18n.js';
 
 const DEFAULT_TIMEOUT_SECONDS = 120;
@@ -9,9 +10,10 @@ const mappings = [
   'credential_environment',
   'credential_headers',
 ];
-// Settings of a pre-registered OAuth client; they exist only with OAuth.
+// Settings that exist only with OAuth: the redirect and a pre-registered client.
 const oauthClientFields = [
   'oauth_redirect_uri',
+  'oauth_redirect_host',
   'oauth_client_id',
   'oauth_client_secret',
   'oauth_scopes',
@@ -101,10 +103,15 @@ export function mcpCredentialNames(configuration) {
 }
 
 // The resources of the changes the MCP Extension publishes: what `list`
-// reports for a connection, and a management job that finished
+// reports for a connection, a management job that finished
 // (`CONNECTIONS_RESOURCE` and `JOBS_RESOURCE` in
-// `resources/extensions/mcp/_management.py`).
-const LIVE_RESOURCES = new Set(['connections', 'jobs']);
+// `resources/extensions/mcp/_management.py`), and its pending inputs, which
+// `list` reports as each connection's `pending_requests`.
+const LIVE_RESOURCES = new Set([
+  'connections',
+  'jobs',
+  PENDING_INPUTS_RESOURCE,
+]);
 
 // A connection that references credentials without a value needs setup
 // before it can connect. Its row shows the same status and "Waiting for"
@@ -285,8 +292,8 @@ export function createMcpSettings({
   return {
     refresh,
     // An App Extension invalidation (`{owner, change}`): a change of the MCP
-    // connections or jobs, or one without an owner (reconnect or Extension
-    // reload), reads the connections again.
+    // connections, jobs or pending inputs, or one without an owner (reconnect
+    // or Extension reload), reads the connections again.
     handleInvalidation({ owner, change }) {
       if (
         owner == null ||

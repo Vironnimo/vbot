@@ -1,6 +1,6 @@
 <script>
   import './mcp.css';
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
   import Dropdown from '../Dropdown.svelte';
   import Banner from '../ui/Banner.svelte';
@@ -13,6 +13,7 @@
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
+  import McpCatalogDialog from './McpCatalogDialog.svelte';
   import McpConnectionDiagnostics from './McpConnectionDiagnostics.svelte';
   import McpImportDialog from './McpImportDialog.svelte';
   import McpQuickFill from './McpQuickFill.svelte';
@@ -50,6 +51,9 @@
   // The import dialog's starting text while it is open, otherwise null.
   let importSource = $state(null);
   let fillNotes = $state([]);
+  // The catalog dialog while it is open, otherwise null: `signIn` names the
+  // connection whose waiting sign-in it opens at instead of the catalog.
+  let catalog = $state(null);
   // Each connection is one collapsed row; its endpoint, catalog counts and
   // actions open in its details. The details stay in the DOM so settings
   // search still matches them.
@@ -61,7 +65,7 @@
   });
   let blocked = $derived(state.busy || Boolean(state.job));
   let dialogOpen = $derived(
-    Boolean(draft || secretConnection) || importSource !== null,
+    Boolean(draft || secretConnection || catalog) || importSource !== null,
   );
   let transportOptions = $derived([
     { value: 'stdio', label: t('mcp.local') },
@@ -147,6 +151,26 @@
   function imported(ids) {
     importSource = null;
     for (const id of ids) expanded.add(id);
+  }
+  // The catalog dialog set up the connection `id`: its row opens and takes
+  // focus, since the control that opened the dialog may be gone with it.
+  async function connected(id) {
+    catalog = null;
+    expanded.add(id);
+    await tick();
+    const index = state.connections.findIndex(
+      (connection) => connection.id === id,
+    );
+    if (index >= 0)
+      document
+        .querySelector(`[aria-controls="${componentId}-details-${index}"]`)
+        ?.focus();
+  }
+  // A connection that waits for the user's browser sign-in.
+  function waitsForSignIn(connection) {
+    return (connection.pending_requests ?? []).some(
+      (request) => request.kind === 'oauth',
+    );
   }
   function set(field, value) {
     draft = { ...draft, [field]: value };
@@ -239,6 +263,13 @@
         variant="tertiary"
         disabled={blocked || state.loading}
         onClick={() => {
+          catalog = { signIn: null };
+        }}>{t('mcp.catalog')}</Button
+      >
+      <Button
+        variant="tertiary"
+        disabled={blocked || state.loading}
+        onClick={() => {
           importSource = '';
         }}>{t('mcp.import')}</Button
       >
@@ -279,7 +310,17 @@
       density="compact"
       title={t('mcp.empty')}
       description={t('mcp.emptyHint')}
-    />
+    >
+      {#snippet actions()}
+        <Button
+          variant="primary"
+          disabled={blocked}
+          onClick={() => {
+            catalog = { signIn: null };
+          }}>{t('mcp.catalogBrowse')}</Button
+        >
+      {/snippet}
+    </EmptyState>
   {:else}
     <div class="s-group mcp-connections">
       {#each state.connections as connection, index (connection.id)}
@@ -322,6 +363,15 @@
               {/if}
             </div>
             <div class="s-entity__end">
+              {#if waitsForSignIn(connection)}
+                <Button
+                  variant="secondary"
+                  ariaLabel={t('mcp.signInFor', { name: connection.id })}
+                  onClick={() => {
+                    catalog = { signIn: connection.id };
+                  }}>{t('mcp.signIn')}</Button
+                >
+              {/if}
               {#if appearance}
                 <StatusChip variant={appearance.variant}
                   >{appearance.label}</StatusChip
@@ -1055,6 +1105,16 @@
       >
     {/snippet}
   </Modal>
+{/if}
+{#if catalog}
+  <McpCatalogDialog
+    {subscribeInvalidations}
+    signInConnection={catalog.signIn}
+    onClose={() => {
+      catalog = null;
+    }}
+    onConnected={connected}
+  />
 {/if}
 {#if importSource !== null}
   <McpImportDialog

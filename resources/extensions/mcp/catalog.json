@@ -1,0 +1,659 @@
+{
+  "entries": [
+    {
+      "id": "deepwiki",
+      "name": "DeepWiki",
+      "description": "Ask questions about public GitHub repositories and read their generated documentation.",
+      "category": "knowledge",
+      "url": "https://mcp.deepwiki.com/mcp",
+      "auth": "none",
+      "docs_url": "https://docs.devin.ai/work-with-devin/deepwiki-mcp"
+    },
+    {
+      "id": "microsoft_learn",
+      "name": "Microsoft Learn",
+      "description": "Search and read official Microsoft documentation and code samples.",
+      "category": "knowledge",
+      "url": "https://learn.microsoft.com/api/mcp",
+      "auth": "none",
+      "docs_url": "https://learn.microsoft.com/en-us/training/support/mcp"
+    },
+    {
+      "id": "context7",
+      "name": "Context7",
+      "description": "Current documentation and code examples for programming libraries and frameworks.",
+      "category": "knowledge",
+      "url": "https://mcp.context7.com/mcp",
+      "auth": "none",
+      "docs_url": "https://github.com/upstash/context7"
+    },
+    {
+      "id": "aws_knowledge",
+      "name": "AWS Knowledge",
+      "description": "Search AWS documentation, best practices and regional service availability.",
+      "category": "knowledge",
+      "url": "https://knowledge-mcp.global.api.aws",
+      "auth": "none",
+      "docs_url": "https://awslabs.github.io/mcp/servers/aws-knowledge-mcp-server"
+    },
+    {
+      "id": "cloudflare_docs",
+      "name": "Cloudflare Docs",
+      "description": "Search Cloudflare's developer documentation.",
+      "category": "knowledge",
+      "url": "https://docs.mcp.cloudflare.com/mcp",
+      "auth": "none",
+      "docs_url": "https://developers.cloudflare.com/agents/model-context-protocol/cloudflare/servers-for-cloudflare/"
+    },
+    {
+      "id": "openai_docs",
+      "name": "OpenAI Docs",
+      "description": "Search and read the OpenAI developer documentation.",
+      "category": "knowledge",
+      "url": "https://developers.openai.com/mcp",
+      "auth": "none",
+      "docs_url": "https://developers.openai.com/resources/docs-mcp"
+    },
+    {
+      "id": "huggingface",
+      "name": "Hugging Face",
+      "description": "Search models, datasets, Spaces and papers on the Hugging Face Hub.",
+      "category": "knowledge",
+      "url": "https://huggingface.co/mcp",
+      "auth": "none"
+    },
+    {
+      "id": "exa",
+      "name": "Exa",
+      "description": "Search the web and read the contents of web pages.",
+      "category": "knowledge",
+      "url": "https://mcp.exa.ai/mcp",
+      "auth": "none",
+      "notes": [
+        "Works without an Exa account at a limited request rate."
+      ],
+      "docs_url": "https://exa.ai/docs/get-started/exa-mcp"
+    },
+    {
+      "id": "grep",
+      "name": "Grep",
+      "description": "Search code across public GitHub repositories.",
+      "category": "knowledge",
+      "url": "https://mcp.grep.app",
+      "auth": "none",
+      "docs_url": "https://vercel.com/blog/grep-a-million-github-repositories-via-mcp"
+    },
+    {
+      "id": "notion",
+      "name": "Notion",
+      "description": "Search, read and edit pages and databases in your Notion workspace.",
+      "category": "productivity",
+      "url": "https://mcp.notion.com/mcp",
+      "auth": "oauth",
+      "docs_url": "https://developers.notion.com/guides/mcp/overview"
+    },
+    {
+      "id": "atlassian",
+      "name": "Atlassian",
+      "description": "Work with Jira issues and Confluence pages on your Atlassian Cloud site.",
+      "category": "productivity",
+      "url": "https://mcp.atlassian.com/v2/mcp",
+      "auth": "oauth",
+      "docs_url": "https://support.atlassian.com/atlassian-ai-gateway/docs/get-started-with-the-atlassian-remote-mcp-server/"
+    },
+    {
+      "id": "trello",
+      "name": "Trello",
+      "description": "Read and update Trello boards, lists and cards.",
+      "category": "productivity",
+      "url": "https://mcp.trello.com/v1",
+      "auth": "oauth"
+    },
+    {
+      "id": "airtable",
+      "name": "Airtable",
+      "description": "Read and edit records, tables and bases in Airtable.",
+      "category": "productivity",
+      "url": "https://mcp.airtable.com/mcp",
+      "auth": "oauth",
+      "docs_url": "https://airtable.com/developers/agents/mcp/getting-started"
+    },
+    {
+      "id": "todoist",
+      "name": "Todoist",
+      "description": "Read, add and complete tasks and projects in Todoist.",
+      "category": "productivity",
+      "url": "https://ai.todoist.net/mcp",
+      "auth": "oauth"
+    },
+    {
+      "id": "monday",
+      "name": "monday.com",
+      "description": "Read and update boards, items and updates in monday.com.",
+      "category": "productivity",
+      "url": "https://mcp.monday.com/mcp",
+      "auth": "oauth",
+      "docs_url": "https://developer.monday.com/apps/docs/mondaycom-mcp-integration"
+    },
+    {
+      "id": "clickup",
+      "name": "ClickUp",
+      "description": "Search and manage tasks, docs and spaces in your ClickUp workspace.",
+      "category": "productivity",
+      "url": "https://mcp.clickup.com/mcp",
+      "auth": "oauth",
+      "docs_url": "https://developer.clickup.com/docs/connect-an-ai-assistant-to-clickups-mcp-server"
+    },
+    {
+      "id": "coda",
+      "name": "Coda",
+      "description": "Read and edit Coda docs, pages and tables.",
+      "category": "productivity",
+      "url": "https://coda.io/apis/mcp",
+      "auth": "oauth"
+    },
+    {
+      "id": "basecamp",
+      "name": "Basecamp",
+      "description": "Work with projects, to-dos, messages and schedules in Basecamp.",
+      "category": "productivity",
+      "url": "https://mcp.basecamp.com/mcp",
+      "auth": "oauth"
+    },
+    {
+      "id": "ticktick",
+      "name": "TickTick",
+      "description": "Read, add and complete tasks and lists in TickTick.",
+      "category": "productivity",
+      "url": "https://mcp.ticktick.com/",
+      "auth": "oauth"
+    },
+    {
+      "id": "craft",
+      "name": "Craft",
+      "description": "Search, read and edit your documents in Craft.",
+      "category": "productivity",
+      "url": "https://mcp.craft.do/my/mcp",
+      "auth": "oauth"
+    },
+    {
+      "id": "readwise",
+      "name": "Readwise",
+      "description": "Search your Readwise highlights and the documents saved in Reader.",
+      "category": "productivity",
+      "url": "https://mcp2.readwise.io/mcp",
+      "auth": "oauth",
+      "docs_url": "https://docs.readwise.io/tools/mcp"
+    },
+    {
+      "id": "granola",
+      "name": "Granola",
+      "description": "Search and read your Granola meeting notes and transcripts.",
+      "category": "productivity",
+      "url": "https://mcp.granola.ai/mcp",
+      "auth": "oauth",
+      "docs_url": "https://docs.granola.ai/help-center/sharing/integrations/mcp"
+    },
+    {
+      "id": "fireflies",
+      "name": "Fireflies",
+      "description": "Search the meeting transcripts and summaries Fireflies recorded.",
+      "category": "productivity",
+      "url": "https://api.fireflies.ai/mcp",
+      "auth": "oauth",
+      "docs_url": "https://docs.fireflies.ai/getting-started/mcp-configuration"
+    },
+    {
+      "id": "calcom",
+      "name": "Cal.com",
+      "description": "View and manage bookings, event types and availability in Cal.com.",
+      "category": "productivity",
+      "url": "https://mcp.cal.com/mcp",
+      "auth": "oauth",
+      "docs_url": "https://cal.com/docs/mcp-server"
+    },
+    {
+      "id": "calendly",
+      "name": "Calendly",
+      "description": "View and manage scheduled events, event types and availability in Calendly.",
+      "category": "productivity",
+      "url": "https://mcp.calendly.com",
+      "auth": "oauth",
+      "redirect_host": "localhost",
+      "docs_url": "https://developer.calendly.com/docs/mcp/calendly-mcp-server"
+    },
+    {
+      "id": "typeform",
+      "name": "Typeform",
+      "description": "Create forms and read their responses in Typeform.",
+      "category": "productivity",
+      "url": "https://api.typeform.com/mcp",
+      "auth": "oauth",
+      "redirect_host": "localhost",
+      "docs_url": "https://www.typeform.com/developers/mcp/"
+    },
+    {
+      "id": "tally",
+      "name": "Tally",
+      "description": "Create Tally forms and read their submissions.",
+      "category": "productivity",
+      "url": "https://api.tally.so/mcp",
+      "auth": "oauth",
+      "docs_url": "https://tally.so/help/mcp"
+    },
+    {
+      "id": "jotform",
+      "name": "Jotform",
+      "description": "Create Jotform forms and read their submissions.",
+      "category": "productivity",
+      "url": "https://mcp.jotform.com",
+      "auth": "oauth",
+      "notes": [
+        "A workspace admin must install the Jotform MCP app first."
+      ],
+      "docs_url": "https://www.jotform.com/developers/mcp/"
+    },
+    {
+      "id": "egnyte",
+      "name": "Egnyte",
+      "description": "Search and read files and folders in Egnyte.",
+      "category": "productivity",
+      "url": "https://mcp-server.egnyte.com/mcp",
+      "auth": "oauth",
+      "notes": [
+        "Available on eligible Egnyte business plans.",
+        "An Egnyte admin must allow external MCP clients."
+      ]
+    },
+    {
+      "id": "miro",
+      "name": "Miro",
+      "description": "Read and create content on Miro boards.",
+      "category": "design",
+      "url": "https://mcp.miro.com/",
+      "auth": "oauth",
+      "notes": [
+        "On Enterprise plans an admin must approve the Miro MCP app."
+      ],
+      "docs_url": "https://developers.miro.com/docs/miro-mcp"
+    },
+    {
+      "id": "canva",
+      "name": "Canva",
+      "description": "Search, create and edit designs in your Canva account.",
+      "category": "design",
+      "url": "https://mcp.canva.com/mcp",
+      "auth": "oauth"
+    },
+    {
+      "id": "lucid",
+      "name": "Lucid",
+      "description": "Search and create diagrams and documents in Lucid.",
+      "category": "design",
+      "url": "https://mcp.lucid.app/mcp",
+      "auth": "oauth"
+    },
+    {
+      "id": "whimsical",
+      "name": "Whimsical",
+      "description": "Create and edit flowcharts, mind maps and docs in Whimsical.",
+      "category": "design",
+      "url": "https://mcp.whimsical.com/mcp",
+      "auth": "oauth"
+    },
+    {
+      "id": "excalidraw",
+      "name": "Excalidraw",
+      "description": "Draw hand-drawn style diagrams with Excalidraw.",
+      "category": "design",
+      "url": "https://mcp.excalidraw.com/mcp",
+      "auth": "none",
+      "docs_url": "https://github.com/excalidraw/excalidraw-mcp"
+    },
+    {
+      "id": "cloudinary",
+      "name": "Cloudinary",
+      "description": "Upload, find, organize and transform images and videos in Cloudinary.",
+      "category": "design",
+      "url": "https://asset-management.mcp.cloudinary.com/mcp",
+      "auth": "oauth",
+      "docs_url": "https://cloudinary.com/documentation/cloudinary_llm_mcp"
+    },
+    {
+      "id": "linear",
+      "name": "Linear",
+      "description": "Find, create and update issues, projects and comments in Linear.",
+      "category": "development",
+      "url": "https://mcp.linear.app/mcp",
+      "auth": "oauth",
+      "read_only_url": "https://mcp.linear.app/mcp/readonly",
+      "docs_url": "https://linear.app/docs/mcp"
+    },
+    {
+      "id": "gitlab",
+      "name": "GitLab",
+      "description": "Work with issues, merge requests and pipelines on GitLab.com.",
+      "category": "development",
+      "url": "https://gitlab.com/api/v4/mcp",
+      "auth": "oauth",
+      "notes": [
+        "Older GitLab.com groups may need an Owner to allow MCP client access."
+      ],
+      "docs_url": "https://docs.gitlab.com/user/gitlab_duo/model_context_protocol/mcp_server/"
+    },
+    {
+      "id": "sentry",
+      "name": "Sentry",
+      "description": "Investigate errors, issues and performance data in Sentry.",
+      "category": "development",
+      "url": "https://mcp.sentry.dev/mcp",
+      "auth": "oauth",
+      "docs_url": "https://mcp.sentry.dev/"
+    },
+    {
+      "id": "cloudflare",
+      "name": "Cloudflare",
+      "description": "Manage your Cloudflare account through the Cloudflare API.",
+      "category": "development",
+      "url": "https://mcp.cloudflare.com/mcp",
+      "auth": "oauth",
+      "docs_url": "https://developers.cloudflare.com/agents/model-context-protocol/cloudflare/servers-for-cloudflare/"
+    },
+    {
+      "id": "supabase",
+      "name": "Supabase",
+      "description": "Manage Supabase projects: databases, migrations, logs and edge functions.",
+      "category": "development",
+      "url": "https://mcp.supabase.com/mcp",
+      "auth": "oauth",
+      "read_only_url": "https://mcp.supabase.com/mcp?read_only=true",
+      "docs_url": "https://supabase.com/docs/guides/ai-tools/mcp"
+    },
+    {
+      "id": "neon",
+      "name": "Neon",
+      "description": "Manage Neon Postgres projects and branches and run SQL.",
+      "category": "development",
+      "url": "https://mcp.neon.tech/mcp",
+      "auth": "oauth",
+      "read_only_url": "https://mcp.neon.tech/mcp?readonly=true",
+      "docs_url": "https://neon.com/docs/ai/neon-mcp-server"
+    },
+    {
+      "id": "netlify",
+      "name": "Netlify",
+      "description": "Create, deploy and manage Netlify sites.",
+      "category": "development",
+      "url": "https://netlify-mcp.netlify.app/mcp",
+      "auth": "oauth",
+      "docs_url": "https://docs.netlify.com/build/build-with-ai/agent-setup-guides/agent-setup-overview/#mcp-server-support"
+    },
+    {
+      "id": "prisma",
+      "name": "Prisma",
+      "description": "Manage Prisma Postgres databases and run queries.",
+      "category": "development",
+      "url": "https://mcp.prisma.io/mcp",
+      "auth": "oauth",
+      "docs_url": "https://www.prisma.io/docs/ai/tools/mcp-server"
+    },
+    {
+      "id": "postman",
+      "name": "Postman",
+      "description": "Work with Postman collections, workspaces and APIs.",
+      "category": "development",
+      "url": "https://mcp.postman.com/minimal",
+      "auth": "oauth",
+      "notes": [
+        "Offers Postman's minimal tool set and serves accounts in the US region."
+      ],
+      "docs_url": "https://learning.postman.com/docs/reference/postman-api/postman-mcp-server/overview"
+    },
+    {
+      "id": "buildkite",
+      "name": "Buildkite",
+      "description": "Inspect Buildkite pipelines, builds, jobs and logs.",
+      "category": "development",
+      "url": "https://mcp.buildkite.com/mcp",
+      "auth": "oauth",
+      "read_only_url": "https://mcp.buildkite.com/mcp/readonly",
+      "docs_url": "https://buildkite.com/docs/apis/mcp-server"
+    },
+    {
+      "id": "jam",
+      "name": "Jam",
+      "description": "Read Jam bug reports with their console logs, network requests and recordings.",
+      "category": "development",
+      "url": "https://mcp.jam.dev/mcp",
+      "auth": "oauth",
+      "docs_url": "https://jam.dev/docs/jam-mcp"
+    },
+    {
+      "id": "expo",
+      "name": "Expo",
+      "description": "Work with Expo app projects, EAS builds and the Expo documentation.",
+      "category": "development",
+      "url": "https://mcp.expo.dev/mcp",
+      "auth": "oauth",
+      "docs_url": "https://docs.expo.dev/mcp/"
+    },
+    {
+      "id": "sanity",
+      "name": "Sanity",
+      "description": "Query and edit content in your Sanity projects.",
+      "category": "development",
+      "url": "https://mcp.sanity.io",
+      "auth": "oauth",
+      "docs_url": "https://www.sanity.io/docs/ai/mcp-server"
+    },
+    {
+      "id": "semgrep",
+      "name": "Semgrep",
+      "description": "Scan code for security issues and look up findings in Semgrep.",
+      "category": "development",
+      "url": "https://mcp.semgrep.ai/mcp",
+      "auth": "oauth"
+    },
+    {
+      "id": "socket",
+      "name": "Socket",
+      "description": "Check open source dependencies for supply chain risk scores.",
+      "category": "development",
+      "url": "https://mcp.socket.dev/",
+      "auth": "none"
+    },
+    {
+      "id": "resend",
+      "name": "Resend",
+      "description": "Send emails and manage domains, audiences and broadcasts in Resend.",
+      "category": "development",
+      "url": "https://mcp.resend.com/mcp",
+      "auth": "oauth",
+      "docs_url": "https://resend.com/docs/mcp-server"
+    },
+    {
+      "id": "mux",
+      "name": "Mux",
+      "description": "Manage Mux video assets and live streams and query playback data.",
+      "category": "development",
+      "url": "https://mcp.mux.com",
+      "auth": "oauth",
+      "docs_url": "https://www.mux.com/docs/integrations/mcp-server"
+    },
+    {
+      "id": "mapbox",
+      "name": "Mapbox",
+      "description": "Geocoding, directions, places search and static maps from Mapbox.",
+      "category": "development",
+      "url": "https://mcp.mapbox.com/mcp",
+      "auth": "oauth",
+      "docs_url": "https://docs.mapbox.com/location-ai/mcp-servers/mcp-server/"
+    },
+    {
+      "id": "posthog",
+      "name": "PostHog",
+      "description": "Query product analytics, feature flags and experiments in PostHog.",
+      "category": "analytics",
+      "url": "https://mcp.posthog.com/mcp",
+      "auth": "oauth",
+      "docs_url": "https://posthog.com/docs/model-context-protocol"
+    },
+    {
+      "id": "grafana",
+      "name": "Grafana",
+      "description": "Query dashboards, metrics, logs and incidents in Grafana Cloud.",
+      "category": "analytics",
+      "url": "https://mcp.grafana.com/mcp",
+      "auth": "oauth"
+    },
+    {
+      "id": "honeycomb",
+      "name": "Honeycomb",
+      "description": "Query traces, events and SLOs in Honeycomb.",
+      "category": "analytics",
+      "url": "https://mcp.honeycomb.io/mcp",
+      "auth": "oauth",
+      "notes": [
+        "The Honeycomb team must enable Honeycomb Intelligence."
+      ],
+      "docs_url": "https://docs.honeycomb.io/integrations/mcp/concepts"
+    },
+    {
+      "id": "stripe",
+      "name": "Stripe",
+      "description": "Work with Stripe customers, payments and invoices, and search Stripe's documentation.",
+      "category": "business",
+      "url": "https://mcp.stripe.com",
+      "auth": "oauth",
+      "docs_url": "https://docs.stripe.com/mcp"
+    },
+    {
+      "id": "paypal",
+      "name": "PayPal",
+      "description": "Manage PayPal invoices, orders, payments and disputes.",
+      "category": "business",
+      "url": "https://mcp.paypal.com/mcp",
+      "auth": "oauth",
+      "docs_url": "https://developer.paypal.com/ai-tools/mcp-server"
+    },
+    {
+      "id": "mercury",
+      "name": "Mercury",
+      "description": "Read Mercury bank accounts, balances and transactions.",
+      "category": "business",
+      "url": "https://mcp.mercury.com/mcp",
+      "auth": "oauth",
+      "notes": [
+        "In beta, with read-only access."
+      ]
+    },
+    {
+      "id": "brex",
+      "name": "Brex",
+      "description": "Read Brex expenses, cards, budgets and users.",
+      "category": "business",
+      "url": "https://api.brex.com/mcp",
+      "auth": "oauth",
+      "notes": [
+        "An account admin must enable Brex MCP access."
+      ],
+      "docs_url": "https://developer.brex.com/docs/mcp"
+    },
+    {
+      "id": "make",
+      "name": "Make",
+      "description": "Run your Make scenarios as tools.",
+      "category": "business",
+      "url": "https://mcp.make.com",
+      "auth": "oauth",
+      "docs_url": "https://developers.make.com/mcp-server"
+    },
+    {
+      "id": "zapier",
+      "name": "Zapier",
+      "description": "Run actions in the apps you connected to Zapier.",
+      "category": "business",
+      "url": "https://mcp.zapier.com/api/v1/connect",
+      "auth": "oauth",
+      "notes": [
+        "Each tool call uses two Zapier tasks."
+      ],
+      "docs_url": "https://docs.zapier.com/mcp/home"
+    },
+    {
+      "id": "pipedrive",
+      "name": "Pipedrive",
+      "description": "Work with deals, contacts and activities in Pipedrive.",
+      "category": "business",
+      "url": "https://mcp.pipedrive.ai/mcp",
+      "auth": "oauth"
+    },
+    {
+      "id": "close",
+      "name": "Close",
+      "description": "Work with leads, contacts and opportunities in Close CRM.",
+      "category": "business",
+      "url": "https://mcp.close.com/mcp",
+      "auth": "oauth"
+    },
+    {
+      "id": "attio",
+      "name": "Attio",
+      "description": "Search and update records, lists and notes in Attio.",
+      "category": "business",
+      "url": "https://mcp.attio.com/mcp",
+      "auth": "oauth",
+      "docs_url": "https://docs.attio.com/mcp/overview"
+    },
+    {
+      "id": "clay",
+      "name": "Clay",
+      "description": "Find and enrich people and company data with Clay.",
+      "category": "business",
+      "url": "https://api.clay.com/v3/mcp",
+      "auth": "oauth",
+      "notes": [
+        "Uses Clay credits."
+      ]
+    },
+    {
+      "id": "kit",
+      "name": "Kit",
+      "description": "Manage Kit subscribers, tags, sequences and broadcasts.",
+      "category": "business",
+      "url": "https://app.kit.com/mcp",
+      "auth": "oauth"
+    },
+    {
+      "id": "webflow",
+      "name": "Webflow",
+      "description": "Manage Webflow sites, pages and CMS collections.",
+      "category": "business",
+      "url": "https://mcp.webflow.com/mcp",
+      "auth": "oauth",
+      "docs_url": "https://developers.webflow.com/mcp/reference/overview"
+    },
+    {
+      "id": "wix",
+      "name": "Wix",
+      "description": "Manage your Wix sites and their business data.",
+      "category": "business",
+      "url": "https://mcp.wix.com/mcp",
+      "auth": "oauth",
+      "docs_url": "https://dev.wix.com/docs/sdk/articles/use-the-wix-mcp/about-the-wix-mcp"
+    },
+    {
+      "id": "wordpress_com",
+      "name": "WordPress.com",
+      "description": "Read and manage posts, pages and site settings on WordPress.com.",
+      "category": "business",
+      "url": "https://public-api.wordpress.com/wpcom/v2/mcp/v1",
+      "auth": "oauth",
+      "notes": [
+        "Requires a paid WordPress.com plan.",
+        "Turn on MCP access in your WordPress.com account preferences before you connect."
+      ],
+      "docs_url": "https://developer.wordpress.com/docs/mcp/"
+    }
+  ]
+}
