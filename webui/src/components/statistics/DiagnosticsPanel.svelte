@@ -179,7 +179,7 @@
       sortValue: (row) => row.session_title || row.session_id,
       cell: sessionCell,
     },
-    { id: 'cache_turns', label: t('statistics.col.calls'), align: 'end' },
+    { id: 'turns', label: t('statistics.col.calls'), align: 'end' },
     {
       id: 'input_tokens',
       label: t('statistics.col.input'),

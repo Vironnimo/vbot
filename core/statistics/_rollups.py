@@ -17,8 +17,8 @@ Units and their tables:
   and ``agg_tool_latency``, a duration histogram with
   ``bucket = floor(4 * log2(duration_ms + 1))``), records by role with their
   visible chat steps (``agg_records``), and prompt-cache turns (``agg_cache``
-  per hour, ``agg_cache_breaks`` per suspected break). Each cache-reporting
-  turn is judged against its predecessor in the whole Session, so the
+  per hour, ``agg_cache_breaks`` per suspected break). Each Chat turn is
+  judged against its predecessor in the whole Session, so the
   judgement does not depend on a report window.
 - A ledger unit's requests (``agg_usage``, per hour).
 
@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core.runs import UNATTENDED_RUN_KINDS
-from core.statistics._projection import CACHE_SQL, MICROSECONDS_PER_HOUR, REASONING_SQL
+from core.statistics._projection import MICROSECONDS_PER_HOUR
 
 ROLLUP_SCHEMA = """
 CREATE TABLE agg_runs (
@@ -79,8 +79,6 @@ CREATE TABLE agg_runs (
     reasoning_tokens INTEGER NOT NULL,
     cache_read_tokens INTEGER NOT NULL,
     cache_write_tokens INTEGER NOT NULL,
-    cache_input_tokens INTEGER NOT NULL,
-    cache_calls INTEGER NOT NULL,
     reported_nusd INTEGER NOT NULL,
     estimated_nusd INTEGER NOT NULL,
     unpriced_calls INTEGER NOT NULL,
@@ -107,8 +105,6 @@ CREATE TABLE agg_run_models (
     reasoning_tokens INTEGER NOT NULL,
     cache_read_tokens INTEGER NOT NULL,
     cache_write_tokens INTEGER NOT NULL,
-    cache_input_tokens INTEGER NOT NULL,
-    cache_calls INTEGER NOT NULL,
     unreported_calls INTEGER NOT NULL,
     reported_nusd INTEGER NOT NULL,
     reported_calls INTEGER NOT NULL,
@@ -134,11 +130,8 @@ CREATE TABLE agg_usage (
     output_tokens INTEGER NOT NULL,
     estimated_output_tokens INTEGER NOT NULL,
     reasoning_tokens INTEGER NOT NULL,
-    reasoning_calls INTEGER NOT NULL,
     cache_read_tokens INTEGER NOT NULL,
     cache_write_tokens INTEGER NOT NULL,
-    cache_input_tokens INTEGER NOT NULL,
-    cache_calls INTEGER NOT NULL,
     unreported_calls INTEGER NOT NULL,
     reported_nusd INTEGER NOT NULL,
     reported_calls INTEGER NOT NULL,
@@ -423,10 +416,10 @@ def session_origin_sql(session: str) -> str:
     )
 
 
-# Prompt-cache-break heuristic (best-effort, derived). A measured turn is
-# evaluated against its predecessor only when no legitimate prefix change
-# explains a cache miss; the thresholds keep false positives low rather than
-# catching every break.
+# Prompt-cache-break heuristic (best-effort, derived). A turn is evaluated
+# against its predecessor only when no legitimate prefix change explains a cache
+# miss; the thresholds keep false positives low rather than catching every
+# break.
 CACHE_BREAK_READ_RATIO = 0.5
 """A cache read below this share of the previous turn's prompt is a suspected break."""
 CACHE_BREAK_MAX_GAP_SECONDS = 300
@@ -437,28 +430,27 @@ _MICROSECONDS_PER_SECOND = 1_000_000
 
 
 def judged_cache_turns_sql(source: str, where: str, unit: str) -> str:
-    """Select every measured, cache-reporting Assistant turn of ``source`` with its judgement.
+    """Select every Assistant turn of ``source`` that has Usage, with its judgement.
 
     ``source`` is a FROM clause yielding ``stat_records r`` rows, ``where``
     filters them and ``unit`` names the partition the turns are ordered in.
-    Only measured Assistant turns set an expectation baseline; a Compaction
-    checkpoint, an Agent takeover, a turn without Usage or an estimated turn
-    clears it. A cache-reporting turn is evaluated against the immediately
-    preceding measured turn when that turn also reported cache fields, used
-    the same Model, sent a prompt of at least the minimum cacheable size and
-    ran within the cache lifetime; a read below the break ratio of the
+    Every turn with Usage counts, estimated counters included, and a cache
+    counter it does not report counts as zero. A Compaction checkpoint, an
+    Agent takeover or an Assistant record without Usage clears the baseline.
+    A turn is evaluated against the immediately preceding turn when that turn
+    used the same Model, sent a prompt of at least the minimum cacheable size
+    and ran within the cache lifetime; a read below the break ratio of the
     previous prompt is a suspected break (``incident``). Columns: ``unit, seq,
     timestamp, instant, model_key, input_tokens, cache_read_tokens,
     cache_write_tokens, previous_input_tokens, evaluated, incident``.
     """
     return f"""
         WITH stream AS (
-            SELECT {unit} AS unit, r.seq, r.timestamp, r.instant, c.model_key, c.has_cache,
+            SELECT {unit} AS unit, r.seq, r.timestamp, r.instant, c.model_key,
                 COALESCE(c.input_tokens, 0) AS input_tokens,
                 COALESCE(c.cache_read_tokens, 0) AS cache_read_tokens,
                 COALESCE(c.cache_write_tokens, 0) AS cache_write_tokens,
-                (r.role = 'assistant' AND c.has_usage = 1
-                    AND c.input_estimated = 0 AND c.output_estimated = 0) AS measured
+                (r.role = 'assistant' AND COALESCE(c.has_usage, 0) = 1) AS turn
             FROM {source}
             LEFT JOIN stat_calls c
                 ON c.session_key = r.session_key AND c.seq = r.seq AND c.kind = 0
@@ -466,10 +458,9 @@ def judged_cache_turns_sql(source: str, where: str, unit: str) -> str:
                 AND r.role IN ('assistant', 'compaction_checkpoint', 'agent_takeover')
         ),
         turns AS (
-            SELECT unit, seq, timestamp, instant, model_key, has_cache, input_tokens,
-                cache_read_tokens, cache_write_tokens, measured,
-                LAG(measured) OVER turn_order AS previous_measured,
-                LAG(has_cache) OVER turn_order AS previous_has_cache,
+            SELECT unit, seq, timestamp, instant, model_key, input_tokens,
+                cache_read_tokens, cache_write_tokens, turn,
+                LAG(turn) OVER turn_order AS previous_turn,
                 LAG(model_key) OVER turn_order AS previous_model_key,
                 LAG(input_tokens) OVER turn_order AS previous_input_tokens,
                 LAG(instant) OVER turn_order AS previous_instant
@@ -479,8 +470,7 @@ def judged_cache_turns_sql(source: str, where: str, unit: str) -> str:
         judged AS (
             SELECT unit, seq, timestamp, instant, model_key, input_tokens,
                 cache_read_tokens, cache_write_tokens, previous_input_tokens, COALESCE(
-                previous_measured = 1
-                AND previous_has_cache = 1
+                previous_turn = 1
                 AND previous_model_key = model_key
                 AND previous_input_tokens >= {CACHE_BREAK_MIN_PREVIOUS_INPUT_TOKENS}
                 AND instant - previous_instant
@@ -488,7 +478,7 @@ def judged_cache_turns_sql(source: str, where: str, unit: str) -> str:
                 0
             ) AS evaluated
             FROM turns
-            WHERE measured = 1 AND has_cache = 1
+            WHERE turn = 1
         )
         SELECT unit, seq, timestamp, instant, model_key, input_tokens, cache_read_tokens,
             cache_write_tokens, previous_input_tokens, evaluated,
@@ -526,8 +516,6 @@ USAGE_MEASURES = (
     "reasoning_tokens",
     "cache_read_tokens",
     "cache_write_tokens",
-    "cache_input_tokens",
-    "cache_calls",
     "unreported_calls",
     "reported_nusd",
     "reported_calls",
@@ -551,15 +539,9 @@ _MEASURE_SQL = {
     "estimated_output_tokens": (
         "SUM(CASE WHEN c.output_estimated = 1 THEN COALESCE(c.output_tokens, 0) ELSE 0 END)"
     ),
-    "reasoning_tokens": f"SUM(CASE WHEN {REASONING_SQL} THEN c.reasoning_tokens ELSE 0 END)",
-    "cache_read_tokens": (
-        f"SUM(CASE WHEN {CACHE_SQL} THEN COALESCE(c.cache_read_tokens, 0) ELSE 0 END)"
-    ),
-    "cache_write_tokens": (
-        f"SUM(CASE WHEN {CACHE_SQL} THEN COALESCE(c.cache_write_tokens, 0) ELSE 0 END)"
-    ),
-    "cache_input_tokens": f"SUM(CASE WHEN {CACHE_SQL} THEN c.input_tokens ELSE 0 END)",
-    "cache_calls": f"SUM({CACHE_SQL})",
+    "reasoning_tokens": "SUM(COALESCE(c.reasoning_tokens, 0))",
+    "cache_read_tokens": "SUM(COALESCE(c.cache_read_tokens, 0))",
+    "cache_write_tokens": "SUM(COALESCE(c.cache_write_tokens, 0))",
     "unreported_calls": "SUM(c.input_tokens IS NULL OR c.output_tokens IS NULL)",
     "reported_nusd": f"SUM(CASE WHEN c.cost_source = 1 THEN {_NUSD} ELSE 0 END)",
     "reported_calls": "SUM(c.cost_source = 1)",
@@ -573,12 +555,8 @@ _MEASURE_SQL = {
         "SUM((c.input_estimated = 1 OR c.output_estimated = 1) "
         "AND c.input_tokens IS NOT NULL AND c.output_tokens IS NOT NULL)"
     ),
-    "reasoning_calls": f"SUM({REASONING_SQL})",
 }
-_USAGE_CUBE_MEASURES = (
-    *(name for name in USAGE_MEASURES if name != "failed_calls"),
-    "reasoning_calls",
-)
+_USAGE_CUBE_MEASURES = tuple(name for name in USAGE_MEASURES if name != "failed_calls")
 # A per-Model and purpose row of a Run: key, run id, Model, has Model, purpose,
 # first use, then ``USAGE_MEASURES``.
 _MODEL_KEY, _HAS_MODEL, _PURPOSE, _FIRST_USE, _MEASURES = 2, 3, 4, 5, 6
@@ -599,8 +577,6 @@ _RUN_MEASURES = (
     "reasoning_tokens",
     "cache_read_tokens",
     "cache_write_tokens",
-    "cache_input_tokens",
-    "cache_calls",
     "reported_nusd",
     "estimated_nusd",
     "unpriced_calls",
@@ -612,7 +588,7 @@ _RUN_COLUMNS = (
     "first_visible_ms, tool_calls, tool_rejected, tool_ms, compactions, errors, calls, "
     "failed_calls, input_tokens, estimated_input_tokens, output_tokens, "
     "estimated_output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens, "
-    "cache_input_tokens, cache_calls, reported_nusd, estimated_nusd, unpriced_calls, "
+    "reported_nusd, estimated_nusd, unpriced_calls, "
     "primary_model, models, kinds, changed_files, lines_added, lines_removed"
 )
 

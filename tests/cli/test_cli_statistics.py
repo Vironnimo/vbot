@@ -20,8 +20,6 @@ _TOTAL_COUNTS = [
     "reasoning_tokens",
     "cache_read_tokens",
     "cache_write_tokens",
-    "cache_input_tokens",
-    "cache_calls",
     "unreported_calls",
     "reported_calls",
     "estimated_calls",
@@ -197,8 +195,6 @@ def test_statistics_overview_prints_cost_runs_leaders_and_insights(
             input_tokens=173000,
             output_tokens=10500,
             cache_read_tokens=91000,
-            cache_input_tokens=145000,
-            cache_calls=5,
             cost_usd=0.6714,
             reported_cost_usd=0.623,
             reported_calls=5,
@@ -245,8 +241,6 @@ def test_statistics_overview_prints_cost_runs_leaders_and_insights(
                 "output_tokens": 8700,
                 "cost_usd": None,
                 "cache_read_tokens": 91000,
-                "cache_input_tokens": 145000,
-                "cache_calls": 5,
             }
         ],
         "insights": [
@@ -267,7 +261,7 @@ def test_statistics_overview_prints_cost_runs_leaders_and_insights(
     for text in (
         "cost: $0.6714 (reported=$0.6230 over 5 calls, estimated=$0.0484 over 3 calls, "
         "unpriced calls=0)",
-        "cache: hit_rate=62.8% (read=91000 of input=145000 over 5 cache-reporting calls) write=0",
+        "cache: hit_rate=52.6% (read=91000 of input=173000) write=0",
         "runs: total=7 completed=4 failed=1 cancelled=1 interrupted=1 running=0",
         "user runs: count=6 duration_p50=3m00s duration_p90=10m00s cost_p50=$0.0730 "
         "cost_p90=$0.2500 first_visible_p50=-",

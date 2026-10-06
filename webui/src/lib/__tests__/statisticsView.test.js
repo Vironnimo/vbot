@@ -122,18 +122,12 @@ describe('statisticsView numbers', () => {
     }
   });
 
-  it('measures the cache hit rate only over calls that report a cache', () => {
-    expect(
-      cacheHitRate({
-        cache_calls: 2,
-        cache_input_tokens: 1000,
-        cache_read_tokens: 250,
-      }),
-    ).toBe(0.25);
-    expect(
-      cacheHitRate({ cache_calls: 0, cache_input_tokens: 1000 }),
-    ).toBeNull();
-    expect(cacheHitRate({ cache_input_tokens: 0 })).toBeNull();
+  it('measures the cache hit rate over all input, unreported reads as zero', () => {
+    expect(cacheHitRate({ input_tokens: 1000, cache_read_tokens: 250 })).toBe(
+      0.25,
+    );
+    expect(cacheHitRate({ input_tokens: 1000 })).toBe(0);
+    expect(cacheHitRate({ input_tokens: 0 })).toBeNull();
   });
 
   it('reports changes against the previous period and judges only on request', () => {

@@ -229,7 +229,7 @@ async def test_auxiliary_requests_keep_request_windows_and_chat_cache_sequence(a
     cache = report["diagnostics"]["cache"]
     assert cache["suspected_breaks"]["evaluated_turns"] == 1
     assert cache["suspected_breaks"]["suspected_turns"] == 0
-    assert cache["lowest_hit_rate_sessions"][0]["cache_turns"] == 2
+    assert cache["lowest_hit_rate_sessions"][0]["turns"] == 2
     narrow = _usage(service, since=BASE, until=BASE + timedelta(seconds=1))
     assert narrow["totals"]["calls"] == 2
     assert [row["kind"] for row in narrow["recent_calls"]] == ["chat", "title"]
@@ -452,7 +452,7 @@ async def test_takeover_keeps_saved_run_usage_without_reassigning_durable_calls(
 
 
 @pytest.mark.asyncio
-async def test_partial_counters_remain_incomplete_without_invented_cache_or_output(accounting):
+async def test_partial_counters_remain_incomplete_and_count_what_they_report(accounting):
     service, _manager, recorder = accounting
     partial = await recorder.start(model="task/m", kind="speech_to_text")
     await recorder.finish(partial, {"input_tokens": 12, "input_tokens_estimated": True})
@@ -464,8 +464,7 @@ async def test_partial_counters_remain_incomplete_without_invented_cache_or_outp
     assert (totals["calls"], totals["unreported_calls"]) == (2, 2)
     assert (totals["input_tokens"], totals["estimated_input_tokens"]) == (12, 12)
     assert totals["output_tokens"] == 0
-    assert (totals["cache_calls"], totals["cache_read_tokens"]) == (0, 0)
-    assert totals["reasoning_tokens"] == 0
+    assert (totals["cache_read_tokens"], totals["reasoning_tokens"]) == (7, 4)
 
 
 @pytest.mark.asyncio

@@ -491,8 +491,6 @@ async def test_a_run_row_sums_its_steps_tools_and_requests(
             "reasoning_tokens": 0,
             "cache_read_tokens": 6,
             "cache_write_tokens": 0,
-            "cache_input_tokens": 30,
-            "cache_calls": 1,
             "reported_nusd": 250_000_000,
             # b/model's 110 tokens at $1 per million.
             "estimated_nusd": 110_000,
@@ -511,8 +509,6 @@ async def test_a_run_row_sums_its_steps_tools_and_requests(
             "reasoning_tokens": 0,
             "cache_read_tokens": 0,
             "cache_write_tokens": 0,
-            "cache_input_tokens": 0,
-            "cache_calls": 0,
             "reported_nusd": 1_500_000_000,
             "estimated_nusd": 0,
             "unpriced_calls": 2,

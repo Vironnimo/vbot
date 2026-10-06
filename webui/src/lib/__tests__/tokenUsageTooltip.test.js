@@ -34,15 +34,11 @@ describe('contextUsageCardModel', () => {
         reasoning_tokens: 1400,
       },
       {
-        // Estimated input joins the totals; only cache-reporting turns form
-        // the hit rate.
+        // The hit rate divides by the input of every turn.
         input_tokens: 10000,
         output_tokens: 400,
-        cache_turns: 2,
-        cache_input_tokens: 4000,
         cache_read_tokens: 3000,
         cache_write_tokens: 500,
-        reasoning_turns: 1,
         reasoning_tokens: 90,
       },
       262144,
@@ -60,7 +56,7 @@ describe('contextUsageCardModel', () => {
         id: 'session',
         title: '',
         rows: [
-          `${label('cacheHitRate')}: 75%`,
+          `${label('cacheHitRate')}: 30%`,
           `${label('totalInput')}: 10,000`,
           `${label('totalOutput')}: 400`,
           `· ${label('reasoning')}: 90`,
@@ -81,7 +77,7 @@ describe('contextUsageCardModel', () => {
     ]);
   });
 
-  it('leaves out figures the Provider never reported instead of showing zero', () => {
+  it('counts figures the usage does not report as zero', () => {
     const card = contextUsageCardModel(
       { tokens: 900, estimated: true },
       {
@@ -90,14 +86,24 @@ describe('contextUsageCardModel', () => {
         output_tokens: 20,
         estimated: true,
       },
-      { input_tokens: 500, output_tokens: 20, cache_turns: 0 },
+      { input_tokens: 500, output_tokens: 20 },
       null,
     );
 
     expect(card.summary).toBe('900');
     expect(card.sections.map(rowsText)).toEqual([
-      [`${label('totalInput')}: 500`, `${label('totalOutput')}: 20`],
-      [`${label('input')}: 500`, `${label('output')}: 20`],
+      [
+        `${label('cacheHitRate')}: 0%`,
+        `${label('totalInput')}: 500`,
+        `${label('totalOutput')}: 20`,
+      ],
+      [
+        `${label('input')}: 500`,
+        `· ${label('cacheRead')}: 0 (0%)`,
+        `· ${label('cacheWrite')}: 0`,
+        `· ${label('uncached')}: 500`,
+        `${label('output')}: 20`,
+      ],
     ]);
   });
 
@@ -117,8 +123,6 @@ describe('formatTokenUsageTooltip', () => {
       {
         input_tokens: 3000,
         output_tokens: 150,
-        cache_turns: 2,
-        cache_input_tokens: 3000,
         cache_read_tokens: 2400,
       },
       200000,
@@ -135,6 +139,7 @@ describe('formatTokenUsageTooltip', () => {
         label('lastTurn'),
         `${label('input')}: 1,000`,
         `  · ${label('cacheRead')}: 800 (80%)`,
+        `  · ${label('cacheWrite')}: 0`,
         `  · ${label('uncached')}: 200`,
         `${label('output')}: 50`,
       ].join('\n'),

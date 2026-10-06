@@ -81,14 +81,6 @@ CALL_TABLE_DEFINITION = """(
     PRIMARY KEY (session_key, seq)
 ) WITHOUT ROWID"""
 
-# Rules over call rows aliased ``c``: Reasoning counts only for a measured
-# output with a valid reported breakdown; cache fields count only for a
-# measured prompt that reported them.
-REASONING_SQL = (
-    "(c.output_estimated = 0 AND c.output_tokens IS NOT NULL AND c.reasoning_tokens IS NOT NULL)"
-)
-CACHE_SQL = "(c.input_estimated = 0 AND c.input_tokens IS NOT NULL AND c.has_cache = 1)"
-
 COST_UNPRICED = 0
 COST_PROVIDER = 1
 COST_CATALOG = 2

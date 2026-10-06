@@ -131,13 +131,10 @@ async def test_measured_usage_reaches_the_answer_the_run_end_and_the_usage_recor
         assert completed["status"] == "completed"
         assert completed["timing"]["duration_ms"] >= 0
         assert completed["session_usage"] == {
-            "cache_turns": 1,
-            "cache_input_tokens": 1000,
             "input_tokens": 1000,
             "output_tokens": 40,
             "cache_read_tokens": 700,
             "cache_write_tokens": 200,
-            "reasoning_turns": 1,
             "reasoning_tokens": 25,
         }
         assert completed["context_usage"] == {
@@ -241,12 +238,11 @@ async def test_unusable_provider_input_is_estimated_and_measured_output_kept(
     completed = _run_completed(runtime)
     # Session totals include the estimated input.
     assert completed["session_usage"] == {
-        "cache_turns": 0,
-        "cache_input_tokens": 0,
         "input_tokens": estimated_input,
         "output_tokens": 2572,
         "cache_read_tokens": 0,
         "cache_write_tokens": 0,
+        "reasoning_tokens": 0,
     }
     assert completed["context_usage"] == {
         "tokens": estimated_input + _hello_tokens(),

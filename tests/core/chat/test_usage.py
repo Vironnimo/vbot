@@ -24,10 +24,9 @@ def _assistant(usage: JsonObject | None) -> ChatMessage:
 NO_TURNS = {
     "input_tokens": 0,
     "output_tokens": 0,
-    "cache_turns": 0,
-    "cache_input_tokens": 0,
     "cache_read_tokens": 0,
     "cache_write_tokens": 0,
+    "reasoning_tokens": 0,
 }
 
 
@@ -36,6 +35,8 @@ NO_TURNS = {
     [
         ([], NO_TURNS),
         (
+            # Every turn counts: estimated counters join the totals, and a
+            # counter a turn does not report counts as zero.
             [
                 ChatMessage.user(content="hello"),
                 _assistant(
@@ -47,48 +48,7 @@ NO_TURNS = {
                         "reasoning_tokens": 30,
                     }
                 ),
-                _assistant({"input_tokens": 2000, "output_tokens": 150, "cache_read_tokens": 1900}),
-            ],
-            {
-                "input_tokens": 3000,
-                "output_tokens": 200,
-                "cache_turns": 2,
-                "cache_input_tokens": 3000,
-                "cache_read_tokens": 2700,
-                "cache_write_tokens": 100,
-                "reasoning_turns": 1,
-                "reasoning_tokens": 30,
-            },
-        ),
-        (
-            # Reported zeros count as cache and reasoning turns; absent fields
-            # do not, and a turn without cache data stays out of the cache input.
-            [
-                _assistant(
-                    {
-                        "input_tokens": 100,
-                        "output_tokens": 20,
-                        "cache_read_tokens": 0,
-                        "reasoning_tokens": 0,
-                    }
-                ),
                 _assistant({"input_tokens": 500, "output_tokens": 5}),
-            ],
-            {
-                **NO_TURNS,
-                "input_tokens": 600,
-                "output_tokens": 25,
-                "cache_turns": 1,
-                "cache_input_tokens": 100,
-                "reasoning_turns": 1,
-                "reasoning_tokens": 0,
-            },
-        ),
-        (
-            # Estimated counters join the totals but never the cache or
-            # reasoning figures.
-            [
-                _assistant({"input_tokens": 1000, "output_tokens": 10}),
                 _assistant(
                     {
                         "input_tokens": 9000,
@@ -100,22 +60,13 @@ NO_TURNS = {
                         "estimated": True,
                     }
                 ),
-                _assistant(
-                    {
-                        "input_tokens": 400,
-                        "input_tokens_estimated": True,
-                        "output_tokens": 30,
-                        "reasoning_tokens": 20,
-                        "estimated": True,
-                    }
-                ),
             ],
             {
-                **NO_TURNS,
-                "input_tokens": 10_400,
-                "output_tokens": 130,
-                "reasoning_turns": 1,
-                "reasoning_tokens": 20,
+                "input_tokens": 10_500,
+                "output_tokens": 145,
+                "cache_read_tokens": 1300,
+                "cache_write_tokens": 100,
+                "reasoning_tokens": 80,
             },
         ),
         (
@@ -132,16 +83,10 @@ NO_TURNS = {
                     }
                 ),
             ],
-            {**NO_TURNS, "cache_turns": 1},
+            NO_TURNS,
         ),
     ],
-    ids=[
-        "empty",
-        "field-by-field",
-        "reported-zeros",
-        "estimated-counters",
-        "junk-ignored",
-    ],
+    ids=["empty", "every-turn-counts", "junk-ignored"],
 )
 def test_session_usage_totals(messages: list[ChatMessage], totals: JsonObject) -> None:
     assert aggregate_session_usage(messages) == totals

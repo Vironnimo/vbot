@@ -207,7 +207,7 @@ def test_status_reports_the_identity_sessions_agent_model_and_cache() -> None:
     assert f"Run created at: {STATUS_PLACEHOLDER}" in reply
     assert "Context usage: 1234 / 200000" in reply
     assert "Last request cache: read 800 / 1234 (64.8% hit), write 100" in reply
-    assert "Session cache: read 800 / 1234 (64.8% hit), write 100, turns 1" in reply
+    assert "Session cache: read 800 / 1234 (64.8% hit), write 100" in reply
     assert "Current time:" in reply
 
 
@@ -384,7 +384,7 @@ def test_status_text_without_data_shows_placeholders() -> None:
     assert "Current time:" in text
 
 
-def test_status_text_marks_an_estimated_context_and_omits_its_cache() -> None:
+def test_status_text_marks_an_estimated_context_and_counts_its_cache_as_zero() -> None:
     messages = [
         ChatMessage.user("Status check", timestamp=_SESSION_STARTED),
         _cached_turn(
@@ -410,8 +410,8 @@ def test_status_text_marks_an_estimated_context_and_omits_its_cache() -> None:
     assert "Temperature: 0.3" in text
     assert f"Activity: {STATUS_PLACEHOLDER}" in text
     assert "Context usage: ~987 / 200000" in text
-    assert f"Last request cache: {STATUS_PLACEHOLDER}" in text
-    assert f"Session cache: {STATUS_PLACEHOLDER}" in text
+    assert "Last request cache: read 0 / 987 (0.0% hit), write 0" in text
+    assert "Session cache: read 0 / 987 (0.0% hit), write 0" in text
     assert "Session started:" in text
     assert "Turn count: 1" in text
     assert "App uptime:" in text
@@ -432,7 +432,7 @@ def test_status_text_marks_an_estimated_context_and_omits_its_cache() -> None:
 
 
 def _two_cached_turns() -> list[ChatMessage]:
-    """One fully measured turn, then one whose Provider omitted only the output."""
+    """One fully measured turn, then one with an estimated output."""
     return [
         ChatMessage.user("Status check", timestamp=_SESSION_STARTED),
         _cached_turn(
@@ -464,24 +464,19 @@ def _two_cached_turns() -> list[ChatMessage]:
             None,
             "500 / 200000",
             "read 200 / 500 (40.0% hit), write 0",
-            "read 1000 / 1500 (66.7% hit), write 100, turns 2",
+            "read 1000 / 1500 (66.7% hit), write 100",
         ),
         (
-            {
-                "input_tokens": 500,
-                "input_tokens_estimated": True,
-                "output_tokens": 8,
-                "estimated": True,
-                "cache_read_tokens": 200,
-            },
+            # Estimated input counts like any other; absent cache counters are zero.
+            {"input_tokens": 500, "input_tokens_estimated": True, "estimated": True},
             "~500 / 200000",
-            STATUS_PLACEHOLDER,
-            "read 800 / 1000 (80.0% hit), write 100, turns 1",
+            "read 0 / 500 (0.0% hit), write 0",
+            "read 800 / 1500 (53.3% hit), write 100",
         ),
     ],
-    ids=["output-estimated", "input-estimated"],
+    ids=["cache-reported", "cache-absent"],
 )
-def test_status_text_cache_figures_count_only_measured_input(
+def test_status_text_cache_figures_count_every_turn(
     latest_usage: dict[str, Any] | None, context: str, latest_cache: str, session_cache: str
 ) -> None:
     messages = _two_cached_turns()
@@ -509,7 +504,7 @@ def test_status_session_facts_match_the_persisted_status_snapshot(tmp_path: Path
     sessions.close()
 
     assert persisted.session_usage == in_memory.session_usage
-    assert persisted.session_usage["cache_input_tokens"] == 1500
+    assert persisted.session_usage["input_tokens"] == 1500
     assert persisted.latest_assistant_usage == in_memory.latest_assistant_usage
 
 
