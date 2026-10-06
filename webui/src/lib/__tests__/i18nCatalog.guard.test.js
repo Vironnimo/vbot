@@ -31,6 +31,15 @@ const REPO_DIR = join(
 // - A `tOr` key is completed with a server-sent code and renders its fallback
 //   when the code has no entry. Every entry the pattern matches counts as used.
 const COMPOSED_KEYS = {
+  // Project Source kinds and Profile translation states from the Projects contract.
+  'projects.sources.*': ['agents', 'skills', 'instructions'],
+  'projects.status.*': ['ready', 'limited', 'needs_attention'],
+  'projects.translation.*': [
+    'applied',
+    'translated',
+    'not_supported',
+    'overridden',
+  ],
   // agentForm.js AGENT_MEMORY_PROMPT_MODES
   'agents.form.memoryPromptModeOption.*': ['off', 'agent', 'agent_user'],
   // agentForm.js THINKING_EFFORT_OPTIONS without the inherit option ''

@@ -798,3 +798,9 @@ reasons yet. Evidence comes from eight analyzed Runs (Sessions, 2026-09); counts
 | Post result: `It reaches {names} in full because it addresses or answers them.` and `{count} participants receive only its opening lines and the call to read the rest.` | Confirms who was addressed, so an unintended or missed mention is visible right after posting (F4). |
 | Post header: `to {names}` and delivered `[{count} more characters not shown. Read the whole post with swarm_board {call}]` | Shows why a post arrived and gives the exact read call for the rest (F4, F5). |
 | `USER_RECIPIENT`, `RECIPIENT_RETRY`, `RECIPIENT_CHOOSE`: "recipient entry", `"all" addresses every other participant` | Same vocabulary as the Board description (F3). |
+
+## Repository Profiles
+
+A formation can select `repository_profile`, a Team Agent id from the selected Project's catalog. The host prepares it through Projects before canonical temporary binding creation; replays and Resume keep existing snapshots. Owner selection bounds capabilities; unsupported restrictions fail closed. Model mappings resolve wishes and inherit retains the formation Model. Editor and prompt inspection share host preparation.
+
+Agent-facing operation guidance: `repository_profile (a Team agent id from the selected Project in catalog; omit to use participant settings)` names the observable catalog and omission behavior, preventing invented ids and unnecessary selections. Skill preload framing belongs to `skills.md` -> Agent-facing text.

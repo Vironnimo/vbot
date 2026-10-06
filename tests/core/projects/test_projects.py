@@ -39,7 +39,8 @@ def test_build_project_fills_every_optional_field_with_its_default(tmp_path: Pat
         "default_temperature": None,
         "default_thinking_effort": None,
         # No default_top_p: an unset one is not written.
-        "source_format": "opencode",
+        "sources": [],
+        "model_mappings": {},
         "auto_load": [],
         "allowed_tools": list(PROJECT_DEFAULT_ALLOWED_TOOLS),
         "skills_bundled_enabled": [],
@@ -62,7 +63,11 @@ def test_build_project_keeps_every_explicit_field_through_a_round_trip(tmp_path:
         "default_temperature": 0.0,
         "default_thinking_effort": "",
         "default_top_p": 0.0,
-        "source_format": "claude",
+        "sources": [
+            {"id": "claude.agents", "enabled": True},
+            {"id": "claude.skills", "enabled": True},
+        ],
+        "model_mappings": {},
         "auto_load": ["AGENTS.md"],
         "allowed_tools": ["read", "grep"],
         "skills_bundled_enabled": ["frontend-design"],
@@ -151,10 +156,10 @@ def test_explicit_empty_tool_whitelist_is_kept(tmp_path: Path) -> None:
         pytest.param(
             "vbot",
             None,
-            {"source_format": "cursor"},
+            {"sources": "cursor"},
             ProjectError,
-            "source_format must be one of: opencode, claude",
-            id="source-format",
+            "sources must be an ordered list.",
+            id="sources",
         ),
         pytest.param(
             "vbot",
@@ -334,7 +339,8 @@ def test_project_from_dict_defaults_optional_fields() -> None:
         "default_temperature": None,
         "default_thinking_effort": None,
         # An old project.json without these fields loads at their defaults.
-        "source_format": "opencode",
+        "sources": [],
+        "model_mappings": {},
         "auto_load": [],
         "skills_bundled_enabled": [],
         "skills_global_enabled": [],

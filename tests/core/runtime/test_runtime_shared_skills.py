@@ -20,7 +20,6 @@ from core.skills.skills import (
     SKILL_ORIGIN_AGENT,
     SKILL_ORIGIN_GLOBAL,
     SkillRegistry,
-    project_skills_dir,
 )
 from core.tools import ToolContext
 from core.utils.config import Config
@@ -441,13 +440,13 @@ def test_manager_lists_inspects_and_evaluates_each_same_name_package(
         runtime.agents.create("two", "Two")
         repo = tmp_path / "repo"
         repo.mkdir()
-        project = runtime.projects.create("p", "P", repo)
+        runtime.projects.create("p", "P", repo)
         write_skill(runtime.global_skills_dir, "inventory-helper", "Dependency.")
         extra = tmp_path / "external"
         packages: tuple[tuple[Path, str, dict[str, object]], ...] = (
             (runtime.global_skills_dir, "global", {"env": "VBOT_TEST_GLOBAL_REQUIRED"}),
             (
-                project_skills_dir(repo, project.source_format),
+                repo / ".opencode" / "skills",
                 "project",
                 {
                     "all": [{"skill": "inventory-helper"}],
@@ -567,7 +566,7 @@ def test_manager_projects_each_agents_effective_skill_access(
     _write_skill_requiring(runtime.global_skills_dir, "needs-alpha", "alpha")
     runtime.reload_skills()
     repo = tmp_path / "repo"
-    write_skill(project_skills_dir(repo, "opencode"), "project-playbook", "Project playbook.")
+    write_skill(repo / ".opencode" / "skills", "project-playbook", "Project playbook.")
     runtime.projects.create("p", "P", repo)
     runtime.projects.update("p", skills_global_enabled=["zeta"])
     for name in ("main-private", "main-off", "zeta"):
@@ -652,7 +651,7 @@ def test_manager_projects_each_projects_skill_pool(runtime: Runtime, tmp_path: P
     )
     runtime.reload_skills()
     repo = tmp_path / "repo"
-    project_root = project_skills_dir(repo, "opencode")
+    project_root = repo / ".opencode" / "skills"
     for name in ("project-playbook", "muted", shadowed):
         write_skill(project_root, name, f"Project {name}.")
     runtime.projects.create("b-project", "Beta", repo)

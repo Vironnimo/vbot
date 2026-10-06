@@ -10,7 +10,7 @@ Read this reference when changing the persisted Project shape, Project Anchor li
 
 - Identity and location: stable `project_id`, normalized repository `cwd`, optional user-facing `display_name` (missing, `null`, or blank falls back to `project_id`), and optional `created_at` / `updated_at` (missing values default to the current UTC timestamp).
 - Runtime defaults: `default_agent`, `default_model`, `default_temperature`, `default_thinking_effort`, and `default_top_p` (written only when set).
-- Discovery: one `source_format` (`opencode` or `claude`) and `auto_load`.
+- Discovery: ordered `sources` entries (`id`, `enabled`, optional repository-relative `agent_paths` patterns), `model_mappings` from repository wishes to usable vBot Models, and `auto_load`. Unknown nested fields survive the guarded writer.
 - Tool ceiling: `allowed_tools`, seeded at creation from `PROJECT_DEFAULT_ALLOWED_TOOLS` (`read`, `apply_patch`, `search_files`, `bash`, `terminal`, `web_fetch`, `web_search`, `status`, `subagent`, and `skill`). A Project requires explicit names: the all-tools wildcard `"*"` is invalid. A persisted name that is not currently a registered Project Tool remains loadable so disabled Extension permissions survive; `project.show` reports it as `UNAVAILABLE_TOOL`, and the WebUI keeps it visible and removable.
 - Skill ceiling: `skills_bundled_enabled`, `skills_global_enabled`, and `skills_project_disabled`.
 - Per-Agent overrides: an `overrides` object keyed by Project Agent id. Supported override fields are exactly `model`, `temperature`, `top_p`, `thinking_effort`, `compaction_policy`, and `tool_access`. Tool access uses the same strict policy shape as Identity Agents; an override's `allowed` and explicit `granted` names must be subsets of the Project Tool Whitelist.
@@ -22,6 +22,8 @@ persisted ceilings; an unavailable retired entry remains removable and grants
 nothing.
 
 Project defaults are fallback inputs shared by its Agents. Overrides target one current Team member and take precedence during resolution; they are not edits to the repository Agent file.
+
+The named additive `project_sources_v1` backfill keeps Generation 1. An existing Project gets its previous Agent and Skill Sources first and active; other already-present Sources start off. `agent_paths` preserves its previous top-level Markdown locations, so newly supported JSON and nested definitions do not change its Team on open. Those definitions remain visible in the scan report; removing the Source's path selection explicitly adopts them. The retired raw field is read only by this initializer and preserved as an unknown field. Loading does not rewrite the file. The next guarded mutation or explicit Source refresh persists the list. Agent ids, overrides and Session addresses do not change; later discoveries use the normal collision-safe activation rule.
 
 ## Anchor Layout
 
@@ -53,7 +55,7 @@ The repository at `cwd` remains outside the anchor and is never mutated. Changin
 
 `server/rpc/project_methods.py` exposes `project.add`, `project.list`, `project.show`, `project.set`, `project.set_override`, `project.clear_override`, `project.rm`, and `project.detect`.
 
-- `project.add` validates that `cwd` exists, detects a source format when none is supplied, persists the Project, and returns the Project with its scan result.
+- `project.add` validates that `cwd` exists, detects all supported Sources when no Source list is supplied, persists the Project, and returns the Project with its scan result.
 - `project.list` with `include_scan: true` adds each Project's `scan` (Team with `effective` values plus the report including unavailable-Tool findings, no Skills) from the resolver's cached scan, scanning only a Project not yet cached; a Project whose scan fails with `OSError` lists `scan: null`. Chat's Agent picker uses it to list every Team without a `project.show` per Project (`test_project_methods.py`).
 - `project.show` reloads Skills, invalidates relevant caches, rescans the repository, and returns current Project plus scan information. Pickers issue one show per Project, so `project.list` and `project.show` read Anchors, reload Skills (`reload_skills_async`), and scan on worker threads (`project` pool), never on the Event Loop; only cache invalidation runs on the loop.
 - `project.add`, `project.set`, `project.set_override` and `project.clear_override` validate, write the Anchor and scan on the same `project` pool, since a write may wait for a data snapshot; they run one at a time (`serialized_mutation`, as they did on the Event Loop), and cache invalidation and resource publication stay on the loop (`test_project_methods.py`).

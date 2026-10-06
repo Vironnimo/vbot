@@ -5,8 +5,6 @@ import {
   createProjectAddForm,
   buildAddProjectPayload,
   normalizeDetectResult,
-  presentFormats,
-  shouldSuggestClaudeMd,
   buildRePointPayload,
   normalizeProject,
 } from './presentation.js';
@@ -98,17 +96,9 @@ export function createProjectDialogs({
     state.addError = '';
     state.statusMessage = '';
     try {
-      const formats = state.addDetect ? presentFormats(state.addDetect) : [];
       const payload = buildAddProjectPayload({
         cwd: state.addForm.cwd,
         display_name: state.addForm.display_name,
-        source_format: formats.length > 1 ? state.addForm.source_format : '',
-        auto_load:
-          state.addDetect &&
-          shouldSuggestClaudeMd(state.addDetect) &&
-          state.addForm.include_claude_md
-            ? ['CLAUDE.md']
-            : [],
       });
       const result = await operations.addProject(payload);
       if (!isActive()) {

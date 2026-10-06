@@ -520,6 +520,36 @@
                   onValueChange={(value) => selectModel(row, value)}
                 />
               </FormField>
+              <FormField
+                controlId={`swarm-repository-profile-${index}`}
+                label={t('swarm.profile.repositoryProfile')}
+              >
+                <Dropdown
+                  id={`swarm-repository-profile-${index}`}
+                  value={row.repository_profile ?? ''}
+                  options={[
+                    {
+                      value: '',
+                      label: t('swarm.profile.repositoryProfileNone'),
+                    },
+                    ...(
+                      (catalog.projects ?? []).find(
+                        (project) =>
+                          project.id === draft.working_directory.project_id,
+                      )?.agent_profiles ?? []
+                    ).map((agent) => ({
+                      value: agent.id,
+                      label: `${agent.name} (${agent.source})`,
+                    })),
+                  ]}
+                  ariaLabel={t('swarm.profile.repositoryProfile')}
+                  disabled={busy || draft.working_directory.kind !== 'project'}
+                  onValueChange={(value) => {
+                    if (value) row.repository_profile = value;
+                    else delete row.repository_profile;
+                  }}
+                />
+              </FormField>
               <div class="formation-settings">
                 <FormField
                   controlId={`swarm-effort-${index}`}

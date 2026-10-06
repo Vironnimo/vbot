@@ -105,7 +105,7 @@ class FakeAgents:
             return SimpleNamespace(id=agent_id, builtin="librarian")
         if agent_id not in self._agent_ids:
             raise AgentNotFoundError(f"Agent not found: {agent_id}")
-        return SimpleNamespace(id=agent_id)
+        return SimpleNamespace(id=agent_id, model="fixture/model")
 
     def list(self) -> list[SimpleNamespace]:
         return [SimpleNamespace(id=agent_id, name=agent_id) for agent_id in sorted(self._agent_ids)]
@@ -134,6 +134,9 @@ class FakeAgentResolver:
     def require_configured(self, model: str) -> None:
         if model in self.unusable_models:
             raise ModelConfigurationError(f"model is not usable in this instance: {model}")
+
+    async def resolve_delegated_agent_async(self, project_id, agent_id, *, caller_model):
+        return await self.resolve_agent_async(project_id, agent_id)
 
     async def resolve_agent_async(
         self, project_id: str | None, agent_id: str, *, session_id: str | None = None

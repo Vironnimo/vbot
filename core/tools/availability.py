@@ -58,7 +58,8 @@ class ToolAccess:
 
     ``fixed`` makes a ``selected`` policy the whole Tool set: no Tool activates
     through the memory mode, a Session grant or by following another Tool. The
-    Agent owner sets it for a built-in Agent; it is never persisted.
+    Agent owner sets it for a built-in Agent or a translated repository Profile.
+    It is absent from public policy JSON and retained in temporary bindings.
     """
 
     mode: str = TOOL_ACCESS_MODE_ALL
@@ -164,7 +165,11 @@ def resolve_tool_access(
             name
             for name in tool_access.allowed
             if name in catalog
-            and _activation_kind(catalog[name]) == TOOL_ACTIVATION_CONFIGURABLE
+            and (
+                _activation_kind(catalog[name]) == TOOL_ACTIVATION_CONFIGURABLE
+                or tool_access.fixed
+                and _activation_kind(catalog[name]) == TOOL_ACTIVATION_FOLLOWS
+            )
             and _constraints_allow(catalog[name], workspace=workspace)
         }
 
@@ -177,7 +182,9 @@ def resolve_tool_access(
     requested_grants = set(session_tool_grants)
     for name, tool in catalog.items():
         activation = _activation_kind(tool)
-        if tool_access.fixed or not _constraints_allow(tool, workspace=workspace):
+        if not _constraints_allow(tool, workspace=workspace):
+            continue
+        if tool_access.fixed and name not in tool_access.allowed:
             continue
         memory_activated = activation == TOOL_ACTIVATION_MEMORY_MODE and memory_tool_enabled(
             memory_prompt_mode

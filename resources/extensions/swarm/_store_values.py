@@ -227,7 +227,15 @@ def _validate_profile(value: Mapping[str, Any]) -> Json:
 def _formation(value: object) -> Json:
     if not isinstance(value, dict):
         raise SwarmStoreError("invalid_arguments", field="participants")
-    allowed = {"model", "count", "thinking_effort", "temperature", "top_p", "fallback_models"}
+    allowed = {
+        "model",
+        "count",
+        "thinking_effort",
+        "temperature",
+        "top_p",
+        "fallback_models",
+        "repository_profile",
+    }
     if set(value) - allowed or set(value) < {"model", "count"}:
         raise SwarmStoreError("invalid_arguments", field="participants")
     model = value.get("model")
@@ -235,6 +243,11 @@ def _formation(value: object) -> Json:
     if not isinstance(model, str) or not model.strip() or type(count) is not int or count < 1:
         raise SwarmStoreError("invalid_arguments", field="participants")
     formation: Json = {"model": model, "count": count}
+    if "repository_profile" in value:
+        reference = value["repository_profile"]
+        if not isinstance(reference, str) or not reference.strip():
+            raise SwarmStoreError("invalid_arguments", field="repository_profile")
+        formation["repository_profile"] = reference
     if "thinking_effort" in value:
         try:
             formation["thinking_effort"] = validate_thinking_effort(

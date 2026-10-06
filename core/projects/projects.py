@@ -34,7 +34,6 @@ from core.config_validation import (
     load_validated_json_file,
     validate_json_file,
     validate_non_empty_string,
-    validate_optional_allowed_string,
     validate_optional_string,
     validate_optional_string_list,
     validate_required_fields,
@@ -45,6 +44,7 @@ from core.json_documents import (
     JsonDocumentFormat,
     JsonShape,
     json_document,
+    json_list,
     json_map,
     json_object,
     strip_unknown_fields,
@@ -52,9 +52,9 @@ from core.json_documents import (
     warn_unknown_fields,
 )
 from core.projects.paths import normalize_cwd
+from core.projects.sources.catalog import detect_sources, normalize_sources
+from core.projects.sources.profile import SourceSelection
 from core.settings import (
-    DEFAULT_PROJECT_SOURCE_FORMAT,
-    PROJECT_SOURCE_FORMATS,
     PROJECT_TOOL_ALLOWLIST_WILDCARD,
     SettingsValidationError,
     is_valid_project_id,
@@ -140,7 +140,8 @@ _PROJECT_CONFIG_FIELDS = frozenset(
         "skills_bundled_enabled",
         "skills_global_enabled",
         "skills_project_disabled",
-        "source_format",
+        "sources",
+        "model_mappings",
         "updated_at",
     }
 )
@@ -162,6 +163,7 @@ def project_shape() -> JsonShape:
             # An override holding only fields this vBot does not model loads as an
             # empty entry and keeps those fields on write; an entry left with no
             # field at all is not written.
+            "sources": json_list(json_object({"id", "enabled", "agent_paths"}), key="id"),
             "overrides": json_map(
                 json_object(
                     OVERRIDE_FIELDS,
@@ -171,7 +173,7 @@ def project_shape() -> JsonShape:
                     },
                 ),
                 drop_empty=True,
-            )
+            ),
         },
     )
 
@@ -230,6 +232,12 @@ def load_validated_project_json(project_path: str | Path) -> JsonObject:
         data = load_validated_json_file(project_path, validate_project_data, missing_ok=False)
     except JsonConfigValidationError as error:
         raise ProjectError(str(error)) from error
+    from core.projects.source_migration import project_sources_v1
+
+    try:
+        data = project_sources_v1(data)
+    except ValueError as error:
+        raise ProjectError(str(error)) from error
     return cast("JsonObject", strip_unknown_fields(data, project_shape()))
 
 
@@ -261,12 +269,27 @@ def validate_project_data(data: Any) -> list[JsonDiagnostic]:
         data.get("default_thinking_effort"),
         allow_none=True,
     )
-    validate_optional_allowed_string(
-        diagnostics,
-        "$.source_format",
-        data.get("source_format"),
-        frozenset(PROJECT_SOURCE_FORMATS),
-    )
+    if "sources" in data:
+        try:
+            entries = data["sources"]
+            if isinstance(entries, list):
+                entries = [
+                    {
+                        key: value
+                        for key, value in item.items()
+                        if key in {"id", "enabled", "agent_paths"}
+                    }
+                    if isinstance(item, dict)
+                    else item
+                    for item in entries
+                ]
+            normalize_sources(entries)
+        except ValueError as error:
+            add_error(diagnostics, "$.sources", str(error))
+    try:
+        _validate_model_mappings(data.get("model_mappings", {}))
+    except ProjectError as error:
+        add_error(diagnostics, "$.model_mappings", str(error))
     _validate_auto_load_list(diagnostics, "$.auto_load", data.get("auto_load"))
     validate_required_fields(diagnostics, "$", data, frozenset({"allowed_tools"}))
     validate_optional_string_list(diagnostics, "$.allowed_tools", data.get("allowed_tools"))
@@ -430,11 +453,8 @@ class Project:
     default_temperature: float | None
     default_thinking_effort: str | None
     default_top_p: float | None
-    # The project's single source format (GLOSSARY → Source Format): which
-    # coding-agent ecosystem its Team agents and project skills come from
-    # (".opencode/" vs ".claude/"). Exactly one per project — every consumer
-    # (scan, skills, autocomplete, prompt preview) sees only this format's set.
-    source_format: str
+    sources: list[SourceSelection]
+    model_mappings: dict[str, str]
     auto_load: list[str]
     # The Project Tool Whitelist — the hard ceiling for this project's config
     # agents (GLOSSARY → Project Tool Whitelist). ``build_project`` defaults it to
@@ -458,6 +478,20 @@ class Project:
     # not model: it overrides nothing, and the writer keeps those fields on disk.
     overrides: dict[str, dict[str, Any]]
 
+    @property
+    def skill_roots(self) -> list[Path]:
+        from core.projects.sources.catalog import skill_roots
+
+        return skill_roots(Path(self.cwd), self.sources)
+
+    @property
+    def instruction_files(self) -> list[str]:
+        from core.projects.sources.catalog import instruction_files
+
+        return list(
+            dict.fromkeys([*self.auto_load, *instruction_files(Path(self.cwd), self.sources)])
+        )
+
     def to_dict(self) -> dict[str, Any]:
         """Return the JSON-serializable mapping persisted to ``project.json``.
 
@@ -472,7 +506,8 @@ class Project:
             "default_model": self.default_model,
             "default_temperature": self.default_temperature,
             "default_thinking_effort": self.default_thinking_effort,
-            "source_format": self.source_format,
+            "sources": [source.to_dict() for source in self.sources],
+            "model_mappings": dict(self.model_mappings),
             "auto_load": list(self.auto_load),
             "allowed_tools": list(self.allowed_tools),
             "skills_bundled_enabled": list(self.skills_bundled_enabled),
@@ -499,7 +534,8 @@ def build_project(
     default_temperature: float | None = DEFAULT_DEFAULT_TEMPERATURE,
     default_thinking_effort: str | None = DEFAULT_DEFAULT_THINKING_EFFORT,
     default_top_p: float | None = DEFAULT_DEFAULT_TOP_P,
-    source_format: str = DEFAULT_PROJECT_SOURCE_FORMAT,
+    sources: list[dict[str, Any]] | None = None,
+    model_mappings: dict[str, str] | None = None,
     auto_load: list[str] | None = None,
     allowed_tools: list[str] | None = None,
     skills_bundled_enabled: list[str] | None = None,
@@ -526,7 +562,21 @@ def build_project(
     validated_default_temperature = _validate_default_temperature(default_temperature)
     validated_default_thinking_effort = _validate_default_thinking_effort(default_thinking_effort)
     validated_default_top_p = _validate_default_top_p(default_top_p)
-    validated_source_format = _validate_source_format(source_format)
+    try:
+        validated_sources = normalize_sources(
+            sources
+            if sources is not None
+            else [
+                item.to_dict()
+                for item in (
+                    SourceSelection(item.definition.id)
+                    for item in detect_sources(Path(validated_cwd))
+                )
+            ]
+        )
+    except ValueError as error:
+        raise ProjectError(str(error)) from error
+    validated_mappings = _validate_model_mappings({} if model_mappings is None else model_mappings)
     validated_auto_load = _validate_auto_load(auto_load)
     validated_allowed_tools = _validate_allowed_tools(allowed_tools)
     validated_skills_bundled = _validate_string_list(
@@ -548,7 +598,8 @@ def build_project(
         default_temperature=validated_default_temperature,
         default_thinking_effort=validated_default_thinking_effort,
         default_top_p=validated_default_top_p,
-        source_format=validated_source_format,
+        sources=validated_sources,
+        model_mappings=validated_mappings,
         auto_load=validated_auto_load,
         allowed_tools=validated_allowed_tools,
         skills_bundled_enabled=validated_skills_bundled,
@@ -580,7 +631,8 @@ def project_from_dict(data: dict[str, Any]) -> Project:
             "default_thinking_effort", DEFAULT_DEFAULT_THINKING_EFFORT
         ),
         default_top_p=data.get("default_top_p", DEFAULT_DEFAULT_TOP_P),
-        source_format=data.get("source_format") or DEFAULT_PROJECT_SOURCE_FORMAT,
+        sources=normalize_sources(data.get("sources", [])),
+        model_mappings=dict(data.get("model_mappings", {})),
         auto_load=list(cast("list[str]", data.get("auto_load") or [])),
         allowed_tools=_allowed_tools_from_data(data.get("allowed_tools")),
         skills_bundled_enabled=list(cast("list[str]", data.get("skills_bundled_enabled") or [])),
@@ -667,12 +719,16 @@ def _validate_default_thinking_effort(value: Any) -> str | None:
         raise ProjectError(str(exc)) from exc
 
 
-def _validate_source_format(value: Any) -> str:
-    """Validate the project source format against the canonical vocabulary."""
-    if value not in PROJECT_SOURCE_FORMATS:
-        choices = ", ".join(PROJECT_SOURCE_FORMATS)
-        raise ProjectError(f"source_format must be one of: {choices}")
-    return cast("str", value)
+def _validate_model_mappings(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict) or any(
+        not isinstance(key, str)
+        or not key.strip()
+        or not isinstance(model, str)
+        or not model.strip()
+        for key, model in value.items()
+    ):
+        raise ProjectError("model_mappings must map non-empty Model wishes to vBot Model ids")
+    return dict(value)
 
 
 def _validate_auto_load(auto_load: list[str] | None) -> list[str]:

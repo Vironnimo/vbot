@@ -685,6 +685,26 @@ class Runtime:
     def set_skill_package_disabled(self, entry_id: str, *, disabled: bool) -> dict[str, Any]:
         return self._skill_operations().set_package_disabled(entry_id, disabled=disabled)
 
+    def profile_skill_content(self, project_id: str, name: str, allowed: list[str]) -> str | None:
+        from core.skills.skill_validator import split_skill_document
+        from core.tools.skill import SKILL_BASE_DIR_MARKER
+
+        registry = self.skills_for(project_id)
+        try:
+            metadata = registry.get(name)
+            if name not in {skill.name for skill in registry.filter_allowed(allowed)}:
+                return None
+            with metadata.path.open("rb") as stream:
+                content = stream.read(128 * 1024 + 1)
+            if len(content) > 128 * 1024:
+                return None
+            body = split_skill_document(content.decode("utf-8-sig"))[1]
+            directory = metadata.path.parent.as_posix()
+            body = body.replace(SKILL_BASE_DIR_MARKER, directory)
+            return f"Skill directory: {directory}\n\n{body}"
+        except KeyError, OSError, ValueError:
+            return None
+
     def project_skill_names(self, project_id: str | None) -> frozenset[str]:
         return self._skill_operations().project_skill_names(project_id)
 

@@ -356,6 +356,12 @@
                 ></span>
                 <span class="projects-team-name">
                   {member.display_name}
+                  <StatusChip
+                    variant={member.status === 'ready' ? 'neutral' : 'warning'}
+                    >{member.source} · {t(
+                      `projects.status.${member.status}`,
+                    )}</StatusChip
+                  >
                 </span>
                 <span class="projects-team-summary">
                   {summary.value}
@@ -610,6 +616,20 @@
                     />
                   </div>
 
+                  <div class="projects-member-block">
+                    <h4>{t('projects.team.translation')}</h4>
+                    {#if member.unavailable_reason}<p>
+                        {member.unavailable_reason}
+                      </p>{/if}
+                    <ul>
+                      {#each member.translations as entry, index (`${entry.setting}:${index}`)}<li
+                        >
+                          <code>{entry.setting}</code>: {t(
+                            `projects.translation.${entry.status}`,
+                          )} — {entry.detail}
+                        </li>{/each}
+                    </ul>
+                  </div>
                   <div class="projects-member-block projects-member-facts">
                     <p class="projects-tools-line">
                       {agentTargetPolicyText(member)}
@@ -631,7 +651,7 @@
                       <p class="projects-source-line">
                         {t('projects.team.sourceFile', {
                           path: member.source_path,
-                          format: member.source_format,
+                          format: member.source,
                         })}
                       </p>
                     {/if}
@@ -641,6 +661,17 @@
             </li>
           {/each}
         </ul>
+        {#if projectsState.shadowedTeam.length}
+          <details>
+            <summary>{t('projects.team.shadowed')}</summary>
+            <ul>
+              {#each projectsState.shadowedTeam as member (`${member.source_path}:${member.agent_id}`)}<li
+                >
+                  {member.display_name} · {member.source} · {member.source_path}
+                </li>{/each}
+            </ul>
+          </details>
+        {/if}
       {/if}
     </div>
   </section>

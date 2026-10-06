@@ -58,6 +58,7 @@ describe('ProjectsView list and selection', () => {
     ).toBeTruthy();
     expectSectionOrder([
       'Repository',
+      'Sources',
       'Agent defaults',
       'Team',
       'Auto-load files',
@@ -475,6 +476,70 @@ describe('ProjectsView list and selection', () => {
 
 describe('ProjectsView Project settings', () => {
   const view = setupProjectsViewSuite();
+
+  it('keeps migrated Agent paths on a Source switch and expands them explicitly', async () => {
+    const sources = [
+      {
+        id: 'claude.agents',
+        enabled: true,
+        agent_paths: ['.claude/agents/*.md'],
+      },
+      { id: 'shared.skills', enabled: true },
+    ];
+    const scan = cleanScan({
+      sources: [
+        {
+          id: 'claude.agents',
+          ecosystem: 'claude',
+          kind: 'agents',
+          detected: true,
+          agents: 1,
+          skills: 0,
+        },
+        {
+          id: 'shared.skills',
+          ecosystem: 'shared',
+          kind: 'skills',
+          detected: true,
+          agents: 0,
+          skills: 1,
+        },
+      ],
+    });
+    let record = serveProject({ sources }, scan);
+    setProjectMock.mockImplementation(async (_id, changes) => {
+      record = { ...record, ...changes };
+      return { project: record, scan };
+    });
+    view.mount();
+    await selectDemo();
+    await wait(0);
+    toggleByAriaLabel('Toggle Claude Code · Agents').click();
+    flushSync();
+    expect(
+      toggleByAriaLabel('Toggle Claude Code · Agents').getAttribute(
+        'aria-checked',
+      ),
+    ).toBe('false');
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-save-demo"]'),
+    );
+    buttonByTestId('project-save-demo').click();
+    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
+    expect(setProjectMock).toHaveBeenLastCalledWith('demo', {
+      sources: [{ ...sources[0], enabled: false }, sources[1]],
+    });
+    buttonWithTextContent('Include all detected definitions').click();
+    flushSync();
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-save-demo"]'),
+    );
+    buttonByTestId('project-save-demo').click();
+    await waitForCondition(() => setProjectMock.mock.calls.length === 2);
+    expect(setProjectMock).toHaveBeenLastCalledWith('demo', {
+      sources: [{ id: 'claude.agents', enabled: false }, sources[1]],
+    });
+  });
 
   it('offers Save only for unsaved edits and saves only the changed fields', async () => {
     serveProject({

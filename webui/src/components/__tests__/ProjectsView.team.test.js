@@ -53,7 +53,9 @@ describe('ProjectsView Team', () => {
             agent_id: 'builder',
             display_name: 'Builder',
             description: 'Builds things',
-            source_format: 'opencode',
+            source: 'opencode',
+            sources: [],
+            model_mappings: {},
             source_path: '.opencode/agents/builder.md',
             effective: effective(
               { value: 'openai/gpt-mini', source: 'override' },

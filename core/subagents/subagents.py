@@ -428,6 +428,8 @@ class SubAgentCoordinator:
             target_project_id,
             model=overrides.get("model"),
             temporary_parent_binding=temporary_parent,
+            caller=context,
+            overrides=overrides,
         )
         if failure is not None:
             error = failure["error"]
@@ -1066,6 +1068,8 @@ async def _validate_target_agent(
     *,
     model: str | None = None,
     temporary_parent_binding: TemporarySessionBinding | None = None,
+    caller: ToolContext | None = None,
+    overrides: dict[str, Any] | None = None,
 ) -> JsonObject | None:
     """Validate that the target resolves under its addressed Project and can run.
 
@@ -1081,7 +1085,35 @@ async def _validate_target_agent(
                 generation_id=temporary_parent_binding.generation_id,
             )
         else:
-            target = await runtime.agent_resolver.resolve_agent_async(project_id, target_agent_id)
+            if (
+                model is None
+                and project_id is not None
+                and caller is not None
+                and overrides is not None
+            ):
+                parent_address = SessionAddress(
+                    caller.project_id, caller.agent_id, caller.session_id
+                )
+                binding = await runtime.chat_sessions.run_async(
+                    runtime.chat_sessions.temporary_binding, parent_address
+                )
+                if binding is not None:
+                    parent = await runtime.agent_resolver.resolve_temporary_agent_async(
+                        parent_address, generation_id=binding.generation_id, session=parent_address
+                    )
+                else:
+                    parent = await runtime.agent_resolver.resolve_agent_async(
+                        caller.project_id, caller.agent_id, session_id=caller.session_id
+                    )
+                target = await runtime.agent_resolver.resolve_delegated_agent_async(
+                    project_id, target_agent_id, caller_model=parent.model
+                )
+                if getattr(target, "model_inherit", False):
+                    overrides["model"] = parent.model
+            else:
+                target = await runtime.agent_resolver.resolve_agent_async(
+                    project_id, target_agent_id
+                )
             if is_librarian(target):
                 # The Librarian is no delegation target: it looks like no Agent at all.
                 raise ResolutionAgentNotFoundError(f"Agent not found: {target_agent_id}")

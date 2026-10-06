@@ -57,10 +57,10 @@ A function vBot offers its Agents, with a name, description and JSON Schema para
 An Identity Agent's own home for its identity and Memory files (`SOUL.md`, `USER.md`, `MEMORY.md`) (`agent.md`). Not a Project, the directory a Session's file and shell work uses, or a Session owner; a Workspace path that equals a Project path does not select that Project.
 
 ## Project
-A registered repository that Agents work in, with its own instructions, Skills, defaults and Team; runtime Project state lives in vBot's data directory, not in the repository (`projects.md`). Not the repository directory itself, an Agent, or a Workspace.
+A registered repository that Agents work in, with ordered repository Sources for instructions, Skills and its Team, plus defaults and capability ceilings; runtime Project state lives in vBot's data directory, not in the repository (`projects.md`). Not the repository directory itself, an Agent, or a Workspace.
 
 ## Team
-A Project's Agents, discovered from the agent definitions in its repository (`projects.md`, `projects/scanning.md`). Membership belongs to the Project, not to vBot's stored Agents; loading Project Context does not make an Identity Agent a member.
+A Project's addressable Agents combined from active repository Sources in priority order; the first definition of each name wins and later definitions are shadowed (`projects.md`, `projects/scanning.md`). Membership belongs to the Project, not to vBot's stored Agents; loading Project Context does not make an Identity Agent a member.
 
 ## Config Agent
 The runtime configuration vBot builds for a Team member from its repository definition, Project defaults and overrides (`projects/resolution.md`). It has no Workspace, Memory or stored identity of its own. Not an Identity Agent.

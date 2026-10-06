@@ -209,8 +209,10 @@ def _project_add_fields_from_args(args: argparse.Namespace) -> dict[str, Any]:
     if args.default_model is not None:
         fields["default_model"] = args.default_model
     _apply_project_default_knobs(args, fields)
-    if args.format is not None:
-        fields["source_format"] = args.format
+    if args.sources is not None:
+        fields["sources"] = args.sources
+    if args.model_mappings is not None:
+        fields["model_mappings"] = args.model_mappings
     if args.auto_load is not None:
         fields["auto_load"] = list(args.auto_load)
     _apply_project_capability_fields(args, fields)
@@ -232,8 +234,10 @@ def _project_set_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
     elif args.default_model is not None:
         changes["default_model"] = args.default_model
     _apply_project_default_knobs(args, changes)
-    if args.format is not None:
-        changes["source_format"] = args.format
+    if args.sources is not None:
+        changes["sources"] = args.sources
+    if args.model_mappings is not None:
+        changes["model_mappings"] = args.model_mappings
     if args.auto_load is not None:
         changes["auto_load"] = list(args.auto_load)
     _apply_project_capability_fields(args, changes)

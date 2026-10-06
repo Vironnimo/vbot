@@ -132,7 +132,8 @@ export function createProjectsController({
         display_name: state.editForm.display_name,
         default_agent: state.editForm.default_agent,
         default_model: state.editForm.default_model,
-        source_format: state.editForm.source_format,
+        sources: state.editForm.sources,
+        model_mappings: state.editForm.model_mappings,
         default_temperature: state.editForm.default_temperature,
         default_top_p: state.editForm.default_top_p,
         default_thinking_effort: state.editForm.default_thinking_effort,
@@ -153,6 +154,8 @@ export function createProjectsController({
     state.editError = '';
     state.activeTeam = [];
     state.activeReport = null;
+    state.activeSources = [];
+    state.shadowedTeam = [];
     state.activeScanSkills = emptyScanSkills();
     state.expandedMembers = {};
     state.overrideDrafts = {};
@@ -178,6 +181,8 @@ export function createProjectsController({
       ]),
     );
     state.activeTeam = projectTeam(scan);
+    state.activeSources = scan?.sources ?? [];
+    state.shadowedTeam = projectTeam({ team: scan?.shadowed ?? [] });
     state.activeReport = normalizeScanReport(scan?.report);
     state.activeScanSkills = normalizeScanSkills(scan);
     for (const member of state.activeTeam) {

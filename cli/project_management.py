@@ -45,7 +45,8 @@ PROJECT_SET_FLAGS = (
     "--clear-default-top-p",
     "--default-thinking-effort",
     "--clear-default-thinking-effort",
-    "--format",
+    "--sources",
+    "--model-mappings",
     "--auto-load",
     "--allowed-tools",
     "--enabled-bundled-skills",
@@ -235,7 +236,7 @@ def project_remove(
 
 
 def project_detect(instance: ServerInstance, cwd: str | None) -> CommandResult:
-    """Report source-format and context-file facts via `project.detect` RPC."""
+    """Report detected repository Sources via `project.detect` RPC."""
 
     params: dict[str, Any] = {} if cwd is None else {"cwd": cwd}
     payload = _rpc_call(instance, "project.detect", params)
@@ -251,22 +252,15 @@ def project_detect(instance: ServerInstance, cwd: str | None) -> CommandResult:
             instance=instance,
         )
     lines = [f"detected project facts for {target}:"]
-    formats = payload.data.get("formats")
-    if isinstance(formats, dict):
-        for format_key in sorted(formats):
-            presence = formats.get(format_key)
-            agents = skills = "?"
-            if isinstance(presence, dict):
-                agents = str(presence.get("agents", "?"))
-                skills = str(presence.get("skills", "?"))
-            lines.append(f"{format_key}: agents={agents} skills={skills}")
-    context_files = payload.data.get("context_files")
-    if isinstance(context_files, dict):
-        lines.append(f"AGENTS.md present: {_bool_text(context_files.get('agents_md'))}")
-        claude_md = context_files.get("claude_md")
+    for source in payload.data.get("sources", []):
+        if not isinstance(source, dict):
+            continue
         lines.append(
-            f"CLAUDE.md: {claude_md if isinstance(claude_md, str) and claude_md else 'none'}"
+            f"{source.get('id', '?')}: agents={source.get('agents', 0)} "
+            f"skills={source.get('skills', 0)} paths={_format_string_list(source.get('paths'))}"
         )
+        if source.get("problem"):
+            lines.append(f"  problem: {source['problem']}")
     return CommandResult(ok=True, message="\n".join(lines), instance=instance)
 
 
@@ -320,7 +314,7 @@ def _project_config_lines(project: object) -> list[str]:
         f"  default_temperature: {temperature}",
         f"  default_top_p: {top_p}",
         f"  default_thinking_effort: {thinking_effort}",
-        f"  format: {_string_or_default(project.get('source_format'), '-')}",
+        f"  sources: {len(project.get('sources', []))}",
         f"  auto_load: {_format_string_list(project.get('auto_load'))}",
     ]
     optional_fields = (
@@ -332,6 +326,15 @@ def _project_config_lines(project: object) -> list[str]:
     for field, label in optional_fields:
         if field in project:
             lines.append(f"  {label}: {_format_string_list(project.get(field))}")
+    for source in project.get("sources", []):
+        if isinstance(source, dict):
+            lines.append(
+                f"    source={source.get('id', '?')} enabled={_bool_text(source.get('enabled'))}"
+            )
+            if "agent_paths" in source:
+                lines.append(f"      agent_paths: {_format_string_list(source['agent_paths'])}")
+    if project.get("model_mappings"):
+        lines.append(f"  model_mappings: {_json_or_default(project['model_mappings'])}")
     return lines
 
 
@@ -341,6 +344,12 @@ def _scan_lines(scan: object) -> list[str]:
     lines: list[str] = []
     lines.extend(_team_lines(scan.get("team")))
     lines.extend(_report_lines(scan.get("report")))
+    for member in scan.get("shadowed", []):
+        if isinstance(member, dict):
+            lines.append(
+                f"  shadowed: {member.get('agent_id', '?')} source={member.get('source', '?')} "
+                f"path={member.get('source_path', '?')}"
+            )
     return lines
 
 
@@ -350,6 +359,15 @@ def _team_lines(team: object) -> list[str]:
     lines = ["  team:"]
     for member in team:
         lines.append(_team_member_line(member))
+        if isinstance(member, dict):
+            for translation in member.get("translations", []):
+                if isinstance(translation, dict):
+                    lines.append(
+                        f"      {translation.get('setting', '?')}: "
+                        f"{translation.get('status', '?')} - {translation.get('detail', '')}"
+                    )
+            if member.get("unavailable_reason"):
+                lines.append(f"      unavailable: {member['unavailable_reason']}")
     return lines
 
 
@@ -360,6 +378,8 @@ def _team_member_line(member: object) -> str:
     model = _string_or_default(member.get("model"), "-")
     description = _string_or_default(member.get("description"), "-")
     line = f"    - {agent_id} model={model} description={description}"
+    if "source" in member:
+        line += f" source={member['source']} status={member.get('status', '?')}"
     if "tools" in member:
         line = f"{line} tools={_format_string_list(member.get('tools'))}"
     if "denied_tools" in member:

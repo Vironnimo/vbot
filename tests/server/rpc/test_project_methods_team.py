@@ -8,9 +8,10 @@ from typing import Any
 
 import pytest
 
-from core.projects.scanners.opencode import OPENCODE_AGENTS_SUBPATH
 from tests.server.rpc.project_methods_test_support import _make_state, _write_agent
 from tests.server.rpc_test_support import JsonObject, rpc_error, rpc_result
+
+OPENCODE_AGENTS_SUBPATH = (".opencode", "agents")
 
 
 def _member(result: JsonObject, agent_id: str = "builder") -> JsonObject:

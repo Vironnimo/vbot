@@ -173,7 +173,7 @@ class ConfigAgent:
     """A run-time agent synthesized from a scanned project profile + a model.
 
     Field set mirrors the store :class:`Agent` so it satisfies
-    :class:`RuntimeAgent`; the values come from the :class:`ScannedAgent` profile
+    :class:`RuntimeAgent`; the values come from the :class:`AgentProfile` profile
     (verbatim ``body`` becomes the system prompt later) plus the model resolved
     through the chain and the project-derived ``tool_access``/``allowed_skills``.
     It carries the scanned ``body`` and
@@ -190,7 +190,7 @@ class ConfigAgent:
     tools: dict[str, Any]
     body: str
     source_path: Path
-    source_format: str
+    source: str
     # Resolved through the chain (agent → project default → global default);
     # ``temperature``, ``top_p`` and ``thinking_effort`` carry the first tier that
     # delivered, or ``None`` when all tiers fell through → the provider default.
@@ -206,6 +206,8 @@ class ConfigAgent:
     created_at: str = _CONFIG_AGENT_TIMESTAMP
     updated_at: str = _CONFIG_AGENT_TIMESTAMP
     compaction_policy: dict[str, Any] | None = None
+    preload_skills: tuple[str, ...] = ()
+    model_inherit: bool = False
 
 
 class AgentResolutionError(ValueError):

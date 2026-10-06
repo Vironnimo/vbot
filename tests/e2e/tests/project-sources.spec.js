@@ -64,7 +64,7 @@ async function startProjectChat(page, agentName) {
   return ensureEmptyChat(chat);
 }
 
-test("a Project keeps Source Formats isolated from scan through Provider context", async ({
+test("a Project mixes Sources and switches them independently through Provider context", async ({
   page,
 }) => {
   test.setTimeout(60_000);
@@ -86,18 +86,6 @@ test("a Project keeps Source Formats isolated from scan through Provider context
       .getByRole("textbox", { name: "Display name" })
       .fill(PROJECT_NAME);
 
-    const sourceFormats = addDialog.getByRole("radiogroup", {
-      name: "Source format",
-    });
-    await expect(
-      sourceFormats.getByRole("radio", { name: /OpenCode.*1 agent.*1 skill/ }),
-    ).toBeVisible();
-    await expect(
-      sourceFormats.getByRole("radio", {
-        name: /Claude Code.*1 agent.*1 skill/,
-      }),
-    ).toBeVisible();
-    await sourceFormats.getByRole("radio", { name: /OpenCode/ }).click();
     await addDialog.getByRole("button", { name: "Add project" }).click();
 
     await expect(
@@ -108,9 +96,9 @@ test("a Project keeps Source Formats isolated from scan through Provider context
       projects.getByRole("heading", { level: 2, name: PROJECT_NAME }),
     ).toBeVisible();
     await expect(teamMember(projects, "open-e2e-worker")).toBeVisible();
-    await expect(teamMember(projects, "claude-e2e-reviewer")).toHaveCount(0);
+    await expect(teamMember(projects, "claude-e2e-reviewer")).toBeVisible();
     await expect(projectSkill(projects, "open-e2e-skill")).toBeChecked();
-    await expect(projectSkill(projects, "claude-e2e-skill")).toHaveCount(0);
+    await expect(projectSkill(projects, "claude-e2e-skill")).toBeChecked();
 
     let chat = await startProjectChat(page, "open-e2e-worker");
     await sendChatMessage(
@@ -131,19 +119,13 @@ test("a Project keeps Source Formats isolated from scan through Provider context
       .getByRole("complementary", { name: "Projects" })
       .getByRole("button", { name: new RegExp(`^${PROJECT_NAME}(?:\\s|$)`) })
       .click();
-    const sourceFormat = projects
-      .getByRole("region", { name: "Repository" })
-      .getByRole("button", { exact: true, name: "Source format" });
-    await sourceFormat.click();
-    await page
-      .getByRole("option", { exact: true, name: "Claude Code" })
-      .click();
-    await expect(sourceFormat).toContainText("Claude Code");
+    const sources = projects.getByRole("region", { name: "Sources" });
+    await sources.getByRole("switch", { exact: true, name: "Toggle OpenCode · Agents" }).click();
 
     await expect(teamMember(projects, "claude-e2e-reviewer")).toBeVisible();
     await expect(teamMember(projects, "open-e2e-worker")).toHaveCount(0);
     await expect(projectSkill(projects, "claude-e2e-skill")).toBeChecked();
-    await expect(projectSkill(projects, "open-e2e-skill")).toHaveCount(0);
+    await expect(projectSkill(projects, "open-e2e-skill")).toBeChecked();
 
     chat = await startProjectChat(page, "claude-e2e-reviewer");
     await sendChatMessage(

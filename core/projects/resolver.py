@@ -45,12 +45,15 @@ from core.projects._runtime_agent import (
 )
 from core.projects.projects import ProjectError, ProjectNotFoundError
 from core.projects.scan_report import FindingType, ScanFinding
-from core.projects.scanners.base import (
-    DetectorRegistration,
-    ScannedAgent,
+from core.projects.sources import (
+    AgentAdapter,
+    AgentProfile,
     ScanResult,
+    Translation,
+    read_profile,
     scan_project,
 )
+from core.projects.sources._translation import rules_allow
 from core.sessions import AGENT_DEFAULT_PROJECT
 from core.settings import AgentDefaults
 from core.utils.workers import BoundedWorkerPool
@@ -132,12 +135,16 @@ class SessionMetadataStore(Protocol):
     async def run_async(self, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any: ...
 
 
+def _profile_skill_allowed(profile: AgentProfile, name: str) -> bool:
+    return rules_allow(profile.skill_rules, name)
+
+
 def _no_project_skills(_project_id: str) -> frozenset[str]:
     """Default project-skill probe: a project with no own skills (bundled-only)."""
     return frozenset()
 
 
-def _bad_model_finding(member: ScannedAgent) -> ScanFinding:
+def _bad_model_finding(member: AgentProfile) -> ScanFinding:
     """Build a ``BAD_MODEL`` finding for a scanned agent's unconfigured model."""
     return ScanFinding(
         type=FindingType.BAD_MODEL,
@@ -203,8 +210,11 @@ class AgentResolver:
         model_checker: ModelConfigurationChecker,
         global_agent_defaults: GlobalAgentDefaultsProvider,
         *,
-        detector_registry: list[DetectorRegistration] | None = None,
+        source_adapters: dict[str, AgentAdapter] | None = None,
         project_skill_names: ProjectSkillNamesProvider | None = None,
+        profile_skill_content: Callable[[str, str, list[str]], str | None] | None = None,
+        skill_pool_names: ProjectSkillNamesProvider | None = None,
+        tool_names: Callable[[], tuple[str, ...]] | None = None,
         temporary_agents: Any | None = None,
         sessions: SessionMetadataStore | None = None,
     ) -> None:
@@ -214,11 +224,16 @@ class AgentResolver:
         self._global_agent_defaults = global_agent_defaults
         # Captured once; ``scan_project`` falls back to its own default registry
         # when this is ``None``, so tests can inject a custom registry.
-        self._detector_registry = detector_registry
+        self._source_adapters = source_adapters
         # Project-skill probe for config-agent skill resolution; defaults to "no
         # project skills" so a resolver built without it degrades to bundled-only
         # rather than failing (the runtime always wires the real probe).
         self._project_skill_names = project_skill_names or _no_project_skills
+        self._profile_skill_content = profile_skill_content or (
+            lambda project_id, name, allowed: None
+        )
+        self._skill_pool_names = skill_pool_names or self._project_skill_names
+        self._tool_names = tool_names or (lambda: ())
         self._temporary_agents = temporary_agents
         # Without Sessions (tests of the chains alone) no Session has overrides.
         self._sessions = sessions
@@ -328,6 +343,16 @@ class AgentResolver:
             if subject_id is not None:
                 agent = await _RESOLUTION_WORKERS.run(self._bind_skill_subject, agent, subject_id)
         return agent
+
+    async def resolve_delegated_agent_async(
+        self, project_id: str | None, agent_id: str, *, caller_model: str
+    ) -> RuntimeAgent:
+        """Resolve `inherit` before requiring a default Model, for delegation only."""
+        if project_id is None:
+            return await self.resolve_agent_async(None, agent_id)
+        return await _RESOLUTION_WORKERS.run(
+            self._resolve_config_agent, project_id, agent_id, caller_model
+        )
 
     async def resolve_temporary_agent_async(
         self,
@@ -584,12 +609,94 @@ class AgentResolver:
         )
         return result
 
+    def _preload_profile(
+        self, project_id: str, profile: AgentProfile, allowed: list[str]
+    ) -> AgentProfile:
+        from core.skills.skills import format_skill_activation_context
+
+        body = [profile.body]
+        for name in profile.preload_skills:
+            if name not in allowed and "*" not in allowed:
+                continue
+            content = self._profile_skill_content(project_id, name, allowed)
+            if content is not None:
+                body.append(format_skill_activation_context(name, content))
+        return replace(profile, body="\n\n".join(part for part in body if part))
+
+    def prepare_temporary_config(
+        self, config: TemporaryAgentConfig, project_id: str | None
+    ) -> TemporaryAgentConfig:
+        """Resolve a repository Profile within the owner's selection, for a snapshot."""
+        if config.repository_profile is None:
+            return config
+        if project_id is None:
+            raise AgentResolutionError("A repository profile requires a Project.")
+        project = self._load_project(project_id)
+        profile = self._read_agent_fresh(project, config.repository_profile)
+        owner_tools = (
+            config.tool_access.allowed
+            if config.tool_access.mode == "selected"
+            else (self._tool_names() if config.tool_access.mode == "all" else ())
+        )
+        owner_tools = tuple(name for name in owner_tools if name not in config.tool_access.denied)
+        # Team and temporary Agents use the same translation; the ceiling belongs
+        # to the Project for a Team member and to its owner for a participant.
+        access = _project_agent_tool_access(
+            replace(project, allowed_tools=list(owner_tools)), profile
+        )
+        access = replace(
+            access,
+            allowed=tuple(name for name in access.allowed if name not in config.tool_access.denied),
+            denied=tuple(sorted(set(access.denied) | set(config.tool_access.denied))),
+            granted=tuple(name for name in config.tool_access.granted if name in access.allowed),
+            fixed=access.fixed or config.tool_access.fixed or config.tool_access.mode == "none",
+        )
+        selected_skills = (
+            sorted(self._skill_pool_names(project_id))
+            if "*" in config.allowed_skills and profile.skill_rules
+            else config.allowed_skills
+        )
+        skills = [name for name in selected_skills if _profile_skill_allowed(profile, name)]
+        profile = self._preload_profile(project_id, profile, skills)
+        overrides = project.overrides.get(profile.agent_id, {})
+        override_model = overrides.get("model")
+        if override_model and self.is_model_configured(override_model):
+            model = override_model
+        elif profile.model in {"", "inherit"}:
+            model = config.model
+        else:
+            model = self._resolve_model_or_raise(
+                profile, project, AgentDefaults.from_dict(self._global_agent_defaults())
+            )
+        self.require_model_configured(model)
+        return replace(
+            config,
+            model=model,
+            tool_access=access,
+            allowed_skills=skills,
+            instructions="\n\n".join(part for part in (profile.body, config.instructions) if part),
+            temperature=overrides.get(
+                "temperature",
+                profile.temperature if profile.temperature is not None else config.temperature,
+            ),
+            top_p=overrides.get(
+                "top_p", profile.top_p if profile.top_p is not None else config.top_p
+            ),
+            thinking_effort=overrides.get(
+                "thinking_effort",
+                profile.thinking_effort
+                if profile.thinking_effort is not None
+                else config.thinking_effort,
+            ),
+        )
+
     def preview_temporary_agent(
         self, config: TemporaryAgentConfig, project_id: str | None = None
     ) -> TemporaryAgent:
         """Resolve editor configuration like a started one, without creating a Session."""
         from core.agents.temporary import TemporaryAgent
 
+        config = self.prepare_temporary_config(config, project_id)
         agent = TemporaryAgent(
             id="preview",
             name=config.name,
@@ -660,7 +767,9 @@ class AgentResolver:
         except AgentError as error:
             raise _identity_resolution_error(error) from error
 
-    def _resolve_config_agent(self, project_id: str, agent_id: str) -> ConfigAgent:
+    def _resolve_config_agent(
+        self, project_id: str, agent_id: str, inherit_model: str | None = None
+    ) -> ConfigAgent:
         project = self._load_project(project_id)
         team = self._project_team(project)
         if agent_id not in {member.agent_id for member in team}:
@@ -676,7 +785,15 @@ class AgentResolver:
         # Read the global tier once and feed it to all three chains, so one resolve
         # never reads the settings file three times (model + temp + thinking).
         global_defaults = AgentDefaults.from_dict(self._global_agent_defaults())
-        resolved_model = self._resolve_model_or_raise(scanned, project, global_defaults)
+        if (
+            scanned.model == "inherit"
+            and inherit_model
+            and not project.overrides.get(agent_id, {}).get("model")
+        ):
+            self.require_model_configured(inherit_model)
+            resolved_model = inherit_model
+        else:
+            resolved_model = self._resolve_model_or_raise(scanned, project, global_defaults)
         resolved_temperature = _resolve_sampling("temperature", scanned, project, global_defaults)
         resolved_top_p = _resolve_sampling("top_p", scanned, project, global_defaults)
         resolved_thinking_effort = _resolve_thinking_effort(scanned, project, global_defaults)
@@ -684,9 +801,11 @@ class AgentResolver:
         allowed_skills = effective_project_allowed_skills(
             project, self._project_skill_names(project_id)
         )
+        allowed_skills = [name for name in allowed_skills if _profile_skill_allowed(scanned, name)]
         allowed_agents = _effective_allowed_agents(scanned, team)
         tools = _project_agent_tools(tool_access, allowed_agents)
-        return _build_config_agent(
+        scanned = self._preload_profile(project_id, scanned, allowed_skills)
+        result = _build_config_agent(
             scanned,
             resolved_model,
             resolved_temperature,
@@ -697,6 +816,11 @@ class AgentResolver:
             project.overrides.get(agent_id, {}).get("compaction_policy"),
             project_id=project_id,
             resolved_top_p=resolved_top_p,
+        )
+        return replace(
+            result,
+            model_inherit=scanned.model == "inherit"
+            and not project.overrides.get(agent_id, {}).get("model"),
         )
 
     def effective_config(
@@ -740,14 +864,14 @@ class AgentResolver:
                     effective[name] = {"value": value, "source": "session"}
         return effective
 
-    def effective_tools_for_member(self, project: Project, member: ScannedAgent) -> dict[str, Any]:
+    def effective_tools_for_member(self, project: Project, member: AgentProfile) -> dict[str, Any]:
         """Project repository-owned Tool settings for one current Team member."""
         tool_access = _project_agent_tool_access(project, member)
         allowed_agents = _effective_allowed_agents(member, self._project_team(project))
         return _project_agent_tools(tool_access, allowed_agents)
 
     def effective_config_for_member(
-        self, project: Project, scanned: ScannedAgent
+        self, project: Project, scanned: AgentProfile
     ) -> dict[str, dict[str, Any]]:
         """Compute a config agent's effective config from an already-scanned member.
 
@@ -792,7 +916,7 @@ class AgentResolver:
         return self._config_effective_from_scanned(project, scanned, global_defaults)
 
     def _config_effective_from_scanned(
-        self, project: Project, scanned: ScannedAgent, global_defaults: AgentDefaults
+        self, project: Project, scanned: AgentProfile, global_defaults: AgentDefaults
     ) -> dict[str, dict[str, Any]]:
         return {
             "model": self._config_model_source(project, scanned, global_defaults),
@@ -805,7 +929,7 @@ class AgentResolver:
         }
 
     def _config_model_source(
-        self, project: Project, scanned: ScannedAgent, global_defaults: AgentDefaults
+        self, project: Project, scanned: AgentProfile, global_defaults: AgentDefaults
     ) -> dict[str, Any]:
         """Return the effective model + source, gated by ``is_configured`` per tier.
 
@@ -816,7 +940,7 @@ class AgentResolver:
         """
         tiers = (
             ("override", _overridden_model(project, scanned.agent_id)),
-            ("agent", scanned.model),
+            ("agent", self._profile_model(project, scanned)),
             ("project_default", project.default_model),
             ("global_default", str(global_defaults.model or "")),
         )
@@ -838,15 +962,16 @@ class AgentResolver:
         """
         result = scan_project(
             _project_root(project),
-            registry=self._detector_registry,
-            source_format=project.source_format,
+            adapters=self._source_adapters,
+            sources=project.sources,
         )
-        model_findings = self._model_findings(result.team)
+        translated = [self.translated_profile(project, member) for member in result.team]
+        model_findings = self._model_findings(project, translated)
         pointer_findings = self._pointer_findings(project, result.team)
         report = result.report.with_findings(model_findings + pointer_findings)
-        return ScanResult(team=result.team, report=report)
+        return replace(result, team=translated, report=report)
 
-    def team_for_project(self, project_id: str) -> list[ScannedAgent]:
+    def team_for_project(self, project_id: str) -> list[AgentProfile]:
         """Return the current cached Team snapshot for one registered Project."""
         return list(self._project_team(self._load_project(project_id)))
 
@@ -904,7 +1029,7 @@ class AgentResolver:
         # result is cached so the next turn does not re-walk the repo.
         return self.rescan_project(project)
 
-    def _project_team(self, project: Project) -> list[ScannedAgent]:
+    def _project_team(self, project: Project) -> list[AgentProfile]:
         return self.cached_scan(project).team
 
     def _load_project(self, project_id: str) -> Project:
@@ -915,7 +1040,7 @@ class AgentResolver:
         except ProjectError as error:
             raise AgentResolutionError(str(error)) from error
 
-    def _read_agent_fresh(self, project: Project, agent_id: str) -> ScannedAgent:
+    def _read_agent_fresh(self, project: Project, agent_id: str) -> AgentProfile:
         """Re-scan the repo and return this agent's current scanned profile.
 
         Reads the live config from disk so a repo edit is reflected on the next
@@ -923,20 +1048,26 @@ class AgentResolver:
         (deleted file), that is an "agent no longer exists" error rather than a
         silent fall-back to the stale cached profile.
         """
-        fresh = scan_project(
-            _project_root(project),
-            registry=self._detector_registry,
-            source_format=project.source_format,
-        )
-        for member in fresh.team:
-            if member.agent_id == agent_id:
-                return member
+        try:
+            member = read_profile(
+                _project_root(project), project.sources, agent_id, self._source_adapters
+            )
+        except (OSError, ValueError) as error:
+            raise AgentResolutionError(
+                f"Cannot read repository Agent '{agent_id}': {error}"
+            ) from error
+        if member is not None:
+            if member.unavailable_reason:
+                raise AgentResolutionError(
+                    f"Repository Agent '{agent_id}' is unavailable: {member.unavailable_reason}"
+                )
+            return member
         raise ResolutionAgentNotFoundError(
             f"agent '{agent_id}' is no longer present in project '{project.project_id}'"
         )
 
     def _resolve_model_or_raise(
-        self, scanned: ScannedAgent, project: Project, global_defaults: AgentDefaults
+        self, scanned: AgentProfile, project: Project, global_defaults: AgentDefaults
     ) -> str:
         """Run the model chain and return the first usable model, or raise.
 
@@ -948,32 +1079,124 @@ class AgentResolver:
         rather than erroring (same ``is_configured`` gate as every tier). Falling all
         the way through is a clear "cannot run" error.
         """
-        overridden = _overridden_model(project, scanned.agent_id)
-        global_model = global_defaults.model or ""
-        for candidate in (overridden, scanned.model, project.default_model, global_model):
-            if candidate and self._model_checker.is_configured(candidate):
-                return candidate
+        effective = self._config_model_source(project, scanned, global_defaults)
+        if effective["value"]:
+            return str(effective["value"])
         raise AgentResolutionError(
-            f"agent '{scanned.agent_id}' has no usable model: override {overridden!r}, "
-            f"declared {scanned.model!r}, project default {project.default_model!r}, "
-            f"and the global default are all missing or unconfigured"
+            f"Agent '{scanned.agent_id}' has no usable Model; "
+            "set a Project default or a vBot override."
         )
 
-    def _model_findings(self, team: list[ScannedAgent]) -> list[ScanFinding]:
-        """Build the scan's ``BAD_MODEL`` findings for a whole Team.
+    def _profile_model(self, project: Project, scanned: AgentProfile) -> str:
+        if scanned.model == "inherit":
+            return ""
+        return project.model_mappings.get(scanned.model, scanned.model)
 
-        One finding per agent whose **declared** model is non-empty yet not
-        configured here. An agent with no declared model is not a finding (it
-        legitimately inherits the project/global default); only a declared model
-        that cannot run is unclean under what exists.
-        """
+    def translated_profile(self, project: Project, scanned: AgentProfile) -> AgentProfile:
+        reports = list(scanned.translations)
+        mapped = self._profile_model(project, scanned)
+        if scanned.model == "inherit":
+            reports = [entry for entry in reports if entry.setting != "model"]
+            reports.append(
+                Translation(
+                    "model",
+                    "translated",
+                    "Uses the delegating caller's Model, otherwise the Project or global default.",
+                )
+            )
+        elif mapped != scanned.model and self._model_checker.is_configured(mapped):
+            reports = [entry for entry in reports if entry.setting != "model"]
+            reports.append(
+                Translation(
+                    "model",
+                    "translated",
+                    f"Model wish '{scanned.model}' maps to '{mapped}'.",
+                )
+            )
+        if (
+            scanned.model
+            and scanned.model != "inherit"
+            and not self._model_checker.is_configured(mapped)
+        ):
+            reports = [entry for entry in reports if entry.setting != "model"]
+            reports.append(
+                Translation(
+                    "model",
+                    "not_supported",
+                    f"Model wish '{scanned.model}' is unmapped or unusable; "
+                    "the Project or global default is used.",
+                )
+            )
+        for setting in project.overrides.get(scanned.agent_id, {}):
+            reports = [
+                replace(
+                    entry,
+                    status="overridden",
+                    detail="The explicit vBot Tool policy replaces this imported restriction.",
+                )
+                if setting == "tool_access"
+                and entry.setting not in {"permission.skill", "permission.task"}
+                and entry.setting.startswith(
+                    (
+                        "tools",
+                        "permission",
+                        "disallowedTools",
+                        "hooks",
+                        "sandbox",
+                        "approval",
+                        "isolation",
+                        "readonly",
+                    )
+                )
+                else entry
+                for entry in reports
+                if entry.setting != setting
+                and not (
+                    setting == "thinking_effort"
+                    and entry.setting in {"effort", "model_reasoning_effort"}
+                )
+            ]
+            reports.append(
+                Translation(
+                    setting,
+                    "overridden",
+                    "The explicit vBot override replaces this repository setting.",
+                )
+            )
+        allowed = effective_project_allowed_skills(
+            project, self._project_skill_names(project.project_id)
+        )
+        for name in scanned.preload_skills:
+            if name not in allowed or not _profile_skill_allowed(scanned, name):
+                reports.append(
+                    Translation(
+                        f"skills.{name}",
+                        "not_supported",
+                        "Skill is absent or outside the Project Skill selection; it cannot"
+                        " be preloaded.",
+                    )
+                )
+            elif self._profile_skill_content(project.project_id, name, allowed) is None:
+                reports.append(
+                    Translation(
+                        f"skills.{name}",
+                        "not_supported",
+                        "Skill is unavailable or unreadable; it cannot be preloaded.",
+                    )
+                )
+        return replace(scanned, translations=tuple(reports))
+
+    def _model_findings(self, project: Project, team: list[AgentProfile]) -> list[ScanFinding]:
         return [
             _bad_model_finding(member)
             for member in team
-            if member.model and not self._model_checker.is_configured(member.model)
+            if member.model
+            and member.model != "inherit"
+            and not self._model_checker.is_configured(_overridden_model(project, member.agent_id))
+            and not self._model_checker.is_configured(self._profile_model(project, member))
         ]
 
-    def _pointer_findings(self, project: Project, team: list[ScannedAgent]) -> list[ScanFinding]:
+    def _pointer_findings(self, project: Project, team: list[AgentProfile]) -> list[ScanFinding]:
         """Build the scan's ``ORPHAN`` findings for the project's anchor pointers.
 
         The pointers live in the anchor, not the repo, so the structural scan
@@ -1042,7 +1265,7 @@ def resolve_prompt_project(
         project = projects.get(working_project_id)
         if not Path(project.cwd).is_dir():
             raise ProjectError(f"Project repository is unavailable: {project.cwd}")
-        return project
+        return replace(project, auto_load=project.instruction_files)
     return None
 
 
@@ -1098,8 +1321,11 @@ def build_agent_resolver(
     provider_credentials: ProviderCredentialResolverProtocol,
     global_agent_defaults: Callable[[], Mapping[str, Any]],
     *,
-    detector_registry: list[DetectorRegistration] | None = None,
+    source_adapters: dict[str, AgentAdapter] | None = None,
     project_skill_names: ProjectSkillNamesProvider | None = None,
+    profile_skill_content: Callable[[str, str, list[str]], str | None] | None = None,
+    skill_pool_names: ProjectSkillNamesProvider | None = None,
+    tool_names: Callable[[], tuple[str, ...]] | None = None,
     temporary_agents: Any | None = None,
     sessions: SessionMetadataStore | None = None,
 ) -> AgentResolver:
@@ -1118,8 +1344,11 @@ def build_agent_resolver(
         projects,
         checker,
         global_agent_defaults,
-        detector_registry=detector_registry,
+        source_adapters=source_adapters,
         project_skill_names=project_skill_names,
+        profile_skill_content=profile_skill_content,
+        skill_pool_names=skill_pool_names,
+        tool_names=tool_names,
         temporary_agents=temporary_agents,
         sessions=sessions,
     )

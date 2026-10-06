@@ -10,12 +10,13 @@ from typing import Any
 import pytest
 
 from core.projects.resolver import AgentResolutionError
-from core.projects.scanners.opencode import OPENCODE_AGENTS_SUBPATH
 from core.runs import Run, RunAdmission
 from core.sessions import ArchiveEntryFilter, SessionAddress
 from server.rpc.errors import RPC_ERROR_PROJECT_BUSY
 from tests.server.rpc.project_methods_test_support import _make_repo, _make_state
 from tests.server.rpc_test_support import call, rpc_error, rpc_result
+
+OPENCODE_AGENTS_SUBPATH = (".opencode", "agents")
 
 
 async def _vbot_state(

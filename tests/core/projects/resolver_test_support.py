@@ -23,8 +23,9 @@ from core.projects.resolver import (
     resolve_skill_scope,
 )
 from core.projects.scan_report import FindingType
-from core.projects.scanners.opencode import OPENCODE_AGENTS_SUBPATH
 from core.projects.store import ProjectStore
+
+OPENCODE_AGENTS_SUBPATH = (".opencode", "agents")
 
 
 @dataclass(frozen=True)

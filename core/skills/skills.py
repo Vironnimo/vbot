@@ -2,8 +2,7 @@
 
 Skills are reusable playbooks stored under ``<data_dir>/skills/<skill-id>/``.
 Each skill directory must contain a ``SKILL.md`` file. Project-owned skills live
-in the skill directory of the project's declared source format
-(:data:`PROJECT_SKILLS_SUBPATHS`). The registry reads the Markdown front matter
+in the ordered source roots supplied by Projects. The registry reads the Markdown front matter
 for prompt metadata and filters it through an agent's ``allowed_skills`` list.
 """
 
@@ -40,16 +39,6 @@ from core.utils.logging import get_logger
 WILDCARD_ALLOWLIST = "*"
 SKILL_FILENAME = "SKILL.md"
 RESOURCE_DIRECTORIES = ("scripts", "references", "assets")
-# A project's own skills live beside its agents, in the skill directory of the
-# project's declared source format (GLOSSARY → Source Format) — one entry per
-# format, keyed by the canonical ``core.settings.PROJECT_SOURCE_FORMATS`` values
-# so the two vocabularies can never drift. Scanned per project and merged with
-# the bundled skills, project-first so a project skill wins a name collision
-# with a bundled one (decision 3/4 in the whitelist plan).
-PROJECT_SKILLS_SUBPATHS: dict[str, tuple[str, ...]] = {
-    "opencode": (".opencode", "skills"),
-    "claude": (".claude", "skills"),
-}
 
 # Origin tags identify which scope a loaded skill came from, so the prompt catalog
 # and the ``skill`` tool can group skills by where they live. They are opaque
@@ -744,20 +733,8 @@ def _optional_string_list(value: Any) -> list[str]:
     return [item for item in value if isinstance(item, str)]
 
 
-def project_skills_dir(project_cwd: Path, source_format: str) -> Path:
-    """Return a project's own skill directory for its declared source format.
-
-    ``<cwd>/.opencode/skills/`` for an OpenCode project, ``<cwd>/.claude/skills/``
-    for a Claude Code one. The format is a required argument — every caller must
-    say which format's directory it means; an unknown format raises ``KeyError``
-    (callers only pass the validated ``Project.source_format``).
-    """
-    return project_cwd.joinpath(*PROJECT_SKILLS_SUBPATHS[source_format])
-
-
 def load_project_skill_registry(
-    project_cwd: Path,
-    source_format: str,
+    project_roots: Sequence[Path],
     bundled_scan_roots: Sequence[Path],
     environment: Mapping[str, str] | None = None,
     *,
@@ -765,30 +742,16 @@ def load_project_skill_registry(
     bundled_origins: Sequence[str | None] | None = None,
     excluded_packages: Collection[tuple[Path, str]] | None = None,
 ) -> SkillRegistry:
-    """Build a project-scoped registry: the project's own skills, then the bundled ones.
-
-    The project skill directory — the declared ``source_format``'s location — is
-    scanned **first** so a project skill wins a name collision with a bundled skill
-    of the same name (one slot, the project's own playbook wins).
-    ``bundled_scan_roots`` must be the same ordered roots the global registry scans,
-    so a project run sees exactly the bundled pool plus its own skills — nothing
-    leaks between projects. A missing project skill directory is treated as empty,
-    so a project without one simply gets the bundled pool.
-    ``project_origin``/``bundled_origins`` tag the loaded skills with their scope
-    for catalog grouping (the project root then the bundled roots).
-    ``excluded_packages`` forwards the packages the Skill Policy turns off.
-    """
-    origins: list[str | None] | None = None
-    if project_origin is not None or bundled_origins is not None:
-        bundled = (
-            list(bundled_origins)
-            if bundled_origins is not None
-            else [None] * len(bundled_scan_roots)
-        )
-        origins = [project_origin, *bundled]
+    """Load ordered Project roots before the ordinary global pool."""
+    roots = [*project_roots, *bundled_scan_roots]
+    if not roots:
+        return SkillRegistry({}, environment=environment)
+    origins = [project_origin] * len(project_roots) + (
+        list(bundled_origins) if bundled_origins is not None else [None] * len(bundled_scan_roots)
+    )
     return SkillRegistry.load(
-        project_skills_dir(project_cwd, source_format),
-        extra_dirs=list(bundled_scan_roots),
+        roots[0],
+        extra_dirs=roots[1:],
         environment=environment,
         origins=origins,
         excluded_packages=excluded_packages,
@@ -830,18 +793,10 @@ def find_skill_package_dir(
 
 
 def scan_project_skill_names(
-    project_cwd: Path,
-    source_format: str,
+    project_roots: Sequence[Path],
     environment: Mapping[str, str] | None = None,
 ) -> frozenset[str]:
-    """Return the names of the skills defined in a project's own skill directory.
-
-    Scans only the declared format's skill directory (not the bundled roots), so
-    the result is exactly the project-owned skills — the set the resolver subtracts
-    ``skills_project_disabled`` from when computing a config agent's effective
-    skills. A missing directory yields an empty set.
-    """
-    return scan_skill_names(project_skills_dir(project_cwd, source_format), environment)
+    return frozenset(name for root in project_roots for name in scan_skill_names(root, environment))
 
 
 # Skill registries are reloaded often — once per project, per run, and on every

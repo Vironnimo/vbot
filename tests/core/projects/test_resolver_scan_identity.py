@@ -71,7 +71,7 @@ def test_scan_reports_model_and_default_agent_findings(
     assert [member.agent_id for member in result.team] == ["builder"]
 
 
-def test_scan_honors_project_source_format(
+def test_scan_honors_project_sources(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
     # Arrange: agents in both formats; the project declares claude as its format.
@@ -81,7 +81,15 @@ def test_scan_honors_project_source_format(
     (claude_dir / "reviewer.md").write_text(
         "---\nname: reviewer\ndescription: Reviews.\n---\nBody.\n", encoding="utf-8"
     )
-    project = projects.create("vbot", "vBot", repo, source_format="claude")
+    project = projects.create(
+        "vbot",
+        "vBot",
+        repo,
+        sources=[
+            {"id": "claude.agents", "enabled": True},
+            {"id": "claude.skills", "enabled": True},
+        ],
+    )
     resolver = _resolver(agents, projects, _openai_configured())
 
     # Act
@@ -89,7 +97,7 @@ def test_scan_honors_project_source_format(
 
     # Assert: only the claude member is on the team — no mixing.
     assert [member.agent_id for member in result.team] == ["reviewer"]
-    assert result.team[0].source_format == "claude"
+    assert result.team[0].source == "claude"
 
 
 def test_scan_reports_orphan_session_owner(agents: AgentStore, repo: Path, data_dir: Path) -> None:

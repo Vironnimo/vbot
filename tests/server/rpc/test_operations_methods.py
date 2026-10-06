@@ -19,6 +19,7 @@ from typing import Any, cast
 import pytest
 
 from core.projects import AgentResolver, ResolutionAgentNotFoundError
+from core.projects.projects import build_project
 from core.projects.resolver import ConfigAgent
 from core.prompts import (
     BlockDefinition,
@@ -723,12 +724,7 @@ async def test_preview_renders_the_working_project_of_an_identity_agent(
         workspace=str(identity_workspace),
         root_project_id=default_project,
     )
-    home_project = SimpleNamespace(
-        project_id="vbot",
-        display_name="vBot",
-        cwd=str(repo),
-        auto_load=(),
-    )
+    home_project = build_project("vbot", "vBot", repo, auto_load=[])
     skills_for_calls: list[tuple[str | None, str | None]] = []
 
     def skills_for(project_id: str | None, agent_id: str | None = None) -> StubSkills:
@@ -770,14 +766,9 @@ async def test_preview_project_config_agent_renders_its_body_in_the_working_proj
         tools={},
         body="Imported reviewer body",
         source_path=repo / ".opencode" / "agents" / "reviewer.md",
-        source_format="opencode",
+        source="opencode",
     )
-    project = SimpleNamespace(
-        project_id="vbot",
-        display_name="vBot",
-        cwd=str(repo),
-        auto_load=(),
-    )
+    project = build_project("vbot", "vBot", repo, auto_load=[])
     state = _preview_state(
         _manager(tmp_path, agents=[]),
         agent,

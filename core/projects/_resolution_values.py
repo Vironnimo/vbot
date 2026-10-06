@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Any, Literal
 
 from core.projects._runtime_agent import (
     ConfigAgent,
 )
-from core.projects.scanners.base import (
-    ScannedAgent,
+from core.projects.sources import (
+    AgentProfile,
 )
 from core.settings import AgentDefaults
 from core.skills import WILDCARD_ALLOWLIST
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
     from core.tools.availability import ToolAccess
 
 
-def _project_agent_tool_access(project: Project, scanned: ScannedAgent) -> ToolAccess:
+def _project_agent_tool_access(project: Project, scanned: AgentProfile) -> ToolAccess:
     """Return the Project-scoped Tool policy for one Project Agent.
 
     A vBot override replaces the repository-scanned Tool policy. ``all`` is
@@ -43,14 +44,44 @@ def _project_agent_tool_access(project: Project, scanned: ScannedAgent) -> ToolA
                 denied=override.denied,
                 granted=override.granted,
             )
-        return override
+        return replace(
+            override,
+            allowed=tuple(name for name in override.allowed if name in project.allowed_tools),
+        )
 
-    denied = tuple(sorted(scanned.denied_tools))
-    allowed = tuple(tool for tool in project.allowed_tools if tool not in scanned.denied_tools)
+    if scanned.unavailable_reason:
+        return ToolAccess(mode="none")
+    return profile_tool_access(scanned, tuple(project.allowed_tools))
+
+
+def profile_tool_access(scanned: AgentProfile, selection: tuple[str, ...]) -> ToolAccess:
+    from core.tools.availability import ToolAccess
+
+    if scanned.unavailable_reason:
+        return ToolAccess(mode="selected", allowed=(), fixed=True)
+    allowed = set(selection)
+    if scanned.allowed_tools is not None:
+        allowed &= scanned.allowed_tools
+    for tool in tuple(allowed):
+        for rule in scanned.tool_rules:
+            if fnmatchcase(tool, rule.pattern):
+                if rule.allowed:
+                    allowed.add(tool)
+                else:
+                    allowed.discard(tool)
+    allowed -= scanned.denied_tools
+    # Exact imported selections suppress automatic activation. Companions for
+    # combined file operations are included explicitly by the capability owner.
+    fixed = scanned.allowed_tools is not None or any(
+        rule.pattern == "*" and not rule.allowed for rule in scanned.tool_rules
+    )
+    companions = {"edit", "write"} if fixed and "apply_patch" in allowed else set()
     return ToolAccess(
         mode="selected",
-        allowed=allowed,
-        denied=denied,
+        allowed=tuple(tool for tool in selection if tool in allowed)
+        + tuple(sorted(companions - set(selection))),
+        denied=tuple(sorted(scanned.denied_tools)),
+        fixed=fixed,
     )
 
 
@@ -74,8 +105,8 @@ def effective_project_allowed_skills(
       with a warning) must not smuggle the ``allowed_skills`` wildcard past the
       whitelist and expose the whole global pool to a project agent.
 
-    OpenCode does not narrow skills per agent in v1, so this is purely
-    project-derived. Config-Agent resolution and Identity Project Context both use
+    This pool is Project-derived; Profile rules can narrow it per Agent.
+    Config-Agent resolution and Identity Project Context both use
     this function so their interpretation cannot drift. The result is sorted for
     determinism; ``filter_allowed`` harmlessly ignores any name that no longer
     resolves to a loadable skill.
@@ -89,11 +120,11 @@ def effective_project_allowed_skills(
     return sorted(allowed)
 
 
-def _effective_allowed_agents(scanned: ScannedAgent, team: list[ScannedAgent]) -> list[str]:
+def _effective_allowed_agents(scanned: AgentProfile, team: list[AgentProfile]) -> list[str]:
     """Materialize additional targets against the Team; self is always implicit."""
     allowed: list[str] = []
     for member in team:
-        if member.agent_id == scanned.agent_id:
+        if member.agent_id == scanned.agent_id or member.unavailable_reason:
             continue
         member_allowed = True
         for rule in scanned.agent_target_rules:
@@ -116,7 +147,7 @@ def _project_agent_tools(tool_access: ToolAccess, allowed_agents: list[str]) -> 
 
 
 def _build_config_agent(
-    scanned: ScannedAgent,
+    scanned: AgentProfile,
     resolved_model: str,
     resolved_temperature: float | None,
     resolved_thinking_effort: str | None,
@@ -138,7 +169,9 @@ def _build_config_agent(
         thinking_effort=resolved_thinking_effort,
         body=scanned.body,
         source_path=scanned.source_path,
-        source_format=scanned.source_format,
+        source=scanned.source,
+        preload_skills=scanned.preload_skills,
+        model_inherit=scanned.model == "inherit",
         tool_access=tool_access,
         allowed_skills=allowed_skills,
         tools=tools,
@@ -153,7 +186,7 @@ SamplingField = Literal["temperature", "top_p"]
 
 def _resolve_sampling(
     field: SamplingField,
-    scanned: ScannedAgent,
+    scanned: AgentProfile,
     project: Project,
     global_defaults: AgentDefaults,
 ) -> float | None:
@@ -168,7 +201,7 @@ def _resolve_sampling(
 
 
 def _resolve_thinking_effort(
-    scanned: ScannedAgent, project: Project, global_defaults: AgentDefaults
+    scanned: AgentProfile, project: Project, global_defaults: AgentDefaults
 ) -> str | None:
     """Resolve thinking effort: override → agent → project default → global default → None.
 
@@ -193,7 +226,7 @@ def _resolve_thinking_effort(
 def _config_sampling_source(
     field: SamplingField,
     project: Project,
-    scanned: ScannedAgent,
+    scanned: AgentProfile,
     global_defaults: AgentDefaults,
 ) -> dict[str, Any]:
     """Return the effective ``temperature`` or ``top_p`` + source for a config agent.
@@ -214,7 +247,7 @@ def _config_sampling_source(
 
 
 def _config_thinking_effort_source(
-    project: Project, scanned: ScannedAgent, global_defaults: AgentDefaults
+    project: Project, scanned: AgentProfile, global_defaults: AgentDefaults
 ) -> dict[str, Any]:
     """Return the effective thinking effort + source for a config agent.
 
@@ -289,7 +322,7 @@ def _global_default_thinking_effort(global_defaults: AgentDefaults) -> str | Non
     return value if isinstance(value, str) else None
 
 
-def _config_tool_access_source(project: Project, scanned: ScannedAgent) -> dict[str, Any]:
+def _config_tool_access_source(project: Project, scanned: AgentProfile) -> dict[str, Any]:
     """Return the editable Project Agent Tool policy and its winning source."""
 
     from core.tools.availability import normalize_tool_access

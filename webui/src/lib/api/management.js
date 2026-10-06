@@ -398,7 +398,7 @@ export function listProjects({ includeScan = false } = {}, options = {}) {
   );
 }
 
-// Probe a cwd for per-format agent/skill presence and context files. Called by
+// Probe a cwd for detected Agent, Skill and instruction Sources. Called by
 // the add dialog while the user types a path; a nonexistent cwd is a success
 // with `cwd_exists: false`, never an error.
 export function detectProject(cwd, options = {}) {

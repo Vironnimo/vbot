@@ -124,6 +124,12 @@ def _validate_profile_catalog(profile: Json, catalog: Json) -> None:
         ),
         None,
     )
+    known_profiles = {item.get("id") for item in (project or {}).get("agent_profiles", [])}
+    if any(
+        item.get("repository_profile") and item["repository_profile"] not in known_profiles
+        for item in profile["participants"]
+    ):
+        raise SwarmStoreError("invalid_arguments", field="repository_profile")
     known_skills = {item.get("name") for item in catalog.get("skills", [])}
     known_skills.update((project or {}).get("allowed_skills", []))
     if any(item != "*" and item not in known_skills for item in profile["allowed_skills"]):
@@ -137,6 +143,7 @@ def _participant_config(profile: Json, participant: Json, cwd: Path) -> Temporar
     )
     return TemporaryAgentConfig(
         model=participant["model"],
+        repository_profile=formation.get("repository_profile"),
         cwd=cwd,
         tool_access=normalize_tool_access(_tool_access(profile)),
         allowed_skills=profile["allowed_skills"],

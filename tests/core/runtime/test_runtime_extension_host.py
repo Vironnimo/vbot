@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from core.agents.temporary import TemporaryAgentConfig
+from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig
 from core.chat import ChatMessage
 from core.chat.messages import ToolCall
 from core.extensions import ExtensionRegistrationIdentity
@@ -84,6 +84,60 @@ async def test_owner_prompt_inspection_uses_selected_blocks_and_private_tool_den
 
 
 @pytest.mark.asyncio
+async def test_swarm_formation_snapshots_a_repository_profile_through_the_real_host(
+    runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from resources.extensions.swarm._extension_values import _participant_config
+
+    _accept_every_model(runtime, monkeypatch)
+    path = tmp_path / ".claude" / "agents" / "reviewer.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "---\nname: reviewer\nskills: [review]\n---\nrepository-review-sentinel", encoding="utf-8"
+    )
+    skill_directory = write_project_skill(tmp_path, "review", "Review changes.")
+    (skill_directory / "SKILL.md").write_text(
+        "---\nname: review\ndescription: Review changes.\n---\nUse {baseDir}/scripts/check.py.",
+        encoding="utf-8",
+    )
+    runtime.projects.create("repo", "Repo", tmp_path)
+    runtime.projects.update("repo", allowed_tools=[])
+    host = _owner_host(runtime, "swarm")
+    assert host.temporary_agents is not None
+    profile = {
+        "participants": [{"model": "fixture/model", "count": 1, "repository_profile": "reviewer"}],
+        "tool_access": {"mode": "selected", "allowed": []},
+        "allowed_skills": ["review"],
+        "tools": {},
+        "instructions": "participant-sentinel",
+        "prompt_blocks": [],
+        "delivery": {route: {"mode": "all"} for route in ("main", "discussion", "ping")},
+    }
+    config = _participant_config(
+        profile, {"ordinal": 1, "model": "fixture/model", "display_name": "Reviewer"}, tmp_path
+    )
+    groups = host.temporary_agents
+    binding = await groups.create("repository-profile", "peer", config, project_id="repo")
+    agent = runtime.agent_resolver.resolve_temporary_agent(
+        binding.address, generation_id=binding.generation_id
+    )
+    assert isinstance(agent, TemporaryAgent)
+    assert "repository-review-sentinel" in agent.instructions
+    assert "participant-sentinel" in agent.instructions
+    assert '<skill_content name="review">' in agent.instructions
+    assert f"{skill_directory.as_posix()}/scripts/check.py" in agent.instructions
+    assert "{baseDir}" not in agent.instructions
+    await groups.open_group("repository-profile")
+    path.write_text("Changed.", encoding="utf-8")
+    assert (
+        runtime.agent_resolver.resolve_temporary_agent(
+            binding.address, generation_id=binding.generation_id
+        )
+        == agent
+    )
+
+
+@pytest.mark.asyncio
 async def test_owner_catalog_projects_registry_metadata_until_the_registration_retires(
     runtime: Runtime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -106,6 +160,7 @@ async def test_owner_catalog_projects_registry_metadata_until_the_registration_r
             "id": "project-a",
             "name": "Project A",
             "cwd": project.cwd,
+            "agent_profiles": [],
             "allowed_tools": ["read"],
             "allowed_skills": ["global-skill", "project-skill"],
         }
