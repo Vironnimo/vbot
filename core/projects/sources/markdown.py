@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,7 @@ from core.projects.sources._translation import (
     unavailable,
     unsupported,
 )
-from core.projects.sources.profile import AgentProfile, ToolRule, Translation
+from core.projects.sources.profile import AgentProfile, Translation
 
 _CLAUDE_TOOLS = {
     "read": frozenset({"read"}),
@@ -31,6 +32,24 @@ _CLAUDE_TOOLS = {
     "agent": frozenset({"subagent"}),
     "skill": frozenset({"skill"}),
 }
+# Claude's own Tool names, which hook matchers are written against.
+_CLAUDE_TOOL_NAMES = {
+    "Read": "read",
+    "Edit": "edit",
+    "MultiEdit": "edit",
+    "Write": "write",
+    "NotebookEdit": "edit",
+    "Glob": "glob",
+    "Grep": "grep",
+    "Bash": "bash",
+    "WebFetch": "webfetch",
+    "WebSearch": "websearch",
+    "Agent": "agent",
+    "Task": "agent",
+    "Skill": "skill",
+}
+# Only these hook events can block or rewrite a Tool call; the others observe.
+_GATING_HOOKS = ("PreToolUse", "PermissionRequest")
 _COMPOUND = {
     "apply_patch": frozenset({"edit", "write"}),
     "search_files": frozenset({"grep", "glob"}),
@@ -83,12 +102,12 @@ class MarkdownAdapter:
                         if not isinstance(permissions, dict):
                             raise reading.SourceError("permissions must be an object.")
                         for key, value in permissions.items():
-                            if key in {"deny", "ask"}:
+                            if key in {"allow", "deny", "ask"}:
                                 settings[key] = [*settings.get(key, []), *reading.names(value)]
                             elif key == "defaultMode":
                                 settings[key] = value
                         if data.get("hooks"):
-                            settings["hooks"] = data["hooks"]
+                            settings["hooks"] = [*settings.get("hooks", []), data["hooks"]]
             except (OSError, ValueError) as error:
                 problem = str(error)
         result: list[AgentProfile] = []
@@ -162,21 +181,15 @@ class MarkdownAdapter:
                         ),
                     ),
                 )
-            elif mode in {"default", "manual", "auto", "acceptEdits"}:
-                agent = replace(
-                    agent,
-                    tool_rules=(*agent.tool_rules, ToolRule("*", False)),
-                    translations=(
-                        *agent.translations,
-                        Translation(
-                            "permissionMode",
-                            "not_supported",
-                            "Approval modes are unavailable; Tools are disabled until a vBot "
-                            "override is set.",
-                        ),
-                    ),
+            elif mode == "dontAsk":
+                # dontAsk refuses every Tool the allow rules do not pre-approve.
+                selected = agent.allowed_tools
+                agent = tool_list(
+                    agent, settings.get("allow", []), _CLAUDE_TOOLS, setting="permissions.allow"
                 )
-            elif mode in {"dontAsk", "bypassPermissions"}:
+                if selected is not None and agent.allowed_tools is not None:
+                    agent = replace(agent, allowed_tools=agent.allowed_tools & selected)
+            elif mode in {"default", "acceptEdits", "auto", "bypassPermissions"}:
                 agent = replace(
                     agent,
                     translations=(
@@ -184,25 +197,16 @@ class MarkdownAdapter:
                         Translation(
                             "permissionMode",
                             "translated",
-                            "vBot permissions and Project ceilings still apply.",
+                            "vBot asks no approvals; the Agent's vBot Tool access applies.",
                         ),
                     ),
                 )
             elif mode:
                 raise reading.SourceError("Unknown permissionMode.")
-            if "hooks" in fields or "hooks" in settings:
-                agent = replace(
-                    agent,
-                    tool_rules=(*agent.tool_rules, ToolRule("*", False)),
-                    translations=(
-                        *agent.translations,
-                        Translation(
-                            "hooks",
-                            "not_supported",
-                            "Hooks cannot enforce their restrictions; Tools are disabled.",
-                        ),
-                    ),
-                )
+            for hooks in settings.get("hooks", []):
+                agent = _gating_hooks(agent, hooks)
+            if "hooks" in fields:
+                agent = _gating_hooks(agent, fields["hooks"], own=True)
             if "isolation" in fields:
                 agent = restrict(
                     agent,
@@ -248,3 +252,53 @@ class MarkdownAdapter:
             agent = replace(agent, denied_tools=agent.denied_tools | {"subagent"})
             known.add("kind")
         return unsupported(agent, fields, known)
+
+
+def _gating_hooks(agent: AgentProfile, hooks: Any, *, own: bool = False) -> AgentProfile:
+    """Disable the Tools a blocking hook would gate; vBot cannot run hooks.
+
+    Project-wide hooks that only observe (session start, after a Tool call) belong to
+    Claude Code's session, not to the Agent, and pass without a report.
+    """
+    if not isinstance(hooks, dict):
+        raise reading.SourceError("hooks must be an object.")
+    matched: set[str] = set()
+    for event in _GATING_HOOKS:
+        entries = hooks.get(event, [])
+        if not isinstance(entries, list):
+            raise reading.SourceError(f"hooks.{event} must be a list.")
+        for entry in entries:
+            matcher = entry.get("matcher", "") if isinstance(entry, dict) else None
+            if not isinstance(matcher, str):
+                raise reading.SourceError(f"hooks.{event} matchers must be strings.")
+            if matcher in {"", "*"}:
+                matched.update(_CLAUDE_TOOL_NAMES)
+                continue
+            try:
+                pattern = re.compile(matcher)
+            except re.error as error:
+                raise reading.SourceError(f"Invalid hook matcher: {matcher}") from error
+            matched.update(name for name in _CLAUDE_TOOL_NAMES if pattern.search(name))
+    if not matched and not own:
+        return agent
+    reports = list(agent.translations)
+    denied = set(agent.denied_tools)
+    for name in sorted(matched):
+        denied |= _CLAUDE_TOOLS[_CLAUDE_TOOL_NAMES[name]]
+        if name == "Bash":
+            denied |= SHELL_TOOLS
+    if matched:
+        reports.append(
+            Translation(
+                "hooks",
+                "not_supported",
+                "Hooks cannot run in vBot; the Tools they gate are disabled: "
+                + ", ".join(sorted(matched))
+                + ".",
+            )
+        )
+    else:
+        reports.append(
+            Translation("hooks", "not_supported", "Hooks do not run in vBot; no Tool is gated.")
+        )
+    return replace(agent, denied_tools=frozenset(denied), translations=tuple(reports))

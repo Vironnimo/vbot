@@ -81,6 +81,36 @@ def write(root: Path, path: str, content: str) -> Path:
             "needs_attention",
         ),
         (
+            "claude",
+            ".claude/agents/reviewer.md",
+            "---\npermissionMode: acceptEdits\n---\nReview.",
+            {
+                "read",
+                "search_files",
+                "apply_patch",
+                "bash",
+                "terminal",
+                "status",
+                "skill",
+                "subagent",
+            },
+            "ready",
+        ),
+        (
+            "claude",
+            ".claude/agents/reviewer.md",
+            "---\npermissionMode: dontAsk\n---\nReview.",
+            set(),
+            "ready",
+        ),
+        (
+            "claude",
+            ".claude/agents/reviewer.md",
+            "---\nhooks:\n  PreToolUse:\n    - matcher: Bash\n---\nReview.",
+            {"read", "search_files", "apply_patch", "status", "skill", "subagent"},
+            "limited",
+        ),
+        (
             "opencode",
             ".opencode/agents/reviewer.md",
             "---\npermission:\n  '*': deny\n  read: allow\n---\nReview.",
@@ -183,6 +213,73 @@ def test_mixed_sources_priority_and_new_detection_preserve_winners(repo):
     assert next(item for item in refreshed if item.id == "cursor.agents").enabled is False
     reordered = scan_project(repo, sources=[sources[1], sources[0], sources[2]])
     assert reordered.team[1].source == "opencode"
+
+
+@pytest.mark.parametrize(
+    ("hooks", "expected", "status"),
+    [
+        (
+            {"SessionStart": [{"hooks": []}]},
+            {
+                "read",
+                "search_files",
+                "apply_patch",
+                "bash",
+                "terminal",
+                "status",
+                "skill",
+                "subagent",
+            },
+            "ready",
+        ),
+        (
+            {"PreToolUse": [{"matcher": "Edit|Write", "hooks": []}]},
+            {"read", "search_files", "bash", "terminal", "status", "skill", "subagent"},
+            "limited",
+        ),
+    ],
+)
+def test_claude_project_hooks_disable_only_the_tools_they_gate(repo, hooks, expected, status):
+    write(repo, ".claude/settings.json", json.dumps({"hooks": hooks}))
+    write(repo, ".claude/agents/reviewer.md", "Review.")
+    profile = scan_project(repo, sources=[SourceSelection("claude.agents")]).team[0]
+    assert profile.status == status
+    policy = profile_tool_access(
+        profile,
+        tuple(
+            sorted(
+                {
+                    "read",
+                    "search_files",
+                    "apply_patch",
+                    "bash",
+                    "terminal",
+                    "status",
+                    "skill",
+                    "subagent",
+                }
+            )
+        ),
+    )
+    assert set(policy.allowed) == expected
+
+
+@pytest.mark.parametrize(
+    ("files", "enabled"),
+    [(("AGENTS.md", "CLAUDE.md", "GEMINI.md"), set()), (("CLAUDE.md", "GEMINI.md"), {"claude"})],
+)
+def test_new_projects_load_at_most_one_instruction_file(projects, repo, files, enabled):
+    for name in files:
+        write(repo, name, "Instructions.")
+    sources = projects.create("repo", "Repo", repo).sources
+    assert {
+        source.id.removesuffix(".instructions")
+        for source in sources
+        if source.id.endswith(".instructions") and source.enabled
+    } == enabled
+    write(repo, ".github/copilot-instructions.md", "Instructions.")
+    refreshed = projects.refresh_sources("repo").sources
+    assert next(item for item in refreshed if item.id == "copilot.instructions").enabled is False
 
 
 @pytest.mark.parametrize("ecosystem", ["claude", "opencode"])
