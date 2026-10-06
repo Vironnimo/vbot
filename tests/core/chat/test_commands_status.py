@@ -384,7 +384,7 @@ def test_status_text_without_data_shows_placeholders() -> None:
     assert "Current time:" in text
 
 
-def test_status_text_marks_an_estimated_context_and_counts_its_cache_as_zero() -> None:
+def test_status_text_reports_an_estimated_turn_like_a_measured_one() -> None:
     messages = [
         ChatMessage.user("Status check", timestamp=_SESSION_STARTED),
         _cached_turn(
@@ -409,7 +409,7 @@ def test_status_text_marks_an_estimated_context_and_counts_its_cache_as_zero() -
     assert f"Actual model thinking effort: {STATUS_PLACEHOLDER}" in text
     assert "Temperature: 0.3" in text
     assert f"Activity: {STATUS_PLACEHOLDER}" in text
-    assert "Context usage: ~987 / 200000" in text
+    assert "Context usage: 987 / 200000" in text
     assert "Last request cache: read 0 / 987 (0.0% hit), write 0" in text
     assert "Session cache: read 0 / 987 (0.0% hit), write 0" in text
     assert "Session started:" in text
@@ -428,7 +428,7 @@ def test_status_text_marks_an_estimated_context_and_counts_its_cache_as_zero() -
     text = build_status_text(
         _make_agent(), [messages[0], answered], context_window=200_000, started_at=_APP_STARTED
     )
-    assert "Context usage: ~987 / 128000" in text
+    assert "Context usage: 987 / 128000" in text
 
 
 def _two_cached_turns() -> list[ChatMessage]:
@@ -469,7 +469,7 @@ def _two_cached_turns() -> list[ChatMessage]:
         (
             # Estimated input counts like any other; absent cache counters are zero.
             {"input_tokens": 500, "input_tokens_estimated": True, "estimated": True},
-            "~500 / 200000",
+            "500 / 200000",
             "read 0 / 500 (0.0% hit), write 0",
             "read 800 / 1500 (53.3% hit), write 100",
         ),

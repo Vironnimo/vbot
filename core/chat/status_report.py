@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta, tzinfo
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal
 
-from core.chat.messages import ChatMessage, usage_token_is_estimated
+from core.chat.messages import ChatMessage
 from core.chat.usage import aggregate_session_usage
 from core.providers.providers import resolve_effective_context_window
 from core.providers.reasoning import (
@@ -639,8 +639,7 @@ def _context_usage_text_from_facts(facts: StatusSessionFacts, context_window: in
     input_tokens = _coerce_int(latest_usage.get("input_tokens"))
     if input_tokens is None:
         return STATUS_PLACEHOLDER
-    prefix = "~" if usage_token_is_estimated(latest_usage, "input_tokens") else ""
-    return f"{prefix}{input_tokens} / {context_window}"
+    return f"{input_tokens} / {context_window}"
 
 
 def _turn_count_text_from_facts(facts: StatusSessionFacts) -> str:
