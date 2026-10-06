@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-import { sendChatMessage, startIsolatedChat } from "./chat-run-support.js";
+import {
+  chatTimeline,
+  sendChatMessage,
+  startIsolatedChat,
+} from "./chat-run-support.js";
 
 test("slash command discovery, help, status, rename, and new Session work together", async ({
   page,
@@ -32,6 +36,13 @@ test("slash command discovery, help, status, rename, and new Session work togeth
   await expect(commandOutputs.last()).toContainText("/handoff");
   await expect(commandOutputs.last()).not.toContainText("/continue");
 
+  // Help and status work in a draft; rename needs a persisted Session.
+  await sendChatMessage(chat, "E2E_STREAM Start the command Session");
+  await expect(
+    chatTimeline(chat).getByText("Fake provider streaming response.", {
+      exact: true,
+    }),
+  ).toBeVisible();
   await sendChatMessage(chat, "/rename E2E Slash Command Session");
   await expect(
     chat.getByText("Session renamed to E2E Slash Command Session.", {
