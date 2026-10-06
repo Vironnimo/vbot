@@ -265,16 +265,17 @@
   padding: 2px 0;
   color: var(--text-body);
   font-size: var(--fs-body-lg);
-  line-height: 1.6;
+  line-height: 1.5;
 }
 
-/* Vertical rhythm: a paragraph break (0.9em) must read clearly larger than
-   the leading between wrapped lines, or paragraphs merge into one block. */
+/* Vertical rhythm in three steps: wrapped lines sit close, a block gap
+   (0.6em) separates paragraphs, lists, quotes, code and tables, and the
+   largest gap sits above a heading so sections read as groups. */
 .msg-markdown {
   padding: 2px 0;
   color: var(--text-body);
   font-size: var(--fs-body-lg);
-  line-height: 1.6;
+  line-height: 1.5;
 }
 
 .msg-markdown > *:first-child {
@@ -286,7 +287,7 @@
 }
 
 .msg-markdown p {
-  margin: 0 0 0.9em;
+  margin: 0 0 0.6em;
 }
 
 /* Chat headings structure an answer rather than title a document: only h1
@@ -298,7 +299,7 @@
 .msg-markdown h4,
 .msg-markdown h5,
 .msg-markdown h6 {
-  margin: 1.35em 0 0.15em;
+  margin: 1.4em 0 0.15em;
   color: var(--text-hi);
   font-size: 1em;
   font-weight: 600;
@@ -315,7 +316,7 @@
 
 .msg-markdown ul,
 .msg-markdown ol {
-  margin: 0 0 0.9em 1.4em;
+  margin: 0 0 0.6em 1.4em;
   padding: 0;
 }
 
@@ -329,14 +330,14 @@
 }
 
 .msg-markdown blockquote {
-  margin: 0.9em 0;
+  margin: 0.6em 0;
   padding: 0 0 0 12px;
   border-left: 3px solid var(--border-2);
   color: var(--text-med);
 }
 
 .msg-markdown pre {
-  margin: 0.9em 0;
+  margin: 0.6em 0;
   overflow-x: auto;
   border: 1px solid var(--border-2);
   border-radius: var(--r-sm);
@@ -369,7 +370,7 @@
 }
 
 .msg-markdown .msg-code {
-  margin: 0.9em 0;
+  margin: 0.6em 0;
 }
 
 .msg-code__header {
@@ -449,7 +450,7 @@
 }
 
 .msg-markdown table {
-  margin: 0.9em 0;
+  margin: 0.6em 0;
   border-collapse: collapse;
   font-size: var(--fs-body-md);
 }
