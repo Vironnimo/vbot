@@ -16,7 +16,7 @@ import {
   runEventSource,
   runningRun,
   selectAgentFromPicker,
-  selectedPersonalAgentName,
+  selectedAgentName,
   sendComposerMessage,
   settle,
   setupChatViewTestSuite,
@@ -149,14 +149,14 @@ describe('ChatView slash commands', () => {
       await selectAgentFromPicker('Beta');
       await waitForText('Beta reply');
       await selectAgentFromPicker('Alpha');
-      await waitForCondition(() => selectedPersonalAgentName() === 'Alpha');
+      await waitForCondition(() => selectedAgentName() === 'Alpha');
 
       resolveStatus(
         handledCommand('Stale Alpha status', { output: 'transient' }),
       );
       await settle();
 
-      expect(selectedPersonalAgentName()).toBe('Alpha');
+      expect(selectedAgentName()).toBe('Alpha');
       expect(document.querySelector('.transient-card')).toBeNull();
     });
   });
@@ -218,7 +218,7 @@ describe('ChatView slash commands', () => {
         await waitForCondition(
           () =>
             historyReads(data.session_id, agentId) > 0 &&
-            selectedPersonalAgentName() === agentName,
+            selectedAgentName() === agentName,
         );
 
         // An action command neither toasts nor shows a transient card.
@@ -326,7 +326,7 @@ describe('ChatView slash commands', () => {
       );
       await settle();
 
-      expect(selectedPersonalAgentName()).toBe('Gamma');
+      expect(selectedAgentName()).toBe('Gamma');
       expect(historyReads('shared-session', 'beta')).toBe(0);
     });
 
@@ -359,13 +359,13 @@ describe('ChatView slash commands', () => {
           data: { command: 'agent', session_id: 'session-1', agent_id: 'beta' },
         }),
       );
-      await waitForCondition(() => selectedPersonalAgentName() === 'Beta');
+      await waitForCondition(() => selectedAgentName() === 'Beta');
       expect(onAgentSelected).not.toHaveBeenCalled();
 
       // Becoming visible again restores the selection App still holds.
       props.active = true;
       flushSync();
-      await waitForCondition(() => selectedPersonalAgentName() === 'Alpha');
+      await waitForCondition(() => selectedAgentName() === 'Alpha');
       expect(onAgentSelected).toHaveBeenCalledTimes(1);
       expect(onAgentSelected).toHaveBeenCalledWith('alpha');
     });

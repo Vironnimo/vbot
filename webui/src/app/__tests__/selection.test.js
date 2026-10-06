@@ -91,6 +91,8 @@ describe('App selection', () => {
     await expect(selection.loadProjects()).resolves.toBe(true);
     expect(projectIds()).toEqual(['newest-project']);
     expect(selection.projectsLoaded).toBe(true);
+    // Chat's Agent picker lists every Project's Team from the cached scans.
+    expect(listProjects).toHaveBeenLastCalledWith({ includeScan: true });
 
     stale.resolve({ projects: [{ project_id: 'stale-project' }] });
     await expect(initial).resolves.toBe(false);

@@ -316,7 +316,12 @@ describe('RPC wrappers', () => {
       (o) => api.detectProject('C:/repos/demo', o),
       { cwd: 'C:/repos/demo' },
     ],
-    ['project.list', (o) => api.listProjects(o), {}],
+    ['project.list', (o) => api.listProjects({}, o), {}],
+    [
+      'project.list (with cached scans)',
+      (o) => api.listProjects({ includeScan: true }, o),
+      { include_scan: true },
+    ],
     ['project.show', (o) => api.showProject('demo', o), { project_id: 'demo' }],
     [
       'project.set (id merged into the changes)',

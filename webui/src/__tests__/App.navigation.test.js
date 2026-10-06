@@ -21,7 +21,7 @@ import {
   returnToCurrentSessionButton,
   rpcMock,
   selectPersonalAgent,
-  selectedPersonalAgentName,
+  selectedAgentName,
   settingsPanelButton,
   sidebarNavButton,
   viewSessionButton,
@@ -299,7 +299,7 @@ describe('App navigation', () => {
     mountApp();
 
     await waitForCondition(() => {
-      expect(selectedPersonalAgentName()).toBe('Beta');
+      expect(selectedAgentName()).toBe('Beta');
       expect(rpcMock).toHaveBeenCalledWith('chat.history', {
         agent_id: 'beta',
         session_id: 'session-beta',
@@ -953,7 +953,7 @@ describe('App navigation', () => {
     // Selecting Beta clears the override in a new history entry.
     await selectPersonalAgent('Beta');
     await waitForCondition(() => {
-      expect(selectedPersonalAgentName()).toBe('Beta');
+      expect(selectedAgentName()).toBe('Beta');
       expect(document.body.textContent).not.toContain('Sub-agent response');
     });
 
@@ -963,7 +963,7 @@ describe('App navigation', () => {
     // the Agent it belongs to.
     await waitForCondition(() => {
       expect(document.body.textContent).toContain('Sub-agent response');
-      expect(selectedPersonalAgentName()).toBe('Alpha');
+      expect(selectedAgentName()).toBe('Alpha');
     });
   });
 

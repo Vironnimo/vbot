@@ -581,7 +581,7 @@ const EFFECTIVE_SOURCE_OVERRIDE = 'override';
 // `overrides` object (or null), and the `effective` map of `{value, source}` per
 // run field so the row can show the resolved value with provenance.
 //
-// NOTE: `agent_id` and `display_name` are consumed by ChatView's project team bar
+// NOTE: `agent_id` and `display_name` are consumed by Chat's Agent picker
 // (the second consumer of this helper) — do not drop or rename them.
 export function projectTeam(scan) {
   const raw = Array.isArray(scan?.team) ? scan.team : [];

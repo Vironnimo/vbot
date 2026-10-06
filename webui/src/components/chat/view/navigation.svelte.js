@@ -258,12 +258,10 @@ export function createChatViewNavigation(context) {
   };
 
   const selectAgentSession = async (agentId, { focusComposer }) => {
-    // Choosing an identity agent always returns the chat to the identity bar,
-    // tearing down any active project-agent selection (the upper bar wins for
-    // the identity path; the project stays selected in the dropdown so its
-    // team bar remains, but the active chat is the identity agent).
+    // Choosing an identity agent leaves any Project Agent and its Project.
     context.target.selectedProjectAgentId = '';
     context.onProjectAgentSelected?.('');
+    context.target.leaveProject();
     const unreadSession = newestUnreadSessionForAgent(
       context.chatState,
       agentId,
@@ -405,18 +403,14 @@ export function createChatViewNavigation(context) {
         ? selection.projectAgentId
         : '';
     if (projectId !== context.target.lastLoadedProjectId) {
-      // Same imperative ownership as the /agent move: pre-sync the guard so
-      // the dropdown-watching effect treats the round-tripped prop as
-      // already loaded instead of jumping to the project default.
-      context.target.initialProjectRestoreDone = true;
-      context.target.lastLoadedProjectId = projectId;
-      context.onProjectSelected?.(projectId);
+      // Same imperative ownership as the /agent move: the target pre-syncs
+      // its guard, so its effect does not jump to the project default.
       changed = true;
       if (!projectId) {
-        context.target.clearProjectContext();
+        context.target.leaveProject();
       } else {
         context.target.selectedProjectAgentId = '';
-        await context.target.loadProjectTeamForMove(projectId);
+        await context.target.openProjectTeam(projectId);
       }
     }
     if (!isCurrent()) return false;
@@ -859,8 +853,8 @@ export function createChatViewNavigation(context) {
   // backend already; the accessor just opens it under the target. The target's
   // outside address decides the world (the one signal: presence of `@`), so the
   // same handler crosses every direction (identity↔project, both ways). It
-  // reuses the two-bar machinery: an identity target goes through the bare-id
-  // current-session path, a project target through the project-bar path.
+  // reuses the picker's paths: an identity target goes through the bare-id
+  // current-session path, a project target through the Project Agent path.
   const moveSessionToAgent = async (move) => {
     if (!move?.sessionId || !move?.bareAgentId) {
       return;
@@ -873,13 +867,13 @@ export function createChatViewNavigation(context) {
     await switchToCurrentSession(move.bareAgentId, move.sessionId);
   };
 
-  // Identity target: drop any active project-agent bar so the chat returns to
-  // the identity world (the project stays chosen in the dropdown, but the active
-  // chat is the identity agent), then select the target identity agent. The
-  // session switch itself is `switchToCurrentSession` (caller).
+  // Identity target: leave any Project Agent and its Project, then select the
+  // target identity agent. The session switch itself is
+  // `switchToCurrentSession` (caller).
   const moveToIdentityAgent = (move) => {
     context.target.selectedProjectAgentId = '';
     context.onProjectAgentSelected?.('');
+    context.target.leaveProject();
     if (move.bareAgentId !== context.chatState.selectedAgentId) {
       selectAgent(context.chatState, move.bareAgentId);
       context.onAgentSelected?.(move.bareAgentId);
@@ -887,20 +881,16 @@ export function createChatViewNavigation(context) {
   };
 
   // Project target: open the SAME session under the project team agent. The
-  // project context is set locally (so the second bar reflects it immediately,
+  // project context is set locally (so the picker reflects it immediately,
   // crossing the agent/project boundary) and reported up so App persists it for
   // the next reload — mirroring `openProjectAgent`, but the session is the moved
   // one, pre-seeded into `projectAgentSessions` so `ensureProjectAgentSession`
   // reuses it instead of picking one.
   //
-  // The move owns the transition imperatively rather than waiting on the
-  // dropdown-driven effect: `lastLoadedProjectId` is set to the target up front
-  // so the `selectedProjectId`-watching effect treats it as already-loaded and
-  // never re-runs `loadProjectTeam` with the project default (which would
-  // clobber the moved agent/session). `selectedProjectAgentId` makes
-  // `projectAgentActive`/`activeAddressing` resolve to the target before the
-  // round-tripped `selectedProjectId` prop has flushed, so the chat does not
-  // depend on that flush timing.
+  // The move owns the transition imperatively: `openProjectTeam` pre-syncs the
+  // target's guard, so its `selectedProjectId`-watching effect never re-runs
+  // `loadProjectTeam` with the project default (which would clobber the moved
+  // agent/session).
   const moveToProjectAgent = async (move) => {
     clearSessionOverride();
     const { projectId, bareAgentId, agentAddress, sessionId } = move;
@@ -908,12 +898,9 @@ export function createChatViewNavigation(context) {
       ...context.target.projectAgentSessions,
       [agentAddress]: sessionId,
     };
-    context.target.initialProjectRestoreDone = true;
-    context.target.lastLoadedProjectId = projectId;
     context.target.selectedProjectAgentId = bareAgentId;
-    context.onProjectSelected?.(projectId);
     context.onProjectAgentSelected?.(bareAgentId);
-    await context.target.loadProjectTeamForMove(projectId);
+    await context.target.openProjectTeam(projectId);
     await context.target.ensureProjectAgentSession(
       resolveAgentAddressing(bareAgentId, projectId, true),
     );

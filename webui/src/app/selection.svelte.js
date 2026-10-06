@@ -70,8 +70,9 @@ export function createAppSelection() {
 
   const initialSelectedProjectId = readStoredSelectedProjectId();
 
-  // Project context for the two-bar chat. `projects` feeds the chat dropdown;
-  // `selectedProjectId` is the chosen project (empty = Personal/identity path).
+  // Project context for Chat. `projects` (with their cached Team scans) feeds
+  // the Agent picker's Project groups; `selectedProjectId` is the Project of
+  // the active Project Agent (empty = an Identity Agent is active).
   let projects = $state([]);
   // False until the first catalog read succeeds: an empty `projects` before
   // then says nothing about which Projects exist.
@@ -175,7 +176,8 @@ export function createAppSelection() {
     const requestId = projectsLoadRequestId + 1;
     projectsLoadRequestId = requestId;
     try {
-      const result = await listProjects();
+      // Chat's Agent picker shows every Project's Team from the cached scans.
+      const result = await listProjects({ includeScan: true });
       if (requestId !== projectsLoadRequestId) {
         return false;
       }
@@ -208,7 +210,7 @@ export function createAppSelection() {
   // The selection half of a Chat place: which identity agent and which
   // project context were active when the history entry was created. Restored
   // together with the shown Session so Back/Forward re-establish the whole
-  // chat context (chips, project bar, and displayed session agree again).
+  // chat context (picker, chips, and displayed session agree again).
   const currentNavigationSelection = () => ({
     agentId: selectedAgentId,
     projectId: selectedProjectId,

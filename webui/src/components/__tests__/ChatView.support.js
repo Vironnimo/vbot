@@ -8,7 +8,7 @@ import {
   unmount,
 } from 'svelte';
 
-import { init } from '../../lib/i18n.js';
+import { init, t } from '../../lib/i18n.js';
 import {
   HOVER_CARD_SHOW_DELAY_MS,
   TOOLTIP_SHOW_DELAY_MS,
@@ -149,6 +149,7 @@ export function setupChatViewTestSuite() {
     resetMock(cancelRunMock, { ok: true });
     resetMock(cancelToolCallMock, { ok: true });
     resetMock(showProjectMock, { project: {}, scan: {} });
+    servedProjectScan = null;
     applyConnectionSnapshotMock.mockReset();
     closeSubscriptionForMock.mockReset();
     testChatStateRefs.length = 0;
@@ -451,6 +452,10 @@ export function unread(sessionId, runId) {
   };
 }
 
+// The scan `serveProject` last served; the Project list carries it as the
+// cached scan.
+let servedProjectScan = null;
+
 // Serves `project.show` for the `vbot` Project with a scanned Team of
 // `[agentId, displayName]` members.
 export function serveProject({
@@ -458,17 +463,28 @@ export function serveProject({
   team = [['builder', 'Builder']],
   findings = [],
 } = {}) {
+  servedProjectScan = {
+    team: team.map(([agentId, name]) => ({
+      agent_id: agentId,
+      display_name: name,
+      model: 'm',
+    })),
+    report: { clean: findings.length === 0, findings },
+  };
   showProjectMock.mockResolvedValue({
     project: { project_id: 'vbot', default_agent: defaultAgent },
-    scan: {
-      team: team.map(([agentId, name]) => ({
-        agent_id: agentId,
-        display_name: name,
-        model: 'm',
-      })),
-      report: { clean: findings.length === 0, findings },
-    },
+    scan: servedProjectScan,
   });
+}
+
+// The `vbot` Project as the Project list reports it, with the cached scan
+// `serveProject` served.
+export function vbotProject() {
+  return {
+    project_id: 'vbot',
+    display_name: 'vBot',
+    scan: servedProjectScan,
+  };
 }
 
 // ChatView props with the `vbot` Project open next to the Identity Agent
@@ -477,23 +493,33 @@ export function projectChatProps(overrides = {}) {
   return {
     sharedAgents: [createAgent()],
     sharedSelectedAgentId: 'alpha',
-    projects: [{ project_id: 'vbot', display_name: 'vBot' }],
+    projects: [vbotProject()],
     selectedProjectId: 'vbot',
     ...overrides,
   };
 }
 
-export function teamTab(name) {
-  return Array.from(
-    document.querySelectorAll('.chat-view__project-team .agent-tab'),
-  ).find((tab) => tab.textContent.includes(name));
+// The picker name of a Project Agent: "Builder · vBot".
+export function projectAgentName(name, project = 'vBot') {
+  return t('chat.agentPicker.projectAgent', { agent: name, project });
 }
 
-export function activeTeamTabName() {
+// Selects a Project Agent the way a user does: open the picker, open its
+// Project's group, choose the Agent.
+export function selectProjectAgentFromPicker(name, project = 'vBot', root) {
+  return selectAgentFromPicker(projectAgentName(name, project), root);
+}
+
+// Whether the picker shows an unread result for the named Agent: on its
+// activity chip, or on the trigger while it is selected.
+export function agentShowsUnread(name, root = document) {
+  const chip = agentChip(name, root);
+  if (chip) {
+    return Boolean(chip.querySelector('.tab-indicator--unread'));
+  }
   return (
-    document
-      .querySelector('.chat-view__project-team .agent-tab.active')
-      ?.textContent.trim() ?? ''
+    selectedAgentName(root) === name &&
+    Boolean(agentPickerTrigger(root).querySelector('.tab-indicator--unread'))
   );
 }
 
@@ -572,17 +598,15 @@ export function findNewSessionButton() {
   );
 }
 
-// Trigger of the Chat header's personal Agent picker. It shows the selected
-// Agent's name, or the "Select agent" placeholder while a Project Agent is
-// active.
+// Trigger of the Chat header's Agent picker. It shows the selected Agent's
+// name ("Builder · vBot" for a Project Agent), or the "Select agent"
+// placeholder.
 export function agentPickerTrigger(root = document) {
-  return root.querySelector(
-    '.chat-header__agent-picker button[aria-haspopup="listbox"]',
-  );
+  return root.querySelector('.chat-header__agent-picker button[aria-haspopup]');
 }
 
-// Name of the personal Agent selected in the picker; '' when none is.
-export function selectedPersonalAgentName(root = document) {
+// Name of the Agent selected in the picker; '' when none is.
+export function selectedAgentName(root = document) {
   const trigger = agentPickerTrigger(root);
   if (
     !trigger ||
@@ -601,15 +625,24 @@ export function agentChip(name, root = document) {
   );
 }
 
-// Selects a personal Agent the way a user does: open the picker, choose the
-// option. The picker's list is portaled to <body>.
+// Selects an Agent the way a user does: open the picker, open the closed
+// Project groups, choose the option. The picker's list is portaled to <body>.
 export async function selectAgentFromPicker(name, root = document) {
   await waitForCondition(() => agentPickerTrigger(root)?.disabled === false);
   agentPickerTrigger(root).click();
   const option = () =>
-    Array.from(document.querySelectorAll('[role="option"]')).find((item) =>
-      item.getAttribute('aria-label')?.startsWith(`${name}:`),
-    );
+    Array.from(
+      document.querySelectorAll('[role="option"], [role="treeitem"]'),
+    ).find((item) => item.getAttribute('aria-label')?.startsWith(`${name}:`));
+  await waitForCondition(() =>
+    document.querySelector('[role="listbox"], [role="tree"]'),
+  );
+  for (const group of document.querySelectorAll(
+    '[role="treeitem"][aria-expanded="false"]',
+  )) {
+    group.click();
+    flushSync();
+  }
   await waitForCondition(() => Boolean(option()));
   option().click();
   flushSync();

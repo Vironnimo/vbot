@@ -15,7 +15,7 @@ import {
   rpcMock,
   runEventSource,
   runningRun,
-  selectedPersonalAgentName,
+  selectedAgentName,
   sendComposerMessage,
   setInputValue,
   setupChatViewTestSuite,
@@ -131,7 +131,7 @@ describe('ChatView', () => {
       flushSync();
 
       await waitForText('Beta history');
-      expect(selectedPersonalAgentName()).toBe('Beta');
+      expect(selectedAgentName()).toBe('Beta');
     });
 
     it('shows the no-Agents state once a roster refresh removes the last Agent', async () => {
@@ -151,7 +151,7 @@ describe('ChatView', () => {
         document.body.textContent.includes(t('chat.noAgents')),
       );
       expect(document.querySelector('.msg-input')).toBeNull();
-      expect(selectedPersonalAgentName()).toBe('');
+      expect(selectedAgentName()).toBe('');
     });
 
     it('waits before showing initial History feedback', async () => {

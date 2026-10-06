@@ -329,12 +329,7 @@
    active view is remounted after reconnection. */
 .app-shell[data-server-unavailable='true']
   .app-shell__content
-  :is(
-    [role='alert'],
-    .banner--error,
-    .chat-view__project-team-error,
-    .session-drawer__state--error
-  ),
+  :is([role='alert'], .banner--error, .session-drawer__state--error),
 .app-shell[data-server-unavailable='true'] .toast.error {
   display: none;
 }

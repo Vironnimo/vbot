@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest';
 
 import { t } from '../../lib/i18n.js';
 import {
-  activeTeamTabName,
   agentChip,
   agentPickerTrigger,
+  agentShowsUnread,
   createAgent,
   createChatRpcMock,
   flushSync,
@@ -16,19 +16,20 @@ import {
   listedSessions,
   markedRead,
   message,
+  projectAgentName,
   projectChatProps,
   rpcMock,
   runServerEvent,
   runSummary,
   selectAgentFromPicker,
-  selectedPersonalAgentName,
+  selectProjectAgentFromPicker,
+  selectedAgentName,
   sendComposerMessage,
   serveProject,
   serveSessionActivity,
   setPageAttention,
   setupChatViewTestSuite,
   streamResponses,
-  teamTab,
   testChatStateRefs,
   testRunStreamRefs,
   unread,
@@ -44,8 +45,7 @@ const beta = (currentSessionId) =>
     current_session_id: currentSessionId,
   });
 
-const teamTabIsUnread = (name) =>
-  Boolean(teamTab(name)?.querySelector('.tab-indicator--unread'));
+const teamMemberIsUnread = (name) => agentShowsUnread(projectAgentName(name));
 
 const chipIsUnread = (name) =>
   Boolean(agentChip(name)?.querySelector('.tab-indicator--unread'));
@@ -70,7 +70,7 @@ describe('ChatView Agent activity', () => {
       );
       flushSync();
 
-      expect(selectedPersonalAgentName()).toBe('Alpha');
+      expect(selectedAgentName()).toBe('Alpha');
       expect(
         agentChip('Beta')?.querySelector('.tab-indicator--running'),
       ).toBeTruthy();
@@ -126,7 +126,7 @@ describe('ChatView Agent activity', () => {
         await waitForCondition(() => betaChip.disabled === false);
         betaChip.click();
 
-        await waitForCondition(() => selectedPersonalAgentName() === 'Beta');
+        await waitForCondition(() => selectedAgentName() === 'Beta');
         expect(rpcMock).toHaveBeenCalledWith('chat.history', {
           agent_id: 'beta',
           session_id: 'session-beta',
@@ -238,7 +238,7 @@ describe('ChatView Agent activity', () => {
 
       await selectAgentFromPicker('Beta');
       await waitForText('Beta user conversation');
-      expect(selectedPersonalAgentName()).toBe('Beta');
+      expect(selectedAgentName()).toBe('Beta');
       expect(historyReads('beta-user-session', 'beta')).toBeGreaterThan(0);
       expect(historyReads('beta-child-session')).toBe(0);
     });
@@ -283,7 +283,7 @@ describe('ChatView Agent activity', () => {
       );
       flushSync();
 
-      expect(selectedPersonalAgentName()).toBe('Alpha');
+      expect(selectedAgentName()).toBe('Alpha');
       expect(
         agentPickerTrigger().querySelector('.tab-indicator--unread'),
       ).toBeNull();
@@ -411,7 +411,7 @@ describe('ChatView Agent activity', () => {
     }
 
     async function openTeamMember(name, text) {
-      teamTab(name).click();
+      await selectProjectAgentFromPicker(name);
       await waitForText(text);
     }
 
@@ -438,7 +438,7 @@ describe('ChatView Agent activity', () => {
           unreadResults['explorer@vbot'] = explorerResult;
           parent.bumpSessionsRefreshToken();
         }
-        await waitForCondition(() => teamTabIsUnread('Explorer'));
+        await waitForCondition(() => teamMemberIsUnread('Explorer'));
 
         await openTeamMember('Explorer', 'Explorer unread result');
         expect(rpcMock).toHaveBeenCalledWith('chat.history', {
@@ -447,14 +447,14 @@ describe('ChatView Agent activity', () => {
           limit: 100,
         });
         expect(document.body.textContent).not.toContain('Explorer earlier');
-        expect(activeTeamTabName()).toContain('Explorer');
+        expect(selectedAgentName()).toBe(projectAgentName('Explorer'));
         await waitForCondition(() =>
           markedRead('explorer@vbot', 'explorer-unread', 'run-explorer'),
         );
 
         // The acknowledged result stays read once another Agent is displayed.
         await openTeamMember('Orchestrator', 'Orchestrator chat');
-        expect(teamTabIsUnread('Explorer')).toBe(false);
+        expect(teamMemberIsUnread('Explorer')).toBe(false);
       },
     );
 
@@ -481,7 +481,7 @@ describe('ChatView Agent activity', () => {
         session_id: 'orch-unread',
         run_id: 'run-orch',
       });
-      await waitForCondition(() => teamTabIsUnread('Orchestrator'));
+      await waitForCondition(() => teamMemberIsUnread('Orchestrator'));
       expect(listSessionActivityMock.mock.calls).toEqual([
         [['orchestrator@vbot']],
       ]);
@@ -491,7 +491,7 @@ describe('ChatView Agent activity', () => {
       await waitForCondition(() =>
         markedRead('orchestrator@vbot', 'orch-unread', 'run-orch'),
       );
-      expect(teamTabIsUnread('Orchestrator')).toBe(false);
+      expect(teamMemberIsUnread('Orchestrator')).toBe(false);
     });
 
     it('lands a Session moved into a Team member on that Session, not its unread one', async () => {
@@ -529,7 +529,7 @@ describe('ChatView Agent activity', () => {
       await chat.mountChat(projectChatProps(), {
         ready: 'Builder project reply',
       });
-      await waitForCondition(() => teamTabIsUnread('Reviewer'));
+      await waitForCondition(() => teamMemberIsUnread('Reviewer'));
 
       sendComposerMessage('/agent reviewer@vbot');
 
@@ -538,7 +538,9 @@ describe('ChatView Agent activity', () => {
         () => historyReads('builder-session', 'reviewer@vbot') > 0,
       );
       expect(historyReads('reviewer-unread')).toBe(0);
-      await waitForCondition(() => activeTeamTabName().includes('Reviewer'));
+      await waitForCondition(
+        () => selectedAgentName() === projectAgentName('Reviewer'),
+      );
     });
   });
 });

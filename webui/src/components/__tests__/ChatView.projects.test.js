@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { t } from '../../lib/i18n.js';
 import {
-  activeTeamTabName,
   agentPickerTrigger,
   createAgent,
   createChatRpcMock,
@@ -16,29 +15,31 @@ import {
   listSessionsMock,
   listedSessions,
   message,
+  projectAgentName,
   projectChatProps,
   rpcCalls,
   rpcMock,
   runningRun,
   selectAgentFromPicker,
-  selectedPersonalAgentName,
+  selectProjectAgentFromPicker,
+  selectedAgentName,
   sendComposerMessage,
   serveProject,
   settle,
   setupChatViewTestSuite,
   showProjectMock,
   streamResponses,
-  teamTab,
+  vbotProject,
   waitForCondition,
   waitForText,
 } from './ChatView.support.js';
 import { createChatViewParentHarness } from './ChatView.parent.support.svelte.js';
 
-const projects = [{ project_id: 'vbot', display_name: 'vBot' }];
+// The Identity Agent Alpha with the `vbot` Project listed but not open.
 const identityProps = () => ({
   sharedAgents: [createAgent()],
   sharedSelectedAgentId: 'alpha',
-  projects,
+  projects: [vbotProject()],
 });
 const builderSession = {
   id: 'builder-session',
@@ -57,28 +58,24 @@ const projectHistoryAgents = () => [
       .filter((agentId) => agentId.includes('@')),
   ),
 ];
-const activeTabCount = () =>
-  document.querySelectorAll('.agent-tab.active').length;
+const showsProjectAgent = (name) =>
+  selectedAgentName() === projectAgentName(name);
 
 describe('ChatView Projects', () => {
   const chat = setupChatViewTestSuite();
 
   describe('Project selection', () => {
-    it('keeps the Identity chat and its bare addresses while no Project is selected', async () => {
+    it('keeps the Identity chat and its bare addresses while no Project is open', async () => {
+      serveProject();
       rpcMock.mockImplementation(
         createChatRpcMock({ streamResponse: runningRun('run-personal') }),
       );
       await chat.mountChat({ ...identityProps(), selectedProjectId: '' });
 
-      // The shared Dropdown trigger reflects the current selection's label.
-      expect(
-        document
-          .querySelector(
-            '.chat-header__project-dropdown .dropdown-primitive__trigger-label',
-          )
-          .textContent.trim(),
-      ).toBe(t('chat.project.none'));
-      expect(document.querySelector('.chat-view__project-team')).toBeNull();
+      // The picker offers the listed Project's Team from its cached scan
+      // without opening the Project.
+      expect(agentPickerTrigger().getAttribute('aria-haspopup')).toBe('tree');
+      expect(selectedAgentName()).toBe('Alpha');
       expect(showProjectMock).not.toHaveBeenCalled();
       expect(rpcMock).toHaveBeenCalledWith('chat.history', {
         agent_id: 'alpha',
@@ -116,11 +113,8 @@ describe('ChatView Projects', () => {
         ready: 'Builder project reply',
       });
 
-      // The second bar shows the scanned Team; the default Agent is active,
-      // not the first member.
-      const teamBar = document.querySelector('.chat-view__project-team');
-      expect(teamBar.textContent).toContain('Reviewer');
-      expect(activeTeamTabName()).toContain('Builder');
+      // The default Agent is active, not the first member.
+      expect(selectedAgentName()).toBe(projectAgentName('Builder'));
       // Session list, History, Queue and sends use the full address.
       expect(listSessionsMock).toHaveBeenCalledWith(
         'builder@vbot',
@@ -180,7 +174,7 @@ describe('ChatView Projects', () => {
 
       await waitForCondition(
         () =>
-          activeTeamTabName().includes('First') &&
+          showsProjectAgent('First') &&
           onSessionNavigation.mock.calls.at(-1)?.[0].agentId === 'first@vbot',
       );
       expect(onSessionNavigation).toHaveBeenLastCalledWith(draftPlace, {
@@ -204,26 +198,28 @@ describe('ChatView Projects', () => {
       );
     });
 
-    it('renders an empty Team bar without an error and keeps the Identity Agent', async () => {
+    it('keeps the Identity Agent and lists no group for a Project without a Team', async () => {
+      const emptyScan = { team: [], report: { clean: true, findings: [] } };
       showProjectMock.mockResolvedValue({
         project: { project_id: 'empty', default_agent: '' },
-        scan: { team: [], report: { clean: true, findings: [] } },
+        scan: emptyScan,
       });
       rpcMock.mockImplementation(createChatRpcMock());
       await chat.mountChat({
         ...identityProps(),
-        projects: [{ project_id: 'empty', display_name: 'Empty' }],
+        projects: [
+          { project_id: 'empty', display_name: 'Empty', scan: emptyScan },
+        ],
         selectedProjectId: 'empty',
       });
 
-      await waitForCondition(() =>
-        document.querySelector('.chat-view__project-team'),
-      );
-      const teamBar = document.querySelector('.chat-view__project-team');
-      expect(teamBar.querySelector('.agent-tab')).toBeNull();
-      expect(teamBar.textContent).toContain(t('chat.project.teamEmpty'));
+      await waitForCondition(() => showProjectMock.mock.calls.length > 0);
+      await settle(2);
       expect(document.querySelector('.chat-view__error')).toBeNull();
-      expect(selectedPersonalAgentName()).toBe('Alpha');
+      expect(selectedAgentName()).toBe('Alpha');
+      expect(agentPickerTrigger().getAttribute('aria-haspopup')).toBe(
+        'listbox',
+      );
     });
 
     it.each([
@@ -245,7 +241,7 @@ describe('ChatView Projects', () => {
         await chat.mountChat(projectChatProps({ onNavigateToProjects }), {
           ready: null,
         });
-        await waitForCondition(() => activeTeamTabName().includes('Builder'));
+        await waitForCondition(() => showsProjectAgent('Builder'));
 
         expect(document.querySelectorAll('.project-scan-banner')).toHaveLength(
           banners,
@@ -287,19 +283,21 @@ describe('ChatView Projects', () => {
         }),
         { ready: null },
       );
-      // The Project default is active; step up to the Identity Agent so the
-      // picker trigger carries its tooltip.
-      await waitForCondition(() => activeTeamTabName().includes('Builder'));
-      await selectAgentFromPicker('Alpha');
-      await waitForCondition(() => selectedPersonalAgentName() === 'Alpha');
+      // The picker trigger carries the selected Agent's tooltip: first the
+      // Project default, then the Identity Agent.
+      await waitForCondition(() => showsProjectAgent('Builder Bot'));
+      vi.useFakeTimers();
+      // An id the name does not already say follows as its own row.
+      expect(await hoveredTooltipText(agentPickerTrigger())).toBe(
+        `${projectAgentName('Builder Bot')}\nActivity: Idle\nModel: openai/gpt-5.2\nThinking effort: medium\nAgent ID: builder`,
+      );
+      vi.useRealTimers();
 
+      await selectAgentFromPicker('Alpha');
+      await waitForCondition(() => selectedAgentName() === 'Alpha');
       vi.useFakeTimers();
       expect(await hoveredTooltipText(agentPickerTrigger())).toBe(
         'Alpha\nActivity: Idle\nModel: openrouter/anthropic/claude-sonnet-4\nThinking effort: Provider default',
-      );
-      // An id the name does not already say follows as its own row.
-      expect(await hoveredTooltipText(teamTab('Builder'))).toBe(
-        'Builder Bot\nActivity: Idle\nModel: openai/gpt-5.2\nThinking effort: medium\nAgent ID: builder',
       );
     });
 
@@ -392,30 +390,43 @@ describe('ChatView Projects', () => {
   });
 
   describe('Project Agent selection', () => {
-    it('keeps one selection across both bars and reports an Identity Agent as empty', async () => {
-      serveProject();
-      listedSessions(builderSession);
+    it('opens a Project Agent from the picker and leaves the Project for an Identity Agent', async () => {
+      serveProject({
+        team: [
+          ['reviewer', 'Reviewer'],
+          ['builder', 'Builder'],
+        ],
+      });
+      listSessionsMock.mockImplementation(async (address) => ({
+        sessions:
+          address === 'reviewer@vbot' ? [{ id: 'reviewer-session' }] : [],
+      }));
       rpcMock.mockImplementation(
-        createChatRpcMock({ sessionMessages: builderReply }),
+        createChatRpcMock({
+          sessionMessages: {
+            'reviewer-session': [
+              message('reviewer-reply', 'Reviewer project reply'),
+            ],
+          },
+        }),
       );
       const parent = createChatViewParentHarness();
-      parent.setSelectedProjectId('vbot');
-      await chat.mountChat(parent.props(['project'], identityProps()), {
-        ready: 'Builder project reply',
-      });
+      await chat.mountChat(parent.props(['project'], identityProps()));
 
-      // The Project Agent deselects the Identity Agent: exactly one
-      // selection across both bars.
-      expect(activeTabCount()).toBe(1);
-      expect(activeTeamTabName()).toContain('Builder');
-      expect(selectedPersonalAgentName()).toBe('');
+      // The chosen member opens, not the Project default, and App persists
+      // the Project and the member for the next reload.
+      await selectProjectAgentFromPicker('Reviewer');
+      await waitForText('Reviewer project reply');
+      expect(selectedAgentName()).toBe(projectAgentName('Reviewer'));
+      expect(parent.selectedProjectId).toBe('vbot');
+      expect(parent.selectedProjectAgentId).toBe('reviewer');
+      expect(projectHistoryAgents()).toEqual(['reviewer@vbot']);
 
-      // Back on the Identity Agent the Team bar keeps no active tab, and App
-      // persists '' (Identity active), distinct from null (nothing
-      // remembered).
+      // An Identity Agent leaves the Project: App persists '' for both, which
+      // is distinct from null (nothing remembered).
       await selectAgentFromPicker('Alpha');
-      await waitForCondition(() => selectedPersonalAgentName() === 'Alpha');
-      expect(activeTabCount()).toBe(0);
+      await waitForCondition(() => selectedAgentName() === 'Alpha');
+      expect(parent.selectedProjectId).toBe('');
       expect(parent.selectedProjectAgentId).toBe('');
     });
 
@@ -426,7 +437,7 @@ describe('ChatView Projects', () => {
         'Reviewer project reply',
         'reviewer@vbot',
       ],
-      ['the Identity Agent active beside the Project', '', 'Hello', null],
+      ['the Identity Agent that left the Project', '', 'Hello', null],
       [
         'the Project default when the remembered member left',
         'ghost',
@@ -459,17 +470,25 @@ describe('ChatView Projects', () => {
             },
           }),
         );
+        const onProjectSelected = vi.fn();
         await chat.mountChat(
-          projectChatProps({ sharedSelectedProjectAgentId: remembered }),
+          projectChatProps({
+            sharedSelectedProjectAgentId: remembered,
+            onProjectSelected,
+          }),
           { ready },
         );
-        await waitForCondition(() =>
-          document.querySelector('.chat-view__project-team .agent-tab'),
-        );
+        const openedName = openedAddress
+          ? projectAgentName(
+              openedAddress.startsWith('reviewer') ? 'Reviewer' : 'Builder',
+            )
+          : 'Alpha';
+        await waitForCondition(() => selectedAgentName() === openedName);
 
-        // Exactly one selection: a Team tab or the Identity Agent.
-        expect(activeTabCount()).toBe(openedAddress ? 1 : 0);
-        expect(selectedPersonalAgentName()).toBe(openedAddress ? '' : 'Alpha');
+        // An Identity Agent remembered as active leaves the Project.
+        if (!openedAddress) {
+          expect(onProjectSelected).toHaveBeenLastCalledWith('');
+        }
         // The background activity refresh may list every Team member, but
         // only the restored Agent's History is read.
         expect(projectHistoryAgents()).toEqual(
@@ -477,29 +496,6 @@ describe('ChatView Projects', () => {
         );
       },
     );
-
-    it('opens the Project default on a genuine Project switch and reports it up', async () => {
-      serveProject({
-        team: [
-          ['reviewer', 'Reviewer'],
-          ['builder', 'Builder'],
-        ],
-      });
-      listedSessions(builderSession);
-      rpcMock.mockImplementation(
-        createChatRpcMock({ sessionMessages: builderReply }),
-      );
-      const parent = createChatViewParentHarness();
-      await chat.mountChat(parent.props(['project'], identityProps()));
-
-      // The user picks a Project from the dropdown (not a reload restore).
-      parent.setSelectedProjectId('vbot');
-      flushSync();
-      await waitForCondition(() => activeTeamTabName().includes('Builder'));
-
-      // App persists the chosen Agent for the next reload.
-      expect(parent.selectedProjectAgentId).toBe('builder');
-    });
   });
 
   describe('Project Sessions', () => {
@@ -702,9 +698,9 @@ describe('ChatView Projects', () => {
 
       // Leave for the Identity Agent, then reopen the Project Agent.
       await selectAgentFromPicker('Alpha');
-      await waitForCondition(() => selectedPersonalAgentName() === 'Alpha');
+      await waitForCondition(() => selectedAgentName() === 'Alpha');
       const landingReads = historyReads('builder-old');
-      teamTab('Builder').click();
+      await selectProjectAgentFromPicker('Builder');
       await waitForCondition(
         () =>
           historyReads('builder-old') > landingReads ||
@@ -753,7 +749,7 @@ describe('ChatView Projects', () => {
         () => historyReads('shared-session', 'builder@vbot') > 0,
       );
 
-      // Sent from the Identity bar with the bare address; the same Session
+      // Sent from the Identity Agent with the bare address; the same Session
       // opens under the full Project address without creating one.
       expect(rpcCalls('chat.stream')).toEqual([
         {
@@ -763,7 +759,7 @@ describe('ChatView Projects', () => {
         },
       ]);
       expect(rpcCalls('session.create')).toEqual([]);
-      await waitForCondition(() => activeTeamTabName().includes('Builder'));
+      await waitForCondition(() => showsProjectAgent('Builder'));
       expect(parent.selectedProjectId).toBe('vbot');
       expect(parent.selectedProjectAgentId).toBe('builder');
     });
@@ -798,7 +794,7 @@ describe('ChatView Projects', () => {
         () => historyReads('builder-session', 'alpha') > 0,
       );
 
-      // Sent from the Project bar with the full source address.
+      // Sent from the Project Agent with the full source address.
       expect(rpcCalls('chat.stream')).toEqual([
         {
           agent_id: 'builder@vbot',
@@ -806,7 +802,7 @@ describe('ChatView Projects', () => {
           content: '/agent alpha',
         },
       ]);
-      await waitForCondition(() => selectedPersonalAgentName() === 'Alpha');
+      await waitForCondition(() => selectedAgentName() === 'Alpha');
     });
   });
 });
