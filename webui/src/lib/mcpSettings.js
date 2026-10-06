@@ -9,9 +9,10 @@ const mappings = [
   'credential_environment',
   'credential_headers',
 ];
-// Settings of a pre-registered OAuth client; they exist only with OAuth.
+// Settings that exist only with OAuth: the redirect and a pre-registered client.
 const oauthClientFields = [
   'oauth_redirect_uri',
+  'oauth_redirect_host',
   'oauth_client_id',
   'oauth_client_secret',
   'oauth_scopes',

@@ -30,6 +30,7 @@ const oauthConfiguration = {
   transport: 'http',
   url: 'https://mcp.example.com/mcp',
   oauth: true,
+  oauth_redirect_host: 'localhost',
   oauth_client_id: 'vbot-client',
   oauth_client_secret: 'REMOTE_CLIENT_SECRET',
   oauth_scopes: ['files:read', 'files:write'],
@@ -152,6 +153,7 @@ describe('MCP settings', () => {
     ]);
     const signedOut = mcpConfiguration({ ...draft, oauth: false });
     for (const field of [
+      'oauth_redirect_host',
       'oauth_client_id',
       'oauth_client_secret',
       'oauth_scopes',

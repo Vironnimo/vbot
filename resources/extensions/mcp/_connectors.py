@@ -46,6 +46,7 @@ ENTRY_SCHEMA: dict[str, Any] = {
         "url": {"type": "string"},
         "auth": {"enum": ["none", "oauth"]},
         "read_only_url": {"type": "string"},
+        "redirect_host": {"enum": ["localhost"]},
         "notes": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 200}},
         "docs_url": {"type": "string"},
     },
@@ -161,6 +162,7 @@ def _entry_connection(entry: dict[str, Any], identifier: str, *, read_only: bool
             "transport": "http",
             "url": entry["read_only_url"] if read_only else entry["url"],
             **({"oauth": True} if entry["auth"] == "oauth" else {}),
+            **({"oauth_redirect_host": entry["redirect_host"]} if "redirect_host" in entry else {}),
             "description": entry["description"],
             "enabled": True,
         }

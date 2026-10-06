@@ -57,7 +57,7 @@ import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass, fields
 from typing import Any, override
-from urllib.parse import parse_qs, urljoin, urlsplit
+from urllib.parse import parse_qs, urljoin, urlsplit, urlunsplit
 
 import httpx2
 from mcp.client.auth import OAuthClientProvider, OAuthFlowError
@@ -104,13 +104,23 @@ def _credential_keys(connection: str) -> tuple[str, str]:
 
 
 def redirect_uri(config: dict[str, Any], host: ExtensionHost) -> str:
-    """The redirect URI a sign-in of *config* uses."""
+    """The redirect URI a sign-in of *config* uses.
+
+    The server's callback names its loopback address, or ``localhost`` with
+    ``oauth_redirect_host: "localhost"``, for authorization servers that refuse
+    loopback addresses.
+    """
     configured = config.get("oauth_redirect_uri")
     if configured:
         return str(configured)
     redirects = host.oauth_redirects
     callback = redirects.callback_url if redirects is not None else None
-    return callback or PASTE_REDIRECT_URI
+    if callback is None:
+        return PASTE_REDIRECT_URI
+    if config.get("oauth_redirect_host") == "localhost":
+        parts = urlsplit(callback)
+        return urlunsplit(parts._replace(netloc=f"localhost:{parts.port}"))
+    return callback
 
 
 def forget_sign_in(host: ExtensionHost, connection: str) -> bool:

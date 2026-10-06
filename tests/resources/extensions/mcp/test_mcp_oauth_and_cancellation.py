@@ -192,14 +192,24 @@ def redirects() -> OAuthRedirects:
 
 
 @pytest.mark.asyncio
-async def test_the_browser_callback_completes_a_sign_in_bound_to_its_server(host, redirects):
+@pytest.mark.parametrize(
+    "fields, redirect",
+    [
+        ({}, CALLBACK),
+        # A server that refuses loopback addresses gets the same callback by name.
+        ({"oauth_redirect_host": "localhost"}, "http://localhost:8420/api/oauth/callback"),
+    ],
+)
+async def test_the_browser_callback_completes_a_sign_in_bound_to_its_server(
+    host, redirects, fields, redirect
+):
     host = replace(host, oauth_redirects=redirects)
     servers = FakeServers()
     inputs = InputRequests()
-    async with signed_client(oauth_connection(), host, inputs, servers) as client:
+    async with signed_client(oauth_connection(**fields), host, inputs, servers) as client:
         request = asyncio.create_task(client.get(RESOURCE))
         sign_in = await pending_sign_in(inputs, request)
-        assert sign_in["redirect_uri"] == CALLBACK
+        assert sign_in["redirect_uri"] == redirect
         assert sign_in["client_id"] == "registered-client"
 
         delivered = {"code": "code", "state": sign_in["state"], "iss": ISSUER}

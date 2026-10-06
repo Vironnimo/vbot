@@ -388,6 +388,8 @@ def test_the_shipped_catalog_loads_completely_and_a_broken_entry_is_left_out(tmp
         _entry("twice"),
         _entry("lines", description="first\nsecond"),
         {**_entry("extra"), "unknown": True},
+        # A redirect host belongs to an OAuth sign-in.
+        _entry("local", auth="none", redirect_host="localhost"),
     ]
     path.write_text(json.dumps({"entries": [_entry("docs", auth="none"), *broken]}))
     catalog = load_connectors(path)
@@ -399,6 +401,7 @@ def test_the_shipped_catalog_loads_completely_and_a_broken_entry_is_left_out(tmp
         ("twice", "duplicate_id"),
         ("lines", "invalid_entry"),
         ("extra", "invalid_entry"),
+        ("local", "invalid_entry"),
     ]
     path.write_text("[]")
     assert load_connectors(path).issues[0]["code"] == "invalid_catalog"
@@ -424,7 +427,11 @@ async def test_adding_from_the_catalog_creates_a_connection_and_never_replaces_o
             {
                 "entries": [
                     _entry("docs", auth="none"),
-                    _entry("tracker", read_only_url="https://tracker.example.com/mcp/readonly"),
+                    _entry(
+                        "tracker",
+                        read_only_url="https://tracker.example.com/mcp/readonly",
+                        redirect_host="localhost",
+                    ),
                 ]
             }
         )
@@ -455,6 +462,7 @@ async def test_adding_from_the_catalog_creates_a_connection_and_never_replaces_o
         assert service.connections["docs"] == validate_connection(mine)
         assert read_only["configuration"]["url"] == "https://tracker.example.com/mcp/readonly"
         assert read_only["configuration"]["oauth"] is True
+        assert read_only["configuration"]["oauth_redirect_host"] == "localhost"
         assert read_only["oauth"]["signed_in"] is False
         listing = {
             entry["id"]: entry["connections"]
