@@ -120,7 +120,7 @@ describe('SessionListDrawer list', () => {
         unread('session-2', 'run-two'),
       ],
     });
-    drawer.mount();
+    const props = drawer.mount();
 
     await waitForCondition(
       () => document.querySelector('.session-row__unread-dot') !== null,
@@ -132,6 +132,14 @@ describe('SessionListDrawer list', () => {
       t('sessions.unreadCompletion'),
     );
     expect(sessionRowButton('session-2').contains(markers[0])).toBe(true);
+
+    // Opening a draft leaves every persisted Session unselected and restores
+    // the unread marker of the Session the area just left.
+    props.currentSessionId = '';
+    flushSync();
+    expect(document.querySelector('.session-row__select--active')).toBeNull();
+    expect(document.querySelectorAll('.session-row__unread')).toHaveLength(2);
+    expect(api.listSessions).toHaveBeenCalledTimes(1);
   });
 
   it('updates a mounted row from live running to unread activity without reloading', async () => {

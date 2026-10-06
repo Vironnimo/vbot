@@ -222,6 +222,9 @@
     const normalizedCurrentSessionId = asText(currentSessionId);
 
     if (!normalizedCurrentSessionId) {
+      if (sessionState.selectedSessionId !== null) {
+        sessionState = selectSession(sessionState, null);
+      }
       return;
     }
 
