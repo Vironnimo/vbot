@@ -81,6 +81,19 @@
   line-height: 1.2;
 }
 
+/* The wordmark echoes the two-tone mark: spaced capitals in copper, led by a
+   steel initial. */
+.app-shell__brand h1 {
+  color: var(--brand-copper);
+  font-size: var(--fs-label-md);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.app-shell__brand h1::first-letter {
+  color: var(--brand-steel);
+}
+
 .app-shell__navigation,
 .nav {
   display: flex;
@@ -110,6 +123,14 @@
 
 .app-shell__nav-group + .app-shell__nav-group {
   margin-top: 18px;
+}
+
+/* A divided group (Settings) continues the group above it behind a hairline
+   instead of a heading. */
+.app-shell__nav-group + .app-shell__nav-group--divided {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
 }
 
 .app-shell__nav-group-label {
@@ -195,6 +216,14 @@
   background: var(--border);
   opacity: var(--sidebar-nav-group-separator-opacity);
   transform: translateX(-50%);
+}
+
+/* The rail's short divider already sets the divided group apart. */
+.app-shell[data-sidebar-collapsed='true']
+  .app-shell__nav-group
+  + .app-shell__nav-group--divided {
+  padding-top: 0;
+  border-top: 0;
 }
 
 .app-shell[data-sidebar-collapsed='true'] .app-shell__nav-item {

@@ -38,18 +38,18 @@ const ALPHA = [
 describe('NAVIGATION_ITEMS', () => {
   it('lists the navigation views grouped by section', () => {
     expect(NAVIGATION_ITEMS.map(({ id, section }) => [id, section])).toEqual([
-      ['chat', 'work'],
-      ['terminals', 'work'],
-      ['agents', 'work'],
-      ['projects', 'work'],
-      ['calendar', 'work'],
-      ['skills', 'configure'],
-      ['cron', 'configure'],
-      ['system-prompt', 'configure'],
-      ['settings', 'configure'],
-      ['statistics', 'insights'],
-      ['logs', 'insights'],
-      ['debug', 'insights'],
+      ['chat', 'main'],
+      ['terminals', 'main'],
+      ['agents', 'agents'],
+      ['skills', 'agents'],
+      ['system-prompt', 'agents'],
+      ['projects', 'agents'],
+      ['cron', 'planning'],
+      ['calendar', 'planning'],
+      ['statistics', 'system'],
+      ['logs', 'system'],
+      ['debug', 'system'],
+      ['settings', 'settings'],
     ]);
   });
 

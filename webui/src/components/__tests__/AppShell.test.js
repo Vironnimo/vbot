@@ -31,12 +31,12 @@ const SIDEBAR_COLLAPSED_KEY = 'vbot.sidebar.collapsed.v1';
 const CHAT = {
   id: 'chat',
   label: () => t('navigation.chat'),
-  section: 'work',
+  section: 'main',
 };
 const SETTINGS = {
   id: 'settings',
   label: () => t('navigation.settings'),
-  section: 'configure',
+  section: 'settings',
 };
 const originalMatchMedia = window.matchMedia;
 
@@ -175,7 +175,7 @@ describe('AppShell sidebar', () => {
         {
           id: 'extension:swarm:swarms',
           label: () => 'Swarms',
-          section: 'work',
+          section: 'main',
         },
       ],
       onSelectView,

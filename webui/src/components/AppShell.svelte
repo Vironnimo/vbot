@@ -196,13 +196,17 @@
     });
   });
 
-  // The sidebar groups navigation by usage cadence. Order and membership come
+  // The sidebar groups navigation by subject: the daily places without a
+  // heading, then Agents, Planning and System. Settings follows System behind
+  // a hairline instead of a heading (`divided`). Order and membership come
   // from each item's `section` field (set in App.svelte); a group with no
   // visible items renders neither its label nor its gap.
   const NAV_SECTIONS = [
-    { id: 'work', label: () => t('nav.section.work') },
-    { id: 'configure', label: () => t('nav.section.configure') },
-    { id: 'insights', label: () => t('nav.section.insights') },
+    { id: 'main' },
+    { id: 'agents', label: () => t('nav.section.agents') },
+    { id: 'planning', label: () => t('nav.section.planning') },
+    { id: 'system', label: () => t('nav.section.system') },
+    { id: 'settings', divided: true },
   ];
 
   // An entry with an indicator names it, since the badge alone is a number.
@@ -419,13 +423,16 @@
     >
       {#each navGroups as group (group.id)}
         <div
+          class:app-shell__nav-group--divided={group.divided}
           class="app-shell__nav-group"
-          role="group"
-          aria-label={group.label()}
+          role={group.label ? 'group' : undefined}
+          aria-label={group.label?.()}
         >
-          <span class="app-shell__nav-group-label" aria-hidden="true">
-            {group.label()}
-          </span>
+          {#if group.label}
+            <span class="app-shell__nav-group-label" aria-hidden="true">
+              {group.label()}
+            </span>
+          {/if}
           {#each group.items as item (item.id)}
             <button
               class:app-shell__nav-item--active={item.id === activeViewId}

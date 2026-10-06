@@ -43,6 +43,10 @@
      steps, so hierarchy reads from tone instead of from border lines. */
   --bg: #15130f;
   --secondary-surface: #1a1814;
+  /* The mark's two metals (webui/public/brand/), lifted for text on the
+     Main menu surface. */
+  --brand-steel: #a39c94;
+  --brand-copper: #c98d52;
   --surface: #1e1b17;
   --surface-2: #26231e;
   --surface-3: #302c26;

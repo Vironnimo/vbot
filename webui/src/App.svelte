@@ -5,62 +5,62 @@
     {
       id: 'chat',
       label: () => t('navigation.chat'),
-      section: 'work',
+      section: 'main',
     },
     {
       id: 'terminals',
       label: () => t('navigation.terminals'),
-      section: 'work',
+      section: 'main',
     },
     {
       id: 'agents',
       label: () => t('navigation.agents'),
-      section: 'work',
-    },
-    {
-      id: 'projects',
-      label: () => t('navigation.projects'),
-      section: 'work',
-    },
-    {
-      id: 'calendar',
-      label: () => t('navigation.calendar'),
-      section: 'work',
+      section: 'agents',
     },
     {
       id: 'skills',
       label: () => t('navigation.skills'),
-      section: 'configure',
-    },
-    {
-      id: 'cron',
-      label: () => t('navigation.cron'),
-      section: 'configure',
+      section: 'agents',
     },
     {
       id: 'system-prompt',
       label: () => t('navigation.systemPrompt'),
-      section: 'configure',
+      section: 'agents',
     },
     {
-      id: 'settings',
-      label: () => t('navigation.settings'),
-      section: 'configure',
+      id: 'projects',
+      label: () => t('navigation.projects'),
+      section: 'agents',
+    },
+    {
+      id: 'cron',
+      label: () => t('navigation.cron'),
+      section: 'planning',
+    },
+    {
+      id: 'calendar',
+      label: () => t('navigation.calendar'),
+      section: 'planning',
     },
     {
       id: 'statistics',
       label: () => t('navigation.statistics'),
-      section: 'insights',
+      section: 'system',
     },
     {
       id: 'logs',
       label: () => t('navigation.logs'),
-      section: 'insights',
+      section: 'system',
     },
     {
       id: 'debug',
       label: () => t('navigation.debug'),
-      section: 'insights',
+      section: 'system',
+    },
+    {
+      id: 'settings',
+      label: () => t('navigation.settings'),
+      section: 'settings',
     },
   ]);
 </script>
