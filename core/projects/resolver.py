@@ -665,9 +665,13 @@ class AgentResolver:
         elif profile.model in {"", "inherit"}:
             model = config.model
         else:
-            model = self._resolve_model_or_raise(
-                profile, project, AgentDefaults.from_dict(self._global_agent_defaults())
-            )
+            try:
+                model = self._resolve_model_or_raise(
+                    profile, project, AgentDefaults.from_dict(self._global_agent_defaults())
+                )
+            except AgentResolutionError:
+                # The participant's own Model stands in for an unusable wish.
+                model = config.model
         self.require_model_configured(model)
         return replace(
             config,

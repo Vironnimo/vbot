@@ -86,7 +86,7 @@ Imported allowlists (including empty) and denials select the Agent's own Tools a
 
 Profile Skill rules narrow the effective Skills. Permitted available preloads include Skill instruction bodies in the Agent body, using existing `skill_content` framing and the origin directory. Missing, unavailable or oversized Skills are not loaded. Ordinary Agent-body prompt pins keep this stable during the Prompt Epoch.
 
-`prepare_temporary_config` consumes the same Profile and translation against the owner's selection instead of Project ceilings. It snapshots resolved Model/scalars, restrictions and instructions before binding creation. The original `repository_profile_request` makes replays idempotent across repository edits. The resolved Tool policy stays in the protected binding; an owner's `fixed` selection stays fixed.
+`prepare_temporary_config` consumes the same Profile and translation against the owner's selection instead of Project ceilings. It snapshots resolved Model/scalars, restrictions and instructions before binding creation. A Model wish that resolves to no usable Model, with no Project or global default either, leaves the participant on its own Model. The original `repository_profile_request` makes replays idempotent across repository edits. The resolved Tool policy stays in the protected binding; an owner's `fixed` selection stays fixed.
 
 ## Working Project resolution
 

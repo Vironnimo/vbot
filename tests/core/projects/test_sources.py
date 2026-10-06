@@ -10,7 +10,7 @@ from core.agents import TemporaryAgentConfig, TemporaryAgentRegistry
 from core.projects._resolution_values import profile_tool_access
 from core.projects.scan_report import FindingType
 from core.projects.sources import SourceSelection, scan_project
-from core.projects.sources.catalog import detect_sources, refresh_sources
+from core.projects.sources.catalog import detect_sources, refresh_sources, skill_roots
 from core.sessions import ChatSessionManager, SessionAddress
 from core.tools.availability import ToolAccess, resolve_tool_access
 from tests.core.projects.resolver_test_support import (
@@ -415,6 +415,22 @@ async def test_inherit_uses_the_delegating_model_without_requiring_a_project_def
         "repo",
     )
     assert temporary.model == "openai/gpt-5.2"
+    # Without any usable default the participant keeps its own Model.
+    projects.update("repo", default_model="")
+    resolver._global_agent_defaults = lambda: {}
+    temporary = resolver.prepare_temporary_config(
+        TemporaryAgentConfig(
+            model="openai/gpt-mini",
+            cwd=repo,
+            tool_access=ToolAccess(mode="none"),
+            allowed_skills=[],
+            tools={},
+            name="Reviewer",
+            repository_profile="reviewer",
+        ),
+        "repo",
+    )
+    assert temporary.model == "openai/gpt-mini"
 
 
 @pytest.mark.parametrize(
@@ -470,3 +486,18 @@ def test_temporary_profiles_keep_owner_tool_limits_and_materialize_skill_rules(
     assert not set(overridden.tool_access.allowed) & set(owner_policy.denied)
     if owner_policy.mode == "none" or owner_policy.fixed:
         assert overridden.tool_access.fixed
+
+
+def test_a_skill_folder_linked_to_another_supplies_its_skills_once(repo):
+    write(repo, ".agents/skills/review/SKILL.md", "---\nname: review\ndescription: R.\n---\nR.")
+    (repo / ".claude").mkdir()
+    try:
+        (repo / ".claude" / "skills").symlink_to(repo / ".agents" / "skills", True)
+    except OSError, NotImplementedError:
+        pytest.skip("symlink creation not permitted on this host")
+    detected = {item.definition.id for item in detect_sources(repo)}
+    assert "shared.skills" in detected
+    assert "claude.skills" not in detected
+    # Projects that already list the linked Source load the folder once.
+    sources = [SourceSelection("claude.skills"), SourceSelection("shared.skills")]
+    assert skill_roots(repo, sources) == [repo / ".agents/skills"]

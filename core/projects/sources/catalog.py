@@ -8,6 +8,7 @@ from typing import Any, Literal, Protocol
 
 from core.projects.sources._reading import SourceError, is_dir_strict, is_file_strict
 from core.projects.sources.profile import AgentProfile, SourceSelection
+from core.utils.file_status import is_link_status
 
 type SourceKind = Literal["agents", "skills", "instructions"]
 
@@ -109,12 +110,17 @@ def detect_sources(
     from core.skills import scan_skill_names
 
     adapters = default_adapters() if adapters is None else adapters
+    skill_folders = [
+        path for item in SOURCE_DEFINITIONS if item.kind == "skills" for path in item.paths
+    ]
     detected: list[DetectedSource] = []
     for definition in SOURCE_DEFINITIONS:
         paths: list[str] = []
         try:
             for relative in definition.paths:
                 path = root / relative
+                if definition.kind == "skills" and _links_to_other(root, relative, skill_folders):
+                    continue
                 if is_dir_strict(path) or is_file_strict(path):
                     paths.append(relative)
             if not paths:
@@ -204,14 +210,31 @@ def initial_sources(
 
 
 def skill_roots(root: Path, selections: list[SourceSelection]) -> list[Path]:
-    return [
-        root / path
+    folders = [
+        path
         for selection in selections
         if selection.enabled
         if (definition := SOURCE_CATALOG.get(selection.id)) is not None
         and definition.kind == "skills"
         for path in definition.paths
     ]
+    return [root / path for path in folders if not _links_to_other(root, path, folders)]
+
+
+def _links_to_other(root: Path, relative: str, folders: list[str]) -> bool:
+    """Whether a folder is a link to another Skill folder, so both name one set.
+
+    Repositories often link one tool's Skill folder to the shared one
+    (``.claude/skills`` -> ``.agents/skills``); the real folder supplies them once.
+    """
+    path = root / relative
+    try:
+        if not is_link_status(path.lstat()):
+            return False
+        target = path.resolve()
+    except OSError:
+        return False
+    return any(other != relative and (root / other).resolve() == target for other in folders)
 
 
 def instruction_files(root: Path, selections: list[SourceSelection]) -> list[str]:
