@@ -204,7 +204,6 @@
 }
 .jev-model {
   overflow-wrap: anywhere;
-  font-family: var(--font-mono);
 }
 .jev-answer p {
   line-height: 1.6;

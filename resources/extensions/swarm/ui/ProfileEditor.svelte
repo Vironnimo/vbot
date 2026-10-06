@@ -818,7 +818,7 @@
               {#each preview.preview.tools as tool (tool.name)}
                 <details>
                   <summary>{tool.name}</summary>
-                  <pre>{JSON.stringify(tool, null, 2)}</pre>
+                  <pre class="tool-json">{JSON.stringify(tool, null, 2)}</pre>
                 </details>
               {/each}
             </details>

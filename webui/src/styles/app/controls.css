@@ -1089,9 +1089,9 @@ summary:not([class])::-webkit-details-marker {
   }
 }
 
-.searchable-dropdown__label--code {
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-body);
+/* The muted lead of an option label (a Model id's provider path). */
+.searchable-dropdown__label-lead {
+  color: var(--text-lo);
 }
 
 .dropdown-primitive__option-meta,

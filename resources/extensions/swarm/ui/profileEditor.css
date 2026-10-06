@@ -131,6 +131,10 @@
   color: var(--text-hi);
   font: inherit;
 }
+.swarm-profile-editor .topic pre.tool-json {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+}
 .swarm-profile-editor .prompt-preview {
   background: var(--surface);
   padding: 14px;

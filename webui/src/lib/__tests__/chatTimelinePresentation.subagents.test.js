@@ -604,7 +604,7 @@ describe('Sub-Agent timing and last Tool', () => {
       rows: [
         { label: t('chat.details.started'), value: moment(startedAt) },
         { label: t('chat.details.runningFor'), value: seconds('4.2') },
-        { label: t('chat.details.latestTool'), value: 'bash', mono: true },
+        { label: t('chat.details.latestTool'), value: 'bash' },
         {
           label: t('chat.details.runningSubAgent'),
           value: 'Inner worker',

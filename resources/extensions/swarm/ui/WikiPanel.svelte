@@ -544,7 +544,7 @@
   }
   .wiki-number {
     color: var(--text-med);
-    font: 600 var(--fs-label-sm) var(--font-mono);
+    font: 600 var(--fs-label-sm) var(--font-ui);
     font-variant-numeric: tabular-nums;
     margin-right: 0.5rem;
   }

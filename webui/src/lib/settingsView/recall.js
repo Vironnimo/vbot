@@ -3,6 +3,7 @@
 // semantic index status line.
 
 import { activeLocaleTag, t, tOr } from '../i18n.js';
+import { modelIdParts } from '../modelSelection.js';
 import { formatRelativeTime } from '../timeText.js';
 import {
   describeLocalModelDownload,
@@ -217,7 +218,7 @@ export function buildEmbeddingModelOptions(targets, selectedId = '') {
       label: selectedId,
       secondaryLabel: t('settings.recall.model.unavailable'),
       group: t('settings.recall.model.groupSaved'),
-      code: true,
+      labelLead: modelIdParts(selectedId).lead,
     });
   }
   return options;

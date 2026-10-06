@@ -510,12 +510,11 @@
   line-height: 1.45;
 }
 
-/* "Source: <path> (<format>)" — dominated by the file path. */
+/* "Source: <path> (<format>)". */
 .projects-view .projects-source-line {
   margin: 0;
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
   overflow-wrap: anywhere;
 }
 
@@ -547,8 +546,7 @@
 /* "Agent <id>" / "Source: <path>" lines. */
 .projects-view .projects-finding-meta {
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
 }
 
 /* ── Modals ───────────────────────────────────────────────────────────────── */

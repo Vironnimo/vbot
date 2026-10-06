@@ -340,8 +340,7 @@
     border-radius: 999px;
     background: transparent;
     color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-xs);
+    font-size: var(--fs-label-sm);
     cursor: pointer;
     transition:
       background 0.1s,

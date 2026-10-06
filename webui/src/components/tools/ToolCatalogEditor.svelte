@@ -286,8 +286,6 @@
   }
   .tool-access-tip strong {
     color: var(--text-hi);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-sm);
     font-weight: 600;
   }
   .tool-access-tip p {

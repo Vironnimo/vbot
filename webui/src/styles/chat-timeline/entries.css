@@ -228,8 +228,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -681,8 +680,7 @@
   align-items: baseline;
   gap: 8px;
   margin-bottom: 5px;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
 }
 
 .tool-diff-file__kind {
@@ -693,6 +691,8 @@
 .tool-diff-file__path {
   min-width: 0;
   color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
   overflow-wrap: anywhere;
 }
 
@@ -1090,8 +1090,13 @@
 
 .subagent-agent {
   color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
+}
+
+/* A Sub-Agent's task and current activity are prose, not arguments. */
+.te-arg:is(.subagent-preview, .subagent-activity) {
+  font-family: var(--font-ui);
+  font-size: var(--fs-label-sm);
 }
 
 .subagent-preview {

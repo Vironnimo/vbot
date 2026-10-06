@@ -115,9 +115,8 @@
   overflow: auto;
   padding: var(--space-sm) var(--space-md) var(--space-sm) 0;
   color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-body);
-  line-height: 1.65;
+  font-size: var(--fs-body-md);
+  line-height: 1.6;
   overflow-wrap: anywhere;
   tab-size: 2;
   white-space: pre-wrap;
@@ -157,7 +156,6 @@
   align-items: center;
   justify-content: center;
   border-radius: var(--r-sm);
-  font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 600;
 }
@@ -206,15 +204,8 @@
 .msg-timestamp,
 .msg-meta-extra {
   color: var(--text-lo);
-  font-family: var(--font-mono);
-}
-
-.msg-timestamp {
-  font-size: 10.5px;
-}
-
-.msg-meta-extra {
-  font-size: 11px;
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .msg-content {
@@ -422,11 +413,9 @@
   }
 }
 
-/* The collapsed Tool-call line is a code-like trace (Tool name, arguments,
-   diff facts, timing), so it stays mono as one unit. */
-.te-fn,
+/* The collapsed Tool-call line: the Tool's name and its timing read as
+   UI text; its arguments (paths, commands, patterns) are code. */
 .te-arg,
-.te-time,
 .teb-code {
   font-family: var(--font-mono);
 }
@@ -434,7 +423,7 @@
 .te-fn {
   flex-shrink: 0;
   color: var(--text-med);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
   font-weight: 500;
 }
 
@@ -491,8 +480,8 @@
 .te-fact {
   flex-shrink: 0;
   color: var(--text-med);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -519,7 +508,8 @@
   flex-shrink: 0;
   margin-left: 6px;
   color: var(--text-lo);
-  font-size: var(--fs-mono-xs);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .te-time.error,

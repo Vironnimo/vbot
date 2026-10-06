@@ -79,7 +79,7 @@
   {:else if trace}
     <header class="detail-header">
       <div class="detail-heading-row">
-        <h3 class:detail-title--id={label.mono}>
+        <h3 class:detail-title--path={label.mono}>
           {label.text}
         </h3>
         <CopyButton text={traceJson} label={t('debug.copyTrace')} />
@@ -232,15 +232,10 @@
   .detail-heading-row h3 {
     margin-right: auto;
   }
-  /* Model and Provider ids are code-like values: Mono. The Model Probe
-     fallback title stays Sans. */
-  .detail-title--id {
+  /* A request path is a code-like value: Mono. */
+  .detail-title--path {
     font-family: var(--font-mono);
     font-size: var(--fs-mono-body);
-  }
-  .detail-provider {
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-sm);
   }
   .detail-facts {
     display: flex;

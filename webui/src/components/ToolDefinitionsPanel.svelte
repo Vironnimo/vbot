@@ -185,8 +185,7 @@
       var(--focus-ring);
   }
   .tool-name {
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-body);
+    font-size: var(--fs-body-sm);
     overflow-wrap: anywhere;
     color: var(--text-hi);
   }
@@ -208,7 +207,7 @@
   .tool-detail-header h3 {
     margin: 0 0 6px;
     color: var(--text-hi);
-    font: 600 var(--fs-mono-body)/1.5 var(--font-mono);
+    font: 600 var(--fs-body-lg)/1.5 var(--font-ui);
     overflow-wrap: anywhere;
   }
   .tool-detail-body {

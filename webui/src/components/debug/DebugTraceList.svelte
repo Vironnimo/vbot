@@ -114,7 +114,7 @@
           <span class="trace-topline">
             <span
               class="debug-trace__model"
-              class:debug-trace__model--id={label.mono}>{label.text}</span
+              class:debug-trace__model--path={label.mono}>{label.text}</span
             >
             <span
               class="trace-status"
@@ -255,9 +255,8 @@
     font-weight: 500;
     font-size: var(--fs-body-lg);
   }
-  /* Model ids, request paths and Provider ids/methods are code-like values:
-     Mono. The Model Probe label stays Sans. */
-  .debug-trace__model--id {
+  /* A request path is a code-like value: Mono. */
+  .debug-trace__model--path {
     font-family: var(--font-mono);
     font-size: var(--fs-mono-body);
   }
@@ -267,10 +266,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .trace-middle {
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-sm);
   }
   .trace-bottom {
     font-variant-numeric: tabular-nums;

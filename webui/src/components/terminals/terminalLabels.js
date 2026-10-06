@@ -165,7 +165,6 @@ export function terminalDetails(item, { nowMs = Date.now() } = {}) {
       {
         label: t('terminals.details.pid'),
         value: !finished && item?.pid != null ? String(item.pid) : '',
-        mono: true,
       },
       { label: t('terminals.details.size'), value: size },
     ],

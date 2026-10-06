@@ -166,6 +166,11 @@ describe('SearchableDropdown', () => {
             badge: 3,
             ariaLabel: 'Gamma: 3 unread results',
           },
+          {
+            value: 'openai/gpt-5.2',
+            label: 'openai/gpt-5.2',
+            labelLead: 'openai/',
+          },
         ],
       },
     });
@@ -192,5 +197,11 @@ describe('SearchableDropdown', () => {
       beta?.querySelector('[role="img"][aria-label="Verified"]'),
     ).toBeTruthy();
     expect(trigger.querySelector('.option-marker')).toBeNull();
+    // A label lead (a Model id's provider path) is part of the label, muted.
+    const model = document.querySelector('[role="option"]:last-of-type');
+    expect(model?.textContent.trim()).toBe('openai/gpt-5.2');
+    expect(
+      model?.querySelector('.searchable-dropdown__label-lead')?.textContent,
+    ).toBe('openai/');
   });
 });

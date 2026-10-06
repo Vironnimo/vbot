@@ -823,7 +823,6 @@ export function toolRejectionTooltip(tool, locale = 'en') {
     rows: codes.map((entry) => ({
       label: String(entry.code),
       value: formatInteger(entry.count, locale),
-      mono: true,
     })),
   };
 }

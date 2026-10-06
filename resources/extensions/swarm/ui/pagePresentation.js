@@ -54,7 +54,6 @@ export function profileTooltip(profile) {
     rows: [...perModel].map(([model, count]) => ({
       label: participantCount(count),
       value: model,
-      mono: true,
     })),
     placement: 'right',
   };

@@ -109,7 +109,7 @@
     return {
       text: inherited ? t('agents.details.modelInherited') : '',
       rows: [
-        { label: t('agents.form.model'), value: parts.model, mono: true },
+        { label: t('agents.form.model'), value: parts.model },
         {
           label: t('agents.details.connection'),
           value:

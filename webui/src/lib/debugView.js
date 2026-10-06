@@ -523,11 +523,11 @@ export function traceTypeLabel(type) {
 
 /**
  * The name a trace goes by: its Model id, "Model Probe", or the request path
- * of a Provider request without a Model. `mono` marks code-like names.
+ * of a Provider request without a Model. `mono` marks the request path.
  */
 export function traceLabel(trace) {
   const modelId = asText(trace?.model_id);
-  if (modelId) return { text: modelId, mono: true };
+  if (modelId) return { text: modelId, mono: false };
   if (trace?.type === 'model_probe') {
     return { text: t('debug.modelProbe'), mono: false };
   }
@@ -565,7 +565,6 @@ export function traceTooltip(trace, nowMs = Date.now()) {
       {
         label: t('debug.modelProbe.provider'),
         value: asText(trace.provider_id),
-        mono: true,
       },
       {
         label: t('debug.request'),

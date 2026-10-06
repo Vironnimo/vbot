@@ -285,7 +285,6 @@ export const subAgentStatusDetails = (
     rows.push({
       label: t('chat.details.latestTool'),
       value: lastToolName,
-      mono: true,
     });
   }
   for (const work of Array.isArray(remainingWork) ? remainingWork : []) {

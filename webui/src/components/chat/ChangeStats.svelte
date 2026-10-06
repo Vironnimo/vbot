@@ -255,8 +255,7 @@
   .changed-files-card__totals {
     display: flex;
     gap: 8px;
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono-sm);
+    font-size: var(--fs-body-sm);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }

@@ -98,6 +98,7 @@
           label: model?.name
             ? option.label.replace(model.id, model.name)
             : option.label,
+          labelLead: model?.name ? '' : option.labelLead,
           secondaryLabel: [model?.model_id, option.secondaryLabel]
             .filter(Boolean)
             .join(' · '),

@@ -401,8 +401,8 @@ describe('statisticsView labels and tooltips', () => {
     ).toEqual({
       title: '4 of 10 calls rejected',
       rows: [
-        { label: 'invalid_path', value: '3', mono: true },
-        { label: 'denied', value: '1', mono: true },
+        { label: 'invalid_path', value: '3' },
+        { label: 'denied', value: '1' },
       ],
     });
     expect(toolRejectionTooltip({ rejected: 0, top_codes: [] })).toBe('');

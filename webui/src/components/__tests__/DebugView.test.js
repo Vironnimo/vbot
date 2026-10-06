@@ -193,22 +193,10 @@ describe('DebugView', () => {
     mountedComponent = mount(DebugView, { target: document.body });
     await waitForText('gpt-5.2');
 
-    const modelCell = (traceId) =>
-      document.querySelector(
-        `.debug-trace[data-trace-id="${traceId}"] .debug-trace__model`,
-      );
-    expect(
-      modelCell('model-trace').classList.contains('debug-trace__model--id'),
-    ).toBe(true);
-    expect(
-      modelCell('probe-trace').classList.contains('debug-trace__model--id'),
-    ).toBe(false);
-
     clickTraceRow('model-trace');
     await waitForCondition(() => document.querySelector('.detail-header h3'));
     const title = document.querySelector('.detail-header h3');
     expect(title.textContent).toBe('gpt-5.2');
-    expect(title.classList.contains('detail-title--id')).toBe(true);
     expect(document.querySelector('.detail-provider').textContent).toBe(
       'openai',
     );

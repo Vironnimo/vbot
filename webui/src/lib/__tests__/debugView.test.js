@@ -235,7 +235,7 @@ describe('debugView trace list projections', () => {
   it('names traces by Model, Model Probe or request path', () => {
     expect(
       traceLabel({ model_id: 'openai/gpt-5', type: 'provider_request' }),
-    ).toEqual({ text: 'openai/gpt-5', mono: true });
+    ).toEqual({ text: 'openai/gpt-5', mono: false });
     expect(traceLabel({ model_id: '', type: 'model_probe' })).toEqual({
       text: 'Model Probe',
       mono: false,

@@ -82,7 +82,6 @@
       titleId={`${uid}-agents`}
       items={agentItems}
       groupToggle={false}
-      plainNames
       toggleLabel={agentToggleLabel}
       emptyLabel={t('skills.access.noAgents')}
       onToggle={toggleAgent}
@@ -94,7 +93,6 @@
         titleId={`${uid}-projects`}
         items={projectItems}
         groupToggle={false}
-        plainNames
         toggleLabel={(name) => t('skills.access.toggleProject', { name })}
         onToggle={toggleProject}
       />
