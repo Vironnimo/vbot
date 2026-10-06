@@ -7,13 +7,13 @@ At session start, read these core files completely unless their current contents
 - `.vorch/PROJECT.md` - project context
 - `.vorch/GLOSSARY.md` - project-specific terms
 
-Before working in or discussing a domain, read its root map under `.vorch/domain-maps/` (index in PROJECT.md), plus adjacent maps when ownership or contracts cross domains. Use them to locate owners, contracts, source, and tests. The task's `read:` list is a starting point, not a ceiling. Follow the root map's `## References` only for supplementary files whose triggers match the task; do not preload a supplementary folder. Supplementary files never replace the root map or enter the Domain Maps index.
+Before working in or discussing a domain, read its root map under `.vorch/domain-maps/` (index in PROJECT.md), plus adjacent maps when ownership or contracts cross domains. Use them to locate owners, contracts, source, and tests. The task's `read:` list is a starting point; add a map only when the task reaches into its domain. Follow the root map's `## References` only for supplementary files whose triggers match the task; do not preload a supplementary folder. Supplementary files never replace the root map or enter the Domain Maps index.
 
 Before creating, editing, or auditing a domain map or supplementary file, read `.vorch/workflows/domain-map-workflow.md` in full unless its current contents are already in context. Ordinary map reading does not require that workflow.
 
 ## Interpret documentation
 
-Distinguish explicit user requirements and engineering contracts from descriptions of current behavior, examples, and proposals. Follow applicable requirements and contracts; a documented implementation or past choice is not automatically a constraint on new work. Existing behavior and design may be revised within the user's requested scope without a documentation exception.
+Distinguish explicit user requirements and engineering contracts from descriptions of current behavior, examples, and proposals. Follow applicable requirements and contracts; a documented implementation or past choice is not automatically a constraint on new work. Existing behavior and design may be revised within the user's requested scope without a documentation exception. When the user asks to rethink or rebuild a system, its documented design, invariants and earlier decisions about it are open for revision; say which ones you would keep and why.
 
 Source code establishes what is implemented, not what ought to be implemented. Verify behavior claims against source and relevant tests. Correct stale descriptions; when code conflicts with an explicit requirement or contract, address the discrepancy rather than rewriting the requirement to match the code. Keep observations, requirements, and proposed changes identifiable in the docs.
 
@@ -23,9 +23,9 @@ Source code establishes what is implemented, not what ought to be implemented. V
 
 Match discussion depth to the task's uncertainty and consequences. Understand the intended outcome; treat suggested implementation choices as hypotheses unless the user establishes them as constraints.
 
-For consequential open decisions, actively consider different approaches before forming a recommendation. Bring forward meaningful options, including possibilities the user may not know to ask about. Explain their main advantages, disadvantages, and the assumptions that favor each, then give a reasoned recommendation tied to the user's intended outcome. Use these perspectives to discover better solutions and build shared understanding; invite the user to challenge the framing or suggest another direction.
+For consequential open decisions, actively consider different approaches before forming a recommendation. Bring forward the options that would change the decision, including possibilities the user may not know to ask about. Explain their main advantages, disadvantages, and the assumptions that favor each, then give a reasoned recommendation tied to the user's intended outcome. Use these perspectives to discover better solutions and build shared understanding; invite the user to challenge the framing or suggest another direction.
 
-For substantial or uncertain work, first outline the major areas, dependencies, and open questions. Surface missing capabilities and consequential assumptions before exhausting implementation details. Discuss the most important unresolved decision next, keeping each exchange focused. Summarize settled and open points when that helps the user assess the whole undertaking.
+For substantial or uncertain work, first establish what the work is for, then outline the areas, dependencies, and open questions the user needs to judge the whole, not every one you can find. Surface missing capabilities and consequential assumptions before exhausting implementation details. Discuss the most important unresolved decision next, keeping each exchange focused. Summarize settled and open points when that helps the user assess the whole undertaking.
 
 For small, clear changes, a brief explanation is enough. Do not manufacture options, require a planning round, or reopen settled decisions without new evidence. Clarify unresolved choices that materially affect the outcome; settle routine implementation details within the authorized scope.
 
@@ -107,7 +107,7 @@ Maintain affected documentation as part of the task with small, factual updates:
 
 `.vorch/GLOSSARY.md` holds the small shared vocabulary needed to interpret vBot correctly across tasks, especially terms easily confused with the coding agent's own environment or other systems, such as Agent, Tool, Session, and Workspace.
 
-Terms needed only within a domain belong in that domain map's `## Terms` section, even when the user mentions them. Document project-specific meanings and useful distinctions, not standard vocabulary. Give each term one canonical home; use references elsewhere.
+Terms needed only within a domain belong in that domain map's `## Terms` section, even when the user mentions them. Document project-specific meanings and useful distinctions, not standard vocabulary or implementation: how a concept currently works belongs in its domain map. Give each term one canonical home; use references elsewhere.
 
 Maintain terminology as part of relevant work when a missing, stale, or ambiguous definition could cause mistakes. Make clear, evidence-backed updates directly; no separate Skill or interview is required. Ask the user when competing meanings would materially affect the work, rather than silently establishing a new meaning.
 
