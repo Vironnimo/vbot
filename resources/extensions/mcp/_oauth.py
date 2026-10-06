@@ -13,7 +13,11 @@ never receives the previous server's token. The token document also keeps the
 authorization server's metadata and the absolute expiry: after a restart the
 provider still refreshes an expiring token ahead of time, at that server's token
 endpoint, instead of sending it until it fails and signing in again. A stored
-registration is reused only for the redirect URI it was registered with.
+registration is reused only for the redirect URI it was registered with, and
+only while it works: a sign-in that does not complete, or a refresh refused for
+any reason but a spent grant, deletes it with its tokens. Authorization servers
+expire and revoke dynamic registrations, and the next sign-in then registers
+again instead of presenting a client the server no longer knows.
 
 Client registration, in order: a pre-registered client from the configuration
 (``oauth_client_id``, an optional ``oauth_client_secret`` credential reference,
@@ -41,6 +45,7 @@ from dataclasses import dataclass, fields
 from typing import Any, override
 from urllib.parse import parse_qs, urlsplit
 
+import httpx2
 from mcp.client.auth import OAuthClientProvider, OAuthFlowError
 from mcp.client.auth.oauth2 import OAuthContext
 from mcp.client.auth.utils import issuers_match, union_scopes
@@ -237,6 +242,11 @@ class OAuthStorage:
     def forget_tokens(self) -> None:
         self._host.set_credential(self._tokens_key, "")
 
+    def forget_client(self) -> None:
+        """Delete the dynamically registered client and the tokens it obtained."""
+        self._host.set_credential(self._client_key, "")
+        self.forget_tokens()
+
     async def get_tokens(self) -> OAuthToken | None:
         document = self._tokens()
         if document is None:
@@ -337,12 +347,40 @@ class _Provider(OAuthClientProvider):
         self._storage.restore(self.context)
 
     @override
-    async def _handle_refresh_response(self, response: Any) -> bool:
+    async def _handle_refresh_response(self, response: httpx2.Response) -> bool:
         refreshed = await super()._handle_refresh_response(response)
         if not refreshed:
             # The refresh token is spent or revoked; never offer it again.
             self._storage.forget_tokens()
+            # Any other refusal may mean the server no longer knows the client.
+            if await _error_code(response) != "invalid_grant":
+                self._forget_registration()
         return refreshed
+
+    @override
+    async def _perform_authorization(self) -> httpx2.Request:
+        try:
+            return await super()._perform_authorization()
+        except Exception:
+            # Cancelled, refused or timed out: the authorization page may have
+            # rejected the client.
+            self._forget_registration()
+            raise
+
+    @override
+    async def _handle_token_response(self, response: httpx2.Response) -> None:
+        try:
+            await super()._handle_token_response(response)
+        except Exception:
+            self._forget_registration()
+            raise
+
+    def _forget_registration(self) -> None:
+        """Register again at the next sign-in instead of reusing the stored registration."""
+        if self._preregistered:
+            return
+        self._storage.forget_client()
+        self.context.client_info = None
 
     @override
     def _expected_issuer(self) -> str:
@@ -454,6 +492,16 @@ class ConnectionOAuth:
         return AuthorizationCodeResult(
             code=params["code"], state=params.get("state"), iss=params.get("iss")
         )
+
+
+async def _error_code(response: httpx2.Response) -> str | None:
+    """The OAuth ``error`` code of a refused token request, if its body names one."""
+    try:
+        body = json.loads(await response.aread())
+    except ValueError:
+        return None
+    error = body.get("error") if isinstance(body, dict) else None
+    return error if isinstance(error, str) else None
 
 
 def _redirect_query(url: str) -> dict[str, str]:

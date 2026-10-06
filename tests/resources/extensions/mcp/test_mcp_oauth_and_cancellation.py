@@ -43,6 +43,10 @@ class FakeServers:
         self.requests: list[httpx2.Request] = []
         self.accepted: set[str] = set()
         self.issued = 0
+        self.registered = 0
+        # Registered clients the server no longer knows, and refresh tokens it refuses.
+        self.forgotten: set[str] = set()
+        self.spent: set[str] = set()
 
     def handle(self, request: httpx2.Request) -> httpx2.Response:
         self.requests.append(request)
@@ -73,10 +77,19 @@ class FakeServers:
                     },
                 )
             if url.path == "/register":
+                self.registered += 1
+                client_id = "registered-client" + (
+                    f"-{self.registered}" if self.registered > 1 else ""
+                )
                 return httpx2.Response(
-                    201, json={**json.loads(request.content), "client_id": "registered-client"}
+                    201, json={**json.loads(request.content), "client_id": client_id}
                 )
             if url.path == "/token":
+                form = parse_qs(request.content.decode())
+                if form.get("client_id", [""])[0] in self.forgotten:
+                    return httpx2.Response(401, json={"error": "invalid_client"})
+                if form.get("refresh_token", [""])[0] in self.spent:
+                    return httpx2.Response(400, json={"error": "invalid_grant"})
                 self.issued += 1
                 self.accepted.add(f"access-{self.issued}")
                 return httpx2.Response(
@@ -132,6 +145,14 @@ async def pending_sign_in(inputs: InputRequests, request: asyncio.Task) -> dict:
     }
 
 
+def complete_sign_in(inputs: InputRequests, sign_in: dict) -> None:
+    """Answer *sign_in* with the address the browser went to, as the user pastes it."""
+    inputs.respond(
+        sign_in["id"],
+        {"redirect_url": f"{PASTE_REDIRECT_URI}?code=code&state={sign_in['state']}"},
+    )
+
+
 @pytest.fixture
 def redirects() -> OAuthRedirects:
     redirects = OAuthRedirects()
@@ -181,10 +202,7 @@ async def test_an_expiring_token_is_refreshed_after_a_restart_without_a_new_sign
         sign_in = await pending_sign_in(inputs, request)
         # Without a server callback, the user pastes where the browser went.
         assert sign_in["redirect_uri"] == PASTE_REDIRECT_URI
-        inputs.respond(
-            sign_in["id"],
-            {"redirect_url": f"{PASTE_REDIRECT_URI}?code=code&state={sign_in['state']}"},
-        )
+        complete_sign_in(inputs, sign_in)
         assert (await asyncio.wait_for(request, 5)).status_code == 200
     stored = json.loads(host.resolve_credential(TOKENS))
     host.set_credential(TOKENS, json.dumps({**stored, "expires_at": time.time() + 10}))
@@ -237,6 +255,62 @@ async def test_a_preregistered_client_skips_registration_and_stays_with_its_serv
         with pytest.raises(OAuthFlowError, match="now uses the authorization server"):
             await asyncio.wait_for(client.get(RESOURCE), 5)
     assert servers.sent("other-auth.example.com") == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "refusal, registration",
+    [
+        ("token", "registered-client-2"),
+        ("authorization", "registered-client-2"),
+        ("refresh", "registered-client-2"),
+        ("spent_refresh", "registered-client"),
+    ],
+)
+async def test_a_registration_the_server_no_longer_accepts_is_replaced(host, refusal, registration):
+    servers = FakeServers()
+    inputs = InputRequests()
+    async with signed_client(oauth_connection(), host, inputs, servers) as client:
+        request = asyncio.create_task(client.get(RESOURCE))
+        complete_sign_in(inputs, await pending_sign_in(inputs, request))
+        assert (await asyncio.wait_for(request, 5)).status_code == 200
+    stored = json.loads(host.resolve_credential(TOKENS))
+    servers.accepted.clear()
+    if refusal == "spent_refresh":
+        # Only the refresh token is spent; the registration still works.
+        servers.spent.add("refresh-1")
+    else:
+        # The authorization server expired or revoked the registration.
+        servers.forgotten.add("registered-client")
+
+    if refusal in {"token", "authorization"}:
+        # The next sign-in presents the stored registration and does not complete.
+        async with signed_client(oauth_connection(), host, inputs, servers) as client:
+            request = asyncio.create_task(client.get(RESOURCE))
+            sign_in = await pending_sign_in(inputs, request)
+            assert sign_in["client_id"] == "registered-client"
+            if refusal == "token":
+                complete_sign_in(inputs, sign_in)
+                with pytest.raises(OAuthFlowError, match="invalid_client"):
+                    await asyncio.wait_for(request, 5)
+            else:
+                # The authorization page rejected the client; the user cancels.
+                inputs.respond(sign_in["id"], {"action": "cancel"})
+                with pytest.raises(ValueError, match="cancelled"):
+                    await asyncio.wait_for(request, 5)
+        assert host.resolve_credential(CLIENT) == ""
+    else:
+        # A refresh is due; its refusal leads to a new sign-in in the same request.
+        host.set_credential(TOKENS, json.dumps({**stored, "expires_at": time.time() + 10}))
+
+    # The sign-in after a refused registration registers again.
+    async with signed_client(oauth_connection(), host, inputs, servers) as client:
+        request = asyncio.create_task(client.get(RESOURCE))
+        sign_in = await pending_sign_in(inputs, request)
+        assert sign_in["client_id"] == registration
+        complete_sign_in(inputs, sign_in)
+        assert (await asyncio.wait_for(request, 5)).status_code == 200
+    assert json.loads(host.resolve_credential(CLIENT))["client_id"] == registration
 
 
 @pytest.mark.asyncio
