@@ -180,7 +180,7 @@
 }
 .jev-notice.banner {
   flex-shrink: 0;
-  margin: 16px 26px 0;
+  margin: 16px var(--page-inset-x) 0;
 }
 .jev-history-list {
   max-height: 230px;
@@ -262,9 +262,6 @@
 @media (max-width: 650px) {
   .jev-header {
     gap: 12px;
-  }
-  .jev-notice.banner {
-    margin: 12px 14px 0;
   }
   .jev-toolbar {
     flex-wrap: wrap;
