@@ -86,6 +86,8 @@ Tests guard behavior against regressions from concurrent and later work. Every t
 
 **Tests run at push, not at commit or merge.** Commits and merges get static checks only: run the tests covering your change yourself and commit once they pass; leave failures your change cannot explain to the push and mention them in your report.
 
+Do not run existing tests to analyze, review, or investigate code: `main` passed the full suite at push, so they only confirm what they already assert. To check a specific behavior claim, run a small targeted probe instead.
+
 ## Dependencies
 
 If a task requires a new dependency, **check first** that no existing dependency already covers the need. Then install it, add it to `pyproject.toml` (or `webui/package.json` for frontend), and commit the lock file changes. Do not install packages speculatively — only what the current task requires.
