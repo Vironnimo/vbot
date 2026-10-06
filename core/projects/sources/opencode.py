@@ -1,4 +1,4 @@
-"""OpenCode Markdown and JSON Agents, with fail-closed permission translation."""
+"""OpenCode Markdown and JSON Agents, translated into whole vBot Tools."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from typing import Any
 
 from core.projects.sources import _reading as reading
 from core.projects.sources._translation import (
-    FILE_TOOLS,
     SHELL_TOOLS,
     permission_rules,
     profile,
@@ -146,7 +145,6 @@ class OpenCodeAdapter:
             )
         states = dict.fromkeys(_MAPPING, True)
         default_access = True
-        blocked: set[str] = set()
         target_rules: list[AgentTargetRule] = []
         skill_rules: list[AgentTargetRule] = []
         reports = list(agent.translations)
@@ -177,18 +175,16 @@ class OpenCodeAdapter:
             for pattern, value in permissions.items():
                 rules = permission_rules(value)
                 scoped = isinstance(value, dict)
+                # Anything the Agent may do, even only for some commands or paths
+                # or after approval, needs the whole vBot Tool.
+                usable = any(rule.allowed for rule in rules)
                 if pattern in {"task", "skill"}:
                     (target_rules if pattern == "task" else skill_rules).extend(rules)
                     if not scoped:
-                        states[pattern] = value == "allow"
-                    approval = any(not rule.allowed for rule in rules) and (
-                        value == "ask" or scoped and "ask" in value.values()
-                    )
+                        states[pattern] = usable
                     reports.append(
                         Translation(
-                            f"permission.{pattern}",
-                            "not_supported" if approval else "translated",
-                            "Applied to available names; approval requests are denied.",
+                            f"permission.{pattern}", "translated", "Applied to available names."
                         )
                     )
                     continue
@@ -196,56 +192,30 @@ class OpenCodeAdapter:
                 if pattern == "edit":
                     matches = ["edit", "write", "apply_patch"]
                 if pattern == "*":
-                    default_access = value == "allow"
-                if scoped:
-                    for foreign in matches:
-                        states[foreign] = False
-                    if pattern in {"read", "external_directory"}:
-                        blocked.update(FILE_TOOLS)
-                    reports.append(
-                        Translation(
-                            f"permission.{pattern}",
-                            "not_supported",
-                            "Per-command/path rules are unavailable; affected Tools are disabled.",
-                        )
-                    )
+                    default_access = usable
+                for foreign in matches:
+                    states[foreign] = usable
+                if not matches:
+                    detail = "vBot has no such capability."
+                elif scoped and usable:
+                    detail = "Granted as the whole vBot Tool; command and path rules do not apply."
                 else:
-                    for foreign in matches:
-                        states[foreign] = value == "allow"
-                    reports.append(
-                        Translation(
-                            f"permission.{pattern}",
-                            "translated"
-                            if (matches or value != "allow") and value != "ask"
-                            else "not_supported",
-                            "Applied to matching capabilities; approval requests disable Tools."
-                            if matches
-                            else "vBot has no such capability.",
-                        )
-                    )
-                if pattern == "external_directory" and value != "allow":
-                    # vBot's file Tools are not confined to the repository.
-                    blocked.update(FILE_TOOLS)
-        # Several foreign capabilities can share one vBot Tool. Every capability
-        # it supplies must be allowed, so a later Glob allow cannot undo Grep deny.
+                    detail = "Applied to matching capabilities."
+                reports.append(Translation(f"permission.{pattern}", "translated", detail))
+        # Several foreign capabilities can share one vBot Tool; any allowed one grants it.
         requirements: dict[str, list[str]] = {}
         for foreign, mapped in _MAPPING.items():
             for tool in mapped:
                 requirements.setdefault(tool, []).append(foreign)
-        tool_rules = [ToolRule("*", default_access)]
-        tool_rules.extend(
-            ToolRule(tool, all(states[foreign] for foreign in required) and tool not in blocked)
+        granted = {
+            tool: any(states[foreign] for foreign in required)
             for tool, required in requirements.items()
-        )
-        for tool in blocked:
-            tool_rules.append(ToolRule(tool, False))
+        }
+        tool_rules = [ToolRule("*", default_access)]
+        tool_rules.extend(ToolRule(tool, allowed) for tool, allowed in granted.items())
         agent = replace(
             agent,
-            denied_tools=frozenset(
-                tool
-                for tool, required in requirements.items()
-                if tool in blocked or not all(states[foreign] for foreign in required)
-            ),
+            denied_tools=frozenset(tool for tool, allowed in granted.items() if not allowed),
             tool_rules=tuple(tool_rules)
             if any("tools" in layer or "permission" in layer for layer in (global_fields, fields))
             else (),

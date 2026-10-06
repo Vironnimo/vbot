@@ -9,7 +9,6 @@ from typing import Any
 
 from core.projects.sources import _reading as reading
 from core.projects.sources._translation import (
-    FILE_TOOLS,
     SHELL_TOOLS,
     profile,
     restrict,
@@ -18,19 +17,8 @@ from core.projects.sources._translation import (
 )
 from core.projects.sources.profile import AgentProfile, Translation
 
-# What each sandbox leaves out that vBot's unconfined Tools would allow. vBot's
-# file Tools can be closed exactly; its shell cannot be confined, so any sandbox
-# closes it.
-_SANDBOXES = {
-    "read-only": frozenset({"apply_patch", *SHELL_TOOLS}),
-    "workspace-write": SHELL_TOOLS,
-    "danger-full-access": frozenset(),
-}
-_PERMISSION_PROFILES = {
-    ":read-only": "read-only",
-    ":workspace": "workspace-write",
-    ":danger-no-sandbox": "danger-full-access",
-}
+# Permission profiles that keep the Agent from editing files at all.
+_READ_ONLY = frozenset({"read-only", ":read-only"})
 
 
 class CodexAdapter:
@@ -138,52 +126,25 @@ class CodexAdapter:
 
 
 def _restrictions(agent: AgentProfile, fields: dict[str, Any]) -> AgentProfile:
-    """Translate Codex sandbox, approval and capability switches without widening."""
-    sandbox = fields.get("sandbox_mode")
-    profile_name = fields.get("default_permissions")
-    if isinstance(profile_name, str) and profile_name in _PERMISSION_PROFILES:
-        sandbox = _PERMISSION_PROFILES[profile_name]
-    elif profile_name is not None or "permissions" in fields:
-        agent = restrict(
-            agent,
-            "default_permissions",
-            FILE_TOOLS,
-            "Custom permission profiles are unavailable; file and shell Tools are disabled.",
+    """Remove only capabilities the Codex Agent lacks entirely.
+
+    vBot has no sandbox and asks no approvals: an Agent that may do something,
+    even confined or after approval, keeps the vBot Tool for it.
+    """
+    for setting in ("sandbox_mode", "default_permissions"):
+        value = fields.get(setting)
+        if value in _READ_ONLY:
+            agent = restrict(agent, setting, frozenset({"apply_patch"}), "File edits are disabled.")
+        elif value is not None:
+            agent = _translated(agent, setting, "vBot has no sandbox; the Agent keeps its Tools.")
+    if "approval_policy" in fields:
+        agent = _translated(
+            agent, "approval_policy", "vBot asks no approvals; the Agent keeps its Tools."
         )
-    if sandbox is not None:
-        closed = _SANDBOXES.get(sandbox) if isinstance(sandbox, str) else None
-        if closed is None:
-            agent = restrict(
-                agent,
-                "sandbox_mode",
-                FILE_TOOLS,
-                "Unknown sandbox; file and shell Tools are disabled.",
-            )
-        elif closed:
-            agent = restrict(
-                agent,
-                "sandbox_mode",
-                closed,
-                "vBot cannot confine its shell; Tools this sandbox forbids are disabled.",
-            )
-        else:
-            agent = _translated(agent, "sandbox_mode", "No sandbox; vBot Tool access applies.")
-    approval = fields.get("approval_policy")
-    if approval is not None and approval != "never":
-        closed = SHELL_TOOLS | ({"apply_patch"} if approval == "untrusted" else set())
-        agent = restrict(
-            agent,
-            "approval_policy",
-            frozenset(closed),
-            "vBot asks no approvals; Tools that would ask are disabled.",
-        )
-    web_search = fields.get("web_search")
-    if web_search == "disabled":
+    if fields.get("web_search") == "disabled":
         agent = restrict(
             agent, "web_search", frozenset({"web_search", "web_fetch"}), "Web access is disabled."
         )
-    elif web_search is not None:
-        agent = _translated(agent, "web_search", "Web search stays available.")
     features = fields.get("features")
     if isinstance(features, dict) and features.get("shell_tool") is False:
         agent = restrict(agent, "features.shell_tool", SHELL_TOOLS, "The shell is disabled.")

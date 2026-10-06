@@ -41,6 +41,12 @@ def write(root: Path, path: str, content: str) -> Path:
     return target
 
 
+ALL_TOOLS = frozenset(
+    {"read", "search_files", "apply_patch", "bash", "terminal", "status", "skill", "subagent"}
+)
+NO_SHELL = ALL_TOOLS - {"bash", "terminal"}
+
+
 @pytest.mark.parametrize(
     ("source", "path", "document", "expected", "status"),
     [
@@ -62,38 +68,30 @@ def write(root: Path, path: str, content: str) -> Path:
         (
             "claude",
             ".claude/agents/reviewer.md",
-            "---\ntools: Read(src/**)\n---\nReview.",
-            set(),
-            "limited",
-        ),
-        (
-            "claude",
-            ".claude/agents/reviewer.md",
-            "---\ntools: Read, Bash(git status)\n---\nReview.",
-            {"read"},
-            "limited",
-        ),
-        (
-            "claude",
-            ".claude/agents/reviewer.md",
             "---\ntools: [Read\n---\nReview.",
             set(),
             "needs_attention",
+        ),
+        # A Tool the Agent may use for some commands or paths is granted whole.
+        (
+            "claude",
+            ".claude/agents/reviewer.md",
+            "---\ntools: Read(src/**), Bash(git status)\n---\nReview.",
+            {"read", "bash"},
+            "ready",
+        ),
+        (
+            "claude",
+            ".claude/agents/reviewer.md",
+            "---\ndisallowedTools: Read(./.env), Bash\n---\nReview.",
+            NO_SHELL,
+            "ready",
         ),
         (
             "claude",
             ".claude/agents/reviewer.md",
             "---\npermissionMode: acceptEdits\n---\nReview.",
-            {
-                "read",
-                "search_files",
-                "apply_patch",
-                "bash",
-                "terminal",
-                "status",
-                "skill",
-                "subagent",
-            },
+            ALL_TOOLS,
             "ready",
         ),
         (
@@ -107,7 +105,7 @@ def write(root: Path, path: str, content: str) -> Path:
             "claude",
             ".claude/agents/reviewer.md",
             "---\nhooks:\n  PreToolUse:\n    - matcher: Bash\n---\nReview.",
-            {"read", "search_files", "apply_patch", "status", "skill", "subagent"},
+            ALL_TOOLS,
             "limited",
         ),
         (
@@ -120,9 +118,10 @@ def write(root: Path, path: str, content: str) -> Path:
         (
             "opencode",
             ".opencode/agents/reviewer.md",
-            "---\npermission:\n  bash:\n    '*': allow\n    'git push*': deny\n---\nReview.",
-            {"read", "search_files", "apply_patch", "status", "skill", "subagent"},
-            "limited",
+            "---\npermission:\n  bash:\n    '*': allow\n    'git push*': deny\n"
+            "  edit: ask\n  todowrite: deny\n---\nReview.",
+            ALL_TOOLS,
+            "ready",
         ),
         (
             "opencode",
@@ -133,55 +132,26 @@ def write(root: Path, path: str, content: str) -> Path:
         ),
         (
             "opencode",
-            "opencode.json",
-            '{"permission":{"*":"deny"},"agent":{"reviewer":{"permission":{"read":"allow"},"prompt":"Review."}}}',
-            {"read"},
+            "opencode.jsonc",
+            '{\n  // Shared\n  "permission": {"bash": "deny"},\n'
+            '  "agent": {"reviewer": {"prompt": "Review.",},},\n}',
+            NO_SHELL,
             "ready",
         ),
         (
             "codex",
             ".codex/agents/reviewer.toml",
-            'name="reviewer"\ndescription="Review"\ndeveloper_instructions="Review."\nsandbox_mode="read-only"',
-            {"read", "search_files", "status", "skill", "subagent"},
-            "limited",
+            'name="reviewer"\ndescription="Review"\ndeveloper_instructions="Review."\n'
+            'sandbox_mode="read-only"\napproval_policy="on-request"',
+            ALL_TOOLS - {"apply_patch"},
+            "ready",
         ),
         (
             "codex",
             ".codex/config.toml",
-            'approval_policy="never"\n[features]\nshell_tool=false\n[agents.reviewer]\ndescription="Review"',
-            {"read", "search_files", "apply_patch", "status", "skill", "subagent"},
+            '[features]\nshell_tool=false\n[agents.reviewer]\ndescription="Review"',
+            NO_SHELL,
             "limited",
-        ),
-        (
-            "claude",
-            ".claude/agents/reviewer.md",
-            "---\ndisallowedTools: Read(./.env)\n---\nReview.",
-            {"apply_patch", "status", "skill", "subagent"},
-            "limited",
-        ),
-        (
-            "opencode",
-            "opencode.jsonc",
-            '{\n  // Shared\n  "permission": {"bash": "deny"},\n'
-            '  "agent": {"reviewer": {"prompt": "Review.",},},\n}',
-            {"read", "search_files", "apply_patch", "status", "skill", "subagent"},
-            "ready",
-        ),
-        (
-            "opencode",
-            ".opencode/agents/reviewer.md",
-            "---\npermission:\n  todowrite: deny\n---\nReview.",
-            {
-                "read",
-                "search_files",
-                "apply_patch",
-                "bash",
-                "terminal",
-                "status",
-                "skill",
-                "subagent",
-            },
-            "ready",
         ),
         (
             "copilot",
@@ -206,14 +176,11 @@ def write(root: Path, path: str, content: str) -> Path:
         ),
     ],
 )
-def test_imports_never_widen_the_tool_selection(repo, source, path, document, expected, status):
+def test_imports_grant_the_tools_an_agent_may_use(repo, source, path, document, expected, status):
     write(repo, path, document)
     profile = scan_project(repo, sources=[SourceSelection(f"{source}.agents")]).team[0]
     assert profile.status == status
-    policy = profile_tool_access(
-        profile,
-        ("read", "search_files", "apply_patch", "bash", "terminal", "status", "skill", "subagent"),
-    )
+    policy = profile_tool_access(profile, tuple(sorted(ALL_TOOLS)))
     assert set(policy.allowed) == expected
     # The actual Tool resolver must not add followers or Session grants to an
     # imported exact list, including the empty list.
@@ -254,42 +221,6 @@ def test_mixed_sources_priority_and_new_detection_preserve_winners(repo):
     assert next(item for item in refreshed if item.id == "cursor.agents").enabled is False
     reordered = scan_project(repo, sources=[sources[1], sources[0], sources[2]])
     assert reordered.team[1].source == "opencode"
-
-
-@pytest.mark.parametrize(
-    ("hooks", "expected", "status"),
-    [
-        (
-            {"SessionStart": [{"hooks": []}]},
-            {
-                "read",
-                "search_files",
-                "apply_patch",
-                "bash",
-                "terminal",
-                "status",
-                "skill",
-                "subagent",
-            },
-            "ready",
-        ),
-        (
-            {"PreToolUse": [{"matcher": "Edit|Write", "hooks": []}]},
-            {"read", "search_files", "bash", "terminal", "status", "skill", "subagent"},
-            "limited",
-        ),
-    ],
-)
-def test_claude_project_hooks_disable_only_the_tools_they_gate(repo, hooks, expected, status):
-    write(repo, ".claude/settings.json", json.dumps({"hooks": hooks}))
-    write(repo, ".claude/agents/reviewer.md", "---\nname: reviewer\n---\nReview.")
-    profile = scan_project(repo, sources=[SourceSelection("claude.agents")]).team[0]
-    assert profile.status == status
-    policy = profile_tool_access(
-        profile,
-        ("read", "search_files", "apply_patch", "bash", "terminal", "status", "skill", "subagent"),
-    )
-    assert set(policy.allowed) == expected
 
 
 @pytest.mark.parametrize(

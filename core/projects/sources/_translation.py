@@ -1,4 +1,4 @@
-"""Adapter helpers for translating capability wishes without widening access."""
+"""Adapter helpers that map what a foreign Agent may do onto whole vBot Tools."""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from core.settings import validate_temperature, validate_thinking_effort, valida
 
 # A foreign shell denial also closes vBot's independent interactive shell.
 SHELL_TOOLS = frozenset({"bash", "terminal"})
-FILE_TOOLS = frozenset({"read", "search_files", "apply_patch", "edit", "write", "bash", "terminal"})
 READ_ONLY_TOOLS = frozenset({"read", "search_files", "web_fetch", "web_search", "status"})
 
 
@@ -112,32 +111,19 @@ def unsupported(
     cosmetic: frozenset[str] = frozenset({"color"}),
 ) -> AgentProfile:
     reports = list(agent.translations)
-    rules = list(agent.tool_rules)
     for key in fields:
         if key in known or key in cosmetic:
             continue
         reports.append(Translation(key, "not_supported", "This setting has no vBot equivalent."))
-        if any(
-            term in key.lower()
-            for term in (
-                "permission",
-                "sandbox",
-                "isolation",
-                "hook",
-                "tool",
-                "network",
-                "environment",
-            )
-        ):
-            rules.append(ToolRule("*", False))
-    return replace(agent, translations=tuple(reports), tool_rules=tuple(rules))
+    return replace(agent, translations=tuple(reports))
 
 
 def restrict(agent: AgentProfile, setting: str, tools: frozenset[str], detail: str) -> AgentProfile:
+    """Remove Tools for a capability the foreign Agent does not have at all."""
     return replace(
         agent,
         denied_tools=agent.denied_tools | tools,
-        translations=(*agent.translations, Translation(setting, "not_supported", detail)),
+        translations=(*agent.translations, Translation(setting, "translated", detail)),
     )
 
 
@@ -148,21 +134,18 @@ def tool_list(
     *,
     deny: bool = False,
     setting: str = "tools",
-    compound: dict[str, frozenset[str]] | None = None,
     wildcard: bool = False,
-    covers: dict[str, frozenset[str]] | None = None,
 ) -> AgentProfile:
     """Map a foreign Tool list onto vBot Tools.
 
-    ``covers`` names further vBot Tools a denial of a foreign Tool also closes,
-    because they reach the same data (a file read denial also covers search and shell).
+    vBot grants whole Tools: an entry the Agent may use for some commands or paths
+    grants the Tool, and only an unscoped denial removes it.
     """
     entries = names(value, comma_separated=True)
     targets: list[AgentTargetRule] = list(agent.agent_target_rules)
     reports = list(agent.translations)
     allowed: set[str] = set()
     denied: set[str] = set(agent.denied_tools)
-    found: set[str] = set()
     unrestricted_targets = False
     inherit_selection = False
     scoped_targets: list[str] = []
@@ -177,19 +160,13 @@ def tool_list(
                 return replace(agent, tool_rules=(*agent.tool_rules, ToolRule("*", False)))
             inherit_selection = True
             unrestricted_targets = True
-            found.update(mapping)
             continue
         mapped = mapping.get(base)
         if mapped is None:
             reports.append(
-                Translation(
-                    f"{setting}.{entry}",
-                    "not_supported",
-                    "No matching vBot Tool; no access is granted.",
-                )
+                Translation(f"{setting}.{entry}", "not_supported", "No matching vBot Tool.")
             )
             continue
-        found.add(base)
         if separator:
             if not rest.endswith(")"):
                 raise SourceError("Malformed Tool scope.")
@@ -203,21 +180,18 @@ def tool_list(
                     scoped_targets.extend(patterns)
                     allowed.update(mapped)
                 continue
-            denied.update(mapped)
-            if "bash" in mapped:
-                denied.update(SHELL_TOOLS)
-            if deny:
-                denied.update((covers or {}).get(base, frozenset()))
+            if not deny:
+                allowed.update(mapped)
             reports.append(
                 Translation(
                     f"{setting}.{entry}",
-                    "not_supported",
-                    "Scoped access is not representable; the affected Tool is disabled.",
+                    "translated",
+                    "Command and path rules do not apply; the whole vBot Tool "
+                    + ("stays available." if deny else "is granted."),
                 )
             )
         elif deny:
             denied.update(mapped)
-            denied.update((covers or {}).get(base, frozenset()))
             if "bash" in mapped:
                 denied.update(SHELL_TOOLS)
             if base == "agent":
@@ -225,29 +199,16 @@ def tool_list(
         else:
             allowed.update(mapped)
             unrestricted_targets |= base == "agent"
-    if not deny:
-        for tool, required in (compound or {}).items():
-            if not required <= found:
-                allowed.discard(tool)
-                if any(tool in mapping[name] for name in found):
-                    reports.append(
-                        Translation(
-                            setting,
-                            "not_supported",
-                            f"{tool} combines capabilities absent from this allowlist "
-                            "and is disabled.",
-                        )
-                    )
-        if not unrestricted_targets:
-            targets.append(AgentTargetRule("*", False))
-            targets.extend(AgentTargetRule(pattern, True) for pattern in scoped_targets)
+    if not deny and not unrestricted_targets:
+        targets.append(AgentTargetRule("*", False))
+        targets.extend(AgentTargetRule(pattern, True) for pattern in scoped_targets)
     reports.append(
         Translation(
             setting,
             "translated",
             "Mapped to an exact vBot Tool selection."
             if not deny
-            else "Mapped to absolute vBot Tool denials.",
+            else "Mapped to vBot Tool denials.",
         )
     )
     return replace(
@@ -280,7 +241,7 @@ def permission_rules(value: Any) -> tuple[AgentTargetRule, ...]:
             raise SourceError(
                 "Permission rules require string patterns and allow/deny/ask actions."
             )
-        result.append(AgentTargetRule(pattern, action == "allow"))
+        result.append(AgentTargetRule(pattern, action != "deny"))
     return tuple(result)
 
 
