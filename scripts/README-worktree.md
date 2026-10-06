@@ -359,7 +359,7 @@ From inside the worktree, start the complete test instance:
 python scripts/test-env.py start
 ```
 
-`scripts/test-env.py start` rebuilds the frontend, starts the Settings-declared fake Provider with an owned PID under the Worktree data directory, then starts vBot. Use `python cli/main.py server start` only when intentionally testing vBot without the fake endpoint.
+`scripts/test-env.py start` rebuilds the frontend, starts the Settings-declared fake Provider (`scripts/fake-provider.mjs`, needs Node.js) with an owned PID under the Worktree data directory, then starts vBot. Use `python cli/main.py server start` only when intentionally testing vBot without the fake endpoint.
 
 ### Stop the local worktree server
 
@@ -388,7 +388,7 @@ This is the machine-readable marker used by config and cleanup logic.
 
 ### `~/.vbot-<name>/settings.json`
 
-This contains the dedicated `server_port`, the keyless `providers.custom.fake` endpoint, manual fake Models for chat/fallback/image/speech, and the corresponding default/task-model bindings. Creation seeds only its newly created data directory. The fixture is `tests/e2e/fake-provider-settings.json` from the checkout that runs `worktree.py` (like the data-directory layout and seed resources), not from the main repository, so a branch that changes it seeds its own version. Its task-model options must be valid for the option schemas vBot builds for those fake Models (for these Custom Provider Models, TTS offers only the `mp3`/`pcm` formats and image generation only `extra_options`), otherwise saving Specialized Models fails on an untouched option; `tests/scripts/test_worktree.py` validates the seeded bindings through the same Task Model check Settings runs.
+This contains the dedicated `server_port`, the keyless `providers.custom.fake` endpoint, manual fake Models for chat/fallback/image/speech, and the corresponding default/task-model bindings. Creation seeds only its newly created data directory. The fixture is `scripts/fake-provider-settings.json` from the checkout that runs `worktree.py` (like the data-directory layout and seed resources), not from the main repository, so a branch that changes it seeds its own version. Its task-model options must be valid for the option schemas vBot builds for those fake Models (for these Custom Provider Models, TTS offers only the `mp3`/`pcm` formats and image generation only `extra_options`), otherwise saving Specialized Models fails on an untouched option; `tests/scripts/test_worktree.py` validates the seeded bindings through the same Task Model check Settings runs.
 
 ### `~/.vbot-<name>/.env` and canonical directories
 

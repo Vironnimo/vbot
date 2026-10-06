@@ -55,8 +55,8 @@ WEBUI_DIST = WEBUI_DIR / "dist" / "index.html"
 WEBUI_NODE_MODULES = WEBUI_DIR / "node_modules"
 STARTUP_TIMEOUT_SECONDS = 15
 FAKE_PROVIDER_ID = "fake"
-FAKE_PROVIDER_SERVICE = "vbot-e2e-fake-provider"
-FAKE_PROVIDER_ENTRY = PROJECT_ROOT / "tests" / "e2e" / "fake-provider.js"
+FAKE_PROVIDER_SERVICE = "vbot-fake-provider"
+FAKE_PROVIDER_ENTRY = PROJECT_ROOT / "scripts" / "fake-provider.mjs"
 FAKE_PROVIDER_STARTUP_TIMEOUT_SECONDS = 5
 FAKE_PROVIDER_POLL_SECONDS = 0.1
 FAKE_PROVIDER_PID_FILE = "fake-provider.pid"
@@ -252,8 +252,8 @@ def start_fake_provider(instance: FakeProviderInstance | None) -> bool:
     instance.pid_path.parent.mkdir(parents=True, exist_ok=True)
     environment = {
         **os.environ,
-        "VBOT_E2E_PROVIDER_HOST": instance.host,
-        "VBOT_E2E_PROVIDER_PORT": str(instance.port),
+        "VBOT_FAKE_PROVIDER_HOST": instance.host,
+        "VBOT_FAKE_PROVIDER_PORT": str(instance.port),
     }
     with instance.log_path.open("w", encoding="utf-8") as log_file:
         if sys.platform == "win32":

@@ -37,7 +37,7 @@ function prepareTestData() {
   );
   const settings = JSON.parse(
     readFileSync(
-      path.join(environment.e2eRoot, "fake-provider-settings.json"),
+      path.join(environment.repoRoot, "scripts", "fake-provider-settings.json"),
       "utf8",
     ),
   );

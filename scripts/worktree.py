@@ -113,7 +113,7 @@ PROJECT_ROOT = _resolve_project_root()
 
 WORKTREES_DIR = PROJECT_ROOT / ".worktrees"
 # Relative to the running script's checkout (see ``_script_checkout_root``).
-FAKE_PROVIDER_SETTINGS_RELATIVE_PATH = Path("tests") / "e2e" / "fake-provider-settings.json"
+FAKE_PROVIDER_SETTINGS_RELATIVE_PATH = Path("scripts") / "fake-provider-settings.json"
 VALID_WORKTREE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 TRASH_DIR_PREFIX = ".trash-"
 # A merge prepares its merge commit, and scripts/push.py checks the commit it

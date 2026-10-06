@@ -35,7 +35,7 @@ def test_start_launches_the_seeded_fake_provider_before_the_server(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     settings = json.loads(
-        (PROJECT_ROOT / "tests" / "e2e" / "fake-provider-settings.json").read_text(encoding="utf-8")
+        (PROJECT_ROOT / "scripts" / "fake-provider-settings.json").read_text(encoding="utf-8")
     )
     settings["providers"]["custom"]["fake"]["base_url"] = "http://127.0.0.1:18422/v1"
     (tmp_path / "settings.json").write_text(json.dumps(settings), encoding="utf-8")

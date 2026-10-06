@@ -1,8 +1,8 @@
 import http from "node:http";
 
-const SERVICE_NAME = "vbot-e2e-fake-provider";
-const host = process.env.VBOT_E2E_PROVIDER_HOST ?? "127.0.0.1";
-const port = Number.parseInt(process.env.VBOT_E2E_PROVIDER_PORT ?? "8438", 10);
+const SERVICE_NAME = "vbot-fake-provider";
+const host = process.env.VBOT_FAKE_PROVIDER_HOST ?? "127.0.0.1";
+const port = Number.parseInt(process.env.VBOT_FAKE_PROVIDER_PORT ?? "8438", 10);
 const activeResponses = new Set();
 let nextToolCallId = 1;
 const TINY_PNG_BASE64 =
@@ -12,7 +12,7 @@ const TINY_PNG_BASE64 =
 const SHELL_TOOL_NAMES = ["bash", "powershell"];
 
 if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-  throw new Error("VBOT_E2E_PROVIDER_PORT must be a valid TCP port");
+  throw new Error("VBOT_FAKE_PROVIDER_PORT must be a valid TCP port");
 }
 
 function writeJson(response, statusCode, body, headers = {}) {

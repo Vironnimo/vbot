@@ -334,7 +334,7 @@ def test_cmd_create_initializes_canonical_data_dir_without_agent(tmp_path, monke
         PROJECT_ROOT / "resources" / "data-dir" / ".env.example"
     ).read_bytes()
     expected_settings = json.loads(
-        (PROJECT_ROOT / "tests" / "e2e" / "fake-provider-settings.json").read_text(encoding="utf-8")
+        (PROJECT_ROOT / "scripts" / "fake-provider-settings.json").read_text(encoding="utf-8")
     )
     expected_settings["providers"]["custom"]["fake"]["base_url"] = "http://127.0.0.1:18422/v1"
     expected_settings["server_port"] = 8422
@@ -447,7 +447,7 @@ def test_seeded_task_model_options_validate_against_loaded_option_schemas(tmp_pa
         storage,
     )
     fixture = json.loads(
-        (PROJECT_ROOT / "tests" / "e2e" / "fake-provider-settings.json").read_text(encoding="utf-8")
+        (PROJECT_ROOT / "scripts" / "fake-provider-settings.json").read_text(encoding="utf-8")
     )
 
     bindings = storage.load_model_task_settings()
@@ -460,7 +460,7 @@ def test_seeded_task_model_options_validate_against_loaded_option_schemas(tmp_pa
 
 def test_seed_worktree_settings_reads_fixture_from_running_checkout(tmp_path, monkeypatch):
     module = _load_worktree_module()
-    fixture_relative = Path("tests") / "e2e" / "fake-provider-settings.json"
+    fixture_relative = Path("scripts") / "fake-provider-settings.json"
     fixture = json.loads((PROJECT_ROOT / fixture_relative).read_text(encoding="utf-8"))
 
     def write_checkout(root: Path, model: str) -> None:
