@@ -179,6 +179,13 @@
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
   }
 
+  /* The popup scrolls; its rows must keep their full height instead of
+     shrinking to fit the capped column (rows with overflow: hidden would
+     otherwise collapse onto their padding and clip their text). */
+  .model-autocomplete > * {
+    flex-shrink: 0;
+  }
+
   .model-autocomplete__eyebrow {
     padding: 8px 10px 6px;
     border-bottom: 1px solid var(--border);
@@ -258,7 +265,6 @@
   }
 
   .model-autocomplete__footer {
-    flex-shrink: 0;
     padding: 7px 10px;
     border: 0;
     border-top: 1px solid var(--border);

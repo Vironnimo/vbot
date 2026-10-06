@@ -142,6 +142,13 @@
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
   }
 
+  /* The popup scrolls; its rows must keep their full height instead of
+     shrinking to fit the capped column (rows with overflow: hidden would
+     otherwise collapse onto their padding and clip their text). */
+  .file-autocomplete > * {
+    flex-shrink: 0;
+  }
+
   .file-autocomplete__eyebrow {
     display: flex;
     justify-content: space-between;
