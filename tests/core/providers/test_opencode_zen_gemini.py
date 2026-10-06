@@ -415,7 +415,13 @@ async def test_gemini_stream_preserves_reasoning_meta_tools_usage_and_finish() -
     usage = next(delta for delta in deltas if delta["type"] == "usage")
     replay = [delta for delta in deltas if delta["type"] == "reasoning_meta"][-1]
     assert finish["reason"] == "tool_calls"
-    assert usage == {"type": "usage", "input_tokens": 10, "output_tokens": 5, "reasoning_tokens": 3}
+    assert usage == {
+        "type": "usage",
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "reasoning_tokens": 3,
+        "cache_read_tokens": 0,
+    }
     assert replay["reasoning_meta"]["gemini_parts"][0]["thoughtSignature"] == "opaque"
 
 
@@ -423,7 +429,12 @@ async def test_gemini_stream_preserves_reasoning_meta_tools_usage_and_finish() -
     ("raw_usage", "expected"),
     [
         pytest.param({}, None, id="empty"),
-        pytest.param({"promptTokenCount": 12}, {"input_tokens": 12}, id="input-only"),
+        pytest.param(
+            # Gemini omits zero counters: no cached count is a cache miss.
+            {"promptTokenCount": 12},
+            {"input_tokens": 12, "cache_read_tokens": 0},
+            id="input-only",
+        ),
         pytest.param({"candidatesTokenCount": 7}, {"output_tokens": 7}, id="output-only"),
         pytest.param(
             {
@@ -441,9 +452,11 @@ async def test_gemini_stream_preserves_reasoning_meta_tools_usage_and_finish() -
             id="reasoning-counted-as-output",
         ),
         pytest.param(
+            # Gemini omits a zero candidate count when a turn only thought;
+            # a cache share without the prompt count stays absent.
             {"thoughtsTokenCount": 3, "cachedContentTokenCount": 4},
-            None,
-            id="secondary-without-primary",
+            {"output_tokens": 3, "reasoning_tokens": 3},
+            id="thoughts-without-candidates",
         ),
         pytest.param(
             {
@@ -622,7 +635,7 @@ async def test_gemini_stream_prompt_block_matches_completed_response() -> None:
     assert [delta for delta in deltas if delta["type"] == "finish"] == [
         {"type": "finish", "reason": "content_filtered"}
     ]
-    assert {"type": "usage", "input_tokens": 12} in deltas
+    assert {"type": "usage", "input_tokens": 12, "cache_read_tokens": 0} in deltas
 
 
 @pytest.mark.parametrize(

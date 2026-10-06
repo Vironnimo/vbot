@@ -346,14 +346,18 @@ def _normalize_gemini_usage(raw: Any) -> dict[str, int] | None:
     usage = {}
     if input_tokens is not None:
         usage["input_tokens"] = input_tokens
-    if visible_output is not None:
-        usage["output_tokens"] = visible_output + (reasoning_tokens or 0)
+    # Thoughts count separately from candidates, and Gemini omits a zero
+    # candidate count (a turn that only thought), so either makes the output.
+    if visible_output is not None or reasoning_tokens is not None:
+        usage["output_tokens"] = (visible_output or 0) + (reasoning_tokens or 0)
     if not usage:
         return None
     if reasoning_tokens is not None:
         usage["reasoning_tokens"] = reasoning_tokens
-    if cache_read is not None:
-        usage["cache_read_tokens"] = cache_read
+    # Gemini's JSON omits zero counters, so with a reported prompt a missing
+    # cached count is a cache miss; without the prompt count there is no share.
+    if input_tokens is not None:
+        usage["cache_read_tokens"] = cache_read or 0
     return usage
 
 
