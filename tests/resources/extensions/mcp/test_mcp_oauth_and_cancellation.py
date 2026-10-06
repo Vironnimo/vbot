@@ -7,8 +7,10 @@ import base64
 import json
 import logging
 import time
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from types import SimpleNamespace
+from typing import override
 from urllib.parse import parse_qs, urlsplit
 
 import httpx2
@@ -35,9 +37,19 @@ TOKENS = "VBOT_MCP_EXAMPLE_OAUTH_TOKENS"
 CLIENT = "VBOT_MCP_EXAMPLE_OAUTH_CLIENT"
 
 
+class _UnreadBody(httpx2.AsyncByteStream):
+    def __init__(self, content: bytes) -> None:
+        self._content = content
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._content
+
+
 class FakeServers:
     """A protected MCP endpoint and its authorization server, answered in memory.
 
+    Each body arrives unread, as from a network transport, until the client reads it.
     Like some firewalls, both refuse OAuth requests that do not identify their client.
     """
 
@@ -61,6 +73,12 @@ class FakeServers:
         self.spent: set[str] = set()
 
     def handle(self, request: httpx2.Request) -> httpx2.Response:
+        answer = self._answer(request)
+        return httpx2.Response(
+            answer.status_code, headers=answer.headers, stream=_UnreadBody(answer.content)
+        )
+
+    def _answer(self, request: httpx2.Request) -> httpx2.Response:
         self.requests.append(request)
         url = request.url
         if url.path != "/mcp" and (

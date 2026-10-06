@@ -170,9 +170,13 @@ def _issuers_match(first: str, second: str) -> bool:
     return first == second or first == f"{second}/" or second == f"{first}/"
 
 
-def _json_object(response: httpx2.Response) -> dict[str, Any] | None:
+async def _json_object(response: httpx2.Response) -> dict[str, Any] | None:
+    """The JSON object *response* holds, or ``None``.
+
+    Inside an auth flow a response arrives as an unread stream, so it is read first.
+    """
     try:
-        body = json.loads(response.content)
+        body = json.loads(await response.aread())
     except ValueError:
         return None
     return body if isinstance(body, dict) else None
@@ -450,9 +454,9 @@ class _Provider(OAuthClientProvider):
                         retry = _registration_without_offline_access(outgoing, response)
                         if retry is not None:
                             response = yield retry
-                        response = self._with_secret_auth_method(response)
+                        response = await self._with_secret_auth_method(response)
                     elif self._discovers_server(outgoing):
-                        response = self._with_listed_issuer(response)
+                        response = await self._with_listed_issuer(response)
                 outgoing = await flow.asend(response)
         except StopAsyncIteration:
             return
@@ -481,10 +485,10 @@ class _Provider(OAuthClientProvider):
         )
         return any(request.url == httpx2.URL(url) for url in urls)
 
-    def _with_listed_issuer(self, response: httpx2.Response) -> httpx2.Response:
+    async def _with_listed_issuer(self, response: httpx2.Response) -> httpx2.Response:
         """The metadata *response* naming its issuer as the resource lists it, if they match."""
         listed = self.context.auth_server_url
-        body = _json_object(response)
+        body = await _json_object(response)
         if response.status_code != 200 or listed is None or body is None:
             return response
         issuer = body.get("issuer")
@@ -492,9 +496,9 @@ class _Provider(OAuthClientProvider):
             return response
         return _json_response(response, {**body, "issuer": listed})
 
-    def _with_secret_auth_method(self, response: httpx2.Response) -> httpx2.Response:
+    async def _with_secret_auth_method(self, response: httpx2.Response) -> httpx2.Response:
         """The registration *response* naming how its client secret is sent, if it does not."""
-        body = _json_object(response)
+        body = await _json_object(response)
         if (
             response.status_code not in {200, 201}
             or body is None
