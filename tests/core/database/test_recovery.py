@@ -34,6 +34,7 @@ from core.database import (
     read_maintenance,
     read_marker,
     restore_data_snapshot,
+    retire_core_databases,
     snapshot_root,
     unregister_database,
 )
@@ -795,6 +796,34 @@ def test_unregistering_is_refused_for_core_unknown_open_or_maintenance(
     assert path.read_bytes() == original
     assert _registered(data_dir) == {"notes", _EXTENSION}
     assert not quarantine_root(data_dir).exists()
+
+
+def test_retiring_a_core_database_releases_it_once_and_leaves_open_ones_alone(
+    data_dir: Path,
+) -> None:
+    snapshot_with_notes(data_dir, "core")
+    path = notes_spec(data_dir).path
+    original = path.read_bytes()
+    database_id = _database_id(data_dir, "notes")
+
+    database = open_database(notes_spec(data_dir))
+    try:
+        with pytest.raises(DatabaseUnavailableError, match="notes database is open"):
+            retire_core_databases(data_dir, ("notes",))
+    finally:
+        database.close()
+    with pytest.raises(ValueError, match="use unregister_database"):
+        retire_core_databases(data_dir, (_EXTENSION,))
+    assert _registered(data_dir) == {"notes"}
+
+    (retired,) = retire_core_databases(data_dir, ("notes", "never_registered"))
+
+    assert (retired.name, retired.database_id) == ("notes", database_id)
+    assert retired.quarantine is not None
+    assert (retired.quarantine / path.name).read_bytes() == original
+    assert not path.exists()
+    assert _registered(data_dir) == set()
+    assert retire_core_databases(data_dir, ("notes",)) == ()
 
 
 def _extension_with_sidecar(data_dir: Path) -> tuple[Path, Path, bytes]:

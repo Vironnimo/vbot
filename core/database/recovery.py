@@ -150,7 +150,7 @@ class SnapshotRestore:
 
 @dataclass(frozen=True)
 class UnregisteredDatabase:
-    """One Extension database released by ``unregister_database``.
+    """One database released by ``unregister_database`` or ``retire_core_databases``.
 
     ``quarantine`` holds its moved files, or is ``None`` when it had none.
     """
@@ -968,6 +968,57 @@ def unregister_database(data_dir: Path, name: str) -> UnregisteredDatabase:
     return UnregisteredDatabase(name, entry.database_id, quarantine)
 
 
+def retire_core_databases(data_dir: Path, names: Iterable[str]) -> tuple[UnregisteredDatabase, ...]:
+    """Release registered core databases whose owner this vBot no longer has.
+
+    Normal Runtime startup calls it with the retired names, so a database whose
+    owner was removed leaves the marker and stops entering data snapshots. Each
+    registered bundle moves to quarantine and is never deleted; names that are
+    not registered are skipped, so repeating the call is harmless. Earlier
+    snapshots keep their copy, and a snapshot restore registers it again.
+
+    Raises ``ValueError`` for an Extension name, ``DatabaseFormatError`` while data
+    maintenance is incomplete or without a marker, and
+    ``DatabaseUnavailableError`` while the operation lock is busy, this process
+    has one of the databases open, or its files cannot be moved.
+    """
+    data_dir = Path(data_dir)
+    names = tuple(names)
+    for name in names:
+        validate_database_name(name)
+        if is_extension_database_name(name):
+            raise ValueError(f"{name} is an Extension database; use unregister_database")
+    require_no_maintenance(data_dir)
+    lock = acquire_operation_lock(data_dir)
+    if lock is None:
+        raise DatabaseUnavailableError("the data-store operation lock is busy")
+    try:
+        marker = read_marker(data_dir)
+        if marker is None:
+            raise DatabaseFormatError(
+                f"the data directory does not authorize a current-format data store: {data_dir}"
+            )
+        entries = {name: marker.databases[name] for name in names if name in marker.databases}
+        for name in entries:
+            if has_live_connection(canonical_database_path(data_dir, name)):
+                raise DatabaseUnavailableError(f"the {name} database is open")
+        quarantined = _retire_databases_locked(data_dir, entries)
+    finally:
+        lock.release()
+    retired = tuple(
+        UnregisteredDatabase(name, entry.database_id, quarantined[name])
+        for name, entry in entries.items()
+    )
+    for item in retired:
+        _LOGGER.info(
+            "Retired database (database=%s database_id=%s quarantine=%s)",
+            item.name,
+            item.database_id,
+            item.quarantine or "none",
+        )
+    return retired
+
+
 def _retire_databases_locked(data_dir: Path, names: Iterable[str]) -> dict[str, Path | None]:
     """Quarantine each bundle, then drop the registrations; repeatable after a crash.
 
@@ -1001,6 +1052,7 @@ __all__ = [
     "read_incident",
     "read_incidents",
     "restore_data_snapshot",
+    "retire_core_databases",
     "unregister_database",
     "write_incident",
 ]
