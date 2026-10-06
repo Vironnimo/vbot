@@ -547,6 +547,46 @@ async def test_list_returns_projects(tmp_path: Path) -> None:
     result = await rpc_result(state, "project.list")
 
     assert [project["project_id"] for project in result["projects"]] == ["alpha", "beta"]
+    assert all("scan" not in project for project in result["projects"])
+
+
+@pytest.mark.asyncio
+async def test_list_with_scan_reports_cached_teams_without_rescanning(tmp_path: Path) -> None:
+    state, repo = await _vbot_state(tmp_path, "builder.md")
+    await rpc_result(
+        state, "project.add", cwd=str(_make_repo(tmp_path, "empty")), display_name="Empty"
+    )
+    resolver = state.runtime.agent_resolver
+    await rpc_result(state, "project.list", include_scan=True)
+    # Once cached, a repo change shows only after an open re-scans it.
+    _write_agent(repo, "tester.md")
+    scans: list[str] = []
+    scan_project_report = resolver.scan_project_report
+
+    def recorded_scan(project: Any) -> Any:
+        scans.append(project.project_id)
+        return scan_project_report(project)
+
+    resolver.scan_project_report = recorded_scan
+
+    listed = await rpc_result(state, "project.list", include_scan=True)
+
+    by_id = {project["project_id"]: project for project in listed["projects"]}
+    assert scans == []
+    assert _team(by_id["vbot"]) == ["builder"]
+    # The same Team + report shape as project.show, without its skill pool.
+    assert "effective" in by_id["vbot"]["scan"]["team"][0]
+    assert isinstance(by_id["vbot"]["scan"]["report"]["clean"], bool)
+    assert _team(by_id["empty"]) == []
+    assert "skills" not in by_id["vbot"]["scan"]
+
+    await rpc_result(state, "project.show", project_id="vbot")
+    relisted = await rpc_result(state, "project.list", include_scan=True)
+
+    assert _team(next(p for p in relisted["projects"] if p["project_id"] == "vbot")) == [
+        "builder",
+        "tester",
+    ]
 
 
 # ---------------------------------------------------------------------------

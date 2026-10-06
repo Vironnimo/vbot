@@ -53,7 +53,7 @@ Do not silently resolve collisions according to filesystem enumeration order. Pr
 
 ## Cache Interaction
 
-The resolver may cache Team membership per Project, not repository Agent configuration. `project.show` deliberately reloads Skills, invalidates relevant caches, and rescans. Changes to Project `cwd` or `source_format` must invalidate membership because they change the discovery source.
+The resolver may cache Team membership per Project, not repository Agent configuration. `project.show` deliberately reloads Skills, invalidates relevant caches, and rescans. `AgentResolver.cached_scan()` returns the cached scan result (scanning on first use) for listings such as `project.list` with `include_scan`; it can lag the repository until the next rescan. Changes to Project `cwd` or `source_format` must invalidate membership because they change the discovery source.
 
 When adding a source format, implement the detector, register its stable rank, add format detection and Project Skill discovery behavior, extend the accepted `source_format` contract and WebUI choice, and cover cross-format ordering/collision behavior. Do not make the resolver understand the new file syntax.
 

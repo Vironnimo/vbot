@@ -890,13 +890,22 @@ class AgentResolver:
         """Event-Loop-safe :meth:`require_model_configured` on the ``agent-resolution`` pool."""
         await _RESOLUTION_WORKERS.run(self._model_checker.require_configured, model)
 
-    def _project_team(self, project: Project) -> list[ScannedAgent]:
+    def cached_scan(self, project: Project) -> ScanResult:
+        """Return the cached Team + complete report, scanning only on first use.
+
+        Unlike :meth:`rescan_project` this never re-walks a repository that was
+        already scanned, so listing every Project's Team stays cheap; an open or an
+        explicit re-scan refreshes the cache.
+        """
         cached = self._team_cache.get(project.project_id)
         if cached is not None:
-            return cached.team
+            return cached
         # Lazy first scan: a resolve before any explicit open still works, and the
         # result is cached so the next turn does not re-walk the repo.
-        return self.rescan_project(project).team
+        return self.rescan_project(project)
+
+    def _project_team(self, project: Project) -> list[ScannedAgent]:
+        return self.cached_scan(project).team
 
     def _load_project(self, project_id: str) -> Project:
         try:
