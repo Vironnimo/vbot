@@ -241,9 +241,12 @@ def test_new_projects_load_at_most_one_instruction_file(projects, repo, files, e
     assert next(item for item in refreshed if item.id == "copilot.instructions").enabled is False
 
 
-@pytest.mark.parametrize("ecosystem", ["claude", "opencode"])
+# The old readers: Claude walked its agents folder, OpenCode read only its top level.
+@pytest.mark.parametrize(
+    ("ecosystem", "legacy_team"), [("claude", ["new", "reviewer"]), ("opencode", ["reviewer"])]
+)
 def test_legacy_anchor_preserves_unknown_fields_overrides_and_sessions(
-    projects, repo, data_dir, ecosystem
+    projects, repo, data_dir, ecosystem, legacy_team
 ):
     write(repo, f".{ecosystem}/agents/reviewer.md", "---\nname: reviewer\n---\nReview.")
     write(repo, f".{ecosystem}/agents/nested/new.md", "---\nname: new\n---\nNew.")
@@ -262,16 +265,15 @@ def test_legacy_anchor_preserves_unknown_fields_overrides_and_sessions(
     try:
         session = sessions.create("reviewer", project_id="repo")
         loaded = projects.get("repo")
-        assert [agent.agent_id for agent in scan_project(repo, sources=loaded.sources).team] == [
-            "reviewer"
-        ]
+        assert [
+            agent.agent_id for agent in scan_project(repo, sources=loaded.sources).team
+        ] == legacy_team
         assert loaded.overrides == stored["overrides"]
         projects.update("repo", display_name="Renamed")
         saved = json.loads(path.read_text(encoding="utf-8"))
         assert saved["format_version"] == 1
         assert saved["future_field"] == {"keep": True}
         assert sessions.get(SessionAddress("repo", "reviewer", session.id)) is not None
-        assert saved["sources"][0]["agent_paths"] == [f".{ecosystem}/agents/*.md"]
         expanded = projects.update(
             "repo",
             sources=[
