@@ -3,7 +3,7 @@
   // dialog: choose a service and Connect, sign in to it in the browser when
   // it needs an account, then choose the Agents that may use it. Opened for
   // an existing connection, it starts at that connection's waiting sign-in.
-  import { onMount, untrack } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
   import Dropdown from '../Dropdown.svelte';
   import RequestedUrl from '../RequestedUrl.svelte';
@@ -33,7 +33,6 @@
   } from '$lib/mcpCatalog.js';
   import { mcpProblemText } from '$lib/mcpSettings.js';
   import { formatAbsoluteTime, formatRelativeTime } from '$lib/timeText.js';
-  import { tooltip } from '$lib/tooltip.js';
 
   const noop = () => {};
   // The MCP Extension's changes that alter a connection's sign-in: its
@@ -51,6 +50,7 @@
   } = $props();
 
   const componentId = $props.id();
+  const titleId = `${componentId}-title`;
   let view = $state('browse');
   let entries = $state(null);
   let loadError = $state('');
@@ -59,8 +59,10 @@
   const readOnly = new SvelteSet();
   let busy = $state(false);
   let error = $state('');
-  // The connection being set up: its id, the service name and whether it
-  // signs in with OAuth.
+  // The connection being set up: its id, the service's name (`label`; null
+  // while it is looked up, empty when the catalog has no entry for it),
+  // whether it signs in with OAuth, and the ids of the saved connections
+  // that already reached the same service.
   let target = $state(null);
   let status = $state(null);
   // The last sign-in request seen, which tells a timed-out sign-in from
@@ -95,11 +97,20 @@
     entries ? mcpCatalogMatches(entries, { query, category }) : [],
   );
   let signIn = $derived(mcpSignInPhase(status, lastRequest, now));
+  // What the dialog calls the connection: the service's name, else the
+  // connection's description, else its id.
+  let targetName = $derived(
+    !target
+      ? ''
+      : target.label === ''
+        ? status?.configuration?.description || target.id
+        : (target.label ?? target.id),
+  );
   let title = $derived(
     view === 'signin'
-      ? t('mcp.signInFor', { name: target.name })
+      ? t('mcp.signInFor', { name: targetName })
       : view === 'grant'
-        ? t('mcp.catalogGrantTitle', { name: target.name })
+        ? t('mcp.catalogGrantTitle', { name: targetName })
         : t('mcp.catalogTitle'),
   );
   let grantable = $derived(
@@ -109,9 +120,10 @@
   onMount(() => {
     const id = untrack(() => signInConnection);
     if (id) {
-      target = { id, name: id, oauth: true };
+      target = { id, label: null, oauth: true, siblings: [] };
       view = 'signin';
       void readStatus();
+      void nameConnection(id);
     } else void loadCatalog();
     return () => {
       stopped = true;
@@ -151,6 +163,45 @@
     }
   }
 
+  // Looks up the service the connection `id` reaches: the catalog entry
+  // whose saved connections include it (they match by URL).
+  async function nameConnection(id) {
+    let entry = null;
+    try {
+      const { entries: listed } = await extensionOperation('mcp', 'catalog');
+      entry = listed.find((item) => item.connections.includes(id)) ?? null;
+    } catch {
+      // Without the catalog, the connection's own description names it.
+    }
+    if (stopped || target?.id !== id) return;
+    target = entry
+      ? {
+          ...target,
+          label: serviceLabel(entry, id),
+          siblings: entry.connections.filter((other) => other !== id),
+        }
+      : { ...target, label: '' };
+  }
+
+  // The service's name, with the connection id when it differs from the
+  // entry's id (a second connection to the same service).
+  function serviceLabel(entry, id) {
+    return entry.id === id
+      ? entry.name
+      : t('mcp.catalogServiceAs', { name: entry.name, id });
+  }
+
+  // Shows another step and moves focus to its title, which names the step
+  // for screen readers; the control that had focus is gone with the step.
+  async function showStep(next) {
+    view = next;
+    await tick();
+    const heading = document.getElementById(titleId);
+    if (!heading || stopped) return;
+    heading.setAttribute('tabindex', '-1');
+    heading.focus();
+  }
+
   async function connect(entry) {
     busy = true;
     error = '';
@@ -162,14 +213,15 @@
       if (stopped) return;
       target = {
         id: result.id,
-        name: entry.name,
+        label: serviceLabel(entry, result.id),
         oauth: entry.auth === 'oauth',
+        siblings: entry.connections,
       };
       if (!target.oauth) {
         await openGrant();
         return;
       }
-      view = 'signin';
+      void showStep('signin');
       showStatus(result);
     } catch (failure) {
       if (!stopped) error = failure.message;
@@ -245,7 +297,7 @@
   }
 
   async function openGrant() {
-    view = 'grant';
+    void showStep('grant');
     error = '';
     access = null;
     try {
@@ -255,7 +307,12 @@
       ]);
       if (stopped) return;
       tools = toolsResult.tools;
-      access = mcpAgentAccess(agentsResult.agents, tools, `mcp_${target.id}`);
+      access = mcpAgentAccess(
+        agentsResult.agents,
+        tools,
+        target.id,
+        target.siblings,
+      );
     } catch (failure) {
       if (!stopped) error = failure.message;
     }
@@ -268,7 +325,7 @@
       for (const { agent } of grantable) {
         await updateAgent({
           id: agent.id,
-          tool_access: mcpGrantedToolAccess(agent, tools, `mcp_${target.id}`),
+          tool_access: mcpGrantedToolAccess(agent, tools, target.id),
         });
         chosen.delete(agent.id);
         access = access.map((item) =>
@@ -298,9 +355,12 @@
 
 <Modal
   {title}
+  labelledById={titleId}
   closeDisabled={busy}
   onClose={busy ? noop : onClose}
-  class="mcp-modal mcp-catalog-modal"
+  class={view === 'browse'
+    ? 'mcp-modal mcp-catalog-modal mcp-catalog-modal--browse'
+    : 'mcp-modal mcp-catalog-modal'}
 >
   {#snippet body()}
     <div class="modal-body mcp-editor mcp-catalog">
@@ -361,18 +421,17 @@
                     >
                   </div>
                   {#if entry.connections.length}
-                    <span
-                      class="tooltip-anchor"
-                      use:tooltip={t('mcp.catalogConnectedAs', {
-                        ids: entry.connections.join(', '),
-                      })}
-                      ><Badge variant="success"
-                        >{t('mcp.catalogConnected')}</Badge
-                      ></span
-                    >
+                    <Badge variant="success">{t('mcp.catalogConnected')}</Badge>
                   {/if}
                 </div>
                 <p class="mcp-catalog__description">{entry.description}</p>
+                {#if entry.connections.length}
+                  <p class="mcp-catalog__note">
+                    {t('mcp.catalogConnectedAs', {
+                      ids: entry.connections.join(', '),
+                    })}
+                  </p>
+                {/if}
                 {#each entry.notes ?? [] as note, noteIndex (noteIndex)}
                   <p class="mcp-catalog__note">{note}</p>
                 {/each}
@@ -411,7 +470,7 @@
           </ul>
         {/if}
       {:else if view === 'signin'}
-        <p>{t('mcp.catalogSignInHelp', { name: target.name })}</p>
+        <p>{t('mcp.catalogSignInHelp', { name: targetName })}</p>
         {#if signIn.phase === 'waiting'}
           <RequestedUrl
             url={signIn.request.payload?.url}
@@ -484,10 +543,10 @@
       {:else}
         <Banner variant="success" role="status"
           >{target.oauth
-            ? t('mcp.catalogSignedIn', { name: target.name })
-            : t('mcp.catalogAdded', { name: target.name })}</Banner
+            ? t('mcp.catalogSignedIn', { name: targetName })
+            : t('mcp.catalogAdded', { name: targetName })}</Banner
         >
-        <p>{t('mcp.catalogGrantHelp', { name: target.name })}</p>
+        <p>{t('mcp.catalogGrantHelp', { name: targetName })}</p>
         {#if access === null}
           {#if !error}
             <Banner variant="neutral" role="status"
@@ -498,11 +557,14 @@
           <p>{t('mcp.catalogNoAgents')}</p>
         {:else}
           <ul class="mcp-catalog__agents">
-            {#each access as item (item.agent.id)}
+            {#each access as item, index (item.agent.id)}
+              {@const usesId = `${componentId}-uses-${index}`}
+              {@const usesOther = !item.granted && item.alsoUses.length > 0}
               <li>
                 <Checkbox
                   checked={item.granted || chosen.has(item.agent.id)}
                   disabled={busy || item.granted}
+                  aria-describedby={usesOther ? usesId : undefined}
                   onChange={(checked) => {
                     if (checked) chosen.add(item.agent.id);
                     else chosen.delete(item.agent.id);
@@ -510,6 +572,12 @@
                 >
                 {#if item.granted}
                   <Badge variant="neutral">{t('mcp.catalogHasAccess')}</Badge>
+                {:else if usesOther}
+                  <span id={usesId} class="mcp-catalog__note"
+                    >{t('mcp.catalogUsesOther', {
+                      ids: item.alsoUses.join(', '),
+                    })}</span
+                  >
                 {/if}
               </li>
             {/each}

@@ -1,6 +1,6 @@
 <script>
   import './mcp.css';
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
   import Dropdown from '../Dropdown.svelte';
   import Banner from '../ui/Banner.svelte';
@@ -152,9 +152,19 @@
     importSource = null;
     for (const id of ids) expanded.add(id);
   }
-  function connected(id) {
+  // The catalog dialog set up the connection `id`: its row opens and takes
+  // focus, since the control that opened the dialog may be gone with it.
+  async function connected(id) {
     catalog = null;
     expanded.add(id);
+    await tick();
+    const index = state.connections.findIndex(
+      (connection) => connection.id === id,
+    );
+    if (index >= 0)
+      document
+        .querySelector(`[aria-controls="${componentId}-details-${index}"]`)
+        ?.focus();
   }
   // A connection that waits for the user's browser sign-in.
   function waitsForSignIn(connection) {

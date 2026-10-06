@@ -179,6 +179,7 @@ export default Object.freeze({
   'mcp.catalogDocs': 'Documentation',
   'mcp.catalogConnect': 'Connect',
   'mcp.catalogConnectAria': 'Connect {name}',
+  'mcp.catalogServiceAs': '{name} ({id})',
   'mcp.catalogSignInHelp':
     'Open the sign-in page and sign in to {name} in your browser. This dialog continues by itself once the browser returns to vBot.',
   'mcp.catalogPreparing': 'Preparing the sign-in…',
@@ -199,6 +200,7 @@ export default Object.freeze({
   'mcp.catalogNoAgents':
     'There are no Agents yet. Once you create one, enable this connection in its Tool settings.',
   'mcp.catalogHasAccess': 'Has access',
+  'mcp.catalogUsesOther': 'Already uses {ids}',
   'mcp.catalogSkip': 'Skip',
   'mcp.catalogGrant': 'Allow access',
   'mcp.signIn': 'Sign in',

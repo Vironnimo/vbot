@@ -730,6 +730,9 @@ describe('MCP management surface', () => {
     button('Browse the catalog').click();
     await settle();
     expect(dialog().textContent).toContain('test-owned-note');
+    expect(
+      dialog().querySelector('li[aria-label="Web Search"]').textContent,
+    ).toContain('Saved as connection search.');
     const query = dialog().querySelector('input[aria-label="Search services"]');
     query.value = 'track';
     query.dispatchEvent(new Event('input', { bubbles: true }));
@@ -748,6 +751,8 @@ describe('MCP management surface', () => {
       arguments: { entry: 'tracker', read_only: true },
     });
     expect(dialog().textContent).toContain('Preparing the sign-in');
+    // Each step change moves focus to the title naming the new step.
+    expect(document.activeElement.textContent).toBe('Sign in to Tracker');
 
     // The sign-in waits for the browser; the row offers it too.
     status.pending_requests = [request];
@@ -780,6 +785,9 @@ describe('MCP management surface', () => {
     publish('connections');
     await settle();
     expect(dialog().textContent).toContain('Signed in to Tracker.');
+    expect(document.activeElement.textContent).toBe(
+      'Choose Agents for Tracker',
+    );
     const agents = [...dialog().querySelectorAll('[role="checkbox"]')];
     expect(agents.map((agent) => agent.textContent.trim())).toEqual([
       'Alice',
@@ -804,5 +812,100 @@ describe('MCP management surface', () => {
         'article[aria-label="tracker"] .mcp-connection__details',
       ).hidden,
     ).toBe(false);
+    expect(document.activeElement.getAttribute('aria-label')).toBe(
+      'Details for tracker',
+    );
+  });
+  it('names a further connection to a catalog service and the Agents using the first one', async () => {
+    const tracker = {
+      id: 'tracker',
+      name: 'Tracker',
+      description: 'test-owned-tracker',
+      category: 'productivity',
+      url: 'https://mcp.tracker.example/mcp',
+      auth: 'oauth',
+      connections: ['tracker', 'tracker_2'],
+    };
+    const status = {
+      id: 'tracker_2',
+      state: 'connecting',
+      configuration: {
+        id: 'tracker_2',
+        transport: 'http',
+        url: tracker.url,
+        oauth: true,
+        enabled: true,
+        timeout: 120,
+      },
+      pending_requests: [
+        {
+          id: 'test-owned-request',
+          connection: 'tracker_2',
+          kind: 'oauth',
+          payload: { url: 'https://auth.tracker.example/authorize?state=s' },
+          session_id: null,
+          expires_at: new Date(Date.now() + 600_000).toISOString(),
+        },
+      ],
+    };
+    records = [status];
+    const listeners = new Set();
+    const handler = rpc.getMockImplementation();
+    rpc.mockImplementation(async (method, params) => {
+      if (method === 'agent.list')
+        return {
+          agents: [
+            {
+              id: 'alice',
+              name: 'Alice',
+              tool_access: { mode: 'all', granted: ['mcp_tracker'] },
+            },
+          ],
+        };
+      if (method === 'tool.list') return { tools: [] };
+      if (params?.operation === 'catalog') return { entries: [tracker] };
+      if (params?.operation === 'status') return structuredClone(status);
+      return handler(method, params);
+    });
+    const dialog = () => document.querySelector('[role="dialog"]');
+    component = mount(Panel, {
+      target: document.body,
+      props: {
+        subscribeInvalidations: (next) => {
+          listeners.add(next);
+          return () => listeners.delete(next);
+        },
+      },
+    });
+    await settle();
+    document.querySelector('button[aria-label="Sign in to tracker_2"]').click();
+    await settle();
+    // Opened from the row, the dialog finds the service by the connection.
+    expect(dialog().querySelector('h3').textContent).toBe(
+      'Sign in to Tracker (tracker_2)',
+    );
+
+    status.pending_requests = [];
+    status.state = 'connected';
+    for (const next of [...listeners])
+      next({ owner: 'mcp', change: { resource: 'connections' } });
+    await settle();
+    expect(document.activeElement.textContent).toBe(
+      'Choose Agents for Tracker (tracker_2)',
+    );
+    const [alice] = dialog().querySelectorAll('[role="checkbox"]');
+    expect(alice.disabled).toBe(false);
+    expect(
+      document.getElementById(alice.getAttribute('aria-describedby'))
+        .textContent,
+    ).toBe('Already uses tracker');
+
+    // Skipping closes the dialog; the connection's row takes focus.
+    button('Skip').click();
+    await settle();
+    expect(dialog()).toBeNull();
+    expect(document.activeElement.getAttribute('aria-label')).toBe(
+      'Details for tracker_2',
+    );
   });
 });

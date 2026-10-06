@@ -236,9 +236,21 @@
   }
 }
 /* The catalog dialog: search and category, then a grid of service tiles,
-   each with its initials on a color its id fixes. */
+   each with its initials on a color its id fixes. While it lists services
+   its height stays fixed, so the search field holds still as results
+   change. */
 .modal.mcp-catalog-modal {
   width: min(960px, calc(100vw - 32px));
+}
+.modal.mcp-catalog-modal--browse {
+  height: min(820px, calc(100dvh - 32px));
+}
+.modal.mcp-catalog-modal--browse .modal-body {
+  flex: 1;
+}
+/* A step change moves focus to the dialog's title, which is not a control. */
+.modal.mcp-catalog-modal .modal-title:focus {
+  outline: none;
 }
 .mcp-catalog__filters {
   display: grid;
@@ -319,6 +331,7 @@
 }
 .mcp-catalog__agents > li {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
