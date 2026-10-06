@@ -3,8 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { t } from '../../lib/i18n.js';
 import {
-  agentChip,
-  agentPickerTrigger,
+  agentPill,
   agentShowsUnread,
   createAgent,
   createChatRpcMock,
@@ -47,9 +46,6 @@ const beta = (currentSessionId) =>
 
 const teamMemberIsUnread = (name) => agentShowsUnread(projectAgentName(name));
 
-const chipIsUnread = (name) =>
-  Boolean(agentChip(name)?.querySelector('.tab-indicator--unread'));
-
 describe('ChatView Agent activity', () => {
   const chat = setupChatViewTestSuite();
 
@@ -72,7 +68,7 @@ describe('ChatView Agent activity', () => {
 
       expect(selectedAgentName()).toBe('Alpha');
       expect(
-        agentChip('Beta')?.querySelector('.tab-indicator--running'),
+        agentPill('Beta')?.querySelector('.tab-indicator--running'),
       ).toBeTruthy();
     });
 
@@ -116,15 +112,15 @@ describe('ChatView Agent activity', () => {
         serveSessionActivity({ beta: activity });
         await chat.mountChat({ sharedAgents: agents });
 
-        await waitForCondition(() => chipIsUnread('Beta'));
-        const betaChip = agentChip('Beta');
-        expect(betaChip.getAttribute('aria-label')).toBe(
+        await waitForCondition(() => agentShowsUnread('Beta'));
+        const betaPill = agentPill('Beta');
+        expect(betaPill.getAttribute('aria-label')).toBe(
           t('chat.agentActivity.unreadOne', {
             name: 'Beta',
           }),
         );
-        await waitForCondition(() => betaChip.disabled === false);
-        betaChip.click();
+        await waitForCondition(() => betaPill.disabled === false);
+        betaPill.click();
 
         await waitForCondition(() => selectedAgentName() === 'Beta');
         expect(rpcMock).toHaveBeenCalledWith('chat.history', {
@@ -137,13 +133,9 @@ describe('ChatView Agent activity', () => {
         );
         flushSync();
 
-        // The selected Agent leaves the chips; its trigger shows no unread
-        // result.
+        // The displayed Agent shows no unread result.
         expect(historyReads('beta-current')).toBe(0);
-        expect(
-          agentPickerTrigger().querySelector('.tab-indicator--unread'),
-        ).toBeNull();
-        expect(agentChip('Beta')).toBeUndefined();
+        expect(agentShowsUnread('Beta')).toBe(false);
       },
     );
 
@@ -183,7 +175,7 @@ describe('ChatView Agent activity', () => {
       flushSync();
 
       expect(betaSession().hasUnreadCompletion).toBe(false);
-      expect(agentChip('Beta')).toBeUndefined();
+      expect(agentShowsUnread('Beta')).toBe(false);
     });
 
     it('clears a delivered child result and lands on the Agent user Session', async () => {
@@ -229,12 +221,12 @@ describe('ChatView Agent activity', () => {
         parent.props(['agent', 'sessions'], { sharedAgents: agents }),
         { ready: null },
       );
-      await waitForCondition(() => chipIsUnread('Beta'));
+      await waitForCondition(() => agentShowsUnread('Beta'));
 
       childDelivered = true;
       parent.bumpSessionsRefreshToken();
       flushSync();
-      await waitForCondition(() => agentChip('Beta') === undefined);
+      await waitForCondition(() => !agentShowsUnread('Beta'));
 
       await selectAgentFromPicker('Beta');
       await waitForText('Beta user conversation');
@@ -284,9 +276,7 @@ describe('ChatView Agent activity', () => {
       flushSync();
 
       expect(selectedAgentName()).toBe('Alpha');
-      expect(
-        agentPickerTrigger().querySelector('.tab-indicator--unread'),
-      ).toBeNull();
+      expect(agentShowsUnread('Alpha')).toBe(false);
       resolveMarkRead();
     });
 

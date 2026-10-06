@@ -288,45 +288,28 @@ export function runServerEvent(type, runId, sequence, payload = {}) {
   };
 }
 
-// Trigger of the Chat header's personal Agent picker.
-function agentPickerTrigger() {
-  return document.querySelector(
-    '.chat-header__agent-picker button[aria-haspopup="listbox"]',
+// Name of the personal Agent the Chat header's Agent bar shows as
+// displayed; '' when none is.
+export function selectedAgentName() {
+  return (
+    document
+      .querySelector('.agent-pill[aria-pressed="true"], .agent-pill--current')
+      ?.textContent.trim() ?? ''
   );
 }
 
-// Name of the personal Agent selected in the picker; '' when none is.
-export function selectedAgentName() {
-  const trigger = agentPickerTrigger();
-  if (
-    !trigger ||
-    trigger.querySelector('[class*="trigger-label--placeholder"]')
-  ) {
-    return '';
-  }
-  return trigger.textContent.trim();
-}
-
-// Selects a personal Agent the way a user does: open the picker, choose the
-// option (the picker's list is portaled to <body>).
+// Selects a personal Agent the way a user does: its button on the Agent bar.
 export async function selectPersonalAgent(name) {
-  const option = () =>
-    Array.from(document.querySelectorAll('[role="option"]')).find((item) =>
+  const pill = () =>
+    Array.from(document.querySelectorAll('button.agent-pill')).find((item) =>
       item.getAttribute('aria-label')?.startsWith(`${name}:`),
     );
   await waitForCondition(() => {
-    if (agentPickerTrigger()?.disabled !== false) {
-      throw new Error('The Agent picker is not ready.');
+    if (pill()?.disabled !== false) {
+      throw new Error(`The Agent bar has no ready ${name} button.`);
     }
   });
-  agentPickerTrigger().click();
-  flushSync();
-  await waitForCondition(() => {
-    if (!option()) {
-      throw new Error(`The Agent picker has no ${name} option.`);
-    }
-  });
-  option().click();
+  pill().click();
   flushSync();
 }
 

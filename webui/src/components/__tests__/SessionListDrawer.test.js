@@ -123,7 +123,7 @@ describe('SessionListDrawer list', () => {
     const props = drawer.mount();
 
     await waitForCondition(
-      () => document.querySelector('.session-row__unread-dot') !== null,
+      () => document.querySelector('.session-row__unread') !== null,
     );
     const markers = document.querySelectorAll('.session-row__unread');
     expect(markers).toHaveLength(1);
@@ -132,6 +132,12 @@ describe('SessionListDrawer list', () => {
       t('sessions.unreadCompletion'),
     );
     expect(sessionRowButton('session-2').contains(markers[0])).toBe(true);
+    // The status dot leads the title.
+    expect(
+      markers[0].compareDocumentPosition(
+        sessionRowButton('session-2').querySelector('.session-row__name'),
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
 
     // Opening a draft leaves every persisted Session unselected and restores
     // the unread marker of the Session the area just left.
@@ -180,7 +186,7 @@ describe('SessionListDrawer list', () => {
     });
     flushSync();
     await waitForCondition(
-      () => document.querySelector('.session-row__unread-dot') !== null,
+      () => document.querySelector('.session-row__unread') !== null,
     );
     expect(document.querySelector('.session-row__active-dot')).toBeNull();
     expect(api.listSessions).toHaveBeenCalledTimes(1);
@@ -406,6 +412,10 @@ describe('SessionListDrawer list', () => {
     await waitForCondition(() => rowCount() === 1);
     expect(api.listSessions.mock.calls[0][0]).toBe('alpha');
     expect(document.body.textContent).not.toContain('Beta');
+    // The header names whose Sessions the list shows.
+    const title = () =>
+      document.querySelector('.session-drawer__title').textContent;
+    expect(title()).toBe('Alpha');
 
     const allAgents = document.querySelector(
       `button[aria-label="${t('sessions.filters.allAgents')}"]`,
@@ -419,6 +429,7 @@ describe('SessionListDrawer list', () => {
     expect(api.listSessions.mock.calls[1][1]).toMatchObject({ limit: 35 });
     expect(allAgents.getAttribute('aria-pressed')).toBe('true');
     expect(document.querySelector('.session-drawer__filter-count')).toBeNull();
+    expect(title()).toBe(t('sessions.filters.allAgents'));
 
     // Merged rows carry their owning Agent's name, and selecting one passes
     // that Agent's address so ChatView can navigate across Agents.

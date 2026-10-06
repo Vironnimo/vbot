@@ -30,6 +30,7 @@ import {
   tick,
   waitForCondition,
   waitForText,
+  sessionListButton,
 } from './ChatView.support.js';
 import { createChatViewParentHarness } from './ChatView.parent.support.svelte.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
@@ -40,7 +41,7 @@ const returnToCurrentButton = () =>
 const returnToParentButton = () =>
   findButtonByText(t('chat.returnToParentSession'));
 const composerInput = () => document.querySelector('.msg-input');
-const sessionsButton = () => findButtonByText(t('sessions.title'));
+const sessionsButton = () => sessionListButton();
 
 // Serves `session.get` point reads from `sessions` keyed `address::sessionId`.
 function serveSessions(sessions) {
@@ -884,15 +885,13 @@ describe('ChatView Sessions', () => {
         { ready: 'Merged deploy notes' },
       );
 
-      // The Librarian is not in the Agent roster; the picker names it.
+      // The Librarian is not in the Agent roster; the Agent bar names it.
       expect(rpcMock).toHaveBeenCalledWith('chat.history', {
         agent_id: 'librarian',
         session_id: 'lib-1',
         limit: 100,
       });
-      expect(
-        document.querySelector('.chat-header__agent-picker').textContent.trim(),
-      ).toBe(t('librarian.name'));
+      expect(selectedAgentName()).toBe(t('librarian.name'));
       expect(composerInput().disabled).toBe(false);
       // The Session's Context names its window, so the ring shows without the
       // hidden Agent in the roster.

@@ -45,7 +45,6 @@
   const SESSION_DISPLAY_INCREMENT = 20;
 
   let {
-    headerControls,
     agentId = '',
     currentSessionId = '',
     // Bumped when Session-list continuity is uncertain (replay gap or server
@@ -144,6 +143,14 @@
     }
     return roster;
   });
+
+  // The header names whose Sessions the list shows.
+  let headerTitle = $derived(
+    filters.allAgents
+      ? t('sessions.filters.allAgents')
+      : rosterAgents.find((entry) => entry.address === asText(agentId))?.name ||
+          t('sessions.title'),
+  );
 
   const SESSION_FILTER_ROWS = [
     {
@@ -532,13 +539,7 @@
 
 <aside class="session-drawer" aria-label={t('sessions.title')}>
   <div class="session-drawer__header">
-    <div class="session-drawer__controls">
-      {#if headerControls}
-        {@render headerControls()}
-      {:else}
-        <h3 class="session-drawer__title">{t('sessions.title')}</h3>
-      {/if}
-    </div>
+    <h3 class="session-drawer__title">{headerTitle}</h3>
     <div class="session-drawer__filter">
       <button
         type="button"
@@ -709,9 +710,11 @@
                 })}
             >
               <div class="session-row__heading">
+                <!-- One status slot before the title: running wins over an
+                     unread result. -->
                 {#if session.has_active_run}
                   <span
-                    class="session-row__active-dot"
+                    class="session-row__status session-row__active-dot"
                     aria-label={t('sessions.activeRun')}
                     use:tooltip={t('sessions.activeRunHint')}
                   >
@@ -720,23 +723,22 @@
                       aria-hidden="true"
                     ></span>
                   </span>
+                {:else if session.has_unread_completion && session.id !== currentSessionId}
+                  <span
+                    class="session-row__status session-row__unread"
+                    aria-label={t('sessions.unreadCompletion')}
+                    use:tooltip={() => unreadRunDetails(session)}
+                  >
+                    <span
+                      class="tab-indicator tab-indicator--unread"
+                      aria-hidden="true"
+                    ></span>
+                  </span>
                 {/if}
                 <p class="session-row__name">
                   {session.display_name || sessionDisplayName(session)}
                 </p>
                 <span class="session-row__markers">
-                  {#if session.has_unread_completion && session.id !== currentSessionId}
-                    <span
-                      class="session-row__unread"
-                      aria-label={t('sessions.unreadCompletion')}
-                      use:tooltip={() => unreadRunDetails(session)}
-                    >
-                      <span
-                        class="tab-indicator tab-indicator--unread session-row__unread-dot"
-                        aria-hidden="true"
-                      ></span>
-                    </span>
-                  {/if}
                   {#if session.platform}
                     <span
                       class="tooltip-anchor session-row__marker-anchor"

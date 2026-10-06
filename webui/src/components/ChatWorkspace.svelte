@@ -424,7 +424,7 @@
   <Button
     variant={inChat ? 'secondary' : 'tertiary'}
     icon
-    class={inChat ? 'chat-view__workspace-action' : ''}
+    class={inChat ? 'chat-header__action' : ''}
     data-workspace-action
     ariaLabel={split ? t('split.close') : t('split.open')}
     tooltip={split ? t('split.close') : t('split.open')}
@@ -460,7 +460,7 @@
     <Button
       variant={inChat ? 'secondary' : 'tertiary'}
       icon
-      class={inChat ? 'chat-view__workspace-action' : ''}
+      class={inChat ? 'chat-header__action' : ''}
       ariaLabel={kinds[index] === 'chat'
         ? t('split.showPreview')
         : t('split.backToChat')}

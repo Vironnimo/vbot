@@ -510,17 +510,26 @@ export function selectProjectAgentFromPicker(name, project = 'vBot', root) {
   return selectAgentFromPicker(projectAgentName(name, project), root);
 }
 
-// Whether the picker shows an unread result for the named Agent: on its
-// activity chip, or on the trigger while it is selected.
+// Whether the Agent bar shows an unread result for the named Agent: on its
+// button, or for an Agent off the bar in the "All agents" list.
 export function agentShowsUnread(name, root = document) {
-  const chip = agentChip(name, root);
-  if (chip) {
-    return Boolean(chip.querySelector('.tab-indicator--unread'));
+  const pill = agentPill(name, root);
+  if (pill) {
+    return Boolean(pill.querySelector('.tab-indicator--unread'));
   }
-  return (
-    selectedAgentName(root) === name &&
-    Boolean(agentPickerTrigger(root).querySelector('.tab-indicator--unread'))
-  );
+  const trigger = allAgentsTrigger(root);
+  if (!trigger || trigger.disabled) {
+    return false;
+  }
+  trigger.click();
+  flushSync();
+  const option = Array.from(
+    document.querySelectorAll('[role="option"], [role="treeitem"]'),
+  ).find((item) => item.getAttribute('aria-label')?.startsWith(`${name}:`));
+  const unread = Boolean(option?.querySelector('.tab-indicator--unread'));
+  trigger.click();
+  flushSync();
+  return unread;
 }
 
 // Params of every RPC call to `method`.
@@ -598,38 +607,51 @@ export function findNewSessionButton() {
   );
 }
 
-// Trigger of the Chat header's Agent picker. It shows the selected Agent's
-// name ("Builder · vBot" for a Project Agent), or the "Select agent"
-// placeholder.
-export function agentPickerTrigger(root = document) {
-  return root.querySelector('.chat-header__agent-picker button[aria-haspopup]');
-}
-
-// Name of the Agent selected in the picker; '' when none is.
-export function selectedAgentName(root = document) {
-  const trigger = agentPickerTrigger(root);
-  if (
-    !trigger ||
-    trigger.querySelector('[class*="trigger-label--placeholder"]')
-  ) {
-    return '';
-  }
-  return trigger.textContent.trim();
-}
-
-// The activity chip of another personal Agent (running or unread), found by
-// the Agent name that starts its accessible label.
-export function agentChip(name, root = document) {
-  return Array.from(root.querySelectorAll('.agent-chips > button')).find(
-    (chip) => chip.getAttribute('aria-label')?.startsWith(`${name}:`),
+// The Chat header's toggle for the Session list.
+export function sessionListButton(root = document) {
+  return root.querySelector(
+    `.chat-header button[aria-label="${t('chat.agentBar.sessionList')}"]`,
   );
 }
 
-// Selects an Agent the way a user does: open the picker, open the closed
-// Project groups, choose the option. The picker's list is portaled to <body>.
+// Trigger of the Agent bar's "All agents" list, which offers every Agent.
+export function allAgentsTrigger(root = document) {
+  return root.querySelector('.chat-header__all-agents button[aria-haspopup]');
+}
+
+// Name of the Agent the Agent bar shows as displayed ("Builder · vBot" for a
+// Project Agent outside the bar); '' when none is.
+export function selectedAgentName(root = document) {
+  const pill = root.querySelector(
+    '.agent-pill[aria-pressed="true"], .agent-pill--current',
+  );
+  return pill ? pill.textContent.trim() : '';
+}
+
+// The Agent bar's button for an Agent, found by the Agent name that starts
+// its accessible label.
+export function agentPill(name, root = document) {
+  return Array.from(root.querySelectorAll('button.agent-pill')).find((pill) =>
+    pill.getAttribute('aria-label')?.startsWith(`${name}:`),
+  );
+}
+
+// Selects an Agent the way a user does: its button on the Agent bar, else
+// the "All agents" list with its closed Project groups opened. The list is
+// portaled to <body>.
 export async function selectAgentFromPicker(name, root = document) {
-  await waitForCondition(() => agentPickerTrigger(root)?.disabled === false);
-  agentPickerTrigger(root).click();
+  await waitForCondition(
+    () =>
+      agentPill(name, root)?.disabled === false ||
+      allAgentsTrigger(root)?.disabled === false,
+  );
+  const pill = agentPill(name, root);
+  if (pill) {
+    pill.click();
+    flushSync();
+    return;
+  }
+  allAgentsTrigger(root).click();
   const option = () =>
     Array.from(
       document.querySelectorAll('[role="option"], [role="treeitem"]'),

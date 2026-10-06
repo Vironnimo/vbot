@@ -22,9 +22,9 @@
 }
 
 .chat-view__surface {
-  --session-controls-inset: 6px;
   position: relative;
   display: flex;
+  min-width: 0;
   min-height: 0;
   flex: 1;
   flex-direction: column;
@@ -32,70 +32,44 @@
   background: var(--bg);
 }
 
+/* The Session list docks beside the chat and pushes it; an area too narrow
+   for both shows the list over the chat instead. */
 .chat-view__content-shell {
   position: relative;
   display: flex;
   min-height: 0;
   flex: 1;
   overflow: hidden;
+  container: chat-area / inline-size;
 }
 
-/* Shared floating Session controls at the top-left of the chat
-     surface. Stays fixed while the timeline scrolls underneath. The session
-     panel opens downward from this control as a floating overlay (not a
-     sidebar), so the chat surface always fills the full width. */
-.chat-view__session-bar {
-  position: absolute;
-  top: var(--session-controls-inset);
-  left: var(--session-controls-inset);
-  z-index: 2;
-  display: flex;
-  align-items: stretch;
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface);
-  box-shadow: var(--floating-elevation);
-  overflow: hidden;
-}
-
-.btn-secondary.chat-view__session-toggle {
-  border: 0;
-  border-radius: var(--r-sm);
-  padding: 5px 8px;
-  background: transparent;
-  color: var(--text-med);
-  font-size: var(--fs-label-sm);
-  font-weight: 600;
-}
-
-.btn-secondary.chat-view__session-toggle:hover:not(:disabled) {
-  background: var(--surface-3);
-  color: var(--text-hi);
-}
-
-.btn-secondary.btn-icon.chat-view__new-session-fab,
-.btn-secondary.btn-icon.chat-view__workspace-action {
+/* Icon actions in the Chat header: the Session list, New session and the
+   area actions ChatWorkspace passes in. */
+.btn-secondary.btn-icon.chat-header__action {
   border: 0;
   border-radius: var(--r-sm);
   width: 28px;
   min-width: 28px;
+  height: 28px;
   padding: 0;
   background: transparent;
   color: var(--text-med);
 }
 
-.btn-secondary.btn-icon.chat-view__new-session-fab:hover:not(:disabled),
-.btn-secondary.btn-icon.chat-view__workspace-action:hover:not(:disabled) {
-  background: var(--surface-3);
+.btn-secondary.btn-icon.chat-header__action:hover:not(:disabled),
+.btn-secondary.btn-icon.chat-header__action[aria-expanded='true'] {
+  background: var(--surface-2);
   color: var(--text-hi);
 }
 
-.chat-view__new-session-fab svg {
+.chat-header__action[aria-expanded='true'] svg {
+  color: var(--accent);
+}
+
+.chat-header__action svg {
   fill: none;
   stroke: currentcolor;
-  stroke-width: 2;
+  stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -202,12 +176,7 @@
 }
 
 @media (max-width: 640px) {
-  .chat-view__surface {
-    --session-controls-inset: 8px;
-  }
-
-  .btn-secondary.btn-icon.chat-view__new-session-fab,
-  .btn-secondary.btn-icon.chat-view__workspace-action {
+  .btn-secondary.btn-icon.chat-header__action {
     width: 40px;
     min-width: 40px;
     height: 40px;
