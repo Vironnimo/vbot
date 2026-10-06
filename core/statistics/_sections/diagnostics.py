@@ -84,8 +84,9 @@ def _compactions(context: ReportContext) -> CompactionsSection:
 def _cache(context: ReportContext) -> JsonObject:
     """Prompt-cache health of listed Sessions from the cache cubes.
 
-    The lowest hit rates need at least two cache-reporting turns with a
-    prompt; suspected breaks are the largest read shortfalls first.
+    Every turn with Usage counts, an unreported cache counter as zero. The
+    lowest hit rates need at least two turns with a prompt; suspected breaks
+    are the largest read shortfalls first.
     """
     sessions: list[JsonObject] = []
     evaluated = suspected = 0
@@ -109,7 +110,7 @@ def _cache(context: ReportContext) -> JsonObject:
             {
                 "agent_id": session.display_key,
                 "session_id": session.address.session_id,
-                "cache_turns": turns,
+                "turns": turns,
                 "input_tokens": input_tokens,
                 "cache_read_tokens": read,
                 "cache_write_tokens": write,

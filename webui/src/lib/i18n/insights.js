@@ -249,11 +249,11 @@ export default Object.freeze({
   'statistics.usage.reasoning': 'Reasoning tokens',
   'statistics.usage.cacheHitRate': 'Cache hit rate',
   'statistics.usage.cacheHitHint':
-    'Cache hit rate: tokens read from cache as a share of the input, over the turns that report cache data.',
+    'Cache hit rate: tokens read from cache as a share of all input tokens.',
   'statistics.usage.reasoningHint':
-    'Reasoning tokens are provider-reported subsets of measured output and are never added to token totals.',
+    'Reasoning tokens are part of the output tokens and are never added to token totals.',
   'statistics.usage.cacheSessions': 'Sessions with lowest cache hit rate',
-  'statistics.usage.cacheEmpty': 'No cache-reporting activity yet.',
+  'statistics.usage.cacheEmpty': 'No chat activity yet.',
   'statistics.usage.cacheBreaks': 'Suspected cache breaks (derived)',
   'statistics.usage.cacheBreaksSummary':
     '{suspected} suspected breaks across {evaluated} evaluated continuation turns.',

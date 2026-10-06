@@ -81,7 +81,7 @@ _GLOBAL_SCOPE = ""
 # version. Bump it when the fact or aggregate tables or the meaning of their
 # rows change; the kernel adds a new table empty, so a new aggregate needs a
 # bump to be filled.
-_PROJECTION_VERSION = 5
+_PROJECTION_VERSION = 6
 # A busy index fails the read quickly as retryable instead of queueing it.
 _WRITE_PATIENCE_S = 1.0
 

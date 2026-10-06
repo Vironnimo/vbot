@@ -170,8 +170,6 @@ class Totals:
             "reasoning_tokens": self["reasoning_tokens"],
             "cache_read_tokens": self["cache_read_tokens"],
             "cache_write_tokens": self["cache_write_tokens"],
-            "cache_input_tokens": self["cache_input_tokens"],
-            "cache_calls": self["cache_calls"],
             "unreported_calls": self["unreported_calls"],
             "cost_usd": self.cost_usd,
             "reported_cost_usd": (usd(self["reported_nusd"]) if self["reported_calls"] else None),

@@ -270,8 +270,7 @@ def _totals_lines(totals: Mapping[str, Any]) -> list[str]:
         f"output={_int(totals.get('estimated_output_tokens'))})",
         f"cache: hit_rate={_cache_hit(totals)} "
         f"(read={_int(totals.get('cache_read_tokens'))} "
-        f"of input={_int(totals.get('cache_input_tokens'))} "
-        f"over {_int(totals.get('cache_calls'))} cache-reporting calls) "
+        f"of input={_int(totals.get('input_tokens'))}) "
         f"write={_int(totals.get('cache_write_tokens'))}",
     ]
 
@@ -646,12 +645,12 @@ def _token_pair(row: Mapping[str, Any]) -> str:
 
 
 def _cache_hit(row: Mapping[str, Any]) -> str:
-    """Cache read share of the input of cache-reporting calls; ``-`` without any."""
+    """Cache read share of all input; ``-`` without any input."""
 
-    cache_input = _int(row.get("cache_input_tokens"))
-    if not _int(row.get("cache_calls")) or not cache_input:
+    input_tokens = _int(row.get("input_tokens"))
+    if not input_tokens:
         return _MISSING
-    return _percent(_int(row.get("cache_read_tokens")) / cache_input)
+    return _percent(_int(row.get("cache_read_tokens")) / input_tokens)
 
 
 def _title(value: object) -> str:

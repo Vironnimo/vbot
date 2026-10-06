@@ -112,8 +112,6 @@ def build(context: ReportContext) -> JsonObject:
                 "output_tokens": row["output_tokens"],
                 "cost_usd": row.cost_usd,
                 "cache_read_tokens": row["cache_read_tokens"],
-                "cache_input_tokens": row["cache_input_tokens"],
-                "cache_calls": row["cache_calls"],
             }
             for model, row in sorted(
                 models.items(),
@@ -234,7 +232,6 @@ _SERIES_FIELDS = (
     "reported_cost_usd",
     "estimated_cost_usd",
     "cache_read_tokens",
-    "cache_input_tokens",
 )
 
 

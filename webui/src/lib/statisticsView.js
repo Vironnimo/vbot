@@ -364,11 +364,9 @@ export function formatHourLabel(hour) {
   return `${String(safeHour).padStart(2, '0')}:00`;
 }
 
-/** Cache hit rate: cache reads as a share of the input of the calls that
- *  report a cache counter; null when no call reports one. */
+/** Cache hit rate: cache reads as a share of all input; null without input. */
 export function cacheHitRate(record) {
-  if (record?.cache_calls === 0) return null;
-  const input = toFiniteNumber(record?.cache_input_tokens);
+  const input = toFiniteNumber(record?.input_tokens);
   if (input <= 0) return null;
   return toFiniteNumber(record?.cache_read_tokens) / input;
 }

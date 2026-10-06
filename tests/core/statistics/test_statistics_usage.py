@@ -88,14 +88,12 @@ def test_measured_and_estimated_tokens_stay_separate(
     # Token counts include their estimated part, which is reported alongside.
     assert (totals["input_tokens"], totals["estimated_input_tokens"]) == (107, 7)
     assert (totals["output_tokens"], totals["estimated_output_tokens"]) == (23, 3)
-    # Reasoning is part of measured output only; cache figures need measured input.
-    assert totals["reasoning_tokens"] == 12
-    assert (totals["cache_calls"], totals["cache_input_tokens"]) == (1, 100)
-    assert totals["cache_read_tokens"] == 30
+    # Every turn counts: reasoning and cache figures include estimated turns.
+    assert (totals["reasoning_tokens"], totals["cache_read_tokens"]) == (14, 30)
     model_row = _rows(usage, "model")[model]
     assert (model_row["input_tokens"], model_row["runs"], model_row["sessions"]) == (107, 1, 1)
-    assert _rows(usage, "provider")["openrouter"]["reasoning_tokens"] == 12
-    assert usage["series"][0]["reasoning_tokens"] == 12
+    assert _rows(usage, "provider")["openrouter"]["reasoning_tokens"] == 14
+    assert usage["series"][0]["reasoning_tokens"] == 14
 
 
 def test_partial_usage_keeps_provider_output_measured(
@@ -238,8 +236,8 @@ def test_cache_totals_split_per_provider_model_and_day(
                     "cache_write_tokens": 50,
                 },
             ),
-            # Measured turn without any cache fields: counts into measured
-            # totals but never into cache-call denominators.
+            # Turns without cache fields count with zero cache reads, estimated
+            # turns included.
             _assistant(
                 model="ollama/llama3",
                 at=BASE + timedelta(seconds=20),
@@ -261,19 +259,14 @@ def test_cache_totals_split_per_provider_model_and_day(
 
     usage = _usage(statistics(usage_recorder=ledger, clock=_clock))
 
-    def cache(row: Report) -> tuple[int, int, int, int]:
-        return (
-            row["cache_calls"],
-            row["cache_input_tokens"],
-            row["cache_read_tokens"],
-            row["cache_write_tokens"],
-        )
+    def cache(row: Report) -> tuple[int, int, int]:
+        return (row["input_tokens"], row["cache_read_tokens"], row["cache_write_tokens"])
 
-    assert cache(usage["totals"]) == (2, 3000, 2500, 150)
-    assert cache(_rows(usage, "provider")["anthropic"]) == (2, 3000, 2500, 150)
-    assert cache(_rows(usage, "provider")["ollama"]) == (0, 0, 0, 0)
-    assert cache(_rows(usage, "model")[CLAUDE]) == (2, 3000, 2500, 150)
-    assert cache(usage["series"][0]) == (2, 3000, 2500, 150)
+    assert cache(usage["totals"]) == (3509, 2500, 150)
+    assert cache(_rows(usage, "provider")["anthropic"]) == (3009, 2500, 150)
+    assert cache(_rows(usage, "provider")["ollama"]) == (500, 0, 0)
+    assert cache(_rows(usage, "model")[CLAUDE]) == (3009, 2500, 150)
+    assert usage["series"][0]["cache_read_tokens"] == 2500
 
 
 def test_session_cache_records_sorted_worst_hit_rate_first(
@@ -295,7 +288,7 @@ def test_session_cache_records_sorted_worst_hit_rate_first(
 
     good_session = cached_session(900, 900)
     bad_session = cached_session(100, 100)
-    # A single cache-reporting turn is not enough for a meaningful hit rate.
+    # A single turn is not enough for a meaningful hit rate.
     cached_session(0)
 
     report = statistics(clock=_clock).report(sections=["diagnostics"])
@@ -303,7 +296,7 @@ def test_session_cache_records_sorted_worst_hit_rate_first(
 
     assert [record["session_id"] for record in records] == [bad_session, good_session]
     assert records[0]["hit_rate"] == pytest.approx(0.1)
-    assert (records[0]["cache_turns"], records[0]["input_tokens"]) == (2, 2000)
+    assert (records[0]["turns"], records[0]["input_tokens"]) == (2, 2000)
     assert records[0]["cache_read_tokens"] == 200
     assert records[1]["hit_rate"] == pytest.approx(0.9)
     assert records[0]["last_activity"] is not None
@@ -323,6 +316,25 @@ def test_suspected_cache_breaks_flag_prefix_collapse_and_skip_explained_misses(
     # The cached prefix collapses between two comparable turns: suspected.
     collapsed = _write_session(
         manager, "main", [cached_turn(BASE, cache_read=9000), cached_turn(later, cache_read=500)]
+    )
+    # A turn without cache fields reads zero, estimated or not: suspected.
+    unreported = _write_session(
+        manager,
+        "main",
+        [
+            cached_turn(BASE, cache_read=9000),
+            _assistant(
+                model=CLAUDE,
+                at=later,
+                usage={
+                    "input_tokens": 10000,
+                    "output_tokens": 10,
+                    "input_tokens_estimated": True,
+                    "output_tokens_estimated": True,
+                    "estimated": True,
+                },
+            ),
+        ],
     )
     # A healthy continuation is evaluated, not suspected.
     _write_session(
@@ -360,11 +372,18 @@ def test_suspected_cache_breaks_flag_prefix_collapse_and_skip_explained_misses(
     report = statistics(clock=_clock).report(sections=["diagnostics"])
     breaks = report["diagnostics"]["cache"]["suspected_breaks"]
 
-    assert (breaks["evaluated_turns"], breaks["suspected_turns"]) == (2, 1)
-    [incident] = breaks["incidents"]
-    assert (incident["agent_id"], incident["session_id"]) == ("main", collapsed)
-    assert incident["model"] == CLAUDE
-    assert (incident["previous_input_tokens"], incident["cache_read_tokens"]) == (10000, 500)
+    assert (breaks["evaluated_turns"], breaks["suspected_turns"]) == (3, 2)
+    # Largest read shortfall first.
+    assert [
+        (
+            incident["session_id"],
+            incident["model"],
+            incident["previous_input_tokens"],
+            incident["cache_read_tokens"],
+        )
+        for incident in breaks["incidents"]
+    ] == [(unreported, CLAUDE, 10000, 0), (collapsed, CLAUDE, 10000, 500)]
+    assert breaks["incidents"][0]["agent_id"] == "main"
 
 
 # -- Costs --------------------------------------------------------------------
