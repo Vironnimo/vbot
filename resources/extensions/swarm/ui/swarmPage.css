@@ -95,14 +95,14 @@ body {
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .workspace
   > .banner {
-  margin: 14px 32px 0;
+  margin: 14px var(--page-inset-x) 0;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .content {
   flex: 1;
   min-width: 0;
   overflow: auto;
-  padding: 28px 32px 32px;
+  padding: var(--page-inset-top) var(--page-inset-x) var(--page-inset-bottom);
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
   .section-head {
@@ -191,7 +191,7 @@ body {
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication) .start {
   display: grid;
   gap: 20px;
-  max-width: 760px;
+  max-width: var(--content-max-narrow);
   margin-inline: auto;
 }
 :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
@@ -485,17 +485,6 @@ body {
   align-items: center;
   color: var(--text-med);
 }
-@media (max-width: 960px) {
-  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-    .content {
-    padding: 22px 20px 28px;
-  }
-  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-    .workspace
-    > .banner {
-    margin-inline: 20px;
-  }
-}
 @media (max-width: 640px) {
   /* Narrow pages stack the pane above the work area. The pane keeps its
      natural height until the cap, then its lists scroll inside it; the work
@@ -530,15 +519,6 @@ body {
   :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
     .usage-summary {
     grid-template-columns: 1fr;
-  }
-  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-    .content {
-    padding: 16px;
-  }
-  :where(.swarm-page, .swarm-page-modal-copy, .swarm-page-communication)
-    .workspace
-    > .banner {
-    margin-inline: 16px;
   }
 }
 

@@ -91,30 +91,16 @@
   overflow: hidden;
 }
 
-/* One continuous configuration page: the header, the titled sections and the
-   final Save. Spacing between sections comes from the section grammar
-   (styles/settings/sections.css); topics continue that rhythm. */
-.projects-view .project-detail-scroll {
-  display: flex;
-  min-height: 0;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
-  gap: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 26px 30px;
-  scrollbar-gutter: stable;
-}
-
-.projects-view .project-detail-scroll > * {
-  width: 100%;
-  max-width: var(--content-max-wide);
-  margin-inline: auto;
+/* One continuous configuration page (`.page-scroll`): the header, the titled
+   sections and the final Save. Spacing between sections comes from the
+   section grammar (styles/settings/sections.css); topics continue that
+   rhythm. */
+.projects-view {
+  --page-measure: var(--content-max-narrow);
 }
 
 .projects-view .project-detail-scroll > .management-header {
-  margin-bottom: 32px;
+  margin-bottom: 28px;
 }
 
 .projects-view .project-detail-scroll > .banner {
@@ -142,17 +128,9 @@
   gap: 10px;
 }
 
-.projects-view .detail-heading {
-  color: var(--text-hi);
-  font-size: var(--fs-display);
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  line-height: 1.2;
-}
-
 /* The Project's working directory path. */
 .projects-view .detail-sub {
-  margin-top: 4px;
+  margin-top: 6px;
   color: var(--text-lo);
   font-family: var(--font-mono);
   font-size: var(--fs-mono-sm);
@@ -581,10 +559,6 @@
 /* ── Responsive ───────────────────────────────────────────────────────────── */
 
 @media (max-width: 960px) {
-  .projects-view .project-detail-scroll {
-    padding: 22px 18px;
-  }
-
   .projects-view .detail-top {
     flex-direction: column;
   }

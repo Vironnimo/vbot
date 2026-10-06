@@ -97,7 +97,32 @@
    identity header, and local navigation/control surface. */
 .view-frame {
   gap: var(--space-lg);
-  padding: 28px 32px 32px;
+  padding: var(--page-inset-top) var(--page-inset-x) var(--page-inset-bottom);
+}
+
+/* The scrollport of a centered page (configuration and overview pages): it
+   spans the view, so its scrollbar sits at the window edge, and centers its
+   children at the page's measure. The gutter is reserved on both edges, so
+   the content stays centered and does not move when the page starts to
+   scroll. Set `--page-measure` on the view to `--content-max-narrow` or
+   `--content-max-wide`. */
+.page-scroll {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--page-inset-top) var(--page-inset-x) var(--page-inset-bottom);
+  scrollbar-gutter: stable both-edges;
+}
+
+.page-scroll > * {
+  width: 100%;
+  max-width: var(--page-measure, none);
+  flex-shrink: 0;
+  margin-inline: auto;
 }
 
 .view-header {

@@ -559,11 +559,11 @@
   bind:this={editorForm}
   onsubmit={handleAgentSubmit}
 >
-  <div class="agent-detail-scroll">
+  <div class="agent-detail-scroll page-scroll">
     <div class="management-header">
       <div class="detail-top">
         <div>
-          <h2 class="detail-heading">
+          <h2 class="detail-heading view-header__title">
             {formMode === AGENT_FORM_MODE_CREATE
               ? t('agents.create')
               : agent?.name || formValues.name || agent?.id}

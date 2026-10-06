@@ -60,8 +60,10 @@
   min-width: 0;
   min-height: 0;
   gap: 14px;
-  padding: 28px 32px 20px;
-  max-width: calc(var(--content-max-wide) + 64px);
+  /* A configuration page whose lists scroll inside the column: the column
+     itself carries the page inset and measure. */
+  padding: var(--page-inset-top) var(--page-inset-x) 20px;
+  max-width: calc(var(--content-max-narrow) + 2 * var(--page-inset-x));
   margin: 0 auto;
 }
 /* The collection page and a package page share the content column; the
@@ -710,7 +712,6 @@ button.skills-librarian__skill:focus-visible,
 }
 @media (max-width: 640px) {
   .skills-main {
-    padding: 16px;
     gap: 12px;
   }
   .skills-toolbar {

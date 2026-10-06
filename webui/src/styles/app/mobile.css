@@ -1,10 +1,6 @@
 /* Mobile (≤640, matching the breakpoint convention above): a slim top band,
    the content, and a bottom tab bar. Touch targets grow to a ≥40px hit area. */
 @media (max-width: 640px) {
-  .view-frame {
-    padding: 16px;
-  }
-
   .view-header {
     align-items: stretch;
     flex-direction: column;

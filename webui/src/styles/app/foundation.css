@@ -159,8 +159,13 @@
      (about 88 characters, the comfortable column's text width), so wider
      areas give room to code, tables, images and Tool rows without
      lengthening lines.
-     The `--content-max-*` tokens cap non-chat views (settings/forms vs.
-     detail/wide panels) and are not user-configurable. */
+     Every other page is one of three types (user decision 2026-10-06):
+     configuration pages - every view with a Secondary pane, plus System
+     Prompt - center their content at `--content-max-narrow`; the overview
+     page (Statistics) at `--content-max-wide`; work areas (Terminals,
+     Calendar, Jev, Logs, Debug) start at the page edge and use the full
+     width. Pages share one inset
+     (`--page-inset-*`), so their titles sit at the same height. */
   --chat-measure-comfortable: 780px;
   --chat-measure-wide: 1100px;
   --chat-measure: var(--chat-measure-comfortable);
@@ -169,8 +174,11 @@
      avatar. The composer stack lines up with the text these leave. */
   --chat-msg-gutter: 28px;
   --chat-msg-indent: 34px;
-  --content-max-narrow: 920px;
+  --content-max-narrow: 860px;
   --content-max-wide: 1180px;
+  --page-inset-top: 28px;
+  --page-inset-x: 32px;
+  --page-inset-bottom: 32px;
 
   /* Breakpoint convention (documented; CSS cannot use vars in media queries):
      mobile ≤640 · tablet 641–960 · desktop ≥961 · wide ≥1280. */
@@ -197,6 +205,22 @@
   --color-border: var(--border);
   --radius-md: var(--r-md);
   --radius-lg: var(--r-lg);
+}
+
+/* Page insets shrink with the window; the breakpoints are the shared ones. */
+@media (max-width: 960px) {
+  :root {
+    --page-inset-top: 24px;
+    --page-inset-x: 24px;
+    --page-inset-bottom: 28px;
+  }
+}
+@media (max-width: 640px) {
+  :root {
+    --page-inset-top: 16px;
+    --page-inset-x: 16px;
+    --page-inset-bottom: 24px;
+  }
 }
 
 html {

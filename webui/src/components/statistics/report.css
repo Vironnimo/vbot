@@ -27,11 +27,14 @@
   height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
   color: var(--text-hi);
 }
 
-/* Header, toolbar and tab content share the wide content measure, centered;
-   the scroll container itself stays full width (scrollbar at the edge). */
+/* An overview page: header, toolbar and tab content share the wide content
+   measure, centered; the scroll container itself stays full width (scrollbar
+   at the edge) and reserves its gutter on both edges, so the content does not
+   move when a tab starts to scroll. */
 .stats-view > * {
   width: 100%;
   max-width: var(--content-max-wide);

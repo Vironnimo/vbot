@@ -9,7 +9,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 28px 32px 20px;
+  padding: var(--page-inset-top) var(--page-inset-x) 20px;
   border-bottom: 1px solid var(--border);
 }
 .jev-help {
@@ -27,11 +27,11 @@
   flex: 1;
   min-width: 0;
   overflow: auto;
-  padding: 24px;
+  padding: 24px var(--page-inset-x) var(--page-inset-bottom);
 }
+/* A work area: the library starts at the header's edge like the title. */
 .jev-library-content {
-  max-width: 960px;
-  margin: 0 auto;
+  max-width: var(--content-max-wide);
 }
 .jev-experiments {
   display: flex;
@@ -261,7 +261,6 @@
 }
 @media (max-width: 650px) {
   .jev-header {
-    padding: 16px;
     gap: 12px;
   }
   .jev-notice.banner {

@@ -113,22 +113,8 @@
   background: var(--surface-3);
 }
 
-/* The page keeps its content height (no stretch to the scrollport), so the
-   bottom padding stays below the last section. */
-.settings-content {
-  display: flex;
-  align-items: flex-start;
-  min-width: 0;
-  flex: 1;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 24px 32px;
-  scrollbar-gutter: stable;
-}
-
-/* Topic pages keep one reading measure while the scrollport fills the pane. */
-.s-doc {
-  width: 100%;
-  max-width: var(--content-max-narrow);
-  margin-inline: auto;
+/* A configuration page: `.settings-content` is its `.page-scroll`, and the
+   document keeps the configuration measure. */
+.settings-layout {
+  --page-measure: var(--content-max-narrow);
 }

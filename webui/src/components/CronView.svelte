@@ -540,10 +540,15 @@
     {:else}
       {#key editor.isCreating ? 'cron-create' : editor.selectedJobId}
         <div class="cron-detail-pane">
-          <form class="cron-detail-scroll" onsubmit={editor.submitForm}>
+          <form
+            class="cron-detail-scroll page-scroll"
+            onsubmit={editor.submitForm}
+          >
             <div class="detail-top">
               <div>
-                <div class="detail-heading">{editor.detailTitle}</div>
+                <h2 class="detail-heading view-header__title">
+                  {editor.detailTitle}
+                </h2>
                 {#if editor.isCreating}
                   <div class="detail-sub">
                     {t('cron.detail.createSubtitle')}
