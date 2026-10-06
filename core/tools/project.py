@@ -170,7 +170,7 @@ def make_project_handler(
                     project.project_id,
                     project.display_name,
                     project.cwd,
-                    project.auto_load,
+                    project.instruction_files,
                 ),
                 tool_available=context.can_call,
                 on_read=read_paths.append,

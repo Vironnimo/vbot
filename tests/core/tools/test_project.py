@@ -109,11 +109,13 @@ def test_project_tool_loads_context_skills_and_stamps_files_read(tmp_path: Path)
     data_dir = tmp_path / "data"
     repo = tmp_path / "repo"
     repo.mkdir()
-    agents_file = repo / "AGENTS.md"
-    agents_file.write_text("Follow the Project rules.", encoding="utf-8")
+    # CLAUDE.md is the only instruction file at creation, so its Source is active.
+    (repo / "CLAUDE.md").write_text("Claude rules.", encoding="utf-8")
     skill_path = repo / ".opencode" / "skills" / "review" / "SKILL.md"
     projects = ProjectStore(data_dir)
     projects.create("vbot", "vBot", repo)
+    agents_file = repo / "AGENTS.md"
+    agents_file.write_text("Follow the Project rules.", encoding="utf-8")
     file_state = FileReadState()
     skill = SimpleNamespace(name="review", description="Review changes.", path=skill_path)
 
@@ -137,7 +139,8 @@ def test_project_tool_loads_context_skills_and_stamps_files_read(tmp_path: Path)
         "follow them for all work in this Project. Your working directory, Workspace, and "
         "permissions are unchanged, so use absolute paths for file Tools and set `workdir` to "
         f"'{project_path}' on every `{SHELL_MODEL_NAME}` call.\n\n"
-        '<file name="AGENTS.md">\nFollow the Project rules.\n</file>\n\n'
+        '<file name="AGENTS.md">\nFollow the Project rules.\n</file>\n'
+        '<file name="CLAUDE.md">\nClaude rules.\n</file>\n\n'
         "Skills from project 'vBot':\n- review: Review changes."
     )
     assert model_path(skill_path) not in data["content"]

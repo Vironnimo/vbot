@@ -182,8 +182,8 @@ def project_shape() -> JsonShape:
 # as the first ``auto_load`` entry when a project is created
 # (:func:`seed_default_auto_load`, used by ``ProjectStore.create``), then treated
 # like any other list entry — removable, reorderable, rendered only through the
-# list. CLAUDE.md and other tool-specific files are deliberately not seeded; the
-# user adds those explicitly.
+# list. CLAUDE.md and other tool-specific files are instruction Sources instead
+# (``core/projects/sources/catalog.py``), active only when no other file loads.
 PROJECT_AGENTS_FILE = "AGENTS.md"
 
 
