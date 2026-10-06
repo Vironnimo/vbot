@@ -93,7 +93,8 @@ async def test_swarm_formation_snapshots_a_repository_profile_through_the_real_h
     path = tmp_path / ".claude" / "agents" / "reviewer.md"
     path.parent.mkdir(parents=True)
     path.write_text(
-        "---\nname: reviewer\nskills: [review]\n---\nrepository-review-sentinel", encoding="utf-8"
+        "---\nname: reviewer\ntools: Read\nskills: [review]\n---\nrepository-review-sentinel",
+        encoding="utf-8",
     )
     skill_directory = write_project_skill(tmp_path, "review", "Review changes.")
     (skill_directory / "SKILL.md").write_text(
@@ -106,7 +107,7 @@ async def test_swarm_formation_snapshots_a_repository_profile_through_the_real_h
     assert host.temporary_agents is not None
     profile = {
         "participants": [{"model": "fixture/model", "count": 1, "repository_profile": "reviewer"}],
-        "tool_access": {"mode": "selected", "allowed": []},
+        "tool_access": {"mode": "selected", "allowed": ["read", "bash"]},
         "allowed_skills": ["review"],
         "tools": {},
         "instructions": "participant-sentinel",
@@ -122,6 +123,9 @@ async def test_swarm_formation_snapshots_a_repository_profile_through_the_real_h
         binding.address, generation_id=binding.generation_id
     )
     assert isinstance(agent, TemporaryAgent)
+    # The Profile's Tool list narrows the owner's selection; opening the group runs
+    # the preflight, which needs the Session's private Swarm Tools to stay granted.
+    assert agent.tool_access.allowed == ("read",)
     assert "repository-review-sentinel" in agent.instructions
     assert "participant-sentinel" in agent.instructions
     assert '<skill_content name="review">' in agent.instructions

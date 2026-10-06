@@ -8,6 +8,7 @@ from typing import Any, Literal, Protocol
 
 from core.projects.sources._reading import SourceError, is_dir_strict, is_file_strict
 from core.projects.sources.profile import AgentProfile, SourceSelection
+from core.utils.file_status import is_link_status
 
 type SourceKind = Literal["agents", "skills", "instructions"]
 
@@ -31,7 +32,14 @@ SOURCE_DEFINITIONS = (
         "opencode.agents",
         "opencode",
         "agents",
-        (".opencode/agents", ".opencode/agent", "opencode.json", ".opencode/opencode.json"),
+        (
+            ".opencode/agents",
+            ".opencode/agent",
+            "opencode.json",
+            "opencode.jsonc",
+            ".opencode/opencode.json",
+            ".opencode/opencode.jsonc",
+        ),
     ),
     SourceDefinition("opencode.skills", "opencode", "skills", (".opencode/skills",)),
     SourceDefinition("claude.agents", "claude", "agents", (".claude/agents",)),
@@ -102,12 +110,17 @@ def detect_sources(
     from core.skills import scan_skill_names
 
     adapters = default_adapters() if adapters is None else adapters
+    skill_folders = [
+        path for item in SOURCE_DEFINITIONS if item.kind == "skills" for path in item.paths
+    ]
     detected: list[DetectedSource] = []
     for definition in SOURCE_DEFINITIONS:
         paths: list[str] = []
         try:
             for relative in definition.paths:
                 path = root / relative
+                if definition.kind == "skills" and _links_to_other(root, relative, skill_folders):
+                    continue
                 if is_dir_strict(path) or is_file_strict(path):
                     paths.append(relative)
             if not paths:
@@ -131,9 +144,18 @@ def detect_sources(
 
 
 def refresh_sources(
-    selections: list[SourceSelection], detected: list[DetectedSource], *, root: Path | None = None
+    selections: list[SourceSelection],
+    detected: list[DetectedSource],
+    *,
+    root: Path | None = None,
+    instructions_loaded: bool = False,
 ) -> list[SourceSelection]:
-    """Append new sources without replacing any existing name's definition."""
+    """Append new sources without replacing any existing name's definition.
+
+    Instruction files usually repeat each other (``CLAUDE.md`` often restates or
+    imports ``AGENTS.md``), so a new instruction source starts active only while no
+    instruction file loads yet; ``instructions_loaded`` reports the Project's own.
+    """
     existing = {item.id for item in selections}
     active = {item.id for item in selections if item.enabled}
     by_id = {selection.id: selection for selection in selections}
@@ -148,12 +170,19 @@ def refresh_sources(
     skill_names = {
         name for item in detected if item.definition.id in active for name in item.skill_names
     }
+    instructions = instructions_loaded or any(
+        item.definition.kind == "instructions" and item.definition.id in active for item in detected
+    )
     result = list(selections)
     for item in detected:
         if item.definition.id in existing:
             continue
         incoming = {agent.agent_id for agent in item.agents if agent.agent_id}
-        enabled = not (incoming & agent_names or item.skill_names & skill_names)
+        if item.definition.kind == "instructions":
+            enabled = not instructions
+            instructions |= enabled
+        else:
+            enabled = not (incoming & agent_names or item.skill_names & skill_names)
         result.append(SourceSelection(item.definition.id, enabled))
         if enabled:
             agent_names |= incoming
@@ -161,15 +190,51 @@ def refresh_sources(
     return result
 
 
-def skill_roots(root: Path, selections: list[SourceSelection]) -> list[Path]:
+def initial_sources(
+    detected: list[DetectedSource], *, instructions_loaded: bool
+) -> list[SourceSelection]:
+    """Select every detected source for a new Project, with one instruction file at most."""
+    selections = refresh_sources(
+        [],
+        [item for item in detected if item.definition.kind == "instructions"],
+        instructions_loaded=instructions_loaded,
+    )
+    chosen = {item.id for item in selections if item.enabled}
     return [
-        root / path
+        SourceSelection(
+            item.definition.id,
+            item.definition.kind != "instructions" or item.definition.id in chosen,
+        )
+        for item in detected
+    ]
+
+
+def skill_roots(root: Path, selections: list[SourceSelection]) -> list[Path]:
+    folders = [
+        path
         for selection in selections
         if selection.enabled
         if (definition := SOURCE_CATALOG.get(selection.id)) is not None
         and definition.kind == "skills"
         for path in definition.paths
     ]
+    return [root / path for path in folders if not _links_to_other(root, path, folders)]
+
+
+def _links_to_other(root: Path, relative: str, folders: list[str]) -> bool:
+    """Whether a folder is a link to another Skill folder, so both name one set.
+
+    Repositories often link one tool's Skill folder to the shared one
+    (``.claude/skills`` -> ``.agents/skills``); the real folder supplies them once.
+    """
+    path = root / relative
+    try:
+        if not is_link_status(path.lstat()):
+            return False
+        target = path.resolve()
+    except OSError:
+        return False
+    return any(other != relative and (root / other).resolve() == target for other in folders)
 
 
 def instruction_files(root: Path, selections: list[SourceSelection]) -> list[str]:

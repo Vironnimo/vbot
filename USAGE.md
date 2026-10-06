@@ -556,7 +556,7 @@ Agent create/update also expose delegation policy through `--subagent-allow <age
 
 ### Projects and Project Agents
 
-A Project registers a server-side repository path, one Source Format, optional auto-load files, Project defaults, and Sessions. Its Source Format is either OpenCode (`.opencode/agents/` and `.opencode/skills/`) or Claude Code (`.claude/agents/` and `.claude/skills/`). Exactly one format is active; vBot does not merge them.
+A Project registers a server-side repository path, an ordered list of Sources, optional auto-load files, Project defaults, and Sessions. vBot detects the agent definitions, Skills and instruction files the repository already has for other coding tools (OpenCode, Claude Code, Codex, GitHub Copilot, Cursor, Gemini CLI and the shared `.agents/skills/`) and lists each as a Source you can switch on or off and reorder. When two active Sources define the same Agent or Skill name, the earlier one wins and the other is shown as shadowed. Each Agent gets the vBot Tools for everything its definition allows, even where the other tool restricts it further; a status (ready, limited, needs attention) shows how completely it carried over. Foreign Model names map to vBot Models through the Project's Model mappings.
 
 Project Agents are Config Agents scanned from the Project Team. They are profiles rather than identities: they have no Workspace, private Memory, private Skills, or `memory` Tool. Their runtime configuration resolves from repository definitions, Project defaults and capability ceilings, and vBot-owned overrides. Their Sessions live under the Project anchor and their address is `agent@project`.
 
@@ -661,7 +661,7 @@ The answer goes to stdout. Tool calls, Tool errors, and retries appear on stderr
 
 ## Skills, Tools, and Sub-Agents
 
-Skills are instruction packages loaded from bundled resources, `<data-dir>/skills`, the active Project's Source Format directory, trusted Extensions, and an Identity Agent's private `skills/` directory. The effective catalog also respects Agent and Project allowlists and Skill requirements.
+Skills are instruction packages loaded from bundled resources, `<data-dir>/skills`, the active Project's Skill Sources, trusted Extensions, and an Identity Agent's private `skills/` directory. The effective catalog also respects Agent and Project allowlists and Skill requirements.
 
 An Agent can load a Skill through the `skill` Tool. Users can explicitly trigger a load with `/skill-name` or `$skill-name`; the original user message remains part of the request. The catalog text is pinned when a Session first builds its prompt, while activation remains live: a newly authored and allowed Skill can be triggered immediately and is announced to an existing Session without rewriting its pinned prompt prefix.
 

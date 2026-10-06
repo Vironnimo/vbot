@@ -565,61 +565,7 @@
   line-height: 1.4;
 }
 
-/* ── Add dialog: source-format choice + CLAUDE.md suggestion ─────────────────
-   The format pick currently renders as modal pick-list cards with a persistent selected state, since the choice stays visible
-   until submit rather than advancing a step. */
-.projects-format-choice {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 6px;
-}
-
-.projects-format-option {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  width: 100%;
-  padding: 9px 12px;
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-md);
-  background: var(--bg);
-  cursor: pointer;
-  text-align: left;
-}
-
-.projects-format-option:hover {
-  border-color: var(--text-faint);
-  background: var(--surface-2);
-}
-
-.projects-format-option:focus-visible {
-  box-shadow: var(--focus-ring);
-  outline: none;
-}
-
-/* The accent border is the selection indicator; the card itself lifts to the
-   selected surface and its text stays neutral. */
-.projects-format-option--selected,
-.projects-format-option--selected:hover {
-  border-color: var(--accent);
-  background: var(--surface-3);
-}
-
-.projects-format-option__name {
-  color: var(--text-hi);
-  font-size: var(--fs-body-sm);
-  font-weight: 500;
-}
-
-.projects-format-option__detail {
-  color: var(--text-lo);
-  font-size: var(--fs-label-sm);
-  font-variant-numeric: tabular-nums;
-}
-
-.projects-claude-md-suggestion,
+/* Remove dialog: the identity-file copy choice. */
 .projects-remove-copy {
   display: flex;
   align-items: flex-start;

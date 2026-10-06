@@ -8,16 +8,14 @@ from typing import Any
 
 from core.projects.sources import _reading as reading
 from core.projects.sources._translation import (
-    FILE_TOOLS,
     READ_ONLY_TOOLS,
     SHELL_TOOLS,
     profile,
-    restrict,
     tool_list,
     unavailable,
     unsupported,
 )
-from core.projects.sources.profile import AgentProfile, ToolRule, Translation
+from core.projects.sources.profile import AgentProfile, AgentTargetRule, Translation
 
 _CLAUDE_TOOLS = {
     "read": frozenset({"read"}),
@@ -26,14 +24,11 @@ _CLAUDE_TOOLS = {
     "glob": frozenset({"search_files"}),
     "grep": frozenset({"search_files"}),
     "bash": frozenset({"bash"}),
+    "powershell": frozenset({"bash"}),
     "webfetch": frozenset({"web_fetch"}),
     "websearch": frozenset({"web_search"}),
     "agent": frozenset({"subagent"}),
     "skill": frozenset({"skill"}),
-}
-_COMPOUND = {
-    "apply_patch": frozenset({"edit", "write"}),
-    "search_files": frozenset({"grep", "glob"}),
 }
 _COPILOT_TOOLS = {
     **_CLAUDE_TOOLS,
@@ -53,6 +48,7 @@ _GEMINI_TOOLS = {
     "list_directory": frozenset({"search_files"}),
     "glob": frozenset({"search_files"}),
     "grep_search": frozenset({"search_files"}),
+    "search_file_content": frozenset({"search_files"}),
     "run_shell_command": frozenset({"bash"}),
     "replace": frozenset({"apply_patch"}),
     "write_file": frozenset({"apply_patch"}),
@@ -83,18 +79,19 @@ class MarkdownAdapter:
                         if not isinstance(permissions, dict):
                             raise reading.SourceError("permissions must be an object.")
                         for key, value in permissions.items():
-                            if key in {"deny", "ask"}:
+                            # Rules that only ask first still let the Agent act.
+                            if key in {"allow", "deny"}:
                                 settings[key] = [*settings.get(key, []), *reading.names(value)]
                             elif key == "defaultMode":
                                 settings[key] = value
-                        if data.get("hooks"):
-                            settings["hooks"] = data["hooks"]
             except (OSError, ValueError) as error:
                 problem = str(error)
         result: list[AgentProfile] = []
         for path in paths:
             name = path.stem.removesuffix(".agent")
             try:
+                if not reading.has_frontmatter(path) and not path.name.endswith(".agent.md"):
+                    continue  # Agent definitions declare frontmatter; other files document.
                 fields, body = reading.markdown(path)
                 name = reading.string(fields, "name", name)
                 if problem:
@@ -112,12 +109,13 @@ class MarkdownAdapter:
             path,
             fields,
             body,
-            model_default="inherit" if self.source in {"cursor", "gemini"} else "",
+            # Claude, Cursor and Gemini subagents use the caller's Model unless named.
+            model_default="inherit" if self.source != "copilot" else "",
         )
         known = {"name", "description", "model", "temperature", "top_p", "effort", "tools"}
         if self.source == "claude":
             if "tools" in fields:
-                agent = tool_list(agent, fields["tools"], _CLAUDE_TOOLS, compound=_COMPOUND)
+                agent = tool_list(agent, fields["tools"], _CLAUDE_TOOLS)
             if "disallowedTools" in fields:
                 agent = tool_list(
                     agent,
@@ -126,11 +124,10 @@ class MarkdownAdapter:
                     deny=True,
                     setting="disallowedTools",
                 )
-            for key in ("deny", "ask"):
-                if key in settings:
-                    agent = tool_list(
-                        agent, settings[key], _CLAUDE_TOOLS, deny=True, setting=f"permissions.{key}"
-                    )
+            if "deny" in settings:
+                agent = tool_list(
+                    agent, settings["deny"], _CLAUDE_TOOLS, deny=True, setting="permissions.deny"
+                )
             if "skills" in fields:
                 agent = replace(
                     agent,
@@ -162,21 +159,15 @@ class MarkdownAdapter:
                         ),
                     ),
                 )
-            elif mode in {"default", "manual", "auto", "acceptEdits"}:
-                agent = replace(
-                    agent,
-                    tool_rules=(*agent.tool_rules, ToolRule("*", False)),
-                    translations=(
-                        *agent.translations,
-                        Translation(
-                            "permissionMode",
-                            "not_supported",
-                            "Approval modes are unavailable; Tools are disabled until a vBot "
-                            "override is set.",
-                        ),
-                    ),
+            elif mode == "dontAsk":
+                # dontAsk refuses every Tool the allow rules do not pre-approve.
+                selected = agent.allowed_tools
+                agent = tool_list(
+                    agent, settings.get("allow", []), _CLAUDE_TOOLS, setting="permissions.allow"
                 )
-            elif mode in {"dontAsk", "bypassPermissions"}:
+                if selected is not None and agent.allowed_tools is not None:
+                    agent = replace(agent, allowed_tools=agent.allowed_tools & selected)
+            elif mode in {"default", "acceptEdits", "auto", "bypassPermissions"}:
                 agent = replace(
                     agent,
                     translations=(
@@ -184,36 +175,32 @@ class MarkdownAdapter:
                         Translation(
                             "permissionMode",
                             "translated",
-                            "vBot permissions and Project ceilings still apply.",
+                            "vBot asks no approvals; the Agent keeps its Tools.",
                         ),
                     ),
                 )
             elif mode:
                 raise reading.SourceError("Unknown permissionMode.")
-            if "hooks" in fields or "hooks" in settings:
-                agent = replace(
-                    agent,
-                    tool_rules=(*agent.tool_rules, ToolRule("*", False)),
-                    translations=(
-                        *agent.translations,
-                        Translation(
-                            "hooks",
-                            "not_supported",
-                            "Hooks cannot enforce their restrictions; Tools are disabled.",
-                        ),
-                    ),
-                )
-            if "isolation" in fields:
-                agent = restrict(
-                    agent,
-                    "isolation",
-                    FILE_TOOLS,
-                    "Worktree isolation is unavailable; file and shell Tools are disabled.",
-                )
-            known |= {"disallowedTools", "skills", "permissionMode", "hooks", "isolation"}
+            known |= {"disallowedTools", "skills", "permissionMode"}
         elif self.source == "copilot":
             if "tools" in fields:
                 agent = tool_list(agent, fields["tools"], _COPILOT_TOOLS, wildcard=True)
+            if "agents" in fields:
+                targets = reading.names(fields["agents"])
+                if "*" not in targets:
+                    agent = replace(
+                        agent,
+                        agent_target_rules=(
+                            *agent.agent_target_rules,
+                            AgentTargetRule("*", False),
+                            *(AgentTargetRule(target, True) for target in targets),
+                        ),
+                        translations=(
+                            *agent.translations,
+                            Translation("agents", "translated", "Limits delegation targets."),
+                        ),
+                    )
+            known.add("agents")
         elif self.source == "cursor":
             known.discard("tools")
             if reading.boolean(fields, "readonly"):
@@ -240,10 +227,6 @@ class MarkdownAdapter:
                     fields["tools"],
                     _GEMINI_TOOLS,
                     wildcard=True,
-                    compound={
-                        "apply_patch": frozenset({"replace", "write_file"}),
-                        "search_files": frozenset({"glob", "grep_search"}),
-                    },
                 )
             agent = replace(agent, denied_tools=agent.denied_tools | {"subagent"})
             known.add("kind")

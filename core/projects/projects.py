@@ -52,7 +52,7 @@ from core.json_documents import (
     warn_unknown_fields,
 )
 from core.projects.paths import normalize_cwd
-from core.projects.sources.catalog import detect_sources, normalize_sources
+from core.projects.sources.catalog import detect_sources, initial_sources, normalize_sources
 from core.projects.sources.profile import SourceSelection
 from core.settings import (
     PROJECT_TOOL_ALLOWLIST_WILDCARD,
@@ -182,8 +182,8 @@ def project_shape() -> JsonShape:
 # as the first ``auto_load`` entry when a project is created
 # (:func:`seed_default_auto_load`, used by ``ProjectStore.create``), then treated
 # like any other list entry — removable, reorderable, rendered only through the
-# list. CLAUDE.md and other tool-specific files are deliberately not seeded; the
-# user adds those explicitly.
+# list. CLAUDE.md and other tool-specific files are instruction Sources instead
+# (``core/projects/sources/catalog.py``), active only when no other file loads.
 PROJECT_AGENTS_FILE = "AGENTS.md"
 
 
@@ -562,22 +562,24 @@ def build_project(
     validated_default_temperature = _validate_default_temperature(default_temperature)
     validated_default_thinking_effort = _validate_default_thinking_effort(default_thinking_effort)
     validated_default_top_p = _validate_default_top_p(default_top_p)
+    validated_auto_load = _validate_auto_load(auto_load)
     try:
         validated_sources = normalize_sources(
             sources
             if sources is not None
             else [
                 item.to_dict()
-                for item in (
-                    SourceSelection(item.definition.id)
-                    for item in detect_sources(Path(validated_cwd))
+                for item in initial_sources(
+                    detect_sources(Path(validated_cwd)),
+                    instructions_loaded=any(
+                        (Path(validated_cwd) / name).is_file() for name in validated_auto_load
+                    ),
                 )
             ]
         )
     except ValueError as error:
         raise ProjectError(str(error)) from error
     validated_mappings = _validate_model_mappings({} if model_mappings is None else model_mappings)
-    validated_auto_load = _validate_auto_load(auto_load)
     validated_allowed_tools = _validate_allowed_tools(allowed_tools)
     validated_skills_bundled = _validate_string_list(
         "skills_bundled_enabled", skills_bundled_enabled

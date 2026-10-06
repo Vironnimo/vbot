@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -239,7 +240,7 @@ class AgentResolver:
         self._sessions = sessions
         # Team-scan cache keyed by project id. A run reads from here; an explicit
         # re-scan / project-open repopulates it via ``rescan_project``.
-        self._team_cache: dict[str, ScanResult] = {}
+        self._team_cache: dict[str, tuple[Hashable, ScanResult]] = {}
 
     def resolve_agent(
         self,
@@ -665,9 +666,13 @@ class AgentResolver:
         elif profile.model in {"", "inherit"}:
             model = config.model
         else:
-            model = self._resolve_model_or_raise(
-                profile, project, AgentDefaults.from_dict(self._global_agent_defaults())
-            )
+            try:
+                model = self._resolve_model_or_raise(
+                    profile, project, AgentDefaults.from_dict(self._global_agent_defaults())
+                )
+            except AgentResolutionError:
+                # The participant's own Model stands in for an unusable wish.
+                model = config.model
         self.require_model_configured(model)
         return replace(
             config,
@@ -984,7 +989,7 @@ class AgentResolver:
         Team without re-walking the repo.
         """
         result = self.scan_project_report(project)
-        self._team_cache[project.project_id] = result
+        self._team_cache[project.project_id] = (_team_key(project), result)
         return result
 
     def invalidate_team_cache(self, project_id: str | None = None) -> None:
@@ -1023,8 +1028,10 @@ class AgentResolver:
         explicit re-scan refreshes the cache.
         """
         cached = self._team_cache.get(project.project_id)
-        if cached is not None:
-            return cached
+        # A changed Source list, location or Model mapping (a background Source
+        # refresh included) makes the cached Team stale.
+        if cached is not None and cached[0] == _team_key(project):
+            return cached[1]
         # Lazy first scan: a resolve before any explicit open still works, and the
         # result is cached so the next turn does not re-walk the repo.
         return self.rescan_project(project)
@@ -1352,3 +1359,7 @@ def build_agent_resolver(
         temporary_agents=temporary_agents,
         sessions=sessions,
     )
+
+
+def _team_key(project: Project) -> Hashable:
+    return (project.cwd, tuple(project.sources), tuple(sorted(project.model_mappings.items())))

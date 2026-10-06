@@ -48,6 +48,10 @@ def _yaml_mapping(loader: _YamlLoader, node: yaml.MappingNode) -> dict[str, Any]
 _YamlLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _yaml_mapping)
 
 
+def has_frontmatter(path: Path) -> bool:
+    return read_text(path).lstrip("\ufeff").startswith("---")
+
+
 def markdown(path: Path) -> tuple[dict[str, Any], str]:
     content = read_text(path)
     lines = content.splitlines(keepends=True)
@@ -68,13 +72,57 @@ def markdown(path: Path) -> tuple[dict[str, Any], str]:
 
 
 def json_object(path: Path) -> dict[str, Any]:
+    text = read_text(path)
+    if path.suffix == ".jsonc":
+        text = _strip_jsonc(text)
     try:
-        data = json.loads(read_text(path), object_pairs_hook=unique_mapping)
+        data = json.loads(text, object_pairs_hook=unique_mapping)
     except json.JSONDecodeError as error:
         raise SourceError(f"Invalid JSON metadata: {error}") from error
     if not isinstance(data, dict):
         raise SourceError("Configuration must be an object.")
     return data
+
+
+def _strip_jsonc(text: str) -> str:
+    """Remove JSONC comments and trailing commas outside of strings."""
+    result: list[str] = []
+    index = 0
+    in_string = False
+    while index < len(text):
+        character = text[index]
+        if in_string:
+            result.append(character)
+            if character == "\\":
+                result.append(text[index + 1 : index + 2])
+                index += 1
+            elif character == '"':
+                in_string = False
+        elif character == '"':
+            in_string = True
+            result.append(character)
+        elif text.startswith("//", index):
+            end = text.find("\n", index)
+            index = len(text) if end < 0 else end
+            continue
+        elif text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            if end < 0:
+                raise SourceError("Unterminated comment in JSONC metadata.")
+            index = end + 2
+            continue
+        elif character in "]}":
+            # A trailing comma before a closing bracket is valid JSONC.
+            position = len(result) - 1
+            while position >= 0 and result[position].isspace():
+                position -= 1
+            if position >= 0 and result[position] == ",":
+                del result[position]
+            result.append(character)
+        else:
+            result.append(character)
+        index += 1
+    return "".join(result)
 
 
 def files(root: Path, suffix: str, *, recursive: bool = False) -> list[Path]:

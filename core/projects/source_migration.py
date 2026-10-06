@@ -38,9 +38,11 @@ def project_sources_v1(data: dict[str, Any]) -> dict[str, Any]:
             {
                 "id": source.id,
                 "enabled": source in selected,
+                # The old OpenCode reader saw only top-level Markdown; the old
+                # Claude reader walked its folder like the Source does.
                 **(
-                    {"agent_paths": [f".{previous}/agents/*.md"]}
-                    if source in selected and source.kind == "agents"
+                    {"agent_paths": [".opencode/agents/*.md"]}
+                    if source.id == "opencode.agents" and previous == "opencode"
                     else {}
                 ),
             }

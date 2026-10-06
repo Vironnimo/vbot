@@ -154,6 +154,8 @@ def _all_identity_scope_targets(
             )
             continue
         for member in team:
+            if member.unavailable_reason:
+                continue  # A Team member that cannot run is no delegation target.
             qualified_id = format_agent_address(member.agent_id, project.project_id)
             targets[qualified_id] = SubAgentPromptTarget(
                 agent_id=qualified_id,

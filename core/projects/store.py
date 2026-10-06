@@ -215,8 +215,12 @@ class ProjectStore:
 
         with self._change():
             project = self.get(project_id)
+            root = Path(project.cwd)
             sources = refresh_sources(
-                project.sources, detect_sources(Path(project.cwd)), root=Path(project.cwd)
+                project.sources,
+                detect_sources(root),
+                root=root,
+                instructions_loaded=any((root / name).is_file() for name in project.auto_load),
             )
             if sources == project.sources:
                 raw = load_validated_json_file(

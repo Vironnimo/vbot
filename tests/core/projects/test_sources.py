@@ -10,7 +10,7 @@ from core.agents import TemporaryAgentConfig, TemporaryAgentRegistry
 from core.projects._resolution_values import profile_tool_access
 from core.projects.scan_report import FindingType
 from core.projects.sources import SourceSelection, scan_project
-from core.projects.sources.catalog import detect_sources, refresh_sources
+from core.projects.sources.catalog import detect_sources, refresh_sources, skill_roots
 from core.sessions import ChatSessionManager, SessionAddress
 from core.tools.availability import ToolAccess, resolve_tool_access
 from tests.core.projects.resolver_test_support import (
@@ -41,6 +41,12 @@ def write(root: Path, path: str, content: str) -> Path:
     return target
 
 
+ALL_TOOLS = frozenset(
+    {"read", "search_files", "apply_patch", "bash", "terminal", "status", "skill", "subagent"}
+)
+NO_SHELL = ALL_TOOLS - {"bash", "terminal"}
+
+
 @pytest.mark.parametrize(
     ("source", "path", "document", "expected", "status"),
     [
@@ -62,23 +68,45 @@ def write(root: Path, path: str, content: str) -> Path:
         (
             "claude",
             ".claude/agents/reviewer.md",
-            "---\ntools: Read(src/**)\n---\nReview.",
-            set(),
-            "limited",
-        ),
-        (
-            "claude",
-            ".claude/agents/reviewer.md",
-            "---\ntools: Read, Bash(git status)\n---\nReview.",
-            {"read"},
-            "limited",
-        ),
-        (
-            "claude",
-            ".claude/agents/reviewer.md",
             "---\ntools: [Read\n---\nReview.",
             set(),
             "needs_attention",
+        ),
+        # A Tool the Agent may use for some commands or paths is granted whole.
+        (
+            "claude",
+            ".claude/agents/reviewer.md",
+            "---\ntools: Read(src/**), Bash(git status)\n---\nReview.",
+            {"read", "bash"},
+            "ready",
+        ),
+        (
+            "claude",
+            ".claude/agents/reviewer.md",
+            "---\ndisallowedTools: Read(./.env), Bash\n---\nReview.",
+            NO_SHELL,
+            "ready",
+        ),
+        (
+            "claude",
+            ".claude/agents/reviewer.md",
+            "---\npermissionMode: acceptEdits\n---\nReview.",
+            ALL_TOOLS,
+            "ready",
+        ),
+        (
+            "claude",
+            ".claude/agents/reviewer.md",
+            "---\npermissionMode: dontAsk\n---\nReview.",
+            set(),
+            "ready",
+        ),
+        (
+            "claude",
+            ".claude/agents/reviewer.md",
+            "---\nhooks:\n  PreToolUse:\n    - matcher: Bash\n---\nReview.",
+            ALL_TOOLS,
+            "limited",
         ),
         (
             "opencode",
@@ -90,9 +118,10 @@ def write(root: Path, path: str, content: str) -> Path:
         (
             "opencode",
             ".opencode/agents/reviewer.md",
-            "---\npermission:\n  bash:\n    '*': allow\n    'git push*': deny\n---\nReview.",
-            {"read", "search_files", "apply_patch", "status", "skill", "subagent"},
-            "limited",
+            "---\npermission:\n  bash:\n    '*': allow\n    'git push*': deny\n"
+            "  edit: ask\n  todowrite: deny\n---\nReview.",
+            ALL_TOOLS,
+            "ready",
         ),
         (
             "opencode",
@@ -103,16 +132,25 @@ def write(root: Path, path: str, content: str) -> Path:
         ),
         (
             "opencode",
-            "opencode.json",
-            '{"permission":{"*":"deny"},"agent":{"reviewer":{"permission":{"read":"allow"},"prompt":"Review."}}}',
-            {"read"},
+            "opencode.jsonc",
+            '{\n  // Shared\n  "permission": {"bash": "deny"},\n'
+            '  "agent": {"reviewer": {"prompt": "Review.",},},\n}',
+            NO_SHELL,
             "ready",
         ),
         (
             "codex",
             ".codex/agents/reviewer.toml",
-            'name="reviewer"\ndescription="Review"\ndeveloper_instructions="Review."\nsandbox_mode="read-only"',
-            {"status", "skill", "subagent"},
+            'name="reviewer"\ndescription="Review"\ndeveloper_instructions="Review."\n'
+            'sandbox_mode="read-only"\napproval_policy="on-request"',
+            ALL_TOOLS - {"apply_patch"},
+            "ready",
+        ),
+        (
+            "codex",
+            ".codex/config.toml",
+            '[features]\nshell_tool=false\n[agents.reviewer]\ndescription="Review"',
+            NO_SHELL,
             "limited",
         ),
         (
@@ -138,24 +176,21 @@ def write(root: Path, path: str, content: str) -> Path:
         ),
     ],
 )
-def test_imports_never_widen_the_tool_selection(repo, source, path, document, expected, status):
+def test_imports_grant_the_tools_an_agent_may_use(repo, source, path, document, expected, status):
     write(repo, path, document)
     profile = scan_project(repo, sources=[SourceSelection(f"{source}.agents")]).team[0]
     assert profile.status == status
-    policy = profile_tool_access(
-        profile,
-        ("read", "search_files", "apply_patch", "bash", "terminal", "status", "skill", "subagent"),
-    )
+    policy = profile_tool_access(profile, tuple(sorted(ALL_TOOLS)))
     assert set(policy.allowed) == expected
-    # The actual Tool resolver must not add followers or Session grants to an
-    # imported exact list, including the empty list.
+    # A Profile selects the Agent's own Tools; the Session's grants still apply to
+    # every runnable Profile, including one with an empty Tool list.
     from types import SimpleNamespace
 
     tools = [SimpleNamespace(name=name, activation="configurable") for name in policy.allowed]
     tools += [SimpleNamespace(name="message_parent", activation="session_grant")]
     actual = resolve_tool_access(policy, tools, "off", session_tool_grants=("message_parent",))
     assert set(actual.allowed_tools) == expected | (
-        {"message_parent"} if not policy.fixed else set()
+        {"message_parent"} if status != "needs_attention" else set()
     )
 
 
@@ -173,24 +208,48 @@ def test_mixed_sources_priority_and_new_detection_preserve_winners(repo):
         SourceSelection("shared.skills"),
     ]
     write(repo, ".opencode/agents/reviewer.md", "OpenCode.")
+    # Neither documentation nor settings for OpenCode's own Agents define Team members.
+    write(repo, ".claude/agents/README.md", "Our agents.")
+    write(repo, "opencode.json", '{"agent":{"plan":{"model":"anthropic/x"}}}')
     result = scan_project(repo, sources=sources)
     assert [agent.agent_id for agent in result.team] == ["builder", "reviewer"]
     assert result.team[1].source == "claude"
     assert result.shadowed[0].source == "opencode"
     assert result.report.findings_of(FindingType.SLUG_COLLISION)
-    write(repo, ".cursor/agents/reviewer.md", "Cursor.")
+    write(repo, ".cursor/agents/reviewer.md", "---\nname: reviewer\n---\nCursor.")
     refreshed = refresh_sources(sources, detect_sources(repo))
     assert next(item for item in refreshed if item.id == "cursor.agents").enabled is False
     reordered = scan_project(repo, sources=[sources[1], sources[0], sources[2]])
     assert reordered.team[1].source == "opencode"
 
 
-@pytest.mark.parametrize("ecosystem", ["claude", "opencode"])
+@pytest.mark.parametrize(
+    ("files", "enabled"),
+    [(("AGENTS.md", "CLAUDE.md", "GEMINI.md"), set()), (("CLAUDE.md", "GEMINI.md"), {"claude"})],
+)
+def test_new_projects_load_at_most_one_instruction_file(projects, repo, files, enabled):
+    for name in files:
+        write(repo, name, "Instructions.")
+    sources = projects.create("repo", "Repo", repo).sources
+    assert {
+        source.id.removesuffix(".instructions")
+        for source in sources
+        if source.id.endswith(".instructions") and source.enabled
+    } == enabled
+    write(repo, ".github/copilot-instructions.md", "Instructions.")
+    refreshed = projects.refresh_sources("repo").sources
+    assert next(item for item in refreshed if item.id == "copilot.instructions").enabled is False
+
+
+# The old readers: Claude walked its agents folder, OpenCode read only its top level.
+@pytest.mark.parametrize(
+    ("ecosystem", "legacy_team"), [("claude", ["new", "reviewer"]), ("opencode", ["reviewer"])]
+)
 def test_legacy_anchor_preserves_unknown_fields_overrides_and_sessions(
-    projects, repo, data_dir, ecosystem
+    projects, repo, data_dir, ecosystem, legacy_team
 ):
     write(repo, f".{ecosystem}/agents/reviewer.md", "---\nname: reviewer\n---\nReview.")
-    write(repo, f".{ecosystem}/agents/nested/new.md", "New nested definition.")
+    write(repo, f".{ecosystem}/agents/nested/new.md", "---\nname: new\n---\nNew.")
     write(repo, "opencode.json", '{"agent":{"json-only":{"prompt":"JSON definition."}}}')
     other = "opencode" if ecosystem == "claude" else "claude"
     write(repo, f".{other}/agents/builder.md", "Build.")
@@ -206,16 +265,15 @@ def test_legacy_anchor_preserves_unknown_fields_overrides_and_sessions(
     try:
         session = sessions.create("reviewer", project_id="repo")
         loaded = projects.get("repo")
-        assert [agent.agent_id for agent in scan_project(repo, sources=loaded.sources).team] == [
-            "reviewer"
-        ]
+        assert [
+            agent.agent_id for agent in scan_project(repo, sources=loaded.sources).team
+        ] == legacy_team
         assert loaded.overrides == stored["overrides"]
         projects.update("repo", display_name="Renamed")
         saved = json.loads(path.read_text(encoding="utf-8"))
         assert saved["format_version"] == 1
         assert saved["future_field"] == {"keep": True}
         assert sessions.get(SessionAddress("repo", "reviewer", session.id)) is not None
-        assert saved["sources"][0]["agent_paths"] == [f".{ecosystem}/agents/*.md"]
         expanded = projects.update(
             "repo",
             sources=[
@@ -273,7 +331,7 @@ def test_profiles_preload_skills_map_models_and_snapshot_temporary_participants(
         participant = registry.resolve(binding.address, generation_id=binding.generation_id)
         assert participant.model == "openai/gpt-5.2"
         assert participant.tool_access.allowed == ("read",)
-        assert participant.tool_access.fixed
+        assert not participant.tool_access.fixed
         assert "Check regression risks." in participant.instructions
         path.write_text("---\ntools: Bash\n---\nChanged.", encoding="utf-8")
         assert (
@@ -357,6 +415,22 @@ async def test_inherit_uses_the_delegating_model_without_requiring_a_project_def
         "repo",
     )
     assert temporary.model == "openai/gpt-5.2"
+    # Without any usable default the participant keeps its own Model.
+    projects.update("repo", default_model="")
+    resolver._global_agent_defaults = lambda: {}
+    temporary = resolver.prepare_temporary_config(
+        TemporaryAgentConfig(
+            model="openai/gpt-mini",
+            cwd=repo,
+            tool_access=ToolAccess(mode="none"),
+            allowed_skills=[],
+            tools={},
+            name="Reviewer",
+            repository_profile="reviewer",
+        ),
+        "repo",
+    )
+    assert temporary.model == "openai/gpt-mini"
 
 
 @pytest.mark.parametrize(
@@ -412,3 +486,18 @@ def test_temporary_profiles_keep_owner_tool_limits_and_materialize_skill_rules(
     assert not set(overridden.tool_access.allowed) & set(owner_policy.denied)
     if owner_policy.mode == "none" or owner_policy.fixed:
         assert overridden.tool_access.fixed
+
+
+def test_a_skill_folder_linked_to_another_supplies_its_skills_once(repo):
+    write(repo, ".agents/skills/review/SKILL.md", "---\nname: review\ndescription: R.\n---\nR.")
+    (repo / ".claude").mkdir()
+    try:
+        (repo / ".claude" / "skills").symlink_to(repo / ".agents" / "skills", True)
+    except OSError, NotImplementedError:
+        pytest.skip("symlink creation not permitted on this host")
+    detected = {item.definition.id for item in detect_sources(repo)}
+    assert "shared.skills" in detected
+    assert "claude.skills" not in detected
+    # Projects that already list the linked Source load the folder once.
+    sources = [SourceSelection("claude.skills"), SourceSelection("shared.skills")]
+    assert skill_roots(repo, sources) == [repo / ".agents/skills"]

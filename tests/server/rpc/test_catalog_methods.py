@@ -10,7 +10,7 @@ from typing import Any, cast
 import pytest
 
 from core.chat import CommandDispatcher, CommandOutcome
-from core.projects import AgentResolver
+from core.projects import AgentResolver, build_project
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.runs import ChatRunManager
 from core.sessions import SessionAddress, SessionNotFoundError
@@ -119,9 +119,8 @@ def _state(
         return agent_registries.get(agent_id or "", global_registry)
 
     projects = SimpleNamespace(
-        get=lambda project_id: SimpleNamespace(
-            project_id=project_id,
-            cwd=project_cwd or str(Path.cwd()),
+        get=lambda project_id: build_project(
+            project_id, project_id, project_cwd or str(Path.cwd()), sources=[]
         ),
         exists=existing_projects.__contains__,
     )

@@ -58,7 +58,7 @@ def profile_tool_access(scanned: AgentProfile, selection: tuple[str, ...]) -> To
     from core.tools.availability import ToolAccess
 
     if scanned.unavailable_reason:
-        return ToolAccess(mode="selected", allowed=(), fixed=True)
+        return ToolAccess(mode="none")
     allowed = set(selection)
     if scanned.allowed_tools is not None:
         allowed &= scanned.allowed_tools
@@ -70,18 +70,12 @@ def profile_tool_access(scanned: AgentProfile, selection: tuple[str, ...]) -> To
                 else:
                     allowed.discard(tool)
     allowed -= scanned.denied_tools
-    # Exact imported selections suppress automatic activation. Companions for
-    # combined file operations are included explicitly by the capability owner.
-    fixed = scanned.allowed_tools is not None or any(
-        rule.pattern == "*" and not rule.allowed for rule in scanned.tool_rules
-    )
-    companions = {"edit", "write"} if fixed and "apply_patch" in allowed else set()
+    # A Profile selects the Agent's own Tools; Tools that follow them and the
+    # Session's grants (``message_parent`` for a delegated Run) activate as usual.
     return ToolAccess(
         mode="selected",
-        allowed=tuple(tool for tool in selection if tool in allowed)
-        + tuple(sorted(companions - set(selection))),
+        allowed=tuple(tool for tool in selection if tool in allowed),
         denied=tuple(sorted(scanned.denied_tools)),
-        fixed=fixed,
     )
 
 

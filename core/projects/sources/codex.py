@@ -9,13 +9,16 @@ from typing import Any
 
 from core.projects.sources import _reading as reading
 from core.projects.sources._translation import (
-    FILE_TOOLS,
+    SHELL_TOOLS,
     profile,
     restrict,
     unavailable,
     unsupported,
 )
-from core.projects.sources.profile import AgentProfile
+from core.projects.sources.profile import AgentProfile, Translation
+
+# Permission profiles that keep the Agent from editing files at all.
+_READ_ONLY = frozenset({"read-only", ":read-only"})
 
 
 class CodexAdapter:
@@ -45,6 +48,9 @@ class CodexAdapter:
                         "network",
                         "skills",
                         "features",
+                        "default_permissions",
+                        "permissions",
+                        "web_search",
                     )
                     if key in config
                 }
@@ -88,22 +94,7 @@ class CodexAdapter:
                 if "model_reasoning_effort" in fields:
                     normalized["effort"] = fields["model_reasoning_effort"]
                 agent = profile(self.source, path, normalized, body)
-                if "sandbox_mode" in fields:
-                    agent = restrict(
-                        agent,
-                        "sandbox_mode",
-                        FILE_TOOLS,
-                        "Sandbox isolation is unavailable; file and shell Tools are disabled.",
-                    )
-                if "approval_policy" in fields and fields["approval_policy"] != "never":
-                    agent = replace(agent, allowed_tools=frozenset())
-                    agent = restrict(
-                        agent,
-                        "approval_policy",
-                        FILE_TOOLS,
-                        "Approval policies are unavailable; Tools are disabled until "
-                        "explicitly overridden in vBot.",
-                    )
+                agent = _restrictions(agent, fields)
                 agent = unsupported(
                     agent,
                     fields,
@@ -115,6 +106,9 @@ class CodexAdapter:
                         "model_reasoning_effort",
                         "sandbox_mode",
                         "approval_policy",
+                        "default_permissions",
+                        "permissions",
+                        "web_search",
                     },
                 )
                 result.append(agent)
@@ -129,3 +123,35 @@ class CodexAdapter:
                     )
                 )
         return result
+
+
+def _restrictions(agent: AgentProfile, fields: dict[str, Any]) -> AgentProfile:
+    """Remove only capabilities the Codex Agent lacks entirely.
+
+    vBot has no sandbox and asks no approvals: an Agent that may do something,
+    even confined or after approval, keeps the vBot Tool for it.
+    """
+    for setting in ("sandbox_mode", "default_permissions"):
+        value = fields.get(setting)
+        if value in _READ_ONLY:
+            agent = restrict(agent, setting, frozenset({"apply_patch"}), "File edits are disabled.")
+        elif value is not None:
+            agent = _translated(agent, setting, "vBot has no sandbox; the Agent keeps its Tools.")
+    if "approval_policy" in fields:
+        agent = _translated(
+            agent, "approval_policy", "vBot asks no approvals; the Agent keeps its Tools."
+        )
+    if fields.get("web_search") == "disabled":
+        agent = restrict(
+            agent, "web_search", frozenset({"web_search", "web_fetch"}), "Web access is disabled."
+        )
+    features = fields.get("features")
+    if isinstance(features, dict) and features.get("shell_tool") is False:
+        agent = restrict(agent, "features.shell_tool", SHELL_TOOLS, "The shell is disabled.")
+    return agent
+
+
+def _translated(agent: AgentProfile, setting: str, detail: str) -> AgentProfile:
+    return replace(
+        agent, translations=(*agent.translations, Translation(setting, "translated", detail))
+    )

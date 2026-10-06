@@ -276,8 +276,14 @@ def test_team_membership_uses_cache_not_live_new_file(
     with pytest.raises(ResolutionAgentNotFoundError):
         resolver.resolve_agent(project.project_id, "planner")
 
-    # After an explicit re-scan, the Team includes the new member.
-    resolver.rescan_project(project)
+    # A changed Source list (here a Source refresh adding an entry) re-scans.
+    projects.update(
+        project.project_id,
+        sources=[
+            *(source.to_dict() for source in project.sources),
+            {"id": "future.agents", "enabled": True},
+        ],
+    )
     resolved = resolver.resolve_agent(project.project_id, "planner")
     assert resolved.id == "planner"
 
