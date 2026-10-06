@@ -115,7 +115,6 @@ export default Object.freeze({
   'navigation.agents': 'Agents',
   'navigation.terminals': 'Terminals',
   'navigation.projects': 'Projects',
-  'navigation.jev': 'Jev',
   'navigation.calendar': 'Calendar',
   'navigation.skills': 'Skills',
   'navigation.cron': 'Schedules',

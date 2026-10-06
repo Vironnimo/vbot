@@ -182,7 +182,7 @@ export default Object.freeze({
   'settings.dictation.result.failed': 'The dictation failed.',
   'settings.sections.recall': 'Conversation search',
   'settings.sections.mediaModels': 'Images, video & music',
-  'settings.sections.evaluation': 'Evaluation',
+  'settings.sections.decisionModel': 'Decision Model',
   'settings.sections.delegation': 'Sub-Agent limits',
   'settings.agentShortcut.hint':
     'The chat Model, Thinking, and Compaction are configured in',
@@ -743,7 +743,7 @@ export default Object.freeze({
   'settings.specializedModels.jsonInvalid': 'Invalid JSON: {error}',
   'settings.specializedModels.decision': 'Decision model',
   'settings.specializedModels.decisionHelp':
-    'Makes the structured judgments of the evaluate Tool and of Jev experiments.',
+    'Answers the questions of the classify Tool: a probability of yes, one of the given options, or a level on a scale.',
   'settings.providers.title': 'Providers',
   'settings.providers.noneConnected':
     'No providers connected yet. Add one to make its models available.',

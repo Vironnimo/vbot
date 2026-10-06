@@ -436,10 +436,6 @@
                   <path d="M4 2h8v12l-4-2.5L4 14z" />
                 {:else if item.id === 'projects'}
                   <path d="M2 12.5V4h4l1.5 1.5h6.5v7z" />
-                {:else if item.id === 'jev'}
-                  <path
-                    d="M2 5.5V2h3.5m5 0H14v3.5m0 5V14h-3.5m-5 0H2v-3.5"
-                  /><path d="m5.5 8 1.75 1.75L10.5 6.5" />
                 {:else if item.id === 'calendar'}
                   <rect x="2" y="3" width="12" height="11" rx="1.5" />
                   <path d="M2 6.5h12M5.5 1.5v3m5-3v3" />

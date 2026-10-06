@@ -5,7 +5,6 @@ import pytest
 from core.model_tasks.decision_types import (
     DecisionError,
     validate_answers,
-    validate_draft,
     validate_input,
 )
 
@@ -55,6 +54,9 @@ def test_round_trip_preserves_application_data_and_optional_absence():
         lambda q: q.append(copy.deepcopy(q[0])),
         lambda q: q[0].update(criteria={"one": "Only one"}),
         lambda q: q[1].update(criteria=[]),
+        lambda q: q[1].update(criteria=["Only"]),
+        lambda q: q[1].update(criteria=[str(n) for n in range(11)]),
+        lambda q: q[0].update(criteria={str(n): "Option" for n in range(256)}),
         lambda q: q[2].update(criteria={"yes": "Yes", "no": "No"}),
         lambda q: q[0].update(instructions=""),
         lambda q: q[0].update(unknown="Do something else"),
@@ -92,35 +94,3 @@ def test_rejects_incomplete_or_unusable_provider_answers(answer):
     with pytest.raises(DecisionError) as error:
         validate_answers(payload, QUESTIONS)
     assert error.value.code == "invalid_result"
-
-
-def test_drafts_allow_incomplete_fields_but_not_unrenderable_shapes():
-    draft = {
-        "title": "Draft",
-        "state": "",
-        "questions": [{"id": "", "type": "choice", "instructions": "", "criteria": {"": ""}}],
-    }
-    assert validate_draft(draft) == draft
-    draft["questions"][0]["criteria"] = None
-    with pytest.raises(DecisionError):
-        validate_draft(draft)
-
-
-def test_control_drafts_allow_incomplete_commands_but_reject_unrenderable_actions():
-    draft = {
-        "title": "Control",
-        "state": "",
-        "questions": [],
-        "control": {
-            "instructions": "",
-            "observe": {"argv": [""], "cwd": ""},
-            "actions": {"": {"description": "", "command": None}},
-            "interval_ms": "",
-            "max_steps": 0,
-            "timeout_seconds": 10,
-        },
-    }
-    assert validate_draft(draft) == draft
-    draft["control"]["actions"][""]["command"] = {"argv": "python", "cwd": ""}
-    with pytest.raises(DecisionError):
-        validate_draft(draft)

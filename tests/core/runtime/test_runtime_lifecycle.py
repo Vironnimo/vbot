@@ -119,6 +119,37 @@ async def test_safe_startup_does_not_load_extensions_or_start_producers(
 
 
 @pytest.mark.asyncio
+async def test_only_a_normal_start_releases_retired_core_databases(config: Config) -> None:
+    from core.database import open_database, read_marker, write_bootstrap_marker
+    from core.runtime.databases import RETIRED_CANONICAL_DATABASES
+    from tests.core.database.database_test_support import notes_spec
+
+    data_dir = config.data_dir
+    data_dir.mkdir(parents=True, exist_ok=True)
+    write_bootstrap_marker(data_dir)
+    for name in RETIRED_CANONICAL_DATABASES:
+        open_database(notes_spec(data_dir, name=name)).close()
+
+    def registered() -> set[str]:
+        marker = read_marker(data_dir)
+        assert marker is not None
+        return set(marker.databases)
+
+    # An update's verification start keeps them: its rollback needs every registration.
+    verification = Runtime(config, safe_startup_mode="verification")
+    verification.start()
+    await verification.aclose()
+    assert set(RETIRED_CANONICAL_DATABASES) <= registered()
+
+    runtime = Runtime(config)
+    runtime.start()
+    await runtime.aclose()
+    assert not set(RETIRED_CANONICAL_DATABASES) & registered()
+    for name in RETIRED_CANONICAL_DATABASES:
+        assert not canonical_database_path(data_dir, name).exists()
+
+
+@pytest.mark.asyncio
 async def test_runtime_runs_persist_through_the_shared_manager_without_data_snapshots(
     config: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -735,7 +766,6 @@ _ASYNC_SHUTDOWN = (
     "session_titles.aclose",
     "chat_runs.aclose",
     "subagent_activity.drain_activity",
-    "decisions.aclose",
     "speech.aclose",
     "provider_usage.aclose",
     "debug_traces.aclose",
@@ -760,7 +790,6 @@ _SYNC_SHUTDOWN = (
     "bootstrap.stop",
     "archive_retention.stop",
     "librarian.stop",
-    "decisions.close",
     "speech.close",
     "provider_usage.close",
     "performance.stop",
@@ -857,7 +886,6 @@ async def test_runtime_shutdown_runs_every_step_before_reporting_failures(
         ("_session_title_service", "session_titles"),
         ("_chat_run_manager", "chat_runs"),
         ("_subagent_coordinator", "subagent_activity"),
-        ("_decisions", "decisions"),
         ("_speech", "speech"),
         ("_provider_usage", "provider_usage"),
         ("_performance", "performance"),

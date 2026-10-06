@@ -1080,10 +1080,6 @@ class Runtime:
         lambda runtime: runtime._music, "Music service not available"
     )
 
-    decisions: _StartedService[DecisionService] = _StartedService(
-        lambda runtime: runtime._decisions, "Decision service not available"
-    )
-
     live_voice: _StartedService[LiveVoiceService] = _StartedService(
         lambda runtime: runtime._live_voice, "Live voice service not available"
     )
@@ -1203,8 +1199,6 @@ class Runtime:
             databases.append(self._chat_sessions.database)
         if self._usage_recorder is not None:
             databases.append(self._usage_recorder.database)
-        if self._decisions is not None:
-            databases.append(self._decisions.database)
         if self._provider_usage is not None:
             provider_usage = self._provider_usage.history_database
             if provider_usage is not None:

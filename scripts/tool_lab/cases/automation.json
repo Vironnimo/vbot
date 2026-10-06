@@ -956,14 +956,14 @@
    }
   },
   {
-   "name": "evaluate: canonical question (needs a Decision model)",
-   "tool": "evaluate",
+   "name": "classify: canonical question (needs a Decision model)",
+   "tool": "classify",
    "arguments": {
-    "state": "The build failed twice today with the same timeout.",
+    "items": ["The build failed twice today with the same timeout."],
     "questions": [
      {
       "id": "flaky",
-      "type": "noul",
+      "type": "yes_no",
       "instructions": "Is this likely a flaky test rather than a real regression?"
      }
     ]

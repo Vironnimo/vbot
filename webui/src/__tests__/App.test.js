@@ -43,7 +43,6 @@ describe('NAVIGATION_ITEMS', () => {
       ['agents', 'work'],
       ['projects', 'work'],
       ['calendar', 'work'],
-      ['jev', 'work'],
       ['skills', 'configure'],
       ['cron', 'configure'],
       ['system-prompt', 'configure'],

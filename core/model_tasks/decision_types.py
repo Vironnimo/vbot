@@ -10,6 +10,9 @@ from core.utils.errors import TaskError
 
 # The most characters a choice label (a key of choice criteria) has.
 CHOICE_LABEL_LIMIT = 128
+# The most options a choice and the most levels a score has (Decisions wire limits).
+CHOICE_OPTION_LIMIT = 255
+SCORE_LEVEL_LIMIT = 10
 
 
 class DecisionError(TaskError):
@@ -41,9 +44,15 @@ def validate_input(state: Any, questions: Any) -> tuple[Any, list[dict[str, Any]
     """Keep state content verbatim; validate complete independent questions."""
     if not isinstance(state, str | dict | list):
         raise DecisionError("state must be text, a JSON object, or a JSON array.")
+    state, questions = json_copy([state, validate_questions(questions)])
+    return state, questions
+
+
+def validate_questions(questions: Any) -> list[dict[str, Any]]:
+    """Validate complete independent questions in the Decisions wire vocabulary."""
     if not isinstance(questions, list) or not questions:
         raise DecisionError("questions must contain at least one question.")
-    state, questions = json_copy([state, questions])
+    questions = json_copy(questions)
     ids: set[str] = set()
     for question in questions:
         if not isinstance(question, dict) or set(question) - {
@@ -61,17 +70,19 @@ def validate_input(state: Any, questions: Any) -> tuple[Any, list[dict[str, Any]
         kind = question.get("type")
         criteria = question.get("criteria")
         if kind == "choice":
-            if not isinstance(criteria, dict) or len(criteria) < 2:
+            if not isinstance(criteria, dict) or not 2 <= len(criteria) <= CHOICE_OPTION_LIMIT:
                 raise DecisionError(
-                    f"Question {identifier}: choice needs at least two named criteria."
+                    f"Question {identifier}: choice needs 2 to {CHOICE_OPTION_LIMIT} named "
+                    "criteria."
                 )
             for key, description in criteria.items():
                 text(key, f"Question {identifier}: a choice label", maximum=CHOICE_LABEL_LIMIT)
                 text(description, f"Question {identifier}: a choice description")
         elif kind == "score":
-            if not isinstance(criteria, list) or not criteria:
+            if not isinstance(criteria, list) or not 2 <= len(criteria) <= SCORE_LEVEL_LIMIT:
                 raise DecisionError(
-                    f"Question {identifier}: score needs ordered criteria, lowest first."
+                    f"Question {identifier}: score needs 2 to {SCORE_LEVEL_LIMIT} ordered "
+                    "criteria, lowest first."
                 )
             for level in criteria:
                 text(level, "Score level")
@@ -85,90 +96,7 @@ def validate_input(state: Any, questions: Any) -> tuple[Any, list[dict[str, Any]
                     text(description, "Noul criterion")
         else:
             raise DecisionError(f"Question {identifier}: type must be choice, score, or noul.")
-    return state, questions
-
-
-def validate_draft(draft: Any) -> dict[str, Any]:
-    """Persist incomplete editor values, but never an unrenderable shape."""
-    if (
-        not isinstance(draft, dict)
-        or not {"title", "state", "questions"} <= set(draft)
-        or set(draft) - {"title", "state", "questions", "control"}
-    ):
-        raise DecisionError("An experiment draft needs title, state, and questions.")
-    text(draft["title"], "Experiment title", maximum=200)
-    if not isinstance(draft["state"], str | dict | list) or not isinstance(
-        draft["questions"], list
-    ):
-        raise DecisionError("Draft state must be text or JSON; questions must be an array.")
-    draft = json_copy(draft)
-    if "control" in draft:
-        _validate_control_draft(draft["control"])
-    for question in draft["questions"]:
-        if (
-            not isinstance(question, dict)
-            or set(question) - {"id", "type", "instructions", "criteria"}
-            or not isinstance(question.get("id"), str)
-            or not isinstance(question.get("instructions"), str)
-        ):
-            raise DecisionError("Each draft question needs text id and instructions.")
-        kind, criteria = question.get("type"), question.get("criteria")
-        if kind == "score":
-            valid = isinstance(criteria, list) and all(isinstance(v, str) for v in criteria)
-        elif kind == "choice":
-            valid = isinstance(criteria, dict) and all(
-                isinstance(v, str) for v in criteria.values()
-            )
-        elif kind == "noul":
-            valid = "criteria" not in question or (
-                isinstance(criteria, dict)
-                and set(criteria) == {"true", "false"}
-                and all(isinstance(v, str) for v in criteria.values())
-            )
-        else:
-            valid = False
-        if not valid:
-            raise DecisionError(
-                "Draft criteria must match the question type: choice, score, or noul."
-            )
-    return cast(dict[str, Any], draft)
-
-
-def _validate_control_draft(value: Any) -> None:
-    """Check editor structure; completeness belongs to explicit start validation."""
-    if (
-        not isinstance(value, dict)
-        or set(value)
-        != {"instructions", "observe", "actions", "interval_ms", "max_steps", "timeout_seconds"}
-        or not isinstance(value["instructions"], str)
-        or not isinstance(value["actions"], dict)
-    ):
-        raise DecisionError("Control setup has an invalid shape.")
-    commands = [value["observe"]]
-    for action in value["actions"].values():
-        if (
-            not isinstance(action, dict)
-            or set(action) != {"description", "command"}
-            or not isinstance(action["description"], str)
-        ):
-            raise DecisionError("Each action needs a text description and a command or null.")
-        if action["command"] is not None:
-            commands.append(action["command"])
-    for command in commands:
-        if (
-            not isinstance(command, dict)
-            or set(command) != {"argv", "cwd"}
-            or not isinstance(command["cwd"], str)
-            or not isinstance(command["argv"], list)
-            or not command["argv"]
-            or not all(isinstance(arg, str) for arg in command["argv"])
-        ):
-            raise DecisionError(
-                "Each command needs a text cwd and a non-empty argv array of strings."
-            )
-    for key in ("interval_ms", "max_steps", "timeout_seconds"):
-        if value[key] != "" and not finite_number(value[key]):
-            raise DecisionError(f"{key} must be a non-negative number or an empty draft field.")
+    return cast(list[dict[str, Any]], questions)
 
 
 def finite_number(value: Any, *, minimum: float = 0, maximum: float = math.inf) -> bool:

@@ -95,4 +95,4 @@ Read these only when your task matches - not by default.
 - Changing one concrete built-in Tool -> its per-tool spec (read only the one you change): `tools/read.md`, `tools/file_state.md` (shared read stamps/mutation locks/atomic replace), `tools/change_tracker.md` (run-delta statistics), `tools/search_files.md`, `tools/web_fetch.md`, `tools/web_search.md`, `tools/shell.md` (`bash`/`powershell` commands in terminals), `tools/terminal.md` (interactive PTY sessions and the command API), `tools/status.md`, `tools/memory.md`, `tools/image.md`, `tools/generated-media.md`, `tools/session_search.md`, `tools/project.md`, `tools/skill.md` (+ `skill_manage` contract owned by `skills.md`), `tools/subagent.md`, `tools/cron.md`, `tools/calendar.md` (calendar domain: `calendar.md`), `tools/channel_send.md`, `tools/speech.md`
 
 - Launching or killing OS child processes (windowless flags, Job/guardian containment, tree kill in `core/utils/processes.py`) -> `tools/os-processes.md`
-- Structured decision judgments through the configured Decision Model -> `tools/evaluate.md`
+- Classifying texts through the configured Decision Model (`classify`) -> `tools/classify.md`

@@ -70,7 +70,7 @@ def test_extension_database_follows_startup_reload_and_stop(config: Config, tmp_
         first = _extension_database(runtime)
         assert first is not None
         assert first.path == data_dir / "extension-data" / "notes_ext" / "notes.db"
-        assert {"sessions", "decisions", DATABASE_NAME} <= {
+        assert {"sessions", DATABASE_NAME} <= {
             database.name for database in runtime.canonical_databases()
         }
         registered = read_marker(data_dir)
