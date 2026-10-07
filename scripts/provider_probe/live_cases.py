@@ -204,6 +204,13 @@ def live_cases() -> list[LiveCase]:
             lookup_ok=False,
         ),
         LiveCase(
+            id="goodbye_ends_call",
+            request="Tschüss.",
+            earlier=("User: Danke dir.", "Assistant: Gern geschehen."),
+            right=(Expected(TOOL_END_CALL),),
+            lookup_ok=False,
+        ),
+        LiveCase(
             id="sleep_ends_call",
             request="Okay, geh schlafen.",
             earlier=(

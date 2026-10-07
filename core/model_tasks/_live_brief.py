@@ -50,9 +50,9 @@ _RESULTS = (
     "confirms it. Speak results as a few short facts without ids or refs."
 )
 _HANDING_ON_THE_END = (
-    "Ending the call: When the user wants to end the conversation, for example with a goodbye, "
-    'hand on "end the call" at once, then say only a short goodbye. Do not announce that you '
-    "hand it on, and do not comment on its result."
+    'Ending the call: When the user says goodbye or wants to end the call, delegate "end the '
+    'call" to vBot right away. Saying goodbye does not end the call; only that delegation does. '
+    "Then say only a short goodbye, without saying that you end the call or pass anything on."
 )
 
 

@@ -38,7 +38,7 @@ def test_every_voice_model_gets_the_same_text_and_guidance_only_for_its_live_too
     shared = voice_instructions(tools=[])
     text = voice_instructions(tools=tools, delegates=delegates)
     guidance = live_tool_guidance(set(tools).__contains__)
-    ending = 'hand on "end the call" at once'
+    ending = 'delegate "end the call" to vBot right away'
     others = "\n\n".join(
         block for block in text.split("\n\n") if not block.startswith("Ending the call:")
     )
