@@ -37,7 +37,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from core.agents import is_librarian
+from core.agents import is_builtin_agent
 from core.chat.content_blocks import ContentBlock, TextBlock
 from core.prompts.briefs import ReflectionScope, reflection_brief
 from core.runs import RunKind
@@ -529,10 +529,10 @@ def callable_review_dimensions(agent: Any, tools: Sequence[Any]) -> tuple[bool, 
     """Whether ``agent`` can call every Tool of the memory and of the skill dimension.
 
     ``agent`` is the effective Agent, so Project ceilings and Tool Access Policy
-    denials apply; ``tools`` are the registered Tools. The built-in Librarian has
-    neither. Resolves policy in memory, so it is safe on the Event Loop.
+    denials apply; ``tools`` are the registered Tools. A built-in Agent has
+    neither: it is never reviewed. Resolves policy in memory, so it is safe on the Event Loop.
     """
-    if is_librarian(agent):
+    if is_builtin_agent(agent):
         return False, False
     callable_tools = set(
         resolve_tool_access(

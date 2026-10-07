@@ -141,6 +141,11 @@ class Agent:
     skill_agent_id: str | None = None
 
 
+def is_builtin_agent(agent: object) -> bool:
+    """Whether ``agent`` (any resolved Agent) is one of vBot's built-in Agents."""
+    return getattr(agent, "builtin", None) is not None
+
+
 def is_librarian(agent: object) -> bool:
     """Whether ``agent`` (any resolved Agent) is the built-in Librarian."""
     return getattr(agent, "builtin", None) == LIBRARIAN_BUILTIN

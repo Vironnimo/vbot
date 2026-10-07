@@ -389,6 +389,7 @@ async def test_run_refuses_clearly_and_changes_nothing(harness: _Harness) -> Non
         harness.home("second"), "old-review", _document("old-review"), writer=_REFLECTION
     )
     harness.agents["librarian"] = SimpleNamespace(builtin="librarian", name="Librarian")
+    harness.agents["live-voice"] = SimpleNamespace(builtin="live_voice", name="Live voice")
 
     await harness.service.run("main")
     status = await harness.service.status("main")
@@ -422,6 +423,9 @@ async def test_run_refuses_clearly_and_changes_nothing(harness: _Harness) -> Non
     # The Librarian gets no pass of its own.
     with pytest.raises(LibrarianUnavailableError, match="gets no pass itself"):
         await harness.service.status("librarian")
+    # The other built-in Agents have no Skills to maintain and look like no Agent at all.
+    with pytest.raises(AgentNotFoundError):
+        await harness.service.status("live-voice")
     with pytest.raises(AgentNotFoundError):
         await harness.service.run("ghost")
     # Without the Librarian no pass runs, and status says why.

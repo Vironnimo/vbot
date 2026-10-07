@@ -87,10 +87,11 @@ async def test_run_without_description_is_refused_with_the_corrected_call(
         # A Project Agent stays inside its own Project whatever the policy says.
         ("acme", None, "worker@vbot", "agent_not_allowed"),
         (None, None, "workre", "agent_not_found"),
-        # The built-in Librarian resolves as an Agent but is no delegation target.
+        # A built-in Agent resolves as an Agent but is no delegation target.
         (None, None, "librarian", "agent_not_found"),
+        (None, None, "live-backend", "agent_not_found"),
     ],
-    ids=["other-scope", "self-only", "other-project", "unknown", "librarian"],
+    ids=["other-scope", "self-only", "other-project", "unknown", "librarian", "live-agent"],
 )
 async def test_targets_outside_the_callers_choices_are_refused_with_them(
     harness: SubAgentHarness,
