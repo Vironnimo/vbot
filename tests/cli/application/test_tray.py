@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sys
 import threading
-import time
 from collections.abc import Callable
 from dataclasses import replace
 from typing import override
@@ -133,11 +132,13 @@ def _labels(controller: TrayController) -> dict[str, object]:
     return {item.label: item for item in controller.menu_items()}
 
 
-def _wait_until(condition, *, timeout: float = 2.0) -> None:
-    deadline = time.monotonic() + timeout
-    while not condition() and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert condition()
+def _run_queued(controller: TrayController) -> None:
+    """Run the queued actions on the test's thread, as the action thread would."""
+
+    while not controller._work.empty():
+        work = controller._work.get_nowait()
+        assert work is not None
+        work()
 
 
 @pytest.mark.parametrize(
@@ -301,36 +302,32 @@ def test_status_window_lists_details_activity_and_recovery_actions():
 def test_left_click_runs_the_primary_action(state: TrayState, expected: str):
     actions = Actions(state)
     view = View()
-    controller = TrayController(actions, poll_interval=0.01)
+    controller = TrayController(actions)
     controller.attach_view(view)
     controller._poll_state()
-    controller.start()
-    try:
-        controller.invoke_default()
-        if expected == "status":
-            assert view.status_shown == 1
-        else:
-            _wait_until(lambda: expected in actions.calls)
-    finally:
-        controller.close()
+
+    controller.invoke_default()
+    _run_queued(controller)
+    if expected == "status":
+        assert (view.status_shown, actions.calls) == (1, [])
+    else:
+        assert (view.status_shown, actions.calls) == (0, [expected])
 
 
 def test_clicked_toast_opens_its_session_or_the_status_window():
     actions = Actions(TrayState("running", "server-desktop"))
     view = View()
-    controller = TrayController(actions, poll_interval=0.01)
+    controller = TrayController(actions)
     controller.attach_view(view)
     controller._poll_state()
-    controller.start()
-    try:
-        controller.activate_toast(
-            Toast("run:r1", "run_completed", "Coder finished", "Plan", session=("coder", "s1"))
-        )
-        _wait_until(lambda: "open_session:coder:s1" in actions.calls)
-        controller.activate_toast(Toast("server", "server_stopped", "vBot server stopped", ""))
-        assert view.status_shown == 1
-    finally:
-        controller.close()
+
+    controller.activate_toast(
+        Toast("run:r1", "run_completed", "Coder finished", "Plan", session=("coder", "s1"))
+    )
+    _run_queued(controller)
+    assert actions.calls == ["open_session:coder:s1"]
+    controller.activate_toast(Toast("server", "server_stopped", "vBot server stopped", ""))
+    assert view.status_shown == 1
 
 
 def test_callbacks_use_one_worker_and_recover_after_a_facade_exception():
@@ -435,21 +432,23 @@ def test_a_running_lifecycle_action_shows_its_transition_while_the_state_keeps_r
 
 def test_update_request_disables_duplicate_clicks_until_facade_reports_completion():
     actions = Actions(TrayState("running", "server"))
-    controller = TrayController(actions, poll_interval=0.01)
+    controller = TrayController(actions)
     controller._poll_state()
-    controller.start()
-    try:
-        controller.invoke("start_update")
-        _wait_until(lambda: "start_update" in actions.calls)
-        assert _labels(controller)["Update"].enabled is False
 
-        actions.current = replace(actions.current, update_phase="completed")
-        controller._poll_state()
-        assert _labels(controller)["Update"].enabled is True
-        controller.invoke("start_update")
-        _wait_until(lambda: actions.calls.count("start_update") == 2)
-    finally:
-        controller.close()
+    controller.invoke("start_update")
+    _run_queued(controller)
+    # The request returned, but the facade has not reported the update yet.
+    assert _labels(controller)["Update"].enabled is False
+    controller.invoke("start_update")
+    _run_queued(controller)
+    assert actions.calls == ["start_update"]
+
+    actions.current = replace(actions.current, update_phase="completed")
+    controller._poll_state()
+    assert _labels(controller)["Update"].enabled is True
+    controller.invoke("start_update")
+    _run_queued(controller)
+    assert actions.calls == ["start_update", "start_update"]
 
 
 def test_terminal_update_status_keeps_server_health_visible_and_allows_next_update():
@@ -494,60 +493,47 @@ def test_unchanged_poll_does_not_present_again():
 
 def test_exit_request_queues_quit_and_stops_the_view_only_after_success():
     actions = Actions(TrayState("stopped", "server", exit_requested=True))
-    controller = TrayController(actions, poll_interval=0.01)
+    controller = TrayController(actions)
     view = View()
     controller.attach_view(view)
-    controller.start()
-    try:
-        _wait_until(lambda: "quit" in actions.calls)
-        _wait_until(lambda: view.stopped)
-    finally:
-        controller.close()
+
+    controller._poll_state()
+    assert (actions.calls, view.stopped) == ([], False)
+    _run_queued(controller)
+    assert (actions.calls, view.stopped) == (["quit"], True)
 
 
 def test_busy_external_exit_request_failure_keeps_the_tray_visible():
     actions = Actions(TrayState("running", "server", update_phase="preparing", exit_requested=True))
     actions.fail = "quit"
-    controller = TrayController(actions, poll_interval=0.05)
+    controller = TrayController(actions)
     view = View()
     controller.attach_view(view)
-    controller.start()
-    try:
-        _wait_until(lambda: "quit" in actions.calls)
-        assert view.stopped is False
-        assert _labels(controller)["Quit vBot"].enabled is False
-    finally:
-        controller.close()
+
+    controller._poll_state()
+    _run_queued(controller)
+    assert actions.calls == ["quit"]
+    assert view.stopped is False
+    assert _labels(controller)["Quit vBot"].enabled is False
 
 
 def test_quit_stops_the_view_only_after_the_facade_quits_successfully():
     actions = Actions(TrayState("stopped", "server"))
-    controller = TrayController(actions, poll_interval=0.01)
+    controller = TrayController(actions)
     view = View()
     controller.attach_view(view)
     controller._poll_state()
-    controller.start()
-    try:
-        controller.invoke("quit")
-        _wait_until(lambda: view.stopped)
 
-        actions.fail = "quit"
-        view.stopped = False
-        controller.invoke("quit")
-        _wait_until(lambda: actions.calls.count("quit") == 2)
-        time.sleep(0.05)
-        assert view.stopped is False
-    finally:
-        controller.close()
+    actions.fail = "quit"
+    controller.invoke("quit")
+    _run_queued(controller)
+    assert (actions.calls, view.stopped) == (["quit"], False)
 
-
-def _run_queued(controller: TrayController) -> None:
-    """Run the queued actions on the test's thread, as the action thread would."""
-
-    while not controller._work.empty():
-        work = controller._work.get_nowait()
-        assert work is not None
-        work()
+    actions.fail = None
+    controller.invoke("quit")
+    assert view.stopped is False  # queued, not run yet
+    _run_queued(controller)
+    assert (actions.calls, view.stopped) == (["quit", "quit"], True)
 
 
 def test_pending_restart_waits_for_an_idle_tray_and_retries_ten_minutes_after_a_failure():
