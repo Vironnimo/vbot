@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import io
-import lzma
 import zlib
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from zipfile import BadZipFile, ZipFile
+from zipfile import ZIP_DEFLATED, ZIP_STORED, BadZipFile, ZipFile
 
 from core.config_validation import (
     JsonConfigValidationError,
@@ -48,10 +47,8 @@ _STORE_WORKERS = BoundedWorkerPool(name="attachments", max_workers=4)
 
 _OOXML_PREFIX = "application/vnd.openxmlformats-officedocument."
 _OOXML_WILDCARD = "application/vnd.openxmlformats-officedocument.*"
-# An OOXML file's ``[Content_Types].xml`` is a small manifest — a few KiB even for
-# large documents. Reading it unbounded lets a crafted ZIP entry decompress to
-# gigabytes from a within-upload-limit file (a zip bomb), so the sniff decompresses
-# at most this many bytes and treats any overflow as "not OOXML".
+# Bound the OOXML manifest separately from the compressed upload size. Only
+# stored/DEFLATE entries are admitted below, where ZipExtFile bounds decoded bytes.
 _MAX_OOXML_CONTENT_TYPES_BYTES = 1_048_576
 _MIME_ALLOWLIST = frozenset(
     {
@@ -549,17 +546,24 @@ def _filename_with_extension(filename: str, canonical_extension: str) -> str:
 
 def _sniff_ooxml_media_type(data: bytes) -> str | None:
     try:
-        with ZipFile(io.BytesIO(data)) as archive, archive.open("[Content_Types].xml") as handle:
-            # Bounded read = bounded decompression: ``read(n)`` inflates at most ``n``
-            # bytes, so a zip bomb in this entry cannot exhaust memory here.
-            content_types_bytes = handle.read(_MAX_OOXML_CONTENT_TYPES_BYTES + 1)
-    except BadZipFile, KeyError, OSError, EOFError, RuntimeError, zlib.error, lzma.LZMAError:
+        with ZipFile(io.BytesIO(data)) as archive:
+            manifest = archive.getinfo("[Content_Types].xml")
+            # OPC permits only stored/DEFLATE entries. Other ZIP methods may
+            # decompress unbounded output internally even for ZipExtFile.read(n).
+            if manifest.compress_type not in (ZIP_STORED, ZIP_DEFLATED):
+                return None
+            if manifest.file_size > _MAX_OOXML_CONTENT_TYPES_BYTES:
+                return None
+            with archive.open(manifest) as handle:
+                # Keep the read bounded even when the ZIP's declared size is false.
+                content_types_bytes = handle.read(_MAX_OOXML_CONTENT_TYPES_BYTES + 1)
+    except BadZipFile, KeyError, OSError, EOFError, RuntimeError, zlib.error:
         # Encrypted entries, unsupported compression and invalid compressed data
         # are unrecognizable input, not failures of the attachment service.
         return None
 
     if len(content_types_bytes) > _MAX_OOXML_CONTENT_TYPES_BYTES:
-        # Larger than any legitimate manifest — treat as a decompression bomb, not Office.
+        # The manifest exceeds our sniffing budget.
         return None
     content_types = content_types_bytes.decode("utf-8", errors="ignore")
 
