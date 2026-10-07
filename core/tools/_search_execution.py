@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import io
 import json
 import os
 import queue
@@ -19,7 +20,7 @@ import tempfile
 import threading
 import time
 import unicodedata
-from collections.abc import Generator
+from collections.abc import Generator, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -35,7 +36,10 @@ if TYPE_CHECKING:
     from core.tools.search import SearchBudget
     from core.tools.tools import ToolContext
 
+# Bound on one output record, such as a JSON event or a listed path.
 MAX_PROTOCOL_LINE = 8 * 1024 * 1024
+# Bytes read from a child's output at once; the records they complete travel together.
+_READ_BYTES = 64 * 1024
 # Bound on one native command line; a longer path list runs in several batches.
 MAX_COMMAND_LINE_BYTES = 28000
 # Polling interval for the child memory bound; each poll is a process query.
@@ -78,16 +82,22 @@ def native_lines(
     *,
     cwd: Path | None = None,
     outcome: NativeOutcome | None = None,
+    terminator: bytes = b"\n",
 ) -> Generator[bytes]:
-    """Drain both pipes with bounded storage and interrupt even a silent process.
+    """Yield the child's output records, draining both pipes with bounded storage.
 
-    With ``outcome``, the exit code and diagnostics are recorded there for the
-    caller to judge. Without it, a failed run raises ``RuntimeError``. A caller
-    outside a Tool call passes no ``context`` and its ``cwd``; only its budget
-    stops the child then.
+    A record ends with ``terminator``, kept in the record: a line by default, a
+    path for ``--null`` listings and a name for ``--null-data``. Each record is
+    bounded at ``MAX_PROTOCOL_LINE``, never the whole output. Even a silent
+    process is interrupted. With ``outcome``, the exit code and diagnostics are
+    recorded there for the caller to judge. Without it, a failed run raises
+    ``RuntimeError``. A caller outside a Tool call passes no ``context`` and its
+    ``cwd``; only its budget stops the child then.
     """
     if context is None and cwd is None:
         raise ValueError("A native search outside a Tool call needs its working directory.")
+    if len(terminator) != 1:
+        raise ValueError("A record terminator is one byte.")
     cancelled = threading.Event()
     if context is not None:
         # The Run retains this callback until dispatch finishes on the Event Loop.
@@ -102,8 +112,9 @@ def native_lines(
         if outcome is not None:
             outcome.interrupted = True
         return
-    # Shut down when this generator stops, which also releases an output thread blocked in put.
-    messages: queue.Queue[tuple[str, bytes]] = queue.Queue(maxsize=8)
+    # Each message holds the records one read completed. Shut down when this generator
+    # stops, which also releases an output thread blocked in put.
+    messages: queue.Queue[tuple[str, list[bytes]]] = queue.Queue(maxsize=8)
     diagnostics = bytearray()
 
     def kill(child: subprocess.Popen[bytes]) -> None:
@@ -113,34 +124,25 @@ def native_lines(
 
     monitored = None
 
-    def put(kind: str, data: bytes) -> bool:
+    def put(kind: str, records: list[bytes]) -> bool:
         """Queue one message; ``False`` once the consumer has stopped."""
         try:
-            messages.put((kind, data))
+            messages.put((kind, records))
         except queue.ShutDown:
             return False
         return True
 
     def output() -> None:
-        assert stdout is not None
+        assert isinstance(stdout, io.BufferedIOBase)
         try:
-            while True:
-                line = stdout.readline(MAX_PROTOCOL_LINE + 1)
-                if not line:
+            for records in _records(stdout, terminator):
+                if records is None:
+                    put("too_long", [])
                     break
-                if len(line) > MAX_PROTOCOL_LINE:
-                    put(
-                        "error",
-                        (
-                            b"A source record exceeds the 8 MiB processing bound; narrow the se"
-                            b"arch or use a file/count output mode."
-                        ),
-                    )
-                    break
-                if not put("line", line):
+                if not put("records", records):
                     break
         finally:
-            put("end", b"")
+            put("end", [])
 
     def errors() -> None:
         assert stderr is not None
@@ -197,15 +199,18 @@ def native_lines(
                             "Search exceeded its memory bound; narrow files or patterns."
                         )
             try:
-                kind, line = messages.get(timeout=0.05)
+                kind, records = messages.get(timeout=0.05)
             except queue.Empty:
                 continue
             if kind == "end":
                 output_finished = True
                 break
-            if kind == "error":
-                raise RuntimeError(line.decode())
-            yield line
+            if kind == "too_long":
+                raise RuntimeError(
+                    "A source record exceeds the 8 MiB processing bound; narrow the search or "
+                    "use a file/count output mode."
+                )
+            yield from records
         # EOF can precede process exit. Keep checking cancellation here as well
         # instead of waiting for the entire remaining search budget at once.
         while keep_going() and process.poll() is None:
@@ -247,6 +252,35 @@ def native_lines(
             # Also release it if a consumer retains this generator's traceback.
             # Reader threads hold only their pipes, never the process object.
             del process
+
+
+def _records(stream: io.BufferedIOBase, terminator: bytes) -> Iterator[list[bytes] | None]:
+    """Yield the records each read of ``stream`` completes, each ending with ``terminator``.
+
+    A last record may lack its terminator. A record that exceeds
+    ``MAX_PROTOCOL_LINE`` is not read on: ``None`` takes its place and ends the
+    iteration.
+    """
+    pending = bytearray()
+    while chunk := stream.read1(_READ_BYTES):
+        # Only the new bytes can hold the terminator of the record in progress.
+        searched = len(pending)
+        pending += chunk
+        records: list[bytes] = []
+        start = 0
+        while (end := pending.find(terminator, searched)) >= 0:
+            if end + 1 - start > MAX_PROTOCOL_LINE:
+                break
+            records.append(bytes(pending[start : end + 1]))
+            start = searched = end + 1
+        del pending[:start]
+        if records:
+            yield records
+        if len(pending) > MAX_PROTOCOL_LINE:
+            yield None
+            return
+    if pending:
+        yield [bytes(pending)]
 
 
 @dataclass
@@ -323,16 +357,19 @@ def _collect(
     scope: Scope,
     context: ToolContext,
     budget: SearchBudget,
+    terminator: bytes,
 ) -> tuple[bytes, NativeOutcome, bool]:
     outcome = NativeOutcome()
     chunks: list[bytes] = []
     size = 0
     truncated = False
-    lines = native_lines(binary, arguments, context, budget, cwd=scope.cwd, outcome=outcome)
-    with contextlib.closing(lines):
-        for line in lines:
-            chunks.append(line)
-            size += len(line)
+    records = native_lines(
+        binary, arguments, context, budget, cwd=scope.cwd, outcome=outcome, terminator=terminator
+    )
+    with contextlib.closing(records):
+        for record in records:
+            chunks.append(record)
+            size += len(record)
             if size > MAX_SCAN_BYTES:
                 truncated = True
                 break
@@ -349,8 +386,11 @@ def count_scan(
     cwd: Path,
 ) -> ScanResult:
     """Count matching lines (or matches) per file in one parallel pass."""
+    # With --null, a file list ends each path with NUL; counts still end with a newline.
+    terminator = b"\n"
     if query.mode == "files_without_match":
         selector = ["--files-without-match", "--null"]
+        terminator = b"\0"
     else:
         selector = [
             # With -U ripgrep's line count merges matches unpredictably; count matches.
@@ -368,7 +408,7 @@ def count_scan(
         "--",
         *scope.paths,
     ]
-    data, outcome, truncated = _collect(binary, arguments, scope, context, budget)
+    data, outcome, truncated = _collect(binary, arguments, scope, context, budget, terminator)
     result = _judge(outcome, scope, cwd)
     result.truncated = truncated
     result.ignored = _walk_paths(outcome.ignored, scope)
@@ -401,7 +441,7 @@ def list_scan(
     else:
         selection = _base_arguments(query, scope)
     arguments = [*selection, "--debug", "--files", "--null", "--", *scope.paths]
-    data, outcome, truncated = _collect(binary, arguments, scope, context, budget)
+    data, outcome, truncated = _collect(binary, arguments, scope, context, budget, b"\0")
     result = _judge(outcome, scope, cwd)
     result.truncated = truncated
     result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
@@ -454,7 +494,7 @@ def match_names(
             str(source),
         ]
         outcome = NativeOutcome()
-        lines = native_lines(binary, arguments, context, budget, outcome=outcome)
+        lines = native_lines(binary, arguments, context, budget, outcome=outcome, terminator=b"\0")
         with contextlib.closing(lines):
             data = b"".join(lines)
     if outcome.returncode not in (0, 1, None):

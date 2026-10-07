@@ -242,6 +242,30 @@ def test_directory_lists_include_empty_directories_ripgrep_enters(
     assert set(_all_pages(tmp_path, {"args": args}, limit=2)) == expected
 
 
+_FILES = {f"d{index}/f{index}.txt" for index in range(40)}
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        ({}, _FILES),
+        ({"pattern": "absent", "args": ["--files-without-match"]}, _FILES),
+        # The directory list reads a file list first, then matches the directory names.
+        ({"pattern": "^d", "args": ["--dirs"]}, {f"d{index}/" for index in range(40)}),
+    ],
+)
+def test_the_record_bound_applies_to_each_listed_path_and_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: dict[str, Any],
+    expected: set[str],
+) -> None:
+    _write(tmp_path, dict.fromkeys(_FILES, "x\n"))
+    # Each path or name ripgrep prints is shorter than the bound; all of them are longer.
+    monkeypatch.setattr("core.tools._search_execution.MAX_PROTOCOL_LINE", 32)
+    assert set(_all_pages(tmp_path, arguments, limit=10000)) == expected
+
+
 @pytest.mark.parametrize(
     ("arguments", "skipped"),
     [
