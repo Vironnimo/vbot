@@ -2,7 +2,8 @@ name: CI
 
 # Complete verification on every supported platform, with the one Python version
 # vBot supports (the one its packages bundle). main-build.yml calls it on every
-# push to main, release.yml as the release gate, and it can be started by hand.
+# push to main, and it can be started by hand. A release requires the main-build
+# run of its commit to have passed it (scripts/release_gate.py).
 # Before it pushes main, scripts/push.py runs its static checks, test suites and
 # WebUI build locally.
 on:

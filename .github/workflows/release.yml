@@ -1,9 +1,12 @@
 name: Release
 
-# Runs the complete CI workflow and builds and smokes the signed packages of every
-# platform before creating the tag and published release. The release is created
-# with all of them attached, so it is never publicly visible without a package an
-# installation needs. Built files stay untracked.
+# Requires the complete CI of the dispatched commit to have passed and builds and
+# smokes the signed packages of every platform before creating the tag and
+# published release. The CI runs once per commit, in main-build.yml on its push;
+# the release waits for that run while its packages build instead of running it
+# again. The release is created with all packages attached, so it is never
+# publicly visible without a package an installation needs. Built files stay
+# untracked.
 on:
   workflow_dispatch:
     inputs:
@@ -20,8 +23,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  quality:
-    uses: ./.github/workflows/ci.yml
+  ci:
+    name: main-build CI
+    runs-on: ubuntu-latest
+    # A main-build run takes about ten minutes; its backend jobs may take 45.
+    timeout-minutes: 90
+    permissions:
+      actions: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Wait for the main-build CI of this commit
+        run: python scripts/release_gate.py --sha "$GITHUB_SHA"
 
   windows:
     uses: ./.github/workflows/windows-package.yml
@@ -36,7 +52,7 @@ jobs:
     secrets: inherit
 
   publish:
-    needs: [quality, windows, linux]
+    needs: [ci, windows, linux]
     runs-on: ubuntu-latest
     env:
       RELEASE_VERSION: ${{ inputs.version }}
