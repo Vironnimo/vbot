@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import errno
 import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from core.tools import _search_execution as execution
 from core.tools._search_execution import MAX_CHILD_MEMORY
 from core.utils.search_binary import require_binary
 from tests.core.tools.search_files_test_support import context, dispatch, search, search_registry
@@ -328,7 +331,9 @@ _OUTPUT_BOUND = ", when their paths reached the 256 MiB output limit"
     ("bound", "value", "arguments", "reason"),
     [
         # Either bound keeps fewer than the 40 files: 5 entries, or about 100 bytes of output.
+        # A listing pass prints paths; a counting pass prints counts and then statistics.
         ("MAX_ENTRIES", 5, {}, ""),
+        ("MAX_ENTRIES", 5, {"pattern": "x", "output": "files"}, ""),
         ("MAX_SCAN_BYTES", 100, {}, _OUTPUT_BOUND),
         ("MAX_SCAN_BYTES", 100, {"pattern": "x", "output": "files"}, _OUTPUT_BOUND),
     ],
@@ -343,11 +348,25 @@ def test_a_pass_a_bound_cut_short_names_its_reason_and_the_files_kept(
 ) -> None:
     _write(tmp_path, dict.fromkeys(_FILES, "x\n"))
     monkeypatch.setattr(f"core.tools._search_execution.{bound}", value)
+    native_lines = execution.native_lines
+    read = 0
+
+    def counted(*args: Any, **kwargs: Any) -> Iterator[bytes]:
+        nonlocal read
+        records = native_lines(*args, **kwargs)
+        with contextlib.closing(records):
+            for record in records:
+                read += 1
+                yield record
+
+    monkeypatch.setattr(execution, "native_lines", counted)
 
     data = search(tmp_path, **arguments, limit=10000)
 
     kept = data["content"].splitlines()
     assert 0 < len(kept) < len(_FILES)
+    # The pass stops reading, and so its child, at the first record past the bound.
+    assert read <= len(kept) + 1
     assert data["warnings"] == [
         f"The search stopped after {len(kept)} files{reason}; narrow path or glob to see the rest."
     ]

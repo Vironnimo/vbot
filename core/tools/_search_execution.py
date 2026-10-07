@@ -45,7 +45,7 @@ MAX_COMMAND_LINE_BYTES = 28000
 # Bound on a child's resident memory, and its polling interval; each poll is a process query.
 MAX_CHILD_MEMORY = 512 * 1024 * 1024
 MEMORY_POLL_SECONDS = 0.05
-# Bound on the entries one search collects before ordering them.
+# Bound on the entries one counting or listing pass collects before they are ordered.
 MAX_ENTRIES = 500_000
 # Bound on the bytes one counting or listing pass may print.
 MAX_SCAN_BYTES = 256 * 1024 * 1024
@@ -386,22 +386,36 @@ def _collect(
     context: ToolContext,
     budget: SearchBudget,
     terminator: bytes,
-) -> tuple[bytes, NativeOutcome, bool]:
+) -> tuple[bytes, NativeOutcome, Literal["entries", "output"] | None]:
+    """Read one counting or listing pass, up to the first bound it reaches.
+
+    Each pass prints its entries with --null, so a record holding NUL is one
+    entry; the statistics after the counts hold none. Reading stops at the entry
+    after ``MAX_ENTRIES``, which shows that more follow and is left out, or at the
+    record that takes the output over ``MAX_SCAN_BYTES``. Stopping closes the
+    records, which ends the child. The third value names the bound that stopped it.
+    """
     outcome = NativeOutcome()
     chunks: list[bytes] = []
     size = 0
-    truncated = False
+    entries = 0
+    stopped_by: Literal["entries", "output"] | None = None
     records = native_lines(
         binary, arguments, context, budget, cwd=scope.cwd, outcome=outcome, terminator=terminator
     )
     with contextlib.closing(records):
         for record in records:
+            if b"\0" in record:
+                entries += 1
+                if entries > MAX_ENTRIES:
+                    stopped_by = "entries"
+                    break
             chunks.append(record)
             size += len(record)
             if size > MAX_SCAN_BYTES:
-                truncated = True
+                stopped_by = "output"
                 break
-    return b"".join(chunks), outcome, truncated
+    return b"".join(chunks), outcome, stopped_by
 
 
 def count_scan(
@@ -436,15 +450,14 @@ def count_scan(
         "--",
         *scope.paths,
     ]
-    data, outcome, truncated = _collect(binary, arguments, scope, context, budget, terminator)
+    data, outcome, stopped_by = _collect(binary, arguments, scope, context, budget, terminator)
     result = _judge(outcome, scope, cwd)
-    result.stopped_by = "output" if truncated else None
+    result.stopped_by = stopped_by
     result.ignored = _walk_paths(outcome.ignored, scope)
     if query.mode == "files_without_match":
         result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
     else:
         result.entries, result.files_searched = _parse_counts(data)
-    _bound(result)
     return result
 
 
@@ -469,13 +482,12 @@ def list_scan(
     else:
         selection = _base_arguments(query, scope)
     arguments = [*selection, "--debug", "--files", "--null", "--", *scope.paths]
-    data, outcome, truncated = _collect(binary, arguments, scope, context, budget, b"\0")
+    data, outcome, stopped_by = _collect(binary, arguments, scope, context, budget, b"\0")
     result = _judge(outcome, scope, cwd)
-    result.stopped_by = "output" if truncated else None
+    result.stopped_by = stopped_by
     result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
     result.skipped = _walk_paths(outcome.skipped, scope)
     result.ignored = _walk_paths(outcome.ignored, scope)
-    _bound(result)
     return result
 
 
@@ -528,12 +540,6 @@ def match_names(
     if outcome.returncode not in (0, 1, None):
         raise SearchRefusedError(outcome.diagnostics.strip().removeprefix("rg: "))
     return {os.fsdecode(name) for name in data.split(b"\0") if name}
-
-
-def _bound(result: ScanResult) -> None:
-    if len(result.entries) > MAX_ENTRIES:
-        del result.entries[MAX_ENTRIES:]
-        result.stopped_by = "entries"
 
 
 def _parse_counts(data: bytes) -> tuple[list[tuple[bytes, int]], int | None]:

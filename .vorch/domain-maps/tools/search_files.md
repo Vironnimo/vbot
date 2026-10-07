@@ -340,10 +340,15 @@ notice about the next page and each warning
   (`test_a_result_over_the_record_bound_fails_naming_the_file_to_leave_out`,
   `test_a_search_over_the_memory_bound_fails_with_advice_for_its_mode`).
 - **Entries:** at most 500,000 entries are collected per pass; more makes the
-  result incomplete, with a warning naming the count. When the 256 MiB output
-  bound stops a pass first (paths averaging over about 537 bytes), the warning
-  names the files kept and that reason (`ScanResult.stopped_by`,
-  `test_a_pass_a_bound_cut_short_names_its_reason_and_the_files_kept`).
+  result incomplete, with a warning naming the count. `_collect` counts the
+  records holding NUL as entries (every pass prints its entries with `--null`;
+  the `--stats` lines hold none) and stops reading at the entry after the bound,
+  which closes `native_lines` and so ends the child instead of reading on to
+  256 MiB. When the 256 MiB output bound stops a pass first (paths averaging over
+  about 537 bytes), the warning names the files kept and that reason
+  (`ScanResult.stopped_by`;
+  `test_a_pass_a_bound_cut_short_names_its_reason_and_the_files_kept` also checks
+  that at most one record past the kept ones is read).
 - **Process ownership:** native subprocess creation, termination and release stay
   in the worker thread. The cancel callback keeps only an event, never the
   `Popen`: dropping it on the Event Loop must not run a blocking Windows handle
