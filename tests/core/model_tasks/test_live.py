@@ -14,7 +14,7 @@ import pytest
 import core.model_tasks._live_call as live_call_module
 import core.model_tasks.live as live_module
 from core.model_tasks._live_backend import BackendRequest
-from core.model_tasks._live_brief import backend_instructions, voice_instructions
+from core.model_tasks._live_brief import live_tool_guidance, voice_instructions
 from core.model_tasks._live_call import LiveCallSession
 from core.model_tasks._live_openai import ControlJoinError, OpenAIBackend
 from core.model_tasks._live_wire import (
@@ -55,7 +55,6 @@ VOICE_TOOLS = (
     {"name": "overview", "description": "What vBot shows.", "parameters": {"type": "object"}},
     {"name": "end_call", "description": "Hang up.", "parameters": {"type": "object"}},
 )
-BACKEND_TOOLS = ("overview", "start_agent_session", "web_search")
 WAKE_PHRASES = ("hey vbot",)
 
 
@@ -935,7 +934,6 @@ class FakeChat:
         self.hosts = hosts
         self.started: list[dict[str, Any]] = []
         self.voices: list[FakeVoice] = []
-        self.asked: list[str] = []
         self.error: Exception | None = None
 
     async def start_external_run(
@@ -956,10 +954,6 @@ class FakeChat:
         voice.on_cancel = on_cancel
         self.voices.append(voice)
         return voice
-
-    async def agent_tool_names(self, agent_id: str) -> tuple[str, ...]:
-        self.asked.append(agent_id)
-        return BACKEND_TOOLS
 
 
 class FakeModelTasks:
@@ -1191,12 +1185,7 @@ _VOICE_NAMES = ["overview", "end_call"]
             ["vbot_request"],
             {
                 "backend": None,
-                "instructions": voice_instructions(
-                    tools=[],
-                    delegation="vbot",
-                    backend_tools=BACKEND_TOOLS,
-                    wake_phrases=WAKE_PHRASES,
-                ),
+                "instructions": voice_instructions(tools=[], wake_phrases=WAKE_PHRASES),
             },
         ),
         (
@@ -1206,17 +1195,10 @@ _VOICE_NAMES = ["overview", "end_call"]
             {
                 "backend": OpenAIBackend(
                     model="gpt-5.6-terra",
-                    instructions=backend_instructions(
-                        set(_VOICE_NAMES).__contains__, context_note=False
-                    ),
+                    instructions=live_tool_guidance(set(_VOICE_NAMES).__contains__),
                     tools=VOICE_TOOLS,
                 ),
-                "instructions": voice_instructions(
-                    tools=[],
-                    delegation="openai",
-                    backend_tools=_VOICE_NAMES,
-                    wake_phrases=WAKE_PHRASES,
-                ),
+                "instructions": voice_instructions(tools=[], wake_phrases=WAKE_PHRASES),
             },
         ),
         (
@@ -1235,9 +1217,7 @@ _VOICE_NAMES = ["overview", "end_call"]
             {
                 "tools": [*VOICE_TOOLS, {"name": "vbot_request"}],
                 "instructions": voice_instructions(
-                    tools=[*_VOICE_NAMES, "vbot_request"],
-                    backend_tools=BACKEND_TOOLS,
-                    wake_phrases=WAKE_PHRASES,
+                    tools=[*_VOICE_NAMES, "vbot_request"], wake_phrases=WAKE_PHRASES
                 ),
             },
         ),
@@ -1261,8 +1241,6 @@ async def test_the_backend_choice_decides_what_the_voice_model_gets(
     )
 
     assert [started["extra_tools"] for started in chat.started] == [extra_tools]
-    # The backend Agent's Tools are asked for only when it answers requests.
-    assert chat.asked == (["live-backend"] if extra_tools else [])
     assert {key: opened[0][key] for key in expected} == expected
     await call.close()
 

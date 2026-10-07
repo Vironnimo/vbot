@@ -202,7 +202,7 @@ async def evaluate_live_case(
     messages: list[JsonObject] = [
         {
             "role": "system",
-            "content": backend_instructions(set(LIVE_TOOL_NAMES).__contains__, context_note=True),
+            "content": backend_instructions(set(LIVE_TOOL_NAMES).__contains__),
         },
         system_reminder_request_message(note, LIVE_VOICE_SYSTEM_REMINDER),
         {"role": "user", "content": case.request},

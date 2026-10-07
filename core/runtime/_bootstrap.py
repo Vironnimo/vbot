@@ -347,7 +347,7 @@ def bootstrap(runtime: Runtime) -> None:
         # The Live backend Agent's guidance names only the Tools it has.
         runtime._tool_prompt_blocks.register(
             LIVE_TOOL_FAMILY,
-            render=lambda context: backend_instructions(context.tool_available, context_note=True),
+            render=lambda context: backend_instructions(context.tool_available),
             owner=f"builtin:{LIVE_BACKEND_BUILTIN}",
         )
         register_search_files_tool(runtime._tools)
