@@ -283,15 +283,14 @@ async def test_running_output_is_the_whole_transcript_and_screen(shell: Shell) -
 async def test_idle_command_continues_as_terminal_and_its_result_is_delivered(
     shell: Shell,
 ) -> None:
+    # Silent and without CPU use, as a command waiting for input is.
     call = shell.call({"command": "read-name"})
-    adapter, tree = await shell.started()
-    adapter.emit("Name: ")
+    _adapter, tree = await shell.started()
     await shell.run_clock(call, until=SHELL_HANDOFF_SECONDS)
 
     result = data(await call)
     terminal_id, next_text = result["terminal_id"], result["next"]
     assert result["status"] == "running"
-    assert result["output"] == "Name:"
     assert next_text.startswith(f"The command in terminal {terminal_id} has printed nothing")
     assert re.search(r"; its 600-second timeout stops it in \d+ seconds\.", next_text)
     # Answering comes first, without an answer for the Agent to copy; then exact calls.
@@ -305,8 +304,8 @@ async def test_idle_command_continues_as_terminal_and_its_result_is_delivered(
     assert terminal_id in [info.terminal_id for info in shell.manager.list_terminals()]
 
     tree.shell_exits(0)
-    await eventually(lambda: shell.manager.command_report(result["terminal_id"]).exited)
-    await asyncio.sleep(0)
+    # The finishing session starts the delivery before it reports the end.
+    await shell.manager.wait_finished(terminal_id)
     assert len(shell.bodies()) == 1
 
 
