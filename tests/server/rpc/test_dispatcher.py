@@ -52,6 +52,25 @@ async def test_expected_rpc_error_is_logged_without_request_params(
 
 
 @pytest.mark.asyncio
+async def test_routine_rpc_error_is_logged_at_debug_only(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def miss(_state: Any, _params: dict[str, Any]) -> dict[str, Any]:
+        raise RpcError(RPC_ERROR_DOMAIN, "no such folder", data={"reason": "x"}, routine=True)
+
+    with caplog.at_level(logging.DEBUG, logger="vbot.server.rpc.dispatcher"):
+        response = await dispatch_rpc(object(), {"method": "example.miss"}, {"example.miss": miss})
+
+    assert response["ok"] is False
+    assert response["error"] == {
+        "code": RPC_ERROR_DOMAIN,
+        "message": "no such folder",
+        "data": {"reason": "x"},
+    }
+    assert [record.levelno for record in caplog.records] == [logging.DEBUG]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("request_", "code", "logged_method"),
     [
