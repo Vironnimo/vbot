@@ -19,6 +19,7 @@
 
   import { portal } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
   import {
     breadcrumbTrail,
     browseStartPaths,
@@ -55,6 +56,7 @@
 
   let portaled = $state(false);
   let listElement = $state();
+  let trailElement = $state();
   // 'places' | 'folder'
   let view = $state('');
   let status = $state('loading');
@@ -395,6 +397,12 @@
     return placement;
   }
 
+  // A deep folder's trail shows its end: the folder that is open.
+  $effect(() => {
+    void crumbs;
+    if (trailElement) trailElement.scrollLeft = trailElement.scrollWidth;
+  });
+
   $effect(() => {
     if (!listElement || initialFocusDone) return;
     initialFocusDone = true;
@@ -437,7 +445,11 @@
                 />
               </svg>
             </Button>
-            <nav class="path-browser__trail" aria-label={t('pathPicker.trail')}>
+            <nav
+              bind:this={trailElement}
+              class="path-browser__trail"
+              aria-label={t('pathPicker.trail')}
+            >
               <ol>
                 {#if !root}
                   <li>
@@ -627,7 +639,12 @@
         </div>
       {/snippet}
       {#snippet footer()}
-        <code class="path-browser__choice">{chosenValue}</code>
+        <!-- A long path loses its start; the tooltip shows it whole. -->
+        <code
+          class="path-browser__choice"
+          use:tooltip={{ text: chosenValue, mono: true, whenTruncated: true }}
+          ><bdi>{chosenValue}</bdi></code
+        >
         <Button variant="secondary" onClick={onClose}
           >{t('common.cancel')}</Button
         >
@@ -653,7 +670,10 @@
     flex-direction: column;
   }
 
+  /* One height for the places and every folder, whatever tools and notices
+     show; the list takes the room they leave. */
   .path-browser__body {
+    height: min(460px, 64vh);
     min-height: 0;
     gap: 10px;
     padding-bottom: 12px;
@@ -732,7 +752,8 @@
 
   .path-browser__panel {
     display: flex;
-    height: min(340px, 48vh);
+    min-height: 0;
+    flex: 1;
     flex-direction: column;
     overflow-y: auto;
     border: 1px solid var(--border-2);
@@ -841,6 +862,8 @@
     font-size: var(--fs-body-sm);
   }
 
+  /* Right-to-left only to clip the start; the path itself stays isolated
+     left-to-right, so its separators keep their places. */
   .path-browser__choice {
     min-width: 0;
     flex: 1;
@@ -848,7 +871,9 @@
     color: var(--text-med);
     font-family: var(--font-mono);
     font-size: var(--fs-mono-xs);
+    text-align: left;
     text-overflow: ellipsis;
     white-space: nowrap;
+    direction: rtl;
   }
 </style>

@@ -239,6 +239,20 @@ describe('PathField', () => {
       'vBot C:\\work\\vBot',
     ]);
 
+    // The trail scrolls to its end, the open folder.
+    const trail = dialog.querySelector('.path-browser__trail');
+    let trailScroll = 0;
+    Object.defineProperties(trail, {
+      scrollWidth: { value: 480, configurable: true },
+      scrollLeft: {
+        get: () => trailScroll,
+        set: (next) => {
+          trailScroll = next;
+        },
+        configurable: true,
+      },
+    });
+
     // Rows and crumbs a click replaces hand keyboard focus to the list.
     const list = dialog.querySelector('[role="listbox"]');
     const clickWithFocus = (element) => {
@@ -248,6 +262,7 @@ describe('PathField', () => {
     clickWithFocus(dialog.querySelectorAll('.path-browser__row')[3]);
     await settle();
     expect(document.activeElement).toBe(list);
+    expect(trailScroll).toBe(480);
     expect(listDirectory).toHaveBeenLastCalledWith({
       path: 'C:/work/vBot',
       include_files: false,
