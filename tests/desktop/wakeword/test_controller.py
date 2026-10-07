@@ -1,13 +1,12 @@
 """The Voice controller: lifecycle, dispatch, commands, status and events end to end.
 
 The listener runs on its real threads over doubles for the microphone
-(:class:`FakeSoundDevice`), the wakeword engine (:class:`ScriptedEngine`, fired
-by the test), the speech decision (:class:`AmplitudeDetector`) and the vBot server
-(:class:`FakeVoiceServer`). The fake microphone delivers silence at up to sixteen
-times real time unless a test feeds audio, so the audio limits of a recording
-(the no-speech timeout, the capture history) last only 0.1 to 0.2 s of wall
-time. A test whose outcome must not depend on thread timing uses
-:class:`FedSoundDevice`, which delivers only the audio the test feeds.
+(:class:`FedSoundDevice`), the wakeword engine (:class:`ScriptedEngine`, fired
+by the test), the speech decision (:class:`CountingDetector`) and the vBot
+server (:class:`FakeVoiceServer`). The microphone delivers only the audio a test
+feeds, so what detection and a recording hear never depends on thread timing:
+:meth:`Rig.wake`, :meth:`Rig.say_wake_phrase` and :meth:`Rig.say_command` speak
+through it, and a test feeds any further audio itself.
 """
 
 from __future__ import annotations
@@ -18,8 +17,8 @@ import threading
 import time
 import wave
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
 from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, override
 
@@ -27,6 +26,7 @@ import numpy as np
 import pytest
 
 from desktop import settings as desktop_settings
+from desktop.speech.capture import AudioCapture, CaptureStatus
 from desktop.speech.microphone import MicrophoneService
 from desktop.wakeword.config import PhraseConfig, VoiceConfigError
 from desktop.wakeword.controller import VoiceControlError, VoiceController, VoiceRuntime
@@ -49,6 +49,11 @@ from tests.desktop.wakeword.voice_test_support import (
 SERVER = "http://pi.lan:9000"
 OKAY = "builtin/okay_nabu"
 HEY = "builtin/hey_nabu"
+
+COMMAND_END_SILENCE = 1.6
+"""Silence that ends a recording: 1 s after speech, 1.5 s without any."""
+HEARD_MARKERS = (600, 1200)
+"""Quiet levels (no speech) of the markers that show detection caught up; they alternate."""
 
 STATUS_KEYS = {
     "enabled",
@@ -121,32 +126,80 @@ class FedSoundDevice(FakeSoundDevice):
     """A microphone that delivers only the audio a test feeds.
 
     Reads wait while nothing is fed, so no silence runs ahead of the threads
-    that consume the audio: what detection and a recording hear depends on the
-    fed audio alone. ``release`` lets reads return paced silence again, so the
-    capture can stop.
+    that consume the audio. Once the running capture's stop event is set
+    (:meth:`capturing_until`), its reads return silence again so it can end;
+    a listener's captures run one after another. ``feeds`` counts the
+    :meth:`feed` calls.
     """
 
     def __init__(self) -> None:
         super().__init__(pace=0.0025)
         self._fed = threading.Condition()
-        self._released = False
+        self._capture_stop = threading.Event()
+        self.feeds = 0
+
+    def capturing_until(self, stop_event: threading.Event) -> None:
+        """Name the stop event of the capture that starts next."""
+        with self._fed:
+            self._capture_stop = stop_event
 
     @override
     def feed(self, *items: Any) -> None:
         super().feed(*items)
         with self._fed:
-            self._fed.notify_all()
-
-    def release(self) -> None:
-        with self._fed:
-            self._released = True
+            self.feeds += 1
             self._fed.notify_all()
 
     @override
     def read(self, stream: FakeInputStream, frames: int) -> tuple[np.ndarray, bool]:
         with self._fed:
-            self._fed.wait_for(lambda: self._released or not self.drained)
+            stop = self._capture_stop
+            while self.drained and not stop.is_set():
+                self._fed.wait(0.005)  # setting the stop event does not notify
         return super().read(stream, frames)
+
+
+class FedMicrophone(MicrophoneService):
+    """The rig's microphone service: it tells the fed microphone which capture runs."""
+
+    def __init__(self, *, sd: FedSoundDevice, **options: Any) -> None:
+        super().__init__(audio_backend=sd, **options)
+        self._sd = sd
+
+    @override
+    def create_capture(
+        self,
+        *,
+        on_status: Callable[[CaptureStatus], None],
+        stop_event: threading.Event,
+        echo_cancellation: bool = True,
+    ) -> AudioCapture:
+        self._sd.capturing_until(stop_event)
+        return super().create_capture(
+            on_status=on_status, stop_event=stop_event, echo_cancellation=echo_cancellation
+        )
+
+
+class CountingDetector(AmplitudeDetector):
+    """Speech detector double that counts the speech hops command recordings heard.
+
+    The command recorder judges 32 ms hops (``is_speech``); detection scores
+    whole chunks (``speech_probability``), which are not counted.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.speech_hops = 0
+
+    @override
+    def is_speech(self, pcm16: bytes) -> bool:
+        speech = super().is_speech(pcm16)
+        self.speech_hops += speech
+        return speech
+
+    @override
+    def speech_probability(self, detection_pcm16: bytes) -> float:
+        return 1.0 if super().is_speech(detection_pcm16) else 0.0
 
 
 @dataclass
@@ -154,15 +207,18 @@ class Rig:
     voice: VoiceController
     microphone: MicrophoneService
     sink: RecordingSink
-    sd: FakeSoundDevice
+    sd: FedSoundDevice
     server: FakeVoiceServer
     live: list[tuple[str, str]]
     engines: list[ScriptedEngine]
     phrases: list[Sequence[PhraseConfig]]
+    detectors: list[CountingDetector]
     caplog: pytest.LogCaptureFixture
     now: list[float] = field(default_factory=lambda: [1000.0])
     fail_engine_start: bool = False
     cues: RecordingCues = field(default_factory=RecordingCues)
+    _heard_feeds: int = field(default=0, init=False)
+    _markers: int = field(default=0, init=False)
 
     @property
     def engine(self) -> ScriptedEngine:
@@ -188,13 +244,61 @@ class Rig:
             message="the readiness check did not finish",
         )
 
-    def say_command(self, model_id: str = OKAY, *, speech: float = 0.4) -> dict[str, Any]:
-        """Speak a wake phrase and a short command; returns ``recording_started``."""
-        started = len([kind for kind in self.sink.kinds() if kind == "recording_started"])
+    def heard_speech(self) -> bool:
+        """Whether a command recording has heard speech."""
+        return any(detector.speech_hops for detector in self.detectors)
+
+    def wait_heard(self) -> None:
+        """Wait until detection has handled all audio fed so far.
+
+        Detection reads its own queue and may lag behind the capture: a quiet
+        marker fed last shows when it caught up (two whole chunks at the
+        marker's level; the level alternates, so the rest of the previous
+        marker cannot pass for it).
+        """
+        if self.sd.feeds == self._heard_feeds:
+            return
+        engine = self.engine
+        level = HEARD_MARKERS[self._markers % len(HEARD_MARKERS)]
+        self._markers += 1
+        scored = len(engine.peaks)
+        self.sd.feed(np.full(4 * DETECTION_CHUNK_SAMPLES, level, dtype=np.int16))
+
+        def at_level(peak: int) -> bool:
+            return abs(peak - level) < level // 5  # the echo stage resamples the marker
+
+        wait_until(
+            lambda: any(
+                at_level(first) and at_level(second)
+                for first, second in pairwise(engine.peaks[scored:])
+            ),
+            message="detection never reached the fed audio",
+        )
+        self._heard_feeds = self.sd.feeds
+
+    def wake(self, model_id: str = OKAY) -> None:
+        """Speak a wake phrase: the engine reports it on the chunk fed with it."""
+        self.wait_heard()
         self.engine.fire(model_id)
-        event = self.sink.wait_for_event("recording_started", started + 1)
-        if speech:
-            self.sd.feed(tone(speech, 16000))
+        self.sd.feed(np.zeros(DETECTION_CHUNK_SAMPLES, dtype=np.int16))
+
+    def say_wake_phrase(self, model_id: str = OKAY) -> dict[str, Any]:
+        """Speak a wake phrase that starts a recording; returns ``recording_started``.
+
+        The recording then hears only the audio the test feeds.
+        """
+        started = len([kind for kind in self.sink.kinds() if kind == "recording_started"])
+        self.wake(model_id)
+        return self.sink.wait_for_event("recording_started", started + 1)
+
+    def say_command(self, model_id: str = OKAY, *, speech: float = 0.4) -> dict[str, Any]:
+        """Speak a wake phrase and a short command; returns ``recording_started``.
+
+        The silence after the command ends the recording; ``speech=0`` says nothing.
+        """
+        event = self.say_wake_phrase(model_id)
+        command = [tone(speech, 16000)] if speech else []
+        self.sd.feed(*command, silence(COMMAND_END_SILENCE, 16000))
         return event
 
 
@@ -203,26 +307,6 @@ def uploaded_wav(content: bytes) -> tuple[int, np.ndarray]:
     with wave.open(io.BytesIO(content[content.index(b"RIFF") :]), "rb") as wav_file:
         frames = wav_file.readframes(wav_file.getnframes())
         return wav_file.getframerate(), np.frombuffer(frames, dtype=np.int16)
-
-
-@contextmanager
-def speaking(sd: FakeSoundDevice) -> Iterator[None]:
-    """Keep speech coming (short pauses only) until the block ends."""
-    done = threading.Event()
-
-    def speak() -> None:
-        while not done.is_set():
-            if sd.drained:
-                sd.feed(tone(0.08, 16000))
-            done.wait(0.02)
-
-    thread = threading.Thread(target=speak, name="test-speaker", daemon=True)
-    thread.start()
-    try:
-        yield
-    finally:
-        done.set()
-        thread.join(5)
 
 
 def _voice_threads(before: set[threading.Thread]) -> list[str]:
@@ -243,7 +327,6 @@ def voice_rig(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> Iterator[Call
         *,
         settings: dict[str, Any] | None = None,
         server: FakeVoiceServer | None = None,
-        sd: FakeSoundDevice | None = None,
         echo_factory: Callable[[], Any] | None = None,
         echo_stage_wait: float | None = None,
         mock: bool = False,
@@ -267,6 +350,7 @@ def voice_rig(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> Iterator[Call
         engines: list[ScriptedEngine] = []
         phrases_seen: list[Sequence[PhraseConfig]] = []
         live: list[tuple[str, str]] = []
+        detectors: list[CountingDetector] = []
         sink = RecordingSink()
         rig_ref: list[Rig] = []
 
@@ -281,19 +365,23 @@ def voice_rig(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> Iterator[Call
             engines.append(engine)
             return engine
 
+        def speech_detector_factory() -> CountingDetector:
+            detectors.append(CountingDetector())
+            return detectors[-1]
+
         server = server or FakeVoiceServer()
-        sd = sd or FakeSoundDevice(pace=0.0025)
+        sd = FedSoundDevice()
         now = [1000.0]
-        microphone = MicrophoneService(
+        microphone = FedMicrophone(
             settings_path=path,
-            audio_backend=sd,
+            sd=sd,
             echo_stage_factory=echo_factory or (lambda: None),
             echo_stage_wait=echo_stage_wait,
             reconnect_interval=0.05,
         )
         runtime = VoiceRuntime(
             engine_factory=engine_factory,
-            speech_detector_factory=AmplitudeDetector,
+            speech_detector_factory=speech_detector_factory,
             transport=server.transport(),
             join_timeout=5.0,
             mock_frame_seconds=0.005,
@@ -313,7 +401,18 @@ def voice_rig(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> Iterator[Call
             clock=(lambda: now[0]) if frozen_clock else time.monotonic,
         )
         rig = Rig(
-            voice, microphone, sink, sd, server, live, engines, phrases_seen, caplog, now, cues=cues
+            voice=voice,
+            microphone=microphone,
+            sink=sink,
+            sd=sd,
+            server=server,
+            live=live,
+            engines=engines,
+            phrases=phrases_seen,
+            detectors=detectors,
+            caplog=caplog,
+            now=now,
+            cues=cues,
         )
         rig_ref.append(rig)
         rigs.append(rig)
@@ -325,8 +424,6 @@ def voice_rig(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> Iterator[Call
     for rig in rigs:
         if rig.server.transcribe_gate is not None:
             rig.server.transcribe_gate.set()
-        if isinstance(rig.sd, FedSoundDevice):
-            rig.sd.release()
         rig.voice.close()
     assert _voice_threads(before) == [], "Voice threads survived close()"
 
@@ -409,12 +506,12 @@ def test_the_user_stop_ends_the_recording_and_sends_what_was_said(
 ) -> None:
     rig = voice_rig()
     rig.wait_ready()
-    rig.say_command(speech=0)
+    rig.say_wake_phrase()
 
-    with speaking(rig.sd):
-        time.sleep(0.3)  # the speech continues, so only the stop can end the recording
-        status = rig.voice.stop_recording()
-        rig.sink.wait_for_event("sent")
+    rig.sd.feed(tone(0.4, 16000))  # no silence follows, so only the stop can end the recording
+    wait_until(rig.heard_speech)
+    status = rig.voice.stop_recording()
+    rig.sink.wait_for_event("sent")
 
     assert status["state"] == "listening"
     _, samples = uploaded_wav(rig.server.uploads[0])
@@ -425,10 +522,10 @@ def test_the_upload_budget_ends_a_long_recording(voice_rig: Callable[..., Rig]) 
     budget = 32000  # one second of 16 kHz audio
     rig = voice_rig(server=FakeVoiceServer(upload_limit=int(budget / 0.9) + 44 + 1))
     rig.wait_ready()
-    rig.say_command(speech=0)
+    rig.say_wake_phrase()
 
-    with speaking(rig.sd):
-        rig.sink.wait_for_event("sent")
+    rig.sd.feed(tone(2.0, 16000))  # speech without a pause, longer than the budget
+    rig.sink.wait_for_event("sent")
 
     _, samples = uploaded_wav(rig.server.uploads[0])
     assert budget - 1280 * 3 < samples.nbytes <= budget
@@ -440,7 +537,7 @@ def test_a_capture_gap_discards_the_recording_and_listening_continues(
     rig = voice_rig()
     rig.wait_ready()
 
-    rig.say_command(speech=0)
+    rig.say_wake_phrase()
     rig.sd.feed(tone(0.2, 16000), Overflow(), tone(0.2, 16000))
     failed = rig.sink.wait_for_event("command_failed")
 
@@ -449,13 +546,6 @@ def test_a_capture_gap_discards_the_recording_and_listening_continues(
     assert rig.sink.kinds()[-2:] == ["recording_ended", "command_failed"]
     assert rig.server.uploads == []
     assert rig.state() == ("listening", None)
-
-    # Detection may still hold audio from before the gap: a wake phrase matched
-    # there starts a recording that the same gap interrupts. Wait until detection
-    # reached a quiet marker fed after the gap.
-    marker = 1234
-    rig.sd.feed(np.full(1600, marker, dtype=np.int16))
-    wait_until(lambda: marker in rig.engine.peaks, message="detection never passed the gap")
     rig.say_command()
     rig.sink.wait_for_event("sent")
 
@@ -465,7 +555,7 @@ def test_a_failing_command_keeps_listening(voice_rig: Callable[..., Rig]) -> Non
     rig.wait_ready()
 
     status = rig.voice.status()
-    rig.engine.fire(OKAY)
+    rig.wake()
     failed = rig.sink.wait_for_event("command_failed")
 
     assert [phrase["problem"] for phrase in status["phrases"]] == [
@@ -508,7 +598,7 @@ def test_speech_to_text_problems_block_command_phrases_only(
     rig.wait_ready()
 
     phrases = rig.voice.status()["phrases"]
-    rig.engine.fire(OKAY)
+    rig.wake()
     failed = rig.sink.wait_for_event("command_failed")
 
     assert {phrase["model_id"]: phrase["problem"] for phrase in phrases} == {
@@ -524,7 +614,7 @@ def test_a_phrase_without_an_agent_reports_the_missing_agent(
     rig = voice_rig(settings={"server_profiles": {}})
     rig.wait_state("listening")
 
-    rig.engine.fire(OKAY)
+    rig.wake()
     failed = rig.sink.wait_for_event("command_failed")
 
     assert failed["error_code"] == "missing_target_agent"
@@ -537,20 +627,12 @@ def test_detection_continues_while_a_command_is_transcribed(
     voice_rig: Callable[..., Rig],
 ) -> None:
     gate = threading.Event()
-    sd = FedSoundDevice()
-    rig = voice_rig(server=FakeVoiceServer(transcribe_gate=gate), sd=sd)
+    rig = voice_rig(server=FakeVoiceServer(transcribe_gate=gate))
     rig.wait_ready()
-    engine = rig.engine
-    # The chunk that completes the wake phrase, the command, then the silence that ends it.
-    command = np.concatenate((silence(0.08, 16000), tone(0.4, 16000), silence(1.2, 16000)))
 
-    engine.fire(OKAY)
-    sd.feed(command)
+    rig.say_command()
     wait_until(rig.server.transcribing.is_set)
-    # The second wake phrase follows once detection has heard all of the first command.
-    wait_until(lambda: len(engine.chunks) >= len(command) // DETECTION_CHUNK_SAMPLES)
-    engine.fire(OKAY)
-    sd.feed(command)
+    rig.say_command()
     wait_until(lambda: len(rig.voice.status()["commands"]) == 2)
     gate.set()
 
@@ -581,7 +663,7 @@ def test_a_live_phrase_asks_the_page_for_live_voice(
     rig.wait_ready()
     rig.voice.update_config({"phrase_actions": {HEY: action}})
 
-    rig.engine.fire(HEY)
+    rig.wake(HEY)
     rig.sink.wait_for_event("live_requested")
 
     assert rig.live == [(mode, "wakeword")]
@@ -606,16 +688,14 @@ def test_during_a_recording_command_phrases_are_ignored_and_live_phrases_still_w
         }
     )
     rig.wait_ready()
-    rig.say_command(speech=0)
+    rig.say_wake_phrase()
 
-    with speaking(rig.sd):
-        engine = rig.engine
-        engine.fire(OKAY)
-        wait_until(lambda: engine.pending == 0)
-        engine.fire(HEY)
-        rig.sink.wait_for_event("live_requested")
-        rig.voice.stop_recording()
-        rig.sink.wait_for_event("sent")
+    rig.wake(OKAY)
+    rig.sd.feed(tone(0.4, 16000))
+    rig.wake(HEY)
+    rig.sink.wait_for_event("live_requested")
+    rig.sd.feed(silence(COMMAND_END_SILENCE, 16000))
+    rig.sink.wait_for_event("sent")
 
     assert rig.sink.kinds() == [
         "detected",
@@ -634,11 +714,11 @@ def test_paused_wake_phrases_are_ignored_until_resumed(voice_rig: Callable[..., 
     rig.voice.update_config({"phrase_actions": {HEY: {"type": "live_voice", "mode": "start"}}})
 
     rig.voice.pause_wake_phrases(True)
-    rig.engine.fire(OKAY)
-    rig.engine.fire(HEY)
-    wait_until(lambda: rig.engine.pending == 0)
+    rig.wake(OKAY)
+    rig.wake(HEY)
+    rig.wait_heard()
     rig.voice.pause_wake_phrases(False)
-    rig.engine.fire(HEY)
+    rig.wake(HEY)
     rig.sink.wait_for_event("live_requested")
 
     assert rig.sink.kinds() == ["detected", "live_requested"]
@@ -667,12 +747,11 @@ def test_a_config_change_during_a_recording_restarts_the_listener_and_drops_it(
 ) -> None:
     rig = voice_rig()
     rig.wait_ready()
-    rig.say_command(speech=0)
+    rig.say_wake_phrase()
 
-    with speaking(rig.sd):
-        rig.voice.update_config({"model_sensitivities": {OKAY: 0.7}})
-        wait_until(lambda: len(rig.engines) == 2)
-        rig.wait_state("listening")
+    rig.voice.update_config({"model_sensitivities": {OKAY: 0.7}})
+    wait_until(lambda: len(rig.engines) == 2)
+    rig.wait_state("listening")
 
     assert rig.sink.kinds() == ["detected", "recording_started", "recording_ended"]
     assert rig.phrases[-1][0] == PhraseConfig(OKAY, 0.7)
@@ -886,14 +965,13 @@ def test_calibration_suppresses_commands_and_throttles_its_status_pushes(
         rig.voice.restart_calibration()
     status = rig.voice.start_calibration(OKAY)
     pushes = len(rig.sink.statuses)
-    engine.fire(OKAY)
-    chunks = len(engine.chunks)
-    wait_until(lambda: len(engine.chunks) >= chunks + 10)
+    rig.wake()
+    rig.sd.feed(silence(0.8, 16000))  # ten more score frames
+    rig.wait_heard()
     frozen_pushes = len(rig.sink.statuses) - pushes
     rig.now[0] += 0.2
-    wait_until(lambda: len(rig.sink.statuses) > pushes)
-    chunks = len(engine.chunks)
-    wait_until(lambda: len(engine.chunks) >= chunks + 10)
+    rig.sd.feed(silence(0.8, 16000))
+    rig.wait_heard()
 
     assert inactive.value.error_code == "calibration_inactive"
     assert status["calibration"]["model_id"] == OKAY
@@ -937,6 +1015,7 @@ def test_the_echo_stage_is_created_once_and_its_state_is_published(
     assert rig.voice.status()["echo_cancellation"] == {"enabled": True, "state": "active"}
 
     stages[0].state = "no_reference"
+    rig.sd.feed(silence(0.04, 16000))  # the capture publishes the echo state after a block
     wait_until(lambda: rig.voice.status()["echo_cancellation"]["state"] == "no_reference")
     rig.voice.retry()
     wait_until(lambda: len(rig.engines) == 2)
@@ -1002,7 +1081,13 @@ def test_a_slow_echo_stage_does_not_delay_listening(voice_rig: Callable[..., Rig
         listening = rig.wait_state("listening")
     finally:
         ready.set()
-    wait_until(lambda: rig.voice.status()["echo_cancellation"]["state"] == "active")
+
+    def attached() -> bool:
+        if rig.sd.drained:
+            rig.sd.feed(silence(0.04, 16000))  # the capture attaches a ready stage between blocks
+        return bool(rig.voice.status()["echo_cancellation"]["state"] == "active")
+
+    wait_until(attached)
     rig.wait_ready()
     rig.say_command()
     rig.sink.wait_for_event("sent")
