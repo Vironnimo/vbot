@@ -329,6 +329,14 @@ describe('ChatComposer suggestions', () => {
 
       await chooseSuggestion('file');
       expect(composerInput().value).toBe('@"my notes/plan.md" ');
+
+      // A path leaving the listing's root lists no folder, only the index.
+      onListFiles.mockClear();
+      for (const typed of ['@../rea', 'a @/etc/rea', 'ab @"C:\\x\\rea']) {
+        typeInComposer(typed);
+        await settle(2);
+      }
+      expect(onListFiles.mock.calls).toEqual([[], [], []]);
     });
 
     it('sends picked paths with spaces or symbols as file mentions', async () => {

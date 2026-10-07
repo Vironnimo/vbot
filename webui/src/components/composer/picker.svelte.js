@@ -105,7 +105,8 @@ export function createComposerPicker(context) {
     }),
   );
 
-  // The directory the @-query is in ('' = the listing's root), or null.
+  // The directory the @-query is in ('' = the listing's root), or null when
+  // there is no @-query or its path leaves the root (only the index answers).
   let mentionDirectory = $derived(
     triggerContext?.marker === '@'
       ? mentionQueryParts(autocompleteQuery).directory
@@ -119,22 +120,23 @@ export function createComposerPicker(context) {
   );
 
   let fileRows = $derived.by(() =>
-    mentionDirectory === null
-      ? []
-      : mentionCandidates({
+    triggerContext?.marker === '@'
+      ? mentionCandidates({
           index: mentionIndex,
-          directory: mentionDirectory,
+          directory: mentionDirectory ?? '',
           entries: mentionListing?.entries ?? [],
           query: autocompleteQuery,
           limit: MAX_FILE_MATCHES,
-        }),
+        })
+      : [],
   );
 
   let fileRowsLoading = $derived(
-    mentionDirectory !== null &&
+    triggerContext?.marker === '@' &&
       (fileListLoading ||
-        Boolean(mentionListing?.loading) ||
-        pendingEntriesDirectory === mentionDirectory),
+        (mentionDirectory !== null &&
+          (Boolean(mentionListing?.loading) ||
+            pendingEntriesDirectory === mentionDirectory))),
   );
 
   let fileRowsTruncated = $derived(
@@ -351,9 +353,9 @@ export function createComposerPicker(context) {
 
   // Lists a directory's direct entries once per picker open: at once when the
   // picker opens or a folder is chosen, otherwise after typing pauses (a
-  // directory typed past is never listed).
+  // directory typed past is never listed). A null directory lists nothing.
   function requestEntries(directory, { immediate = false } = {}) {
-    if (listingOf(directoryEntries, directory)) {
+    if (directory === null || listingOf(directoryEntries, directory)) {
       cancelPendingEntries();
       return;
     }
@@ -470,7 +472,8 @@ export function createComposerPicker(context) {
     return { marker: 'model', start: 6, end: boundedCursor };
   };
 
-  // The directory an @-trigger's text is in ('' = the listing's root).
+  // The directory an @-trigger's text is in ('' = the listing's root), or
+  // null when its path leaves the root.
   const triggerDirectory = (trigger) =>
     mentionQueryParts(
       typeof trigger.query === 'string'

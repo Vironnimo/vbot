@@ -7,6 +7,7 @@ import {
   formatMentionToken,
   isMentionTokenChar,
   mentionCandidates,
+  mentionQueryParts,
   resolveMentionFiles,
 } from '../fileMentions.js';
 
@@ -97,7 +98,18 @@ describe('resolveMentionFiles', () => {
 
     await expect(
       resolveMentionFiles(
-        ['src/app.py', 'build/out.log.', '.env', 'build/cache', 'missing/x'],
+        [
+          'src/app.py',
+          'build/out.log.',
+          '.env',
+          'build/cache',
+          'missing/x',
+          // Folders outside the root are never listed.
+          '../secret.txt',
+          '/etc/hosts',
+          'C:\\x\\y.txt',
+          'src/../build/out.log',
+        ],
         { files, listEntries },
       ),
     ).resolves.toEqual(['src/app.py', 'build/out.log', '.env']);
@@ -245,6 +257,18 @@ describe('mentionCandidates', () => {
       { path: 'src/app.py', kind: 'file', ignored: false },
       { path: 'src/api.js', kind: 'file', ignored: false },
     ]);
+  });
+
+  it.each([
+    ['src/a', { directory: 'src', name: 'a' }],
+    ['src\\lib\\x', { directory: 'src/lib', name: 'x' }],
+    ['rea', { directory: '', name: 'rea' }],
+    ['../rea', { directory: null, name: 'rea' }],
+    ['src/../rea', { directory: null, name: 'rea' }],
+    ['/etc/ho', { directory: null, name: 'ho' }],
+    ['C:\\x', { directory: null, name: 'x' }],
+  ])('reads the typed folder of %j as %j', (query, expected) => {
+    expect(mentionQueryParts(query)).toEqual(expected);
   });
 
   it('caps the merged rows', () => {

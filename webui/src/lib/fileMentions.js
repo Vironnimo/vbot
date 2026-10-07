@@ -91,6 +91,12 @@ function mentionVariants(token) {
   return [...new Set([token, normalized, trimmed])].filter(Boolean);
 }
 
+// A typed path that is absolute (`/x`, `C:/x`) or has a `..` segment would
+// leave the listing's root, so its folder is never listed.
+function leavesRoot(path) {
+  return /^(?:\/|[A-Za-z]:)/.test(path) || path.split('/').includes('..');
+}
+
 function splitMentionPath(path) {
   const index = path.lastIndexOf('/');
   return index < 0
@@ -104,7 +110,7 @@ function splitMentionPath(path) {
  * its directory do (`listEntries(directory)`), so files reached by
  * navigation, ignored ones included, count too. Everything else (pasted code
  * decorators, handles) is silently not a mention; a directory that cannot be
- * listed confirms nothing.
+ * listed confirms nothing, and one outside the root is never listed.
  */
 export async function resolveMentionFiles(
   tokens,
@@ -125,6 +131,7 @@ export async function resolveMentionFiles(
       for (const path of mentionVariants(token)) {
         const { directory } = splitMentionPath(path);
         if (
+          !leavesRoot(path) &&
           !listedFiles.has(directory) &&
           listedFiles.size < MAX_CONFIRMED_DIRECTORIES
         ) {
@@ -167,16 +174,17 @@ export async function resolveMentionFiles(
   return mentions;
 }
 
-/** The typed directory (posix, '' = the root) and the name typed in it. */
+/**
+ * The typed directory (posix, '' = the root) and the name typed in it. The
+ * directory is null when the typed path would leave the root (absolute, or
+ * with a `..` segment): the picker then lists no folder.
+ */
 export function mentionQueryParts(query) {
   const normalized = String(query ?? '').replaceAll('\\', '/');
   const index = normalized.lastIndexOf('/');
-  return index < 0
-    ? { directory: '', name: normalized }
-    : {
-        directory: normalized.slice(0, index).replace(/^\/+/, ''),
-        name: normalized.slice(index + 1),
-      };
+  let directory = index < 0 ? '' : normalized.slice(0, index);
+  if (leavesRoot(normalized)) directory = null;
+  return { directory, name: normalized.slice(index + 1) };
 }
 
 /**
