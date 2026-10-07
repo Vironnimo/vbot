@@ -17,7 +17,12 @@ from typing import Any
 
 from core.model_tasks.live import live_failure, live_success
 from core.tools.call_syntax import spelling
-from server.live._brief import TOOL_READ, TOOL_SEND_MESSAGE, TOOL_START_AGENT_SESSION, TOOL_STOP
+from core.tools.live import (
+    TOOL_READ_OUTPUT,
+    TOOL_SEND_MESSAGE,
+    TOOL_START_AGENT_SESSION,
+    TOOL_STOP,
+)
 from server.live._context import (
     UNCERTAIN_DELIVERY,
     JsonObject,
@@ -318,10 +323,10 @@ class LiveSessions:
         return live_success(f"Sent to {ref} ({name}). An update follows when it finishes.")
 
     async def read(self, arguments: JsonObject, catalog: LiveCatalog) -> JsonObject:
-        target = await self._conversation_target(arguments, TOOL_READ, catalog)
+        target = await self._conversation_target(arguments, TOOL_READ_OUTPUT, catalog)
         if target.terminal is not None:
             return await self._terminals.read(target.terminal)
-        key = await self._session_of(target, TOOL_READ, catalog)
+        key = await self._session_of(target, TOOL_READ_OUTPUT, catalog)
         name = await catalog.agent_name(key.address)
         ref = self._refs.session(key, session_title(name))
         history = await self._ctx.call(
@@ -395,11 +400,11 @@ class LiveSessions:
         candidates = [item for item in sessions if clear(item)]
         if len(candidates) == 1:
             return session_key(candidates[0])
-        if not candidates and tool == TOOL_READ and sessions:
+        if not candidates and tool == TOOL_READ_OUTPUT and sessions:
             return session_key(sessions[0])
         if not candidates:
             what = "working" if tool == TOOL_STOP else "running or recent"
-            skipped = bool(background) if tool == TOOL_READ else any(map(clear, background))
+            skipped = bool(background) if tool == TOOL_READ_OUTPUT else any(map(clear, background))
             note = (
                 f" Its {_BACKGROUND_SESSION}s (started by a schedule or another chat app) are "
                 "not chosen by its name."

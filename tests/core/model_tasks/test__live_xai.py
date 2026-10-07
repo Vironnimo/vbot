@@ -18,11 +18,11 @@ from core.model_tasks._live_wire import (
     WireAudio,
     WireCaption,
     WireClosed,
-    WireDelegation,
     WirePlaybackClear,
     WireProblem,
     WireSendError,
     WireStarted,
+    WireToolCall,
     WireUsage,
     relay_media,
 )
@@ -76,12 +76,9 @@ class Clock:
         return self.now
 
 
-def _session(*, direct: bool = False, clock: Clock | None = None) -> XaiSession:
+def _session(*, clock: Clock | None = None) -> XaiSession:
     session = XaiSession(
-        tools=TOOLS if direct else [REQUEST_TOOL],
-        direct_tools=direct,
-        clock=clock or Clock(),
-        wall_clock=lambda: 1000.0,
+        tools=[*TOOLS, REQUEST_TOOL], clock=clock or Clock(), wall_clock=lambda: 1000.0
     )
     session.receive({"type": "session.updated", "session": {}})
     return session
@@ -141,8 +138,8 @@ def _decoded(output: str) -> Any:
 # -- session setup -----------------------------------------------------------
 
 
-def test_session_update_configures_voice_vad_audio_transcription_and_delegation_tool():
-    update = XaiSession(tools=[REQUEST_TOOL], direct_tools=False).configure(INSTRUCTIONS, "eve")
+def test_session_update_configures_voice_vad_audio_transcription_and_flat_tools():
+    update = XaiSession(tools=[*TOOLS, REQUEST_TOOL]).configure(INSTRUCTIONS, "eve")
 
     assert update == {
         "type": "session.update",
@@ -162,28 +159,15 @@ def test_session_update_configures_voice_vad_audio_transcription_and_delegation_
                 },
                 "output": {"format": {"type": "audio/pcm", "rate": 24000}},
             },
-            "tools": [{"type": "function", **REQUEST_TOOL}],
+            "tools": [{"type": "function", **tool} for tool in [*TOOLS, REQUEST_TOOL]],
         },
     }
-
-
-def test_direct_tools_mode_registers_the_app_tools_in_flat_shape():
-    update = XaiSession(tools=TOOLS, direct_tools=True).configure(INSTRUCTIONS, None)
-
-    assert "voice" not in update["session"]
-    assert update["session"]["tools"] == [{"type": "function", **tool} for tool in TOOLS]
     assert all("strict" not in tool for tool in update["session"]["tools"])
-
-
-def test_a_delegating_session_offers_exactly_one_tool():
-    with pytest.raises(ValueError):
-        XaiSession(tools=TOOLS, direct_tools=False)
+    assert "voice" not in XaiSession(tools=TOOLS).configure(INSTRUCTIONS, None)["session"]
 
 
 def test_session_starts_on_session_updated_and_drops_audio_before():
-    session = XaiSession(
-        tools=[REQUEST_TOOL], direct_tools=False, clock=Clock(), wall_clock=lambda: 1000.0
-    )
+    session = XaiSession(tools=[REQUEST_TOOL], clock=Clock(), wall_clock=lambda: 1000.0)
 
     assert session.audio(b"\x01\x00") == []
     step = session.receive({"type": "session.updated", "session": {}})
@@ -327,10 +311,10 @@ def test_an_announcement_item_does_not_finish_the_open_user_turn():
     ]
 
 
-# -- delegation and Tool calls -------------------------------------------------
+# -- Tool calls -------------------------------------------------
 
 
-def test_completed_calls_delegate_once_and_results_return_as_tool_output():
+def test_completed_calls_run_once_and_results_return_as_tool_output():
     session = _session()
     session.receive(_created("r1"))
     session.receive(_call("r1", "c1"))
@@ -360,10 +344,12 @@ def test_completed_calls_delegate_once_and_results_return_as_tool_output():
         )
     )
 
-    assert done.events == [WireDelegation(delegation_id="c1", request="Open the terminals")]
+    assert done.events == [
+        WireToolCall(call_id="c1", name="vbot_request", arguments={"request": "Open the terminals"})
+    ]
     assert _creates(done.commands) == []
     commands = session.deliver("c1", "The terminals view is open.")
-    assert _outputs(commands) == {"c1": {"result": "The terminals view is open."}}
+    assert _outputs(commands) == {"c1": "The terminals view is open."}
     assert _types(commands) == ["conversation.item.create", "response.create"]
     assert session.deliver("c1", "again") == []
 
@@ -394,53 +380,22 @@ def test_calls_of_an_interrupted_response_never_run_and_get_an_output(events, st
     assert session.deliver("c1", "late") == []
 
 
-@pytest.mark.parametrize(
-    ("name", "arguments", "code"),
-    [
-        ("web_search", json.dumps({"query": "x"}), "unknown_tool"),
-        ("vbot_app", json.dumps({"action": "context"}), "unknown_tool"),
-        ("vbot_request", json.dumps({"request": "  "}), "invalid_arguments"),
-        ("vbot_request", "not json", "invalid_arguments"),
-    ],
-)
-def test_unknown_or_malformed_delegation_calls_are_answered_without_running(name, arguments, code):
+def test_every_call_goes_to_the_call_as_written_and_returns_its_text():
     session = _session()
-    session.receive(_created("r1"))
-    session.receive(_call("r1", "c1", name=name, arguments=arguments))
-    done = session.receive(_done("r1"))
-
-    assert done.events == []
-    assert _outputs(done.commands)["c1"].startswith(f"Error ({code}): ")
-    assert _types(done.commands)[-1] == "response.create"
-
-
-def test_a_delegation_call_in_a_wrapper_spelling_is_accepted():
-    session = _session()
-    session.receive(_created("r1"))
-    session.receive(
-        _call("r1", "c1", name="functions.vbot_request", arguments=json.dumps({"request": "Hi"}))
-    )
-    done = session.receive(_done("r1"))
-
-    assert done.events == [WireDelegation(delegation_id="c1", request="Hi")]
-
-
-def test_direct_tools_mode_hands_every_call_to_the_call_and_returns_its_text():
-    session = _session(direct=True)
     session.receive(_created("r1"))
     session.receive(_call("r1", "c1", name="overview", arguments=json.dumps({})))
     session.receive(_call("r1", "c2", name="status", arguments="{broken"))
-    session.receive(_call("r1", "c3", name="vbot_request"))
+    session.receive(_call("r1", "c3", name="functions.vbot_request"))
     done = session.receive(_done("r1"))
 
     # The call prepares names and arguments; undecodable text stays as it came.
     assert [(event.call_id, event.name, event.arguments) for event in done.events] == [
         ("c1", "overview", {}),
         ("c2", "status", "{broken"),
-        ("c3", "vbot_request", {"request": "Open the terminals"}),
+        ("c3", "functions.vbot_request", {"request": "Open the terminals"}),
     ]
     session.deliver("c2", "Error (invalid_arguments): The arguments are not one JSON object.")
-    session.deliver("c3", "Error (unknown_tool): There is no Tool called vbot_request.")
+    session.deliver("c3", "Error (unknown_tool): There is no Tool called status.")
     commands = session.deliver("c1", "Agents: Main, Coder.")
     assert _outputs(commands) == {"c1": "Agents: Main, Coder."}
 
@@ -710,7 +665,7 @@ def test_max_duration_closes_the_socket_and_confirms_the_close():
 
 
 def test_a_rejected_setup_is_a_problem_that_ends_the_call():
-    session = XaiSession(tools=[REQUEST_TOOL], direct_tools=False)
+    session = XaiSession(tools=[REQUEST_TOOL])
     step = session.receive(
         {"type": "error", "error": {"type": "invalid_request_error", "message": "bad voice"}}
     )
@@ -852,7 +807,6 @@ async def _open(connect: FakeConnect, token_getter: Any = None, **kwargs: Any) -
         instructions=kwargs.pop("instructions", INSTRUCTIONS),
         voice=kwargs.pop("voice", "eve"),
         tools=kwargs.pop("tools", [REQUEST_TOOL]),
-        direct_tools=kwargs.pop("direct_tools", False),
         connect=connect,
         **kwargs,
     )
@@ -863,7 +817,7 @@ async def test_open_joins_the_pinned_model_with_connection_auth_and_configures_t
     socket = FakeSocket()
     connect = FakeConnect(socket)
 
-    wire = await _open(connect, direct_tools=True, tools=TOOLS)
+    wire = await _open(connect, tools=TOOLS)
 
     url, options = connect.calls[0]
     assert url == "wss://api.x.ai/v1/realtime?model=grok-voice-think-fast-2.0"
@@ -930,7 +884,7 @@ async def test_socket_events_are_normalized_and_the_wire_answers_on_the_socket()
     socket.push(_call("r1", "c1"))
     socket.push(_done("r1"))
     async with asyncio.timeout(2):
-        while not any(isinstance(event, WireDelegation) for event in events):
+        while not any(isinstance(event, WireToolCall) for event in events):
             await asyncio.sleep(0.005)
     await wire.send_audio(b"\x01\x00")
     await wire.deliver_result("c1", "Done.")
@@ -939,7 +893,9 @@ async def test_socket_events_are_normalized_and_the_wire_answers_on_the_socket()
         await reader
 
     assert isinstance(events[0], WireStarted)
-    assert events[1] == WireDelegation(delegation_id="c1", request="Open the terminals")
+    assert events[1] == WireToolCall(
+        call_id="c1", name="vbot_request", arguments={"request": "Open the terminals"}
+    )
     assert events[-1] == WireClosed(reason=None, usage=None, confirmed=False)
     assert _types(socket.sent[1:]) == [
         "input_audio_buffer.append",

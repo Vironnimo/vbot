@@ -179,7 +179,7 @@
                 ],
                 "default": "eve"
               },
-              "backend_model": { "type": "model", "default": "", "allow_none": true }
+              "backend": { "type": "enum", "values": ["none", "vbot"], "default": "none" }
             }
           }
         }

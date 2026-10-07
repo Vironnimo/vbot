@@ -1,8 +1,9 @@
 """The Live Tools a voice call runs, acting as the app's user.
 
-:meth:`LiveToolExecutor.run` takes a Tool call as a Model made it, prepares it
-into one canonical, validated call (``_arguments.py``), runs it once, and
-returns a Tool Result envelope whose content is short plain text. Live starts
+:meth:`LiveToolExecutor.run` takes a Live Tool call with the arguments as a
+Model wrote them, prepares it into one canonical, validated call
+(``_arguments.py``), runs it once, and returns a Tool Result envelope whose
+content is short plain text. Live starts
 ordinary top-level Sessions and Terminals, never subagents, and reads or
 changes the app only through vBot's canonical RPCs and the owner's UI requests.
 A failure says what was wrong and names the next valid call; an effect is
@@ -27,22 +28,22 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
-from core.model_tasks.live import LiveToolRun, live_failure, live_result_text, live_success
-from core.utils.paths import model_path
-from server.live._arguments import run_live_call
-from server.live._brief import (
+from core.model_tasks.live import live_failure, live_result_text, live_success
+from core.tools.live import (
     LIVE_READ_ONLY_TOOLS,
     TARGET_VIEWS,
     TOOL_END_CALL,
+    TOOL_MANAGE_TERMINALS,
     TOOL_OPEN,
     TOOL_OVERVIEW,
-    TOOL_READ,
+    TOOL_READ_OUTPUT,
     TOOL_SEND_MESSAGE,
     TOOL_START_AGENT_SESSION,
     TOOL_START_CODING_TERMINAL,
     TOOL_STOP,
-    TOOL_TERMINAL,
 )
+from core.utils.paths import model_path
+from server.live._arguments import PreparedLiveCall, prepare_live_call
 from server.live._context import (
     NAVIGATION_NOT_APPLIED,
     OPERATION_FAILED,
@@ -57,7 +58,6 @@ from server.live._context import (
     UiRequester,
     text_field,
 )
-from server.live._memory import LiveMemory
 from server.live._programs import CODING_PROGRAMS
 from server.live._sessions import LIST_CAP, LiveSessions
 from server.live._targets import (
@@ -96,7 +96,6 @@ _OPEN_VIEW_KINDS = {
 }
 
 Handler = Callable[[JsonObject, LiveCatalog], Awaitable[JsonObject]]
-Recorder = Callable[[JsonObject], None]
 
 
 class LiveToolExecutor:
@@ -108,11 +107,9 @@ class LiveToolExecutor:
     ``is_active`` turns false once the call stops or is replaced; multi-step
     operations check it before each further effect. ``started_at`` bounds the
     recently finished Sessions ``overview`` shows (``_sessions.py``). ``end_call``
-    ends the voice call after a short goodbye. ``memory`` holds the refs and assignments
-    shared with earlier and later calls (a fresh one by default). ``report``,
-    when given, receives one ``action`` update per executed Tool call for the
-    app (see :func:`action_update`). ``record``, when given, receives one
-    record per Tool call, labeled with ``mode``.
+    ends the voice call after a short goodbye. ``report``, when given, receives
+    one ``action`` update per executed Tool call for the app (see
+    :func:`action_update`).
     """
 
     def __init__(
@@ -124,22 +121,16 @@ class LiveToolExecutor:
         is_active: Callable[[], bool],
         started_at: datetime,
         end_call: Callable[[], None],
-        memory: LiveMemory | None = None,
         report: Callable[[JsonObject], None] | None = None,
-        record: Recorder | None = None,
         timings: TerminalTimings | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._ctx = LiveContext(rpc=rpc, ui=ui, app_context=app_context, is_active=is_active)
-        self._memory = memory or LiveMemory(clock=clock)
-        self._refs = self._memory.refs
+        self._refs = LiveRefs()
         self._teams = TeamCache(clock=clock)
         self._end_call = end_call
         self._report = report
-        self._record = record
-        self._clock = clock
-        self.mode = "delegated"
         self._terminals = LiveTerminals(
             self._ctx, self._refs, timings=timings or TerminalTimings(), sleep=sleep, clock=clock
         )
@@ -149,34 +140,27 @@ class LiveToolExecutor:
             TOOL_START_AGENT_SESSION: self._sessions.start,
             TOOL_START_CODING_TERMINAL: self._start_coding_terminal,
             TOOL_SEND_MESSAGE: self._sessions.send_message,
-            TOOL_READ: self._sessions.read,
+            TOOL_READ_OUTPUT: self._sessions.read,
             TOOL_STOP: self._sessions.stop,
             TOOL_OPEN: self._open,
-            TOOL_TERMINAL: self._terminal,
+            TOOL_MANAGE_TERMINALS: self._terminal,
             TOOL_END_CALL: self._end,
         }
 
     def session_ref(self, address: str, session_id: str) -> str:
-        """The Session's ref, assigned on first mention and kept across calls."""
+        """The Session's ref, assigned on first mention and kept for the call."""
         return self._refs.session(SessionKey(address=address, session_id=session_id))
 
     def known_refs(self) -> str:
         """The refs named so far, one labeled line each, most recent last."""
         return self._refs.legend()
 
-    async def run(
-        self, name: Any, arguments: Any, *, rejection: JsonObject | None = None
-    ) -> LiveToolRun:
-        """Prepare and run one Tool call as a Model made it; never raises for failures."""
-        return await run_live_call(
-            name,
-            arguments,
-            execute=self.execute,
-            rejection=rejection,
-            record=self._record,
-            mode=self.mode,
-            clock=self._clock,
-        )
+    async def run(self, name: str, arguments: Any) -> JsonObject:
+        """Prepare and run one Live Tool call as a Model wrote it; never raises for failures."""
+        prepared = prepare_live_call(name, arguments)
+        if not isinstance(prepared, PreparedLiveCall):
+            return prepared
+        return await self.execute(prepared.name, dict(prepared.arguments))
 
     async def current_state(self) -> str:
         """The full overview as text; it is not reported or noted as an assignment."""
@@ -189,10 +173,8 @@ class LiveToolExecutor:
     async def execute(self, name: str, arguments: JsonObject) -> JsonObject:
         """Run one canonical Live Tool call and return its Tool Result envelope."""
         result = await self._execute(name, arguments)
-        if name in self._handlers:
-            self._memory.note(name, arguments, result)
-            if self._report is not None:
-                self._report(action_update(name, arguments, result, self._refs))
+        if name in self._handlers and self._report is not None:
+            self._report(action_update(name, arguments, result, self._refs))
         return result
 
     async def _execute(self, name: str, arguments: JsonObject) -> JsonObject:

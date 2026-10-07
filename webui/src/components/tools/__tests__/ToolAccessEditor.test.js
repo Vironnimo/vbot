@@ -305,6 +305,48 @@ describe('ToolAccessEditor', () => {
     },
   );
 
+  const liveCallTools = ['send_message', 'end_call'].map((name) => ({
+    name,
+    family: 'live',
+    activation: 'configurable',
+    requires_opt_in: true,
+    constraints: ['live_call'],
+    ready: true,
+  }));
+
+  it.each([
+    // Only the Live voice Agents list the Live call Tools; a stored one is
+    // not a missing Tool elsewhere.
+    [false, ['read', 'session_read', 'memory'], ['send_message', 'end_call']],
+    // Their policy is their whole Tool set: no automatic Tool is listed.
+    [true, ['read', 'send_message', 'end_call'], ['session_read', 'memory']],
+  ])(
+    'lists the Tools its Agent can use (liveCall: %s)',
+    (liveCall, shown, hidden) => {
+      mountedComponent = mount(ToolAccessEditor, {
+        target: document.body,
+        props: {
+          value: {
+            mode: 'selected',
+            allowed: ['read', 'send_message'],
+            granted: ['send_message'],
+          },
+          tools: [...tools, ...liveCallTools],
+          liveCall,
+        },
+      });
+      flushSync();
+      const names = [...document.querySelectorAll('[data-tool-name]')].map(
+        (tool) => tool.dataset.toolName,
+      );
+      expect(names).toEqual(expect.arrayContaining(shown));
+      for (const name of hidden) expect(names).not.toContain(name);
+      expect(
+        document.body.textContent.includes(t('toolAccess.family.live')),
+      ).toBe(liveCall);
+    },
+  );
+
   it('filters live by name, description and family without changing hidden permissions', () => {
     const onChange = vi.fn();
     mountedComponent = mount(ToolAccessEditor, {

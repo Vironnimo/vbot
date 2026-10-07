@@ -1,27 +1,21 @@
-"""Live Tool calls as Models write them: names and argument spellings.
+"""Live Tool arguments as Models write them.
 
-Voice models call Live Tools by other names (``status``, ``delegate``), send
-arguments as JSON text, and use other harnesses' field names (``prompt``,
-``session_id``). ``prepare_live_call`` turns a call whose intent is clear into
-one canonical Live Tool call through the shared Tool contract machinery, or
-returns a failure result that says what was wrong and names the next valid call.
-Every Tool call of a call, delegated or direct, goes through
-:func:`run_live_call`: prepared here, run once, and recorded.
+Voice models send arguments as JSON text and use other harnesses' field names
+(``prompt``, ``session_id``). :func:`prepare_live_call` turns a call whose
+intent is clear into one canonical, validated Live Tool call through the shared
+Tool contract machinery, or returns a failure result that says what was wrong
+and names the next valid call. The Tool registry already resolved the name.
 """
 
 from __future__ import annotations
 
 import json
-import logging
-import re
-import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cache
 from typing import Any
 
-from core.model_tasks.live import LiveToolRun, live_failure, live_result_text
-from core.tools import called_tool_name
+from core.model_tasks.live import live_failure
 from core.tools.call_syntax import (
     SpellingAliases,
     is_placeholder,
@@ -29,49 +23,24 @@ from core.tools.call_syntax import (
     spelling,
 )
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
-from server.live._brief import (
+from core.tools.live import (
     LIVE_KEYS,
-    LIVE_READ_ONLY_TOOLS,
     LIVE_TOOL_NAMES,
     LIVE_VIEWS,
     TOOL_END_CALL,
+    TOOL_MANAGE_TERMINALS,
     TOOL_OPEN,
     TOOL_OVERVIEW,
-    TOOL_READ,
+    TOOL_READ_OUTPUT,
     TOOL_SEND_MESSAGE,
     TOOL_START_AGENT_SESSION,
     TOOL_START_CODING_TERMINAL,
     TOOL_STOP,
-    TOOL_TERMINAL,
-    live_tools,
+    live_tool_definitions,
 )
 from server.live._programs import CODING_PROGRAM_ALIASES
 
 JsonObject = dict[str, Any]
-Executor = Callable[[str, JsonObject], Awaitable[JsonObject]]
-Recorder = Callable[[JsonObject], None]
-
-_LOGGER = logging.getLogger("vbot.server.live")
-
-_WRAPPER_PREFIX = re.compile(r"^(?:functions?|default_api|tools?)[.:]", re.IGNORECASE)
-
-# Other names for Live Tools, by spelling; the pair's arguments are implied
-# only where the call leaves them out.
-_NAME_ALIASES: dict[str, tuple[str, JsonObject]] = {
-    **dict.fromkeys(("status", "list", "overviewstatus"), (TOOL_OVERVIEW, {})),
-    **dict.fromkeys(
-        ("startsession", "startagent", "newsession", "delegate", "spawn"),
-        (TOOL_START_AGENT_SESSION, {}),
-    ),
-    **dict.fromkeys(("startterminal", "startcli", "launch"), (TOOL_START_CODING_TERMINAL, {})),
-    "startcodex": (TOOL_START_CODING_TERMINAL, {"program": "codex"}),
-    "startclaude": (TOOL_START_CODING_TERMINAL, {"program": "claude"}),
-    **dict.fromkeys(("send", "message", "reply", "answer"), (TOOL_SEND_MESSAGE, {})),
-    **dict.fromkeys(("get", "showsession", "readsession", "readterminal"), (TOOL_READ, {})),
-    **dict.fromkeys(("cancel", "abort", "interrupt"), (TOOL_STOP, {})),
-    **dict.fromkeys(("navigate", "show", "goto"), (TOOL_OPEN, {})),
-    **dict.fromkeys(("hangup", "endvoicecall", "goodbye"), (TOOL_END_CALL, {})),
-}
 
 _TASK = ("prompt", "message", "instruction", "request", "text", "goal")
 _COUNT = ("n", "times", "copies", "number", "instances", "amount", "quantity")
@@ -98,10 +67,10 @@ _FIELD_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
         "target": (*_TARGET, "agent"),
         "text": ("message", "content", "prompt", "answer", "reply"),
     },
-    TOOL_READ: {"target": (*_TARGET, "agent")},
+    TOOL_READ_OUTPUT: {"target": (*_TARGET, "agent")},
     TOOL_STOP: {"target": (*_TARGET, "agent")},
     TOOL_OPEN: {"target": (*_TARGET, "agent", "group", "project")},
-    TOOL_TERMINAL: {
+    TOOL_MANAGE_TERMINALS: {
         "action": ("op",),
         "target": ("terminal", "terminal_id", "id", "ref", "group", "group_id", "group_name"),
         "name": ("new_name",),
@@ -131,135 +100,45 @@ _EXAMPLES = {
     TOOL_START_AGENT_SESSION: '{"agent": "<Agent name from overview>", "task": "<the task>"}',
     TOOL_START_CODING_TERMINAL: '{"program": "codex", "task": "<the task>"}',
     TOOL_SEND_MESSAGE: '{"target": "s2", "text": "<the message>"}',
-    TOOL_READ: '{"target": "s2"}',
+    TOOL_READ_OUTPUT: '{"target": "s2"}',
     TOOL_STOP: '{"target": "s2"}',
     TOOL_OPEN: '{"target": "s2"} or {"view": "terminals"}',
-    TOOL_TERMINAL: '{"action": "maximize", "target": "t1"}',
+    TOOL_MANAGE_TERMINALS: '{"action": "maximize", "target": "t1"}',
     TOOL_END_CALL: "{}",
 }
 
 
 @dataclass(frozen=True)
 class PreparedLiveCall:
-    """One canonical Live Tool call; ``called`` is the name the Model used."""
+    """One canonical Live Tool call."""
 
-    called: str
     name: str
     arguments: JsonObject
 
 
-async def run_live_call(
-    name: Any,
-    arguments: Any,
-    *,
-    execute: Executor,
-    rejection: JsonObject | None = None,
-    record: Recorder | None = None,
-    mode: str = "",
-    clock: Callable[[], float] = time.monotonic,
-) -> LiveToolRun:
-    """Prepare one Tool call as a Model made it, run it once, and record it.
-
-    *execute* runs a canonical call and reports operation failures in its
-    result. *rejection* is a failure the Provider Adapter reported for unusable
-    arguments; it becomes the result and nothing runs. *record* receives one
-    record labeled with *mode*, also when the call is stopped before it
-    returns (a timeout or the call's end); such a record has no result.
-    """
-    started = clock()
-    prepared: PreparedLiveCall | JsonObject = (
-        live_failure(str(rejection.get("code")), str(rejection.get("message")))
-        if isinstance(rejection, dict)
-        else prepare_live_call(name, arguments)
-    )
-    result: JsonObject | None = None
-    try:
-        if isinstance(prepared, PreparedLiveCall):
-            result = await execute(prepared.name, dict(prepared.arguments))
-        else:
-            result = prepared
-    finally:
-        _record_call(record, mode, name, arguments, prepared, result, clock() - started)
-    changed = (
-        prepared.name
-        if isinstance(prepared, PreparedLiveCall) and prepared.name not in LIVE_READ_ONLY_TOOLS
-        else ""
-    )
-    return LiveToolRun(result=result, changed=changed)
-
-
-def _record_call(
-    record: Recorder | None,
-    mode: str,
-    called: Any,
-    arguments: Any,
-    prepared: PreparedLiveCall | JsonObject,
-    result: JsonObject | None,
-    duration: float,
-) -> None:
-    """Record one Tool call: as called, as run, its result text, and its duration."""
-    if record is None:
-        return
-    run = prepared if isinstance(prepared, PreparedLiveCall) else None
-    try:
-        record(
-            {
-                "type": "tool",
-                "mode": mode,
-                "called": called,
-                "tool": run.name if run is not None else None,
-                "arguments": arguments,
-                "run_arguments": run.arguments if run is not None else None,
-                "ok": result is not None and result.get("ok") is True,
-                "result": live_result_text(result) if result is not None else None,
-                "stopped": result is None,
-                "duration_ms": max(0, round(duration * 1000)),
-            }
-        )
-    except Exception as exc:
-        _LOGGER.warning("Live call record failed (error_type=%s)", type(exc).__name__)
-
-
-def prepare_live_call(name: Any, arguments: Any) -> PreparedLiveCall | JsonObject:
+def prepare_live_call(name: str, arguments: Any) -> PreparedLiveCall | JsonObject:
     """Return the canonical call the Model clearly meant, or a failure result."""
-
-    called = name if isinstance(name, str) else ""
-    parsed = _parsed_arguments(arguments)
-    if parsed is None:
-        tool = _tool_name(called)[0]
-        return live_failure(
-            "invalid_arguments",
-            "The arguments are not one JSON object. Call "
-            f"{tool or 'the Tool'} again with an object such as "
-            f"{_EXAMPLES.get(tool or '', '{}')}.",
-        )
-    tool, implied = _tool_name(called)
-    if tool is None:
+    if name not in LIVE_TOOL_NAMES:
         return live_failure(
             "unknown_tool",
-            f'There is no Tool called "{called}". Call one of: {", ".join(LIVE_TOOL_NAMES)}.',
+            f'There is no Live Tool called "{name}". Call one of: {", ".join(LIVE_TOOL_NAMES)}.',
         )
-
+    parsed = _parsed_arguments(arguments)
+    if parsed is None:
+        return live_failure(
+            "invalid_arguments",
+            f"The arguments are not one JSON object. Call {name} again with an object such as "
+            f"{_EXAMPLES[name]}.",
+        )
     try:
-        prepared = {**implied, **_normalized(tool, parsed)}
-        _contract(tool).validate_arguments(prepared)
+        prepared = _normalized(name, parsed)
+        _contract(name).validate_arguments(prepared)
     except ToolContractError as error:
         return live_failure(
             "invalid_arguments",
-            f"{error} Call {tool} again, for example with {_EXAMPLES[tool]}.",
+            f"{error} Call {name} again, for example with {_EXAMPLES[name]}.",
         )
-    return PreparedLiveCall(called=called, name=tool, arguments=prepared)
-
-
-def _tool_name(name: str) -> tuple[str | None, JsonObject]:
-    if not name.strip():
-        return None, {}
-    offered = set(LIVE_TOOL_NAMES)
-    mapped = called_tool_name(name, offered)
-    if mapped in offered:
-        return mapped, {}
-    alias = _NAME_ALIASES.get(spelling(_WRAPPER_PREFIX.sub("", name.strip())))
-    return alias if alias is not None else (None, {})
+    return PreparedLiveCall(name=name, arguments=prepared)
 
 
 def _parsed_arguments(arguments: Any) -> JsonObject | None:
@@ -391,10 +270,10 @@ _FIELD_NORMALIZERS: dict[str, Callable[[Any], Any]] = {
 
 @cache
 def _contract(tool: str) -> ToolContract:
-    definition = next(item for item in live_tools() if item["name"] == tool)
+    definition = next(item for item in live_tool_definitions() if item["name"] == tool)
     return compile_tool_contract(
         name=tool, input_schema=definition["parameters"], require_closed_input=False
     )
 
 
-__all__ = ["PreparedLiveCall", "prepare_live_call", "run_live_call"]
+__all__ = ["PreparedLiveCall", "prepare_live_call"]

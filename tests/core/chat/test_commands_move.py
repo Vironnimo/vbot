@@ -96,9 +96,12 @@ class _MoveSessions:
         return self.destination
 
 
+_BUILTINS = {"librarian": "librarian", "live-voice": "live_voice"}
+
+
 def _identity(agent_id: str) -> SimpleNamespace:
-    """An Identity Agent; ``librarian`` is the built-in Librarian."""
-    return SimpleNamespace(id=agent_id, builtin="librarian" if agent_id == "librarian" else None)
+    """An Identity Agent; ``librarian`` and ``live-voice`` are built-in Agents."""
+    return SimpleNamespace(id=agent_id, name=agent_id, builtin=_BUILTINS.get(agent_id))
 
 
 class _MoveAgents:
@@ -312,8 +315,9 @@ async def test_move_directions_relocate_and_re_home_pointers(
             id="unknown-target",
         ),
         pytest.param(_MoveHarness, "/agent agent:planner", id="invalid-address"),
-        # The built-in Librarian keeps its own Sessions.
+        # A built-in Agent keeps its own Sessions.
         pytest.param(_MoveHarness, "/agent librarian", id="to-the-librarian"),
+        pytest.param(_MoveHarness, "/agent live-voice", id="to-a-live-agent"),
         pytest.param(
             lambda: _MoveHarness(source_agent="librarian"), "/agent planner", id="from-librarian"
         ),

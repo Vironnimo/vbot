@@ -82,7 +82,7 @@ class _Trigger:
 class _Resolver:
     """Resolves every Agent except ``ghost``, recording each resolve target.
 
-    ``librarian`` resolves as the built-in Librarian.
+    ``librarian`` and ``live-voice`` resolve as built-in Agents.
     """
 
     def __init__(
@@ -104,8 +104,13 @@ class _Resolver:
         self.resolved.append((project_id, agent_id))
         if agent_id == "ghost":
             raise ResolutionAgentNotFoundError(f"unknown agent: {agent_id}")
-        if agent_id == "librarian":
-            return SimpleNamespace(**{**vars(self.agent), "builtin": "librarian"})
+        if agent_id in {"librarian", "live-voice"}:
+            builtin = {
+                "librarian": ("Librarian", "librarian"),
+                "live-voice": ("Live voice", "live_voice"),
+            }
+            name, kind = builtin[agent_id]
+            return SimpleNamespace(**{**vars(self.agent), "name": name, "builtin": kind})
         return self.agent
 
     async def resolve_agent_async(self, project_id: str | None, agent_id: str) -> SimpleNamespace:
@@ -297,7 +302,10 @@ async def test_handoff_starts_the_target_on_the_written_handoff_in_a_new_session
     [
         pytest.param("/handoff agent:ghost", False, None, 0, "ghost", id="unknown-target"),
         pytest.param(
-            "/handoff agent:librarian", False, None, 0, "built-in Librarian", id="librarian"
+            "/handoff agent:librarian", False, None, 0, "Librarian, an Agent built", id="librarian"
+        ),
+        pytest.param(
+            "/handoff agent:live-voice", False, None, 0, "Live voice, an Agent", id="live-agent"
         ),
         pytest.param("/handoff agent:a@b@c", False, None, 0, "a@b@c", id="invalid-address"),
         pytest.param("/handoff", True, None, 0, "current run", id="run-active"),

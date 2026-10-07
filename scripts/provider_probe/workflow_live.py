@@ -1,13 +1,16 @@
-"""Live Tools probe: does the backend model pick the right first Tool call?
+"""Live Tools probe: does the Live backend Agent's Model pick the right first Tool call?
 
-Each trial runs the production ``LiveBrain`` (delegation instructions, Live
-Tools, call preparation) on one voice-style request against a scripted vBot,
-so nothing in vBot changes. The verdict judges only the first Tool call:
+Each trial gives one voice-style request to the Model with what the Live
+backend Agent gets in a call: its Live call instructions, the System Reminder
+with what happened in the call, the Live Tools, and their call preparation. A
+scripted vBot answers, so nothing in vBot changes. The probe runs its own small
+Tool loop instead of a Chat Run, so the rest of the Agent's System Prompt and
+its web Tools are missing. The verdict judges only the first Tool call:
 ``ideal`` (a right call), ``lookup`` (a valid read-only call first, accepted),
-``wrong``, or ``error`` (the backend model request failed). Later calls and the
-spoken answer are kept for review; an answer that claims a start, send, or stop
-although no Tool call changed anything is flagged as an unconfirmed claim and
-fails the probe.
+``wrong``, or ``error`` (the Model request failed). Later calls and the answer
+are kept for review; an answer that claims a start, send, or stop although no
+Tool call changed anything is flagged as an unconfirmed claim and fails the
+probe.
 """
 
 from __future__ import annotations
@@ -17,18 +20,24 @@ import asyncio
 import json
 import re
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
-from core.model_tasks._live_brain import EFFECTS_LABEL, BrainTarget, DelegationInput, LiveBrain
-from scripts.provider_probe.live_cases import LiveCase, ScriptedVbot, describe, live_cases, matches
-from server.live._arguments import run_live_call
-from server.live._brief import (
-    DELEGATION_INSTRUCTIONS,
+from core.chat.messages import LIVE_VOICE_SYSTEM_REMINDER
+from core.chat.streaming import stream_model_response
+from core.chat.wire_shaping import system_reminder_request_message
+from core.model_tasks._live_backend import BackendRequest, context_note
+from core.model_tasks._live_brief import backend_instructions
+from core.model_tasks.live import live_failure
+from core.providers.adapter import TOOL_CALL_REJECTION_FIELD
+from core.tools import called_tool_name
+from core.tools.live import (
     LIVE_READ_ONLY_TOOLS,
+    LIVE_TOOL_NAMES,
     TOOL_OVERVIEW,
-    live_tools,
+    live_tool_definitions,
 )
+from scripts.provider_probe.live_cases import LiveCase, ScriptedVbot, describe, live_cases, matches
+from server.live._arguments import PreparedLiveCall, prepare_live_call
 
 JsonObject = dict[str, Any]
 
@@ -45,7 +54,7 @@ _DONE_CLAIM = re.compile(
 
 
 class _Borrowed:
-    """The probe's Adapter, lent to one delegation: requests are kept, closing is not."""
+    """The probe's Adapter, lent to one request: requests are kept, closing is not."""
 
     def __init__(self, adapter: Any) -> None:
         self._adapter = adapter
@@ -66,13 +75,12 @@ class _Borrowed:
         return None
 
 
-def verdict(case: LiveCase, records: list[JsonObject]) -> str:
-    """Judge the first Tool call of one delegation from its records."""
+def verdict(case: LiveCase, records: list[JsonObject], failure: str | None = None) -> str:
+    """Judge the first Tool call of one request from its records."""
 
     calls = [record for record in records if record.get("type") == "tool"]
     if not calls:
-        delegation = next((r for r in records if r.get("type") == "delegation"), {})
-        if delegation.get("failure"):
+        if failure:
             return "error"
         return "ideal" if None in case.right else "wrong"
     first = calls[0]
@@ -85,10 +93,7 @@ def verdict(case: LiveCase, records: list[JsonObject]) -> str:
 
 
 def unconfirmed_claim(records: list[JsonObject], answer: str) -> bool:
-    """Whether *answer* reports an action as done although no Tool call changed anything.
-
-    Only the Model's words count, not the closing line vBot adds from the Tool results.
-    """
+    """Whether *answer* reports an action as done although no Tool call changed anything."""
 
     changed = any(
         record.get("type") == "tool"
@@ -96,8 +101,81 @@ def unconfirmed_claim(records: list[JsonObject], answer: str) -> bool:
         and record.get("tool") not in LIVE_READ_ONLY_TOOLS
         for record in records
     )
-    words = (answer or "").split(EFFECTS_LABEL, 1)[0]
-    return not changed and _DONE_CLAIM.search(words) is not None
+    return not changed and _DONE_CLAIM.search(answer or "") is not None
+
+
+async def _run_tool(
+    vbot: ScriptedVbot, tool_call: JsonObject, records: list[JsonObject]
+) -> JsonObject:
+    """Run one Tool call as a Live call does: its name, then its arguments, then vBot."""
+    called = str(tool_call.get("name") or "")
+    tool = called_tool_name(called, LIVE_TOOL_NAMES)
+    arguments = tool_call.get("arguments")
+    rejection = tool_call.get(TOOL_CALL_REJECTION_FIELD)
+    prepared: PreparedLiveCall | JsonObject = (
+        live_failure(str(rejection.get("code")), str(rejection.get("message")))
+        if isinstance(rejection, dict)
+        else prepare_live_call(tool, arguments)
+    )
+    if isinstance(prepared, PreparedLiveCall):
+        result = await vbot(prepared.name, prepared.arguments)
+    else:
+        result = prepared
+    records.append(
+        {
+            "type": "tool",
+            "called": called,
+            "tool": tool,
+            "arguments": arguments,
+            "run_arguments": prepared.arguments if isinstance(prepared, PreparedLiveCall) else None,
+            "ok": result.get("ok") is True,
+            "result": result,
+        }
+    )
+    return result
+
+
+async def _answer(
+    adapter: Any,
+    args: argparse.Namespace,
+    messages: list[JsonObject],
+    vbot: ScriptedVbot,
+    records: list[JsonObject],
+    conversation_id: str,
+) -> str:
+    """Run Model steps and their Tool calls until the Model answers in text."""
+    request_context = dict(
+        adapter.request_context_kwargs(agent_id="live-backend", session_id=conversation_id)
+    )
+    tools = live_tool_definitions()
+    for _step in range(MAX_TRIAL_STEPS):
+        response = await stream_model_response(
+            adapter,
+            messages,
+            model_id=args.model,
+            thinking_effort=args.thinking_effort,
+            tools=tools,
+            **request_context,
+        )
+        content = response.get("content")
+        calls = [call for call in response.get("tool_calls") or [] if isinstance(call, dict)]
+        if not calls:
+            return content.strip() if isinstance(content, str) else ""
+        assistant: JsonObject = {"role": "assistant", "content": content, "tool_calls": calls}
+        for key in ("reasoning", "reasoning_meta"):
+            if response.get(key) is not None:
+                assistant[key] = response[key]
+        messages.append(assistant)
+        for call in calls:
+            result = await _run_tool(vbot, call, records)
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call.get("id"),
+                    "content": json.dumps(result, ensure_ascii=False),
+                }
+            )
+    raise RuntimeError(f"the request needed more than {MAX_TRIAL_STEPS} steps")
 
 
 async def evaluate_live_case(
@@ -106,50 +184,43 @@ async def evaluate_live_case(
     case: LiveCase,
     repetition: int = 1,
 ) -> JsonObject:
-    """Run one delegation for *case* and judge its first Tool call."""
+    """Run one request for *case* and judge its first Tool call."""
 
     borrowed = _Borrowed(adapter)
     records: list[JsonObject] = []
     vbot = ScriptedVbot()
-
-    async def run_tool(name: Any, arguments: Any, *, rejection: JsonObject | None = None) -> Any:
-        return await run_live_call(
-            name, arguments, execute=vbot, rejection=rejection, record=records.append
-        )
-
-    brain = LiveBrain(
-        SimpleNamespace(get_adapter=lambda _ref: borrowed),
-        BrainTarget(
-            provider_id=args.provider,
-            connection_id=args.connection,
-            model_id=args.model,
-            thinking_effort=args.thinking_effort,
-        ),
-        instructions=DELEGATION_INSTRUCTIONS,
-        tools=live_tools(),
-        run_tool=run_tool,
-        conversation_id=f"live-probe-{case.id}-{repetition}",
-        record=records.append,
-        max_steps=MAX_TRIAL_STEPS,
-    )
     # Like a real call, the request comes with what vBot shows right now.
     state = (await vbot(TOOL_OVERVIEW, {}))["data"]["content"]
-    answer = await brain.answer(
-        DelegationInput(
+    note = context_note(
+        BackendRequest(
             request=case.request,
             conversation=case.conversation,
             updates="\n".join(case.updates),
             state=state,
         )
     )
-    judged = verdict(case, records)
+    messages: list[JsonObject] = [
+        {
+            "role": "system",
+            "content": backend_instructions(set(LIVE_TOOL_NAMES).__contains__, context_note=True),
+        },
+        system_reminder_request_message(note, LIVE_VOICE_SYSTEM_REMINDER),
+        {"role": "user", "content": case.request},
+    ]
+    failure: str | None = None
+    try:
+        answer = await _answer(
+            borrowed, args, messages, vbot, records, f"live-probe-{case.id}-{repetition}"
+        )
+    except Exception as exc:
+        failure, answer = f"{type(exc).__name__}: {exc}", ""
+    judged = verdict(case, records, failure)
     claim = unconfirmed_claim(records, answer)
     calls = [
         {key: record.get(key) for key in _CALL_FIELDS}
         for record in records
         if record.get("type") == "tool"
     ]
-    delegation = next((r for r in records if r.get("type") == "delegation"), {})
     return {
         "case": case.id,
         "repetition": repetition,
@@ -161,7 +232,7 @@ async def evaluate_live_case(
         "first_call": calls[0] if calls else None,
         "calls": calls,
         "answer": answer,
-        "failure": delegation.get("failure"),
+        "failure": failure,
         "transcript": borrowed.requests[-1] if borrowed.requests else [],
     }
 
@@ -199,11 +270,12 @@ async def _probe_live_tools(adapter: Any, args: argparse.Namespace) -> JsonObjec
             "passed": len(ordered) == len(cases) * args.repetitions
             and all(row["right"] for row in ordered),
             "fixture_limits": (
-                "Production LiveBrain with the delegation instructions and Live Tools; a "
-                "scripted vBot answers from one fixed state, so nothing changes. Only the "
-                "first Tool call is judged; later calls and the answer need review. An "
-                "answer claiming a start, send, or stop without a changing Tool call fails "
-                "(a word heuristic)."
+                "The Live backend Agent's Live call instructions, System Reminder, and Live "
+                "Tools in a small Tool loop, without the rest of its System Prompt or its "
+                "web Tools; a scripted vBot answers from one fixed state, so nothing "
+                "changes. Only the first Tool call is judged; later calls and the answer "
+                "need review. An answer claiming a start, send, or stop without a changing "
+                "Tool call fails (a word heuristic)."
             ),
             "results": ordered,
         }

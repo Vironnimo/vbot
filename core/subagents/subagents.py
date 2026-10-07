@@ -13,7 +13,7 @@ import asyncio
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, cast
 
-from core.agents import is_librarian
+from core.agents import is_builtin_agent
 from core.projects import (
     AgentResolutionError,
     InvalidAgentAddressError,
@@ -1110,8 +1110,8 @@ async def _validate_target_agent(
                 target = await runtime.agent_resolver.resolve_agent_async(
                     project_id, target_agent_id
                 )
-            if is_librarian(target):
-                # The Librarian is no delegation target: it looks like no Agent at all.
+            if is_builtin_agent(target):
+                # A built-in Agent is no delegation target: it looks like no Agent at all.
                 raise ResolutionAgentNotFoundError(f"Agent not found: {target_agent_id}")
         if model is not None:
             await runtime.agent_resolver.require_model_configured_async(model)

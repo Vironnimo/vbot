@@ -714,7 +714,29 @@ export default Object.freeze({
   'settings.specializedModels.liveVoiceDescription':
     'Live voice appears in the sidebar once a Model is chosen.',
   'settings.specializedModels.liveVoiceHelp':
-    'The realtime Model you talk with in Live voice.\n\nSome voice Models hand work in the app to a backend Model. Choose it in the options that appear once the voice Model is set.\n\nThe Provider bills voice time, including pauses, and backend requests separately.',
+    'The realtime Model you talk with in Live voice.\n\nIts Backend option decides who answers the requests the voice model hands on: the vBot backend set up below, the Provider’s own backend model, or the voice model itself. The choices depend on the voice Model.\n\nThe Provider bills voice time, including pauses; backend requests are billed separately.',
+  'settings.liveVoice.voiceTools': 'Voice model Tools',
+  'settings.liveVoice.voiceToolsDescription':
+    'What the voice model can do in vBot during a call. With the OpenAI backend, OpenAI’s backend model uses these Tools for it.',
+  'settings.liveVoice.voiceToolsHint':
+    'With GPT-Live and the vBot backend, these Tools are not used: GPT-Live hands every request to the vBot backend, which uses its own Tools.',
+  'settings.liveVoice.backend': 'vBot backend',
+  'settings.liveVoice.backendDescription':
+    'The Agent that answers the voice model’s requests when its Backend option is vBot. It works in a second Session of the call with the Model and Tools set here.',
+  'settings.liveVoice.backendTools': 'vBot backend Tools',
+  'settings.liveVoice.agentLoadError': 'The Agent could not be loaded.',
+  'settings.liveVoice.agentUnavailable':
+    'This built-in Agent is not available right now.',
+  'settings.liveVoice.toolsLoadError': 'The Tools could not be loaded.',
+  'settings.liveVoice.calls': 'Recent calls',
+  'settings.liveVoice.callsDescription':
+    'Each call is recorded in a Session of the voice model. Open one to read the call in Chat.',
+  'settings.liveVoice.callsLoading': 'Loading calls…',
+  'settings.liveVoice.callsError': 'The calls could not be loaded.',
+  'settings.liveVoice.callsEmpty': 'No call yet.',
+  'settings.liveVoice.callRunning': 'In progress',
+  'settings.liveVoice.openSession': 'Open session',
+  'settings.liveVoice.openSessionLabel': 'Open the Session of {title}',
   'settings.specializedModels.imageUnderstanding': 'Image understanding',
   'settings.specializedModels.imageUnderstandingDescription':
     'Describes images for Agents whose Model cannot see them.',

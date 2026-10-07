@@ -123,6 +123,7 @@ from core.tools import (
     register_skill_manage_tool,
     register_skill_tool,
 )
+from core.tools.live import LiveToolHosts
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.usage import UsageRecorder
@@ -205,6 +206,7 @@ class Runtime:
         self._embeddings: EmbeddingService | None = None
         self._decisions: DecisionService | None = None
         self._live_voice: LiveVoiceService | None = None
+        self._live_tool_hosts: LiveToolHosts | None = None
         self._storage: StorageManager | None = None
         self._attachment_store: AttachmentStore | None = None
         self._keep_awake: KeepAwakeController | None = None

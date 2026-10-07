@@ -13,6 +13,7 @@
     setToolAccessPreference,
     setToolFamilyPreference,
     toolAccessPreferenceEnabled,
+    toolCatalogForEditor,
     toolIsConfigurable,
   } from '$lib/toolAccess.js';
   import { t } from '$lib/i18n.js';
@@ -24,6 +25,9 @@
     tools = [],
     ceiling = null,
     disabled = false,
+    // Edits a Live voice Agent: lists the Live call Tools and only
+    // configurable Tools (`toolCatalogForEditor`).
+    liveCall = false,
     memoryPromptMode = 'agent_user',
     showReset = false,
     resetLabel = '',
@@ -46,8 +50,9 @@
   );
 
   function catalogWithStoredTools() {
-    const catalog = Array.isArray(tools) ? [...tools] : [];
-    const unknown = policyNamesNotInCatalog(policy, catalog);
+    const catalog = toolCatalogForEditor(tools, { liveCall });
+    // A hidden catalog Tool is known, not a stored name to list as missing.
+    const unknown = policyNamesNotInCatalog(policy, tools);
     for (const name of unknown) {
       catalog.push({
         name,

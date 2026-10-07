@@ -106,6 +106,7 @@ _RECALL_VALID_RUN_KINDS = (
     "memory_reflection",
     "skill_reflection",
     "librarian",
+    "live",
     "subagent",
     "system",
 )
@@ -137,6 +138,9 @@ _LIST_VISIBILITY_SUBAGENT_PARENT = 1 << 9
 # Librarian's scope; elsewhere it is a pass Session of an earlier vBot, which ran
 # passes in a hidden Session of the curated Agent.
 _LIST_VISIBILITY_LIBRARIAN = 1 << 10
+# A Session with a Live Run: never recalled, listed only in the scope of a
+# built-in Agent of a Live call.
+_LIST_VISIBILITY_LIVE = 1 << 11
 
 # Metadata facade keys stored in dedicated columns.
 _TITLE_KEYS = ("title", "auto_title")
@@ -222,6 +226,8 @@ def _session_list_visibility_mask(metadata: JsonObject) -> int:
         mask |= _LIST_VISIBILITY_SUBAGENT_RUN_KIND
     if "librarian" in kinds:
         mask |= _LIST_VISIBILITY_LIBRARIAN
+    if "live" in kinds:
+        mask |= _LIST_VISIBILITY_LIVE
 
     platform = metadata.get("platform")
     platform_conversation = metadata.get("platform_conv_id")
@@ -404,7 +410,7 @@ def _session_list_visibility_sql(
     include_channels: bool,
 ) -> tuple[str, list[Any]]:
     """Return the ``sessions AS s`` predicate of one Session-list filter set."""
-    from core.agents import LIBRARIAN_AGENT_ID
+    from core.agents import LIBRARIAN_AGENT_ID, LIVE_BACKEND_AGENT_ID, LIVE_VOICE_AGENT_ID
 
     is_subagent = (
         "((s.list_visibility_mask & "
@@ -420,6 +426,8 @@ def _session_list_visibility_sql(
     visible = (
         f"((s.list_visibility_mask & {_LIST_VISIBILITY_LIBRARIAN}) = 0 OR "
         f"(s.project_id = '' AND s.agent_id = '{LIBRARIAN_AGENT_ID}')) AND "
+        f"((s.list_visibility_mask & {_LIST_VISIBILITY_LIVE}) = 0 OR (s.project_id = '' AND "
+        f"s.agent_id IN ('{LIVE_VOICE_AGENT_ID}', '{LIVE_BACKEND_AGENT_ID}'))) AND "
         "NOT EXISTS (SELECT 1 FROM temporary_session_bindings AS owner_binding "
         "WHERE owner_binding.session_key = s.session_key) AND "
         "(? = 1 OR COALESCE(TRIM(s.platform), '') = '' "
@@ -445,7 +453,7 @@ _RECALL_SUBAGENT_MASK = _LIST_VISIBILITY_SUBAGENT_SESSION | _LIST_VISIBILITY_SUB
 def _recall_visibility_case(alias: str) -> str:
     """The one definition of ``SessionRecallVisibility`` over ``list_visibility_mask``.
 
-    Reflection and Librarian kinds hide a Session even when it also carries User
+    Reflection, Librarian and Live kinds hide a Session even when it also carries User
     or Sub-Agent markers. Sub-Agent markers (flag or Run kind) make it a delegated Session.
     Otherwise Sessions without valid Run kinds and Sessions with a User-facing
     Run kind are conversations; the rest (system-only) stay hidden.
@@ -453,7 +461,9 @@ def _recall_visibility_case(alias: str) -> str:
     mask = f"{alias}.list_visibility_mask"
     return (
         "CASE"
-        f" WHEN ({mask} & {_LIST_VISIBILITY_REFLECTION | _LIST_VISIBILITY_LIBRARIAN}) != 0"
+        f" WHEN ({mask} & "
+        f"{_LIST_VISIBILITY_REFLECTION | _LIST_VISIBILITY_LIBRARIAN | _LIST_VISIBILITY_LIVE})"
+        " != 0"
         " THEN 'hidden'"
         f" WHEN ({mask} & {_RECALL_SUBAGENT_MASK}) != 0 THEN 'subagent'"
         f" WHEN ({mask} & {_LIST_VISIBILITY_VALID_RUN_KINDS}) = 0"

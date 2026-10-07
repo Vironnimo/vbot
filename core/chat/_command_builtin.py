@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
-from core.agents import is_librarian
+from core.agents import is_builtin_agent
 from core.chat.commands import (
     _COMMAND_WORKERS,
     _LOGGER,
@@ -57,10 +57,10 @@ CHANNEL_SOURCE_META_KEY = "source_channel_id"
 
 AGENT_TAKEOVER_NOTE = "This session was just moved to you from {source}."
 
-LIBRARIAN_HANDOFF_REFUSAL = "Cannot handoff to vBot's built-in Librarian."
-
-LIBRARIAN_MOVE_REFUSAL = (
-    "vBot's built-in Librarian keeps its own Sessions: none can move to it or away from it."
+# A built-in Agent (the Librarian, the Agents of a Live call) keeps its own Sessions.
+BUILTIN_HANDOFF_REFUSAL = "Cannot handoff to {name}, an Agent built into vBot."
+BUILTIN_MOVE_REFUSAL = (
+    "{name} is built into vBot and keeps its own Sessions: none can move to it or away from it."
 )
 
 
@@ -157,8 +157,8 @@ async def _execute_handoff(
             )
         except AgentResolutionError:
             return _notice("handoff", f"Cannot handoff to unknown agent: {target_display}")
-        if is_librarian(target):
-            return _notice("handoff", LIBRARIAN_HANDOFF_REFUSAL)
+        if is_builtin_agent(target):
+            return _notice("handoff", BUILTIN_HANDOFF_REFUSAL.format(name=target.name))
 
     handoff_prompt = await _COMMAND_WORKERS.run(
         storage.read_prompt_fragment,
@@ -415,8 +415,9 @@ async def _execute_agent(
         if context.project_id is None
         else None
     )
-    if is_librarian(target) or is_librarian(source):
-        return _notice("agent", LIBRARIAN_MOVE_REFUSAL)
+    for agent in (target, source):
+        if agent is not None and is_builtin_agent(agent):
+            return _notice("agent", BUILTIN_MOVE_REFUSAL.format(name=agent.name))
 
     source_address = SessionAddress(
         project_id=context.project_id, agent_id=context.agent_id, session_id=context.session_id

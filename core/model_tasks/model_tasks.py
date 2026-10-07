@@ -560,8 +560,6 @@ class TaskModelService:
             target_ref.provider_id,
             target_ref.target,
             model=model,
-            models=self._models,
-            connection_id=target_ref.local_connection_id,
             wire=self._image_wire(target_ref),
         )
 

@@ -542,7 +542,7 @@ async def _ref_target(
     raise LiveToolError(
         "wrong_target",
         f"{ref} is a Terminal; {tool} needs a {_kinds_phrase(allowed)} as {field}. Call {tool} "
-        "again with a matching ref, or use terminal for Terminal actions.",
+        "again with a matching ref, or use manage_terminals for Terminal actions.",
     )
 
 

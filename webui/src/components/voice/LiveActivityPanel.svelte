@@ -1,7 +1,7 @@
 <script>
   // What was said in the Live call and what the operator did, with links to
-  // the Sessions and Terminals it named. It stays readable after the call
-  // ends, until the next call starts.
+  // the call's own Sessions and to the Sessions and Terminals it named. It
+  // stays readable after the call ends, until the next call starts.
   import { onMount, tick } from 'svelte';
   import { t, tOr } from '$lib/i18n.js';
 
@@ -157,6 +157,28 @@
       </svg>
     </button>
   </header>
+  {#if voice.sessions.voice || voice.sessions.backend}
+    <div class="live-activity__sessions">
+      {#if voice.sessions.voice}
+        <button
+          type="button"
+          class="live-activity__link"
+          data-live-session="voice"
+          onclick={() => show({ kind: 'session', ...voice.sessions.voice })}
+          >{t('live.activity.voiceSession')}</button
+        >
+      {/if}
+      {#if voice.sessions.backend}
+        <button
+          type="button"
+          class="live-activity__link"
+          data-live-session="backend"
+          onclick={() => show({ kind: 'session', ...voice.sessions.backend })}
+          >{t('live.activity.backendSession')}</button
+        >
+      {/if}
+    </div>
+  {/if}
   <ol class="live-activity__feed" bind:this={feed} onscroll={handleScroll}>
     {#each entries as entry (`${entry.kind}-${entry.seq}`)}
       {#if entry.kind === 'caption'}
@@ -350,6 +372,13 @@
     font-family: var(--font-mono);
     font-size: var(--fs-mono-xs);
     white-space: pre-wrap;
+  }
+  .live-activity__sessions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
   }
   .live-activity__links {
     display: flex;

@@ -6,7 +6,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
+from core.agents import is_live_agent
 from core.chat._agentic_progression import AgenticProgression
+from core.chat._external_run import ExternalRun, start_external_run
 from core.chat._queued_input import QueuedChatInput as _QueuedRunExecutor
 from core.chat._request_builder import RequestBuilder
 from core.chat._run_execution import RunExecution
@@ -201,6 +203,7 @@ class ChatLoop:
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
         source_session_id: str | None = None,
+        context_note: str | None = None,
     ) -> Run:
         """Start one chat run against an existing session for server-facing callers.
 
@@ -220,6 +223,9 @@ class ChatLoop:
 
         ``source_session_id`` attributes a review Run executing in a fork to the
         Session it examines; it is accessor-only provenance on the Run.
+
+        ``context_note`` is stored as a note right before the input, for context
+        the Model reads with it, such as what happened since the previous Run.
         """
         return await self._start_run(
             agent_id,
@@ -238,6 +244,7 @@ class ChatLoop:
             run_kind=run_kind,
             contributes_to_agent_activity=contributes_to_agent_activity,
             source_session_id=source_session_id,
+            context_note=context_note,
         )
 
     async def edit_run(
@@ -355,6 +362,7 @@ class ChatLoop:
         working_project_id = await resolver.resolve_working_project_async(
             project_id, agent, session_id=session_id
         )
+        _reject_live_input(agent, run_kind)
         provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
         _ensure_provider_exists(self._dependencies.providers, provider_id)
         session = await self._get_session_async(
@@ -499,6 +507,7 @@ class ChatLoop:
         contributes_to_agent_activity: bool = True,
         edit_message_id: str | None = None,
         source_session_id: str | None = None,
+        context_note: str | None = None,
     ) -> Run:
         _validate_run_tool_iteration_limit(max_tool_iterations)
         if session_id is None and create_missing and new_session is None:
@@ -520,6 +529,7 @@ class ChatLoop:
             working_project_id = await resolver.resolve_working_project_async(
                 project_id, agent, requested=new_session.working_project_id
             )
+        _reject_live_input(agent, run_kind)
         provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
         _ensure_provider_exists(self._dependencies.providers, provider_id)
         if new_session is not None:
@@ -555,6 +565,7 @@ class ChatLoop:
             max_tool_iterations=max_tool_iterations,
             input_persisted_hook=input_persisted_hook,
             edit_message_id=edit_message_id,
+            context_note=context_note,
         )
         address = SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id)
         try:
@@ -744,10 +755,51 @@ class ChatLoop:
             agent, session_tool_grants=session_tool_grants
         )
 
+    async def agent_tool_names(self, agent_id: str) -> tuple[str, ...]:
+        """The names of the Tools a new Session of identity Agent *agent_id* offers its Model."""
+        agent = await self._dependencies.agent_resolver.resolve_agent_async(None, agent_id)
+        definitions = await self._requests.preview_tool_definitions(agent)
+        return tuple(str(definition.get("name")) for definition in definitions)
+
+    async def start_external_run(
+        self,
+        agent_id: str,
+        *,
+        model: str,
+        title: str,
+        run_kind: RunKind = RunKind.LIVE,
+        extra_tools: Sequence[str] = (),
+        on_cancel: Callable[[], None] | None = None,
+    ) -> ExternalRun:
+        """Start a Run in a new Session whose turns a Model outside the loop produces.
+
+        The Session is titled *title*; *model* is recorded on its Assistant
+        messages. The Model can call the Agent's Tools and *extra_tools*
+        (:attr:`ExternalRun.tool_definitions`). The Run does not count as Agent
+        activity. *on_cancel* is called when the user cancels the Run, so the
+        owner can end the conversation.
+        """
+        return await start_external_run(
+            self._dependencies,
+            self._requests,
+            agent_id,
+            model=model,
+            title=title,
+            run_kind=run_kind,
+            extra_tools=extra_tools,
+            on_cancel=on_cancel,
+        )
+
 
 def _stored_working_project(project_id: str | None, working_project_id: str | None) -> str | None:
     """Return the working Project a new Session stores: none for a Project Session."""
     return None if project_id is not None else working_project_id
+
+
+def _reject_live_input(agent: Any, run_kind: RunKind) -> None:
+    """Refuse typed input to a Session that records a Live voice call."""
+    if is_live_agent(agent) and run_kind != RunKind.LIVE:
+        raise ChatError("This Session records a Live voice call; it takes no typed messages.")
 
 
 def _validate_run_tool_iteration_limit(max_tool_iterations: int | None) -> None:

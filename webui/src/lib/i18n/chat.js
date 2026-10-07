@@ -360,6 +360,8 @@ export default Object.freeze({
   'chat.activity.later.unknown': 'another change',
   'chat.cancelBackgroundTaskError': 'Background task could not be cancelled.',
   'chat.subagentSessionNotice': 'Viewing a sub-agent session',
+  'chat.liveCallNotice':
+    'This Session records a Live voice call. Only the call writes to it.',
   'chat.returnToParentSession': 'Return to parent session',
   'chat.returnToCurrentSession': 'Return to current session',
   'chat.runError': 'Run failed.',

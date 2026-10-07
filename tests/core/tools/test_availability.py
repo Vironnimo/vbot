@@ -130,6 +130,19 @@ def test_identity_constraint_is_enforced_for_all_and_selected_modes() -> None:
     assert project_selected.allowed_tools == ()
 
 
+def test_live_call_tools_resolve_only_for_a_live_call_policy() -> None:
+    tools = _catalog(("read", {}), ("overview", {"constraints": ("live_call",)}))
+    selected = ToolAccess(mode="selected", allowed=("overview", "read"))
+
+    assert resolve_tool_access(ToolAccess(), tools, "off").allowed_tools == ("read",)
+    assert resolve_tool_access(selected, tools, "off").allowed_tools == ("read",)
+    assert resolve_tool_access(
+        ToolAccess(mode="selected", allowed=("overview", "read"), live_call=True), tools, "off"
+    ).allowed_tools == ("overview", "read")
+    # The flag stays out of the public policy.
+    assert "live_call" not in ToolAccess(live_call=True).to_dict()
+
+
 def test_followed_tool_requires_its_source_and_can_be_denied_independently() -> None:
     tools = _catalog(
         ("session_search", {}),

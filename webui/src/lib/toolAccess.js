@@ -13,7 +13,22 @@ export const TOOL_ACCESS_MODES = Object.freeze([
 export const TOOL_ACTIVATION_CONFIGURABLE = 'configurable';
 export const TOOL_ACTIVATION_FOLLOWS = 'follows';
 
+// Tools with this constraint work only for the Agents of a Live voice call.
+const TOOL_CONSTRAINT_LIVE_CALL = 'live_call';
+
 const EMPTY_POLICY = Object.freeze({ mode: TOOL_ACCESS_MODE_ALL });
+
+// The catalog Tools a Tool policy editor offers. The Live call Tools appear
+// only in the editors of the Live voice Agents (`liveCall`), which offer only
+// configurable Tools because their policy is the whole Tool set; every other
+// editor hides the Live call Tools.
+export function toolCatalogForEditor(catalog = [], { liveCall = false } = {}) {
+  const tools = Array.isArray(catalog) ? catalog : [];
+  if (liveCall) return tools.filter(toolIsConfigurable);
+  return tools.filter(
+    (tool) => !(tool?.constraints ?? []).includes(TOOL_CONSTRAINT_LIVE_CALL),
+  );
+}
 
 export function normalizeToolAccess(value) {
   if (!isPlainObject(value) || !TOOL_ACCESS_MODES.includes(value.mode)) {

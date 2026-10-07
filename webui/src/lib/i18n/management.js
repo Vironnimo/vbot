@@ -532,6 +532,7 @@ export default Object.freeze({
   'toolAccess.family.sessions': 'Sessions',
   'toolAccess.family.skills': 'Skills',
   'toolAccess.family.media': 'Media',
+  'toolAccess.family.live': 'Live voice',
   'toolAccess.family.all': 'All {family} Tools',
   'toolAccess.activation.follows': 'Automatic with {source}',
   'toolAccess.activation.memoryOff': 'Memory is currently off',

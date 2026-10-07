@@ -627,19 +627,25 @@ def test_openai_live_voice_models_are_task_only_per_connection(
     parameters = model.capabilities.task_options["live_voice"]["parameters"]
     assert len(parameters["voice"]["values"]) == voice_count
     assert parameters["voice"]["default"] == default_voice
-    assert parameters["backend_model"] == {"type": "model", "default": "gpt-5.6-terra"}
-    backend = registry.get("openai", "gpt-5.6-terra")
-    assert backend.capabilities.tools is True
-    assert backend.allows_connection(connection_id)
+    assert dict(parameters["backend"]) == {
+        "type": "enum",
+        "values": ("vbot", "openai"),
+        "default": "vbot",
+    }
+    # OpenAI's hosted backend Models exist and run on the same Connection.
+    hosted = parameters["openai_backend_model"]
+    assert hosted["default"] in hosted["values"]
+    for backend_id in hosted["values"]:
+        assert registry.get("openai", backend_id).allows_connection(connection_id)
 
 
-def test_xai_grok_voice_is_a_task_only_live_voice_model_without_a_backend_default(
+def test_xai_grok_voice_is_a_task_only_live_voice_model_that_uses_its_own_tools(
     registry: ModelRegistry,
 ) -> None:
     """Grok Voice is a live voice Task Model on both xAI Connections.
 
-    It calls the Live app Tools itself, so its backend model defaults to
-    none; tool-capable Grok chat Models remain available as backends.
+    It calls the voice Agent's Tools itself, so it needs no backend by
+    default; the vBot backend Agent is the alternative.
     """
 
     model = registry.get("xai", "grok-voice-think-fast-2.0")
@@ -655,8 +661,11 @@ def test_xai_grok_voice_is_a_task_only_live_voice_model_without_a_backend_defaul
     assert len(voices) == len(set(voices)) == 28
     assert all(voice == voice.lower() for voice in voices)
     assert parameters["voice"]["default"] == "eve"
-    assert parameters["backend_model"] == {"type": "model", "default": "", "allow_none": True}
-    assert registry.get("xai", "grok-4.6").capabilities.tools is True
+    assert dict(parameters["backend"]) == {
+        "type": "enum",
+        "values": ("none", "vbot"),
+        "default": "none",
+    }
 
 
 def test_anthropic_opus_4_5_override_pins_budget_control(registry: ModelRegistry) -> None:

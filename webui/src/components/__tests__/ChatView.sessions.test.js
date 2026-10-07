@@ -917,6 +917,41 @@ describe('ChatView Sessions', () => {
     });
   });
 
+  describe('Live call Session', () => {
+    it.each([
+      ['live-voice', 'live.agent.voice'],
+      ['live-backend', 'live.agent.backend'],
+    ])(
+      'shows a Session of %s for reading, without a composer',
+      async (agentId, nameKey) => {
+        rpcMock.mockImplementation(
+          createChatRpcMock({
+            sessionMessages: {
+              'call-1': [message('call-summary', 'Started the deploy')],
+            },
+          }),
+        );
+        await chat.mountChat(
+          {
+            sharedAgents: [createAgent()],
+            sharedSelectedAgentId: 'alpha',
+            pendingSessionNavigation: {
+              agentId,
+              sessionId: 'call-1',
+              subAgent: false,
+            },
+          },
+          { ready: 'Started the deploy' },
+        );
+
+        expect(selectedAgentName()).toBe(t(nameKey));
+        // Only the call writes to its Sessions.
+        expect(composerInput()).toBeNull();
+        expect(document.body.textContent).toContain(t('chat.liveCallNotice'));
+      },
+    );
+  });
+
   describe('Session info', () => {
     it('renders a restored Reflection and opens its Session', async () => {
       const baseRpc = createChatRpcMock({

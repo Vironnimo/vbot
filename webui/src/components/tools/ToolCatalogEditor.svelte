@@ -19,7 +19,16 @@
   } = $props();
   const catalogId = $props.id();
   let search = $state('');
-  const order = ['files', 'execution', 'web', 'sessions', 'skills', 'media'];
+  // The Live call Tools lead because only the Live voice editors list them.
+  const order = [
+    'live',
+    'files',
+    'execution',
+    'web',
+    'sessions',
+    'skills',
+    'media',
+  ];
   let allGroups = $derived(
     groupToolCatalog(items).sort((a, b) => rank(a.id) - rank(b.id)),
   );
@@ -40,10 +49,11 @@
 
   function rank(id) {
     const i = order.indexOf(id);
-    return i < 0 ? (id ? 6 : 7) : i;
+    return i < 0 ? order.length + (id ? 0 : 1) : i;
   }
   function familyLabel(group) {
     const labels = {
+      live: t('toolAccess.family.live'),
       files: t('toolAccess.family.files'),
       execution: t('toolAccess.family.execution'),
       web: t('toolAccess.family.web'),

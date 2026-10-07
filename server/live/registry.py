@@ -3,9 +3,9 @@
 One Live call is active per server; starting another ends it. The accessor
 that started a call owns it through one owner socket (protocol:
 ``server/live/owner.py``). The registry starts and stops calls, attaches owner
-sockets, routes UI results, keeps the final updates of an ended call briefly
-for a reconnecting owner, and carries the operator's memory from one call to
-the next. Each call runs on its own host (``server/live/_call.py``).
+sockets, routes UI results, and keeps the final updates of an ended call
+briefly for a reconnecting owner. Each call runs on its own host
+(``server/live/_call.py``).
 """
 
 from __future__ import annotations
@@ -20,8 +20,6 @@ from core.model_tasks.live import LiveCall, LiveCallHost
 from server.events import ServerEventBus
 from server.live._call import LiveCallEntry, LiveCallLimits
 from server.live._context import RpcInvoker
-from server.live._memory import LiveMemory
-from server.live._record import LiveCallRecorder
 from server.live.owner import LiveOwnerStream
 
 JsonObject = dict[str, Any]
@@ -61,9 +59,6 @@ class LiveCallRegistry:
 
     ``rpc`` dispatches one registered RPC method in-process; the call's Tools
     and Run announcements go through it so they behave like any accessor call.
-    ``recorder`` keeps the Tool call and delegation records of calls that start
-    while ``recording()`` is true (Debug Mode). ``memory`` carries refs and the
-    operator's assignments from one call to the next (see ``_memory.py``).
     """
 
     def __init__(
@@ -73,15 +68,9 @@ class LiveCallRegistry:
         rpc: RpcInvoker,
         limits: LiveCallLimits | None = None,
         clock: Callable[[], datetime] = _utc_now,
-        recorder: LiveCallRecorder | None = None,
-        recording: Callable[[], bool] = lambda: True,
-        memory: LiveMemory | None = None,
     ) -> None:
         self._events = events
-        self._memory = memory or LiveMemory()
         self._rpc = rpc
-        self._recorder = recorder
-        self._recording = recording
         self._limits = limits or LiveCallLimits()
         self._clock = clock
         self._start_lock = asyncio.Lock()
@@ -123,10 +112,7 @@ class LiveCallRegistry:
                 on_finalized=self._entry_finalized,
                 started_at=self._clock(),
                 after_sequence=self._events.last_sequence,
-                memory=self._memory,
-                recap=self._memory.begin_call(),
                 wake_phrases=wake_phrases,
-                recorder=self._recorder if self._recording_enabled() else None,
             )
             call = await service.start_call(media=media, offer_sdp=offer_sdp, host=entry)
             if self._closed:
@@ -138,13 +124,6 @@ class LiveCallRegistry:
             self._active = entry
             entry.bind(call)
             return call
-
-    def _recording_enabled(self) -> bool:
-        try:
-            return bool(self._recording())
-        except Exception:
-            _LOGGER.warning("Live call recording check failed", exc_info=True)
-            return False
 
     def stop(self, call_id: str) -> bool:
         """Close the call gracefully in the background; ``False`` for unknown calls."""
@@ -182,11 +161,7 @@ class LiveCallRegistry:
         return entry.resolve_ui_request(request_id, result=result, error=error)
 
     async def aclose(self) -> None:
-        """End every call at server shutdown; starts are refused afterwards.
-
-        Records handed off so far are written even when the caller's bound
-        cancels the shutdown.
-        """
+        """End every call at server shutdown; starts are refused afterwards."""
         self._closed = True
         self._active = None
         entries = list(self._entries.values())
@@ -197,12 +172,8 @@ class LiveCallRegistry:
                 handle.cancel()
             self._linger.clear()
             self._entries.clear()
-            if self._recorder is not None:
-                await self._recorder.drain()
 
     def _entry_finalized(self, entry: LiveCallEntry) -> None:
-        # The idle period of the operator's memory starts when a call ends.
-        self._memory.touch()
         if self._active is entry:
             self._active = None
         if self._closed or not entry.has_undelivered_updates:

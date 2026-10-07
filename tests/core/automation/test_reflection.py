@@ -552,6 +552,23 @@ async def test_run_end_accounting_follows_the_review_cadence(
             None,
             id="librarian",
         ),
+        # The Live Agents are built in as well and never reviewed.
+        pytest.param(
+            SimpleNamespace(
+                **{
+                    **vars(_without(memory=True)),
+                    "id": "live-backend",
+                    "builtin": "live_backend",
+                    "tool_access": ToolAccess(mode="selected", allowed=("skill", "skill_manage")),
+                }
+            ),
+            (1, 1),
+            (1, 5),
+            {"iteration_count": 3, "tool_call_names": {"skill_manage"}},
+            (1, 5),
+            None,
+            id="live-agent",
+        ),
     ],
 )
 async def test_unavailable_dimension_is_neither_counted_nor_reviewed(

@@ -1,5 +1,7 @@
 export default Object.freeze({
   'live.title': 'Live voice',
+  'live.agent.voice': 'Live voice',
+  'live.agent.backend': 'Live backend',
   'live.startButton': 'Start Live',
   'live.stopButton': 'Stop Live',
   'live.mute': 'Mute microphone',
@@ -12,6 +14,8 @@ export default Object.freeze({
   'live.activity.hide': 'Hide Live activity',
   'live.activity.title': 'Live activity',
   'live.activity.lastCall': 'Last Live call',
+  'live.activity.voiceSession': 'Voice model Session',
+  'live.activity.backendSession': 'vBot backend Session',
   'live.activity.empty':
     'Nothing yet. What you say and what Live voice does in vBot shows here.',
   'live.activity.you': 'You',
@@ -21,10 +25,10 @@ export default Object.freeze({
   'live.tool.start_agent_session': 'Started Sessions',
   'live.tool.start_coding_terminal': 'Started coding Terminals',
   'live.tool.send_message': 'Sent a message',
-  'live.tool.read': 'Read',
+  'live.tool.read_output': 'Read output',
   'live.tool.stop': 'Stopped work',
   'live.tool.open': 'Showed in the app',
-  'live.tool.terminal': 'Used a Terminal',
+  'live.tool.manage_terminals': 'Arranged Terminals',
   'live.tool.end_call': 'Ended the call',
   'live.busy': 'Working…',
   'live.state.connecting': 'Connecting…',
@@ -48,7 +52,7 @@ export default Object.freeze({
   'live.error.providerUnavailable':
     'The Provider connection of the Live voice Model is missing or not set up. Check it in Settings → Providers.',
   'live.error.backendUnavailable':
-    'The backend model of Live voice is not available. Choose another one in Settings → Voice.',
+    'The backend chosen for Live voice cannot be used. Check the Backend option of the voice Model in Settings → Voice.',
   'live.error.notUsable':
     'The Live voice Model cannot be used right now. Check its Provider connection in Settings.',
   'live.error.invalidOffer':

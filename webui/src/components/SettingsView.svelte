@@ -16,6 +16,7 @@
   import SettingsExtensionsPanel from './settings/SettingsExtensionsPanel.svelte';
   import SettingsGeneralPanel from './settings/SettingsGeneralPanel.svelte';
   import SettingsLibrarianPanel from './settings/SettingsLibrarianPanel.svelte';
+  import SettingsLiveVoicePanel from './settings/SettingsLiveVoicePanel.svelte';
   import SettingsNotificationsPanel from './settings/SettingsNotificationsPanel.svelte';
   import SettingsProvidersPanel from './settings/SettingsProvidersPanel.svelte';
   import SettingsRecallPanel from './settings/SettingsRecallPanel.svelte';
@@ -205,7 +206,6 @@
   const panelById = new Map(sections.map((section) => [section.id, section]));
   const modelTasksBySection = {
     speech_models: ['speech_to_text', 'text_to_speech'],
-    live_voice_model: ['live_voice'],
     media_models: [
       'image_understanding',
       'image_generation',
@@ -929,10 +929,19 @@
       {agentsRefreshToken}
       onError={(message) => reportSettingsError(message)}
     />
+  {:else if panelId === 'live_voice_model'}
+    <SettingsLiveVoicePanel
+      {settings}
+      onCommit={commitSettings}
+      onError={(message) => reportSettingsError(message)}
+      {onOpenSession}
+      {modelsRefreshToken}
+      {agentsRefreshToken}
+      {sessionsRefreshToken}
+    />
   {:else if modelTasksBySection[panelId]}
     <SettingsSpecializedModelsPanel
       taskTypes={modelTasksBySection[panelId]}
-      showTaskLabels={panelId !== 'live_voice_model'}
       {settings}
       onCommit={commitSettings}
       onError={(message) => reportSettingsError(message)}

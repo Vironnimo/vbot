@@ -1,9 +1,17 @@
 """OpenAI GPT-Live wires: ChatGPT subscription (Codex route) and public API.
 
-Both dialects create a WebRTC call over HTTP with client delegation and join
-the call's control WebSocket before the SDP answer is returned, because the
-control channel does not replay earlier events. The browser's data channel
-duplicates control events; the server never relies on it.
+Both dialects create a WebRTC call over HTTP and join the call's control
+WebSocket before the SDP answer is returned, because the control channel does
+not replay earlier events. The browser's data channel duplicates control
+events; the server never relies on it.
+
+The voice model hands requests on through native delegation. With client
+delegation, vBot answers each one (:class:`WireDelegation`). With an
+:class:`OpenAIBackend`, OpenAI's hosted backend model answers them
+(``delegation: {type: "responses"}``) and calls vBot's function Tools; each
+call arrives as a :class:`WireToolCall`, and its output goes back as a
+``function_call_output`` item. The hosted backend's event shapes are not
+verified live yet; the parser accepts the Responses item and flat forms.
 
 * ``codex`` (Connection mode ``codex_responses``): ``POST
   /codex/realtime/calls`` returns the raw SDP answer and the call id in
@@ -18,7 +26,8 @@ from __future__ import annotations
 import contextlib
 import json
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
@@ -36,6 +45,7 @@ from core.model_tasks._live_wire import (
     WireProblem,
     WireSendError,
     WireStarted,
+    WireToolCall,
     WireUsage,
     websocket_url,
 )
@@ -68,7 +78,32 @@ _CALL_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _AUDIO_FRAME_MARKERS = ('"session.input_audio.append"', '"session.output_audio.delta"')
 _CAPTION_ROLES = frozenset({"user", "assistant"})
 
+# Events that can carry a finished function call of the hosted backend model.
+_FUNCTION_CALL_EVENTS = frozenset(
+    {
+        "response.output_item.done",
+        "response.function_call_arguments.done",
+        "delegation.output_item.done",
+        "delegation.function_call",
+    }
+)
+# Events that wrap another event of the hosted backend model.
+_WRAPPER_EVENTS = frozenset({"response.event", "delegation.event", "delegation.response.event"})
+
 WebSocketConnector = Callable[..., Awaitable[Any]]
+
+
+@dataclass(frozen=True)
+class OpenAIBackend:
+    """OpenAI's hosted backend model, which answers what the voice model hands on.
+
+    *tools* are vBot's function Tools it can call (``name``, ``description``,
+    JSON Schema ``parameters``).
+    """
+
+    model: str
+    instructions: str
+    tools: Sequence[JsonObject]
 
 
 class ControlJoinError(Exception):
@@ -93,10 +128,13 @@ async def open_openai_live_wire(
     offer_sdp: str,
     instructions: str,
     voice: str | None,
+    backend: OpenAIBackend | None = None,
     connect: WebSocketConnector | None = None,
     http_client: httpx.AsyncClient | None = None,
 ) -> OpenAILiveWire:
     """Create the provider call and join its control channel.
+
+    Without *backend*, vBot answers the voice model's delegations.
 
     Provider errors from call creation propagate unchanged. A control join
     failure raises :class:`ControlJoinError`; the created call then ends when
@@ -108,6 +146,7 @@ async def open_openai_live_wire(
         offer_sdp=offer_sdp,
         instructions=instructions,
         voice=voice,
+        backend=backend,
         http_client=http_client,
     )
     try:
@@ -141,12 +180,13 @@ class _OpenAILiveClient(ProviderTaskClient):
         offer_sdp: str,
         instructions: str,
         voice: str | None,
+        backend: OpenAIBackend | None,
         http_client: httpx.AsyncClient | None,
     ) -> tuple[str, str, str, dict[str, str]]:
         session: JsonObject = {
             "model": self._model_id,
             "instructions": instructions,
-            "delegation": {"type": "client"},
+            "delegation": _delegation(backend),
         }
         if voice:
             session["audio"] = {"output": {"voice": voice}}
@@ -198,6 +238,27 @@ class _OpenAILiveClient(ProviderTaskClient):
         return headers
 
 
+def _delegation(backend: OpenAIBackend | None) -> JsonObject:
+    if backend is None:
+        return {"type": "client"}
+    return {
+        "type": "responses",
+        "responses": {
+            "model": backend.model,
+            "instructions": backend.instructions,
+            "tools": [
+                {
+                    "type": "function",
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("parameters") or {"type": "object", "properties": {}},
+                }
+                for tool in backend.tools
+            ],
+        },
+    }
+
+
 def _parse_codex_call(response: httpx.Response) -> tuple[str, str]:
     answer_sdp = response.text
     if not answer_sdp.lstrip().startswith("v=0"):
@@ -245,6 +306,9 @@ class OpenAILiveWire:
         self._normalizer: _CodexEvents | _PublicEvents = (
             _CodexEvents() if dialect == DIALECT_CODEX else _PublicEvents()
         )
+        # Function calls of the hosted backend model: seen, and still unanswered.
+        self._function_calls: set[str] = set()
+        self._open_function_calls: set[str] = set()
 
     @property
     def call_id(self) -> str:
@@ -269,7 +333,7 @@ class OpenAILiveWire:
                     continue
                 if not isinstance(event, dict):
                     continue
-                for normalized in self._normalizer.normalize(event):
+                for normalized in [*self._normalizer.normalize(event), *self._calls(event)]:
                     yield normalized
                     if isinstance(normalized, WireClosed):
                         return
@@ -277,7 +341,32 @@ class OpenAILiveWire:
             pass
         yield WireClosed(reason=None, usage=None, confirmed=False)
 
+    def _calls(self, event: JsonObject) -> list[WireEvent]:
+        calls: list[WireEvent] = []
+        for call in _function_calls(event):
+            if call.call_id not in self._function_calls:
+                self._function_calls.add(call.call_id)
+                self._open_function_calls.add(call.call_id)
+                calls.append(call)
+        return calls
+
     async def deliver_result(self, delegation_id: str, text: str) -> None:
+        if delegation_id in self._function_calls:
+            await self._send(
+                {
+                    "type": "response.item.create",
+                    "item": {
+                        "type": "function_call_output",
+                        "call_id": delegation_id,
+                        "output": text,
+                    },
+                }
+            )
+            self._open_function_calls.discard(delegation_id)
+            if not self._open_function_calls:
+                # The hosted backend continues once every call it made has an output.
+                await self._send({"type": "response.create"})
+            return
         if self._dialect == DIALECT_CODEX:
             for chunk in chunk_text(text, _CODEX_APPEND_MAX_BYTES):
                 await self._send(
@@ -364,6 +453,24 @@ def _byte_prefix_length(text: str, max_bytes: int) -> int:
         if size > max_bytes:
             return max(index, 1)
     return len(text)
+
+
+def _function_calls(event: JsonObject, depth: int = 0) -> list[WireToolCall]:
+    """The finished function calls of the hosted backend model *event* carries."""
+    kind = event.get("type")
+    if kind in _WRAPPER_EVENTS and depth < 2:
+        inner = event.get("event")
+        return _function_calls(inner, depth + 1) if isinstance(inner, dict) else []
+    if kind not in _FUNCTION_CALL_EVENTS:
+        return []
+    item = event.get("item")
+    call = item if isinstance(item, dict) else event
+    if isinstance(item, dict) and item.get("type") != "function_call":
+        return []
+    call_id, name = call.get("call_id"), call.get("name")
+    if not isinstance(call_id, str) or not call_id or not isinstance(name, str) or not name:
+        return []
+    return [WireToolCall(call_id=call_id, name=name, arguments=call.get("arguments"))]
 
 
 def _usage(event: JsonObject) -> JsonObject | None:

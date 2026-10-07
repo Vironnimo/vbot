@@ -101,6 +101,7 @@ BUILTIN_TOOL_FAMILY_LABELS = {
     "sessions": "Sessions",
     "skills": "Skills",
     "media": "Media",
+    "live": "Live voice",
 }
 
 JsonObject = dict[str, Any]
@@ -777,7 +778,8 @@ class ToolPromptBlockRegistry:
     of ``core.prompts.BlockDefinition`` objects, never imports a tool class.
 
     A declared block is id ``tool:<name>`` and owner ``tool:<name>`` (so gate 2
-    renders it only when ``<name>`` is on the agent's effective allowlist), static
+    renders it only when ``<name>`` is on the agent's effective allowlist) unless
+    the declaration names another owner, static
     (``default_text``) or dynamic (``render``) — the same split as a core or
     extension block. Project and Sub-Agent use this seam for dynamic catalogs and
     guidance. Collisions are resolved first-wins with a warning, like tool-name
@@ -785,7 +787,7 @@ class ToolPromptBlockRegistry:
     """
 
     def __init__(self) -> None:
-        self._declarations: dict[str, tuple[str | None, Callable[..., Any] | None]] = {}
+        self._declarations: dict[str, tuple[str | None, Callable[..., Any] | None, str | None]] = {}
 
     def register(
         self,
@@ -793,8 +795,12 @@ class ToolPromptBlockRegistry:
         *,
         default_text: str | None = None,
         render: Callable[..., Any] | None = None,
+        owner: str | None = None,
     ) -> None:
         """Declare a prompt block for *tool_name* (exactly one text / render).
+
+        *owner* gates the block on another owner than ``tool:<tool_name>``, such
+        as ``builtin:<kind>`` for guidance only one built-in Agent gets.
 
         *render* returns the block's text, or a ``core.prompts.RenderedBlock``
         that also names the catalog the text lists. Chat pins a dynamic block's
@@ -816,7 +822,7 @@ class ToolPromptBlockRegistry:
                 tool_name,
             )
             return
-        self._declarations[tool_name] = (default_text, render)
+        self._declarations[tool_name] = (default_text, render, owner)
 
     def block_definitions(self) -> list[Any]:
         """Return the declared blocks as ``core.prompts.BlockDefinition`` objects.
@@ -828,11 +834,11 @@ class ToolPromptBlockRegistry:
         from core.prompts import BlockDefinition
 
         definitions: list[Any] = []
-        for tool_name, (default_text, render) in self._declarations.items():
+        for tool_name, (default_text, render, owner) in self._declarations.items():
             definitions.append(
                 BlockDefinition(
                     id=f"tool:{tool_name}",
-                    owner=f"tool:{tool_name}",
+                    owner=owner or f"tool:{tool_name}",
                     default_text=default_text,
                     render=render,
                 )

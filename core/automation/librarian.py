@@ -76,6 +76,7 @@ from core.agents import (
     SKILL_AGENT_ID_KEY,
     AgentNotFoundError,
     LibrarianProblem,
+    is_builtin_agent,
     is_librarian,
     librarian_problem_message,
 )
@@ -813,6 +814,8 @@ class LibrarianService:
             raise LibrarianUnavailableError(
                 "The Librarian maintains the Skills of other Agents and gets no pass itself."
             )
+        if is_builtin_agent(agent):
+            raise AgentNotFoundError(f"Agent not found: {agent_id}")
         return agent
 
     def _blocked(

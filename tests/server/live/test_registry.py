@@ -1,5 +1,5 @@
 """Live call ownership: one active call, its owner socket, what the app shows, UI requests,
-the call's brief and Tools, Run announcements, local call records and shutdown."""
+the call's Live Tools, Run announcements and shutdown."""
 
 from __future__ import annotations
 
@@ -21,7 +21,6 @@ from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-
 from core.model_tasks.live import LiveCallHost, LiveRunNotice, LiveStartRejected
 from server.app import create_app
 from server.events import ServerEventBus
-from server.live._record import LiveCallRecorder
 from server.live.owner import (
     LIVE_AUDIO_FRAME_MAX_BYTES,
     LIVE_SOCKET_CLOSE_ENDED,
@@ -155,7 +154,7 @@ class FakeRpc:
 
 async def run_tool(call: FakeCall, name: str, arguments: JsonObject) -> JsonObject:
     """Run one Live Tool call through the call's host and return its result."""
-    return (await call.host.run_tool(name, arguments)).result
+    return await call.host.run_live_tool(name, arguments)
 
 
 class OwnerReader:
@@ -190,8 +189,6 @@ class Harness:
         limits: LiveCallLimits = FAST,
         *,
         bus: ServerEventBus | None = None,
-        recorder: LiveCallRecorder | None = None,
-        recording: Callable[[], bool] = lambda: True,
     ) -> None:
         self.bus = bus or ServerEventBus()
         self.rpc = FakeRpc()
@@ -201,8 +198,6 @@ class Harness:
             rpc=self.rpc,
             limits=limits,
             clock=lambda: STARTED_AT,
-            recorder=recorder,
-            recording=recording,
         )
         self.readers: list[OwnerReader] = []
 
@@ -601,29 +596,19 @@ async def test_tools_report_voice_stopped_once_the_call_is_stopping(live: Harnes
 
 
 @pytest.mark.asyncio
-async def test_the_brief_carries_the_wake_phrases_of_the_start(live: Harness) -> None:
+async def test_the_host_carries_the_wake_phrases_of_the_start(live: Harness) -> None:
     call = await live.start_relay(wake_phrases=("Hey Nabu", "Hey Jarvis"))
-    for direct_tools in (False, True):
-        brief = call.host.brief(direct_tools=direct_tools)
-        assert '"Hey Nabu", "Hey Jarvis"' in brief.voice_instructions
-        assert "end_call" in [tool["name"] for tool in brief.tools]
+    assert call.host.wake_phrases == ("Hey Nabu", "Hey Jarvis")
 
 
 @pytest.mark.asyncio
-async def test_a_later_call_keeps_the_refs_and_assignments_of_the_earlier_one(
-    live: Harness,
-) -> None:
+async def test_each_call_starts_with_refs_of_its_own(live: Harness) -> None:
     first = await live.start()
-    assert "Earlier calls" not in first.host.brief(direct_tools=True).voice_instructions
     await run_tool(first, "start_agent_session", {"agent": "joel", "task": "Plan the trip"})
+    assert first.host.known_refs() == "- s1: Session at Joel"
 
     second = await live.start()
-    for direct_tools in (False, True):
-        brief = second.host.brief(direct_tools=direct_tools)
-        for instructions in (brief.voice_instructions, brief.delegation_instructions):
-            assert '"task": "Plan the trip"' in instructions
-            assert "- s1: Session at Joel" in instructions
-    assert second.host.known_refs() == "- s1: Session at Joel"
+    assert second.host.known_refs() == ""
 
 
 @pytest.mark.asyncio
@@ -729,119 +714,6 @@ async def test_a_live_call_nobody_uses_is_warned_then_ended() -> None:
         assert call.close_calls == 1
     finally:
         await harness.close()
-
-
-# -- call records -------------------------------------------------------------------
-
-
-class RecordClock:
-    def __init__(self) -> None:
-        self.now = datetime(2026, 9, 25, 23, 59, 30, tzinfo=UTC)
-
-    def __call__(self) -> datetime:
-        return self.now
-
-
-def record_lines(path: Path) -> list[JsonObject]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-
-
-@pytest.mark.asyncio
-async def test_records_are_kept_as_json_lines_in_the_file_of_their_utc_day(
-    tmp_path: Path,
-) -> None:
-    clock = RecordClock()
-    harness = Harness(recorder=LiveCallRecorder(tmp_path / "live-calls", clock=clock))
-    call = await harness.start()
-    call.host.record({"type": "tool", "tool": "overview", "result": "Agents: Ä."})
-    call.host.record({"type": "delegation", "request": "was läuft?"})
-    clock.now += timedelta(minutes=1)
-    call.host.record({"type": "tool", "tool": "read", "arguments": {"at": clock.now}})
-    # Shutdown writes every record handed off before it.
-    await harness.close()
-
-    first = tmp_path / "live-calls" / "2026-09-25.jsonl"
-    assert record_lines(first) == [
-        {
-            "at": "2026-09-25T23:59:30+00:00",
-            "call_id": "call-1",
-            "type": "tool",
-            "tool": "overview",
-            "result": "Agents: Ä.",
-        },
-        {
-            "at": "2026-09-25T23:59:30+00:00",
-            "call_id": "call-1",
-            "type": "delegation",
-            "request": "was läuft?",
-        },
-    ]
-    assert b"\r\n" not in first.read_bytes()
-    # Values JSON cannot hold are kept as text.
-    assert record_lines(tmp_path / "live-calls" / "2026-09-26.jsonl")[0]["arguments"] == {
-        "at": "2026-09-26 00:00:30+00:00"
-    }
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("debug_mode", [True, False])
-async def test_tool_calls_are_recorded_only_for_calls_started_in_debug_mode(
-    tmp_path: Path, debug_mode: bool
-) -> None:
-    directory = tmp_path / "live-calls"
-    harness = Harness(
-        recorder=LiveCallRecorder(directory, clock=RecordClock()), recording=lambda: debug_mode
-    )
-    call = await harness.start()
-    call.host.brief(direct_tools=True)
-    await call.host.run_tool("functions.overview", "{}")
-    await harness.close()
-
-    if not debug_mode:
-        assert not directory.exists()
-        return
-    [record] = record_lines(directory / "2026-09-25.jsonl")
-    assert (record["type"], record["mode"], record["called"], record["tool"]) == (
-        "tool",
-        "direct",
-        "functions.overview",
-        "overview",
-    )
-
-
-@pytest.mark.asyncio
-async def test_record_days_older_than_the_retention_window_are_deleted(tmp_path: Path) -> None:
-    directory = tmp_path / "live-calls"
-    directory.mkdir()
-    for name in ("2026-08-25.jsonl", "2026-08-26.jsonl", "notes.jsonl", "2026-08-01.txt"):
-        (directory / name).write_bytes(b"{}\n")
-    harness = Harness(recorder=LiveCallRecorder(directory, retention_days=30, clock=RecordClock()))
-    call = await harness.start()
-    call.host.record({"type": "tool"})
-    await harness.close()
-
-    assert sorted(path.name for path in directory.iterdir()) == [
-        "2026-08-01.txt",
-        "2026-08-26.jsonl",
-        "2026-09-25.jsonl",
-        "notes.jsonl",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_a_failing_record_write_is_logged_without_content_and_never_raises(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    blocked = tmp_path / "live-calls"
-    blocked.write_bytes(b"not a directory")
-    harness = Harness(recorder=LiveCallRecorder(blocked, clock=RecordClock()))
-    call = await harness.start()
-    with caplog.at_level(logging.WARNING):
-        call.host.record({"type": "delegation", "request": "secret task"})
-        await harness.close()
-
-    assert "Live call record failed" in caplog.text
-    assert "secret task" not in caplog.text
 
 
 # -- Run announcements ----------------------------------------------------------

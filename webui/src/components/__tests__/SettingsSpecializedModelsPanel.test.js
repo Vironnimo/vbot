@@ -801,67 +801,66 @@ describe('SettingsSpecializedModelsPanel', () => {
       },
     );
 
-    it('narrows dependent choices and never keeps a hidden value', async () => {
-      const target = 'openai/gpt-live-1::api-key';
-      api.getTaskModelOptions.mockResolvedValue({
-        fields: [
-          {
-            name: 'backend_model',
-            type: 'select',
-            label: 'Backend model',
-            default: 'terra',
-            required: true,
-            options: [
-              { value: 'terra', label: 'Terra' },
-              { value: 'astra', label: 'Astra' },
-            ],
-          },
-          {
-            name: 'backend_thinking_effort',
-            type: 'select',
-            label: 'Backend reasoning',
-            default: 'low',
-            options: ['', 'none', 'low', 'medium', 'high'].map((value) => ({
-              value,
-              label: value || 'Model default',
-            })),
-            options_by: {
-              field: 'backend_model',
-              values: {
-                terra: ['', 'none', 'low', 'high'],
-                astra: ['', 'none', 'medium'],
-              },
-            },
-          },
-        ],
-      });
+    // GPT-Live's options: who answers its requests, and OpenAI's backend
+    // model, which only the OpenAI backend uses.
+    function gptLiveFields() {
+      return [
+        {
+          name: 'backend',
+          type: 'select',
+          label: 'Backend',
+          default: 'vbot',
+          required: true,
+          options: [
+            { value: 'vbot', label: 'vBot (the Live backend Agent)' },
+            { value: 'openai', label: 'OpenAI' },
+          ],
+        },
+        {
+          name: 'openai_backend_model',
+          type: 'select',
+          label: 'OpenAI backend model',
+          default: 'gpt-6-luna',
+          options: [
+            { value: 'gpt-6-luna', label: 'gpt-6-luna' },
+            { value: 'gpt-6-sol', label: 'gpt-6-sol' },
+          ],
+          options_by: { field: 'backend', values: { vbot: [] } },
+        },
+      ];
+    }
+    const target = 'openai/gpt-live-1::api-key';
+    const backendId = 'task-model-live_voice-backend';
+    const backendModelId = 'task-model-live_voice-openai_backend_model';
+
+    function choose(fieldId, label) {
+      document.getElementById(fieldId).click();
+      flushSync();
+      [...document.querySelectorAll('[role="option"]')]
+        .find((option) => option.textContent.trim() === label)
+        .click();
+      flushSync();
+    }
+
+    it('offers a dependent field only for the value that uses it', async () => {
+      api.getTaskModelOptions.mockResolvedValue({ fields: gptLiveFields() });
       mountPanel({
         taskTypes: ['live_voice'],
         settings: { model_tasks: { live_voice: { target, options: {} } } },
       });
-      const effortId = 'task-model-live_voice-backend_thinking_effort';
-      const toggleEffort = () => {
-        document.getElementById(effortId).click();
-        flushSync();
-      };
-      await waitForCondition(() => document.getElementById(effortId));
+      await waitForCondition(() => document.getElementById(backendId));
+      expect(document.getElementById(backendModelId)).toBeNull();
 
-      toggleEffort();
-      expect(optionLabels()).toEqual(['Model default', 'none', 'low', 'high']);
-      toggleEffort();
-
-      document.getElementById('task-model-live_voice-backend_model').click();
-      flushSync();
-      [...document.querySelectorAll('[role="option"]')]
-        .find((option) => option.textContent.trim() === 'Astra')
-        .click();
-      flushSync();
-      expect(document.getElementById(effortId).textContent.trim()).toBe(
-        'Model default',
+      choose(backendId, 'OpenAI');
+      expect(document.getElementById(backendModelId).textContent.trim()).toBe(
+        'gpt-6-luna',
       );
-      toggleEffort();
-      expect(optionLabels()).toEqual(['Model default', 'none', 'medium']);
-      toggleEffort();
+      document.getElementById(backendModelId).click();
+      flushSync();
+      expect(optionLabels()).toEqual(['gpt-6-luna', 'gpt-6-sol']);
+      document.getElementById(backendModelId).click();
+      flushSync();
+      choose(backendModelId, 'gpt-6-sol');
 
       button('Save').click();
       await waitForCondition(
@@ -870,61 +869,31 @@ describe('SettingsSpecializedModelsPanel', () => {
       expect(api.updateTaskModelSettings.mock.calls[0][0]).toEqual({
         live_voice: {
           target,
-          options: { backend_model: 'astra', backend_thinking_effort: '' },
+          options: { backend: 'openai', openai_backend_model: 'gpt-6-sol' },
         },
       });
     });
 
-    it('hides a dependent field that the current value makes irrelevant', async () => {
-      const target = 'xai/grok-voice-think-fast-2.0::subscription';
-      api.getTaskModelOptions.mockResolvedValue({
-        fields: [
-          {
-            name: 'backend_model',
-            type: 'select',
-            label: 'Backend model',
-            default: '',
-            options: [
-              { value: '', label: 'None (the voice model uses vBot directly)' },
-              { value: 'terra', label: 'Terra' },
-            ],
-          },
-          {
-            name: 'backend_thinking_effort',
-            type: 'select',
-            label: 'Backend reasoning',
-            default: 'low',
-            options: ['', 'low', 'high'].map((value) => ({
-              value,
-              label: value || 'Model default',
-            })),
-            options_by: { field: 'backend_model', values: { '': [] } },
-          },
-        ],
-      });
+    it('keeps the value of a hidden field until it shows again', async () => {
+      api.getTaskModelOptions.mockResolvedValue({ fields: gptLiveFields() });
       mountPanel({
         taskTypes: ['live_voice'],
         settings: {
           model_tasks: {
             live_voice: {
               target,
-              options: { backend_thinking_effort: 'high' },
+              options: { backend: 'vbot', openai_backend_model: 'gpt-6-sol' },
             },
           },
         },
       });
-      const backendId = 'task-model-live_voice-backend_model';
-      const effortId = 'task-model-live_voice-backend_thinking_effort';
       await waitForCondition(() => document.getElementById(backendId));
 
-      expect(document.getElementById(effortId)).toBeNull();
-      document.getElementById(backendId).click();
-      flushSync();
-      [...document.querySelectorAll('[role="option"]')]
-        .find((option) => option.textContent.trim() === 'Terra')
-        .click();
-      flushSync();
-      expect(document.getElementById(effortId).textContent.trim()).toBe('high');
+      expect(document.getElementById(backendModelId)).toBeNull();
+      choose(backendId, 'OpenAI');
+      expect(document.getElementById(backendModelId).textContent.trim()).toBe(
+        'gpt-6-sol',
+      );
     });
   });
 });

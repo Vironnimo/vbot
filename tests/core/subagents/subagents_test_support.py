@@ -95,14 +95,14 @@ class RecordingTriggerService:
 
 
 class FakeAgents:
-    """The roster ``agent_ids``, plus the built-in Librarian that resolves but is never listed."""
+    """The roster ``agent_ids``, plus built-in Agents that resolve but are never listed."""
 
     def __init__(self, agent_ids: set[str]) -> None:
         self._agent_ids = agent_ids
 
     def get(self, agent_id: str) -> SimpleNamespace:
-        if agent_id == "librarian":
-            return SimpleNamespace(id=agent_id, builtin="librarian")
+        if agent_id in {"librarian", "live-backend"}:
+            return SimpleNamespace(id=agent_id, builtin=agent_id.replace("-", "_"))
         if agent_id not in self._agent_ids:
             raise AgentNotFoundError(f"Agent not found: {agent_id}")
         return SimpleNamespace(id=agent_id, model="fixture/model")

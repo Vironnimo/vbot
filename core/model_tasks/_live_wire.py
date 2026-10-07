@@ -84,9 +84,10 @@ class WireDelegation:
 
 @dataclass(frozen=True)
 class WireToolCall:
-    """The voice model called one function Tool itself (direct Tools mode).
+    """A Model of the call called one of vBot's function Tools.
 
-    ``name`` is the name as called, which the call maps to a Live Tool.
+    The caller is the voice model, or OpenAI's hosted backend model. ``name``
+    is the name as called, which the voice Agent's Session resolves.
     ``arguments`` is the decoded argument value, which may not be an object, or
     the raw text when it is not JSON. The result text returns through
     :meth:`LiveWire.deliver_result` with the same id.

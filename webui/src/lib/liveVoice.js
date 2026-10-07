@@ -53,6 +53,14 @@ class LiveVoiceFailure extends Error {
 const failure = (code) => new LiveVoiceFailure(code);
 const isText = (value) => typeof value === 'string' && value.length > 0;
 
+function sessionRef(value) {
+  return isPlainObject(value) &&
+    isText(value.agent_id) &&
+    isText(value.session_id)
+    ? { agent_id: value.agent_id, session_id: value.session_id }
+    : null;
+}
+
 function stopTracks(stream) {
   for (const track of stream?.getTracks?.() ?? []) {
     track.enabled = false;
@@ -130,6 +138,10 @@ export function createLiveVoiceState() {
     // terminal_id?}]}. Captions and actions share `seq`, their order of arrival.
     // Both stay after the call until the next start.
     actions: [],
+    // The call's Sessions, {agent_id, session_id} each: the voice model's
+    // from the start, the vBot backend's once the call created it (null
+    // before and for a call without one). Kept after the call too.
+    sessions: { voice: null, backend: null },
     // Last error code that ended a call; kept until the next start.
     error: '',
     // The call is held (microphone and assistant audio off) for something
@@ -518,6 +530,13 @@ export function createLiveVoice({
     state.actions = [...state.actions, action].slice(-ACTION_LIMIT);
   }
 
+  function applySessions(frame) {
+    state.sessions = {
+      voice: sessionRef(frame.voice),
+      backend: sessionRef(frame.backend),
+    };
+  }
+
   // Seconds from now as epoch milliseconds; null for anything else.
   function deadline(seconds) {
     return Number.isFinite(seconds) && seconds >= 0
@@ -611,6 +630,9 @@ export function createLiveVoice({
         break;
       case 'action':
         applyAction(frame);
+        break;
+      case 'sessions':
+        applySessions(frame);
         break;
       case 'expiry':
         state.expiresAt = deadline(frame.seconds);

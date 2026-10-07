@@ -812,6 +812,8 @@ describe('ProjectsView Tool and Skill whitelists', () => {
         })),
         { name: 'status', family: null },
         { name: 'memory', family: null, project_configurable: false },
+        // Only the Live voice Agents use the Live call Tools.
+        { name: 'send_message', family: 'live', constraints: ['live_call'] },
       ],
       defaultProjectTools: ['read'],
     });
@@ -832,6 +834,7 @@ describe('ProjectsView Tool and Skill whitelists', () => {
     ]);
     // Project configurability is server-owned metadata, not a name list.
     expect(toggleByAriaLabel('Toggle tool memory')).toBeNull();
+    expect(toggleByAriaLabel('Toggle tool send_message')).toBeNull();
 
     const search = document.querySelector(
       '#project-detail-panel-access input[type="search"]',

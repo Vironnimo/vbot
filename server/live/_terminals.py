@@ -26,8 +26,13 @@ from pathlib import Path
 
 from core.model_tasks.live import live_failure, live_success
 from core.tools.call_syntax import spelling
+from core.tools.live import (
+    MAX_LIVE_NAME_CHARS,
+    MAX_LIVE_TEXT_CHARS,
+    TOOL_MANAGE_TERMINALS,
+    TOOL_READ_OUTPUT,
+)
 from core.utils.paths import model_path
-from server.live._brief import MAX_LIVE_NAME_CHARS, MAX_LIVE_TEXT_CHARS
 from server.live._context import (
     UNCERTAIN_DELIVERY,
     VOICE_STOPPED,
@@ -388,7 +393,8 @@ class LiveTerminals:
             raise
         except RpcError as exc:
             return live_failure(
-                "send_failed", f"Nothing was sent to {ref}: {exc.message} Call read with {ref}."
+                "send_failed",
+                f"Nothing was sent to {ref}: {exc.message} Call read_output with {ref}.",
             )
         except Exception:
             _LOGGER.exception("Live Terminal message failed unexpectedly")
@@ -401,7 +407,7 @@ class LiveTerminals:
 
     async def read(self, terminal: JsonObject) -> JsonObject:
         """The coding Terminal's screen as quoted text."""
-        ref, program = self._coding(terminal, "read")
+        ref, program = self._coding(terminal, TOOL_READ_OUTPUT)
         snapshot = await self._read(str(terminal["terminal_id"]))
         lines = snapshot.screen.rstrip().splitlines()
         screen = "\n".join(line.rstrip() for line in lines)
@@ -433,11 +439,11 @@ class LiveTerminals:
         if key not in KEY_SEQUENCES:
             raise LiveToolError(
                 "missing_key",
-                f"key must be one of {', '.join(KEY_SEQUENCES)}. Call terminal again with "
+                f"key must be one of {', '.join(KEY_SEQUENCES)}. Call manage_terminals again with "
                 f'{{"action": "key", "target": "{ref}", "key": "enter"}}.',
             )
-        ref, program = self._writable(terminal, "terminal")
-        return await self._press(terminal, ref, program, key, tool="terminal")
+        ref, program = self._writable(terminal, TOOL_MANAGE_TERMINALS)
+        return await self._press(terminal, ref, program, key, tool=TOOL_MANAGE_TERMINALS)
 
     # -- shared -------------------------------------------------------------
 
@@ -485,18 +491,20 @@ class LiveTerminals:
                     return live_failure(
                         "program_not_running",
                         f"{label} was not pressed: {program.label} no longer runs in {ref}, so the "
-                        f"key would reach its shell. Call read with {ref} to see its screen.",
+                        f"key would reach its shell. Call read_output with {ref} to see its "
+                        "screen.",
                     )
                 return live_failure(
                     "key_failed", f"{label} was not pressed in {ref}: {exc.message}"
                 )
             if tool == "stop":
                 return live_success(
-                    f"Pressed {label} in {ref} to interrupt it. Call read with {ref} to check that "
+                    f"Pressed {label} in {ref} to interrupt it. Call read_output with {ref} to "
+                    "check that "
                     "it stopped."
                 )
             return live_success(
-                f"Pressed {label} in {ref}. Call read with {ref} to see the result."
+                f"Pressed {label} in {ref}. Call read_output with {ref} to see the result."
             )
         return live_failure(
             "screen_busy",
@@ -594,7 +602,8 @@ def _unconfirmed_answer(program: CodingProgram, ref: str, screen: str) -> JsonOb
     return live_failure(
         "answer_not_selected",
         f'{program.label} in {ref} has {selected}, not "{prompt.choice}", so Enter was not '
-        f'pressed. To answer "{prompt.choice}", press up or down with terminal until read with '
+        f'pressed. To answer "{prompt.choice}", press up or down with manage_terminals until '
+        "read_output with "
         f"{ref} shows it selected, then press Enter. Other answers are for the user to choose in "
         "the app.",
     )
@@ -658,31 +667,33 @@ def _task_sentence(
         return (
             f"{who} did not show {program.label}'s input line within "
             f"{round(timeout_seconds)} seconds, so the task was not typed. "
-            f"Call read with {first} to check it, then {later}.{others}"
+            f"Call read_output with {first} to check it, then {later}.{others}"
         )
     if status == "exited":
         return f"{who} ended before {program.label} was ready; the task was not typed."
     if status == "not_running":
         return (
-            f"{program.label} no longer runs in {who}, so the task was not typed. Call read with "
+            f"{program.label} no longer runs in {who}, so the task was not typed. Call "
+            "read_output with "
             f"{first} to see why."
         )
     if status in {"not_at_input", "busy"}:
         return (
             f"{who} did not show {program.label}'s input line, so the task was not typed. Call "
-            f"read with {first}, then {later}.{others}"
+            f"read_output with {first}, then {later}.{others}"
         )
     if status == "typed_program_ended":
         return f"{program.label} ended in {who} after the task was typed; it was not sent."
     if status == "typed_unconfirmed":
         return (
             f"The task was typed into {who}, but {program.label}'s input line does not show it, "
-            f"so it was not sent. Call read with {first} to see the screen.{others}"
+            f"so it was not sent. Call read_output with {first} to see the screen.{others}"
         )
     if status == "typed_not_sent":
         return (
             f"The task was typed into {who} but not sent ({detail or 'Enter failed'}). Call "
-            f"read with {first}; if its input line shows the task, call terminal with "
+            f"read_output with {first}; if its input line shows the task, call manage_terminals "
+            "with "
             f'{{"action": "key", "target": "{first}", "key": "enter"}} to send it.{others}'
         )
     if status == "stopped":
@@ -690,7 +701,8 @@ def _task_sentence(
     if status == "uncertain":
         return f"Typing the task into {who} failed unexpectedly. {UNCERTAIN_DELIVERY}"
     return (
-        f"The task was not typed into {who}: {detail} Call read with {first}, then {later}.{others}"
+        f"The task was not typed into {who}: {detail} Call read_output with {first}, then "
+        f"{later}.{others}"
     )
 
 
@@ -722,16 +734,16 @@ def _ready_report(
         elif status == "not_ready":
             sentences.append(
                 f"{who} did not show {program.label}'s input line within "
-                f"{round(timeout_seconds)} seconds. Call read with {first} to check it."
+                f"{round(timeout_seconds)} seconds. Call read_output with {first} to check it."
             )
         elif status == "exited":
             sentences.append(f"{who} ended before {program.label} was ready.")
         elif status == "stopped":
             sentences.append(f"The voice call ended before {program.label} was ready in {who}.")
         elif status == "uncertain":
-            sentences.append(f"Checking {who} failed unexpectedly. Call read with {first}.")
+            sentences.append(f"Checking {who} failed unexpectedly. Call read_output with {first}.")
         else:
-            sentences.append(f"Checking {who} failed: {detail} Call read with {first}.")
+            sentences.append(f"Checking {who} failed: {detail} Call read_output with {first}.")
     return " ".join(sentences)
 
 
@@ -749,15 +761,15 @@ def _prompt_sentence(
     if prompt.kind == "trust":
         return (
             f"{program.label} in {who} asks whether to trust the folder{consequence}. Ask the "
-            f"user; if they agree, call terminal with {keys}."
+            f"user; if they agree, call manage_terminals with {keys}."
         )
     if prompt.kind == "update":
         return (
             f"{program.label} in {who} offers an update and waits{consequence}. Ask the user; "
-            f"to skip the update, call terminal with {keys}."
+            f"to skip the update, call manage_terminals with {keys}."
         )
     return (
-        f"{program.label} in {who} asks a question{consequence}. Call read with {first} and "
+        f"{program.label} in {who} asks a question{consequence}. Call read_output with {first} and "
         "ask the user."
     )
 
@@ -768,27 +780,30 @@ def _message_problem(ref: str, program: CodingProgram, outcome: _Outcome) -> str
     if outcome.prompt is not None:
         return (
             f"{program.label} in {ref} is asking a startup question, so nothing was sent. Call "
-            f"read with {ref} and ask the user how to answer."
+            f"read_output with {ref} and ask the user how to answer."
         )
     if outcome.status == "not_running":
         return (
-            f"{program.label} no longer runs in {ref}, so nothing was sent. Call read with {ref} "
+            f"{program.label} no longer runs in {ref}, so nothing was sent. Call read_output with "
+            f"{ref} "
             "to see its screen."
         )
     if outcome.status in {"not_at_input", "busy"}:
         return (
             f"{ref} does not show {program.label}'s input line right now (it may be showing a "
-            f"menu or question), so nothing was sent. Call read with {ref} to see its screen."
+            f"menu or question), so nothing was sent. Call read_output with {ref} to see its "
+            "screen."
         )
     if outcome.status == "typed_program_ended":
         return f"{program.label} ended in {ref} after the message was typed; nothing was sent."
     if outcome.status == "typed_unconfirmed":
         return (
             f"The message was typed into {ref}, but {program.label}'s input line does not show "
-            f"it, so it was not sent. Call read with {ref} to see the screen."
+            f"it, so it was not sent. Call read_output with {ref} to see the screen."
         )
     return (
         f"The message was typed into {ref} but not sent ({outcome.detail or 'Enter failed'}). "
-        f"Call read with {ref}; if its input line shows the message, call terminal with "
+        f"Call read_output with {ref}; if its input line shows the message, call manage_terminals "
+        "with "
         f'{{"action": "key", "target": "{ref}", "key": "enter"}} to send it.'
     )

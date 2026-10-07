@@ -475,6 +475,9 @@
   let composerDisabled = $derived(
     !target.activeAgent || chatState.loadingHistory,
   );
+  // A Session of a Live voice call is written only by the call, so it shows a
+  // notice in place of the composer.
+  let liveCallSession = $derived(Boolean(target.activeAgent?.__liveCall));
   // Provider availability is the first prerequisite for every current Agent.
   // Do not infer it from Models: App supplies Settings' authoritative usable-
   // connection state. A model-less Identity Agent becomes the second step once
@@ -1089,7 +1092,13 @@
                 </p>
               </div>
             {/if}
-            {#if composerAvailable}
+            {#if liveCallSession}
+              <Banner appearance="compact" class="chat-view__footer-banner">
+                <p>
+                  {t('chat.liveCallNotice')}
+                </p>
+              </Banner>
+            {:else if composerAvailable}
               <ChatComposer
                 disabled={composerDisabled}
                 isRunning={isRunActive(target.activeSessionState)}

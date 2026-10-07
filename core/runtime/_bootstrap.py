@@ -10,6 +10,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, Protocol, cast
 from uuid import uuid4
 
+from core.agents import LIVE_BACKEND_BUILTIN
 from core.agents.agents import AgentStore
 from core.agents.temporary import TemporaryAgentRegistry
 from core.archive import ArchiveRetentionUnknownError, ArchiveService, ArchiveServices
@@ -44,7 +45,7 @@ from core.model_tasks import (
     VideoService,
 )
 from core.model_tasks.decisions import DecisionService
-from core.model_tasks.live import LiveVoiceService
+from core.model_tasks.live import LiveVoiceService, backend_instructions
 from core.models.models import ModelRegistry
 from core.performance import PerformanceService
 from core.projects import ProjectStore, build_agent_resolver
@@ -118,6 +119,7 @@ from core.tools import (
 from core.tools.calendar import register_calendar_tool
 from core.tools.classify import register_classify_tool
 from core.tools.cron import register_cron_tool
+from core.tools.live import LIVE_TOOL_FAMILY, LiveToolHosts, register_live_tools
 from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
 from core.tools.terminal_manager import TerminalManager
@@ -275,8 +277,13 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._decisions = DecisionService(
             runtime._model_tasks, runtime, usage_recorder=runtime._usage_recorder
         )
+        # The running Live call each Session's Live Tool calls reach.
+        runtime._live_tool_hosts = LiveToolHosts()
         runtime._live_voice = LiveVoiceService(
-            runtime._model_tasks, runtime, usage_recorder=runtime._usage_recorder
+            runtime._model_tasks,
+            runtime,
+            hosts=runtime._live_tool_hosts,
+            usage_recorder=runtime._usage_recorder,
         )
         # Sessions are a canonical service: it opens and verifies one database
         # before any Agent lifecycle operation can create or validate a Session.
@@ -336,6 +343,13 @@ def bootstrap(runtime: Runtime) -> None:
         )
         register_apply_patch_tool(runtime._tools, file_state=runtime._file_state)
         register_edit_tools(runtime._tools, file_state=runtime._file_state)
+        register_live_tools(runtime._tools, runtime._live_tool_hosts)
+        # The Live backend Agent's guidance names only the Tools it has.
+        runtime._tool_prompt_blocks.register(
+            LIVE_TOOL_FAMILY,
+            render=lambda context: backend_instructions(context.tool_available, context_note=True),
+            owner=f"builtin:{LIVE_BACKEND_BUILTIN}",
+        )
         register_search_files_tool(runtime._tools)
         register_memory_tool(runtime._tools, runtime._memory_service)
         register_web_fetch_tool(
@@ -495,12 +509,12 @@ def bootstrap(runtime: Runtime) -> None:
             temporary_agents=runtime._temporary_agents,
             sessions=runtime._chat_sessions,
         )
-        # Creating the bootstrap Agent and the built-in Librarian enters the snapshot
+        # Creating the bootstrap Agent and the built-in Agents enters the snapshot
         # barrier on the calling thread, the Event Loop in the server lifespan. It never
         # waits there: no request, and so no data snapshot, is served before startup
         # completes.
         runtime._agents.ensure_bootstrap()
-        runtime._agents.ensure_librarian()
+        runtime._agents.ensure_builtin_agents()
         runtime._recall = RecallIntegration(
             storage=runtime._storage,
             sessions=runtime._chat_sessions,

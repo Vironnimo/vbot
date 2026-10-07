@@ -514,6 +514,19 @@ export function createSettingsRpcMock(options = {}) {
       };
     }
 
+    // Live voice: the built-in voice and vBot backend Agents, no call yet.
+    if (method === 'agent.get' && LIVE_AGENTS[params.id]) {
+      return deepClone(LIVE_AGENTS[params.id]);
+    }
+
+    if (method === 'tool.list') {
+      return { tools: deepClone(options.tools ?? []) };
+    }
+
+    if (method === 'session.list') {
+      return { sessions: [], next_cursor: null, total_count: 0 };
+    }
+
     if (method === 'channel.list') {
       return {
         channels: channels.map((channel) => ({
@@ -772,6 +785,23 @@ export function createSettingsRpcMock(options = {}) {
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
+
+const LIVE_AGENTS = Object.freeze({
+  'live-voice': {
+    id: 'live-voice',
+    name: 'Live voice',
+    builtin: 'live_voice',
+    tool_access: { mode: 'selected', allowed: [] },
+    effective: {},
+  },
+  'live-backend': {
+    id: 'live-backend',
+    name: 'Live backend',
+    builtin: 'live_backend',
+    tool_access: { mode: 'selected', allowed: [] },
+    effective: {},
+  },
+});
 
 function mergeSettingsPayload(currentSettings, patch) {
   const nextSettings = deepClone(currentSettings);

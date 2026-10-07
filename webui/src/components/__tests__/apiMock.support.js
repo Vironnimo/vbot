@@ -100,6 +100,13 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
       }),
     listSessionActivity: (agentIds) =>
       call('session.activity_list', { agent_ids: agentIds }),
+    listSessions: (agentIds, query = {}) =>
+      call('session.list', {
+        ...(Array.isArray(agentIds)
+          ? { agent_ids: agentIds }
+          : { agent_id: agentIds }),
+        ...(query.limit ? { limit: query.limit } : {}),
+      }),
     getSession: (agentId, sessionId) =>
       call('session.get', { agent_id: agentId, session_id: sessionId }),
     getSessionChangeStats: (agentId, sessionId) =>

@@ -47,6 +47,8 @@ TOOL_ACTIVATION_KINDS: frozenset[str] = frozenset(
 
 TOOL_CONSTRAINT_IDENTITY_AGENT = "identity_agent"
 TOOL_CONSTRAINT_IMAGE_FALLBACK_ROUTE = "image_fallback_route"
+# Marks the Tools only the Agents of a Live voice call can use (``ToolAccess.live_call``).
+TOOL_CONSTRAINT_LIVE_CALL = "live_call"
 
 
 TOOL_ACCESS_FIELDS = frozenset({"mode", "allowed", "denied", "granted"})
@@ -60,6 +62,9 @@ class ToolAccess:
     through the memory mode, a Session grant or by following another Tool. The
     Agent owner sets it for a built-in Agent or a translated repository Profile.
     It is absent from public policy JSON and retained in temporary bindings.
+    ``live_call`` lets the policy activate the Tools constrained to a Live
+    voice call; the Agent owner sets it only for the Agents of a Live call, and
+    it is absent from public policy JSON too.
     """
 
     mode: str = TOOL_ACCESS_MODE_ALL
@@ -67,6 +72,7 @@ class ToolAccess:
     denied: tuple[str, ...] = ()
     granted: tuple[str, ...] = ()
     fixed: bool = False
+    live_call: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Return the canonical persisted/public JSON representation."""
@@ -158,7 +164,7 @@ def resolve_tool_access(
             name
             for name, tool in catalog.items()
             if _activation_kind(tool) == TOOL_ACTIVATION_CONFIGURABLE
-            and _constraints_allow(tool, workspace=workspace)
+            and _constraints_allow(tool, tool_access, workspace=workspace)
         }
     else:
         active = {
@@ -170,7 +176,7 @@ def resolve_tool_access(
                 or tool_access.fixed
                 and _activation_kind(catalog[name]) == TOOL_ACTIVATION_FOLLOWS
             )
-            and _constraints_allow(catalog[name], workspace=workspace)
+            and _constraints_allow(catalog[name], tool_access, workspace=workspace)
         }
 
     # A whitelist (including a materialized Project ceiling) is never an opt-in.
@@ -182,7 +188,7 @@ def resolve_tool_access(
     requested_grants = set(session_tool_grants)
     for name, tool in catalog.items():
         activation = _activation_kind(tool)
-        if not _constraints_allow(tool, workspace=workspace):
+        if not _constraints_allow(tool, tool_access, workspace=workspace):
             continue
         if tool_access.fixed and name not in tool_access.allowed:
             continue
@@ -194,7 +200,7 @@ def resolve_tool_access(
             active.add(name)
 
     if not tool_access.fixed:
-        _add_followed_tools(active, catalog, workspace=workspace)
+        _add_followed_tools(active, catalog, tool_access, workspace=workspace)
     active.difference_update(tool_access.denied)
     _remove_orphaned_followers(active, catalog)
 
@@ -229,12 +235,16 @@ def _activation_kind(tool: Any) -> str:
     return str(getattr(tool, "activation", TOOL_ACTIVATION_CONFIGURABLE))
 
 
-def _constraints_allow(tool: Any, *, workspace: str) -> bool:
+def _constraints_allow(tool: Any, tool_access: ToolAccess, *, workspace: str) -> bool:
     constraints = tuple(getattr(tool, "constraints", ()))
+    if TOOL_CONSTRAINT_LIVE_CALL in constraints and not tool_access.live_call:
+        return False
     return TOOL_CONSTRAINT_IDENTITY_AGENT not in constraints or bool(workspace)
 
 
-def _add_followed_tools(active: set[str], catalog: Mapping[str, Any], *, workspace: str) -> None:
+def _add_followed_tools(
+    active: set[str], catalog: Mapping[str, Any], tool_access: ToolAccess, *, workspace: str
+) -> None:
     changed = True
     while changed:
         changed = False
@@ -242,7 +252,7 @@ def _add_followed_tools(active: set[str], catalog: Mapping[str, Any], *, workspa
             if name in active or _activation_kind(tool) != TOOL_ACTIVATION_FOLLOWS:
                 continue
             source = getattr(tool, "activation_source", None)
-            if source in active and _constraints_allow(tool, workspace=workspace):
+            if source in active and _constraints_allow(tool, tool_access, workspace=workspace):
                 active.add(name)
                 changed = True
 
@@ -382,6 +392,7 @@ __all__ = [
     "TOOL_ACTIVATION_MEMORY_MODE",
     "TOOL_ACTIVATION_SESSION_GRANT",
     "TOOL_CONSTRAINT_IDENTITY_AGENT",
+    "TOOL_CONSTRAINT_LIVE_CALL",
     "TOOL_CONSTRAINT_IMAGE_FALLBACK_ROUTE",
     "ToolAccess",
     "ToolAccessResolution",

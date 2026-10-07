@@ -20,17 +20,36 @@ DEFAULT_LIBRARIAN_ENABLED = True
 
 # The built-in Agents vBot creates itself. ``agent.json`` marks one with
 # ``builtin``; the mark is valid only on its reserved id.
-BuiltinAgent = Literal["librarian"]
+BuiltinAgent = Literal["librarian", "live_voice", "live_backend"]
 LIBRARIAN_BUILTIN: BuiltinAgent = "librarian"
-BUILTIN_AGENTS: frozenset[str] = frozenset({LIBRARIAN_BUILTIN})
+# The Agents of a Live voice call: the voice Agent records the call in its
+# Session, the backend Agent answers the requests the voice Model hands on.
+LIVE_VOICE_BUILTIN: BuiltinAgent = "live_voice"
+LIVE_BACKEND_BUILTIN: BuiltinAgent = "live_backend"
+LIVE_AGENT_BUILTINS: frozenset[str] = frozenset({LIVE_VOICE_BUILTIN, LIVE_BACKEND_BUILTIN})
 # The Librarian curates other Agents' Skills in Sessions of its own.
 LIBRARIAN_AGENT_ID = "librarian"
 LIBRARIAN_AGENT_NAME = "Librarian"
+LIVE_VOICE_AGENT_ID = "live-voice"
+LIVE_BACKEND_AGENT_ID = "live-backend"
+# Each built-in Agent's reserved id and name, in creation order.
+BUILTIN_AGENT_IDS: dict[BuiltinAgent, str] = {
+    LIBRARIAN_BUILTIN: LIBRARIAN_AGENT_ID,
+    LIVE_VOICE_BUILTIN: LIVE_VOICE_AGENT_ID,
+    LIVE_BACKEND_BUILTIN: LIVE_BACKEND_AGENT_ID,
+}
+BUILTIN_AGENT_NAMES: dict[BuiltinAgent, str] = {
+    LIBRARIAN_BUILTIN: LIBRARIAN_AGENT_NAME,
+    LIVE_VOICE_BUILTIN: "Live voice",
+    LIVE_BACKEND_BUILTIN: "Live backend",
+}
+BUILTIN_AGENTS: frozenset[str] = frozenset(BUILTIN_AGENT_IDS)
 # The Librarian's whole Tool set; nothing widens it.
 LIBRARIAN_TOOLS = ("skill", "skill_manage")
-# Why the Librarian is unavailable: no Agent has its id yet, a user's Agent (or
-# an unfinished rename) holds the id, or its ``agent.json`` cannot be loaded.
-LibrarianProblem = Literal["missing", "agent_id_taken", "invalid_config"]
+# Why a built-in Agent is unavailable: no Agent has its id yet, a user's Agent
+# (or an unfinished rename) holds the id, or its ``agent.json`` cannot be loaded.
+BuiltinAgentProblem = Literal["missing", "agent_id_taken", "invalid_config"]
+LibrarianProblem = BuiltinAgentProblem
 # Session metadata binding a Session of the Librarian to the Agent whose Skills
 # it maintains, its Skill subject. vBot writes it when a pass starts; a Session
 # without it works on the Librarian's own Skills.
@@ -122,9 +141,19 @@ class Agent:
     skill_agent_id: str | None = None
 
 
+def is_builtin_agent(agent: object) -> bool:
+    """Whether ``agent`` (any resolved Agent) is one of vBot's built-in Agents."""
+    return getattr(agent, "builtin", None) is not None
+
+
 def is_librarian(agent: object) -> bool:
     """Whether ``agent`` (any resolved Agent) is the built-in Librarian."""
     return getattr(agent, "builtin", None) == LIBRARIAN_BUILTIN
+
+
+def is_live_agent(agent: object) -> bool:
+    """Whether ``agent`` (any resolved Agent) is one of the built-in Agents of a Live call."""
+    return getattr(agent, "builtin", None) in LIVE_AGENT_BUILTINS
 
 
 def librarian_problem_message(problem: LibrarianProblem) -> str:

@@ -211,6 +211,8 @@ class _RunRequest:
     temporary_parent_binding: TemporarySessionBinding | None = None
     # Input the Parent Agent of this Sub-Agent Session wrote, not the user.
     parent_agent_input: bool = False
+    # A note stored right before the input, such as what happened since the last Run.
+    context_note: str | None = None
 
     @property
     def supports_steering(self) -> bool:
@@ -223,6 +225,7 @@ class _RunRequest:
             and self.tool_denial_resolver is None
             and self.max_tool_iterations is None
             and self.input_persisted_hook is None
+            and self.context_note is None
             and self.temporary_binding is None
             and self.temporary_parent_binding is None
             and not self.input_already_persisted

@@ -659,6 +659,27 @@ describe('Live call frames', () => {
     expect(f.state.captions).toEqual([]);
   });
 
+  it('names the Sessions of the call as the server creates them', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    const voice = { agent_id: 'live-voice', session_id: 'call-1' };
+    f.frame({ type: 'sessions', voice, backend: null });
+    expect(f.state.sessions).toEqual({ voice, backend: null });
+    // The backend Session follows once its first request created it.
+    const backend = { agent_id: 'live-backend', session_id: 'call-2' };
+    f.frame({ type: 'sessions', voice, backend });
+    expect(f.state.sessions).toEqual({ voice, backend });
+    f.frame({ type: 'sessions', voice: { agent_id: 'live-voice' } });
+    expect(f.state.sessions).toEqual({ voice: null, backend: null });
+
+    // They stay after the call and start over with the next one.
+    f.frame({ type: 'sessions', voice, backend });
+    f.frame({ type: 'closed', reason: 'hung_up', usage: null });
+    expect(f.state.sessions).toEqual({ voice, backend });
+    await f.goLive();
+    expect(f.state.sessions).toEqual({ voice: null, backend: null });
+  });
+
   it('knows how long the call runs, when the provider ends it and when it idles out', async () => {
     let clock = 1_000_000;
     const f = liveFixture({ now: () => clock });

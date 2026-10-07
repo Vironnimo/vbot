@@ -14,16 +14,16 @@ from dataclasses import dataclass, field
 from typing import Any, override
 
 from core.model_tasks.live import live_failure, live_success
-from server.live._brief import (
+from core.tools.live import (
     TOOL_END_CALL,
+    TOOL_MANAGE_TERMINALS,
     TOOL_OPEN,
     TOOL_OVERVIEW,
-    TOOL_READ,
+    TOOL_READ_OUTPUT,
     TOOL_SEND_MESSAGE,
     TOOL_START_AGENT_SESSION,
     TOOL_START_CODING_TERMINAL,
     TOOL_STOP,
-    TOOL_TERMINAL,
 )
 
 JsonObject = dict[str, Any]
@@ -176,8 +176,8 @@ def live_cases() -> list[LiveCase]:
                 ),
             ),
             right=(
-                Expected(TOOL_READ, {"target": "s5"}),
-                Expected(TOOL_READ, {"target": "Reviewer"}),
+                Expected(TOOL_READ_OUTPUT, {"target": "s5"}),
+                Expected(TOOL_READ_OUTPUT, {"target": "Reviewer"}),
             ),
         ),
         LiveCase(
@@ -188,7 +188,7 @@ def live_cases() -> list[LiveCase]:
         LiveCase(
             id="maximize_terminal",
             request="Mach das Codex-Terminal groß.",
-            right=(Expected(TOOL_TERMINAL, {"action": "maximize", "target": "t1"}),),
+            right=(Expected(TOOL_MANAGE_TERMINALS, {"action": "maximize", "target": "t1"}),),
         ),
         LiveCase(
             id="agent_not_in_terminal",
@@ -419,8 +419,8 @@ class ScriptedVbot:
             f"Sent to {found} ({session.agent}). An update follows when it finishes."
         )
 
-    def _read(self, arguments: JsonObject) -> JsonObject:
-        found = self._target(arguments.get("target"), "read")
+    def _read_output(self, arguments: JsonObject) -> JsonObject:
+        found = self._target(arguments.get("target"), TOOL_READ_OUTPUT)
         if not isinstance(found, str):
             return found
         if found in self.terminals:
@@ -464,12 +464,12 @@ class ScriptedVbot:
             return live_success(f"Showing {found} in the Terminals view.")
         return live_success(f"Showing {found} ({self._session(found).agent}) in the chat.")
 
-    def _terminal(self, arguments: JsonObject) -> JsonObject:
+    def _manage_terminals(self, arguments: JsonObject) -> JsonObject:
         action = arguments.get("action")
         target = arguments.get("target")
         if action in {"create_group", "rename_group", "delete_group", "reorder"}:
             return live_success(f"Done: {action}.")
-        found = self._target(target, "terminal")
+        found = self._target(target, TOOL_MANAGE_TERMINALS)
         if not isinstance(found, str):
             return found
         if found not in self.terminals:

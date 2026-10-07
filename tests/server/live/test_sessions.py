@@ -91,7 +91,7 @@ async def _run_a_session(executor: LiveToolExecutor, adapter: StubAdapter, state
     assert "waits in its Queue" in await _ok(
         executor, "send_message", target="s1", text="Also try Linux."
     )
-    read = await _ok(executor, "read", target="s1")
+    read = await _ok(executor, "read_output", target="s1")
     assert read.startswith("s1 at Coder Agent, working. Latest messages, quoted:")
     assert "> Check the PDF export." in read
 
