@@ -224,3 +224,4 @@ export {
   openLiveCallSocket,
 } from './api/live.js';
 export { reportClientMetrics } from './api/performance.js';
+export { listServerDirectory } from './api/filesystem.js';

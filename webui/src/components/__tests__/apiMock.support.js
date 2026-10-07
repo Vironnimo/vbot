@@ -138,6 +138,12 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
             ? { working_project_id: workingProjectId }
             : {}),
       }),
+    listServerDirectory: ({ path = null, root, include_files } = {}) =>
+      call('filesystem.list', {
+        path,
+        ...(root === undefined ? {} : { root }),
+        ...(include_files ? { include_files: true } : {}),
+      }),
     setSessionAgentOverrides: (agentId, sessionId, agentOverrides) =>
       call('session.set_agent_overrides', {
         agent_id: agentId,

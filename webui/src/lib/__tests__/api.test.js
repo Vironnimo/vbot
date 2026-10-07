@@ -210,6 +210,20 @@ describe('RPC wrappers', () => {
       { agent_id: 'agent-1', session_id: 'session-1' },
     ],
     [
+      'filesystem.list for the places',
+      (o) => api.listServerDirectory({}, o),
+      { path: null },
+    ],
+    [
+      'filesystem.list for files inside a root',
+      (o) =>
+        api.listServerDirectory(
+          { path: 'docs', root: 'C:/repo', include_files: true },
+          o,
+        ),
+      { path: 'docs', root: 'C:/repo', include_files: true },
+    ],
+    [
       'session.set_agent_overrides',
       (o) =>
         api.setSessionAgentOverrides(
@@ -753,6 +767,11 @@ describe('RPC wrappers', () => {
       'non-object Project changes',
       () => api.setProject('demo', null),
       'project.set',
+    ],
+    [
+      'a directory listing with an empty root',
+      () => api.listServerDirectory({ path: '', root: '' }),
+      'filesystem.list',
     ],
     [
       'a blank Agent id in an activity batch',
