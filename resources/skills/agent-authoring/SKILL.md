@@ -1,6 +1,6 @@
 ---
 name: agent-authoring
-description: Write or revise an Agent's SOUL.md or a Skill, and decide what belongs in a SOUL, a Skill or Memory. Use when creating an Agent for a purpose, changing a SOUL, or turning a workflow or conversation into a Skill.
+description: Write or revise an Agent's SOUL.md or a Skill, and decide what belongs in a SOUL, a Skill or Memory. Use when creating or renaming an Agent, changing a SOUL, or turning a workflow or conversation into a Skill.
 ---
 
 # Agent authoring
@@ -29,7 +29,7 @@ Change another Agent's SOUL.md or Skills only when the user asks for it.
 
 ## Create an Agent for a purpose
 
-1. State the new Agent's role in one sentence from the request: its purpose, the user it serves and the result it owes. Done when the sentence exists. If the request leaves the purpose itself open, ask the user for it; decide id, name, tone and configuration yourself.
+1. State the new Agent's role in one sentence from the request: its purpose, the user it serves and the result it owes. Done when the sentence exists. If the request leaves the purpose itself open, ask the user for it; decide id, name, tone and configuration yourself. Search the user's files or create folders for the new Agent only when the user asks for it.
 2. Create the Agent with `vbot agent create <agent-id> <display-name>` and set its Model, Tool access and Skills; the `vbot-cli` Skill's `references/agents-projects.md` lists the flags. Give the Agent only the Tools its role needs. Done when `vbot agent show <agent-id>` reports the Agent with its Workspace path.
 3. Write its SOUL.md by `references/soul.md`, section "Write a new SOUL.md". Done when those steps are done.
 4. When the role includes a recurring kind of task with a known method, create a private Skill for the new Agent by `references/skills.md`. Done when each such method is in a Skill, or the role has none.

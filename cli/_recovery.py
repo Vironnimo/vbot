@@ -103,7 +103,8 @@ _AGENT_NOT_FOUND_EXPLANATION = (
 _OWN_RUN_BUSY_EXPLANATION = (
     "This command runs in a Run of Agent '{agent_id}', and that Run keeps the Agent busy "
     "until it ends, so the Agent cannot run this command on itself. Ask the user to run it "
-    "outside this Agent's Runs, for example in a terminal."
+    "outside this Agent's Runs, for example in a terminal; do not retry it or start it in "
+    "the background."
 )
 
 

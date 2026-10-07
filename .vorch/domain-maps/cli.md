@@ -158,6 +158,8 @@ Extended Session inspection is documented in the bundled `vbot-cli/references/se
 
 ## Agent-facing text
 
+For `agent_busy` on an `agent` command whose id is the calling Run's Agent (`VBOT_RUN_AGENT_ID`), `_recovery.py` explains that the Run keeps the Agent busy and asks the Agent to have the user run the command, `do not retry it or start it in the background`; the last clause exists because an Agent wrapped its own `agent rename` in a background retry loop that renamed it after the Run ended (agent-authoring eval, 2026-10-07).
+
 The bundled `vbot-cli/references/agents-projects.md` teaches minimal Project creation followed by `project show`, so an Agent need not inspect foreign formats before registering a repository. The `--sources` paragraph gives the complete-list replacement rule, observable ids, priority and collision behavior; the Model paragraph gives usable targets and fallback/inherit behavior. The status paragraph explains unsupported restrictions and the explicit override path without promising external hook or MCP execution. `references/system-layout.md` points to enabled Skill Sources rather than a single ecosystem directory, preventing filesystem work against the wrong package.
 
 ## References
