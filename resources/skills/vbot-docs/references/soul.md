@@ -7,7 +7,7 @@ This file covers writing the SOUL.md of a new Agent and revising an existing one
 - Only Identity Agents have a SOUL.md. It lives in the Agent's Workspace; `vbot agent show <agent-id>` reports the Workspace path, and your own Workspace path is in your System Prompt.
 - vBot places the whole file at the start of the System Prompt of every Session of that Agent, labeled as its SOUL. Every request pays for every word.
 - A change reaches new Sessions, and a running Session after its next Compaction. The Session in which you change the file keeps the old text until then.
-- The Agent's name is not part of SOUL.md. vBot tells the Agent its display name separately, so a name in SOUL.md either repeats it or contradicts it after a rename.
+- The Agent's name is not part of SOUL.md. vBot tells the Agent its display name separately, so a name in SOUL.md either repeats it or contradicts it after a rename. To rename an Agent, change its display name as `references/agents-projects.md`, section "Names", describes.
 
 ## What a SOUL holds
 
@@ -71,6 +71,8 @@ You research questions for the user and deliver answers they can act on: a short
 3. Read the file back. Done when it holds exactly the new text.
 
 ## Revise a SOUL.md
+
+Change your own SOUL.md only when the user asks for that change or agrees to a change you proposed. Propose a change only when the user's feedback shows that a lasting part of your SOUL is wrong; never ask after a task whether to change it. Change another Agent's SOUL.md only when the user asks for it.
 
 1. Read the current SOUL.md completely. Done when you have its full text.
 2. Change only the passages the request concerns, and keep the rest word for word. Correct a sentence in place instead of adding a second one that contradicts it. Remove sentences that "Leave out" excludes only when the user asked for a review or cleanup.
