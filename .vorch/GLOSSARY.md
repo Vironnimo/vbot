@@ -68,6 +68,9 @@ The runtime configuration vBot builds for a Team member from its repository defi
 ## Identity Agent
 An Agent that vBot stores with its own configuration, Workspace and Memory, which persist across Sessions (`agent.md`). Not a Config Agent or a temporary Agent.
 
+## Built-in Agent
+An Identity Agent vBot creates and keeps itself, hidden from the roster and refused as a delegation, handoff or move target: the Librarian and the two Live Agents of a Live voice call (`agent.md` -> Built-in Agents, `model_tasks/live.md`). Not a bundled template, a Config Agent, or a user's Agent that happens to use the same name.
+
 ## Librarian
 vBot's built-in hidden Identity Agent that keeps other Identity Agents' own Skills small and current, in passes the user can open as Sessions (`agent.md`, `automation.md` -> Librarian). Not a Tool, a Reflection, or a user's Agent that happens to be named "librarian".
 
