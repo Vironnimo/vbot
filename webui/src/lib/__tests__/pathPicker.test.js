@@ -12,6 +12,7 @@ import {
   listingPathFor,
   matchingEntries,
   parentPath,
+  sameServerPath,
   splitTypedPath,
   toNativePath,
   trimTrailingSeparator,
@@ -95,6 +96,17 @@ describe('typed text', () => {
     ['~', '~'],
   ])('leaves %j as %j', (text, expected) => {
     expect(trimTrailingSeparator(text)).toBe(expected);
+  });
+
+  it.each([
+    ['C:/work/', 'C:/work', true],
+    ['c:\\work', 'C:/work/', true],
+    ['\\\\host\\share\\team', '//host/share/team', true],
+    ['/srv/data/', '/srv/data', true],
+    ['C:/work', 'C:/Work', false],
+    ['/srv/a\\b', '/srv/a/b', false],
+  ])('compares %j with %j as the same folder: %j', (left, right, same) => {
+    expect(sameServerPath(left, right)).toBe(same);
   });
 
   it('extends the prefix to what every match shares', () => {

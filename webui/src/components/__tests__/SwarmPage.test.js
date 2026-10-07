@@ -450,6 +450,9 @@ describe('Swarm Run start', () => {
     });
     await render(bridge);
     await vi.waitFor(() => expect(directory().value).toBe('C:/project'));
+    // The completed default keeps its separator, yet stays the Project's.
+    await pickFolder('swarm-start-directory', 'C:/p', 'project');
+    expect(directory().value).toBe('C:/project/');
     fill('swarm-goal', 'project-goal');
     await tick();
     button(START_RUN).click();

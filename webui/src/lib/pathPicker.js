@@ -74,6 +74,22 @@ export function trimTrailingSeparator(text) {
   return path;
 }
 
+/**
+ * Whether two typed paths spell the same server folder: trailing separators
+ * aside and, on a Windows path (a drive or `\\host\share`), with `\` and `/`
+ * alike and the drive letter in either case.
+ */
+export function sameServerPath(left, right) {
+  return comparablePath(left) === comparablePath(right);
+}
+
+function comparablePath(text) {
+  const path = trimTrailingSeparator(text);
+  if (!DRIVE_PREFIX.test(path) && !path.startsWith('\\\\')) return path;
+  const slashed = path.replace(/\\/g, '/');
+  return `${slashed.charAt(0).toUpperCase()}${slashed.slice(1)}`;
+}
+
 /** A path inside a root in listing form ('' = the root); null leaves it. */
 export function normalizeRootPath(text) {
   const segments = String(text ?? '')

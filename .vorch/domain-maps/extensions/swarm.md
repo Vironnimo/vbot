@@ -585,8 +585,10 @@ records the Run directory and Project selection for Resume and request replay.
 Evidence: `SwarmPage.test.js` and `test_swarm_start.py`.
 The Run directory and the profile editor's Directory are the shared `PathField`
 in directory mode with the page client's `listDirectory`, so both complete and
-browse the server's folders (`webui.md` -> Ownership); a completed folder keeps
-its trailing separator, which counts as a changed Run directory. The manifest
+browse the server's folders (`webui.md` -> Ownership). The Run directory counts
+as changed only when `sameServerPath` (`lib/pathPicker.js`) says it names another
+folder than the default, so a completed folder's trailing separator, or `/` for
+`\` on a Windows path, keeps the Project selection. The manifest
 therefore requires API 12 (`extension.json`; `SwarmPage.test.js`,
 `SwarmPage.profiles.test.js`).
 Activity forwards running Tool Call cancellation through the generic page bridge with the exact Swarm group, Run and Tool Call ids. The host verifies current page registration and canonical Run ownership before requesting call-local cancellation; failures stay visible and the Run continues (`SwarmPage.activity.test.js`, `test_extensions_methods.py`).
