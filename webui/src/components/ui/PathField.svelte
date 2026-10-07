@@ -255,6 +255,9 @@
         accept(matches[activeIndex]);
         return true;
       case 'Tab': {
+        // Like a shell, Tab completes while there is something to complete:
+        // offered entries keep it in the field, even when they share no
+        // longer start (Escape closes them, then Tab moves on).
         if (!showsOptions || event.shiftKey) return false;
         if (activeIndex >= 0 || matches.length === 1) {
           accept(matches[Math.max(activeIndex, 0)]);
@@ -262,9 +265,10 @@
         }
         const { parent, prefix } = splitTypedPath(value);
         const extended = extendPrefix(matches, prefix);
-        if (extended === prefix) return false;
-        setText(`${parent}${extended}`);
-        scheduleListing(`${parent}${extended}`, { immediate: true });
+        if (extended !== prefix) {
+          setText(`${parent}${extended}`);
+          scheduleListing(`${parent}${extended}`, { immediate: true });
+        }
         return true;
       }
       case 'Escape':

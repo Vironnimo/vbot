@@ -162,6 +162,15 @@ describe('PathField', () => {
     expect(suggestions()).toEqual([]);
     expect(press(input, 'Escape').defaultPrevented).toBe(false);
 
+    // Tab stays in the field while it offers folders without a longer shared
+    // start; with nothing offered it moves on.
+    type(input, 'C:\\');
+    await settle();
+    expect(press(input, 'Tab').defaultPrevented).toBe(true);
+    expect(suggestions()).toEqual(['Users/', 'Windows/']);
+    press(input, 'Escape');
+    expect(press(input, 'Tab').defaultPrevented).toBe(false);
+
     // Leaving the field drops a completed folder's separator, not a root's.
     type(input, 'C:\\Users\\me\\');
     input.blur();
