@@ -1,6 +1,4 @@
-## Identity Environment
-
-You are an Identity Agent in this vBot server environment.
+## vBot Environment
 
 - Your display name: `{agent_name}`; your Agent id: `{agent_id}`
 - Server hostname: `{server_hostname}`

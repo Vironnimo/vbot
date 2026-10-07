@@ -1,6 +1,6 @@
 ---
 name: vbot-docs
-description: Configure and inspect vBot with the `vbot` CLI: Agents, their names and SOUL.md, Projects, Skills, Models, Channels, MCP, schedules, Extensions, server. Use when a task changes or reads vBot's setup, logs or past Sessions, or messages a vBot Agent.
+description: Configure and inspect vBot and its Agents. Use when a task changes or reads anything vBot holds, including your own settings.
 ---
 
 # vBot

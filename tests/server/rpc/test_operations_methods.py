@@ -81,7 +81,7 @@ class StubStorage:
     def __init__(self) -> None:
         self._fragments = {
             "identity_runtime.md": (
-                "## Identity Environment\n"
+                "## vBot Environment\n"
                 "Host {server_hostname}\n"
                 "Version {vbot_version}\n"
                 "Identity Workspace {identity_workspace}\n"
@@ -742,7 +742,7 @@ async def test_preview_renders_the_working_project_of_an_identity_agent(
     result = await _preview_prompt(state, {"agent_id": "coder", **params})
 
     assert skills_for_calls == [(skill_project, "coder")]
-    assert "## Identity Environment" in result["text"]
+    assert "## vBot Environment" in result["text"]
     assert f"Identity Workspace {model_path(identity_workspace)}" in result["text"]
     assert ("## Working Project" in result["text"]) is (skill_project is not None)
     assert (f"Project Workspace {model_path(repo)}" in result["text"]) is (
@@ -785,7 +785,7 @@ async def test_preview_project_config_agent_renders_its_body_in_the_working_proj
     assert "Project vBot" in result["text"]
     assert "Project ID vbot" in result["text"]
     assert f"Project Workspace {model_path(repo)}" in result["text"]
-    assert "## Identity Environment" not in result["text"]
+    assert "## vBot Environment" not in result["text"]
     assert "Host test-host" not in result["text"]
     assert "Identity Workspace" not in result["text"]
     assert f"Root {tmp_path / 'app'}" not in result["text"]
