@@ -92,20 +92,28 @@ def list_selected_files(
     global Git excludes apply; ``.git`` and directory links are never entered.
     Paths are relative to ``root`` with ``/`` separators, in no particular order.
     The second value says whether the list may be incomplete: ``limit`` cut it or
-    ``budget`` stopped it. A name with a line break, possible outside Windows,
-    comes out split at it.
+    ``budget`` stopped it.
     """
     files: list[str] = []
     truncated = False
     # Unreadable directories are left out, as search_files leaves them out of a listing.
     outcome = NativeOutcome()
-    lines = native_lines(binary, [*_SELECTION, "--files"], None, budget, cwd=root, outcome=outcome)
-    with contextlib.closing(lines):
-        for line in lines:
+    # NUL ends each path, since a name can hold a line break outside Windows.
+    records = native_lines(
+        binary,
+        [*_SELECTION, "--files", "--null"],
+        None,
+        budget,
+        cwd=root,
+        outcome=outcome,
+        terminator=b"\0",
+    )
+    with contextlib.closing(records):
+        for record in records:
             if len(files) >= limit:
                 truncated = True
                 break
-            name = os.fsdecode(line.removesuffix(b"\n"))
+            name = os.fsdecode(record.removesuffix(b"\0"))
             # Only Windows prints another separator; there it cannot occur in a name.
             files.append(name.replace(os.sep, "/") if os.sep != "/" else name)
     return files, truncated or budget.stopped

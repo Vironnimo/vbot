@@ -29,8 +29,9 @@ services:
 Two shared modules help. `core/tools/search.py` provides `SearchBudget`,
 `MAX_OUTPUT_BYTES` and path display, plus the listings the Chat `@` file picker
 runs outside a Tool call: `list_selected_files` (the files a `files` listing
-without arguments returns) and `unselected_names` (which entries of one directory
-that selection leaves out, from ripgrep's `--debug` skip reports). They call
+without arguments returns, read NUL-separated so a name with a line break stays
+whole) and `unselected_names` (which entries of one directory that selection
+leaves out, from ripgrep's `--debug` skip reports). They call
 `native_lines` without a `ToolContext`, so only their budget stops the child, and
 keep the picker on the same selection as the Tool. `core/tools/_path_suggestions.py`
 (shared with `read`) suggests similar paths. The async handler runs the whole
@@ -311,10 +312,11 @@ notice about the next page and each warning
   One output record is bounded at 8 MiB, the output queue and stderr are
   bounded, and one counting or listing pass is bounded at 256 MiB of output.
   A record is a line, or one path or name where ripgrep ends them with NUL
-  (`--files --null`, `--files-without-match --null`, `--null-data`); those
-  callers pass `native_lines` the NUL `terminator`. Read as lines, a file list
-  over 8 MiB was one record and failed the call (probe, 2026-10: 66,000 files;
-  `--dirs` failed alike, since it reads a file list first).
+  (`--files --null`, `--files-without-match --null`, `--null-data`, and the
+  picker's `list_selected_files`); those callers pass `native_lines` the NUL
+  `terminator`. Read as lines, a file list over 8 MiB was one record and failed
+  the call (probe, 2026-10: 66,000 files; `--dirs` failed alike, since it reads
+  a file list first).
 - **Entries:** at most 500,000 entries are collected; more makes the result
   incomplete, with a warning.
 - **Process ownership:** native subprocess creation, termination and release stay
