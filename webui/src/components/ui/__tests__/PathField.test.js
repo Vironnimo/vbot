@@ -152,6 +152,17 @@ describe('PathField', () => {
     expect(press(input, 'Escape').defaultPrevented).toBe(true);
     expect(suggestions()).toEqual([]);
     expect(press(input, 'Escape').defaultPrevented).toBe(false);
+
+    // Leaving the field drops a completed folder's separator, not a root's.
+    type(input, 'C:\\Users\\me\\');
+    input.blur();
+    flushSync();
+    expect(props.value).toBe('C:\\Users\\me');
+    input.focus();
+    type(input, 'C:\\');
+    input.blur();
+    flushSync();
+    expect(props.value).toBe('C:\\');
   });
 
   it('shows only the newest listing and says when a folder cannot be read', async () => {

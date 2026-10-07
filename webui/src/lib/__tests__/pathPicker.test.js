@@ -14,6 +14,7 @@ import {
   parentPath,
   splitTypedPath,
   toNativePath,
+  trimTrailingSeparator,
 } from '../pathPicker.js';
 
 const dir = (name, extra = {}) => ({ name, kind: 'directory', ...extra });
@@ -79,6 +80,21 @@ describe('typed text', () => {
     ['', dir('C:/'), 'C:/'],
   ])('completes %j with %j to %j', (text, entry, expected) => {
     expect(completeTypedPath(text, entry)).toBe(expected);
+  });
+
+  it.each([
+    ['C:/work/', 'C:/work'],
+    ['C:\\Users\\me\\\\', 'C:\\Users\\me'],
+    ['/home//', '/home'],
+    ['~/', '~'],
+    ['\\\\host\\share\\', '\\\\host\\share'],
+    ['docs/', 'docs'],
+    ['C:\\', 'C:\\'],
+    ['C:/', 'C:/'],
+    ['/', '/'],
+    ['~', '~'],
+  ])('leaves %j as %j', (text, expected) => {
+    expect(trimTrailingSeparator(text)).toBe(expected);
   });
 
   it('extends the prefix to what every match shares', () => {

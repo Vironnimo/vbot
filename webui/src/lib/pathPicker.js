@@ -9,6 +9,8 @@ import { t } from './i18n.js';
 const DRIVE_ROOT = /^[A-Za-z]:\/$/;
 const DRIVE_PREFIX = /^[A-Za-z]:[\\/]/;
 const UNC_SHARE = /^\/\/[^/]+\/[^/]+$/;
+// A typed filesystem root: `/`, `\`, `C:/` or `C:\`.
+const TYPED_ROOT = /^(?:[A-Za-z]:)?[\\/]$/;
 
 const LISTING_REASONS = new Set([
   'not_found',
@@ -54,6 +56,19 @@ export function normalizeServerPath(text) {
   const unc = slashed.startsWith('//');
   let path = `${unc ? '//' : ''}${slashed.slice(unc ? 2 : 0).replace(/\/{2,}/g, '/')}`;
   while (path.length > 1 && path.endsWith('/') && !DRIVE_ROOT.test(path)) {
+    path = path.slice(0, -1);
+  }
+  return path;
+}
+
+/**
+ * Typed text without its trailing separators, in the separators the user
+ * chose; a root (`/`, `C:/`, `C:\`) keeps its own. A folder accepted while
+ * typing ends with one so completion can continue, the field's value not.
+ */
+export function trimTrailingSeparator(text) {
+  let path = typeof text === 'string' ? text : '';
+  while (/[\\/]$/.test(path) && !TYPED_ROOT.test(path)) {
     path = path.slice(0, -1);
   }
   return path;

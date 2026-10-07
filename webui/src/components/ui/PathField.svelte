@@ -28,6 +28,7 @@
     matchingEntries,
     normalizeServerPath,
     splitTypedPath,
+    trimTrailingSeparator,
   } from '$lib/pathPicker.js';
   import Button from './Button.svelte';
   import PathBrowserDialog from './PathBrowserDialog.svelte';
@@ -293,6 +294,13 @@
 
   function handleBlur(event) {
     stopSuggesting();
+    // A folder accepted while typing ends with a separator; the value does
+    // not, once focus moves on. A window losing focus keeps the field focused
+    // and the text as typed.
+    if (!isFocused()) {
+      const trimmed = trimTrailingSeparator(value);
+      if (trimmed !== value) onInput(trimmed);
+    }
     callerBlur?.(event);
   }
 
@@ -310,7 +318,7 @@
 
   function chooseFromBrowser(path) {
     browsing = false;
-    onInput(path);
+    onInput(trimTrailingSeparator(path));
   }
 
   async function loadProjectShortcuts() {
