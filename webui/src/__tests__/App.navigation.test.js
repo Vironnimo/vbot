@@ -128,7 +128,7 @@ describe('App navigation', () => {
     });
   }
 
-  it('routes shared defaults search into Agents, returns there from the Main menu and starts over on a second click', async () => {
+  it('routes a Settings search result to shared Agent defaults', async () => {
     rpcMock.mockImplementation(createSettingsRpcMock());
     mountApp();
     sidebarNavButton('settings').click();
@@ -141,27 +141,46 @@ describe('App navigation', () => {
     Array.from(document.querySelectorAll('.settings-search-result'))
       .find((button) => button.textContent.includes(t('agents.shared.title')))
       .click();
-    await waitForCondition(() =>
-      expect(document.querySelector('#settings-defaults-model')).toBeTruthy(),
-    );
-    expect(isCurrent('agents')).toBe(true);
-
-    sidebarNavButton('settings').click();
-    await waitForCondition(() =>
-      expect(document.querySelector('.settings-content')).toBeTruthy(),
-    );
-    // The Main menu returns to the place Agents showed last.
-    sidebarNavButton('agents').click();
     await waitForCondition(() => {
       expect(document.querySelector('#settings-defaults-model')).toBeTruthy();
+      expect(isCurrent('agents')).toBe(true);
       expect(window.location.hash).toBe('#agents/~defaults');
     });
+  });
+
+  it('returns to shared defaults from the Main menu and starts over on a second click', async () => {
+    const settingsRpc = createSettingsRpcMock();
+    const agentsRpc = agentsAppRpc({ agents: [baseAgent()] });
+    rpcMock.mockImplementation((method, params) =>
+      method === 'settings.get'
+        ? settingsRpc(method, params)
+        : agentsRpc(method, params),
+    );
+    mountApp();
+    // Open defaults within Agents; the search link is covered above.
+    sidebarNavButton('agents').click();
+    await waitForCondition(() => expect(agentShown('alpha')).toBe(true));
+    document.querySelector('.agent-list-defaults button').click();
+    const defaultsShown = () => {
+      expect(isCurrent('agents')).toBe(true);
+      expect(window.location.hash).toBe('#agents/~defaults');
+      expect(document.querySelector('#settings-defaults-model')).toBeTruthy();
+    };
+    await waitForCondition(defaultsShown);
+
+    sidebarNavButton('chat').click();
+    await waitForCondition(() => expect(isCurrent('chat')).toBe(true));
+    // The Main menu returns to the place Agents showed last.
+    sidebarNavButton('agents').click();
+    await waitForCondition(defaultsShown);
 
     // Choosing the shown view again starts at its start: the selected Agent.
     sidebarNavButton('agents').click();
     await waitForCondition(() => {
       expect(document.querySelector('.agent-editor-host')?.hidden).toBe(false);
       expect(document.querySelector('.agent-shared-pane')?.hidden).toBe(true);
+      expect(agentShown('alpha')).toBe(true);
+      expect(window.location.hash).toBe('#agents/alpha');
     });
   });
 
