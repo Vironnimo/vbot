@@ -50,12 +50,15 @@ MAX_ENTRIES = 500_000
 # Bound on the bytes one counting or listing pass may print.
 MAX_SCAN_BYTES = 256 * 1024 * 1024
 
-# A --debug line naming a path ripgrep's walker skipped, and the kind of rule that
+# A --debug message naming a path ripgrep's walker skipped, and the kind of rule that
 # skipped it. File type filters skip files only and report every file, so their
-# lines are left out.
+# messages are left out. A path can hold a line break outside Windows.
 _SKIPPED = re.compile(
-    rb"^rg: DEBUG\|ignore::walk\|.*?: ignoring (.*?): Ignore\(IgnoreMatch\((?!Types\()(\w+)"
+    rb"^rg: DEBUG\|ignore::walk\|.*?: ignoring (.*?): Ignore\(IgnoreMatch\((?!Types\()(\w+)",
+    re.DOTALL,
 )
+# Bound on one --debug message kept for matching; a longer one is matched on its start.
+_DEBUG_MESSAGE_BYTES = 1024 * 1024
 
 # Defaults that differ from ripgrep's own; later args items override them.
 DEFAULT_ARGUMENTS = ("--no-config", "--hidden", "--no-require-git", "--glob-case-insensitive")
@@ -164,23 +167,32 @@ def native_lines(
         finally:
             put("end", [])
 
+    def note_skip(message: bytearray) -> None:
+        skipped = _SKIPPED.match(message)
+        if skipped and outcome is not None and len(outcome.skipped) < MAX_ENTRIES:
+            outcome.skipped.append(skipped[1])
+            if skipped[2] == b"Gitignore":
+                outcome.ignored.append(skipped[1])
+
     def errors() -> None:
         assert stderr is not None
-        debug = False
+        # A message starts with "rg: "; lines without it continue the previous one,
+        # such as the regex error inside a debug message about engine fallback, or
+        # the rest of a skipped path that holds a line break. So a debug message is
+        # matched once the next message starts, or at the end.
+        debug: bytearray | None = None
         while line := stderr.readline(65536):
-            # A message starts with "rg: "; lines without it continue the previous one,
-            # such as the regex error inside a debug message about engine fallback.
             if line.startswith(b"rg: "):
-                debug = line.startswith(b"rg: DEBUG|")
-            if debug:
-                skipped = _SKIPPED.match(line)
-                if skipped and outcome is not None and len(outcome.skipped) < MAX_ENTRIES:
-                    outcome.skipped.append(skipped[1])
-                    if skipped[2] == b"Gitignore":
-                        outcome.ignored.append(skipped[1])
+                if debug is not None:
+                    note_skip(debug)
+                debug = bytearray() if line.startswith(b"rg: DEBUG|") else None
+            if debug is not None:
+                debug += line[: _DEBUG_MESSAGE_BYTES - len(debug)]
                 continue
             if len(diagnostics) < 8192:
                 diagnostics.extend(line[: 8192 - len(diagnostics)])
+        if debug is not None:
+            note_skip(debug)
 
     threads = [
         threading.Thread(target=output, daemon=True),

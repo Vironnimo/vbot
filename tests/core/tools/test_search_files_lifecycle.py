@@ -15,7 +15,12 @@ from typing import override
 import psutil  # type: ignore[import-untyped]
 import pytest
 
-from core.tools._search_execution import MAX_CHILD_MEMORY, SearchBoundError, native_lines
+from core.tools._search_execution import (
+    MAX_CHILD_MEMORY,
+    NativeOutcome,
+    SearchBoundError,
+    native_lines,
+)
 from core.tools.search import SearchBudget
 from core.tools.tools import run_tool_worker
 from tests.core.tools.search_files_test_support import context, dispatch
@@ -367,6 +372,49 @@ def test_finished_child_is_drained_when_process_monitor_misses_it(
     else:
         assert list(lines) == []
     assert child.stdout.closed and child.stderr.closed
+
+
+# Captured from ripgrep 14.1.0 on Linux, without its host name lines. A name with a
+# line break splits its skip report across two lines.
+_SKIP_REPORTS = (
+    b"rg: DEBUG|rg::flags::parse|crates/core/flags/parse.rs:89: not reading config files "
+    b"because --no-config is present\n"
+    b"rg: DEBUG|rg::flags::hiargs|crates/core/flags/hiargs.rs:174: using 12 thread(s)\n"
+    b"rg: DEBUG|ignore::walk|/usr/share/cargo/registry/ignore-0.4.22/src/walk.rs:1799: "
+    b'ignoring ./build: Ignore(IgnoreMatch(Gitignore(Glob { from: Some("./.gitignore"), '
+    b'original: "build/", actual: "**/build", is_whitelist: false, is_only_dir: true })))\n'
+    b"rg: DEBUG|ignore::walk|/usr/share/cargo/registry/ignore-0.4.22/src/walk.rs:1799: "
+    b"ignoring src/new\nline.txt: Ignore(IgnoreMatch(Gitignore(Glob { from: "
+    b'Some("/tmp/tmp.MIMeBqH8Ym/.gitignore"), original: "new?line.txt", actual: '
+    b'"**/new?line.txt", is_whitelist: false, is_only_dir: false })))\n'
+)
+
+
+def test_skip_reports_keep_a_name_with_a_line_break_whole(tmp_path, monkeypatch):
+    child = SimpleNamespace(
+        pid=1234,
+        stdout=io.BytesIO(b""),
+        stderr=io.BytesIO(_SKIP_REPORTS),
+        returncode=0,
+        poll=lambda: 0,
+        wait=lambda **_kwargs: 0,
+    )
+
+    def gone(pid):
+        raise psutil.NoSuchProcess(pid)
+
+    monkeypatch.setattr(
+        "core.tools._search_execution.subprocess.Popen", lambda *_args, **_kw: child
+    )
+    monkeypatch.setattr("core.tools._search_execution.psutil.Process", gone)
+    outcome = NativeOutcome()
+    lines = native_lines(
+        Path(sys.executable), [], None, SearchBudget(None), cwd=tmp_path, outcome=outcome
+    )
+
+    assert list(lines) == []
+    assert outcome.skipped == outcome.ignored == [b"./build", b"src/new\nline.txt"]
+    assert outcome.diagnostics == ""
 
 
 def test_child_memory_is_bounded_and_polled_at_an_interval(tmp_path, monkeypatch):

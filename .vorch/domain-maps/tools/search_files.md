@@ -207,6 +207,14 @@ directories holding a selected file are listed. The `--debug` line format is
 ripgrep 15.1.0's; `test_directory_lists_include_empty_directories_ripgrep_enters`
 fails if an upgrade changes it.
 
+ripgrep prints a skipped path unescaped, so a name with a line break continues
+its report on a line without the `rg: ` prefix. `native_lines` matches each
+debug message once the next `rg: ` line or the end of stderr arrives, so the
+path stays whole for every reader of these reports: the `--dirs` skip set, the
+picker's `ignored` mark and the `skipped` summary
+(`test_skip_reports_keep_a_name_with_a_line_break_whole`, a captured ripgrep
+14.1.0 sample that runs on every platform).
+
 Result units:
 
 - Without `-U`, one result is one matching line, which is consistent with `-c`.
