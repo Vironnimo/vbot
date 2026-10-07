@@ -213,14 +213,20 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForCondition(condition, maxAttempts = 20) {
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+// Waits by time, not by turns: a condition behind a real timer (such as the
+// path field's listing delay) takes the same time on fast and slow machines.
+async function waitForCondition(condition, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     if (condition()) {
       return;
     }
     await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 5));
     flushSync();
+  }
+  if (condition()) {
+    return;
   }
   throw new Error('Timed out waiting for condition');
 }
