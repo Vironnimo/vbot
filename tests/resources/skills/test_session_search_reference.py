@@ -40,7 +40,7 @@ def test_session_sql_recipes_preserve_scope_current_history_forks_blocks_and_exa
     fork.append(ChatMessage.assistant(model="test", content="fork only"))
     document = (
         Path(__file__).resolve().parents[3]
-        / "resources/skills/vbot-cli/references/session-search.md"
+        / "resources/skills/vbot-docs/references/session-search.md"
     ).read_text(encoding="utf-8")
     blocks = re.findall(r"```python\n(.*?)\n```", document, re.DOTALL)
     namespace: dict[str, Any] = {}

@@ -35,7 +35,7 @@ Arguments: `source` (string with `contentMediaType: text/plain`, at most 200000 
 
 - WebUI: the MCP section's Import action opens `settings/McpImportDialog.svelte`: paste or open a file, preview, review each server (program or URL, credential states, warnings, `error`, `conflict` as "Name in use"), edit a server's connection id (the preview is read again 400 ms after typing stops; a server whose new id resolved its conflict becomes chosen) and optionally type a value per missing credential. `mcpImportPlan` (`lib/mcpSettings.js`) plans the call: `import` with `apply`, then `credential` for each typed value, then `enable` for each connection whose missing credentials were all typed and that is neither unresolved nor turned off.
 - WebUI quick fill (`settings/McpQuickFill.svelte`, in the new-connection editor): the text is previewed; exactly one server without `error` and without a `provided` secret fills the form (an id or description the user already typed stays), and its warnings and missing credentials show as notes; any other text opens the Import dialog with it.
-- CLI: `vbot extensions run mcp import <file>` or `import -` (standard input) previews; `--apply true`, `--servers '<json-array>'`, `--ids '<json-object>'` apply (document arguments: `cli.md` -> Extension management operations). Agent guidance: `resources/skills/vbot-cli/references/mcp.md`.
+- CLI: `vbot extensions run mcp import <file>` or `import -` (standard input) previews; `--apply true`, `--servers '<json-array>'`, `--ids '<json-object>'` apply (document arguments: `cli.md` -> Extension management operations). Agent guidance: `resources/skills/vbot-docs/references/mcp.md`.
 
 ## Tests
 

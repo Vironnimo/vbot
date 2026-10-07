@@ -4,7 +4,7 @@ Backend-selected read model for discovering content in persisted chat Sessions. 
 
 ## Overview
 
-One Agent-facing Tool: `session_search` requires a query and returns backend-ranked excerpts with bounded canonical conversation context. Optional Session scope supports focused follow-up searches. Session listing, full transcripts, and exact Tool Results are taught by the bundled `vbot-cli` Skill through CLI and read-only SQLite recipes; there is no `session_read` Tool.
+One Agent-facing Tool: `session_search` requires a query and returns backend-ranked excerpts with bounded canonical conversation context. Optional Session scope supports focused follow-up searches. Session listing, full transcripts, and exact Tool Results are taught by the bundled `vbot-docs` Skill through CLI and read-only SQLite recipes; there is no `session_read` Tool.
 
 `core/tools/session_search.py` owns Tool definitions, validation, execution and the final visibility recheck of hit Sessions; `_session_recall_results.py` holds internal bounded result projection, conversation context and descriptors under the same owner.
 

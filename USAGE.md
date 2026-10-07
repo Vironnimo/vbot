@@ -679,7 +679,7 @@ vbot skill install https://github.com/owner/repo --scope global --dry-run
 
 Use `--path <directory>` when a source contains multiple Skills. `--dry-run` validates without writing; an identical package is unchanged, while replacing different files requires `--replace --yes` and removes local modifications too. Public skills.sh and ClawHub Skill links are also supported; other catalogs can supply their repository or archive-download link. Installation preserves supporting files and binary assets without running scripts or installing dependencies. Local paths refer to the server machine; a remote CLI does not upload client files.
 
-An Identity Agent can follow the bundled `vbot-cli` Skill and install for itself with `--scope own`, including while a Project is loaded. Outside a Run, use `agent:<id>` or `global` explicitly. Private Skills become available to their owner subject to requirements and disable policy; global installs retain the Agent's existing Skill selection. Installation does not grant Tools or credentials. Use `skill inventory` to inspect saved packages and the Agent's `skill` Tool to verify its effective catalog. Uninstall with `skill delete <name> --scope global|agent:<id> --yes`.
+An Identity Agent can follow the bundled `vbot-docs` Skill and install for itself with `--scope own`, including while a Project is loaded. Outside a Run, use `agent:<id>` or `global` explicitly. Private Skills become available to their owner subject to requirements and disable policy; global installs retain the Agent's existing Skill selection. Installation does not grant Tools or credentials. Use `skill inventory` to inspect saved packages and the Agent's `skill` Tool to verify its effective catalog. Uninstall with `skill delete <name> --scope global|agent:<id> --yes`.
 
 Tools are runtime capabilities exposed according to Agent, Project, Extension, and Settings policy. Inspect the public catalog and one Agent's complete System Prompt with:
 
@@ -728,11 +728,11 @@ The result contains only Models with at least one usable Connection (including e
 
 Recall searches canonical persisted Session history; it does not replace curated `MEMORY.md`. Available first-party backends are `canonical_scan` for direct chronological scanning, `sqlite_fts` for indexed substring and relevance search, `vector` for semantic Passage search through the configured `text_embedding` Model, and `hybrid` for fused lexical and semantic results. SQLite indexes under `<data-dir>/recall/` are derived and disposable; incompatible schemas or embedding spaces rebuild rather than migrate.
 
-The `session_search` Tool exposes Recall to Agents. For complete transcripts, including the current Session's Messages before a Compaction checkpoint, the bundled `vbot-cli` Skill teaches read-only queries through the shell Tool.
+The `session_search` Tool exposes Recall to Agents. For complete transcripts, including the current Session's Messages before a Compaction checkpoint, the bundled `vbot-docs` Skill teaches read-only queries through the shell Tool.
 
 ### Compaction and Continuation
 
-Compaction appends a checkpoint Projection and never rewrites or deletes older Session records. Automatic Compaction runs only at safe completed Model boundaries according to the effective Policy; `/compact` invokes the selected strategy manually when no Run is active. Older detail remains discoverable through Recall and the `vbot-cli` Skill's Session search.
+Compaction appends a checkpoint Projection and never rewrites or deletes older Session records. Automatic Compaction runs only at safe completed Model boundaries according to the effective Policy; `/compact` invokes the selected strategy manually when no Run is active. Older detail remains discoverable through Recall and the `vbot-docs` Skill's Session search.
 
 When a visible Run is interrupted, Continuation retains a private checkpoint regardless of whether the cause was user Cancel, a Provider or network failure, a timeout, a process restart, or an internal failure. The WebUI exposes no checkpoint banner or recovery controls. The next normal user message receives the checkpoint automatically alongside the new instruction, and a complete response resolves it.
 
@@ -1088,7 +1088,7 @@ vbot extensions set homeassistant url http://homeassistant.local:8123
 Get-Content .\hass-token.txt | vbot extensions set homeassistant token --stdin
 ```
 
-For the Extension API, hook contracts, capabilities, and examples, use the [vbot-cli Skill](resources/skills/vbot-cli/SKILL.md), its [Extension authoring guide](resources/skills/vbot-cli/references/extensions.md), and its [runnable templates](resources/skills/vbot-cli/assets/extensions). Bundled Swarm, MCP, and Computer Use operation is covered in the Skill's [Extension usage reference](resources/skills/vbot-cli/references/extension-usage.md).
+For the Extension API, hook contracts, capabilities, and examples, use the [vbot-docs Skill](resources/skills/vbot-docs/SKILL.md), its [Extension authoring guide](resources/skills/vbot-docs/references/extensions.md), and its [runnable templates](resources/skills/vbot-docs/assets/extensions). Bundled Swarm, MCP, and Computer Use operation is covered in the Skill's [Extension usage reference](resources/skills/vbot-docs/references/extension-usage.md).
 
 ### Home Assistant
 

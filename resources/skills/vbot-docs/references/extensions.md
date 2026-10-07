@@ -4,7 +4,7 @@ An **extension** is in-process Python that adds capabilities to vBot without for
 
 Read this reference when creating or changing an Extension. For settings and enable/disable operations, read [configuration.md](configuration.md#extensions); for MCP setup, read [mcp.md](mcp.md). Swarm and Computer Use operation live in [extension-usage.md](extension-usage.md). Browser automation uses the separate `playwright-cli` Skill.
 
-Paths beginning with `core/`, `resources/` or `webui/` below are relative to the `vbot_root` reported by `vbot home` on the server machine. Templates are bundled with this Skill under `assets/extensions/`; read them through the `skill` Tool with `name: "vbot-cli"` and the relative file path, or copy from `<vbot_root>/resources/skills/vbot-cli/assets/extensions/`.
+Paths beginning with `core/`, `resources/` or `webui/` below are relative to the `vbot_root` reported by `vbot home` on the server machine. Templates are bundled with this Skill under `assets/extensions/`; read them through the `skill` Tool with `name: "vbot-docs"` and the relative file path, or copy from `<vbot_root>/resources/skills/vbot-docs/assets/extensions/`.
 
 ## Build and verify
 

@@ -86,7 +86,7 @@ SKILLS_SECTION: dict[str, Any] = {
     "skills_without_offer_data": 1,
     "skills": [
         _skill(
-            "vbot-cli",
+            "vbot-docs",
             ["bundled"],
             offered_sessions=10,
             activated_sessions=4,
@@ -125,7 +125,7 @@ def test_statistics_skills_prints_the_skill_usage_report(rpc: FakeRpc, run_cli: 
         "without offer data: 1",
         "glossary [global, project:vBot]",
         "deep-research [global]",
-        "vbot-cli [bundled]",
+        "vbot-docs [bundled]",
         "offered=10",
         "activated=4",
         "offer_conversion=0.40",

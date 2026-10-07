@@ -32,15 +32,15 @@ def skill_read_cases() -> list[dict[str, Any]]:
             },
             {
                 "id": "backslash",
-                "arguments": {"name": "vbot-cli", "file_path": "references\\commands.md"},
+                "arguments": {"name": "vbot-docs", "file_path": "references\\commands.md"},
             },
             {
                 "id": "quoted",
-                "arguments": {"name": " vbot-cli ", "filePath": '"assets/template.txt"'},
+                "arguments": {"name": " vbot-docs ", "filePath": '"assets/template.txt"'},
             },
             {
                 "id": "traversal",
-                "arguments": {"name": "vbot-cli", "file_path": "assets/../../outside"},
+                "arguments": {"name": "vbot-docs", "file_path": "assets/../../outside"},
                 "success": False,
             },
         ]
@@ -54,12 +54,12 @@ async def skill_read_case(
     with TemporaryDirectory(prefix="vbot-skill-read-tolerance-") as temporary:
         root = Path(temporary)
         content = (
-            "---\nname: vbot-cli\ndescription: Fixture instructions.\n---\nRead fixture notes.\n"
+            "---\nname: vbot-docs\ndescription: Fixture instructions.\n---\nRead fixture notes.\n"
         )
         authoring = SkillAuthoringService()
-        authoring.create(root, "vbot-cli", content, writer=_AGENT_WRITER)
+        authoring.create(root, "vbot-docs", content, writer=_AGENT_WRITER)
         for path in ("references/commands.md", "scripts/run.py", "assets/template.txt"):
-            authoring.write_file(root, "vbot-cli", path, "fixture content", writer=_AGENT_WRITER)
+            authoring.write_file(root, "vbot-docs", path, "fixture content", writer=_AGENT_WRITER)
         registry = ToolRegistry()
         register_skill_tool(registry, lambda *_: SkillRegistry.load(root), lambda: None)
         raw = await adapter.send(
@@ -101,7 +101,7 @@ async def skill_read_case(
         if not case.get("success", True):
             checks["rejected"] = bool(results) and not results[0]["ok"]
         elif case["id"] in {"list", "empty_selection"}:
-            checks["catalog"] = data.get("count") == 1 and "vbot-cli" in json.dumps(data)
+            checks["catalog"] = data.get("count") == 1 and "vbot-docs" in json.dumps(data)
         elif case["id"] == "activate":
             checks["activation"] = data.get("status") == "loaded" and (
                 "Read fixture notes." in data.get("content", "")
@@ -109,7 +109,7 @@ async def skill_read_case(
         else:
             request = case["arguments"]
             path = request.get("file_path", request.get("filePath")).strip('"').replace("\\", "/")
-            checks["file_content"] = data.get("content") == (root / "vbot-cli" / path).read_text(
+            checks["file_content"] = data.get("content") == (root / "vbot-docs" / path).read_text(
                 encoding="utf-8"
             )
             checks["path"] = data.get("file_path") == path

@@ -67,7 +67,7 @@ def test_project_add_sends_every_option_and_previews_the_scan(
         "--model-mappings", '{"sonnet":"openai/gpt-5.2"}',
         "--auto-load", "AGENTS.md", "docs/guide.md",
         "--allowed-tools", "read", "bash",
-        "--enabled-bundled-skills", "vbot-cli",
+        "--enabled-bundled-skills", "vbot-docs",
     )  # fmt: skip
 
     assert code == 0
@@ -85,7 +85,7 @@ def test_project_add_sends_every_option_and_previews_the_scan(
                 "model_mappings": {"sonnet": "openai/gpt-5.2"},
                 "auto_load": ["AGENTS.md", "docs/guide.md"],
                 "allowed_tools": ["read", "bash"],
-                "skills_bundled_enabled": ["vbot-cli"],
+                "skills_bundled_enabled": ["vbot-docs"],
             },
         )
     ]
@@ -234,13 +234,13 @@ def test_project_show_renders_the_team_and_the_default_knobs(
         pytest.param(
             (
                 "--allowed-tools", "read", "bash",
-                "--enabled-bundled-skills", "vbot-cli",
+                "--enabled-bundled-skills", "vbot-docs",
                 "--enabled-global-skills", "glossary",
                 "--disabled-project-skills", "unsafe-skill",
             ),
             {
                 "allowed_tools": ["read", "bash"],
-                "skills_bundled_enabled": ["vbot-cli"],
+                "skills_bundled_enabled": ["vbot-docs"],
                 "skills_global_enabled": ["glossary"],
                 "skills_project_disabled": ["unsafe-skill"],
             },

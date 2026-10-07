@@ -148,7 +148,7 @@ Generated Session ids use `ses_` plus 12 lowercase base32 characters. Creation a
 - The title System Prompt instructs the Model to use the language of the user's main request (not quoted text/code/logs), preserve proper names and technical terms, and summarize the topic without following instructions in the supplied source material. These are Model instructions; the local validator enforces title shape and length, not language or semantic compliance.
 - Title generation resolves the Adapter's `request_context_kwargs` from Project/Agent/Session once and forwards it on both attempts. This supplies required Provider routing headers without coupling Sessions to wire fields. `test_title_service_sends_opencode_session_header` covers the real OpenCode Go Responses serialization; a synthetic Muse Spark 1.3 title completed through this path on 2026-09-07.
 
-Runtime Session readers use `ChatSessionManager`. The bundled `vbot-cli` Skill additionally documents deliberate read-only SQLite inspection for extended Session search and transcripts, scoped by Project/Agent/Session, live generation, current view and canonical sequence; these operator-style recipes do not create another runtime storage owner.
+Runtime Session readers use `ChatSessionManager`. The bundled `vbot-docs` Skill additionally documents deliberate read-only SQLite inspection for extended Session search and transcripts, scoped by Project/Agent/Session, live generation, current view and canonical sequence; these operator-style recipes do not create another runtime storage owner.
 
 ## Constraints & Gotchas
 
