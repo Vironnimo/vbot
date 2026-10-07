@@ -76,8 +76,11 @@ SOUL_INCLUDE_MARKER = "{include:SOUL.md}"
 
 # SOUL-only framing; never apply it to ordinary workspace includes or empty SOUL.
 SOUL_FRAMING = (
-    "The following is your SOUL — your core identity: who you are and how you behave. "
-    "Treat it as your foundational, highest-priority instructions, not as reference material."
+    "The following is your SOUL from `SOUL.md` in your Workspace: who you are and how you "
+    "work. Follow it; when the user's current request conflicts with it, follow the request. "
+    "Change `SOUL.md` only when the user asks for a change or agrees to one you proposed. "
+    "Propose a change only when the user's feedback shows that a lasting part of your SOUL "
+    "is wrong; never ask after a task whether to change it."
 )
 
 

@@ -665,6 +665,8 @@ class SystemPromptManager:
             "{vbot_version}": self._vbot_version,
             "{operating_system}": self._operating_system or platform.platform(),
             "{model}": agent.model,
+            "{agent_id}": agent.id,
+            "{agent_name}": agent.name or agent.id,
             "{identity_workspace}": model_path(agent.workspace) if agent.workspace else "",
             "{vbot_root}": model_path(self._vbot_root.resolve()),
             "{data_root}": model_path(self._data_root.resolve()),

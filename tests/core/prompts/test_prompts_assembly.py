@@ -77,6 +77,8 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     assert model_path((tmp_path / "app").resolve()) in prompt
     assert model_path((tmp_path / "data").resolve()) in prompt
     assert "openai/gpt-5.2" in prompt
+    assert "`Coder Agent`" in prompt
+    assert "`coder`" in prompt
     assert model_path(workspace) in prompt
     assert "high" in prompt
     assert "Current local date: `2026-05-04`" in prompt
