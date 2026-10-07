@@ -24,10 +24,21 @@ from core.channels.adapter import (
     main_conversation_id,
 )
 from core.sessions import SessionAddress, new_session_id
+from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.channels.config import ChannelConfig
     from core.sessions import ChatSessionManager
+
+_LOGGER = get_logger("channels.routing")
+
+
+class _ForeignAnchorError(Exception):
+    """The derived anchor id names another Channel's own conversation Session."""
+
+
+def _conversation_anchor(channel_id: str, chat_id: str) -> str:
+    return f"ch-{channel_id}-{chat_id}"
 
 
 def _session_address(agent_id: str, session_id: str) -> SessionAddress:
@@ -57,15 +68,8 @@ class ChannelSessionRouting:
         A known conversation whose channel context is unchanged costs only reads;
         creation and a changed context commit together in one write.
         """
-        route = await self._pointers.run_async(self._route_facts, conversation)
         reply_plan = self._reply_plan_for(conversation)
-        await self._chat_sessions.run_async(
-            self._update_session_metadata,
-            route,
-            conversation,
-            reply_plan,
-            create_missing=True,
-        )
+        route = await self._route_async(conversation, reply_plan)
         return route, reply_plan
 
     def _reply_plan_for(self, conversation: ConversationFacts) -> ReplyPlanFacts:
@@ -83,32 +87,76 @@ class ChannelSessionRouting:
 
     async def ensure_channel_session(self, conversation: ConversationFacts) -> RouteFacts:
         """Ensure the Session mirroring a conversation exists with channel context."""
-        route = await self._pointers.run_async(self._route_facts, conversation)
         # Proactive (outbound-only) Sessions get the same channel metadata as inbound
         # ones, so a channel_send-created session is recognizable as a channel session and has
         # a last_reply_target before any inbound message arrives.
-        await self._chat_sessions.run_async(
-            self._update_session_metadata,
-            route,
+        return await self._route_async(
             conversation,
             ReplyPlanFacts(
                 channel_id=self._config.id,
                 platform_target=conversation.chat_id,
                 thread_id=conversation.thread_id,
             ),
-            create_missing=True,
         )
+
+    async def _route_async(
+        self, conversation: ConversationFacts, reply_plan: ReplyPlanFacts
+    ) -> RouteFacts:
+        """Route to the conversation's active Session, creating it with channel context."""
+        route, anchored = await self._pointers.run_async(self._route_facts, conversation)
+        try:
+            await self._chat_sessions.run_async(
+                self._update_session_metadata,
+                route,
+                conversation,
+                reply_plan,
+                create_missing=True,
+                own_anchor=anchored,
+            )
+        except _ForeignAnchorError:
+            # Another Channel of this Agent derives the same anchor id for one of its own
+            # conversations (channel tg with chat -100, channel tg- with chat 100). That
+            # Channel keeps the Session; this conversation moves to its own one.
+            session_id = await self._pointers.run_async(
+                self._leave_foreign_anchor, conversation, route.session_id
+            )
+            route = RouteFacts(agent_id=self._config.agent_id, session_id=session_id)
+            await self._chat_sessions.run_async(
+                self._update_session_metadata,
+                route,
+                conversation,
+                reply_plan,
+                create_missing=True,
+            )
+            _LOGGER.info(
+                "Channel %s conversation moved to Session %s: its anchor Session belongs "
+                "to another Channel",
+                self._config.id,
+                session_id,
+            )
         return route
 
-    def _route_facts(self, conversation: ConversationFacts) -> RouteFacts:
+    def _route_facts(self, conversation: ConversationFacts) -> tuple[RouteFacts, bool]:
+        """Return the active route and whether it is the conversation's own anchor."""
         # _derive_session_id yields the stable conversation anchor. The active
         # session may have been moved off that anchor by /new (the "Wegweiser"
         # pointer), so route through the pointer instead of straight to the anchor.
         conversation_key = self._derive_session_id(conversation)
-        return RouteFacts(
-            agent_id=self._config.agent_id,
-            session_id=self._resolve_active_session_id(conversation_key),
+        active = self._pointers.active_session_id(self._config.id, conversation_key)
+        route = RouteFacts(agent_id=self._config.agent_id, session_id=active or conversation_key)
+        return route, active is None
+
+    def _leave_foreign_anchor(self, conversation: ConversationFacts, anchor: str) -> str:
+        """Point the conversation at a Session of its own, unless it already moved."""
+        conversation_key = self._derive_session_id(conversation)
+        active = self._pointers.active_session_id(self._config.id, conversation_key)
+        if active is not None and active != anchor:
+            return active
+        session_id = new_session_id()
+        self._pointers.point_conversation(
+            self._config.id, conversation_key, conversation.kind, session_id
         )
+        return session_id
 
     def _resolve_active_session_id(self, conversation_key: str) -> str:
         """Follow a conversation anchor's pointer to its currently active session.
@@ -186,10 +234,10 @@ class ChannelSessionRouting:
             return f"ch-{self._config.id}-u{conversation.user_id}"
         if scope == "per_account_channel_peer":
             return f"ch-{self._config.id}-{conversation.chat_id}-u{conversation.user_id}"
-        return f"ch-{self._config.id}-{conversation.chat_id}"
+        return _conversation_anchor(self._config.id, conversation.chat_id)
 
     def _group_conversation_key(self, chat_id: str) -> str:
-        return f"ch-{self._config.id}-{chat_id}"
+        return _conversation_anchor(self._config.id, chat_id)
 
     def _update_session_metadata(
         self,
@@ -198,8 +246,14 @@ class ChannelSessionRouting:
         reply_plan: ReplyPlanFacts,
         *,
         create_missing: bool = False,
+        own_anchor: bool = False,
     ) -> None:
-        """Re-assert the channel context; unchanged context is not rewritten."""
+        """Re-assert the channel context; unchanged context is not rewritten.
+
+        With *own_anchor*, raise ``_ForeignAnchorError`` instead when the Session is
+        another Channel's anchor for one of its chats: the derived id
+        ``ch-<channel>-<chat>`` does not show where the channel id ends.
+        """
         address = _session_address(route.agent_id, route.session_id)
         last_reply_target: dict[str, Any] = {
             "channel_id": reply_plan.channel_id,
@@ -211,6 +265,15 @@ class ChannelSessionRouting:
             last_reply_target["thread_id"] = reply_plan.thread_id
 
         def update(metadata: dict[str, Any]) -> None:
+            owner = metadata.get("source_channel_id")
+            if (
+                own_anchor
+                and isinstance(owner, str)
+                and owner != self._config.id
+                and _conversation_anchor(owner, str(metadata.get("platform_conv_id")))
+                == route.session_id
+            ):
+                raise _ForeignAnchorError(route.session_id)
             metadata.update(
                 {
                     "source_channel_id": self._config.id,

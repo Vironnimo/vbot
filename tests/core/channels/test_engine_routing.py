@@ -5,21 +5,24 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
+from core.channels._conversation_routing import ChannelSessionRouting
 from core.channels.adapter import RouteFacts
 from core.database import DatabaseUnavailableError
-from core.sessions import SessionAddress
+from core.sessions import ChatSessionManager, SessionAddress
 
 from .engine_test_support import (
     SESSION_ID,
     channel_state,
     drain,
     make_completed_run,
+    make_config,
     make_conversation,
     make_engine,
     make_new_only_dispatcher,
@@ -68,7 +71,7 @@ async def test_async_routing_runs_each_database_on_its_own_pool(
     route_facts = routing._route_facts
     update_session_metadata = routing._update_session_metadata
 
-    def blocking_route_facts(conversation: Any) -> RouteFacts:
+    def blocking_route_facts(conversation: Any) -> tuple[RouteFacts, bool]:
         threads["pointer"] = threading.current_thread().name
         started.set()
         assert release.wait(timeout=2)
@@ -176,3 +179,35 @@ async def test_ensure_channel_session_follows_pointer_after_new(tmp_path: Path) 
     route = await engine.ensure_channel_session(make_conversation())
     assert route == RouteFacts(agent_id="assistant", session_id=new_session_id)
     await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_channels_whose_anchor_ids_collide_keep_separate_sessions(tmp_path: Path) -> None:
+    # ch-tg + "-" + -100123 and ch-tg- + "-" + 100123 derive the same anchor id.
+    pointers = channel_state(tmp_path, "tg", "tg-")
+    sessions = ChatSessionManager(tmp_path)
+    group = ChannelSessionRouting(replace(make_config(), id="tg"), sessions, pointers)
+    direct = ChannelSessionRouting(replace(make_config(), id="tg-"), sessions, pointers)
+
+    def conversation(channel_id: str, chat_id: int, kind: str) -> Any:
+        return replace(make_conversation(chat_id=chat_id, kind=kind), channel_id=channel_id)
+
+    group_route = await group.ensure_channel_session(conversation("tg", -100123, "group"))
+    direct_route = await direct.ensure_channel_session(conversation("tg-", 100123, "direct"))
+
+    assert group_route.session_id == "ch-tg--100123"
+    assert direct_route.session_id not in {group_route.session_id, "ch-tg--100123"}
+    for routing, chat_id, kind, route in (
+        (group, -100123, "group", group_route),
+        (direct, 100123, "direct", direct_route),
+    ):
+        again, _plan = await routing._prepare_inbound_route_async(
+            conversation(routing._config.id, chat_id, kind)
+        )
+        assert again == route
+        metadata = sessions.get_metadata(
+            SessionAddress(project_id=None, agent_id="assistant", session_id=route.session_id)
+        )
+        assert metadata["source_channel_id"] == routing._config.id
+        assert metadata["last_reply_target"]["platform_target"] == str(chat_id)
+    sessions.close()
