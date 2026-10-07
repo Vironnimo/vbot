@@ -141,6 +141,7 @@ class LiveCallSession:
         host: LiveCallHost,
         hosts: LiveToolHosts,
         target: str,
+        says_goodbye_first: bool = False,
         log_id: str | None = None,
         start_timeout: float = START_TIMEOUT_SECONDS,
         close_timeout: float = CLOSE_TIMEOUT_SECONDS,
@@ -162,6 +163,7 @@ class LiveCallSession:
         self._host = host
         self._hosts = hosts
         self._target = target
+        self._says_goodbye_first = says_goodbye_first
         self._log_id = log_id or new_id("live")
         self._start_timeout = start_timeout
         self._close_timeout = close_timeout
@@ -219,6 +221,10 @@ class LiveCallSession:
     @property
     def media(self) -> JsonObject:
         return self._wire.media
+
+    @property
+    def says_goodbye_first(self) -> bool:
+        return self._says_goodbye_first
 
     def start(self) -> None:
         """Begin reading wire events; called once by the service."""

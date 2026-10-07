@@ -23,18 +23,28 @@ def _named_tools(text: str) -> set[str]:
 
 
 @pytest.mark.parametrize(
-    "tools",
-    [["start_agent_session", "read_output", "end_call"], ["vbot_request"], []],
-    ids=["own-live-tools", "requests-only", "hands-on-natively"],
+    ("tools", "delegates", "hands_on_the_end"),
+    [
+        (["start_agent_session", "read_output", "end_call"], False, False),
+        (["vbot_request"], False, True),
+        ([], True, True),
+        ([], False, False),
+    ],
+    ids=["own-live-tools", "requests-only", "hands-on-natively", "no-access"],
 )
 def test_every_voice_model_gets_the_same_text_and_guidance_only_for_its_live_tools(
-    tools: list[str],
+    tools: list[str], delegates: bool, hands_on_the_end: bool
 ) -> None:
     shared = voice_instructions(tools=[])
-    text = voice_instructions(tools=tools)
+    text = voice_instructions(tools=tools, delegates=delegates)
     guidance = live_tool_guidance(set(tools).__contains__)
+    ending = 'hand on "end the call" at once'
+    others = "\n\n".join(
+        block for block in text.split("\n\n") if not block.startswith("Ending the call:")
+    )
 
-    assert text == (f"{shared}\n\n{guidance}" if guidance else shared)
+    assert others == (f"{shared}\n\n{guidance}" if guidance else shared)
+    assert (ending in text) is hands_on_the_end
     assert _named_tools(text) <= set(tools)
     assert ("About vBot" in text) is bool(set(tools) & set(LIVE_TOOL_NAMES))
 

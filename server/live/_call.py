@@ -67,6 +67,9 @@ class LiveCallLimits:
     abort_timeout_seconds: float = 4.0
     # Time for the voice model's goodbye before ``end_call`` closes the call.
     end_call_delay_seconds: float = 5.0
+    # The same when the voice model handed the end on: its goodbye ran while
+    # the request did, so only its rest is left.
+    handed_on_end_delay_seconds: float = 1.0
     # A live call without speech, Tool calls, or delegated work ends after
     # this long; ``idle_warning_seconds`` before, the owner is warned.
     idle_seconds: float = 600.0
@@ -241,7 +244,13 @@ class LiveCallEntry:
         self._spawn(self._end_after_goodbye(), "end")
 
     async def _end_after_goodbye(self) -> None:
-        await asyncio.sleep(self._limits.end_call_delay_seconds)
+        call = self.call
+        handed_on = call is not None and call.says_goodbye_first
+        await asyncio.sleep(
+            self._limits.handed_on_end_delay_seconds
+            if handed_on
+            else self._limits.end_call_delay_seconds
+        )
         _LOGGER.info("Live call ended by the voice model (call=%s)", self.log_id)
         self._end_reason = self._end_reason or CLOSED_REASON_HUNG_UP
         self.request_close()

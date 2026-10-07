@@ -84,7 +84,7 @@ from core.providers.errors import (
     ProviderOutcomeUnknownError,
     ProviderRateLimitError,
 )
-from core.tools.live import TOOL_VBOT_REQUEST, LiveToolHosts
+from core.tools.live import TOOL_END_CALL, TOOL_VBOT_REQUEST, LiveToolHosts
 from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, TaskError, VBotError
 from core.utils.ids import new_id
@@ -213,6 +213,15 @@ class LiveCall(Protocol):
 
     @property
     def media(self) -> JsonObject: ...
+
+    @property
+    def says_goodbye_first(self) -> bool:
+        """Whether the voice model says goodbye before the end reaches vBot.
+
+        True when it hands the end of the call on instead of calling
+        ``end_call`` itself, so its goodbye runs while the request does.
+        """
+        ...
 
     async def close(self) -> None:
         """Ask the provider to finish the call and wait briefly for final usage."""
@@ -455,6 +464,7 @@ class LiveVoiceService:
             ),
             host=host,
             hosts=self._hosts,
+            says_goodbye_first=all(tool.get("name") != TOOL_END_CALL for tool in setup.tools),
             target=label,
             log_id=log_id,
             usage_accounting=wire.accounting,
@@ -485,7 +495,9 @@ class LiveVoiceService:
             )
         wire_tools = tools if plan.wire.tools else ()
         instructions = voice_instructions(
-            tools=[str(tool.get("name")) for tool in wire_tools], wake_phrases=wake_phrases
+            tools=[str(tool.get("name")) for tool in wire_tools],
+            delegates=not plan.wire.tools,
+            wake_phrases=wake_phrases,
         )
         return _VoiceSetup(
             instructions=instructions, tools=wire_tools, openai_backend=openai_backend

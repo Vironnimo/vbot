@@ -72,6 +72,7 @@ class FakeCall:
         )
         self.audio: list[bytes] = []
         self.notices: list[LiveRunNotice] = []
+        self.says_goodbye_first = False
         self.close_calls = 0
         self.abort_calls = 0
         self.close_mode = "finish"
@@ -645,22 +646,35 @@ async def test_the_owner_reports_what_the_app_shows_to_the_call(live: Harness) -
 
 
 @pytest.mark.asyncio
-async def test_end_call_closes_the_call_gracefully_after_the_goodbye(live: Harness) -> None:
-    call = await live.start()
-    reader = live.attach(call)
-    result = await run_tool(call, "end_call", {})
-    assert result["ok"] is True
-    assert call.close_calls == 0
-    await settle(lambda: live.registry.active_call_id is None)
-    assert call.close_calls == 1
-    assert call.abort_calls == 0
-    # The owner learns that the voice model hung up, not that the user stopped.
-    await settle(lambda: reader.done)
-    assert reader.frames[-1] == {
-        "type": "closed",
-        "reason": "hung_up",
-        "usage": {"total_tokens": 3},
-    }
+@pytest.mark.parametrize("handed_on", [False, True], ids=["own-end-call", "handed-on"])
+async def test_end_call_closes_the_call_gracefully_after_the_goodbye(handed_on: bool) -> None:
+    # Only the delay for who ended the call is short enough to close here.
+    live = Harness(
+        limits=replace(
+            FAST,
+            end_call_delay_seconds=60.0 if handed_on else 0.01,
+            handed_on_end_delay_seconds=0.01 if handed_on else 60.0,
+        )
+    )
+    try:
+        call = await live.start()
+        call.says_goodbye_first = handed_on
+        reader = live.attach(call)
+        result = await run_tool(call, "end_call", {})
+        assert result["ok"] is True
+        assert call.close_calls == 0
+        await settle(lambda: live.registry.active_call_id is None)
+        assert call.close_calls == 1
+        assert call.abort_calls == 0
+        # The owner learns that the voice model hung up, not that the user stopped.
+        await settle(lambda: reader.done)
+        assert reader.frames[-1] == {
+            "type": "closed",
+            "reason": "hung_up",
+            "usage": {"total_tokens": 3},
+        }
+    finally:
+        await live.close()
 
 
 @pytest.mark.asyncio

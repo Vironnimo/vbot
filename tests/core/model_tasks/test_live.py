@@ -1185,7 +1185,9 @@ _VOICE_NAMES = ["overview", "end_call"]
             ["vbot_request"],
             {
                 "backend": None,
-                "instructions": voice_instructions(tools=[], wake_phrases=WAKE_PHRASES),
+                "instructions": voice_instructions(
+                    tools=[], delegates=True, wake_phrases=WAKE_PHRASES
+                ),
             },
         ),
         (
@@ -1198,7 +1200,9 @@ _VOICE_NAMES = ["overview", "end_call"]
                     instructions=live_tool_guidance(set(_VOICE_NAMES).__contains__),
                     tools=VOICE_TOOLS,
                 ),
-                "instructions": voice_instructions(tools=[], wake_phrases=WAKE_PHRASES),
+                "instructions": voice_instructions(
+                    tools=[], delegates=True, wake_phrases=WAKE_PHRASES
+                ),
             },
         ),
         (
@@ -1242,6 +1246,8 @@ async def test_the_backend_choice_decides_what_the_voice_model_gets(
 
     assert [started["extra_tools"] for started in chat.started] == [extra_tools]
     assert {key: opened[0][key] for key in expected} == expected
+    # Without end_call of its own, the voice model said goodbye before the end arrives.
+    assert call.says_goodbye_first is not xai
     await call.close()
 
 
