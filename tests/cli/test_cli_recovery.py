@@ -179,6 +179,24 @@ def test_server_code_selects_the_actual_failed_resource(tmp_path, code, area):
     assert guidance.commands[0][1] == area
 
 
+@pytest.mark.parametrize("run_agent", ["a", "other"])
+def test_agent_busy_inspects_sessions_unless_the_agent_runs_the_command_itself(
+    tmp_path, monkeypatch, run_agent
+):
+    monkeypatch.setenv("VBOT_RUN_AGENT_ID", run_agent)
+    result = CommandResult(
+        False,
+        "test sentinel",
+        instance(tmp_path),
+        failure=RpcFailure("agent.rename", "responded", "agent_busy"),
+    )
+    guidance = recovery_guidance(parse_args(["agent", "rename", "a", "b"]), result)
+
+    own_run = run_agent == "a"
+    assert (guidance.commands[0][1:3] == ("session", "list")) is not own_run
+    assert ("'a'" in guidance.explanation) is own_run
+
+
 @pytest.mark.parametrize(
     "tokens,code,inspection",
     [
