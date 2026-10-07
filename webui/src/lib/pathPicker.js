@@ -277,9 +277,10 @@ export function breadcrumbTrail(path, { root = '' } = {}) {
 }
 
 /**
- * Where the dialog tries to open for a field value, in order: the value as a
- * directory, then its parent with the value's own name highlighted. Empty
- * when the value names nothing listable (start at the places or the root).
+ * Where a picker tries to start for a path, nearest first: the path as a
+ * directory, then each ancestor up to the filesystem root (or the `root`
+ * itself), highlighting the name it came from. Empty when the path names
+ * nothing listable (start at the places or the root).
  */
 export function browseStartPaths(value, { root = '' } = {}) {
   const text = typeof value === 'string' ? value.trim() : '';
@@ -293,11 +294,23 @@ export function browseStartPaths(value, { root = '' } = {}) {
     path = normalizeServerPath(text);
   }
   const candidates = [{ path, highlight: '' }];
-  const parent = parentPath(path, { relative: Boolean(root) });
-  if (parent !== null) {
-    candidates.push({ path: parent, highlight: baseName(path) });
+  for (
+    let child = path, parent = parentPath(path, { relative: Boolean(root) });
+    parent !== null;
+    child = parent, parent = parentPath(parent, { relative: Boolean(root) })
+  ) {
+    candidates.push({ path: parent, highlight: baseName(child) });
   }
   return candidates;
+}
+
+/**
+ * Whether a start candidate's parent is worth trying after the candidate
+ * failed for `reason`: not after a folder that did not answer in time or a
+ * failed request, which its parents would only repeat.
+ */
+export function parentMayList(reason) {
+  return reason !== 'timeout' && reason !== 'failed';
 }
 
 /**

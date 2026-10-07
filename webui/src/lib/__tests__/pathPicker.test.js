@@ -229,6 +229,7 @@ describe('opening the dialog', () => {
       [
         { path: 'C:/repo/app', highlight: '' },
         { path: 'C:/repo', highlight: 'app' },
+        { path: 'C:/', highlight: 'repo' },
       ],
     ],
     ['C:\\', {}, [{ path: 'C:/', highlight: '' }]],
@@ -240,6 +241,7 @@ describe('opening the dialog', () => {
       [
         { path: 'docs/a.md', highlight: '' },
         { path: 'docs', highlight: 'a.md' },
+        { path: '', highlight: 'docs' },
       ],
     ],
     ['C:/elsewhere/a.md', { root: 'C:/repo' }, []],

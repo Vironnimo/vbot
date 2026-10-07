@@ -258,6 +258,22 @@ describe('ProjectsView list and selection', () => {
     flushSync();
 
     await waitForCondition(() => inputById('projects-repoint-cwd'));
+    // Browse starts at the missing folder, or the nearest one above it.
+    inputById('projects-repoint-cwd')
+      .closest('.path-field')
+      .querySelector('.path-field__browse')
+      .click();
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(([method]) => method === 'filesystem.list'),
+    );
+    expect(rpcMock).toHaveBeenCalledWith('filesystem.list', {
+      path: 'C:/repos/default',
+    });
+    document
+      .querySelector('.path-browser .modal-footer .btn-secondary')
+      .click();
+    flushSync();
+    expect(inputById('projects-repoint-cwd').value).toBe('');
     setInputValue('projects-repoint-cwd', 'C:/repos/moved');
     submitButtonInDialog('Re-point').click();
 

@@ -4,8 +4,9 @@
   // time. Without a `root` it starts at the places (filesystem roots, home,
   // and the shortcuts `loadShortcuts` returns) and chooses absolute paths in
   // the server's own separators; with a `root` it never leaves that folder
-  // and chooses paths relative to it. It opens at `value` when that names a
-  // listable folder (or its parent, highlighting the named entry).
+  // and chooses paths relative to it. It opens at the nearest folder of
+  // `value` that lists (the value itself or an ancestor, highlighting the
+  // entry it came from), or of `startPath` when the value names none.
   //
   // Like a desktop file dialog, a click highlights an entry and a double
   // click or Enter opens a folder or chooses a file; Select takes the
@@ -29,6 +30,7 @@
     listingErrorReason,
     listingFailureText,
     normalizeServerPath,
+    parentMayList,
     parentPath,
     toNativePath,
   } from '$lib/pathPicker.js';
@@ -46,6 +48,7 @@
     mode = 'directory',
     root = '',
     value = '',
+    startPath = '',
     listDirectory,
     loadShortcuts = null,
     onSelect = noop,
@@ -182,8 +185,9 @@
     listElement?.focus();
   }
 
-  // Opens a folder. A quiet attempt (the start candidates) changes nothing
-  // when it fails and reports whether it worked.
+  // Opens a folder and resolves to null, or to why it did not open: a
+  // `listingErrorReason`, or 'superseded' once a newer navigation started. A
+  // quiet attempt (a start candidate) changes nothing when it fails.
   async function openFolder(
     path,
     { highlight = '', refresh = false, quiet = false } = {},
@@ -199,7 +203,7 @@
     }
     try {
       const result = await listings.list(listingParams(path), { refresh });
-      if (token !== loadToken) return false;
+      if (token !== loadToken) return 'superseded';
       listing = result;
       separator = result?.separator === '\\' ? '\\' : '/';
       view = 'folder';
@@ -213,11 +217,12 @@
         );
       }
       await revealActive();
-      return true;
+      return null;
     } catch (error) {
-      if (token !== loadToken || quiet) return false;
-      showFailure(error);
-      return false;
+      if (token !== loadToken) return 'superseded';
+      const reason = listingErrorReason(error);
+      if (!quiet) showFailure(reason);
+      return reason;
     }
   }
 
@@ -241,12 +246,11 @@
       status = 'ready';
     } catch (error) {
       if (token !== loadToken) return;
-      showFailure(error);
+      showFailure(listingErrorReason(error));
     }
   }
 
-  function showFailure(error) {
-    const reason = listingErrorReason(error);
+  function showFailure(reason) {
     status = 'error';
     retryable = reason !== 'invalid';
     failure = listingFailureText(reason, {
@@ -270,10 +274,14 @@
   }
 
   async function start() {
-    for (const candidate of browseStartPaths(value, { root })) {
-      if (await openFolder(candidate.path, { ...candidate, quiet: true })) {
-        return;
-      }
+    const fromValue = browseStartPaths(value, { root });
+    const candidates = fromValue.length
+      ? fromValue
+      : browseStartPaths(startPath, { root });
+    for (const { path, highlight } of candidates) {
+      const failure = await openFolder(path, { highlight, quiet: true });
+      if (failure === null || failure === 'superseded') return;
+      if (!parentMayList(failure)) break;
     }
     await openStart();
   }

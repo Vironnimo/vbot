@@ -10,6 +10,9 @@
   // absolute `root`, completion and browsing stay inside it and chosen values
   // are relative to it; typing an absolute path stays possible.
   // `projectShortcuts` adds the configured Projects to the dialog's places.
+  // `startPath` is where an empty field starts: Browse… opens at its nearest
+  // folder that lists, and ArrowDown offers that folder to complete from,
+  // while the value stays empty (Re-point starts near a missing folder).
   // Other props reach the TextField input (`id`, `aria-*`, `onkeydown`): the
   // field handles its own keys first and passes the rest on, so Enter still
   // submits or adds unless it picks a highlighted suggestion.
@@ -19,6 +22,7 @@
   import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
   import {
+    browseStartPaths,
     completeTypedPath,
     createListingCache,
     extendPrefix,
@@ -27,7 +31,9 @@
     listingPathFor,
     matchingEntries,
     normalizeServerPath,
+    parentMayList,
     splitTypedPath,
+    toNativePath,
     trimTrailingSeparator,
   } from '$lib/pathPicker.js';
   import Button from './Button.svelte';
@@ -44,6 +50,7 @@
     onInput = noop,
     mode = 'directory',
     root = '',
+    startPath = '',
     listDirectory = null,
     projectShortcuts = false,
     id = '',
@@ -165,6 +172,52 @@
     positionPanel();
   }
 
+  // An empty field offers the nearest folder of `startPath` that lists, as
+  // the one suggestion to complete from.
+  async function offerStartFolder() {
+    clearTimeout(listingTimer);
+    listingTimer = null;
+    listingToken += 1;
+    const token = listingToken;
+    for (const { path } of browseStartPaths(startPath, { root })) {
+      let listing = null;
+      let reason = '';
+      try {
+        listing = await listings.list({
+          path,
+          ...(root ? { root } : {}),
+          include_files: mode !== 'directory',
+        });
+      } catch (error) {
+        reason = listingErrorReason(error);
+      }
+      if (token !== listingToken || !isFocused()) return;
+      if (reason) {
+        if (parentMayList(reason)) continue;
+        return;
+      }
+      // Inside a root, the root itself is what the empty field names.
+      if (root && path === '') return;
+      const separator = root || listing?.separator !== '\\' ? '/' : '\\';
+      const shown = toNativePath(path, separator);
+      matches = [
+        {
+          name: /[\\/]$/.test(shown) ? shown : `${shown}${separator}`,
+          kind: 'directory',
+          link: false,
+          hidden: false,
+        },
+      ];
+      moreAvailable = false;
+      failure = '';
+      activeIndex = -1;
+      panelOpen = true;
+      await tick();
+      positionPanel();
+      return;
+    }
+  }
+
   function positionPanel() {
     const input = inputElement();
     if (!panelOpen || !input || !panelElement) {
@@ -247,6 +300,10 @@
         }
         if (event.key === 'ArrowDown' && listingParams(value)) {
           scheduleListing(value, { immediate: true });
+          return true;
+        }
+        if (event.key === 'ArrowDown' && !value && startPath) {
+          void offerStartFolder();
           return true;
         }
         return false;
@@ -441,7 +498,7 @@
           >
             <span class="path-field__name"
               >{entry.name}{entry.kind === 'directory' &&
-              !entry.name.endsWith('/')
+              !/[\\/]$/.test(entry.name)
                 ? '/'
                 : ''}</span
             >
@@ -462,6 +519,7 @@
     {mode}
     {root}
     {value}
+    {startPath}
     listDirectory={(params) => (listDirectory ?? listServerDirectory)(params)}
     loadShortcuts={projectShortcuts ? loadProjectShortcuts : null}
     onSelect={chooseFromBrowser}

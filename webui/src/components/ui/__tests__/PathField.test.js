@@ -321,6 +321,52 @@ describe('PathField', () => {
     expect(document.body.querySelector('.path-browser')).toBeNull();
   });
 
+  it('starts an empty field at the nearest folder of its start path that lists', async () => {
+    const listDirectory = fakeServer({
+      places: { path: '', entries: [dir('C:/')] },
+      'C:/repos': { entries: [dir('moved'), dir('other')] },
+      'C:/repos/moved': { entries: [] },
+      '//host/share/team': listingFailure('timeout'),
+    });
+    const input = render({ listDirectory, startPath: 'C:\\repos\\gone' });
+    input.focus();
+
+    // ArrowDown offers the folder; taking it lists inside it.
+    press(input, 'ArrowDown');
+    await settle();
+    expect(suggestions()).toEqual(['C:\\repos\\']);
+    expect(props.value).toBe('');
+    press(input, 'Tab');
+    expect(props.value).toBe('C:\\repos\\');
+    await settle();
+    expect(suggestions()).toEqual(['moved/', 'other/']);
+
+    // Browse opens there while the field is empty.
+    type(input, '');
+    input.blur();
+    const browse = async () => {
+      listDirectory.mockClear();
+      document.body.querySelector('.path-field__browse').click();
+      await settle();
+      const dialog = document.body.querySelector('.modal.path-browser');
+      const opened = [...dialog.querySelectorAll('.path-browser__crumb')].map(
+        (crumb) => crumb.textContent.trim(),
+      );
+      dialog.querySelector('.modal-footer .btn-secondary').click();
+      flushSync();
+      return [opened, listDirectory.mock.calls.map(([params]) => params.path)];
+    };
+    expect(await browse()).toEqual([
+      ['Places', 'C:', 'repos'],
+      ['C:/repos/gone', 'C:/repos'],
+    ]);
+
+    // A folder that does not answer ends the search: its parents would not.
+    props.startPath = '\\\\host\\share\\team';
+    flushSync();
+    expect(await browse()).toEqual([['Places'], ['//host/share/team', null]]);
+  });
+
   it('keeps a root, opens at the value and returns files relative to it', async () => {
     const listDirectory = fakeServer(
       {
