@@ -15,7 +15,9 @@ root starts:
   session. A process that starts its own session (``setsid``, daemons) leaves.
 
 Facts are best effort where the platform is: Windows does not guarantee job
-notifications, so a missing child exit code proves nothing. Liveness and CPU
+notifications, and a child is opened only once the notification of its start
+is handled, so a child that has ended and been released by its parent by then
+leaves no exit code. A missing child exit code proves nothing. Liveness and CPU
 time come from authoritative queries.
 """
 
@@ -185,6 +187,7 @@ _MSG_ABNORMAL_EXIT_PROCESS = 8
 _PROCESS_TERMINATE = 0x0001
 _PROCESS_SET_QUOTA = 0x0100
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_PROCESS_NAME_NATIVE = 0x00000001
 _SYNCHRONIZE = 0x00100000
 _INFINITE = 0xFFFFFFFF
 _STILL_ACTIVE = 259
@@ -567,7 +570,11 @@ def _image_name(kernel32: Any, handle: Any) -> str:
 
     size = wintypes.DWORD(1024)
     buffer = ctypes.create_unicode_buffer(size.value)
-    if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+    # The native path still answers once the process has exited, the Win32 path
+    # fails then, and a short-lived child may only be opened after its exit.
+    if not kernel32.QueryFullProcessImageNameW(
+        handle, _PROCESS_NAME_NATIVE, buffer, ctypes.byref(size)
+    ):
         return ""
     return PurePath(buffer.value).name
 

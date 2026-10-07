@@ -161,7 +161,13 @@ class TrayPresentation:
 class TrayView(Protocol):
     """Native tray surface; every method may be called from any thread."""
 
-    def present(self, presentation: TrayPresentation) -> None: ...
+    def present(self, presentation: TrayPresentation) -> None:
+        """Show a presentation; the controller calls it one at a time, newest last.
+
+        It runs under the controller's publish lock, so it must return promptly
+        and must not call back into the controller.
+        """
+        ...
 
     def show_toast(self, toast: Toast) -> None: ...
 
@@ -208,6 +214,7 @@ class TrayController:
         self._closed = threading.Event()
         self._view: TrayView | None = None
         self._state_lock = threading.Lock()
+        self._publish_lock = threading.Lock()
         self._published: TrayPresentation | None = None
         self._worker = threading.Thread(target=self._run_worker, name="vbot-tray", daemon=True)
         self._poller = threading.Thread(target=self._run_poller, name="vbot-tray-poll", daemon=True)
@@ -536,15 +543,18 @@ class TrayController:
         view = self._view
         if view is None:
             return
-        presentation = self.presentation()
-        with self._state_lock:
+        # Refresh, action and UI threads all publish. Projecting and presenting
+        # one at a time keeps a projection of older state from reaching the view
+        # after a newer one, which a later unchanged poll would never correct.
+        with self._publish_lock:
+            presentation = self.presentation()
             if not force and presentation == self._published:
                 return
             self._published = presentation
-        try:
-            view.present(presentation)
-        except Exception:
-            _LOGGER.exception("Could not refresh the vBot tray")
+            try:
+                view.present(presentation)
+            except Exception:
+                _LOGGER.exception("Could not refresh the vBot tray")
 
 
 def run_tray(actions: TrayActions, icon_path: Path, *, start_server: bool = False) -> None:

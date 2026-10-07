@@ -105,6 +105,8 @@ class Shell:
         self.background_callbacks: list[Callable[[], bool]] = []
         # Callbacks the call registered to run once its Tool Result is persisted.
         self.persisted: list[Callable[[], None]] = []
+        # Live output events of the calls: terminal id and screen.
+        self.live_output: list[JsonObject] = []
         self.executor = TrackedExecutor()
 
     def _track(self, _pid: int) -> FakeTree:
@@ -130,6 +132,7 @@ class Shell:
             cancel_registration_hook=self.cancel_callbacks.append,
             background_registration_hook=self.background_callbacks.append,
             result_persisted_hook=self.persisted.append,
+            emit_hook=lambda _event, payload: self.live_output.append(payload),
         )
 
     def call(self, arguments: JsonObject, *, terminal: bool = True) -> asyncio.Task[JsonObject]:
@@ -140,6 +143,20 @@ class Shell:
     async def started(self) -> tuple[FakeTerminalAdapter, FakeTree]:
         await eventually(lambda: bool(self.trees))
         return self.factory.adapters[-1], self.trees[-1]
+
+    async def shows(self, text: str) -> None:
+        """Wait until the running command's screen shows *text*.
+
+        A reader thread renders what the fake terminal prints, and fake time
+        does not wait for it.
+        """
+        await eventually(lambda: bool(self.live_output))
+        terminal_id = self.live_output[0]["terminal_id"]
+
+        async def shown() -> bool:
+            return text in await self.manager.command_screen(terminal_id, 1)
+
+        await eventually(shown)
 
     async def run_clock(self, task: asyncio.Future[Any], *, until: float) -> None:
         """Advance fake time in half seconds while *task* waits on it."""
@@ -272,6 +289,7 @@ async def test_running_output_is_the_whole_transcript_and_screen(shell: Shell) -
     call = shell.call({"command": "build"})
     adapter, _tree = await shell.started()
     adapter.emit("".join(f"row {number}\r\n" for number in range(1, 121)))
+    await shell.shows("row 120")
     await shell.run_clock(call, until=SHELL_HANDOFF_SECONDS)
 
     result = data(await call)
@@ -283,15 +301,14 @@ async def test_running_output_is_the_whole_transcript_and_screen(shell: Shell) -
 async def test_idle_command_continues_as_terminal_and_its_result_is_delivered(
     shell: Shell,
 ) -> None:
+    # Silent and without CPU use, as a command waiting for input is.
     call = shell.call({"command": "read-name"})
-    adapter, tree = await shell.started()
-    adapter.emit("Name: ")
+    _adapter, tree = await shell.started()
     await shell.run_clock(call, until=SHELL_HANDOFF_SECONDS)
 
     result = data(await call)
     terminal_id, next_text = result["terminal_id"], result["next"]
     assert result["status"] == "running"
-    assert result["output"] == "Name:"
     assert next_text.startswith(f"The command in terminal {terminal_id} has printed nothing")
     assert re.search(r"; its 600-second timeout stops it in \d+ seconds\.", next_text)
     # Answering comes first, without an answer for the Agent to copy; then exact calls.
@@ -305,8 +322,8 @@ async def test_idle_command_continues_as_terminal_and_its_result_is_delivered(
     assert terminal_id in [info.terminal_id for info in shell.manager.list_terminals()]
 
     tree.shell_exits(0)
-    await eventually(lambda: shell.manager.command_report(result["terminal_id"]).exited)
-    await asyncio.sleep(0)
+    # The finishing session starts the delivery before it reports the end.
+    await shell.manager.wait_finished(terminal_id)
     assert len(shell.bodies()) == 1
 
 

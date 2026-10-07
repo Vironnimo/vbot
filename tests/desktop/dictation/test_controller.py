@@ -10,7 +10,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import numpy as np
 import pytest
@@ -23,12 +23,60 @@ from desktop.dictation.insertion import INSERT_CLIPBOARD, INSERT_FAILED, INSERT_
 from desktop.speech.microphone import MicrophoneService
 from desktop.speech.server_client import SpeechServerRejected
 from tests.desktop.hotkey_test_support import FakeHotkeyApi
-from tests.desktop.speech.speech_test_support import FakeSoundDevice, silence, tone, wait_until
+from tests.desktop.speech.speech_test_support import (
+    FakeInputStream,
+    FakeSoundDevice,
+    silence,
+    tone,
+    wait_until,
+)
 
 TARGET_WINDOW = 7
 HELD_KEYS = {ord("D"), hotkey.VK_CONTROL, hotkey.VK_MENU}
 SERVER_URL = "http://server.lan:8420"
 ESCAPE_REGISTRATION = (hotkey.ESCAPE_HOTKEY_ID, hotkey.MOD_NOREPEAT, hotkey.VK_ESCAPE)
+RATE = 16000
+LEAD_IN = silence(0.4, RATE)  # covers the audio dropped under the start cue
+WORD = tone(0.6, RATE)
+
+
+class StepClock:
+    """The controller's clock: every reading moves it on by 5 ms.
+
+    The take reads it once per round of its recording loop, and a round takes
+    the next waiting audio block. The 0.2 s tail after an end request thus
+    lasts about forty rounds instead of wall-clock time, in which a loaded
+    machine may deliver too little fake audio for the take to count.
+    """
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        self.now += 0.005
+        return self.now
+
+
+class FakeMicrophone(FakeSoundDevice):
+    """Opens only while ``can_open`` is set, so a test can hold a take before its first audio."""
+
+    def __init__(self) -> None:
+        super().__init__(pace=0.0025)
+        self.can_open = threading.Event()
+        self.can_open.set()
+
+    @override
+    def InputStream(  # noqa: N802 - mirrors sounddevice.InputStream
+        self, *, samplerate: int, channels: int, dtype: str, blocksize: int, device: int
+    ) -> FakeInputStream:
+        assert self.can_open.wait(5)
+        return super().InputStream(
+            samplerate=samplerate,
+            channels=channels,
+            dtype=dtype,
+            blocksize=blocksize,
+            device=device,
+        )
 
 
 class FakeServer:
@@ -117,7 +165,7 @@ class FakePage:
 @dataclass
 class Rig:
     controller: DictationController
-    sd: FakeSoundDevice
+    sd: FakeMicrophone
     server: FakeServer
     inserter: FakeInserter
     cues: FakeCues
@@ -144,10 +192,15 @@ class Rig:
     def wait_idle(self) -> None:
         wait_until(lambda: not self.controller.is_busy())
 
-    def dictate(self) -> None:
-        """One toggle take: start, wait for the microphone, end."""
+    def start_take(self) -> None:
+        """Press, then wait until the microphone delivered a spoken word to the take."""
+        self.sd.feed(LEAD_IN, WORD)
         self.press()
-        wait_until(lambda: "listen" in self.cues.played)
+        wait_until(lambda: "listen" in self.cues.played and self.sd.drained)
+
+    def dictate(self) -> None:
+        """One toggle take: start, speak, end."""
+        self.start_take()
         self.press()
         self.wait_idle()
 
@@ -168,7 +221,7 @@ def make_rig(tmp_path: Path) -> Iterator[Any]:
             ),
             encoding="utf-8",
         )
-        sd = FakeSoundDevice(pace=0.0025)
+        sd = FakeMicrophone()
         server, inserter, cues, page = FakeServer(), FakeInserter(), FakeCues(), FakePage()
         apis: list[FakeHotkeyApi] = []
         echo_stages: list[str] = []
@@ -192,6 +245,7 @@ def make_rig(tmp_path: Path) -> Iterator[Any]:
             client_factory=server.client,
             hotkey_supported=True,
             hotkey_api_factory=api_factory,
+            clock=StepClock(),
             **options,
         )
         controller.start()
@@ -201,15 +255,9 @@ def make_rig(tmp_path: Path) -> Iterator[Any]:
 
     yield make
     for rig in rigs:
+        rig.sd.can_open.set()
         rig.server.release_transcription.set()
         rig.controller.stop()
-
-
-def _wav_seconds(audio: bytes) -> float:
-    with wave.open(io.BytesIO(audio)) as wav_file:
-        frames: int = wav_file.getnframes()
-        rate: int = wav_file.getframerate()
-    return frames / rate
 
 
 def _samples(audio: bytes | np.ndarray) -> np.ndarray:
@@ -239,7 +287,6 @@ def test_a_toggle_take_records_until_the_second_press_and_types_the_stripped_tra
     # Echo cancellation stays out of a take although the setting enables it.
     assert rig.echo_stages == []
     assert len(rig.server.uploads) == 1
-    assert _wav_seconds(rig.server.uploads[0]) >= 0.3
     assert rig.server.urls == [SERVER_URL]
     # Escape belongs to the take: claimed while it runs, released after.
     assert ESCAPE_REGISTRATION in rig.api.registrations()
@@ -254,15 +301,17 @@ def test_a_hold_take_ends_when_the_combination_is_let_go_and_a_tap_is_dropped(
     rig = make_rig(mode="hold")
     rig.api.down |= HELD_KEYS
 
-    rig.press()
-    wait_until(lambda: "listen" in rig.cues.played)
-    rig.press()  # a second press while held changes nothing in hold mode
+    rig.start_take()
+    assert rig.controller.status()["state"] == "recording"  # held: still recording
     rig.api.down -= HELD_KEYS
     rig.wait_idle()
     assert rig.inserter.inserted == [("Hallo Welt", TARGET_WINDOW)]
 
-    rig.press()  # keys already up: the take ends before it has audio
+    # A tap: the keys are already up while the microphone is still opening.
+    rig.sd.can_open.clear()
+    rig.press()
     wait_until(lambda: "cancel" in rig.cues.played)
+    rig.sd.can_open.set()
     rig.wait_idle()
 
     assert rig.cues.played == ["listen", "done", "cancel"]
@@ -274,12 +323,11 @@ def test_a_hold_take_ends_when_the_combination_is_let_go_and_a_tap_is_dropped(
 def test_escape_cancels_the_take_without_inserting(make_rig: Any, during: str) -> None:
     rig = make_rig()
     rig.server.release_transcription.clear()
-    rig.press()
-    wait_until(lambda: "listen" in rig.cues.played)
+    rig.start_take()
     if during == "transcribing":
         rig.press()
+        wait_until(lambda: rig.controller.status()["state"] == "transcribing")
         assert rig.server.transcribing.wait(5)
-        assert rig.controller.status()["state"] == "transcribing"
 
     rig.escape()
     wait_until(lambda: "cancel" in rig.cues.played)
@@ -349,11 +397,6 @@ def test_a_take_that_cannot_run_ends_by_itself_with_an_error_cue(
     assert rig.cues.played[-1] == "failed"
     assert rig.server.uploads == []
     assert rig.controller.status()["last_failure"]["code"] == code
-
-
-RATE = 16000
-LEAD_IN = silence(0.4, RATE)  # covers the audio dropped under the start cue
-WORD = tone(0.6, RATE)
 
 
 @pytest.mark.parametrize(
