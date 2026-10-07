@@ -44,9 +44,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, Protocol
 
-from core.agents import LIVE_BACKEND_AGENT_ID, LIVE_VOICE_AGENT_ID
+from core.agents import LIVE_VOICE_AGENT_ID
 from core.model_tasks._live_backend import LiveBackend
-from core.model_tasks._live_brief import backend_instructions, voice_instructions
+from core.model_tasks._live_brief import (
+    backend_instructions,
+    live_tool_guidance,
+    voice_instructions,
+)
 from core.model_tasks._live_call import LiveCallSession
 from core.model_tasks._live_openai import (
     ControlJoinError,
@@ -425,7 +429,7 @@ class LiveVoiceService:
             )
             raise LiveStartRejected("not_configured", str(exc)) from exc
         try:
-            setup = await self._voice_setup(plan, voice.tool_definitions, host.wake_phrases)
+            setup = self._voice_setup(plan, voice.tool_definitions, host.wake_phrases)
             wire = await self._open_wire(plan, label, offer_sdp, setup)
         except BaseException:
             await asyncio.shield(voice.discard())
@@ -466,34 +470,22 @@ class LiveVoiceService:
         )
         return call
 
-    async def _voice_setup(
+    def _voice_setup(
         self, plan: _CallPlan, voice_tools: Sequence[JsonObject], wake_phrases: Sequence[str]
     ) -> _VoiceSetup:
         tools = tuple(voice_tools)
-        backend_tools: tuple[str, ...] = ()
         openai_backend: OpenAIBackend | None = None
-        delegation = ""
-        if plan.backend == LIVE_BACKEND_VBOT:
-            backend_tools = await self._runtime.chat_loop.agent_tool_names(LIVE_BACKEND_AGENT_ID)
-            if not plan.wire.tools:
-                delegation = LIVE_BACKEND_VBOT
-        elif plan.backend == LIVE_BACKEND_OPENAI:
-            delegation = LIVE_BACKEND_OPENAI
+        if plan.backend == LIVE_BACKEND_OPENAI:
             offered = tuple(tool for tool in tools if tool.get("name") != TOOL_VBOT_REQUEST)
-            backend_tools = tuple(str(tool.get("name")) for tool in offered)
+            offered_names = {str(tool.get("name")) for tool in offered}
             openai_backend = OpenAIBackend(
                 model=plan.openai_backend_model or "",
-                instructions=backend_instructions(
-                    set(backend_tools).__contains__, context_note=False
-                ),
+                instructions=live_tool_guidance(offered_names.__contains__),
                 tools=offered,
             )
         wire_tools = tools if plan.wire.tools else ()
         instructions = voice_instructions(
-            tools=[str(tool.get("name")) for tool in wire_tools],
-            delegation=delegation,
-            backend_tools=backend_tools,
-            wake_phrases=wake_phrases,
+            tools=[str(tool.get("name")) for tool in wire_tools], wake_phrases=wake_phrases
         )
         return _VoiceSetup(
             instructions=instructions, tools=wire_tools, openai_backend=openai_backend

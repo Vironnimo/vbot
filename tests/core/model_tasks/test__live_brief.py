@@ -1,4 +1,4 @@
-"""What the Models of a Live call are told: only Tools they have, and how results arrive."""
+"""What the Models of a Live call are told: one voice text, Tool guidance where the Tools are."""
 
 from __future__ import annotations
 
@@ -6,7 +6,12 @@ import re
 
 import pytest
 
-from core.model_tasks._live_brief import EFFECTS_LABEL, backend_instructions, voice_instructions
+from core.model_tasks._live_brief import (
+    EFFECTS_LABEL,
+    backend_instructions,
+    live_tool_guidance,
+    voice_instructions,
+)
 from core.tools.live import LIVE_TOOL_NAMES
 
 _ALL_TOOLS = frozenset({*LIVE_TOOL_NAMES, "vbot_request"})
@@ -18,43 +23,20 @@ def _named_tools(text: str) -> set[str]:
 
 
 @pytest.mark.parametrize(
-    ("options", "named", "effects_line"),
-    [
-        (
-            {"tools": ["overview", "read_output", "end_call"]},
-            {"overview", "read_output", "end_call"},
-            False,
-        ),
-        ({"tools": ["overview", "vbot_request"]}, {"vbot_request"}, True),
-        ({"tools": [], "delegation": "vbot", "backend_tools": ["end_call"]}, set(), True),
-        ({"tools": [], "delegation": "openai", "backend_tools": ["end_call"]}, set(), False),
-        ({"tools": ["vbot_request"], "backend_tools": ["overview"]}, {"vbot_request"}, True),
-        ({"tools": []}, set(), False),
-    ],
-    ids=[
-        "own-tools",
-        "own-tools-and-requests",
-        "hands-on-to-vbot",
-        "hands-on-to-openai",
-        "requests-only",
-        "no-access",
-    ],
+    "tools",
+    [["start_agent_session", "read_output", "end_call"], ["vbot_request"], []],
+    ids=["own-live-tools", "requests-only", "hands-on-natively"],
 )
-def test_the_voice_model_is_told_only_about_tools_it_has(
-    options: dict[str, object], named: set[str], effects_line: bool
+def test_every_voice_model_gets_the_same_text_and_guidance_only_for_its_live_tools(
+    tools: list[str],
 ) -> None:
-    text = voice_instructions(**options)  # type: ignore[arg-type]
+    shared = voice_instructions(tools=[])
+    text = voice_instructions(tools=tools)
+    guidance = live_tool_guidance(set(tools).__contains__)
 
-    assert _named_tools(text) == named - {"overview"}
-    assert ("ends with what vBot changed" in text) is effects_line
-
-
-def test_the_voice_model_hands_on_hanging_up_only_when_the_backend_can_end_the_call() -> None:
-    with_end = voice_instructions(tools=[], delegation="vbot", backend_tools=["end_call"])
-    without_end = voice_instructions(tools=[], delegation="vbot", backend_tools=["overview"])
-
-    assert "that includes ending this call" in with_end
-    assert "ending this call" not in without_end
+    assert text == (f"{shared}\n\n{guidance}" if guidance else shared)
+    assert _named_tools(text) <= set(tools)
+    assert ("About vBot" in text) is bool(set(tools) & set(LIVE_TOOL_NAMES))
 
 
 def test_wake_phrases_are_quoted_and_never_to_be_answered() -> None:
@@ -65,16 +47,14 @@ def test_wake_phrases_are_quoted_and_never_to_be_answered() -> None:
     assert "Wake phrases" not in voice_instructions(tools=[])
 
 
-@pytest.mark.parametrize("context_note", [True, False])
-def test_the_backend_is_told_only_about_tools_it_has(context_note: bool) -> None:
+def test_the_backend_agent_is_told_its_situation_and_only_about_tools_it_has() -> None:
     has = {"start_agent_session", "send_message"}
-    text = backend_instructions(has.__contains__, context_note=context_note)
-    full = backend_instructions(_ALL_TOOLS.__contains__, context_note=context_note)
+    text = backend_instructions(has.__contains__)
+    full = backend_instructions(_ALL_TOOLS.__contains__)
 
+    assert live_tool_guidance(has.__contains__) in text
     assert _named_tools(text) <= has
-    assert "end_call" in full and "read_output" in full
-    # Only vBot's backend Agent gets the call's context as a System Reminder.
-    assert ("System Reminder" in text) is context_note
-    assert ("what vBot shows right now" in full) is context_note
-    assert "what vBot shows right now" not in text
+    assert "read_output" in full
+    assert "System Reminder" in text
+    assert ("what vBot shows right now" in full) and "what vBot shows right now" not in text
     assert EFFECTS_LABEL not in text

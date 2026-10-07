@@ -755,12 +755,6 @@ class ChatLoop:
             agent, session_tool_grants=session_tool_grants
         )
 
-    async def agent_tool_names(self, agent_id: str) -> tuple[str, ...]:
-        """The names of the Tools a new Session of identity Agent *agent_id* offers its Model."""
-        agent = await self._dependencies.agent_resolver.resolve_agent_async(None, agent_id)
-        definitions = await self._requests.preview_tool_definitions(agent)
-        return tuple(str(definition.get("name")) for definition in definitions)
-
     async def start_external_run(
         self,
         agent_id: str,
