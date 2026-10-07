@@ -13,7 +13,10 @@ import {
   setupChatViewTestSuite,
   testChatStateRefs,
 } from './ChatView.support.js';
-import { resetComposerMemory } from '../../lib/composerMemory.js';
+import {
+  renameComposerAgent,
+  resetComposerMemory,
+} from '../../lib/composerMemory.js';
 import ChatWorkspace from '../ChatWorkspace.svelte';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
@@ -402,6 +405,88 @@ describe('ChatWorkspace', () => {
     expect(
       rpcMock.mock.calls.filter(([method]) => method === 'chat.stream'),
     ).toEqual([]);
+  });
+
+  it('keeps both areas on their Agents, Sessions and drafts through Agent renames', async () => {
+    let agents = [
+      createAgent(),
+      createAgent({
+        id: 'beta',
+        name: 'Beta',
+        current_session_id: 'session-beta',
+      }),
+    ];
+    const baseRpc = createChatRpcMock({
+      sessionMessages: {
+        'session-beta': [
+          { id: 'beta-answer', role: 'assistant', content: 'Beta sentinel' },
+        ],
+      },
+    });
+    rpcMock.mockImplementation(async (method, params) =>
+      method === 'agent.list' ? { agents } : baseRpc(method, params),
+    );
+    const renameListeners = [];
+    const props = reactiveProps({
+      sharedAgents: agents,
+      sharedSelectedAgentId: 'alpha',
+      agentsRefreshToken: 0,
+      subscribeAgentRenames: (listener) => {
+        renameListeners.push(listener);
+        return () =>
+          renameListeners.splice(renameListeners.indexOf(listener), 1);
+      },
+    });
+    // What App does for a rename another window or the CLI made.
+    function renameAgent(oldId, newId) {
+      renameComposerAgent(oldId, newId);
+      for (const listener of [...renameListeners]) listener(oldId, newId);
+      if (props.sharedSelectedAgentId === oldId) {
+        props.sharedSelectedAgentId = newId;
+      }
+      agents = agents.map((agent) =>
+        agent.id === oldId ? { ...agent, id: newId } : agent,
+      );
+      props.sharedAgents = agents;
+      props.agentsRefreshToken += 1;
+      flushSync();
+    }
+    harness.mount({ target: document.body, props }, ChatWorkspace);
+    await waitForCondition(() => pane(0)?.textContent.includes('Hello'));
+    action(0, 'Split view');
+    await selectAgentFromPicker('Beta', pane(1));
+    await waitForCondition(() => pane(1).textContent.includes('Beta sentinel'));
+    const inputs = [0, 1].map((index) =>
+      pane(index).querySelector('.msg-input'),
+    );
+    setInputValue(inputs[0], 'Alpha draft sentinel');
+    setInputValue(inputs[1], 'Beta draft sentinel');
+    flushSync();
+
+    renameAgent('beta', 'delta');
+    renameAgent('alpha', 'gamma');
+    await waitForCondition(() =>
+      testChatStateRefs.every((state) =>
+        state.agents.some((agent) => agent.id === 'gamma'),
+      ),
+    );
+
+    expect(testChatStateRefs.map((state) => state.selectedAgentId)).toEqual([
+      'gamma',
+      'delta',
+    ]);
+    expect(pane(0).textContent).toContain('Hello');
+    expect(pane(1).textContent).toContain('Beta sentinel');
+    expect(
+      [0, 1].map((index) => pane(index).querySelector('.msg-input').value),
+    ).toEqual(['Alpha draft sentinel', 'Beta draft sentinel']);
+    for (const state of testChatStateRefs) {
+      expect(
+        Object.keys(state.sessions).filter((key) =>
+          /^(alpha|beta)::/.test(key),
+        ),
+      ).toEqual([]);
+    }
   });
 
   it('starts a newly opened Chat area from the current Run state, not stale App buffers', async () => {

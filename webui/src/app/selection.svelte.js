@@ -239,7 +239,22 @@ export function createAppSelection() {
       typeof agentOrId === 'string' ? agentOrId : (agentOrId?.id ?? '');
   };
 
+  // Surfaces holding their own Agent-keyed state (Chat areas) re-key it
+  // here, synchronously, before any roster read or reactive update sees the
+  // new id. Returns the unsubscribe function.
+  const agentRenameListeners = [];
+  const subscribeAgentRenames = (listener) => {
+    agentRenameListeners.push(listener);
+    return () => {
+      const index = agentRenameListeners.indexOf(listener);
+      if (index >= 0) agentRenameListeners.splice(index, 1);
+    };
+  };
+
   const remapIdentityAgentId = (oldAgentId, newAgentId) => {
+    for (const listener of [...agentRenameListeners]) {
+      listener(oldAgentId, newAgentId);
+    }
     if (selectedAgentId === oldAgentId) {
       selectedAgentId = newAgentId;
     }
@@ -329,6 +344,9 @@ export function createAppSelection() {
     },
     get remapIdentityAgentId() {
       return remapIdentityAgentId;
+    },
+    get subscribeAgentRenames() {
+      return subscribeAgentRenames;
     },
     get refreshAgents() {
       return refreshAgents;

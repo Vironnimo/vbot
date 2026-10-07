@@ -1,6 +1,10 @@
 import { parseAgentAddress } from '../agentAddress.js';
 import { isReflectionRunKind } from '../chatTimelinePresentation.js';
-import { TERMINAL_RUN_STATUSES, isRecord } from './sessionState.js';
+import {
+  TERMINAL_RUN_STATUSES,
+  isRecord,
+  supersedeRenamedSessionKey,
+} from './sessionState.js';
 
 const RPC_ERROR_LEARNING_UNDO_CONFLICT = 'learning_undo_conflict';
 
@@ -213,5 +217,10 @@ export function createChatReflections({
     }
   }
 
-  return { beginRequest, refresh, loadChanges, undo };
+  // A renamed Session's reads in flight stay superseded under its new key.
+  function renameSession(oldKey, newKey) {
+    supersedeRenamedSessionKey(loadVersions, oldKey, newKey);
+  }
+
+  return { beginRequest, refresh, loadChanges, undo, renameSession };
 }

@@ -41,6 +41,9 @@ const dirtyAttachments = new Set();
 // Messages this tab sent since its last persist, merged per push so every
 // tab's sends survive in the shared per-agent history.
 let pendingHistoryPushes = [];
+// Agent renames this tab applied since its last persist, replayed onto the
+// stored history before the pushes (`{ from, to }`, oldest first).
+let pendingHistoryRenames = [];
 let persistTimer = null;
 
 adoptOtherTabWrites();
@@ -110,10 +113,11 @@ function persistNow() {
       dirtyAttachments,
     );
   }
-  if (pendingHistoryPushes.length > 0) {
+  if (pendingHistoryPushes.length > 0 || pendingHistoryRenames.length > 0) {
     const stored = readStore(HISTORY_STORAGE_KEY) ?? histories;
     histories = withPendingHistory(stored);
     pendingHistoryPushes = [];
+    pendingHistoryRenames = [];
     writeStore(HISTORY_STORAGE_KEY, histories);
   }
 }
@@ -146,7 +150,10 @@ function withLocalChanges(base, local, dirty) {
 }
 
 function withPendingHistory(base) {
-  const merged = { ...base };
+  let merged = { ...base };
+  for (const { from, to } of pendingHistoryRenames) {
+    merged = withRenamedHistory(merged, from, to);
+  }
   for (const { agentKey, entry } of pendingHistoryPushes) {
     merged[agentKey] = withHistoryEntry(merged[agentKey], entry);
   }
@@ -353,6 +360,58 @@ function withHistoryEntry(list, entry) {
   return next;
 }
 
+// An Identity Agent was renamed: its Sessions' drafts and attachments
+// (`<old>::<session>`, also an unsaved draft's key) and its send history move
+// to the new id. Every open tab applies the rename it was told about; a key
+// another tab already moved is simply absent, so repeating it changes nothing.
+export function renameComposerAgent(oldAgentId, newAgentId) {
+  if (!oldAgentId || !newAgentId || oldAgentId === newAgentId) {
+    return;
+  }
+  drafts = withRenamedSessionKeys(drafts, dirtyDrafts, oldAgentId, newAgentId);
+  attachments = withRenamedSessionKeys(
+    attachments,
+    dirtyAttachments,
+    oldAgentId,
+    newAgentId,
+  );
+  histories = withRenamedHistory(histories, oldAgentId, newAgentId);
+  pendingHistoryRenames.push({ from: oldAgentId, to: newAgentId });
+  schedulePersist();
+}
+
+function withRenamedSessionKeys(store, dirty, oldAgentId, newAgentId) {
+  const prefix = `${oldAgentId}::`;
+  const renamed = {};
+  for (const [key, value] of Object.entries(store)) {
+    if (!key.startsWith(prefix)) {
+      renamed[key] = value;
+      continue;
+    }
+    const newKey = `${newAgentId}::${key.slice(prefix.length)}`;
+    renamed[newKey] = value;
+    markChanged(dirty, key);
+    markChanged(dirty, newKey);
+  }
+  return renamed;
+}
+
+// The old id's history leads, followed by anything already kept for the new
+// id (a former Agent of that id), deduplicated and bounded.
+function withRenamedHistory(store, oldAgentId, newAgentId) {
+  if (!Object.hasOwn(store, oldAgentId)) {
+    return store;
+  }
+  const { [oldAgentId]: moved, ...rest } = store;
+  const merged = [
+    ...new Set([
+      ...(Array.isArray(moved) ? moved : []),
+      ...(Array.isArray(rest[newAgentId]) ? rest[newAgentId] : []),
+    ]),
+  ].slice(0, MAX_HISTORY_PER_AGENT);
+  return { ...rest, [newAgentId]: merged };
+}
+
 // Test support: drop all in-memory and persisted composer memory.
 export function resetComposerMemory() {
   drafts = {};
@@ -361,6 +420,7 @@ export function resetComposerMemory() {
   dirtyDrafts.clear();
   dirtyAttachments.clear();
   pendingHistoryPushes = [];
+  pendingHistoryRenames = [];
   if (persistTimer !== null) {
     clearTimeout(persistTimer);
     persistTimer = null;

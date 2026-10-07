@@ -7,6 +7,7 @@ import {
 import { parseAgentAddress } from '$lib/agentAddress.js';
 import { t } from '$lib/i18n.js';
 import { takeSessionInvalidations } from '$lib/sessionInvalidation.js';
+import { renameAgentInKey, renameAgentInKeys } from '$lib/chatState.js';
 
 // The Session settings the composer footer shows for the displayed
 // conversation: the Project it works in, and the Model and thinking effort it
@@ -350,7 +351,23 @@ export function createSessionSettings(context) {
     );
   }
 
+  // An Identity Agent rename keeps its Sessions' and drafts' settings under
+  // the new id.
+  function renameAgent(oldAgentId, newAgentId) {
+    drafts = renameAgentInKeys(drafts, oldAgentId, newAgentId);
+    rows = renameAgentInKeys(rows, oldAgentId, newAgentId);
+    pending = renameAgentInKeys(pending, oldAgentId, newAgentId);
+    for (const key of Object.keys(latestWrite)) {
+      const renamed = renameAgentInKey(key, oldAgentId, newAgentId);
+      if (renamed !== key) {
+        latestWrite[renamed] = latestWrite[key];
+        delete latestWrite[key];
+      }
+    }
+  }
+
   return {
+    renameAgent,
     get view() {
       return view;
     },

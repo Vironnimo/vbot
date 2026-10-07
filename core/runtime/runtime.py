@@ -869,15 +869,16 @@ class Runtime:
         """Rename one Identity Agent and every reference to it as one recoverable change.
 
         The Agent's tree, config, Sessions and Sub-Agent links move together with
-        the Channels, Cron and Bootstrap jobs, Calendar actions and delegation
-        allow-lists that name it. A failure reverts all of it; an interrupted
-        rename completes on the next start. While a Channel, Cron or Bootstrap
-        job or Calendar action still names ``new_agent_id``, the rename is refused
-        with ``AgentReferencedError`` before anything changes; a delegation
-        allow-list entry naming the unused id is a leftover the rename removes
-        instead. The caller holds the Run admission guards of both ids.
-        Afterwards Skills of both ids are invalidated and the Recall indexes
-        forget the moved Sessions' old addresses.
+        the Channels, Cron and Bootstrap jobs, Calendar actions, delegation
+        allow-lists and live Terminal Session scopes that name it. A failure
+        reverts all of it; an interrupted rename completes on the next start.
+        While a Channel, Cron or Bootstrap job or Calendar action still names
+        ``new_agent_id``, the rename is refused with ``AgentReferencedError``
+        before anything changes; a delegation allow-list entry naming the unused
+        id is a leftover the rename removes instead. The caller holds the Run
+        admission guards of both ids. Afterwards Skills of both ids are
+        invalidated and the Recall indexes forget the moved Sessions' old
+        addresses.
         """
         self._ensure_started()
         outcome = await rename_identity_agent(self._agent_rename_services(), agent_id, new_agent_id)
@@ -941,6 +942,7 @@ class Runtime:
             bootstrap=bootstrap_jobs,
             calendar=calendar,
             snapshot_barrier=self._snapshot_barrier,
+            terminals=self._terminal_manager,
         )
 
     def reload_skills(self) -> None:

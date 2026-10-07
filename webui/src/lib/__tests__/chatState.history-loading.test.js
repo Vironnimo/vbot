@@ -299,7 +299,12 @@ describe('History reads', () => {
     },
   );
 
-  it('ignores an older History response for the same Session', async () => {
+  it.each([
+    ['the same Session', 'alpha'],
+    // An Identity Agent rename keeps the Session; a read for its old address
+    // is older than any read under the new one.
+    ['a Session whose Agent was renamed meanwhile', 'gamma'],
+  ])('ignores an older History response for %s', async (_case, agentId) => {
     let resolveOlderHistory;
     let resolveNewerHistory;
     const loadChatHistory = vi
@@ -322,7 +327,8 @@ describe('History reads', () => {
     });
 
     const olderLoad = controller.loadHistoryForSession('alpha', 'session-one');
-    const newerLoad = controller.loadHistoryForSession('alpha', 'session-one');
+    controller.renameAgent('alpha', agentId);
+    const newerLoad = controller.loadHistoryForSession(agentId, 'session-one');
     resolveOlderHistory({
       active_run: { run_id: 'run-old', status: 'running' },
       has_more: false,
@@ -343,11 +349,14 @@ describe('History reads', () => {
     expect(await newerLoad).toBe(true);
     expect(chatState.loadingHistory).toBe(false);
     expect(
-      ensureSessionState(chatState, 'alpha', 'session-one').messages,
+      ensureSessionState(chatState, agentId, 'session-one').messages,
     ).toEqual(newerHistory.messages);
+    expect(Object.keys(chatState.sessions)).toEqual([
+      `${agentId}::session-one`,
+    ]);
     expect(runStream.attachRunStream).toHaveBeenCalledOnce();
     expect(runStream.attachRunStream).toHaveBeenCalledWith(
-      ensureSessionState(chatState, 'alpha', 'session-one'),
+      ensureSessionState(chatState, agentId, 'session-one'),
       newerHistory.active_run,
     );
   });

@@ -65,6 +65,24 @@ describe('App selection', () => {
     },
   );
 
+  it('tells each subscribed surface of an Agent rename before the selection follows', () => {
+    listAgents.mockResolvedValue({ agents: [] });
+    selection.syncAgents([{ id: 'alpha' }]);
+    const seen = [];
+    selection.subscribeAgentRenames((oldId, newId) =>
+      seen.push([oldId, newId, selection.selectedAgentId]),
+    );
+    const unsubscribe = selection.subscribeAgentRenames(() =>
+      seen.push('unsubscribed'),
+    );
+    unsubscribe();
+
+    selection.remapIdentityAgentId('alpha', 'gamma');
+
+    expect(seen).toEqual([['alpha', 'gamma', 'alpha']]);
+    expect(selection.selectedAgentId).toBe('gamma');
+  });
+
   it('ignores a server read after its App owner is destroyed', async () => {
     const response = deferred();
     listAgents.mockReturnValueOnce(response.promise);

@@ -124,6 +124,9 @@
     // App's Extension invalidations (`{ owner, change }`); the composer's
     // Computer Use control refreshes its status from them.
     subscribeExtensionInvalidations = null,
+    // App's Identity Agent renames, delivered synchronously before the roster
+    // is read again (`(oldAgentId, newAgentId)`); returns the unsubscribe.
+    subscribeAgentRenames = null,
     // Scope object of the latest `resource_changed(kind:"queue")` (a fresh
     // object per signal); re-syncs the matching held session's queue live.
     queueInvalidation = null,
@@ -564,6 +567,29 @@
       });
     }
   });
+
+  // An Identity Agent was renamed (from any window or the CLI): this area
+  // keeps showing the same Session, with its History, drafts and Session
+  // settings, under the new id. A History read in flight for the old id is
+  // superseded, so the shown Session is read again.
+  function renameAgent(oldAgentId, newAgentId) {
+    if (!oldAgentId || !newAgentId || oldAgentId === newAgentId) {
+      return;
+    }
+    chatController.renameAgent(oldAgentId, newAgentId);
+    navigation.renameAgent(oldAgentId, newAgentId);
+    sessionSettings.renameAgent(oldAgentId, newAgentId);
+    actions.renameAgent(oldAgentId, newAgentId);
+    if (lastSharedSelectedAgentId === oldAgentId) {
+      lastSharedSelectedAgentId = newAgentId;
+    }
+    const shown = target.activeSessionState;
+    if (shown?.agentId === newAgentId) {
+      void actions.loadHistoryForSession(newAgentId, shown.sessionId);
+    }
+  }
+
+  $effect(() => subscribeAgentRenames?.(renameAgent));
 
   // The controller owns reconnect deduplication and reconciliation; the View
   // only forwards the latest reactive input.

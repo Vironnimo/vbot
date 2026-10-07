@@ -195,6 +195,15 @@ async def test_a_live_rename_moves_every_reference_or_none(
             (runtime.calendar_service, ("_notify_changed",)),
         ):
             _record_threads(owner, names, automation_threads, monkeypatch)
+        # Live Terminal Sessions follow the Agent's Sessions, and back on a revert.
+        terminal_moves: list[tuple[str, str]] = []
+        transfer = runtime.terminal_manager.transfer_agent_scope
+
+        def record_terminal_move(agent_id: str, new_agent_id: str) -> int:
+            terminal_moves.append((agent_id, new_agent_id))
+            return transfer(agent_id, new_agent_id)
+
+        monkeypatch.setattr(runtime.terminal_manager, "transfer_agent_scope", record_terminal_move)
         if fails:
             # The last reference fails after every other one moved.
             _fail_when_retargeted_to(
@@ -220,6 +229,8 @@ async def test_a_live_rename_moves_every_reference_or_none(
         assert channel_loops == [asyncio.get_running_loop()] * changes
         assert started_adapters == []
         assert automation_threads == {threading.get_ident()}
+        forward = ("coder", "researcher")
+        assert terminal_moves == ([forward, forward[::-1]] if fails else [forward])
     finally:
         await runtime.aclose()
 
