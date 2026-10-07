@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Collection
+from datetime import timedelta
 from pathlib import Path
 
 import pytest_asyncio
 
 from core.projects import ProjectStore
+from core.storage.temp_files import TemporaryFileManager
 from core.tools.terminal import TERMINAL_TOOL_NAME, register_terminal_tool
 from core.tools.terminal_manager import TerminalManager, TerminalRenderHost
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure_for_exception
@@ -15,11 +17,14 @@ from tests.core.tools.terminal_manager_helpers import AdapterFactory
 
 
 @pytest_asyncio.fixture
-async def manager() -> AsyncIterator[tuple[TerminalManager, AdapterFactory]]:
+async def manager(tmp_path: Path) -> AsyncIterator[tuple[TerminalManager, AdapterFactory]]:
     factory = AdapterFactory()
     manager = TerminalManager(
         adapter_factory=factory,
         render_host=TerminalRenderHost.in_process(),
+        temporary_files=TemporaryFileManager(
+            tmp_path / "temp", retention={"terminals": timedelta(hours=1)}
+        ),
         sweep_interval_seconds=3600,
         activity_quiet_seconds=0.03,
     )

@@ -942,7 +942,15 @@ _ALTERNATE_SCREEN_NOTE = (
     "history; to see earlier content, use the program's own scrolling or paging."
 )
 # Launch facts: status shows them; other results do not repeat them.
-_LAUNCH_FIELDS = ("program", "title", "workdir", "log_file", "name")
+_LAUNCH_FIELDS = ("program", "title", "workdir", "log", "name")
+
+
+def _log_text(path: str) -> str:
+    """What an interactive terminal's log file holds; a bare path did not say."""
+    return (
+        f"Everything the program printed is written live to {path}, as raw text with its "
+        "terminal control sequences."
+    )
 
 
 def _screen_result(
@@ -968,6 +976,9 @@ def _screen_result(
         if key in _HIDDEN_SNAPSHOT_FIELDS or key in projected or key == "state":
             continue
         if value is None or value == "" or key == "exit_code":
+            continue
+        if key == "log_file":
+            projected["log"] = _log_text(str(value))
             continue
         projected[key] = value
     if view != "status":

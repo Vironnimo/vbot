@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, cast
@@ -734,5 +735,14 @@ async def test_follow_up_results_show_the_screen_without_repeating_launch_facts(
     status = await terminal({"action": "status", "terminal_id": terminal_id})
     assert {"program", "workdir"} <= set(status["data"])
     assert status["data"]["program"] == "fake-tui -q"
+    # The log sentence says what the file holds; the file has the raw output.
+    log = re.fullmatch(
+        r"Everything the program printed is written live to (\S+), as raw text with its "
+        r"terminal control sequences\.",
+        status["data"]["log"],
+    )
+    assert log is not None, status["data"]["log"]
+    assert "line-29\r\nready> " in Path(log[1]).read_bytes().decode("utf-8")
+    assert "log_file" not in status["data"]
     hidden = {"attention", "attention_revision", "screen_revision", "started_at", "columns"}
     assert not hidden & set(status["data"])
