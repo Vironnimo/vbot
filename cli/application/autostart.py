@@ -37,6 +37,7 @@ BOOTSTRAP_FAILED_EXIT_CODE = 111
 # Cap every registration command so a stuck Task Scheduler call or polkit
 # prompt cannot block forever.
 _COMMAND_TIMEOUT_SECONDS = 30.0
+_TIMED_OUT_EXIT_CODE = 124
 _TASK_NOT_FOUND_EXIT_CODE = 3
 _LOGGER = logging.getLogger("vbot.application.integration")
 
@@ -175,7 +176,9 @@ def run_command(command: list[str]) -> CommandRun:
         )
     except subprocess.TimeoutExpired:
         return CommandRun(
-            124, "", f"command timed out after {_COMMAND_TIMEOUT_SECONDS:.0f}s: {command[0]}"
+            _TIMED_OUT_EXIT_CODE,
+            "",
+            f"command timed out after {_COMMAND_TIMEOUT_SECONDS:.0f}s: {command[0]}",
         )
     except OSError as exc:
         return CommandRun(127, "", f"could not run {command[0]}: {exc}")
@@ -251,6 +254,11 @@ def task_command(operation: str, **values: str | int) -> list[str]:
 
 def _task_lookup(run: Runner, name: str) -> tuple[bool, str, str]:
     result = run(task_command("inspect", task_name=name))
+    if result.returncode == _TIMED_OUT_EXIT_CODE:
+        # A cold powershell.exe start occasionally hangs past the timeout. The
+        # query changes nothing, so it is safe to ask once more.
+        _LOGGER.warning("Task Scheduler query timed out; asking once more")
+        result = run(task_command("inspect", task_name=name))
     if result.returncode == _TASK_NOT_FOUND_EXIT_CODE:
         return False, "", ""
     if result.returncode != 0:

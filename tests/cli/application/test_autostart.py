@@ -62,6 +62,34 @@ def test_windows_autostart_refuses_foreign_registration_before_disable(tmp_path:
         autostart(install, "disable", platform="win32", runner=runner)
 
 
+@pytest.mark.parametrize("timeouts", [1, 2], ids=["one-timeout", "repeated-timeouts"])
+def test_windows_autostart_asks_a_timed_out_query_once_more_before_refusing(
+    tmp_path: Path, timeouts: int
+) -> None:
+    install = _install(tmp_path / "app")
+    operations: list[object] = []
+
+    def runner(command: list[str]) -> CommandRun:
+        operation = _operation(command)["operation"]
+        operations.append(operation)
+        if operation == "delete":
+            return CommandRun(0, "", "")
+        if operations.count("inspect") <= timeouts:
+            return CommandRun(124, "", "command timed out after 30s: powershell.exe")
+        registration = {"launcher": str(install.root / "vBot.exe"), "arguments": ""}
+        return CommandRun(0, json.dumps(registration), "")
+
+    if timeouts == 1:
+        assert autostart(install, "disable", platform="win32", runner=runner)["changed"] is True
+        assert operations == ["inspect", "inspect", "delete"]
+    else:
+        with pytest.raises(
+            ApplicationError, match="Task Scheduler query failed: command timed out"
+        ):
+            autostart(install, "disable", platform="win32", runner=runner)
+        assert operations == ["inspect", "inspect"]
+
+
 @pytest.mark.parametrize("lingering", [True, False], ids=["lingering", "no-lingering"])
 def test_linux_autostart_owns_one_systemd_user_unit_that_runs_the_bootstrap_server(
     tmp_path: Path, lingering: bool
