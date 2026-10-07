@@ -308,8 +308,13 @@ notice about the next page and each warning
   a Run cancellation returns partial results with a warning. A user cancellation
   kills the child and returns `cancelled_by_user`.
 - **Child process:** each child's RSS is bounded at 512 MiB, polled every 50 ms.
-  One protocol record is bounded at 8 MiB, the output queue and stderr are
+  One output record is bounded at 8 MiB, the output queue and stderr are
   bounded, and one counting or listing pass is bounded at 256 MiB of output.
+  A record is a line, or one path or name where ripgrep ends them with NUL
+  (`--files --null`, `--files-without-match --null`, `--null-data`); those
+  callers pass `native_lines` the NUL `terminator`. Read as lines, a file list
+  over 8 MiB was one record and failed the call (probe, 2026-10: 66,000 files;
+  `--dirs` failed alike, since it reads a file list first).
 - **Entries:** at most 500,000 entries are collected; more makes the result
   incomplete, with a warning.
 - **Process ownership:** native subprocess creation, termination and release stay
@@ -381,7 +386,8 @@ Tests live in `tests/core/tools/test_search_files*.py`:
   - a git differential (`git ls-files --others --exclude-standard`) checks ignore
     selection;
   - other tests cover totals, ordering, context at page edges, the byte limit,
-    multiline paging, outside roots, `.git`, excerpts, encodings, link loops,
+    the output record bound per listed path and name, multiline paging, outside
+    roots, `.git`, excerpts, encodings, link loops,
     junctions, unusual names, timeout and cancel, English OS errors, the missing
     engine, and the display.
 - **`test_search_files_arguments.py`** checks interpretation and tolerance:
