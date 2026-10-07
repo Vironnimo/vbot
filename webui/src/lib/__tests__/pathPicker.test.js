@@ -38,6 +38,8 @@ describe('typed text', () => {
     ['\\\\host\\share\\', {}, '//host/share'],
     // Relative text names nothing without a root, absolute text nothing with one.
     ['src/', {}, null],
+    // Links (the Skill install source) never complete.
+    ['https://example.com/skills/', {}, null],
     ['', {}, null],
     ['', { root: 'C:/repo' }, ''],
     ['docs\\./guides/', { root: 'C:/repo' }, 'docs/guides'],

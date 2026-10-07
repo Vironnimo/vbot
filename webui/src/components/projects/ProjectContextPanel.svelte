@@ -4,9 +4,12 @@
   import InfoHint from '../ui/InfoHint.svelte';
   import Button from '../ui/Button.svelte';
   import SortableList from '../ui/SortableList.svelte';
-  import TextField from '../ui/TextField.svelte';
+  import PathField from '../ui/PathField.svelte';
   import { tooltip } from '$lib/tooltip.js';
   let { projectsState = $bindable(), projectsController } = $props();
+
+  // Auto-load files are picked inside the Project folder, relative to it.
+  let projectRoot = $derived(projectsController.selectedProject()?.cwd ?? '');
 
   function addAutoLoadEntry() {
     const entry = projectsState.autoLoadDraft.trim();
@@ -90,10 +93,11 @@
           </div>
         {/if}
         <div class="s-group__block projects-file-add">
-          <TextField
+          <PathField
             id="project-edit-auto-load"
             class="projects-file-input"
-            code
+            mode="file"
+            root={projectRoot}
             value={projectsState.autoLoadDraft}
             placeholder={t('projects.manage.autoLoadPlaceholder')}
             ariaLabel={t('projects.manage.autoLoad')}

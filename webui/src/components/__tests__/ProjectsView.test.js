@@ -707,6 +707,17 @@ describe('ProjectsView auto-load files', () => {
     await selectDemo();
 
     await waitForCondition(() => inputById('project-edit-auto-load'));
+    // Typed folders complete from the Project folder, relative to it.
+    inputById('project-edit-auto-load').focus();
+    setInputValue('project-edit-auto-load', 'docs/');
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(([method]) => method === 'filesystem.list'),
+    );
+    expect(rpcMock).toHaveBeenCalledWith('filesystem.list', {
+      path: 'docs',
+      root: 'C:/repos/default',
+      include_files: true,
+    });
     setInputValue('project-edit-auto-load', 'docs/guide.md');
     buttonByTestId('project-auto-load-add').click();
     flushSync();
