@@ -52,7 +52,7 @@ export default Object.freeze({
   'live.error.providerUnavailable':
     'The Provider connection of the Live voice Model is missing or not set up. Check it in Settings → Providers.',
   'live.error.backendUnavailable':
-    'The backend chosen for Live voice cannot be used. Check the Backend option of the voice Model in Settings → Voice.',
+    'The backend chosen for Live voice cannot be used. Check the backend and its Model in Settings → Live voice.',
   'live.error.notUsable':
     'The Live voice Model cannot be used right now. Check its Provider connection in Settings.',
   'live.error.invalidOffer':

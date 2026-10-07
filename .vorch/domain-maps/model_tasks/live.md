@@ -28,7 +28,7 @@ The two built-in Agents of a Live call (`agent.md` -> Built-in Agents): Live voi
 
 ### Voice model / backend
 
-The voice model (the binding target) talks with the user. The backend (option `backend`) answers what the voice model hands on: `vbot` (the Live backend Agent), `openai` (OpenAI's hosted backend model, GPT-Live only), or `none` (nothing; the voice model uses only its own Tools, xAI only). vBot's coding Agents still do coding work.
+The voice model (the binding target) talks with the user. The backend (option `backend`) answers what the voice model hands on: `vbot` (the Live backend Agent), `openai` (OpenAI's hosted backend model, GPT-Live over an API key only; it fails on the ChatGPT subscription, `model_tasks/live-wires.md`), or `none` (nothing; the voice model uses only its own Tools, xAI only). A start with backend `vbot` is rejected `backend_unavailable` while the Live backend Agent has no Model, since every request would fail; the user picks it in Settings -> Live voice. vBot's coding Agents still do coding work.
 
 ### Handed-on request
 

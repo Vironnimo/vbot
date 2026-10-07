@@ -564,12 +564,7 @@
                 ],
                 "default": "cove"
               },
-              "backend": { "type": "enum", "values": ["vbot", "openai"], "default": "vbot" },
-              "openai_backend_model": {
-                "type": "enum",
-                "values": ["gpt-6-luna", "gpt-6-sol"],
-                "default": "gpt-6-luna"
-              }
+              "backend": { "type": "enum", "values": ["vbot"], "default": "vbot" }
             }
           }
         }

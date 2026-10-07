@@ -602,10 +602,11 @@ def test_openai_task_model_overrides_are_limited_to_working_connections(
 
 
 @pytest.mark.parametrize(
-    ("model_id", "connection_id", "voice_count", "default_voice"),
+    ("model_id", "connection_id", "voice_count", "default_voice", "backends"),
     [
-        ("gpt-live-1", "api-key", 22, "marin"),
-        ("gpt-live-1-codex", "subscription", 9, "cove"),
+        ("gpt-live-1", "api-key", 22, "marin", ("vbot", "openai")),
+        # OpenAI's hosted backend is unreachable on the subscription route.
+        ("gpt-live-1-codex", "subscription", 9, "cove", ("vbot",)),
     ],
 )
 def test_openai_live_voice_models_are_task_only_per_connection(
@@ -614,6 +615,7 @@ def test_openai_live_voice_models_are_task_only_per_connection(
     connection_id: str,
     voice_count: int,
     default_voice: str,
+    backends: tuple[str, ...],
 ) -> None:
     """GPT-Live targets are live voice Task Models, never Chat Models."""
 
@@ -629,9 +631,12 @@ def test_openai_live_voice_models_are_task_only_per_connection(
     assert parameters["voice"]["default"] == default_voice
     assert dict(parameters["backend"]) == {
         "type": "enum",
-        "values": ("vbot", "openai"),
+        "values": backends,
         "default": "vbot",
     }
+    if "openai" not in backends:
+        assert "openai_backend_model" not in parameters
+        return
     # OpenAI's hosted backend Models exist and run on the same Connection.
     hosted = parameters["openai_backend_model"]
     assert hosted["default"] in hosted["values"]

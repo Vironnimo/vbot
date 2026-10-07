@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, Protocol
 
-from core.agents import LIVE_VOICE_AGENT_ID
+from core.agents import LIVE_BACKEND_AGENT_ID, LIVE_VOICE_AGENT_ID
 from core.model_tasks._live_backend import LiveBackend
 from core.model_tasks._live_brief import (
     backend_instructions,
@@ -252,6 +252,9 @@ class LiveRuntime(Protocol):
 
     @property
     def chat_sessions(self) -> Any: ...
+
+    @property
+    def agents(self) -> Any: ...
 
     def get_connection_token_getter(self, connection: Any) -> Any: ...
 
@@ -561,6 +564,14 @@ class LiveVoiceService:
         ):
             raise LiveStartRejected(
                 "backend_unavailable", "The OpenAI backend model of Live voice is not set"
+            )
+        if (
+            backend == LIVE_BACKEND_VBOT
+            and not self._runtime.agents.get(LIVE_BACKEND_AGENT_ID).model
+        ):
+            # Every request would fail; the user picks the Model in Settings.
+            raise LiveStartRejected(
+                "backend_unavailable", "The Live backend Agent has no Model set"
             )
         return _CallPlan(
             target_ref=target_ref,

@@ -985,10 +985,18 @@ class FakeModelTasks:
         return None
 
 
-def _service(model_tasks: FakeModelTasks | None = None) -> tuple[LiveVoiceService, FakeChat]:
+def _service(
+    model_tasks: FakeModelTasks | None = None, *, backend_agent_model: str = "openai/gpt-6-sol"
+) -> tuple[LiveVoiceService, FakeChat]:
     hosts = LiveToolHosts()
     chat = FakeChat(hosts)
-    runtime = SimpleNamespace(models=object(), chat_loop=chat, chat_sessions=object())
+    backend_agent = SimpleNamespace(model=backend_agent_model)
+    runtime = SimpleNamespace(
+        models=object(),
+        chat_loop=chat,
+        chat_sessions=object(),
+        agents=SimpleNamespace(get=lambda agent_id: backend_agent),
+    )
     service = LiveVoiceService(
         model_tasks or FakeModelTasks(),
         runtime,  # type: ignore[arg-type]
@@ -1058,6 +1066,7 @@ async def test_invalid_offers_are_rejected_before_resolution(offer: str):
             ("vbot",),
             "backend_unavailable",
         ),
+        (FakeModelTasks(options={"backend": "vbot"}), ("vbot",), "backend_unavailable"),
     ],
     ids=[
         "unbound",
@@ -1066,6 +1075,7 @@ async def test_invalid_offers_are_rejected_before_resolution(offer: str):
         "openai-without-backend",
         "xai-with-openai-backend",
         "backend-the-model-does-not-offer",
+        "vbot-backend-agent-without-model",
     ],
 )
 async def test_an_unusable_configuration_names_what_is_missing(
@@ -1075,7 +1085,8 @@ async def test_an_unusable_configuration_names_what_is_missing(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(live_module, "live_backend_choices", lambda model: offered)
-    service, chat = _service(model_tasks)
+    # Only the vBot backend case reaches the Live backend Agent's Model.
+    service, chat = _service(model_tasks, backend_agent_model="")
     media = "relay" if model_tasks.target == XAI_TARGET else "webrtc"
     with pytest.raises(LiveStartRejected) as caught:
         await service.start_call(media=media, offer_sdp=OFFER, host=FakeHost())
