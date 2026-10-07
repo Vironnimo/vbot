@@ -433,13 +433,14 @@ def capture_config_backup(
             )
             for path, (content, mode) in contents.items()
         }
+        root = config_backup_root(data_dir)
+        # Stored first, so an object altered on disk is repaired even when nothing changed.
+        for path, (content, _mode) in sorted(contents.items()):
+            _store_object(root, files[path].sha256, content)
         backups, unreadable = _scan(data_dir)
         if backups and backups[0].files == files:
             return None
         moment = datetime.now(UTC) if now is None else now
-        root = config_backup_root(data_dir)
-        for path, (content, _mode) in sorted(contents.items()):
-            _store_object(root, files[path].sha256, content)
         backup = ConfigBackup(
             backup_id=f"{moment.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}",
             created_at=format_canonical_timestamp(moment),
@@ -520,10 +521,14 @@ def _changed_count(previous: Mapping[str, ConfigFile], current: Mapping[str, Con
 
 
 def _store_object(root: Path, digest: str, content: bytes) -> None:
-    """Store one content durably under its hash; an existing complete object stays."""
+    """Store one content durably under its hash; an existing intact object stays.
+
+    An existing object whose content no longer matches its hash (torn, zeroed or
+    altered on disk) is replaced, so a backup never references a broken copy.
+    """
     target = _object_path(root, digest)
     try:
-        if target.stat().st_size == len(content):
+        if hashlib.sha256(target.read_bytes()).hexdigest() == digest:
             return
     except FileNotFoundError:
         pass
