@@ -210,6 +210,12 @@ describe('RPC wrappers', () => {
       { agent_id: 'agent-1', session_id: 'session-1' },
     ],
     [
+      'files.list with the entries of a directory',
+      (o) =>
+        api.listFiles('agent-1', { sessionId: 'session-1', directory: '' }, o),
+      { agent_id: 'agent-1', session_id: 'session-1', directory: '' },
+    ],
+    [
       'filesystem.list for the places',
       (o) => api.listServerDirectory({}, o),
       { path: null },

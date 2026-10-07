@@ -129,7 +129,10 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
       }),
     stopAll: (agentId, sessionId) =>
       call('chat.stop_all', { agent_id: agentId, session_id: sessionId }),
-    listFiles: (agentId, { sessionId = '', workingProjectId } = {}) =>
+    listFiles: (
+      agentId,
+      { sessionId = '', workingProjectId, directory } = {},
+    ) =>
       call('files.list', {
         agent_id: agentId,
         ...(sessionId
@@ -137,6 +140,7 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
           : workingProjectId !== undefined
             ? { working_project_id: workingProjectId }
             : {}),
+        ...(typeof directory === 'string' ? { directory } : {}),
       }),
     listServerDirectory: ({ path = null, root, include_files } = {}) =>
       call('filesystem.list', {

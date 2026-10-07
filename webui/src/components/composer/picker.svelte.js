@@ -1,7 +1,10 @@
 import {
+  createMentionIndex,
+  findOpenQuotedMention,
   formatMentionToken,
-  fuzzyFilterFiles,
   isMentionTokenChar,
+  mentionCandidates,
+  mentionQueryParts,
 } from '$lib/fileMentions.js';
 import {
   buildModelSelectOptions,
@@ -10,12 +13,19 @@ import {
 } from '$lib/modelSelection.js';
 import { tick } from 'svelte';
 
+// Directory names are data: only a listing's own keys count.
+const listingOf = (listings, directory) =>
+  Object.hasOwn(listings, directory) ? listings[directory] : undefined;
+
 export function createComposerPicker(context) {
   const SKILL_TRIGGER_PATTERN = /[A-Za-z0-9_-]/u;
 
-  // Mirrors FileAutocomplete's render cap so keyboard navigation and the
-  // rendered list can never disagree on the match set.
+  // FileAutocomplete renders exactly these rows, so keyboard navigation and
+  // the rendered list can never disagree on the match set.
   const MAX_FILE_MATCHES = 50;
+
+  // Typing a directory prefix lists that directory once the typing pauses.
+  const ENTRIES_DEBOUNCE_MS = 120;
 
   let autocompleteElement = $state(null);
 
@@ -27,16 +37,30 @@ export function createComposerPicker(context) {
 
   let activeSkillIndex = $state(0);
 
-  // @-mention picker data: `null` = never fetched for this session. Fetched
-  // once per picker open (fresh list, no cache-invalidation problem) and reused
-  // at submit to decide which @-tokens are real files.
-  let fileCandidates = $state(null);
+  // @-mention picker data: `null` = never fetched for this session. The index
+  // (files plus the folders holding them) is fetched once per picker open
+  // (fresh list, no cache-invalidation problem) and reused at submit to decide
+  // which @-tokens are real files.
+  let fileCandidates = $state.raw(null);
+
+  let fileDirectories = $state.raw([]);
 
   let fileListTruncated = $state(false);
 
   let fileListLoading = $state(false);
 
   let _fileFetchToken = 0;
+
+  // The direct entries of each directory the picker visited during this open,
+  // ignored ones included: directory -> `{ loading }` or `{ entries,
+  // truncated, failed }`. Replaced, never mutated, so a send can keep it.
+  let directoryEntries = $state.raw({});
+
+  let pendingEntriesDirectory = $state(null);
+
+  let _entriesTimer = null;
+
+  let _entriesToken = 0;
 
   // /model argument autocomplete: `null` = never fetched. Fetched once when the
   // `/model ` trigger opens and reused while the popup stays active.
@@ -66,18 +90,55 @@ export function createComposerPicker(context) {
     if (!triggerContext) {
       return '';
     }
+    // A quoted @-mention carries its unescaped text.
+    if (typeof triggerContext.query === 'string') {
+      return triggerContext.query;
+    }
 
     return context.content.slice(triggerContext.start + 1, triggerContext.end);
   });
 
-  let matchingFiles = $derived.by(() =>
+  let mentionIndex = $derived(
+    createMentionIndex({
+      files: fileCandidates ?? [],
+      directories: fileDirectories,
+    }),
+  );
+
+  // The directory the @-query is in ('' = the listing's root), or null.
+  let mentionDirectory = $derived(
     triggerContext?.marker === '@'
-      ? fuzzyFilterFiles(
-          fileCandidates ?? [],
-          autocompleteQuery,
-          MAX_FILE_MATCHES,
-        )
-      : [],
+      ? mentionQueryParts(autocompleteQuery).directory
+      : null,
+  );
+
+  let mentionListing = $derived(
+    mentionDirectory === null
+      ? null
+      : listingOf(directoryEntries, mentionDirectory),
+  );
+
+  let fileRows = $derived.by(() =>
+    mentionDirectory === null
+      ? []
+      : mentionCandidates({
+          index: mentionIndex,
+          directory: mentionDirectory,
+          entries: mentionListing?.entries ?? [],
+          query: autocompleteQuery,
+          limit: MAX_FILE_MATCHES,
+        }),
+  );
+
+  let fileRowsLoading = $derived(
+    mentionDirectory !== null &&
+      (fileListLoading ||
+        Boolean(mentionListing?.loading) ||
+        pendingEntriesDirectory === mentionDirectory),
+  );
+
+  let fileRowsTruncated = $derived(
+    fileListTruncated || Boolean(mentionListing?.truncated),
   );
 
   let showSkillAutocomplete = $derived(
@@ -90,7 +151,7 @@ export function createComposerPicker(context) {
   let showFileAutocomplete = $derived(
     Boolean(triggerContext) &&
       triggerContext.marker === '@' &&
-      (fileListLoading || matchingFiles.length > 0),
+      (fileRowsLoading || fileRows.length > 0),
   );
 
   let allModelOptions = $derived.by(() => {
@@ -128,12 +189,12 @@ export function createComposerPicker(context) {
         : autocompleteElement;
 
   const activeAutocompleteLoading = () =>
-    (showFileAutocomplete && fileListLoading) ||
+    (showFileAutocomplete && fileRowsLoading) ||
     (showModelAutocomplete && modelCatalogLoading);
 
   const activeMatchCount = () => {
     if (triggerContext?.marker === '@') {
-      return matchingFiles.length;
+      return fileRows.length;
     }
     if (triggerContext?.marker === 'model') {
       return matchingModelCount();
@@ -220,13 +281,18 @@ export function createComposerPicker(context) {
     }
 
     // A newly opened @-picker (or the caret jumping to a different @-token)
-    // fetches a fresh file list; typing within the same token filters locally.
+    // fetches a fresh file list; typing within the same token filters locally
+    // and lists each typed directory once.
     if (
       triggerContext?.marker === '@' &&
       (previousContext?.marker !== '@' ||
         previousContext.start !== triggerContext.start)
     ) {
       refreshFileCandidates();
+    } else if (triggerContext?.marker === '@') {
+      requestEntries(triggerDirectory(triggerContext));
+    } else {
+      cancelPendingEntries();
     }
 
     // A newly opened /model argument popup fetches the model catalog once;
@@ -240,10 +306,15 @@ export function createComposerPicker(context) {
   };
 
   const refreshFileCandidates = async () => {
+    resetDirectoryEntries();
     if (typeof context.onListFiles !== 'function') {
       fileCandidates = [];
+      fileDirectories = [];
       fileListTruncated = false;
       return;
+    }
+    if (triggerContext?.marker === '@') {
+      requestEntries(triggerDirectory(triggerContext), { immediate: true });
     }
     // The token invalidates stale responses: a session switch or a newer fetch
     // bumps it, and the slower response is dropped instead of applied.
@@ -254,8 +325,7 @@ export function createComposerPicker(context) {
       if (fetchToken !== _fileFetchToken) {
         return;
       }
-      fileCandidates = Array.isArray(result?.files) ? result.files : [];
-      fileListTruncated = Boolean(result?.truncated);
+      applyFileIndex(result);
     } catch {
       if (fetchToken !== _fileFetchToken) {
         return;
@@ -269,6 +339,86 @@ export function createComposerPicker(context) {
       }
     }
   };
+
+  // The listed index of files and the folders that hold them.
+  function applyFileIndex(result) {
+    fileCandidates = Array.isArray(result?.files) ? result.files : [];
+    fileDirectories = Array.isArray(result?.directories)
+      ? result.directories
+      : [];
+    fileListTruncated = Boolean(result?.truncated);
+  }
+
+  // Lists a directory's direct entries once per picker open: at once when the
+  // picker opens or a folder is chosen, otherwise after typing pauses (a
+  // directory typed past is never listed).
+  function requestEntries(directory, { immediate = false } = {}) {
+    if (listingOf(directoryEntries, directory)) {
+      cancelPendingEntries();
+      return;
+    }
+    if (immediate) {
+      cancelPendingEntries();
+      void loadEntries(directory);
+      return;
+    }
+    if (pendingEntriesDirectory === directory) {
+      return;
+    }
+    cancelPendingEntries();
+    pendingEntriesDirectory = directory;
+    _entriesTimer = setTimeout(() => {
+      _entriesTimer = null;
+      pendingEntriesDirectory = null;
+      void loadEntries(directory);
+    }, ENTRIES_DEBOUNCE_MS);
+  }
+
+  function cancelPendingEntries() {
+    if (_entriesTimer !== null) {
+      clearTimeout(_entriesTimer);
+      _entriesTimer = null;
+    }
+    pendingEntriesDirectory = null;
+  }
+
+  async function loadEntries(directory) {
+    if (typeof context.onListFiles !== 'function') {
+      return;
+    }
+    const entriesToken = _entriesToken;
+    directoryEntries = { ...directoryEntries, [directory]: { loading: true } };
+    let listing;
+    try {
+      const result = await context.onListFiles({ directory });
+      listing = {
+        entries: Array.isArray(result?.entries) ? result.entries : [],
+        truncated: Boolean(result?.truncated),
+      };
+    } catch {
+      // A missing or unreadable directory simply adds nothing.
+      listing = { entries: [], truncated: false, failed: true };
+    }
+    if (entriesToken === _entriesToken) {
+      directoryEntries = { ...directoryEntries, [directory]: listing };
+    }
+  }
+
+  function resetDirectoryEntries() {
+    cancelPendingEntries();
+    _entriesToken += 1;
+    directoryEntries = {};
+  }
+
+  // The directories listed so far in this open, as a lookup a send keeps
+  // after the picker moves on: directory -> its entries, or null.
+  function listedEntries() {
+    const listings = directoryEntries;
+    return (directory) => {
+      const listing = listingOf(listings, directory);
+      return listing?.entries && !listing.failed ? listing.entries : null;
+    };
+  }
 
   const refreshModelCatalog = async () => {
     if (typeof context.onLoadModelCatalog !== 'function') {
@@ -320,6 +470,14 @@ export function createComposerPicker(context) {
     return { marker: 'model', start: 6, end: boundedCursor };
   };
 
+  // The directory an @-trigger's text is in ('' = the listing's root).
+  const triggerDirectory = (trigger) =>
+    mentionQueryParts(
+      typeof trigger.query === 'string'
+        ? trigger.query
+        : context.content.slice(trigger.start + 1, trigger.end),
+    ).directory;
+
   const detectFileTrigger = (value, boundedCursor) => {
     let start = boundedCursor - 1;
 
@@ -327,18 +485,24 @@ export function createComposerPicker(context) {
       start -= 1;
     }
 
-    if (start < 0 || value[start] !== '@') {
-      return null;
-    }
-
-    if (start > 0) {
-      const previous = value[start - 1];
-      if (isMentionTokenChar(previous) || previous === '@') {
-        return null;
+    if (start >= 0 && value[start] === '@') {
+      const previous = start > 0 ? value[start - 1] : '';
+      if (!isMentionTokenChar(previous) && previous !== '@') {
+        return { marker: '@', start, end: boundedCursor };
       }
     }
 
-    return { marker: '@', start, end: boundedCursor };
+    // A quoted mention still being typed: `@"meeting notes/ag`.
+    const quoted = findOpenQuotedMention(value, boundedCursor);
+    if (!quoted) {
+      return null;
+    }
+    return {
+      marker: '@',
+      start: quoted.start,
+      end: boundedCursor,
+      query: quoted.query,
+    };
   };
 
   const detectSkillTrigger = (value, cursorPosition) => {
@@ -386,22 +550,39 @@ export function createComposerPicker(context) {
     return { marker: trigger, start, end: boundedCursor };
   };
 
-  const selectFile = async (file) => {
-    if (!triggerContext || typeof file !== 'string' || !file) {
+  // A chosen file completes the mention; a chosen folder continues it inside
+  // that folder with the picker still open.
+  const selectFile = async (row) => {
+    const path = typeof row?.path === 'string' ? row.path : '';
+    if (!triggerContext || !path) {
       return;
     }
 
     const prefix = context.content.slice(0, triggerContext.start);
     const suffix = context.content.slice(triggerContext.end);
+    const isDirectory = row.kind === 'directory';
     // The trailing space ends the mention token, so typing continues normally.
-    // Paths outside the bare token grammar are inserted in quoted form.
-    const insertedToken = `${formatMentionToken(file)} `;
+    // Paths outside the bare token grammar are inserted in quoted form, a
+    // folder's left open for the rest of the path.
+    const insertedToken = isDirectory
+      ? formatMentionToken(`${path}/`, { open: true })
+      : `${formatMentionToken(path)} `;
     const nextCursorPosition = prefix.length + insertedToken.length;
     context.content = `${prefix}${insertedToken}${suffix}`;
     context.noteContentEdited();
-    triggerContext = null;
     activeSkillIndex = 0;
-    _triggerClosed = true;
+    if (isDirectory) {
+      triggerContext = {
+        marker: '@',
+        start: triggerContext.start,
+        end: nextCursorPosition,
+        ...(insertedToken.startsWith('@"') ? { query: `${path}/` } : {}),
+      };
+      requestEntries(path, { immediate: true });
+    } else {
+      triggerContext = null;
+      _triggerClosed = true;
+    }
 
     await tick();
     context.inputElement?.focus();
@@ -454,9 +635,11 @@ export function createComposerPicker(context) {
   // draft chose); a different one is fetched again on the next `@`.
   function resetFileCandidates() {
     fileCandidates = null;
+    fileDirectories = [];
     fileListTruncated = false;
     fileListLoading = false;
     _fileFetchToken += 1;
+    resetDirectoryEntries();
   }
 
   function resetForDraft() {
@@ -510,6 +693,22 @@ export function createComposerPicker(context) {
     },
     set fileCandidates(value) {
       fileCandidates = value;
+    },
+    get fileDirectories() {
+      return fileDirectories;
+    },
+    set fileDirectories(value) {
+      fileDirectories = value;
+    },
+    listedEntries,
+    get fileRows() {
+      return fileRows;
+    },
+    get fileRowsLoading() {
+      return fileRowsLoading;
+    },
+    get fileRowsTruncated() {
+      return fileRowsTruncated;
     },
     get fileListTruncated() {
       return fileListTruncated;

@@ -17,7 +17,10 @@ const { default: ModelAutocomplete } =
   await import('../ModelAutocomplete.svelte');
 
 describe.each([
-  [FileAutocomplete, { files: ['notes.md'] }],
+  [
+    FileAutocomplete,
+    { candidates: [{ path: 'notes.md', kind: 'file', ignored: false }] },
+  ],
   [SkillAutocomplete, { skills: [{ name: 'debugging' }] }],
   [ModelAutocomplete, { options: [{ value: 'openai/gpt-5.2' }] }],
 ])('autocomplete explicit active selection', (Component, componentProps) => {

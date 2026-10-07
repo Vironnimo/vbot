@@ -18,7 +18,7 @@
   } from '$lib/composerMemory.js';
   import {
     extractMentionTokens,
-    matchMentionCandidates,
+    resolveMentionFiles,
   } from '$lib/fileMentions.js';
   import { isImeComposing } from '$lib/keyboard.js';
   import {
@@ -312,7 +312,9 @@
 
   // Which @-tokens in the outgoing text are actual files. Decided against the
   // picker's file list (fetched now if this draft never opened the picker, e.g.
-  // a restored draft), so pasted code decorators and handles never expand.
+  // a restored draft), then against the entries of a token's folder, so files
+  // reached by browsing count too while pasted code decorators and handles
+  // never expand.
   const collectFileMentions = async (snapshot) => {
     let files = snapshot.fileCandidates;
     if (files === null && typeof snapshot.listFiles === 'function') {
@@ -321,13 +323,30 @@
         files = Array.isArray(result?.files) ? result.files : [];
         if (draftKey === snapshot.draftKey) {
           picker.fileCandidates = files;
+          picker.fileDirectories = Array.isArray(result?.directories)
+            ? result.directories
+            : [];
           picker.fileListTruncated = Boolean(result?.truncated);
         }
       } catch {
         files = [];
       }
     }
-    return matchMentionCandidates(snapshot.mentionTokens, files ?? []);
+    const listEntries = async (directory) => {
+      const listed = snapshot.listedEntries?.(directory);
+      if (listed) {
+        return listed;
+      }
+      if (typeof snapshot.listFiles !== 'function') {
+        return [];
+      }
+      const result = await snapshot.listFiles({ directory });
+      return Array.isArray(result?.entries) ? result.entries : [];
+    };
+    return resolveMentionFiles(snapshot.mentionTokens, {
+      files: files ?? [],
+      listEntries,
+    });
   };
 
   const createSubmitSnapshot = () => ({
@@ -339,6 +358,7 @@
     mentionTokens: extractMentionTokens(content),
     fileCandidates:
       picker.fileCandidates === null ? null : Array.from(picker.fileCandidates),
+    listedEntries: picker.listedEntries(),
     listFiles: onListFiles,
     sendMessage: onSendMessage,
     attachments: media.pendingAttachments.map((attachment) => ({
@@ -879,10 +899,9 @@
   {#if picker.showFileAutocomplete}
     <FileAutocomplete
       bind:this={picker.fileAutocompleteElement}
-      files={picker.fileCandidates ?? []}
-      query={picker.autocompleteQuery}
-      truncated={picker.fileListTruncated}
-      loading={picker.fileListLoading}
+      candidates={picker.fileRows}
+      truncated={picker.fileRowsTruncated}
+      loading={picker.fileRowsLoading}
       activeIndex={picker.activeSkillIndex}
       onSelect={picker.selectFile}
       onHover={(index) => {

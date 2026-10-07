@@ -6,7 +6,7 @@ import {
 } from '../../../lib/chatState.js';
 import {
   extractMentionTokens,
-  matchMentionCandidates,
+  resolveMentionFiles,
 } from '$lib/fileMentions.js';
 import { t } from '$lib/i18n.js';
 
@@ -397,10 +397,18 @@ export function createChatViewActions(context) {
       const result = await context.chatController.listFiles(agentAddress, {
         sessionId,
       });
-      return matchMentionCandidates(
-        tokens,
-        Array.isArray(result?.files) ? result.files : [],
-      );
+      // Files reached by browsing a folder (ignored ones too) are confirmed
+      // by listing that folder.
+      return await resolveMentionFiles(tokens, {
+        files: Array.isArray(result?.files) ? result.files : [],
+        listEntries: async (directory) => {
+          const listing = await context.chatController.listFiles(agentAddress, {
+            sessionId,
+            directory,
+          });
+          return Array.isArray(listing?.entries) ? listing.entries : [];
+        },
+      });
     } catch {
       // Without a file list nothing can be verified as a mention; the edit
       // still goes through as plain text.
