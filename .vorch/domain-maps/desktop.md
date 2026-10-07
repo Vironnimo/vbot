@@ -108,7 +108,7 @@ Threads and lifecycle:
 
 - Desktop is an accessor only, not a server manager. Closing the window ends only the Desktop process, never the target server. It connects to localhost/LAN servers over normal HTTP.
 - The loaded UI is the normal WebUI root `/` - no desktop-only frontend build or route exists. Desktop-only controls are capability-gated sections in that shared WebUI; the Connection screen stays shell-rendered native HTML, English-only for now (i18n deferred - see `FLAGGED.md`).
-- Desktop inherits the WebUI 1:1 including Projects. There is deliberately **no native folder picker**: adding a project uses hand-typed server-path input, because the server can be remote where a local picker would browse the wrong filesystem.
+- Desktop inherits the WebUI 1:1 including Projects. There is deliberately **no native folder picker**, because the server can be remote where a local picker would browse the wrong filesystem: server paths (adding a Project and the other path fields) are chosen through the WebUI's server-listed picker, `PathField` (`webui.md` -> Ownership).
 - The Desktop enables document text selection; its capability-gated context menu exposes Copy for selected non-sensitive text, link copy/open for safe HTTP(S), Cut/Paste for writable controls (password fields Paste without leaking selections). Escape/outside press/scroll/resize dismiss it. The window title is `vBot`.
 - Platform icons come from `desktop/icon.ico` (Windows; WinForms requires ICO - PNG input is rejected by `System.Drawing.Icon`) and `desktop/icon.png` (other platforms), passed to pywebview when present with a platform-default fallback.
 - Bridge methods execute in separate threads - implementations must be thread-safe.
