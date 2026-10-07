@@ -34,7 +34,7 @@ from core.tools import (
 
 def _skill_md(
     name: str = "demo",
-    description: str = "Do a demo task.",
+    description: str = "Use when demoing.",
     body: str = "# Demo\n",
 ) -> str:
     return f"---\nname: {name}\ndescription: {description}\n---\n\n{body}"
@@ -288,7 +288,7 @@ def test_create_is_immediately_live_and_invalidates(tmp_path: Path, caplog: Any)
     assert result["ok"] is True
     assert result["data"] == {"content": "Created Skill 'demo'."}
     assert harness.document().is_file()
-    assert SkillRegistry.load(harness.home("main")).get("demo").description == "Do a demo task."
+    assert SkillRegistry.load(harness.home("main")).get("demo").description == "Use when demoing."
     assert harness.invalidated == ["main"]
     # The change is reported once, after the caches it affects were invalidated.
     assert harness.changes == [["main"]]
@@ -300,7 +300,8 @@ def test_create_is_immediately_live_and_invalidates(tmp_path: Path, caplog: Any)
 
 
 _STAMPED_HEAD = (
-    "---\nname: demo\ndescription: Do a demo task.\nmetadata:\n  vbot:\n    author: agent\n---\n\n"
+    "---\nname: demo\ndescription: Use when demoing.\nmetadata:\n  vbot:\n"
+    "    author: agent\n---\n\n"
 )
 _CREATED = _STAMPED_HEAD.encode() + b"# Demo\n"
 
@@ -308,11 +309,11 @@ _CREATED = _STAMPED_HEAD.encode() + b"# Demo\n"
 @pytest.mark.parametrize(
     ("content", "description"),
     [
-        ("# Demo\n", "Do a demo task."),
-        ("---\nname: demo\n---\n\n# Demo\n", "Do a demo task."),
-        ("---\ndescription: Do a demo task.\n---\n\n# Demo\n", None),
+        ("# Demo\n", "Use when demoing."),
+        ("---\nname: demo\n---\n\n# Demo\n", "Use when demoing."),
+        ("---\ndescription: Use when demoing.\n---\n\n# Demo\n", None),
         (
-            "\n```markdown\n---\nname: demo\ndescription: Do a demo task.\n---\n\n# Demo\n```\n",
+            "\n```markdown\n---\nname: demo\ndescription: Use when demoing.\n---\n\n# Demo\n```\n",
             None,
         ),
     ],
@@ -558,7 +559,8 @@ def test_a_librarian_pass_reads_a_skill_again_that_changed_after_it_started(
 
 _PATCH_BODY = (
     '# Demo\n\n1. Run `pytest`.\n2. Tag the release: "v1".\n\n## Pitfalls\n\n'
-    "- Never deploy on Fridays.\n- Check the Friday calendar.\n"
+    "- Never deploy on Fridays.\n- Check the Friday calendar.\n\n"
+    "Read references/notes.md before tagging.\n"
 )
 
 
@@ -839,7 +841,7 @@ def test_edit_replaces_complete_skill_document(tmp_path: Path) -> None:
     )
 
     assert result["ok"] is True
-    assert harness.changed_files() == [("SKILL.md", "updated", 2, 10)]
+    assert harness.changed_files() == [("SKILL.md", "updated", 2, 12)]
     text = skill_file.read_text(encoding="utf-8")
     assert "description: Updated." in text
     assert "New body." in text

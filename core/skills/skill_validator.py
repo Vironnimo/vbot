@@ -18,6 +18,10 @@ MAX_SKILL_NAME_LENGTH = 64
 # The Agent Skills specification's limit. Every request's Skill list carries each
 # description in full, so a longer one only warns and is never cut.
 MAX_SKILL_DESCRIPTION_LENGTH = 1024
+# The authoring conventions' limits (bundled ``agent-authoring`` Skill). They only
+# advise: a Skill beyond them loads like any other.
+SKILL_DESCRIPTION_ADVISED_LENGTH = 250
+SKILL_MD_ADVISED_LENGTH = 12000
 MALFORMED_YAML_FALLBACK_WARNING = (
     "YAML front matter was repaired by quoting scalar values with colons."
 )

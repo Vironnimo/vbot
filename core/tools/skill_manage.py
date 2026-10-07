@@ -35,6 +35,7 @@ from core.skills.skills import (
     find_skill_package_dir,
     scan_skill_names,
 )
+from core.tools._skill_conventions import skill_manage_hints
 from core.tools.availability import SKILL_MANAGE_TOOL_NAME
 from core.tools.call_syntax import normalize_call_arguments, spelling
 from core.tools.contracts import ToolContractError, compile_tool_contract
@@ -264,6 +265,13 @@ _GLOBAL_SCOPES = frozenset({"global", "user"})
 _NAME_MARKS = "/$@"
 _LISTED_NAME_LIMIT = 20
 _PREVIEW_LIMIT = 400
+# Actions whose written text gets authoring hints, and those that replace a whole file.
+_HINTED_ACTIONS = frozenset({"create", "edit", "patch", "write_file"})
+_WHOLE_FILE_ACTIONS = frozenset({"create", "edit", "write_file"})
+# Support files the hints read: the directories SKILL.md points into, bounded.
+_HINT_DIRECTORIES = ("references", "scripts")
+_HINT_FILE_LIMIT = 200
+_HINT_TEXT_BYTES = 256 * 1024
 
 # Typographic glyphs a Model may type where a file has the plain form. Mirrors the
 # patch folds of ``fuzzy_match`` so a folded match also folds its replacement.
@@ -456,6 +464,7 @@ def make_skill_manage_handler(
                     )
             # Checks and write run under one Skill write lock, so a change that
             # lands after a check cannot be overwritten by this write.
+            hints: list[str] = []
             with authoring.exclusive():
                 if call.action == "publish":
                     result, summary = _publish(call, writer, owner_id, global_root, publish_skill)
@@ -471,6 +480,7 @@ def make_skill_manage_handler(
                     if call.action == "delete":
                         _check_absorbed_into(call, own_root)
                     result, summary = _apply(authoring, target_root, call, writer, followed)
+                    hints = _hints(authoring, target_root, call, result)
         except _RefusalError as refusal:
             return _Outcome(tool_failure(refusal.code, refusal.message, retryable=False))
         except SkillProtectedError as error:
@@ -512,6 +522,7 @@ def make_skill_manage_handler(
         lines = [summary]
         lines.extend(f"Warning: {warning}" for warning in result.warnings)
         lines.extend(f"Note: {note}" for note in call.notes)
+        lines.extend(f"Hint: {hint}" for hint in hints)
         return _Outcome(tool_success({"content": "\n".join(lines)}), global_changed)
 
     return skill_manage_handler
@@ -582,6 +593,53 @@ def _check_absorbed_into(call: _Call, own_root: Path) -> None:
             "invalid_arguments",
             SKILL_MANAGE_ABSORBED_INTO_UNKNOWN.format(target=target, name=call.name),
         )
+
+
+def _hints(
+    authoring: SkillAuthoringService, target_root: Path, call: _Call, result: SkillWriteResult
+) -> list[str]:
+    """The authoring conventions the written text breaks; never fails the write."""
+    if call.action not in _HINTED_ACTIONS or len(result.changes) != 1:
+        return []
+    change = result.changes[0]
+    try:
+        files = _package_texts(authoring, target_root, call.name)
+        files[change.path] = change.after
+        return skill_manage_hints(
+            files, change.path, change.before, whole=call.action in _WHOLE_FILE_ACTIONS
+        )
+    except Exception:
+        # The write succeeded; a defect in the advice must not report it as failed.
+        _LOGGER.warning("Skill authoring hints failed (skill=%s)", call.name, exc_info=True)
+        return []
+
+
+def _package_texts(
+    authoring: SkillAuthoringService, target_root: Path, name: str
+) -> dict[str, str | None]:
+    """SKILL.md and the files under references/ and scripts/, by package path.
+
+    A file that is large, not UTF-8 or unreadable maps to ``None``.
+    """
+    package = find_skill_package_dir(target_root, name)
+    files: dict[str, str | None] = {}
+    if package is None:
+        return files
+    paths = [package / SKILL_FILENAME]
+    for directory in _HINT_DIRECTORIES:
+        # Path.walk never enters a link, Windows junctions included.
+        walk = (package / directory).walk()
+        paths.extend(sorted(base / entry for base, _, names in walk for entry in names))
+    for path in paths[:_HINT_FILE_LIMIT]:
+        relative = path.relative_to(package).as_posix()
+        try:
+            if not path.is_file() or path.stat().st_size > _HINT_TEXT_BYTES:
+                files[relative] = None
+                continue
+            files[relative] = authoring.read_text(target_root, name, relative)
+        except SkillAuthoringError, OSError:
+            files[relative] = None
+    return files
 
 
 def _record_display_details(context: ToolContext, result: SkillWriteResult) -> None:
