@@ -1,6 +1,6 @@
 # Session Search
 
-Finds conversation content in past Sessions and returns bounded excerpts with canonical conversation context. Extended inspection belongs to the `vbot-cli` Skill, not another Recall Tool.
+Finds conversation content in past Sessions and returns bounded excerpts with canonical conversation context. Extended inspection belongs to the `vbot-docs` Skill, not another Recall Tool.
 
 ## Interfaces
 
@@ -25,7 +25,7 @@ Finds conversation content in past Sessions and returns bounded excerpts with ca
 
 ## Extended inspection
 
-The bundled `vbot-cli` Skill advertises extended Session search and transcript retrieval and routes to `references/session-search.md`. It teaches when existing excerpts suffice, Session listing through the CLI, read-only SQLite scope selection (Tool `project_id: null` means SQL empty string, not SQL NULL), complete active User/Assistant transcripts, match-centered substring previews including Tool Results, and generation-bound exact Result reads. Search previews return the generation needed for the exact read. It names the shell Tool's `VBOT_RUN_AGENT_ID`, `VBOT_RUN_SESSION_ID` and `VBOT_RUN_PROJECT_ID` variables for the current Session, which `session_search` excludes; this path replaces the archived `history` Tool (`tools/history.md`). It adds no Bash availability prerequisite, Tool grant, or new runtime API.
+The bundled `vbot-docs` Skill advertises extended Session search and transcript retrieval and routes to `references/session-search.md`. It teaches when existing excerpts suffice, Session listing through the CLI, read-only SQLite scope selection (Tool `project_id: null` means SQL empty string, not SQL NULL), complete active User/Assistant transcripts, match-centered substring previews including Tool Results, and generation-bound exact Result reads. Search previews return the generation needed for the exact read. It names the shell Tool's `VBOT_RUN_AGENT_ID`, `VBOT_RUN_SESSION_ID` and `VBOT_RUN_PROJECT_ID` variables for the current Session, which `session_search` excludes; this path replaces the archived `history` Tool (`tools/history.md`). It adds no Bash availability prerequisite, Tool grant, or new runtime API.
 
 ## Agent-facing text
 

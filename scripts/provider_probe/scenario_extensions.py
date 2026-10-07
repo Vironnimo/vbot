@@ -49,7 +49,7 @@ HA_CALL_SERVICE_PARAMETERS = _HOMEASSISTANT_EXTENSION.HA_CALL_SERVICE_PARAMETERS
 
 
 _WORD_COUNT_EXAMPLE = importlib.import_module(
-    "resources.skills.vbot-cli.assets.extensions.word_count"
+    "resources.skills.vbot-docs.assets.extensions.word_count"
 )
 
 

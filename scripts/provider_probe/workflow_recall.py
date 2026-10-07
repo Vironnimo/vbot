@@ -81,7 +81,7 @@ async def _evaluate_case(
             workspace=root,
             data_root=data_root,
             vbot_root=PROJECT_ROOT,
-            allowed_skills=["vbot-cli"],
+            allowed_skills=["vbot-docs"],
         )
         definitions = registry.provider_definitions()
         wire = render_tool_definitions(definitions, profile="explicit_non_strict")
@@ -91,7 +91,7 @@ async def _evaluate_case(
             .read_text(encoding="utf-8")
             .replace(
                 "{generated:skill_catalog}",
-                _format_skill_catalog(skills.filter_allowed(["vbot-cli"])),
+                _format_skill_catalog(skills.filter_allowed(["vbot-docs"])),
             )
         )
         if "exact_arguments" in case:

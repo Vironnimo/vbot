@@ -6,8 +6,8 @@ Session from its first persisted `compaction_checkpoint`. That grant changed the
 Session's Tool list mid-Session at the first Compaction and broke the Provider
 prompt cache.
 
-The `vbot-cli` Skill's Session search reference
-(`resources/skills/vbot-cli/references/session-search.md`, `session_search.md` ->
+The `vbot-docs` Skill's Session search reference
+(`resources/skills/vbot-docs/references/session-search.md`, `session_search.md` ->
 Extended inspection) replaces it: a read-only SQLite query through the shell Tool
 reads the current Session's complete transcript, Messages before any Compaction
 checkpoint included, and exact Tool Results. The shell Tool names the current

@@ -74,14 +74,14 @@ CANONICAL_REGISTERED_TOOLS = sorted(
 )
 
 BUNDLED_SKILLS = [
-    "agent-authoring",
     "coding-agents",
     "computer-use",
     "free-models",
     "home-assistant",
     "pdf",
     "playwright-cli",
-    "vbot-cli",
+    "skill-writing",
+    "vbot-docs",
     "weather",
 ]
 

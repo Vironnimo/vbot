@@ -118,9 +118,9 @@ The server has no built-in authentication and binds to `127.0.0.1` by default. T
 | Connect a Provider and choose a Model | [First-run setup](USAGE.md#first-run-setup) |
 | Work with Agents, Projects, Sessions and Live voice | [Agents, Projects, and Sessions](USAGE.md#agents-projects-and-sessions) |
 | Configure Skills, Tools, Channels and schedules | [Skills and Tools](USAGE.md#skills-tools-and-sub-agents) · [Channels](USAGE.md#channels) · [Cron](USAGE.md#cron) |
-| Use the Swarm, MCP and Computer Use Extensions | [Extension usage](resources/skills/vbot-cli/references/extension-usage.md) |
+| Use the Swarm, MCP and Computer Use Extensions | [Extension usage](resources/skills/vbot-docs/references/extension-usage.md) |
 | Automate or integrate vBot | [CLI reference](USAGE.md#cli-reference) · [Server API](USAGE.md#server-api) |
-| Build an Extension | [Extension authoring guide](resources/skills/vbot-cli/references/extensions.md) |
+| Build an Extension | [Extension authoring guide](resources/skills/vbot-docs/references/extensions.md) |
 | Develop vBot itself | [Development and verification](USAGE.md#development-and-verification) |
 
 ## Project status

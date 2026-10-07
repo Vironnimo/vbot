@@ -1,9 +1,9 @@
 ---
-name: vbot-cli
-description: "Configure and operate vBot: Agents, Projects, Sessions, Settings, Skill installation from links or archives, Memory, prompts, Providers and Models, Channels, scheduling, Extension authoring and management, MCP, server lifecycle, updates, storage recovery, and diagnostics. Use for changes to the application itself, investigating its current configuration or health, extended Session search and transcript retrieval, and sending a message to a vBot Agent from the shell, for example to try a prompt or Skill with another Model."
+name: vbot-docs
+description: Configure and inspect vBot with the `vbot` CLI: Agents, their names and SOUL.md, Projects, Skills, Models, Channels, MCP, schedules, Extensions, server. Use when a task changes or reads vBot's setup, logs or past Sessions, or messages a vBot Agent.
 ---
 
-# vBot CLI
+# vBot
 
 Use `vbot` through the shell Tool to inspect and configure the application. The server runs Agents and owns the state used by the CLI, WebUI, Desktop, and Channels. A saved configuration change affects that server instance.
 
@@ -24,7 +24,8 @@ For a focused question about a past conversation, use `session_search` and answe
 
 | Task | Read |
 |---|---|
-| Agents, Project membership, permissions, Sessions | `references/agents-projects.md` |
+| Create an Agent for a purpose, rename an Agent, Agent settings, Project membership, permissions, Sessions | `references/agents-projects.md` |
+| Write or revise an Agent's SOUL.md: its role, how it works, its voice, its boundaries | `references/soul.md` |
 | Archived Agents, Projects and Sessions: list, restore, delete permanently | `references/agents-projects.md` |
 | Send a message to an Agent and read its answer, continue one of its Sessions, set a Session's Model, thinking effort or temperature | `references/chat.md` |
 | Extended Session search, listing past conversations, full transcripts or exact Tool Results | `references/session-search.md` |
@@ -51,7 +52,7 @@ For a focused question about a past conversation, use `session_search` and answe
 
 Read [the Extension authoring guide](references/extensions.md) before creating or changing an Extension. It covers installation, declarations, lifecycle, permissions and verification. Copy or adapt the matching example under `assets/extensions/`: `word_count.py` for a Tool, `guard_bash.py` for a decision hook, or the complete `workflow_command/` directory for a Command with a bundled Skill. These are templates; install only the requested Extension into the target server's Extension directory.
 
-Read a template with the `skill` Tool using `name: "vbot-cli"` and its relative `file_path`, such as `assets/extensions/word_count.py`. To copy files on disk, resolve this bundled Skill under the `vbot_root` reported by `vbot home`: `resources/skills/vbot-cli/`. Preserve a directory example's manifest and nested Skill files.
+Read a template with the `skill` Tool using `name: "vbot-docs"` and its relative `file_path`, such as `assets/extensions/word_count.py`. To copy files on disk, resolve this bundled Skill under the `vbot_root` reported by `vbot home`: `resources/skills/vbot-docs/`. Preserve a directory example's manifest and nested Skill files.
 
 ## Keep the target and path roles clear
 

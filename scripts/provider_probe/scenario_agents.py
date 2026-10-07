@@ -348,7 +348,7 @@ def _subagent_scenario(case_name: str) -> ProbeScenario:
 
 
 def _skill_scenario(case_name: str) -> ProbeScenario:
-    name = "vbot-cli"
+    name = "vbot-docs"
     skill_arguments: dict[str, dict[str, Any]] = {
         "list": {},
         "activate": {"name": name},

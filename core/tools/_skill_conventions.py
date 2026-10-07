@@ -1,6 +1,6 @@
 """Authoring hints for a Skill that ``skill_manage`` just wrote.
 
-The conventions are those of the bundled ``agent-authoring`` Skill. A hint
+The conventions are those of the bundled ``skill-writing`` Skill. A hint
 never blocks or changes a write; it tells the Agent which convention its text
 breaks and how to fix it. Only cheap checks with few false alarms run: across
 the Agent-written Skills they were calibrated on, every flagged date was an

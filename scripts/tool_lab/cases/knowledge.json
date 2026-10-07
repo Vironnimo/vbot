@@ -316,7 +316,7 @@
     "ok": true,
     "contains": [
      "deploy-checklist",
-     "vbot-cli"
+     "vbot-docs"
     ]
    }
   },
@@ -727,7 +727,7 @@
    "tool": "skill_manage",
    "arguments": {
     "action": "patch",
-    "name": "vbot-cli",
+    "name": "vbot-docs",
     "old_string": "vBot",
     "new_string": "VBOT"
    },

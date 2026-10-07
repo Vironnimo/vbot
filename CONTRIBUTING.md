@@ -18,7 +18,7 @@ Thanks for your interest in vBot. It is alpha software maintained by a small tea
 - **Open an issue or discussion first** for anything larger than a small fix, so we can agree on the approach before you invest time.
 - **Keep a pull request to one change.** Unrelated fixes belong in separate pull requests.
 - **Add or update tests** for changed behavior. Tests cover contracts at a module's public interface, not implementation details; a bug fix usually extends the existing test for that behavior.
-- **Update the documentation** your change affects: [README.md](README.md), [USAGE.md](USAGE.md), or the files under `resources/skills/vbot-cli/references/`.
+- **Update the documentation** your change affects: [README.md](README.md), [USAGE.md](USAGE.md), or the files under `resources/skills/vbot-docs/references/`.
 - **Commit messages** use the conventional format `<type>(<scope>): <what>`, lowercase, at most 72 characters, no trailing period. Types: `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `chore`. Example: `fix(calendar): keep reminders on the configured time zone`.
 - Contributions are licensed under the project's [Apache-2.0 license](LICENSE).
 

@@ -1,4 +1,4 @@
-"""Extension templates shipped with the vbot-cli Skill work after installation.
+"""Extension templates shipped with the vbot-docs Skill work after installation.
 
 These examples are documentation-grade: a third-party author copies them first,
 so they must load without diagnostics and behave as their comments claim. They
@@ -21,7 +21,7 @@ from core.skills import SkillRegistry
 from core.tools import ToolContractError, ToolRegistry
 from tests.core.extensions.extension_test_support import hook_context, tool_context
 
-_ASSETS_DIR = Path(__file__).resolve().parents[3] / "resources/skills/vbot-cli/assets/extensions"
+_ASSETS_DIR = Path(__file__).resolve().parents[3] / "resources/skills/vbot-docs/assets/extensions"
 
 
 @pytest.fixture

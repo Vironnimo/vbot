@@ -79,7 +79,7 @@ def test_playwright_preserves_upstream_and_reads_every_reference(tmp_path: Path)
 def test_vbot_cli_exposes_extension_templates_without_loading_their_skill(
     tmp_path: Path,
 ) -> None:
-    package = SKILLS_ROOT / "vbot-cli"
+    package = SKILLS_ROOT / "vbot-docs"
     for relative in (
         "SKILL.md",
         "references/extensions.md",
@@ -95,7 +95,7 @@ def test_vbot_cli_exposes_extension_templates_without_loading_their_skill(
     # The nested template Skill is a resource, not a discovered Skill.
     assert "workflow" not in {skill.name for skill in registry.list_all()}
     tool = SkillTool(tmp_path, registry)
-    activated = tool.call({"name": "vbot-cli"})
+    activated = tool.call({"name": "vbot-docs"})
     resources = [
         "references/extensions.md",
         "references/extension-pages.md",
@@ -108,7 +108,7 @@ def test_vbot_cli_exposes_extension_templates_without_loading_their_skill(
     ]
     assert activated["data"]["status"] == "loaded"
     assert set(resources) <= set(activated["data"]["resource_files"]["files"])
-    assert_files_readable_through_the_tool(tool, "vbot-cli", resources)
+    assert_files_readable_through_the_tool(tool, "vbot-docs", resources)
 
 
 def test_retired_browser_is_preserved_outside_discovery_roots() -> None:
