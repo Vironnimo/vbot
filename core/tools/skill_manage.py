@@ -931,7 +931,8 @@ def _assemble(fields: dict[str, Any], description: str, body: str) -> str:
     ordered = {"name": fields.pop("name"), "description": description}
     fields.pop("description", None)
     ordered.update(fields)
-    front = yaml.safe_dump(ordered, sort_keys=False, allow_unicode=True).strip()
+    # One line per scalar keeps the author's lines, so a patch copied from them matches.
+    front = yaml.safe_dump(ordered, sort_keys=False, allow_unicode=True, width=float("inf")).strip()
     return f"---\n{front}\n---\n\n{body.strip(chr(10))}\n"
 
 

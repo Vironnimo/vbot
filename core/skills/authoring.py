@@ -1474,7 +1474,8 @@ def _with_provenance(
 
 
 def _assemble_document(fields: dict[str, Any], body: str) -> str:
-    front = yaml.safe_dump(fields, sort_keys=False, allow_unicode=True).strip()
+    # One line per scalar keeps the author's lines, so a patch copied from them matches.
+    front = yaml.safe_dump(fields, sort_keys=False, allow_unicode=True, width=float("inf")).strip()
     document = f"{FRONT_MATTER_DELIMITER}\n{front}\n{FRONT_MATTER_DELIMITER}"
     stripped_body = body.strip("\n")
     if stripped_body:

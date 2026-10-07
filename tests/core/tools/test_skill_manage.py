@@ -1439,6 +1439,27 @@ def test_patch_applies_text_copied_with_other_line_endings_or_quotes(
     assert "“" not in body
 
 
+def test_patch_matches_a_long_front_matter_line_as_the_agent_wrote_it(tmp_path: Path) -> None:
+    line = (
+        "description: Sort a repository's open issues into urgent, can wait and close, with a "
+        "reason each. Use when the user asks for the weekly issue review."
+    )
+    harness = _Harness(tmp_path)
+    assert harness.create(content=f"---\nname: demo\n{line}\n---\n\n# Demo\n")["ok"] is True
+
+    result = harness.run(
+        {
+            "action": "patch",
+            "name": "demo",
+            "old_string": line,
+            "new_string": f"{line} Not for PRs.",
+        }
+    )
+
+    assert result["ok"] is True
+    assert f"{line} Not for PRs." in harness.document().read_text(encoding="utf-8").split("\n")
+
+
 def test_patch_that_changes_nothing_says_so(tmp_path: Path) -> None:
     harness, skill_file = _patch_harness(tmp_path, body="Say “hello” to users.\n")
 
