@@ -98,6 +98,20 @@ export function createAgentFormValues(agent = {}) {
   };
 }
 
+// The form values once the saved Agent changed from `baseline` to `saved` (both
+// `createAgentFormValues` results): a field the user has not edited, whose value
+// still equals `baseline`, shows its `saved` value; an edited field keeps the
+// user's value. Taken values are `saved`'s own objects.
+export function rebaseAgentFormValues(values, baseline, saved) {
+  const rebased = { ...values };
+  for (const [field, value] of Object.entries(saved)) {
+    if (JSON.stringify(values[field]) === JSON.stringify(baseline[field])) {
+      rebased[field] = value;
+    }
+  }
+  return rebased;
+}
+
 export function agentIdValidationError(value) {
   const errors = {};
   validateAgentId(asText(value).trim(), errors);

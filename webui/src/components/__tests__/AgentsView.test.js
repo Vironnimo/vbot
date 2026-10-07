@@ -7,6 +7,7 @@ import { createAutosaveCoordinator } from '../../lib/autosave.js';
 import { init, t } from '../../lib/i18n.js';
 import { createStandaloneNavigation } from '../../lib/navigation.svelte.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 import {
   rpcMock,
   modelTriggerLabel,
@@ -1150,5 +1151,41 @@ describe('AgentsView', () => {
     await flushAsyncUpdates();
 
     expect(textInputValue('agent-name')).toBe('Bravo');
+  });
+
+  it('shows a change saved elsewhere in unedited fields and keeps edited ones', async () => {
+    const agents = [baseAgent()];
+    rpcMock.mockImplementation(createAgentsRpcMock({ agents }));
+    const props = reactiveProps({ agentsRefreshToken: 0 });
+    mountedComponent = mount(AgentsView, { target: document.body, props });
+    flushSync();
+    await waitForCondition(() => textInputValue('agent-name') === 'Alpha', 100);
+
+    // No automatic save may land meanwhile; it would rebase the form itself.
+    vi.useFakeTimers();
+    openSimpleDropdown('agent-memory-prompt-mode');
+    selectSimpleOption(
+      'agent-memory-prompt-mode',
+      t('agents.form.memoryPromptModeOption.off'),
+    );
+
+    // The Agent renames itself while another window changes the Memory
+    // setting the user is editing here.
+    agents[0] = {
+      ...baseAgent(),
+      name: 'Alpha Prime',
+      memory_prompt_mode: 'agent',
+    };
+    props.agentsRefreshToken += 1;
+    await flushAsyncUpdates(8);
+    expect(textInputValue('agent-name')).toBe('Alpha Prime');
+
+    submitAgentForm();
+    await flushAsyncUpdates();
+    expect(getAgentUpdateCalls()).toHaveLength(1);
+    expect(getAgentUpdateCalls()[0][1]).toEqual({
+      id: 'alpha',
+      memory_prompt_mode: 'off',
+    });
   });
 });
