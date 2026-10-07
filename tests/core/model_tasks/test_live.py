@@ -18,7 +18,6 @@ from core.model_tasks._live_brief import live_tool_guidance, voice_instructions
 from core.model_tasks._live_call import LiveCallSession
 from core.model_tasks._live_openai import ControlJoinError, OpenAIBackend
 from core.model_tasks._live_wire import (
-    RELAY_BYTES_PER_MS,
     WireAudio,
     WireCaption,
     WireClosed,
@@ -832,29 +831,6 @@ async def test_relay_audio_flows_only_while_live():
     call.push_audio(b"\x04\x00")
     await asyncio.sleep(0.01)
     assert wire.audio == [b"\x02\x00", b"\x03\x00"]
-
-
-@pytest.mark.asyncio
-async def test_speech_finishes_when_the_turn_is_final_and_its_relayed_audio_played():
-    now = [100.0]
-    wire, host = FakeWire(relay=True), FakeHost()
-    call, _voice = _call(wire, host, clock=lambda: now[0])
-    wire.push(WireStarted(None), WireCaption("assistant", "Bye", final=False))
-    await _until(lambda: any(u.get("phase") == "live" for u in host.updates))
-    finished = asyncio.create_task(call.speech_finished())
-
-    # 100 ms of audio is still playing when the turn ends.
-    wire.push(WireAudio("item_1", b"\x00" * RELAY_BYTES_PER_MS * 100))
-    await _until(lambda: bool(host.audio))
-    assert not finished.done()
-    wire.push(WireCaption("assistant", "Bye!", final=True))
-    await asyncio.sleep(0.02)
-    assert not finished.done()
-    await asyncio.wait_for(finished, 1)
-    # Without speech, nothing holds the end.
-    now[0] += 1.0
-    await asyncio.wait_for(call.speech_finished(), 0.05)
-    await call.close()
 
 
 @pytest.mark.asyncio

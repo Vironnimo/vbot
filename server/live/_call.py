@@ -232,16 +232,13 @@ class LiveCallEntry:
         return True
 
     def end_soon(self) -> None:
-        """Close gracefully as soon as the voice model finished its goodbye."""
+        """Close gracefully right away, once the Tool call has returned."""
         if self._ending or self._closing or self.ended:
             return
         self._ending = True
-        self._spawn(self._end_after_goodbye(), "end")
+        self._spawn(self._end(), "end")
 
-    async def _end_after_goodbye(self) -> None:
-        call = self.call
-        if call is not None:
-            await call.speech_finished()
+    async def _end(self) -> None:
         _LOGGER.info("Live call ended by the voice model (call=%s)", self.log_id)
         self._end_reason = self._end_reason or CLOSED_REASON_HUNG_UP
         self.request_close()

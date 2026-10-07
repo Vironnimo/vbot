@@ -222,14 +222,6 @@ class LiveCall(Protocol):
         """Tear the call down immediately without waiting for the provider."""
         ...
 
-    async def speech_finished(self) -> None:
-        """Return once the voice model is not speaking and its relayed audio has played.
-
-        It returns at once when nothing is being spoken; a turn that never
-        finishes stops holding it after a bound.
-        """
-        ...
-
     def announce_run(self, notice: LiveRunNotice) -> None:
         """Queue a spoken notice about a finished Run; repeated run ids are ignored."""
         ...

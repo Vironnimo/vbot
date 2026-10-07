@@ -80,8 +80,6 @@ _REQUEST_EXTRA_SECONDS = 15.0
 # final transcript, which can arrive after the delegation. A transcript that
 # never finishes no longer holds the request back after this long.
 USER_SETTLE_TIMEOUT_SECONDS = 2.0
-# A voice model turn that never finishes no longer holds the end of the call.
-_SPEECH_STALL_SECONDS = 30.0
 _CONVERSATION_MAX_CHARS = 4000
 _UPDATES_MAX_CHARS = 4000
 # Records waiting for the voice Session; the oldest are dropped beyond this.
@@ -189,13 +187,9 @@ class LiveCallSession:
         # What was said and the updates since the previous request, for the backend.
         self._said: list[tuple[str, str]] = []
         self._partial: dict[str, str] = {}
-        # Set while no transcript of that role is unfinished.
+        # Set while no user transcript is unfinished.
         self._user_settled = asyncio.Event()
         self._user_settled.set()
-        self._assistant_quiet = asyncio.Event()
-        self._assistant_quiet.set()
-        # When relayed assistant audio ends playing (clock time).
-        self._playback_end = 0.0
         self._updates: list[str] = []
         # Records for the voice Session, stored in order by one task.
         self._records: deque[tuple[str, str]] = deque(maxlen=_RECORD_BACKLOG)
@@ -352,9 +346,6 @@ class LiveCallSession:
             if self._phase == "live" and not self._closing:
                 self._publish_audio(event.pcm)
         elif isinstance(event, WirePlaybackClear):
-            # The user started speaking: unplayed assistant audio is dropped.
-            self._playback_end = self._clock()
-            self._assistant_quiet.set()
             self._publish({"type": "playback_clear"})
         elif isinstance(event, WireCaption):
             self._on_caption(event)
@@ -373,11 +364,11 @@ class LiveCallSession:
             )
 
     def _on_caption(self, event: WireCaption) -> None:
-        settled = self._user_settled if event.role == "user" else self._assistant_quiet
-        if event.final:
-            settled.set()
-        else:
-            settled.clear()
+        if event.role == "user":
+            if event.final:
+                self._user_settled.set()
+            else:
+                self._user_settled.clear()
         if event.final:
             self._partial.pop(event.role, None)
             if event.text:
@@ -524,17 +515,6 @@ class LiveCallSession:
                 await self._user_settled.wait()
         except TimeoutError:
             pass
-
-    async def speech_finished(self) -> None:
-        try:
-            async with asyncio.timeout(_SPEECH_STALL_SECONDS):
-                await self._assistant_quiet.wait()
-        except TimeoutError:
-            _LOGGER.warning("Live voice model turn did not finish (call=%s)", self._log_id)
-        remaining = self._playback_end - self._clock()
-        if remaining > 0:
-            # Relayed audio plays in real time; the goodbye is still audible.
-            await asyncio.sleep(remaining)
 
     # -- voice Session records ----------------------------------------------
 
@@ -820,8 +800,6 @@ class LiveCallSession:
             )
 
     def _publish_audio(self, pcm: bytes) -> None:
-        start = max(self._clock(), self._playback_end)
-        self._playback_end = start + len(pcm) / RELAY_BYTES_PER_MS / 1000
         try:
             self._host.publish_audio(pcm)
         except Exception as exc:
