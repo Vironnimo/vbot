@@ -35,7 +35,6 @@ _ANNOUNCED_OUTCOMES = {
 }
 _SEEN_RUN_LIMIT = 2_000
 _PENDING_LIMIT = 100
-_RESUBSCRIBE_DELAY_SECONDS = 0.1
 
 
 @dataclass(frozen=True)
@@ -115,7 +114,6 @@ class LiveRunFeed:
                     self._consider(event)
             # The bus evicted this subscriber after it lagged; resume after the
             # last event seen. Runs that left retention meanwhile stay silent.
-            await asyncio.sleep(_RESUBSCRIBE_DELAY_SECONDS)
 
     def _consider(self, event: JsonObject) -> None:
         kind = _ANNOUNCED_OUTCOMES.get(str(event.get("type")))

@@ -467,10 +467,10 @@ def test_speaking_waits_for_the_estimated_playback_to_drain():
     session.receive(_done("r1"))
 
     assert _creates(session.deliver("c1", "Done.")) == []
-    assert session.next_deadline() == pytest.approx(clock.now + 2.2)
-    clock.now += 2.0
+    assert session.next_deadline() == pytest.approx(clock.now + 2.0)
+    clock.now += 1.9
     assert session.tick() == []
-    clock.now += 0.25
+    clock.now += 0.1
     assert session.tick() == [{"type": "response.create", "event_id": "vbot_rc_1"}]
 
 
@@ -487,7 +487,7 @@ def test_an_unanswered_create_is_retried_once_then_dropped():
     assert session.next_deadline() is None
 
 
-def test_active_response_errors_back_off_and_benign_errors_stay_silent():
+def test_active_response_errors_wait_for_that_response_and_benign_errors_stay_silent():
     clock = Clock()
     session = _session(clock=clock)
     session.announce("vBot update: {}")
@@ -521,8 +521,13 @@ def test_active_response_errors_back_off_and_benign_errors_stay_silent():
 
     assert busy.events == [] and _creates(busy.commands) == []
     assert all(step.events == [] for step in benign)
-    clock.now += 1.0
-    assert session.tick() == [{"type": "response.create", "event_id": "vbot_rc_2"}]
+    assert session.tick() == []
+    # The gate opens again with the events of the response vBot had not seen.
+    session.receive(_created("resp_unseen"))
+    session.receive(_done("resp_unseen"))
+    assert _creates(session.announce("vBot update: {}")) == [
+        {"type": "response.create", "event_id": "vbot_rc_2"}
+    ]
 
 
 def test_a_refused_create_is_reported_and_not_repeated():

@@ -65,11 +65,6 @@ class LiveCallLimits:
     owner_audio_limit_bytes: int = 60 * 48_000
     shutdown_close_timeout_seconds: float = 3.0
     abort_timeout_seconds: float = 4.0
-    # Time for the voice model's goodbye before ``end_call`` closes the call.
-    end_call_delay_seconds: float = 5.0
-    # The same when the voice model handed the end on: its goodbye ran while
-    # the request did, so only its rest is left.
-    handed_on_end_delay_seconds: float = 1.0
     # A live call without speech, Tool calls, or delegated work ends after
     # this long; ``idle_warning_seconds`` before, the owner is warned.
     idle_seconds: float = 600.0
@@ -237,7 +232,7 @@ class LiveCallEntry:
         return True
 
     def end_soon(self) -> None:
-        """Close gracefully once the voice model had time to say goodbye."""
+        """Close gracefully as soon as the voice model finished its goodbye."""
         if self._ending or self._closing or self.ended:
             return
         self._ending = True
@@ -245,12 +240,8 @@ class LiveCallEntry:
 
     async def _end_after_goodbye(self) -> None:
         call = self.call
-        handed_on = call is not None and call.says_goodbye_first
-        await asyncio.sleep(
-            self._limits.handed_on_end_delay_seconds
-            if handed_on
-            else self._limits.end_call_delay_seconds
-        )
+        if call is not None:
+            await call.speech_finished()
         _LOGGER.info("Live call ended by the voice model (call=%s)", self.log_id)
         self._end_reason = self._end_reason or CLOSED_REASON_HUNG_UP
         self.request_close()

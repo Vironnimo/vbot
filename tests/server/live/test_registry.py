@@ -41,7 +41,6 @@ FAST = LiveCallLimits(
     ui_request_timeout_seconds=5.0,
     shutdown_close_timeout_seconds=0.1,
     abort_timeout_seconds=0.5,
-    end_call_delay_seconds=0.01,
 )
 
 
@@ -72,12 +71,17 @@ class FakeCall:
         )
         self.audio: list[bytes] = []
         self.notices: list[LiveRunNotice] = []
-        self.says_goodbye_first = False
+        # Set while the voice model is not speaking.
+        self.speech_done = asyncio.Event()
+        self.speech_done.set()
         self.close_calls = 0
         self.abort_calls = 0
         self.close_mode = "finish"
         self.announce_error: Exception | None = None
         self._closed = asyncio.Event()
+
+    async def speech_finished(self) -> None:
+        await self.speech_done.wait()
 
     async def close(self) -> None:
         self.close_calls += 1
@@ -646,23 +650,17 @@ async def test_the_owner_reports_what_the_app_shows_to_the_call(live: Harness) -
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("handed_on", [False, True], ids=["own-end-call", "handed-on"])
-async def test_end_call_closes_the_call_gracefully_after_the_goodbye(handed_on: bool) -> None:
-    # Only the delay for who ended the call is short enough to close here.
-    live = Harness(
-        limits=replace(
-            FAST,
-            end_call_delay_seconds=60.0 if handed_on else 0.01,
-            handed_on_end_delay_seconds=0.01 if handed_on else 60.0,
-        )
-    )
+async def test_end_call_closes_the_call_gracefully_once_the_goodbye_is_spoken() -> None:
+    live = Harness()
     try:
         call = await live.start()
-        call.says_goodbye_first = handed_on
         reader = live.attach(call)
+        call.speech_done.clear()
         result = await run_tool(call, "end_call", {})
         assert result["ok"] is True
+        await drain()
         assert call.close_calls == 0
+        call.speech_done.set()
         await settle(lambda: live.registry.active_call_id is None)
         assert call.close_calls == 1
         assert call.abort_calls == 0

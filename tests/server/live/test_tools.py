@@ -486,7 +486,7 @@ async def test_open_reports_navigation_that_did_not_happen(fx: Fixture) -> None:
 @pytest.mark.asyncio
 async def test_end_call_asks_the_call_to_end_after_a_goodbye(fx: Fixture) -> None:
     text = await fx.ok("end_call")
-    assert text == "The call ends in a few seconds. Say a short goodbye now; running work goes on."
+    assert text == "The call is ending now; running work goes on."
     assert fx.ended == 1
     assert fx.app.effects() == []
 
