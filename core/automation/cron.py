@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime
@@ -399,6 +400,7 @@ class CronService:
                     job_id, fields, validate_references=False
                 )
             if changed_fields:
+                edited = self._clone_job(candidate)
                 self._jobs[job_id] = candidate
                 # Job tasks follow memory at once, so a fire in flight sees the edit.
                 if self._started and restart_task:
@@ -406,9 +408,10 @@ class CronService:
 
                 def undo() -> None:
                     if self._jobs.get(job_id) is candidate:
-                        self._jobs[job_id] = job
+                        # A fire during the save records on the live job; keep that.
+                        _take_back_edit(candidate, before=job, edited=edited)
                         if self._started and restart_task:
-                            self._restart_job_task(job)
+                            self._restart_job_task(candidate)
 
                 await settle_before_cancelling(self._save_edit(undo))
         return self._clone_job(job), self._clone_job(candidate), changed_fields
@@ -1330,6 +1333,23 @@ def _count_consecutive_failure(job: CronJob) -> None:
             job.consecutive_failures,
             job.status,
         )
+
+
+def _take_back_edit(live: CronJob, *, before: CronJob, edited: CronJob) -> None:
+    """Undo an edit on the live job without losing what a fire recorded since.
+
+    Each field the edit changed returns to its earlier value unless a fire changed
+    it again; runs a fire spent from the edited budget are spent from the restored one.
+    """
+    for field_name in (item.name for item in dataclasses.fields(CronJob)):
+        old, new = getattr(before, field_name), getattr(edited, field_name)
+        current = getattr(live, field_name)
+        if old == new:
+            continue
+        if current == new:
+            setattr(live, field_name, old)
+        elif field_name == "remaining_runs" and isinstance(new, int) and isinstance(current, int):
+            live.remaining_runs = None if old is None else max(old - (new - current), 0)
 
 
 def _missing_session_text(job: CronJob) -> str:
