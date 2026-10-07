@@ -22,6 +22,7 @@ from core.tools._search_execution import (
     MAX_CHILD_MEMORY,
     MAX_ENTRIES,
     MAX_PROTOCOL_LINE,
+    MAX_SCAN_BYTES,
     ScanResult,
     Scope,
     SearchBoundError,
@@ -664,11 +665,15 @@ class _Found:
         )
         self.warnings.extend(result.warnings)
         self.ignored.extend(result.ignored)
-        if result.truncated:
+        if result.stopped_by is not None:
+            reason = ""
+            if result.stopped_by == "output":
+                reason = f", when their paths reached the {_mebibytes(MAX_SCAN_BYTES)} output limit"
             self.warnings.append(
-                "The search stopped after 500000 files; narrow path or glob to see the rest."
+                f"The search stopped after {len(result.entries)} files{reason}; narrow path or "
+                "glob to see the rest."
             )
-        if result.truncated or result.interrupted or result.warnings:
+        if result.stopped_by is not None or result.interrupted or result.warnings:
             self.complete = False
         if result.files_searched is not None:
             self.files_searched = (self.files_searched or 0) + result.files_searched

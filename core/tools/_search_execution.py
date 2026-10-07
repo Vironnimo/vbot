@@ -319,7 +319,8 @@ class ScanResult:
     entries: list[tuple[bytes, int]] = field(default_factory=list)
     files_searched: int | None = None
     warnings: list[str] = field(default_factory=list)
-    truncated: bool = False
+    # The bound that cut the pass short: MAX_ENTRIES ("entries") or MAX_SCAN_BYTES ("output").
+    stopped_by: Literal["entries", "output"] | None = None
     interrupted: bool = False
     skipped: list[Path] = field(default_factory=list)
     ignored: list[Path] = field(default_factory=list)
@@ -425,7 +426,7 @@ def count_scan(
     ]
     data, outcome, truncated = _collect(binary, arguments, scope, context, budget, terminator)
     result = _judge(outcome, scope, cwd)
-    result.truncated = truncated
+    result.stopped_by = "output" if truncated else None
     result.ignored = _walk_paths(outcome.ignored, scope)
     if query.mode == "files_without_match":
         result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
@@ -458,7 +459,7 @@ def list_scan(
     arguments = [*selection, "--debug", "--files", "--null", "--", *scope.paths]
     data, outcome, truncated = _collect(binary, arguments, scope, context, budget, b"\0")
     result = _judge(outcome, scope, cwd)
-    result.truncated = truncated
+    result.stopped_by = "output" if truncated else None
     result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
     result.skipped = _walk_paths(outcome.skipped, scope)
     result.ignored = _walk_paths(outcome.ignored, scope)
@@ -520,7 +521,7 @@ def match_names(
 def _bound(result: ScanResult) -> None:
     if len(result.entries) > MAX_ENTRIES:
         del result.entries[MAX_ENTRIES:]
-        result.truncated = True
+        result.stopped_by = "entries"
 
 
 def _parse_counts(data: bytes) -> tuple[list[tuple[bytes, int]], int | None]:

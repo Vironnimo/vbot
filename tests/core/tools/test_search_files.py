@@ -321,6 +321,39 @@ def test_a_search_over_the_memory_bound_fails_with_advice_for_its_mode(
     assert advice in message
 
 
+_OUTPUT_BOUND = ", when their paths reached the 256 MiB output limit"
+
+
+@pytest.mark.parametrize(
+    ("bound", "value", "arguments", "reason"),
+    [
+        # Either bound keeps fewer than the 40 files: 5 entries, or about 100 bytes of output.
+        ("MAX_ENTRIES", 5, {}, ""),
+        ("MAX_SCAN_BYTES", 100, {}, _OUTPUT_BOUND),
+        ("MAX_SCAN_BYTES", 100, {"pattern": "x", "output": "files"}, _OUTPUT_BOUND),
+    ],
+)
+def test_a_pass_a_bound_cut_short_names_its_reason_and_the_files_kept(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    bound: str,
+    value: int,
+    arguments: dict[str, Any],
+    reason: str,
+) -> None:
+    _write(tmp_path, dict.fromkeys(_FILES, "x\n"))
+    monkeypatch.setattr(f"core.tools._search_execution.{bound}", value)
+
+    data = search(tmp_path, **arguments, limit=10000)
+
+    kept = data["content"].splitlines()
+    assert 0 < len(kept) < len(_FILES)
+    assert data["warnings"] == [
+        f"The search stopped after {len(kept)} files{reason}; narrow path or glob to see the rest."
+    ]
+    assert data["summary"].endswith("The search is incomplete; see warnings.")
+
+
 @pytest.mark.parametrize(
     ("arguments", "skipped"),
     [

@@ -331,8 +331,11 @@ notice about the next page and each warning
   when set, and narrowing alone for listings
   (`test_a_result_over_the_record_bound_fails_naming_the_file_to_leave_out`,
   `test_a_search_over_the_memory_bound_fails_with_advice_for_its_mode`).
-- **Entries:** at most 500,000 entries are collected; more makes the result
-  incomplete, with a warning.
+- **Entries:** at most 500,000 entries are collected per pass; more makes the
+  result incomplete, with a warning naming the count. When the 256 MiB output
+  bound stops a pass first (paths averaging over about 537 bytes), the warning
+  names the files kept and that reason (`ScanResult.stopped_by`,
+  `test_a_pass_a_bound_cut_short_names_its_reason_and_the_files_kept`).
 - **Process ownership:** native subprocess creation, termination and release stay
   in the worker thread. The cancel callback keeps only an event, never the
   `Popen`: dropping it on the Event Loop must not run a blocking Windows handle
@@ -402,8 +405,8 @@ Tests live in `tests/core/tools/test_search_files*.py`:
   - a git differential (`git ls-files --others --exclude-standard`) checks ignore
     selection;
   - other tests cover totals, ordering, context at page edges, the byte limit,
-    the output record bound per listed path and name, the bound failures,
-    multiline paging, outside
+    the output record bound per listed path and name, the bound failures and
+    stop warnings, multiline paging, outside
     roots, `.git`, excerpts, encodings, link loops,
     junctions, unusual names, timeout and cancel, English OS errors, the missing
     engine, and the display.
