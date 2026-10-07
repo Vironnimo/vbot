@@ -477,6 +477,27 @@ async def test_timeout_after_admission_is_failed_not_missed(tmp_path):
     assert trigger.trigger_run.await_count == 1
 
 
+@pytest.mark.asyncio
+async def test_an_occurrence_that_expires_while_its_claim_is_saved_is_missed(tmp_path, monkeypatch):
+    service, event, trigger, now = setup(tmp_path)
+    clock = [now]
+    monkeypatch.setattr(actions_module, "_utc_now", lambda: clock[0])
+    save = service.actions._save_async
+
+    async def slow_save():
+        if any(row["status"] == "claimed" for row in service.actions._executions.values()):
+            clock[0] = now + timedelta(minutes=31)  # Past the event start, its expiry.
+        await save()
+
+    monkeypatch.setattr(service.actions, "_save_async", slow_save)
+    await service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    await service.actions.tick(now)
+    await drain(service)
+
+    trigger.trigger_run.assert_not_awaited()
+    assert service.actions.project(window(service, now))[0]["status"] == "missed"
+
+
 def _session_gone(service, trigger):
     service.actions._sessions.exists.return_value = False
 
