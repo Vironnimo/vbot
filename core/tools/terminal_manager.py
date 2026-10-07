@@ -457,7 +457,11 @@ class TerminalManager:
         idle_seconds: float | None,
         progress: Callable[[str], Awaitable[None]] | None = None,
     ) -> CommandWaitOutcome:
-        """Wait for the command to exit, for *seconds* (None: no limit), or idleness."""
+        """Wait for the command to end, for *seconds* (None: no limit), or idleness.
+
+        A command ends once its shell exited and every process it left running
+        ended or went quiet; the outcome is then ``exited``.
+        """
         deadline = None if seconds is None else self._services.monotonic() + seconds
         return await self._get(terminal_id).wait_command(
             deadline=deadline, idle_seconds=idle_seconds, progress=progress
@@ -472,7 +476,7 @@ class TerminalManager:
     def hand_off_command(self, terminal_id: str, *, deliver: bool) -> CommandReport:
         """List a running command; with *deliver*, its result is delivered when it ends.
 
-        The returned report tells whether the shell exited before the hand-off,
+        The returned report tells whether the command ended before the hand-off,
         in which case nothing is delivered and the caller reports the result.
         """
         session = self._get(terminal_id)
@@ -486,7 +490,7 @@ class TerminalManager:
         """How long a running command has printed nothing, got no input and used no CPU.
 
         None while it works, as the command idle rule decides, and once its
-        shell exited.
+        shell exited: processes it left running end the command when they go quiet.
         """
         return await self._get(terminal_id).command_idle_seconds()
 
@@ -513,6 +517,11 @@ class TerminalManager:
     async def command_screen(self, terminal_id: str, lines: int) -> str:
         """The newest non-blank rows of a command's screen."""
         return await self._get(terminal_id).command_screen(lines)
+
+    async def command_view(self, terminal_id: str, rows: int) -> tuple[CommandReport, str]:
+        """A command's report and the output that follows its transcript, without
+        gap or overlap: while the shell runs, the screen's newest *rows* rows."""
+        return await self._get(terminal_id).command_view(rows)
 
     async def cancel_run(self, run_id: str) -> None:
         """Kill the foreground commands a cancelled Run started and reject new ones for it.
