@@ -3,8 +3,11 @@
 The listener runs on its real threads over doubles for the microphone
 (:class:`FakeSoundDevice`), the wakeword engine (:class:`ScriptedEngine`, fired
 by the test), the speech decision (:class:`AmplitudeDetector`) and the vBot server
-(:class:`FakeVoiceServer`). The fake microphone delivers silence at about four
-times real time unless a test feeds audio.
+(:class:`FakeVoiceServer`). The fake microphone delivers silence at up to sixteen
+times real time unless a test feeds audio, so the audio limits of a recording
+(the no-speech timeout, the capture history) last only 0.1 to 0.2 s of wall
+time. A test whose outcome must not depend on thread timing uses
+:class:`FedSoundDevice`, which delivers only the audio the test feeds.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import numpy as np
 import pytest
@@ -27,10 +30,13 @@ from desktop import settings as desktop_settings
 from desktop.speech.microphone import MicrophoneService
 from desktop.wakeword.config import PhraseConfig, VoiceConfigError
 from desktop.wakeword.controller import VoiceControlError, VoiceController, VoiceRuntime
+from desktop.wakeword.detection import DETECTION_CHUNK_SAMPLES
 from tests.desktop.speech.speech_test_support import (
     FakeEchoStage,
+    FakeInputStream,
     FakeSoundDevice,
     Overflow,
+    silence,
     tone,
     wait_until,
 )
@@ -109,6 +115,38 @@ class RecordingCues:
 
     def play(self, cue: str) -> None:
         self.played.append(cue)
+
+
+class FedSoundDevice(FakeSoundDevice):
+    """A microphone that delivers only the audio a test feeds.
+
+    Reads wait while nothing is fed, so no silence runs ahead of the threads
+    that consume the audio: what detection and a recording hear depends on the
+    fed audio alone. ``release`` lets reads return paced silence again, so the
+    capture can stop.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(pace=0.0025)
+        self._fed = threading.Condition()
+        self._released = False
+
+    @override
+    def feed(self, *items: Any) -> None:
+        super().feed(*items)
+        with self._fed:
+            self._fed.notify_all()
+
+    def release(self) -> None:
+        with self._fed:
+            self._released = True
+            self._fed.notify_all()
+
+    @override
+    def read(self, stream: FakeInputStream, frames: int) -> tuple[np.ndarray, bool]:
+        with self._fed:
+            self._fed.wait_for(lambda: self._released or not self.drained)
+        return super().read(stream, frames)
 
 
 @dataclass
@@ -287,6 +325,8 @@ def voice_rig(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> Iterator[Call
     for rig in rigs:
         if rig.server.transcribe_gate is not None:
             rig.server.transcribe_gate.set()
+        if isinstance(rig.sd, FedSoundDevice):
+            rig.sd.release()
         rig.voice.close()
     assert _voice_threads(before) == [], "Voice threads survived close()"
 
@@ -497,12 +537,20 @@ def test_detection_continues_while_a_command_is_transcribed(
     voice_rig: Callable[..., Rig],
 ) -> None:
     gate = threading.Event()
-    rig = voice_rig(server=FakeVoiceServer(transcribe_gate=gate))
+    sd = FedSoundDevice()
+    rig = voice_rig(server=FakeVoiceServer(transcribe_gate=gate), sd=sd)
     rig.wait_ready()
+    engine = rig.engine
+    # The chunk that completes the wake phrase, the command, then the silence that ends it.
+    command = np.concatenate((silence(0.08, 16000), tone(0.4, 16000), silence(1.2, 16000)))
 
-    rig.say_command()
+    engine.fire(OKAY)
+    sd.feed(command)
     wait_until(rig.server.transcribing.is_set)
-    rig.say_command()
+    # The second wake phrase follows once detection has heard all of the first command.
+    wait_until(lambda: len(engine.chunks) >= len(command) // DETECTION_CHUNK_SAMPLES)
+    engine.fire(OKAY)
+    sd.feed(command)
     wait_until(lambda: len(rig.voice.status()["commands"]) == 2)
     gate.set()
 
