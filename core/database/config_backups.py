@@ -21,7 +21,8 @@ snapshot. Retention keeps the newest :data:`CONFIG_BACKUP_KEEP_LATEST` backups
 and the newest backup of every hour, day and ISO week within the tier horizons,
 so a run of bad states never pushes the good ones out. Restore is offline
 maintenance: it replaces the selected files (never one damaged in the backup,
-never one whose folder no longer exists), leaves files created after the backup
+never one whose folder no longer exists, never one a backup cannot read because
+it or a folder on its path is a link), leaves files created after the backup
 alone, and first backs up the current state, so a restore can be taken back by
 restoring that backup.
 """
@@ -58,7 +59,7 @@ from core.database.marker import (
 )
 from core.database.snapshot_barrier import capture_members
 from core.utils.atomic import atomic_write_bytes, atomic_write_text
-from core.utils.file_status import is_dir_strict
+from core.utils.file_status import is_link_status, stat_or_none
 from core.utils.log_conditions import LoggedConditions
 from core.utils.timestamps import (
     format_canonical_timestamp,
@@ -621,12 +622,13 @@ def restore_config_backup(
     """Restore files of one configuration backup while no server runs on ``data_dir``.
 
     ``paths`` names the files to restore (``None``: every file of the backup).
-    A named file that is not in the backup, is damaged there, or whose folder
-    no longer exists (a deleted or renamed Agent, Project or Channel) refuses
-    the restore with ``ValueError``; restoring every file skips such files
-    instead. Every object is verified before anything changes; a missing or
-    altered one raises ``DatabaseCorruptError``. Files created after the backup
-    stay. Before the first change the current state is backed up and the
+    A named file that is not in the backup, is damaged there, whose folder
+    no longer exists (a deleted or renamed Agent, Project or Channel), or that
+    is a link or lies below a linked folder (symbolic link or junction, which
+    backups never read) refuses the restore with ``ValueError``; restoring every
+    file skips such files instead. Every object is verified before anything
+    changes; a missing or altered one raises ``DatabaseCorruptError``. Files
+    created after the backup stay. Before the first change the current state is backed up and the
     maintenance guard held, so an interrupted restore keeps Runtime from
     starting until it is repeated; while it is incomplete, any other restore
     raises ``DatabaseFormatError``.
@@ -723,12 +725,26 @@ def _interrupted_restore(data_dir: Path, operation: str) -> bool:
 def _restore_problem(data_dir: Path, item: ConfigFile) -> str | None:
     if item.damaged:
         return "it is damaged in this backup; choose an earlier backup"
+    # A backup reads only regular files reached through real directories
+    # (``matching_data_paths``), so a restore writes nothing through a link
+    # either: the before-restore backup could not hold what it would replace.
+    parts = item.path.split("/")
+    current = Path(data_dir)
     try:
-        folder_exists = is_dir_strict(_data_path(data_dir, item.path).parent)
+        for depth, part in enumerate(parts, start=1):
+            current = current / part
+            status = stat_or_none(current, follow_symlinks=False)
+            if status is not None and is_link_status(status):
+                if depth == len(parts):
+                    return "it is a link, which configuration backups neither read nor replace"
+                folder = "/".join(parts[:depth])
+                return f"its folder {folder} is a link, which configuration backups do not follow"
+            if depth < len(parts) and (status is None or not stat.S_ISDIR(status.st_mode)):
+                return (
+                    "its folder no longer exists (a deleted or renamed Agent, Project or Channel)"
+                )
     except OSError as exc:
         raise DatabaseUnavailableError(f"the folder of {item.path} cannot be checked") from exc
-    if not folder_exists:
-        return "its folder no longer exists (a deleted or renamed Agent, Project or Channel)"
     return None
 
 

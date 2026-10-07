@@ -296,7 +296,7 @@ def data_store_config_backup_restore(
 
     ``files`` names the files to restore; ``complete`` restores every file of the
     backup. Files created after the backup and files whose folder no longer exists
-    stay as they are. The state before the restore is backed up first.
+    or is reached through a link stay as they are. The state before the restore is backed up first.
     """
     if instance.host not in _LOOPBACK_HOSTS:
         return CommandResult(ok=False, message=_LOCAL_ONLY_MESSAGE, instance=instance)

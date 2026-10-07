@@ -25,6 +25,7 @@ from core.database import (
 from core.database import config_backups as config_backups_module
 from core.database.marker import acquire_operation_lock
 from tests.core.database.database_test_support import write_document
+from tests.directory_links import link_directory
 
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
 
@@ -200,12 +201,22 @@ def test_a_restore_replaces_the_named_files_after_backing_up_the_state_it_replac
         restore_config_backup(data_dir, earlier, paths=["cron/jobs.json"])
 
 
-def test_restoring_a_whole_backup_leaves_newer_files_and_vanished_folders_alone(
-    data_dir: Path,
+def test_restoring_a_whole_backup_leaves_newer_files_and_vanished_or_linked_folders_alone(
+    data_dir: Path, tmp_path: Path
 ) -> None:
     _write(data_dir, "agents/nova/agent.json", '{"format_version": 1, "id": "nova"}\n')
     _write(data_dir, "agents/gone/agent.json", '{"format_version": 1, "id": "gone"}\n')
+    _write(data_dir, "agents/linked/agent.json", '{"format_version": 1, "id": "linked"}\n')
     backup_id = _backup(data_dir)
+    # A folder replaced by a link: backups never read through it, so a restore
+    # must not write through it either.
+    linked = data_dir / "agents" / "linked"
+    (linked / "agent.json").unlink()
+    linked.rmdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "agent.json").write_text("outside\n", encoding="utf-8")
+    link_directory(linked, outside)
     _write(data_dir, "agents/nova/agent.json", '{"format_version": 1, "id": "nova", "x": 1}\n')
     for path in sorted(data_dir.joinpath("agents", "gone").rglob("*"), reverse=True):
         path.unlink()
@@ -215,12 +226,15 @@ def test_restoring_a_whole_backup_leaves_newer_files_and_vanished_folders_alone(
     restored = restore_config_backup(data_dir, backup_id)
 
     assert restored.restored == ("agents/nova/agent.json",)
-    assert set(restored.skipped) == {"agents/gone/agent.json"}
+    assert set(restored.skipped) == {"agents/gone/agent.json", "agents/linked/agent.json"}
     assert restored.created_after == ("agents/new/agent.json",)
     assert not data_dir.joinpath("agents", "gone").exists()
     assert data_dir.joinpath("agents", "new", "agent.json").exists()
+    assert (outside / "agent.json").read_text(encoding="utf-8") == "outside\n"
     with pytest.raises(ValueError, match="folder no longer exists"):
         restore_config_backup(data_dir, backup_id, paths=["agents/gone/agent.json"])
+    with pytest.raises(ValueError, match="is a link"):
+        restore_config_backup(data_dir, backup_id, paths=["agents/linked/agent.json"])
 
 
 def test_a_restore_verifies_every_copy_before_it_changes_anything(data_dir: Path) -> None:
