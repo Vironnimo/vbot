@@ -414,46 +414,119 @@ async def test_inspect_reports_the_work_a_subagent_still_runs(harness: SubAgentH
     assert projection["running"] == [{"kind": "subagent", "id": inner["id"], "label": "Do inner"}]
 
 
-async def test_cancel_stops_a_subagent_and_everything_below_it(
+@pytest.mark.parametrize("user_stop", [False, True], ids=["cancel-tool", "stop-all"])
+async def test_cancel_stops_the_whole_tree_before_waiting_for_cleanup(
     harness: SubAgentHarness,
+    user_stop: bool,
 ) -> None:
+    harness.storage.settings = {"max_subagent_depth": 3}
     harness.loop.hold("outer")
     outer = await harness.spawn("outer")
+    outer_session = harness.subagent_session(outer["id"])
     harness.loop.hold("inner")
-    inner = await harness.spawn("inner", session=harness.subagent_session(outer["id"]))
-    runs = harness.manager.active_runs()
+    inner = await harness.spawn("inner", session=outer_session)
+    inner_session = harness.subagent_session(inner["id"])
+    outer_run, inner_run = harness.manager.active_runs()
+    cleanup_entered, release_cleanup = asyncio.Event(), asyncio.Event()
 
-    result = await harness.call({"action": "cancel", "id": outer["id"]})
+    async def cleanup() -> None:
+        cleanup_entered.set()
+        await release_cleanup.wait()
+
+    outer_run.add_cancel_callback(cleanup)
+    stopping = asyncio.create_task(
+        harness.coordinator.stop_tree(outer_session)
+        if user_stop
+        else harness.call({"action": "cancel", "id": outer["id"]})
+    )
+    try:
+        await cleanup_entered.wait()
+        assert inner_run.cancel_requested
+        # An overlapping call cannot create or resume work while the root's
+        # cancellation cleanup is still pending.
+        spawned = await harness.call(
+            {"description": "Do late work", "content": "late work"},
+            inner_session,
+            cancellation_hook=lambda: inner_run.cancel_requested,
+        )
+        sent = await harness.call(
+            {
+                "action": "send",
+                "id": inner["id"],
+                "content": "late follow-up",
+                "model": "replacement/model",
+            },
+            outer_session,
+            cancellation_hook=lambda: outer_run.cancel_requested,
+        )
+        assert spawned["error"]["code"] == sent["error"]["code"] == "run_cancelled"
+        assert (await harness.resolver.session_overrides_async(inner_session)).model is None
+        assert [turn.content for turn in harness.loop.turns] == ["outer", "inner"]
+    finally:
+        release_cleanup.set()
+        result = await stopping
     await harness.settle()
 
-    assert result["data"]["status"] == "cancelled"
-    assert [run.status for run in runs] == [RunStatus.CANCELLED, RunStatus.CANCELLED]
-    # The Parent learned the outcome from its own Tool result.
-    assert harness.triggers.to(harness.parent) == []
-    assert harness.triggers.to(harness.subagent_session(outer["id"])) == []
+    assert [outer_run.status, inner_run.status] == [RunStatus.CANCELLED, RunStatus.CANCELLED]
+    assert harness.triggers.to(outer_session) == []
+    if user_stop:
+        assert result == 2
+        [notice] = harness.triggers.to(harness.parent)
+        assert "Its turn was cancelled by the user." in notice.body
+    else:
+        assert isinstance(result, dict)
+        assert result["data"]["status"] == "cancelled"
+        # The Parent learned the outcome from its own Tool result.
+        assert harness.triggers.to(harness.parent) == []
 
     again = await harness.call({"action": "cancel", "id": inner["id"]})
     assert again["error"]["code"] == "subagent_not_running"
 
 
-async def test_user_stop_all_stops_the_tree_without_waking_anyone(
+async def test_stop_all_includes_a_child_whose_admission_is_in_flight(
     harness: SubAgentHarness,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    harness.loop.hold("outer")
-    outer = await harness.spawn("outer")
-    outer_session = harness.subagent_session(outer["id"])
-    harness.loop.hold("inner")
-    await harness.spawn("inner", session=outer_session)
-    runs = harness.manager.active_runs()
+    admission_entered, release_admission = asyncio.Event(), asyncio.Event()
+    stop_waiting = asyncio.Event()
+    activities = harness.coordinator._activities  # noqa: SLF001
+    ensure_activity = activities.ensure
+    admission_lock = harness.coordinator._admission_lock  # noqa: SLF001
+    acquire = admission_lock.acquire
 
-    stopped = await harness.coordinator.stop_tree(outer_session)
-    await harness.settle()
+    async def held_activity(address):
+        admission_entered.set()
+        await release_admission.wait()
+        return await ensure_activity(address)
 
-    assert stopped == 2
-    assert [run.status for run in runs] == [RunStatus.CANCELLED, RunStatus.CANCELLED]
-    assert harness.triggers.to(outer_session) == []
-    [notice] = harness.triggers.to(harness.parent)
-    assert "Its turn was cancelled by the user." in notice.body
+    async def observed_acquire():
+        if admission_lock.locked():
+            stop_waiting.set()
+        return await acquire()
+
+    monkeypatch.setattr(activities, "ensure", held_activity)
+    monkeypatch.setattr(admission_lock, "acquire", observed_acquire)
+    harness.loop.hold("child")
+    admission = asyncio.create_task(harness.spawn("child"))
+    await admission_entered.wait()
+    stopping = asyncio.create_task(harness.coordinator.stop_tree(harness.parent))
+    blocked = asyncio.create_task(stop_waiting.wait())
+    try:
+        # Either stop waits for the current admission, or the broken implementation
+        # returns before the new child's Run exists. Neither path needs a timer.
+        await asyncio.wait([stopping, blocked], return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        release_admission.set()
+        blocked.cancel()
+        await asyncio.gather(blocked, return_exceptions=True)
+        await admission
+        stopped = await stopping
+
+    assert stopped == 1
+    assert harness.manager.active_runs() == []
+    [(_event_type, started)] = harness.events
+    assert harness.manager.get(started["data"]["run_id"]).status is RunStatus.CANCELLED
+    assert harness.triggers.to(harness.parent) == []
 
 
 @pytest.mark.parametrize(

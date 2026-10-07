@@ -329,21 +329,12 @@ class SubAgentCoordinator:
         the stopped Sub-Agents are not forwarded, so they do not wake the Sessions
         above them that are stopped too.
         """
-        sessions = self._runtime.chat_sessions
-        below = await sessions.run_async(descendants, sessions, address)
-        stopped = await self._stop_sessions(
-            [address],
+        return await self._stop_subtree(
+            address,
             reason=USER_CANCEL_REASON,
             initiator="user_stop_all",
-            silence=False,
-            clear_queue=False,
-        )
-        return stopped + await self._stop_sessions(
-            [link.session for link in below],
-            reason=USER_CANCEL_REASON,
-            initiator="user_stop_all",
-            silence=True,
-            clear_queue=True,
+            silence_root=False,
+            clear_root_queue=False,
         )
 
     async def drain_activity(self) -> None:
@@ -601,6 +592,10 @@ class SubAgentCoordinator:
                 )
                 if refusal is not None:
                     return refusal
+            if context.is_cancelled():
+                return tool_failure(
+                    "run_cancelled", "Your Run was cancelled before the message was sent."
+                )
             if overrides:
                 await sessions.run_async(
                     runtime.agent_resolver.update_session_overrides, address, overrides
@@ -729,21 +724,13 @@ class SubAgentCoordinator:
         ):
             own = await sessions.run_async(children, sessions, caller)
             return _not_found(subagent_id, own)
-        below = await sessions.run_async(descendants, sessions, link.session)
         initiator = f"parent_run:{context.run_id}"
-        stopped = await self._stop_sessions(
-            [link.session],
+        stopped = await self._stop_subtree(
+            link.session,
             reason=PARENT_AGENT_CANCEL_REASON,
             initiator=initiator,
-            silence=link.parent == caller,
-            clear_queue=True,
-        )
-        stopped += await self._stop_sessions(
-            [item.session for item in below],
-            reason=PARENT_AGENT_CANCEL_REASON,
-            initiator=initiator,
-            silence=True,
-            clear_queue=True,
+            silence_root=link.parent == caller,
+            clear_root_queue=True,
         )
         if not stopped:
             return tool_failure(
@@ -760,36 +747,45 @@ class SubAgentCoordinator:
         result["note"] = SUBAGENT_CANCELLED_NOTE
         return tool_success(result)
 
-    async def _stop_sessions(
+    async def _stop_subtree(
         self,
-        addresses: list[SessionAddress],
+        root: SessionAddress,
         *,
         reason: str,
         initiator: str,
-        silence: bool,
-        clear_queue: bool,
+        silence_root: bool,
+        clear_root_queue: bool,
     ) -> int:
-        """Stop the Runs, queued input and terminals of *addresses*; return how many stopped."""
+        """Cancel a complete admitted tree before awaiting any of its cleanup."""
+        sessions = self._runtime.chat_sessions
         manager = self._runtime.chat_run_manager
         terminals = self._runtime.terminal_manager
         stopped = 0
         runs: list[Run] = []
-        for address in addresses:
-            if clear_queue:
-                stopped += manager.clear_queued(
-                    address.agent_id, address.session_id, project_id=address.project_id
+        # A child start already in flight must finish before the tree is read.
+        # Cancel every captured Run while admissions are still excluded, so a
+        # descendant cannot create or resume work during another Run's cleanup.
+        async with self._admission_lock:
+            below = await sessions.run_async(descendants, sessions, root)
+            addresses = [root, *(link.session for link in below)]
+            for address in addresses:
+                if address != root or clear_root_queue:
+                    stopped += manager.clear_queued(
+                        address.agent_id, address.session_id, project_id=address.project_id
+                    )
+                run = manager.active_run(
+                    agent_id=address.agent_id,
+                    session_id=address.session_id,
+                    project_id=address.project_id,
                 )
-            run = manager.active_run(
-                agent_id=address.agent_id,
-                session_id=address.session_id,
-                project_id=address.project_id,
-            )
-            if run is not None:
-                if silence:
-                    self._forwarding.silence(run.id)
-                run.request_cancel(reason=reason, initiator=initiator)
-                runs.append(run)
-                stopped += 1
+                if run is not None:
+                    if address != root or silence_root:
+                        self._forwarding.silence(run.id)
+                    run.request_cancel(reason=reason, initiator=initiator)
+                    runs.append(run)
+                    stopped += 1
+        # Cleanup can wait on other work; never hold the admission lock here.
+        for address in addresses:
             if terminals is not None:
                 owner = TerminalOwner(
                     project_id=address.project_id,
