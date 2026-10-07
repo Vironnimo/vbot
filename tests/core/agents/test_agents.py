@@ -344,6 +344,9 @@ def test_the_librarian_keeps_its_id_and_existence_and_changes_only_model_setting
         store.update(LIVE_VOICE_AGENT_ID, memory_prompt_mode="agent")
     with pytest.raises(InvalidAgentIdError):
         store.create("Live-Voice", "Mine")
+    # An archived Agent never returns under a built-in id, even while that Agent is missing.
+    shutil.rmtree(store.data_dir / "agents" / "live-voice")
+    assert store.restore_target_problem("Live-Voice") == "agent_id_taken"
 
 
 def test_create_with_custom_values_persists_schema_and_keeps_workspace_files(

@@ -29,7 +29,7 @@ from core.agents._config import (
     load_validated_agent_json,
 )
 from core.agents._types import (
-    LIBRARIAN_AGENT_ID,
+    BUILTIN_AGENT_IDS,
     Agent,
     AgentAlreadyExistsError,
     AgentError,
@@ -170,12 +170,12 @@ def inspect_archived(store: AgentStore, source: Path) -> ArchivedAgentPayload:
 
 def restore_target_problem(store: AgentStore, target_id: str) -> str | None:
     """``invalid_target_id``, ``agent_id_taken`` (an Agent or an unfinished rename
-    holds it, or the built-in Librarian reserves it) or ``None`` when an archived
+    holds it, or a built-in Agent reserves it) or ``None`` when an archived
     Agent can return as ``target_id``."""
     if not is_valid_agent_id(target_id):
         return "invalid_target_id"
     if (
-        target_id.casefold() == LIBRARIAN_AGENT_ID
+        target_id.casefold() in BUILTIN_AGENT_IDS.values()
         or has_id_entry(store.data_dir / "agents", target_id)
         or os.path.lexists(store._agent_dir(target_id))
         or target_id in store._pending_rename_ids()
