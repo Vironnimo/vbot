@@ -179,7 +179,8 @@ def test_a_librarian_session_runs_on_the_skills_of_its_bound_agent(
     agents: AgentStore, projects: ProjectStore
 ) -> None:
     agents.create("coder", model="openai/gpt-5.2", allowed_skills=["review"])
-    librarian = agents.ensure_librarian()
+    agents.ensure_builtin_agents()
+    librarian = agents.librarian()
     assert librarian is not None
     resolver = _resolver(agents, projects, _openai_configured())
     sessions = agents._session_manager()

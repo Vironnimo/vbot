@@ -233,7 +233,7 @@ async def test_the_builtin_librarian_is_hidden_and_only_its_model_settings_chang
     state.agent_delete_lock = asyncio.Lock()
     state.event_bus = SimpleNamespace(publish=lambda _event, _payload: None)
     state.runtime.agents.create("coder", "Coder")
-    state.runtime.agents.ensure_librarian()
+    state.runtime.agents.ensure_builtin_agents()
 
     listed = (await rpc_result(state, "agent.list"))["agents"]
     updated = await rpc_result(

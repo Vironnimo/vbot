@@ -60,12 +60,18 @@ from core.agents._config import (
     validate_agent_rename_file,
 )
 from core.agents._types import (
+    BUILTIN_AGENT_IDS,
+    BUILTIN_AGENT_NAMES,
     DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
     DEFAULT_LIBRARIAN_ENABLED,
     LIBRARIAN_AGENT_ID,
     LIBRARIAN_AGENT_NAME,
     LIBRARIAN_BUILTIN,
     LIBRARIAN_TOOLS,
+    LIVE_BACKEND_AGENT_ID,
+    LIVE_BACKEND_BUILTIN,
+    LIVE_VOICE_AGENT_ID,
+    LIVE_VOICE_BUILTIN,
     SKILL_AGENT_ID_KEY,
     Agent,
     AgentAlreadyExistsError,
@@ -81,11 +87,13 @@ from core.agents._types import (
     ArchivedAgentPayload,
     BuiltinAgent,
     BuiltinAgentError,
+    BuiltinAgentProblem,
     InvalidAgentIdError,
     InvalidAgentOrderError,
     LibrarianProblem,
     _AgentOrderDocument,
     is_librarian,
+    is_live_agent,
     librarian_problem_message,
     skill_subject_id,
 )
@@ -122,14 +130,26 @@ from core.settings import (
 )
 from core.settings.normalizers import normalize_compaction_policy
 from core.tools.availability import (
+    TOOL_ACCESS_MODE_SELECTED,
     ToolAccess,
 )
+from core.tools.live import LIVE_TOOL_NAMES
+from core.tools.web_fetch import WEB_FETCH_TOOL_NAME
+from core.tools.web_search import WEB_SEARCH_TOOL_NAME
 from core.utils.file_status import exists_strict
 from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
 from core.utils.timestamps import utc_now_timestamp
 
 __all__ = [
+    "BUILTIN_AGENT_IDS",
+    "BUILTIN_AGENT_NAMES",
+    "LIVE_BACKEND_AGENT_ID",
+    "LIVE_BACKEND_BUILTIN",
+    "LIVE_VOICE_AGENT_ID",
+    "LIVE_VOICE_BUILTIN",
+    "BuiltinAgentProblem",
+    "is_live_agent",
     "LIBRARIAN_AGENT_ID",
     "LIBRARIAN_AGENT_NAME",
     "LIBRARIAN_TOOLS",
@@ -180,9 +200,10 @@ _AGENT_ORDER_FILE_NAME = "order.json"
 
 _AGENT_RENAME_FILE_NAME = "rename-pending.json"
 
-# What the user may change on a built-in Agent: its Model settings. The current
-# Session follows the Session the user opens.
-_BUILTIN_EDITABLE_FIELDS = frozenset(
+# What the user may change on a built-in Agent: its Model settings, and on the
+# Agents of a Live call also their Tools. The current Session follows the
+# Session the user opens.
+_BUILTIN_MODEL_FIELDS = frozenset(
     {
         "model",
         "fallback_models",
@@ -192,6 +213,20 @@ _BUILTIN_EDITABLE_FIELDS = frozenset(
         "current_session_id",
     }
 )
+_BUILTIN_EDITABLE_FIELDS: dict[str, frozenset[str]] = {
+    LIBRARIAN_BUILTIN: _BUILTIN_MODEL_FIELDS,
+    LIVE_VOICE_BUILTIN: _BUILTIN_MODEL_FIELDS | {"tool_access"},
+    LIVE_BACKEND_BUILTIN: _BUILTIN_MODEL_FIELDS | {"tool_access"},
+}
+# The Tools a new Agent of a Live call starts with: the Live Tools, and for the
+# backend Agent also web research.
+_BUILTIN_DEFAULT_TOOL_ACCESS: dict[str, ToolAccess] = {
+    LIVE_VOICE_BUILTIN: ToolAccess(mode=TOOL_ACCESS_MODE_SELECTED, allowed=LIVE_TOOL_NAMES),
+    LIVE_BACKEND_BUILTIN: ToolAccess(
+        mode=TOOL_ACCESS_MODE_SELECTED,
+        allowed=(*LIVE_TOOL_NAMES, WEB_SEARCH_TOOL_NAME, WEB_FETCH_TOOL_NAME),
+    ),
+}
 
 _LOGGER = get_logger("agents")
 
@@ -494,65 +529,80 @@ class AgentStore:
 
     def list_with_builtins(self) -> builtins.list[Agent]:
         """Return the roster followed by the built-in Agents that are available."""
-        librarian = self.librarian()
-        return [*self.list(), *([librarian] if librarian is not None else [])]
+        available = (self.builtin_agent(builtin) for builtin in BUILTIN_AGENT_IDS)
+        return [*self.list(), *(agent for agent in available if agent is not None)]
 
-    def librarian(self) -> Agent | None:
-        """Return the built-in Librarian with defaults applied, ``None`` while unavailable."""
-        if self.librarian_problem() is not None:
+    def builtin_agent(self, builtin: BuiltinAgent) -> Agent | None:
+        """Return a built-in Agent with defaults applied, ``None`` while unavailable."""
+        if self.builtin_problem(builtin) is not None:
             return None
         try:
-            return self.get(LIBRARIAN_AGENT_ID)
+            return self.get(BUILTIN_AGENT_IDS[builtin])
         except AgentError, OSError:
             return None
 
-    def librarian_problem(self) -> LibrarianProblem | None:
-        """Why the built-in Librarian is unavailable, ``None`` while it is available.
+    def builtin_problem(self, builtin: BuiltinAgent) -> BuiltinAgentProblem | None:
+        """Why a built-in Agent is unavailable, ``None`` while it is available.
 
         ``missing``: no Agent has its id yet (startup creates it); ``agent_id_taken``:
         an Agent of the user or an unfinished rename holds the id;
         ``invalid_config``: its ``agent.json`` cannot be loaded. Never raises.
         """
+        agent_id = BUILTIN_AGENT_IDS[builtin]
         with self._write_lock:
             try:
-                agent_path = self._stored_agent_path(LIBRARIAN_AGENT_ID)
+                agent_path = self._stored_agent_path(agent_id)
                 if agent_path is None:
-                    if LIBRARIAN_AGENT_ID in self._pending_rename_ids() or exists_strict(
-                        self._agent_dir(LIBRARIAN_AGENT_ID)
+                    if agent_id in self._pending_rename_ids() or exists_strict(
+                        self._agent_dir(agent_id)
                     ):
                         return "agent_id_taken"
                     return "missing"
                 agent = self._read_agent_config(agent_path)
             except AgentError, OSError:
                 return "invalid_config"
-            return None if is_librarian(agent) else "agent_id_taken"
+            return None if agent.builtin == builtin else "agent_id_taken"
 
-    def ensure_librarian(self) -> Agent | None:
-        """Create the built-in Librarian when it is missing; return it, ``None`` while unavailable.
+    def librarian(self) -> Agent | None:
+        """Return the built-in Librarian with defaults applied, ``None`` while unavailable."""
+        return self.builtin_agent(LIBRARIAN_BUILTIN)
 
-        It gets a new Agent's defaults, so it runs the default Model until the user
-        picks one. An Agent of the user that holds its id and an ``agent.json``
-        that cannot be loaded stay as they are; the warning names the problem.
+    def librarian_problem(self) -> LibrarianProblem | None:
+        """Why the built-in Librarian is unavailable (:meth:`builtin_problem`)."""
+        return self.builtin_problem(LIBRARIAN_BUILTIN)
+
+    def ensure_builtin_agents(self) -> None:
+        """Create each built-in Agent that is missing.
+
+        A new built-in Agent gets a new Agent's defaults, so it runs the default
+        Model until the user picks one; the Agents of a Live call start with
+        their default Tools. An Agent of the user that holds a reserved id and an
+        ``agent.json`` that cannot be loaded stay as they are; the warning names
+        the problem.
         """
-        with self._snapshot_barrier.compound_mutation(), self._change():
-            problem = self.librarian_problem()
-            if problem == "missing":
-                try:
-                    self._create(
-                        LIBRARIAN_AGENT_ID, LIBRARIAN_AGENT_NAME, builtin=LIBRARIAN_BUILTIN
+        for builtin, agent_id in BUILTIN_AGENT_IDS.items():
+            name = BUILTIN_AGENT_NAMES[builtin]
+            with self._snapshot_barrier.compound_mutation(), self._change():
+                problem = self.builtin_problem(builtin)
+                if problem == "missing":
+                    try:
+                        self._create(
+                            agent_id,
+                            name,
+                            builtin=builtin,
+                            tool_access=_BUILTIN_DEFAULT_TOOL_ACCESS.get(builtin),
+                        )
+                    except (AgentError, OSError) as error:
+                        _LOGGER.warning("Could not create the built-in %s Agent: %s", name, error)
+                        continue
+                    _LOGGER.info("Built-in %s Agent created (agent=%s)", name, agent_id)
+                elif problem is not None:
+                    _LOGGER.warning(
+                        "The built-in %s Agent is unavailable (agent=%s problem=%s)",
+                        name,
+                        agent_id,
+                        problem,
                     )
-                except (AgentError, OSError) as error:
-                    _LOGGER.warning("Could not create the built-in Librarian: %s", error)
-                    return None
-                _LOGGER.info("Built-in Librarian created (agent=%s)", LIBRARIAN_AGENT_ID)
-            elif problem is not None:
-                _LOGGER.warning(
-                    "The built-in Librarian is unavailable (agent=%s problem=%s)",
-                    LIBRARIAN_AGENT_ID,
-                    problem,
-                )
-                return None
-        return self.librarian()
 
     def list_with_order(self) -> AgentListResult:
         """Return the canonical roster plus its conflict-detection revision.
@@ -732,13 +782,16 @@ class AgentStore:
             changes.pop("id", None)
             agent_path = self._require_agent_path(agent_id)
             agent = self._load_verified_agent(agent_path)
-            fixed_fields = sorted(set(changes) - _BUILTIN_EDITABLE_FIELDS)
-            if agent.builtin is not None and (fixed_fields or copy_workspace_identity_files):
-                raise BuiltinAgentError(
-                    f"The {agent.name} is built into vBot: only its model, fallback_models, "
-                    "temperature, top_p and thinking_effort can change, not "
-                    f"{', '.join(fixed_fields or ['copy_workspace_identity_files'])}"
-                )
+            if agent.builtin is not None:
+                editable = _BUILTIN_EDITABLE_FIELDS[agent.builtin]
+                fixed_fields = sorted(set(changes) - editable)
+                if fixed_fields or copy_workspace_identity_files:
+                    names = ", ".join(sorted(editable - {"current_session_id"}))
+                    raise BuiltinAgentError(
+                        f"The {agent.name} Agent is built into vBot: only its {names} can "
+                        "change, not "
+                        f"{', '.join(fixed_fields or ['copy_workspace_identity_files'])}"
+                    )
             if not changes:
                 if copy_workspace_identity_files:
                     raise AgentError("copy_workspace_identity_files requires a workspace change")
@@ -814,7 +867,9 @@ class AgentStore:
             if not changes:
                 return AgentUpdateResult(_apply_defaults(agent, self._agent_defaults()))
 
-            updated_agent = replace(agent, **changes, updated_at=utc_now_timestamp())
+            updated_agent = _with_builtin_capabilities(
+                replace(agent, **changes, updated_at=utc_now_timestamp())
+            )
             relocation = _WorkspaceRelocation()
             try:
                 if "workspace" in changes:

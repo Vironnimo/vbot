@@ -212,7 +212,8 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         "tools": dict(getattr(agent, "tools", {})),
         "custom_system_prompt_enabled": bool(agent.custom_system_prompt_enabled),
         "librarian_enabled": getattr(agent, "librarian_enabled", True) is not False,
-        # Which built-in Agent this is (``librarian``), ``None`` for the user's Agents.
+        # Which built-in Agent this is (``librarian``, ``live_voice``, ``live_backend``),
+        # ``None`` for the user's Agents.
         "builtin": getattr(agent, "builtin", None),
         "compaction_policy": dict(agent_policy) if agent_policy is not None else None,
         "effective_compaction_policy": effective_compaction_policy(

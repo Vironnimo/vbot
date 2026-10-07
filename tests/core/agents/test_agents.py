@@ -11,6 +11,8 @@ import pytest
 
 from core.agents import (
     LIBRARIAN_AGENT_ID,
+    LIVE_BACKEND_AGENT_ID,
+    LIVE_VOICE_AGENT_ID,
     AgentAlreadyExistsError,
     AgentError,
     AgentNotFoundError,
@@ -22,6 +24,7 @@ from core.agents import (
     validate_agent_file,
 )
 from core.tools.availability import ToolAccess
+from core.tools.live import LIVE_TOOL_NAMES
 from core.utils.timestamps import is_canonical_timestamp
 from tests.core.agents.agents_test_support import (
     TEMPLATE_FILES,
@@ -189,44 +192,68 @@ def test_ensure_bootstrap_avoids_invalid_main_directory(store: AgentStore) -> No
     assert [agent.id for agent in store.list()] == ["main-2"]
 
 
-def test_ensure_librarian_creates_the_builtin_agent_outside_the_roster(
-    store: AgentStore,
-) -> None:
+def test_ensure_builtin_agents_creates_them_outside_the_roster(store: AgentStore) -> None:
     store.ensure_bootstrap()
 
-    librarian = store.ensure_librarian()
+    store.ensure_builtin_agents()
 
+    librarian = store.librarian()
     assert librarian is not None and is_librarian(librarian)
     assert (librarian.id, librarian.name, librarian.model) == ("librarian", "Librarian", "")
     assert persisted(store, "librarian")["builtin"] == "librarian"
+    assert persisted(store, LIVE_VOICE_AGENT_ID)["builtin"] == "live_voice"
+    assert persisted(store, LIVE_BACKEND_AGENT_ID)["builtin"] == "live_backend"
     assert "builtin" not in persisted(store, "main")
     assert [agent.id for agent in store.list()] == ["main"]
-    assert [agent.id for agent in store.list_with_builtins()] == ["main", "librarian"]
+    assert [agent.id for agent in store.list_with_builtins()] == [
+        "main",
+        "librarian",
+        LIVE_VOICE_AGENT_ID,
+        LIVE_BACKEND_AGENT_ID,
+    ]
     assert json.loads((store.data_dir / "agents" / "order.json").read_text())["agent_ids"] == [
         "main"
     ]
     assert store.get_raw("librarian").current_session_id == librarian.current_session_id
-    # Later starts find it; offline edits never widen what it can do.
-    rewrite(
-        store,
-        "librarian",
-        tool_access={"mode": "all"},
-        memory_prompt_mode="agent_user",
-        custom_system_prompt_enabled=True,
-        librarian_enabled=True,
-        tools={"subagent": {"allowed_agents": ["*"]}},
+    # The Agents of a Live call start with the Live Tools, always usable.
+    voice = store.builtin_agent("live_voice")
+    backend = store.builtin_agent("live_backend")
+    assert voice is not None and backend is not None
+    assert voice.tool_access == ToolAccess(
+        mode="selected", allowed=LIVE_TOOL_NAMES, granted=LIVE_TOOL_NAMES, fixed=True
     )
-    again = store.ensure_librarian()
+    assert backend.tool_access == ToolAccess(
+        mode="selected",
+        allowed=(*LIVE_TOOL_NAMES, "web_search", "web_fetch"),
+        granted=LIVE_TOOL_NAMES,
+        fixed=True,
+    )
+    # Later starts find them; offline edits never widen what they can do.
+    for agent_id in ("librarian", LIVE_VOICE_AGENT_ID):
+        rewrite(
+            store,
+            agent_id,
+            tool_access={"mode": "all"},
+            memory_prompt_mode="agent_user",
+            custom_system_prompt_enabled=True,
+            librarian_enabled=True,
+            tools={"subagent": {"allowed_agents": ["*"]}},
+        )
+    store.ensure_builtin_agents()
+    again = store.librarian()
     assert again is not None and again.created_at == librarian.created_at
     assert again.tool_access == ToolAccess(
         mode="selected", allowed=("skill", "skill_manage"), fixed=True
     )
-    assert (
-        again.memory_prompt_mode,
-        again.custom_system_prompt_enabled,
-        again.librarian_enabled,
-        again.tools,
-    ) == ("off", False, False, {})
+    voice_again = store.get(LIVE_VOICE_AGENT_ID)
+    assert voice_again.tool_access == ToolAccess(mode="all", granted=LIVE_TOOL_NAMES, fixed=True)
+    for agent in (again, voice_again):
+        assert (
+            agent.memory_prompt_mode,
+            agent.custom_system_prompt_enabled,
+            agent.librarian_enabled,
+            agent.tools,
+        ) == ("off", False, False, {})
     assert store.librarian_problem() is None
 
 
@@ -243,7 +270,7 @@ def test_an_agent_holding_the_librarian_id_stays_and_the_librarian_is_unavailabl
         rewrite(store, "librarian", id="librarian", builtin="unknown")
     before = agent_path(store, "librarian").read_bytes()
 
-    assert store.ensure_librarian() is None
+    store.ensure_builtin_agents()
 
     assert store.librarian_problem() == problem
     assert store.librarian() is None
@@ -253,16 +280,18 @@ def test_an_agent_holding_the_librarian_id_stays_and_the_librarian_is_unavailabl
     assert [(item.severity, item.path) for item in report.diagnostics] == [
         ("warning", "$.id") if problem == "agent_id_taken" else ("error", "$.builtin")
     ]
-    assert [agent.id for agent in store.list_with_builtins()] == (
-        ["librarian"] if problem == "agent_id_taken" else []
-    )
+    assert [agent.id for agent in store.list_with_builtins()] == [
+        *(["librarian"] if problem == "agent_id_taken" else []),
+        LIVE_VOICE_AGENT_ID,
+        LIVE_BACKEND_AGENT_ID,
+    ]
 
 
 def test_the_librarian_keeps_its_id_and_existence_and_changes_only_model_settings(
     store: AgentStore,
 ) -> None:
     store.ensure_bootstrap()
-    store.ensure_librarian()
+    store.ensure_builtin_agents()
 
     updated = store.update(
         LIBRARIAN_AGENT_ID,
@@ -292,6 +321,18 @@ def test_the_librarian_keeps_its_id_and_existence_and_changes_only_model_setting
     assert store.restore_target_problem("librarian") == "agent_id_taken"
     assert store.get(LIBRARIAN_AGENT_ID).name == "Librarian"
     assert not (store.data_dir / "payload").exists()
+    # The Agents of a Live call also take their Tools from the user.
+    backend = store.update(
+        LIVE_BACKEND_AGENT_ID, tool_access={"mode": "selected", "allowed": ["overview"]}
+    )
+    assert backend.tool_access == ToolAccess(
+        mode="selected", allowed=("overview",), granted=LIVE_TOOL_NAMES, fixed=True
+    )
+    assert store.get(LIVE_BACKEND_AGENT_ID).tool_access == backend.tool_access
+    with pytest.raises(BuiltinAgentError):
+        store.update(LIVE_VOICE_AGENT_ID, memory_prompt_mode="agent")
+    with pytest.raises(InvalidAgentIdError):
+        store.create("Live-Voice", "Mine")
 
 
 def test_create_with_custom_values_persists_schema_and_keeps_workspace_files(

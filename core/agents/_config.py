@@ -10,10 +10,11 @@ from pathlib import Path
 from typing import Any, cast
 
 from core.agents._types import (
+    BUILTIN_AGENT_IDS,
+    BUILTIN_AGENT_NAMES,
     BUILTIN_AGENTS,
     DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
     DEFAULT_LIBRARIAN_ENABLED,
-    LIBRARIAN_AGENT_ID,
     LIBRARIAN_BUILTIN,
     LIBRARIAN_TOOLS,
     Agent,
@@ -87,6 +88,7 @@ from core.tools.availability import (
     normalize_env_keys,
     normalize_tool_access,
 )
+from core.tools.live import LIVE_TOOL_NAMES
 from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.timestamps import utc_now_timestamp
 
@@ -107,18 +109,26 @@ _EXCLUDED_SKILLS_WILDCARD_ERROR = (
 )
 
 # What a built-in Agent keeps whatever its ``agent.json`` says: the Librarian
-# can only load and maintain Skills, and has no Memory, Project, custom System
+# can only load and maintain Skills; the Agents of a Live call keep the Tools the
+# user picks plus the Live Tools. None has Memory, a Project, a custom System
 # Prompt or Librarian passes of its own.
-# An Agent of the user that holds the id of the built-in Librarian.
-_LIBRARIAN_ID_TAKEN_WARNING = (
-    f"{LIBRARIAN_AGENT_ID} is the id of vBot's built-in Librarian, so the Librarian is "
-    "unavailable and no Librarian pass runs while this Agent holds it; rename this Agent "
-    f"(vbot agent rename {LIBRARIAN_AGENT_ID} <new-id>) and restart vBot to create the "
-    "Librarian"
-)
 _LIBRARIAN_TOOL_ACCESS = ToolAccess(
     mode=TOOL_ACCESS_MODE_SELECTED, allowed=LIBRARIAN_TOOLS, fixed=True
 )
+
+
+def _builtin_id_taken_warning(builtin: str) -> str:
+    """Say that an Agent of the user holds the reserved id of a built-in Agent."""
+    agent_id = BUILTIN_AGENT_IDS[builtin]  # type: ignore[index]
+    name = BUILTIN_AGENT_NAMES[builtin]  # type: ignore[index]
+    return (
+        f"{agent_id} is the id of vBot's built-in {name} Agent, so that Agent is unavailable "
+        f"while this Agent holds it; rename this Agent (vbot agent rename {agent_id} <new-id>) "
+        f"and restart vBot to create the {name} Agent"
+    )
+
+
+_BUILTIN_BY_ID = {agent_id: builtin for builtin, agent_id in BUILTIN_AGENT_IDS.items()}
 
 _AGENT_CONFIG_FIELDS = frozenset(
     {
@@ -336,14 +346,20 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
     if builtin is not None:
         if builtin not in BUILTIN_AGENTS:
             add_error(diagnostics, "$.builtin", f"must be null or one of: {sorted(BUILTIN_AGENTS)}")
-        elif builtin == LIBRARIAN_BUILTIN and data.get("id") != LIBRARIAN_AGENT_ID:
+        elif data.get("id") != BUILTIN_AGENT_IDS[builtin]:
             add_error(
-                diagnostics, "$.builtin", f"is valid only for the Agent id {LIBRARIAN_AGENT_ID}"
+                diagnostics,
+                "$.builtin",
+                f"is valid only for the Agent id {BUILTIN_AGENT_IDS[builtin]}",
             )
-    elif data.get("id") == LIBRARIAN_AGENT_ID:
-        # The Agent of the user keeps working; doctor says why the Librarian does not.
+    elif data.get("id") in _BUILTIN_BY_ID:
+        # The Agent of the user keeps working; doctor says why the built-in one does not.
         diagnostics.append(
-            JsonDiagnostic(severity="warning", path="$.id", message=_LIBRARIAN_ID_TAKEN_WARNING)
+            JsonDiagnostic(
+                severity="warning",
+                path="$.id",
+                message=_builtin_id_taken_warning(_BUILTIN_BY_ID[data["id"]]),
+            )
         )
     validate_optional_compaction_policy(
         diagnostics, data.get("compaction_policy"), "$.compaction_policy"
@@ -678,17 +694,32 @@ def _agent_from_dict(
 
 def _with_builtin_capabilities(agent: Agent) -> Agent:
     """Return ``agent`` with the fixed capabilities of a built-in Agent; others unchanged."""
-    if agent.builtin != LIBRARIAN_BUILTIN:
+    if agent.builtin is None:
         return agent
+    tool_access = (
+        _LIBRARIAN_TOOL_ACCESS
+        if agent.builtin == LIBRARIAN_BUILTIN
+        else live_agent_tool_access(agent.tool_access)
+    )
     return replace(
         agent,
-        tool_access=_LIBRARIAN_TOOL_ACCESS,
+        tool_access=tool_access,
         memory_prompt_mode=MEMORY_PROMPT_MODE_OFF,
         custom_system_prompt_enabled=False,
         librarian_enabled=False,
         root_project_id=None,
         tools={},
     )
+
+
+def live_agent_tool_access(tool_access: ToolAccess) -> ToolAccess:
+    """Return a Live Agent's Tool policy: the user's choice, with the Live Tools usable.
+
+    The Live Tools need an opt-in on every Agent, which a Live Agent always has;
+    nothing activates beside the Tools the policy names.
+    """
+    granted = tuple(dict.fromkeys((*tool_access.granted, *LIVE_TOOL_NAMES)))
+    return replace(tool_access, granted=granted, fixed=True)
 
 
 def _agent_document(agent: Agent, *, workspace: str) -> JsonObject:
@@ -786,13 +817,15 @@ def _validate_new_agent_id(agent_id: str) -> None:
     """Validate an id a user picks for a new or renamed Agent.
 
     The id names the Agent's directory, so a name Windows reserves is refused on
-    every platform, and so is the built-in Librarian's id in any case; existing
+    every platform, and so are the ids of the built-in Agents in any case; existing
     Agents keep their ids.
     """
     _validate_agent_id(agent_id)
     if is_reserved_name(agent_id):
         raise InvalidAgentIdError(reserved_name_message("Agent id", agent_id))
-    if agent_id.casefold() == LIBRARIAN_AGENT_ID:
+    builtin = _BUILTIN_BY_ID.get(agent_id.casefold())
+    if builtin is not None:
         raise InvalidAgentIdError(
-            f"Agent id {agent_id} is reserved for vBot's built-in Librarian; choose another id"
+            f"Agent id {agent_id} is reserved for vBot's built-in "
+            f"{BUILTIN_AGENT_NAMES[builtin]} Agent; choose another id"
         )
