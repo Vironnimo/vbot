@@ -300,6 +300,11 @@ def powershell_command(command: str) -> str:
     return f"{SETUP_STATEMENT}; {INVOKE_STATEMENT}\n$__vbotCommand = '{literal}'{run}"
 
 
+def powershell_literal(text: str) -> str:
+    """Return *text* as a single-quoted PowerShell string that keeps it as data."""
+    return f"'{_escaped(text)}'"
+
+
 def _escaped(text: str) -> str:
     """Return *text* escaped for a single-quoted PowerShell string."""
     # PowerShell also treats typographic single quotes as quotes; a doubled one is literal.
@@ -313,4 +318,5 @@ __all__ = [
     "UNIX_LINE_FILTERS_STATEMENT",
     "UTF8_CONSOLE_STATEMENT",
     "powershell_command",
+    "powershell_literal",
 ]

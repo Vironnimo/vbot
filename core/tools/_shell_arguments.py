@@ -20,6 +20,7 @@ from functools import cache
 from pathlib import PurePath
 from typing import Any
 
+from core.tools._powershell import powershell_literal
 from core.tools.call_syntax import SpellingAliases, normalize_call_arguments, spelling
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
 from core.tools.model_names import BASH_TOOL_NAME, SHELL_MODEL_NAME
@@ -185,8 +186,7 @@ def _host_shell_script(argv: list[str]) -> str | None:
 def _powershell_command_line(argv: list[str]) -> str:
     """Quote argv for PowerShell 7, which passes each quoted token as one argument."""
     tokens = [
-        item if _PWSH_BARE_ARGUMENT.fullmatch(item) else "'" + item.replace("'", "''") + "'"
-        for item in argv
+        item if _PWSH_BARE_ARGUMENT.fullmatch(item) else powershell_literal(item) for item in argv
     ]
     if tokens[0].startswith("'"):
         tokens.insert(0, "&")
