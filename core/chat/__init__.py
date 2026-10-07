@@ -6,6 +6,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from core.chat._external_run import ExternalRun
     from core.chat._message_history import (
         checkpoint_ordinal,
         compaction_projection_without_active_skills,
@@ -101,6 +102,7 @@ _EXPORT_MODULES = {
     "CommandSpec": "core.chat.commands",
     "CommandUnavailability": "core.chat.commands",
     "ExtensionCommandContext": "core.chat.commands",
+    "ExternalRun": "core.chat._external_run",
     "HandoffArgument": "core.chat.commands",
     "NewSessionCommandContext": "core.chat.commands",
     "NewSessionCommandResult": "core.chat.commands",
@@ -150,6 +152,7 @@ __all__ = [
     "CommandSpec",
     "CommandUnavailability",
     "ExtensionCommandContext",
+    "ExternalRun",
     "HandoffArgument",
     "NewSessionCommandContext",
     "NewSessionCommandResult",

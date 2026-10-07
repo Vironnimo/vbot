@@ -279,6 +279,8 @@ class RunExecution:
                         if request.content is None:
                             raise ChatError("content is required for non-retry runs")
                         _append_input_origin_note(session, request.input_origin)
+                        if request.context_note:
+                            session.add_note(request.context_note)
                         if request.parent_agent_input:
                             session.add_note(PARENT_AGENT_INPUT_SYSTEM_REMINDER)
                         if takeover:
