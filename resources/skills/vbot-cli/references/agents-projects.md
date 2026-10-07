@@ -4,6 +4,8 @@ Address form: a bare id (`assistant`) targets an identity agent; `agent@project`
 
 ## Agents
 
+Before you create an Agent for the user, load the `agent-authoring` Skill: it settles the new Agent's purpose, asking the user when the request leaves it open, and writes its SOUL.
+
 ```bash
 vbot agent list
 vbot agent show <agent-id>
@@ -48,7 +50,7 @@ vbot agent rename coder researcher
 
 ### Choosing the agent kind
 
-`vbot agent create` always creates an Identity Agent with its own Workspace, `SOUL.md`, Memory, private Skills, and Sessions. When the user generically asks to create an Agent, use this kind. To make it work in a Project, create it and then set its default Project with `agent update --project`. Write the new Agent's `<workspace>/SOUL.md` for its role, with the Workspace path from `agent show`; the `agent-authoring` Skill says what a SOUL holds and how to write it.
+`vbot agent create` always creates an Identity Agent with its own Workspace, `SOUL.md`, Memory, private Skills, and Sessions. When the user generically asks to create an Agent, use this kind. To make it work in a Project, create it and then set its default Project with `agent update --project`. Write the new Agent's `<workspace>/SOUL.md` for its role, with the Workspace path from `agent show`.
 
 A Project Agent is different: it is a workspace-less Config Agent discovered from the Project's enabled repository Agent Sources. It has no `SOUL.md`, Memory, or persistent identity. Do not inspect the repo or create/edit a Project Agent file merely because the user wants an Agent associated with a Project; do that only when the user explicitly asks for a Project Team member or repo-owned agent profile.
 
