@@ -171,6 +171,33 @@ async def test_aclose_cancels_and_drains_generated_title_tasks(manager) -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_late_title_never_lands_on_a_new_session_at_the_same_address(manager) -> None:
+    started, release = asyncio.Event(), asyncio.Event()
+
+    class SlowAdapter(StubAdapter):
+        @override
+        async def send(self, messages: list[dict], **kwargs: Any) -> dict[str, Any]:
+            started.set()
+            await release.wait()
+            return await super().send(messages, **kwargs)
+
+    runtime = StubRuntime(
+        manager, enabled=True, configured_model="openai/title::cheap", adapters=[SlowAdapter()]
+    )
+    _append_first_user(runtime, "Archived conversation")
+    service = SessionTitleService(cast(Any, runtime))
+    _notify(service, "Archived conversation")
+    await started.wait()
+
+    await manager.archive(_address("coder", "session-one"))
+    _append_first_user(runtime, "New conversation")
+    release.set()
+    await _wait_for_background(service)
+
+    assert "auto_title" not in _metadata(runtime)
+
+
+@pytest.mark.asyncio
 async def test_disabled_generation_keeps_local_title_without_adapter(manager) -> None:
     runtime = StubRuntime(manager, enabled=False, adapters=[])
     content = "  Investigate\n login   failures in production  " + "x" * 50

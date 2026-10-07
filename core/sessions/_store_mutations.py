@@ -25,7 +25,7 @@ from core.sessions._types import (
     SessionIdentityReferenceUpdate,
     ToolResultFacts,
 )
-from core.sessions.errors import SessionStoreCorruptError
+from core.sessions.errors import SessionNotFoundError, SessionStoreCorruptError
 from core.utils.timestamps import utc_now_timestamp
 
 if TYPE_CHECKING:
@@ -163,9 +163,16 @@ def mutate_metadata(
     connection: sqlite3.Connection,
     address: SessionAddress,
     mutation: Callable[[JsonObject], None],
+    *,
+    expected_generation_id: str | None = None,
 ) -> tuple[JsonObject, JsonObject]:
-    """Apply one metadata read-modify-write under the writer transaction."""
+    """Apply one metadata read-modify-write under the writer transaction.
+
+    With *expected_generation_id*, another live generation counts as missing.
+    """
     state = _store_values._live_metadata_row(connection, address)
+    if expected_generation_id is not None and str(state["generation_id"]) != expected_generation_id:
+        raise SessionNotFoundError(f"session generation changed: {address.session_id}")
     previous, updated, storage = metadata_change(state, mutation)
     if storage is not None:
         _store_values._write_metadata_storage(connection, int(state["session_key"]), storage)
