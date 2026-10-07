@@ -13,7 +13,7 @@ import asyncio
 import json
 import re
 import shutil
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -99,6 +99,8 @@ _PATTERN_FLAGS = re.IGNORECASE | re.MULTILINE
 TERMINAL_KEYS = tuple(TERMINAL_INPUT_KEY_SEQUENCES)
 # Terminals named in errors, and the label length for each.
 _LISTED_TERMINALS = 3
+# A matched line longer than this is cut.
+_MATCHED_LINE_CHARS = 500
 _TERMINAL_LABEL_CHARS = 40
 # A list row shows this much of the program's first line.
 _PROGRAM_CHARS = 80
@@ -401,13 +403,15 @@ async def _handle_terminal(
     except ToolContractError as error:
         return tool_failure("invalid_arguments", str(error), retryable=False)
     except TerminalManagerError as error:
-        state = (
-            f" To see whether {terminal_id} still runs, call terminal "
-            f"{_call('status', str(terminal_id))}."
-            if isinstance(terminal_id, str) and terminal_id
-            else ""
-        )
-        return tool_failure("terminal_failed", f"{error}.{state}", retryable=True)
+        message = str(error).rstrip(". ") + "."
+        if isinstance(terminal_id, str) and terminal_id:
+            if action == "kill":
+                message += f" To try again, call terminal {_call('kill', terminal_id)}."
+            message += (
+                f" To see whether {terminal_id} still runs, call terminal "
+                f"{_call('status', terminal_id)}."
+            )
+        return tool_failure("terminal_failed", message, retryable=True)
 
 
 async def _handle_start(
@@ -644,19 +648,70 @@ async def _handle_wait(
         default=None,
         minimum=0,
     )
-    ended = await terminal_manager.wait(
-        terminal_id, owner, seconds=seconds, pattern=pattern, after_revision=after_revision
+    matched: list[str] = []
+    ended = await _wait_unless_released(
+        context,
+        terminal_manager.wait(
+            terminal_id,
+            owner,
+            seconds=seconds,
+            pattern=pattern,
+            after_revision=after_revision,
+            on_match=matched.append,
+        ),
     )
+    command = info.kind == "command"
+    if ended == "user":
+        notes.append("The user ended this wait; the program keeps running.")
+    elif ended == "timeout" and pattern is not None:
+        notes.append(f"No output matched pattern within {seconds:g} seconds.")
+    elif ended == "timeout" and command:
+        notes.append(f"The command did not exit within {seconds:g} seconds.")
     if capped and ended == "timeout":
-        notes.append(_capped_wait_note())
-    if info.kind == "command":
+        notes.append(_capped_wait_note(command=command))
+    if command:
         data = await _command_result(terminal_manager, context, terminal_id, wait_ended=ended)
-        return tool_success(_with_notes(data, notes))
-    snapshot = await terminal_manager.snapshot(terminal_id, owner, include_name=False)
-    _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
-    data = _screen_result(snapshot, view="wait")
-    data["wait_ended"] = ended
+    else:
+        snapshot = await terminal_manager.snapshot(terminal_id, owner, include_name=False)
+        _acknowledge_after_persistence(terminal_manager, context, owner, snapshot)
+        data = _screen_result(snapshot, view="wait")
+        data["wait_ended"] = ended
+    if matched:
+        data["matched"] = _matched_line(matched[0])
     return tool_success(_with_notes(data, notes))
+
+
+async def _wait_unless_released(context: ToolContext, waiting: Awaitable[str]) -> str:
+    """How *waiting* ended, or ``user`` when the user ended the wait first."""
+    released = asyncio.Event()
+
+    def release() -> bool:
+        if released.is_set():
+            return False
+        released.set()
+        return True
+
+    if context.background_registration_hook is not None:
+        context.background_registration_hook(release)
+    wait = asyncio.ensure_future(waiting)
+    user = asyncio.ensure_future(released.wait())
+    try:
+        await asyncio.wait({wait, user}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in (wait, user):
+            task.cancel()
+        await asyncio.gather(wait, user, return_exceptions=True)
+    if wait.done() and not wait.cancelled():
+        return wait.result()
+    return "user"
+
+
+def _matched_line(line: str) -> str:
+    """The line a pattern matched, as a result shows it."""
+    line = line.strip()
+    if len(line) <= _MATCHED_LINE_CHARS:
+        return line
+    return line[: _MATCHED_LINE_CHARS - 3] + "..."
 
 
 async def _handle_input(
@@ -746,6 +801,7 @@ async def _handle_input(
             + json.dumps({"action": "input", "terminal_id": terminal_id, "key": "enter"})
             + ".",
         )
+    matched: list[str] = []
     if pattern is not None:
         ended = await terminal_manager.wait(
             terminal_id,
@@ -753,6 +809,7 @@ async def _handle_input(
             seconds=seconds,
             pattern=pattern,
             after_revision=revision_before_input,
+            on_match=matched.append,
         )
     else:
         # The reply: the output settles after the input, as start's first screen does.
@@ -760,7 +817,7 @@ async def _handle_input(
             terminal_id, owner, seconds=seconds, after_quiet=int(sent["quiet_boundaries"])
         )
     if capped and ended == "timeout":
-        notes.append(_capped_wait_note())
+        notes.append(_capped_wait_note(command=info.kind == "command"))
     if info.kind == "command":
         data = await _command_result(
             terminal_manager,
@@ -776,6 +833,8 @@ async def _handle_input(
             data["wait_ended"] = ended
         elif ended == "timeout":
             data["next"] = _reply_pending_text(terminal_id)
+    if matched:
+        data["matched"] = _matched_line(matched[0])
     result = _with_notes({**data, **typed}, notes)
     if "next" in result:
         # What to do next closes the result, after what was typed.
@@ -992,11 +1051,13 @@ def _with_notes(data: JsonObject, notes: list[str]) -> JsonObject:
     return data
 
 
-def _capped_wait_note() -> str:
-    return (
+def _capped_wait_note(*, command: bool) -> str:
+    """A capped wait timed out; a command's result arrives without another wait."""
+    note = (
         f"A wait lasts at most {TERMINAL_WAIT_MAX_SECONDS} seconds, so this one ended after "
-        f"{TERMINAL_WAIT_MAX_SECONDS}; wait again to keep following the program."
+        f"{TERMINAL_WAIT_MAX_SECONDS}"
     )
+    return f"{note}." if command else f"{note}; wait again to keep following the program."
 
 
 def _wait_seconds(

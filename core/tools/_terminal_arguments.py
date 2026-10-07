@@ -31,7 +31,19 @@ _ENTER = TERMINAL_INPUT_KEY_SEQUENCES["enter"]
 
 _FIELD_ALIASES = SpellingAliases(
     {
-        "terminal_id": ("session_id", "terminal", "term_id", "terminal_session_id", "id"),
+        "terminal_id": (
+            "session_id",
+            "terminal",
+            "term_id",
+            "terminal_session_id",
+            "id",
+            # Background-command ids of other harnesses (Claude Code, Codex) and older vBot.
+            "process_id",
+            "proc_id",
+            "bash_id",
+            "shell_id",
+            "task_id",
+        ),
         "command": ("cmd", "program", "executable"),
         "workdir": ("cwd", "dir", "directory", "working_directory", "working_dir"),
         "text": ("input",),
@@ -49,7 +61,7 @@ _FIELD_ALIASES = SpellingAliases(
         "timeout": ("timeout_seconds", "timeout_secs", "timeout_sec", "timeout_s", "seconds"),
         "expected_screen_revision": ("screen_revision", "expected_revision"),
         "after_revision": ("attention_revision", "since_revision"),
-        "pattern": ("regex", "regexp", "until", "wait_for", "expect", "match"),
+        "pattern": ("regex", "regexp", "until", "wait_for", "expect", "expected", "match"),
     }
 )
 _SUBMIT = "submit"
@@ -72,6 +84,7 @@ _ACTION_VALUES = {
             "poll",
             "check",
             "inspect",
+            "info",
             "peek",
             "snapshot",
             "capture",
@@ -82,7 +95,7 @@ _ACTION_VALUES = {
         ),
         "status",
     ),
-    **dict.fromkeys(("wait", "await", "waitfor", "waitforoutput"), "wait"),
+    **dict.fromkeys(("wait", "await", "waitfor", "waitforoutput", "join", "block"), "wait"),
     **dict.fromkeys(
         (
             "input",
@@ -105,7 +118,19 @@ _ACTION_VALUES = {
     **dict.fromkeys(("submit", "sendline", "writeline"), _SUBMIT),
     **dict.fromkeys(("resize", "setsize", "size"), _RESIZE),
     **dict.fromkeys(
-        ("kill", "stop", "close", "terminate", "end", "destroy", "killsession"), "kill"
+        (
+            "kill",
+            "stop",
+            "close",
+            "terminate",
+            "end",
+            "destroy",
+            "killsession",
+            "killshell",
+            "cancel",
+            "abort",
+        ),
+        "kill",
     ),
 }
 # Flags other harnesses use to press Enter after the input.

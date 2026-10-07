@@ -1,8 +1,10 @@
 """A shell command run as a Terminal Session: transcript, process tree and outcome.
 
 A command session renders its output like any Terminal Session and also keeps
-a transcript: the rendered output as final logical lines, written to a private
-file and held as a bounded head and tail for the result. Its process tree is
+a transcript: the rendered output as final logical lines, held as a bounded
+head and tail for the result and written to a private log file. The log file
+also holds the rendered rows that are not final yet, rewritten as they change,
+so it has the command's whole output while the command runs. Its process tree is
 tracked from the start, so the outcome records the facts the shell's own exit
 code hides - failed child programs and processes still running - and why the
 command was stopped when vBot stopped it.
@@ -22,7 +24,7 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, TextIO
+from typing import BinaryIO, Literal
 
 from core.storage.temp_files import TemporaryFileLease
 
@@ -33,6 +35,8 @@ COMMAND_HEAD_LINES = 40
 COMMAND_TAIL_LINES = 80
 # A transcript line kept in memory for the result; the file has every line whole.
 COMMAND_MEMORY_LINE_MAX_CHARS = 65_536
+# A running command's log file shows its output at most this long after it was printed.
+COMMAND_LOG_REFRESH_SECONDS = 1.0
 # Ctrl+C first; a tree still running after this long is killed.
 COMMAND_STOP_GRACE_SECONDS = 3.0
 # A command that prints nothing and uses no CPU this long is idle.
@@ -84,6 +88,8 @@ class CommandReport:
     # Until the timeout stops every process of the command still running, the
     # ones its exited shell left behind included; None without a timeout.
     timeout_remaining_seconds: float | None
+    # From the start until the command ended, or until the report was taken.
+    elapsed_seconds: float
 
 
 CommandReportFormatter = Callable[[CommandReport], str]
@@ -124,18 +130,21 @@ class CommandState:
         self.exited = asyncio.Event()
         self.ended = asyncio.Event()
         self._facts: ProcessTreeFacts | None = None
+        self._ended_at: float | None = None
         self._head: list[str] = []
         self._tail: deque[str] = deque(maxlen=COMMAND_TAIL_LINES)
         self._total_lines = 0
         self._lease = transcript_lease
         # Kept after the lease ends: the file stays until its retention expires.
         self._log_path = transcript_lease.path if transcript_lease is not None else None
-        self._file: TextIO | None = None
+        self._file: BinaryIO | None = None
+        # The log file's final lines end here; the rows after them are pending.
+        self._final_bytes = 0
         if transcript_lease is not None:
             path = transcript_lease.path
             if os.name != "nt":
                 path.chmod(0o600)
-            self._file = path.open("a", encoding="utf-8", newline="\n")
+            self._file = path.open("wb")
 
     @property
     def shell_exited(self) -> bool:
@@ -150,15 +159,12 @@ class CommandState:
         return self._log_path
 
     def add_lines(self, lines: tuple[str, ...] | list[str]) -> None:
-        """Append final transcript lines."""
+        """Append final transcript lines; they replace the pending rows in the log file."""
         if not lines:
             return
-        if self._file is not None:
-            try:
-                self._file.write("\n".join(lines) + "\n")
-                self._file.flush()
-            except OSError:
-                self._close_file()
+        written = self._write_log(lines)
+        if written is not None:
+            self._final_bytes += written
         for line in lines:
             kept = line[:COMMAND_MEMORY_LINE_MAX_CHARS]
             if len(self._head) < COMMAND_HEAD_LINES:
@@ -166,6 +172,25 @@ class CommandState:
             else:
                 self._tail.append(kept)
         self._total_lines += len(lines)
+
+    def show_pending(self, lines: tuple[str, ...]) -> None:
+        """Show *lines*, the rendered rows after the final lines, at the log file's end."""
+        self._write_log(lines)
+
+    def _write_log(self, lines: tuple[str, ...] | list[str]) -> int | None:
+        """Replace everything after the final lines with *lines*; the bytes written."""
+        if self._file is None:
+            return None
+        data = "".join(f"{line}\n" for line in lines).encode("utf-8", "replace")
+        try:
+            self._file.seek(self._final_bytes)
+            self._file.write(data)
+            self._file.truncate()
+            self._file.flush()
+        except OSError:
+            self._close_file()
+            return None
+        return len(data)
 
     def record_exit(self, exit_code: int | None, facts: ProcessTreeFacts | None) -> None:
         """The shell exited: fix the outcome the report shows."""
@@ -175,13 +200,14 @@ class CommandState:
         self._facts = facts
         self.exited.set()
 
-    def record_end(self, facts: ProcessTreeFacts | None) -> None:
+    def record_end(self, facts: ProcessTreeFacts | None, *, now: float) -> None:
         """The shell exited and what it left running ended or went quiet: the
         outcome is final, *facts* (when known) show what still runs."""
         if self.has_ended:
             return
         if facts is not None:
             self._facts = facts
+        self._ended_at = now
         self.ended.set()
 
     def tree_ended(self) -> None:
@@ -226,6 +252,9 @@ class CommandState:
                 if self.timeout_seconds
                 else None
             ),
+            elapsed_seconds=max(
+                0.0, (now if self._ended_at is None else self._ended_at) - self.started_at
+            ),
         )
 
     def _failed_exits(self, facts: ProcessTreeFacts | None) -> tuple[ProgramExit, ...]:
@@ -265,6 +294,7 @@ class CommandState:
 __all__ = [
     "COMMAND_IDLE_SECONDS",
     "COMMAND_LEFTOVER_QUIET_SECONDS",
+    "COMMAND_LOG_REFRESH_SECONDS",
     "COMMAND_STOP_GRACE_SECONDS",
     "COMMAND_TEMPORARY_CATEGORY",
     "CommandReport",

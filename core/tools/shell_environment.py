@@ -77,6 +77,9 @@ _UNATTENDED_DEFAULTS: dict[str, str] = {
     "GCM_INTERACTIVE": "never",
     "GIT_PAGER": "cat",
     "PAGER": "cat",
+    # Python writes UTF-8 when its output is piped or captured, which is how the
+    # shell decodes it; otherwise non-ASCII text arrives garbled.
+    "PYTHONIOENCODING": "utf-8",
 }
 _TERM = "xterm-256color"
 

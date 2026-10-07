@@ -429,11 +429,20 @@ async def test_codex_and_hermes_input_shapes_type_into_the_terminal(
         ("await", "wait"),
         ("launch", "start"),
         ("disconnect", "detach"),
+        ("KillShell", "kill"),
+        ("cancel", "kill"),
+        ("join", "wait"),
     ],
 )
 def test_action_spellings_name_the_action(action: str, canonical: str) -> None:
     normalized = normalize_terminal_arguments({"action": action, "terminal_id": "term_a"})
     assert normalized["action"] == canonical
+
+
+@pytest.mark.parametrize("field", ["process_id", "bash_id", "shell_id", "task_id"])
+def test_background_command_id_spellings_name_the_terminal(field: str) -> None:
+    normalized = normalize_terminal_arguments({"action": "status", field: "term_a"})
+    assert normalized == {"action": "status", "terminal_id": "term_a"}
 
 
 @pytest.mark.asyncio
@@ -708,7 +717,9 @@ async def test_follow_up_results_show_the_screen_without_repeating_launch_facts(
         "screen",
         "scrollback",
         "wait_ended",
+        "matched",
     ]
+    assert waited["data"]["matched"] == "ready>"
     # The user sees the lines above the screen and the screen, read from the result.
     assert terminal.details(wait, waited) == [
         {"type": "text", "label": label, "source": {"from": "result", "path": ["data", key]}}
