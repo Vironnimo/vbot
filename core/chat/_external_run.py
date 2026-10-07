@@ -16,7 +16,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from core.chat._step_outcomes import tool_result_facts
+from core.chat._step_outcomes import _RegisteredNames, tool_result_facts
 from core.chat.errors import ChatError
 from core.chat.events import _emit_message_event
 from core.chat.messages import (
@@ -37,7 +37,7 @@ from core.runs import (
     RunKind,
 )
 from core.sessions import AGENT_DEFAULT_PROJECT, ChatSession, SessionAddress
-from core.tools import tool_failure
+from core.tools import called_tool_name, tool_failure
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
@@ -144,7 +144,9 @@ class ExternalRun:
     async def run_tool(self, call_id: str, name: str, arguments: Any) -> JsonObject:
         """Run one Tool call of the Model and store it; return its Tool result envelope.
 
-        *arguments* are as the Model sent them: an object or its JSON text.
+        *name* resolves like a Chat Run's call: a namespace prefix such as
+        ``functions.`` or another harness's name for an offered Tool runs that
+        Tool. *arguments* are as the Model sent them: an object or its JSON text.
         The call and its result are stored together once it finished, after
         what was said while it ran. Calls can run concurrently; cancelling one
         stores a result saying it was stopped.
@@ -154,7 +156,14 @@ class ExternalRun:
             return tool_failure("tool_stopped", _STOPPED)
         call = ToolCall.from_dict(
             normalize_tool_call_candidate(
-                tool_call_id=call_id, name=name, arguments=arguments, fallback_id=new_id("call")
+                tool_call_id=call_id,
+                name=called_tool_name(
+                    name,
+                    self._allowed_tools,
+                    registered=_RegisteredNames(self._dependencies.tools),
+                ),
+                arguments=arguments,
+                fallback_id=new_id("call"),
             )
         )
         self._iteration += 1

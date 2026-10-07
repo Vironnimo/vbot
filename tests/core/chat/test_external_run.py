@@ -80,7 +80,8 @@ async def test_external_run_records_the_conversation_and_runs_tool_calls(tmp_pat
     ]
     await external.record_user("What is the weather?")
     looked_up = await external.run_tool("call_1", "lookup", {"q": "weather"})
-    relayed = await external.run_tool("call_2", "relay", {"request": "check"})
+    # A namespace prefix some Models write still names the offered Tool.
+    relayed = await external.run_tool("call_2", "functions.relay", {"request": "check"})
     await external.record_note("vBot update: a Run finished.")
     await external.record_assistant("It is sunny.")
     await external.finish()
