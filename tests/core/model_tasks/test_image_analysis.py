@@ -348,6 +348,29 @@ async def test_analyze_sends_fixed_isolated_prompt_and_ordered_images(tmp_path: 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("terminal_outcome", "complete"),
+    [("stop", True), ("output_truncated", False), ("content_filtered", False)],
+)
+async def test_an_analysis_the_model_did_not_finish_says_so(
+    tmp_path: Path, terminal_outcome: str, complete: bool
+) -> None:
+    partial = "Visible ingredients: flour and"
+    adapter = _UnderstandingAdapter(
+        response={"content": partial, "terminal_outcome": terminal_outcome}
+    )
+    service = ImageService(
+        _UnderstandingModelTasks(task_types=("chat", "text_output")),
+        cast(Any, _UnderstandingRuntime(adapter)),
+    )
+
+    result = await service.analyze("List the ingredients.", image_paths=[_png(tmp_path / "a.png")])
+
+    assert result.content.startswith(partial)
+    assert (result.content == partial) is complete
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("format", ["BMP", "HEIF"])
 async def test_analysis_converts_for_the_actual_target_without_changing_original(
     tmp_path: Path, format

@@ -648,6 +648,44 @@ async def test_a_fire_while_an_edit_checks_its_references_is_kept(tmp_path: Path
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fields",
+    [{"prompt": "Pong"}, {"remaining_runs": 5}],
+    ids=["other-field", "remaining-runs"],
+)
+async def test_a_failed_edit_save_keeps_a_fire_recorded_meanwhile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fields: dict[str, Any]
+) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    job = await service.create_job(
+        agent_id="agent-one",
+        prompt="Ping",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+        remaining_runs=3,
+    )
+    fired_at = "2026-09-30T09:00:00+00:00"
+
+    async def fire_then_fail() -> None:
+        # A fire spends one run of the edited job while the edit's save fails.
+        stored = service._jobs[job.id]
+        assert stored.remaining_runs is not None
+        stored.last_fired_at, stored.remaining_runs = fired_at, stored.remaining_runs - 1
+        raise CronStorageError("disk full")
+
+    monkeypatch.setattr(service, "_save_jobs_async", fire_then_fail)
+    with pytest.raises(CronStorageError):
+        await service.update_job(job.id, **fields)
+
+    restored = service.get_job(job.id)
+    assert (restored.prompt, restored.last_fired_at, restored.remaining_runs) == (
+        "Ping",
+        fired_at,
+        2,
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["create", "update"])
 @pytest.mark.parametrize(
     ("resolver_error", "expected_error", "resolver_base"),

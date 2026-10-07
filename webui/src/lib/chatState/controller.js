@@ -82,6 +82,15 @@ function historyLoadOptions(history) {
   };
 }
 
+// Each page reports the Runs of its own messages; a later record wins.
+function mergeHistoryRuns(earlier, later) {
+  const runs = new Map();
+  for (const run of [...(earlier ?? []), ...(later ?? [])]) {
+    runs.set(run.run_id, run);
+  }
+  return [...runs.values()];
+}
+
 // Background status deltas fold in order; a later status wins.
 function mergeBackgroundStatuses(earlier, later) {
   if (!isRecord(later)) {
@@ -300,6 +309,7 @@ export function createChatController({
           next_before: result.next_before,
           history_reset: result.history_reset,
           messages: [...(result.messages ?? []), ...(page.messages ?? [])],
+          runs: mergeHistoryRuns(result.runs, page.runs),
           background_command_statuses: mergeBackgroundStatuses(
             result.background_command_statuses,
             page.background_command_statuses,

@@ -239,6 +239,28 @@ def test_a_restore_verifies_every_copy_before_it_changes_anything(data_dir: Path
     assert len(list_config_backups(data_dir)) == 1
 
 
+@pytest.mark.parametrize("changed", [False, True], ids=["unchanged", "changed"])
+def test_a_backup_repairs_a_stored_copy_altered_to_the_same_size(
+    data_dir: Path, changed: bool
+) -> None:
+    _write(data_dir, "settings.json", _settings("Europe/Berlin"))
+    _write(data_dir, ".env", "KEY=one\n")
+    first = _backup(data_dir)
+    env_object = read_config_backup(data_dir, first).files[".env"].sha256
+    (config_backup_root(data_dir) / "objects" / env_object[:2] / env_object).write_bytes(
+        b"KEY=bad\n"
+    )
+    if changed:
+        _write(data_dir, "settings.json", _settings("UTC"))
+
+    second = capture_config_backup(data_dir, reason="test", now=NOW + timedelta(minutes=5))
+
+    assert (second is not None) is changed
+    _write(data_dir, ".env", "KEY=two\n")
+    restore_config_backup(data_dir, first if second is None else second.backup_id, paths=[".env"])
+    assert _read(data_dir, ".env") == "KEY=one\n"
+
+
 @pytest.mark.parametrize("wrote_every_file", [False, True], ids=["mid-write", "after writing"])
 def test_an_interrupted_restore_holds_the_maintenance_guard_until_it_is_repeated(
     data_dir: Path, monkeypatch: pytest.MonkeyPatch, wrote_every_file: bool

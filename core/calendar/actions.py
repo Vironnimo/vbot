@@ -769,14 +769,19 @@ class CalendarActions:
         """:meth:`can_fire` for ``event`` as given, which may be an unsaved edit."""
         if any(self._executions[key]["action_id"] == action["id"] for key in self._workers):
             return True
-        if self._calendar.occurs_from(event, now):
+        anchor, offset, _ = parse_action_when(action["when"])
+        duration = timedelta(days=event.duration_days or 0, minutes=event.duration_minutes or 0)
+        shift = timedelta(minutes=offset) + (duration if anchor == "end" else timedelta())
+        # An occurrence starting at or after the horizon is not due yet; one
+        # starting before it may already have fired, even ahead of its start.
+        horizon = now - shift + timedelta(days=1)
+        if self._calendar.occurs_from(event, horizon):
             return True
         # An occurrence that started earlier expires at most an hour after its
         # end plus a positive offset, so older ones can no longer fire.
-        _, offset, _ = parse_action_when(action["when"])
         lower = now - timedelta(minutes=max(offset, 0), hours=2)
         created = _instant(action["created_at"])
-        for occurrence in self._calendar.event_occurrences(event, lower, now):
+        for occurrence in self._calendar.event_occurrences(event, lower, max(now, horizon)):
             key, row = self._execution(action, event, occurrence)
             expires = _instant(row["expires_at"])
             if expires <= now or expires <= created:
@@ -1076,14 +1081,19 @@ class CalendarActions:
         try:
             assert self._trigger is not None
             await self._validate_async(action)
-            remaining = (_instant(row["expires_at"]) - datetime.now(UTC)).total_seconds()
-            if remaining <= 0:
+            if _remaining_seconds(row) <= 0:
                 mark(status="missed")
                 _log_missed(row, "expired before it started")
                 return
             # The claim is durable before any await that can admit work.
             mark(status="claimed")
             await self._save_async()
+            # A slow save spends the occurrence's window like any other wait.
+            remaining = _remaining_seconds(row)
+            if remaining <= 0:
+                mark(status="missed")
+                _log_missed(row, "expired while its claim was saved")
+                return
             agent, project = parse_agent_address(action["target"])
             message = action_message(
                 action, event, occurrence, event.tz_name or self._calendar.system_timezone_name()
@@ -1200,6 +1210,16 @@ def _log_missed(row: dict[str, Any], reason: str) -> None:
         row["scheduled_at"],
         reason,
     )
+
+
+def _utc_now() -> datetime:
+    """The current time; a seam tests move to expire an occurrence mid-start."""
+    return datetime.now(UTC)
+
+
+def _remaining_seconds(row: dict[str, Any]) -> float:
+    """Seconds until the execution row's occurrence expires."""
+    return (_instant(row["expires_at"]) - _utc_now()).total_seconds()
 
 
 def _instant(value: str) -> datetime:

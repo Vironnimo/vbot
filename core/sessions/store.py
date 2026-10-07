@@ -313,10 +313,16 @@ class SessionStore:
         )
 
     def mutate_metadata(
-        self, address: SessionAddress, mutation: Callable[[JsonObject], None]
+        self,
+        address: SessionAddress,
+        mutation: Callable[[JsonObject], None],
+        *,
+        expected_generation_id: str | None = None,
     ) -> tuple[JsonObject, JsonObject]:
         return self._execute_write(
-            lambda connection: _store_mutations.mutate_metadata(connection, address, mutation)
+            lambda connection: _store_mutations.mutate_metadata(
+                connection, address, mutation, expected_generation_id=expected_generation_id
+            )
         )
 
     def ensure_metadata(

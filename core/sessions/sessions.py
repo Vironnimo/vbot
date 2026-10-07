@@ -462,8 +462,18 @@ class ChatSessionManager:
         return await self._store.run_async(self.set_title, address, title)
 
     def set_auto_title(
-        self, address: SessionAddress, title: str, *, initialized: bool = True
+        self,
+        address: SessionAddress,
+        title: str,
+        *,
+        initialized: bool = True,
+        expected_generation_id: str | None = None,
     ) -> str | None:
+        """Store the automatic title; with *expected_generation_id*, only on that generation.
+
+        Raises ``SessionNotFoundError`` when the Session is missing or, with
+        *expected_generation_id*, another generation now holds its address.
+        """
         normalized = _normalize_session_title(title)
 
         def update(metadata: JsonObject) -> None:
@@ -474,7 +484,9 @@ class ChatSessionManager:
             if initialized:
                 metadata[SESSION_AUTO_TITLE_INITIALIZED_KEY] = True
 
-        previous_metadata, _updated = self._store.mutate_metadata(address, update)
+        previous_metadata, _updated = self._store.mutate_metadata(
+            address, update, expected_generation_id=expected_generation_id
+        )
         previous = previous_metadata.get(SESSION_AUTO_TITLE_KEY)
         if previous != normalized:
             self._notify_callbacks("title_changed", self._title_changed_callbacks, address)

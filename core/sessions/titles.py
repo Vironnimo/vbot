@@ -31,6 +31,7 @@ from core.sessions._types import (
     OwnedSessionSummary,
     SessionAddress,
 )
+from core.sessions.errors import SessionNotFoundError
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 
@@ -109,6 +110,8 @@ TITLE_SYSTEM_PROMPT = (
 class _TitleGenerationRequest:
     model: str
     title_input: str
+    # The Session generation the title belongs to; a later one at the same address keeps its own.
+    generation_id: str | None
 
 
 class _InvalidGeneratedTitleError(ValueError):
@@ -164,7 +167,7 @@ class SessionTitleService:
         run_id: str,
     ) -> None:
         try:
-            generation = await self._runtime.chat_sessions.run_async(
+            request = await self._runtime.chat_sessions.run_async(
                 self._prepare_title,
                 agent_id=agent_id,
                 session_id=session_id,
@@ -172,13 +175,12 @@ class SessionTitleService:
                 agent=agent,
                 content=content,
             )
-            if generation is not None:
+            if request is not None:
                 await self._generate_title(
                     agent_id=agent_id,
                     session_id=session_id,
                     project_id=project_id,
-                    model=generation.model,
-                    title_input=generation.title_input,
+                    request=request,
                     run_id=run_id,
                 )
         except Exception:
@@ -231,7 +233,9 @@ class SessionTitleService:
 
         configured_model = settings["model"]
         model = configured_model or str(agent.model)
-        return _TitleGenerationRequest(model=model, title_input=title_input)
+        return _TitleGenerationRequest(
+            model=model, title_input=title_input, generation_id=session.generation_id
+        )
 
     def _on_background_task_done(self, task: asyncio.Task[None]) -> None:
         self._background_tasks.discard(task)
@@ -257,14 +261,14 @@ class SessionTitleService:
         agent_id: str,
         session_id: str,
         project_id: str | None,
-        model: str,
-        title_input: str,
+        request: _TitleGenerationRequest,
         run_id: str,
     ) -> None:
+        model = request.model
         try:
             title = await self._request_title(
                 model=model,
-                title_input=title_input,
+                title_input=request.title_input,
                 agent_id=agent_id,
                 session_id=session_id,
                 project_id=project_id,
@@ -276,12 +280,20 @@ class SessionTitleService:
                 chat_sessions.set_auto_title,
                 SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session_id),
                 title,
+                expected_generation_id=request.generation_id,
             )
             _LOGGER.debug(
                 "Generated automatic Session title (agent=%s session=%s model=%s)",
                 agent_id,
                 session_id,
                 model,
+            )
+        except SessionNotFoundError:
+            # Archived or deleted meanwhile; a new Session at its address keeps its own title.
+            _LOGGER.debug(
+                "Generated Session title dropped; the Session ended (agent=%s session=%s)",
+                agent_id,
+                session_id,
             )
         except _InvalidGeneratedTitleError as exc:
             _LOGGER.warning(

@@ -133,6 +133,19 @@ export function createComposerMedia(context) {
     setAttachmentsForDraftKey(key, update(current));
   };
 
+  // An attachment can move to another draft while it uploads (a first send
+  // creates the Session its draft continues in); its upload follows it there.
+  const draftKeyHoldingAttachment = (localId, fallbackKey) => {
+    for (const [scope, attachments] of Object.entries(
+      pendingAttachmentsByScope,
+    )) {
+      if (attachments.some((attachment) => attachment.local_id === localId)) {
+        return scope === EPHEMERAL_ATTACHMENT_SCOPE ? '' : scope;
+      }
+    }
+    return fallbackKey;
+  };
+
   const releasePendingAttachmentPreviews = () => {
     for (const attachments of Object.values(pendingAttachmentsByScope)) {
       for (const attachment of attachments) {
@@ -243,7 +256,11 @@ export function createComposerMedia(context) {
       const localId = newAttachments[index].local_id;
       try {
         const result = await uploadAttachment(file);
-        updateAttachmentsForDraftKey(attachmentDraftKey, (attachments) =>
+        const holdingKey = draftKeyHoldingAttachment(
+          localId,
+          attachmentDraftKey,
+        );
+        updateAttachmentsForDraftKey(holdingKey, (attachments) =>
           attachments.map((attachment) => {
             if (attachment.local_id !== localId) {
               return attachment;
@@ -258,7 +275,10 @@ export function createComposerMedia(context) {
           }),
         );
       } catch {
-        removePendingAttachmentByLocalId(attachmentDraftKey, localId);
+        removePendingAttachmentByLocalId(
+          draftKeyHoldingAttachment(localId, attachmentDraftKey),
+          localId,
+        );
         showAttachmentUploadErrorToast();
       }
     });
