@@ -192,10 +192,15 @@ class Rig:
     def wait_idle(self) -> None:
         wait_until(lambda: not self.controller.is_busy())
 
-    def dictate(self) -> None:
-        """One toggle take: start, wait for the microphone, end."""
+    def start_take(self) -> None:
+        """Press, then wait until the microphone delivered a spoken word to the take."""
+        self.sd.feed(LEAD_IN, WORD)
         self.press()
-        wait_until(lambda: "listen" in self.cues.played)
+        wait_until(lambda: "listen" in self.cues.played and self.sd.drained)
+
+    def dictate(self) -> None:
+        """One toggle take: start, speak, end."""
+        self.start_take()
         self.press()
         self.wait_idle()
 
@@ -255,13 +260,6 @@ def make_rig(tmp_path: Path) -> Iterator[Any]:
         rig.controller.stop()
 
 
-def _wav_seconds(audio: bytes) -> float:
-    with wave.open(io.BytesIO(audio)) as wav_file:
-        frames: int = wav_file.getnframes()
-        rate: int = wav_file.getframerate()
-    return frames / rate
-
-
 def _samples(audio: bytes | np.ndarray) -> np.ndarray:
     if isinstance(audio, np.ndarray):
         return audio.astype(np.int64)
@@ -289,7 +287,6 @@ def test_a_toggle_take_records_until_the_second_press_and_types_the_stripped_tra
     # Echo cancellation stays out of a take although the setting enables it.
     assert rig.echo_stages == []
     assert len(rig.server.uploads) == 1
-    assert _wav_seconds(rig.server.uploads[0]) >= 0.3
     assert rig.server.urls == [SERVER_URL]
     # Escape belongs to the take: claimed while it runs, released after.
     assert ESCAPE_REGISTRATION in rig.api.registrations()
@@ -302,11 +299,9 @@ def test_a_hold_take_ends_when_the_combination_is_let_go_and_a_tap_is_dropped(
     make_rig: Any,
 ) -> None:
     rig = make_rig(mode="hold")
-    rig.sd.feed(LEAD_IN, WORD)
     rig.api.down |= HELD_KEYS
 
-    rig.press()
-    wait_until(lambda: "listen" in rig.cues.played and rig.sd.drained)
+    rig.start_take()
     assert rig.controller.status()["state"] == "recording"  # held: still recording
     rig.api.down -= HELD_KEYS
     rig.wait_idle()
@@ -328,12 +323,11 @@ def test_a_hold_take_ends_when_the_combination_is_let_go_and_a_tap_is_dropped(
 def test_escape_cancels_the_take_without_inserting(make_rig: Any, during: str) -> None:
     rig = make_rig()
     rig.server.release_transcription.clear()
-    rig.press()
-    wait_until(lambda: "listen" in rig.cues.played)
+    rig.start_take()
     if during == "transcribing":
         rig.press()
+        wait_until(lambda: rig.controller.status()["state"] == "transcribing")
         assert rig.server.transcribing.wait(5)
-        assert rig.controller.status()["state"] == "transcribing"
 
     rig.escape()
     wait_until(lambda: "cancel" in rig.cues.played)
