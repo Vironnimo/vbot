@@ -182,14 +182,15 @@
 }
 
 .session-row__agent {
+  width: 100%;
   margin-top: 2px;
   color: var(--text-med);
   font-family: var(--font-ui);
   font-size: var(--fs-label-sm);
   line-height: 1.25;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  mask-image: var(--session-row-fade);
 }
 
 .session-drawer__list {
@@ -213,8 +214,20 @@
 
 /* Flat master-list rows in the shared Agents/Projects list language: no
      per-row card chrome, a quiet hover/focus tint, and the selected row
-     marked only by the 2px accent rail with an accent-dim fill. */
+     marked only by the 2px accent rail with an accent-dim fill.
+
+   The title takes the whole row. Its end fades out instead of an ellipsis;
+   one kind marker sits at the end of the title line and gives way to the
+   row's "..." button while the row is hovered or focused, and the title's
+   fade moves back to make room for whichever of them shows. */
 .session-row {
+  --session-row-fade: linear-gradient(
+    to right,
+    #000 calc(100% - 20px),
+    transparent
+  );
+  --session-row-trail: 0px;
+
   position: relative;
   flex: 0 0 auto;
   border-left: 2px solid transparent;
@@ -224,6 +237,10 @@
     background 120ms ease,
     border-color 120ms ease,
     box-shadow 120ms ease;
+}
+
+.session-row--marked {
+  --session-row-trail: 14px;
 }
 
 .session-row:hover,
@@ -244,7 +261,7 @@
   width: 100%;
   border: 0;
   border-radius: inherit;
-  padding: 5px 28px 5px 18px;
+  padding: 5px 8px 5px 16px;
   text-align: left;
   background: transparent;
   color: var(--text-hi);
@@ -259,105 +276,90 @@
   outline: none;
 }
 
-.session-row__actions {
+/* The kind marker and the "..." button share the end of the title line. */
+.session-row__marker,
+.btn-tertiary.btn-icon.session-row__menu-trigger {
   position: absolute;
-  top: 50%;
-  right: 6px;
-  transform: translateY(-50%);
+  top: 1px;
+  right: 3px;
+  height: 24px;
 }
 
-.session-row__menu-trigger {
-  display: flex;
+.session-row__marker {
+  display: inline-flex;
+  width: 20px;
   align-items: center;
   justify-content: center;
+  color: var(--text-lo);
+  transition: opacity 120ms ease;
+}
+
+.session-row__marker > svg {
+  width: 12px;
+  height: 12px;
+}
+
+.btn-tertiary.btn-icon.session-row__menu-trigger {
   width: 24px;
-  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
   padding: 0;
-  border: 0;
   border-radius: var(--r-sm);
-  background: transparent;
-  color: var(--text-med);
-  /* Reserved in every row's layout, revealed only on interaction. */
-  opacity: 0;
-  cursor: pointer;
+  color: var(--text-lo);
   transition:
     background 150ms ease,
     color 150ms ease,
-    opacity 150ms ease;
+    opacity 120ms ease;
 }
 
-.session-row:hover .session-row__menu-trigger,
-.session-row:focus-within .session-row__menu-trigger,
-.session-row__menu-trigger--open {
-  opacity: 1;
+.btn-tertiary.btn-icon.session-row__menu-trigger > svg {
+  width: 16px;
+  height: 16px;
 }
 
-/* Pointer-coarse devices have no hover, so the row action stays visible. */
-@media (hover: none) {
-  .session-row__menu-trigger {
+.btn-tertiary.btn-icon.session-row__menu-trigger:hover,
+.session-row--menu-open .btn-tertiary.btn-icon.session-row__menu-trigger {
+  background: var(--surface-3);
+  color: var(--text-hi);
+}
+
+/* With a pointer that hovers, the "..." button replaces the marker while
+   the row is hovered, keyboard-focused or has its menu open. A row merely
+   clicked keeps its marker. */
+@media (hover: hover) {
+  .btn-tertiary.btn-icon.session-row__menu-trigger {
+    opacity: 0;
+  }
+
+  .session-row:is(:hover, :has(:focus-visible), .session-row--menu-open) {
+    --session-row-trail: 20px;
+  }
+
+  .session-row:is(:hover, :has(:focus-visible), .session-row--menu-open)
+    .btn-tertiary.btn-icon.session-row__menu-trigger {
     opacity: 1;
+  }
+
+  .session-row:is(:hover, :has(:focus-visible), .session-row--menu-open)
+    .session-row__marker {
+    opacity: 0;
   }
 }
 
-.session-row__menu-trigger:hover,
-.session-row__menu-trigger--open {
-  background: var(--surface-3);
-  color: var(--text-hi);
-}
+/* Without hover the "..." button stays visible and the marker sits before
+   it. */
+@media (hover: none) {
+  .session-row {
+    --session-row-trail: 20px;
+  }
 
-.session-row__menu-trigger:focus-visible {
-  outline: 1px solid var(--accent);
-  outline-offset: 1px;
-}
+  .session-row--marked {
+    --session-row-trail: 40px;
+  }
 
-.session-row__menu-trigger svg {
-  width: 15px;
-  height: 15px;
-  fill: currentColor;
-}
-
-.session-row__menu {
-  position: fixed;
-  z-index: var(--z-floating);
-  width: max-content;
-  min-width: 132px;
-  max-width: calc(100vw - 16px);
-  overflow-y: auto;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface-3);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-}
-
-.session-row__menu-item {
-  display: block;
-  width: 100%;
-  padding: 7px 9px;
-  border: 0;
-  border-radius: var(--r-sm);
-  background: transparent;
-  color: var(--text-hi);
-  font-family: var(--font-ui);
-  font-size: var(--fs-body-sm);
-  text-align: left;
-  cursor: pointer;
-  transition: background 150ms ease;
-}
-
-.session-row__menu-item:hover,
-.session-row__menu-item:focus-visible {
-  outline: none;
-  background: var(--accent-12);
-}
-
-.session-row__menu-item--danger {
-  color: var(--red);
-}
-
-.session-row__menu-item--danger:hover,
-.session-row__menu-item--danger:focus-visible {
-  background: color-mix(in srgb, var(--red) 14%, transparent);
+  .session-row__marker {
+    right: 27px;
+  }
 }
 
 .session-row__edit {
@@ -400,6 +402,8 @@
   align-items: center;
   justify-content: flex-start;
   gap: 8px;
+  padding-right: var(--session-row-trail);
+  transition: padding-right 120ms ease;
 }
 
 .session-row__name {
@@ -412,38 +416,8 @@
   font-weight: 400;
   line-height: 1.25;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.session-row__badge {
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
-.session-row__markers,
-.session-row__marker-anchor {
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-}
-
-.session-row__markers {
-  gap: 4px;
-}
-
-.badge.session-row__badge--icon {
-  width: 18px;
-  height: 18px;
-  flex: 0 0 18px;
-  justify-content: center;
-  gap: 0;
-  padding: 0;
-  border-radius: var(--r-sm);
-}
-
-.badge.session-row__badge--icon > svg {
-  flex-shrink: 0;
+  mask-image: var(--session-row-fade);
 }
 
 /* Every title starts at the same edge; the status dot sits in the gutter
@@ -451,10 +425,18 @@
 .session-row__status {
   position: absolute;
   top: 50%;
-  left: -12px;
+  left: -11px;
   display: inline-flex;
   align-items: center;
   transform: translateY(-50%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-row__heading,
+  .session-row__marker,
+  .btn-tertiary.btn-icon.session-row__menu-trigger {
+    transition: none;
+  }
 }
 
 .session-drawer__state {

@@ -442,14 +442,10 @@ export default Object.freeze({
   'sessions.unreadCompletion': 'Unread',
   'sessions.unreadCompletionHint': 'This Session has an unread result.',
   'sessions.fork': 'Fork',
-  'sessions.forkHint':
-    'A copy of another session. Reflection, in the background or started with /reflect, works on a fork of the conversation so the original session stays untouched.',
   'sessions.runKind.cron': 'Started by a Schedule',
   'sessions.runKind.reflection': 'Reflection',
   'sessions.runKind.memory_reflection': 'Memory reflection',
   'sessions.runKind.skill_reflection': 'Skill reflection',
-  'sessions.subagentHint':
-    'A Subagent works in this Session on behalf of a parent Session, named in the row’s details.',
   'sessions.last_active': 'Last active',
   'sessions.platform_telegram': 'Telegram',
   'sessions.platform_discord': 'Discord',

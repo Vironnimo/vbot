@@ -75,42 +75,47 @@ const MUTATIONS = {
 describe('SessionListDrawer row actions', () => {
   const drawer = setupSessionListDrawerSuite();
 
-  it('portals the complete row menu, behind a vertical ellipsis, outside the clipped drawer', async () => {
+  it('opens the same row menu from its menu button and a right click, outside the clipped drawer', async () => {
     drawer.mount();
     await waitForCondition(() => rowCount() === 1);
+    const menuItems = () =>
+      [...document.querySelectorAll('.context-menu [role="menuitem"]')].map(
+        (item) => item.textContent.trim(),
+      );
+    const expectedItems = [
+      t('sessions.rename'),
+      t('sessions.compactionPolicy'),
+      DELETE_ITEM,
+    ];
 
     const trigger = document.querySelector('.session-row__menu-trigger');
-    const dots = [...trigger.querySelectorAll('circle')];
-    expect(
-      dots.map((dot) => [dot.getAttribute('cx'), dot.getAttribute('cy')]),
-    ).toEqual([
-      ['8', '3'],
-      ['8', '8'],
-      ['8', '13'],
-    ]);
-
+    expect(trigger.getAttribute('aria-haspopup')).toBe('menu');
     trigger.click();
     flushSync();
-    await waitForCondition(
-      () =>
-        document.querySelector('.session-row__menu')?.style.visibility !==
-        'hidden',
-    );
-    const menu = document.querySelector('.session-row__menu');
+    const menu = document.querySelector('.context-menu');
     expect(menu.parentElement).toBe(document.body);
     expect(document.querySelector('.session-drawer').contains(menu)).toBe(
       false,
     );
-    expect(menu.dataset.positioning).toBe('fixed');
-    expect(
-      [...menu.querySelectorAll('.session-row__menu-item')].map((item) =>
-        item.textContent.trim(),
-      ),
-    ).toEqual([
-      t('sessions.rename'),
-      t('sessions.compactionPolicy'),
-      DELETE_ITEM,
-    ]);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(menuItems()).toEqual(expectedItems);
+
+    keydown(menu, 'Escape');
+    flushSync();
+    expect(document.querySelector('.context-menu')).toBeNull();
+
+    const rightClick = new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 40,
+      clientY: 20,
+    });
+    document.querySelector('.session-row__name').dispatchEvent(rightClick);
+    flushSync();
+    // The drawer handled it, so neither the browser's nor the Desktop
+    // context menu opens.
+    expect(rightClick.defaultPrevented).toBe(true);
+    expect(menuItems()).toEqual(expectedItems);
   });
 
   it('renames inline: IME keys stay with the composition, Escape cancels and Enter saves', async () => {

@@ -248,13 +248,14 @@ describe('SessionListDrawer list', () => {
         session('fork-copy', {
           title: 'Fork copy',
           fork_source: { agent_id: 'alpha', session_id: 'origin-session' },
+          run_kinds: ['skill_reflection'],
         }),
         session('origin-session', { title: 'Release planning' }),
       ],
     });
     drawer.mount({
       currentSessionId: 'child-session-with-a-long-identifier',
-      initialFilters: { subagents: true },
+      initialFilters: { subagents: true, skillReflections: true },
       agents: [{ address: 'orchestrator', name: 'Orchestrator' }],
     });
     await waitForCondition(() => rowCount() === 3);
@@ -282,6 +283,9 @@ describe('SessionListDrawer list', () => {
       return {
         tooltipElement,
         title: tooltipElement.querySelector('.app-tooltip__title').textContent,
+        lead:
+          tooltipElement.querySelector('.app-tooltip__text')?.textContent ??
+          null,
         rows: Object.fromEntries(
           [...tooltipElement.querySelectorAll('dt')].map((term) => [
             term.textContent,
@@ -293,6 +297,8 @@ describe('SessionListDrawer list', () => {
 
     const child = await detailsOf(childButton);
     expect(child.title).toBe('Child session title');
+    // Its origin rows already say it is a Subagent.
+    expect(child.lead).toBeNull();
     // An unlisted parent leads with its Agent's name, then its id.
     expect(child.rows).toMatchObject({
       [sourceChannel]: 'telegram-main',
@@ -315,14 +321,23 @@ describe('SessionListDrawer list', () => {
     );
     expect(fork.rows).not.toHaveProperty(originId);
     expect(fork.rows).not.toHaveProperty(created);
+    // The row's marker hides while the row is hovered or focused, so the
+    // card names the kind it marks.
+    expect(fork.lead).toBe(t('sessions.runKind.skill_reflection'));
   });
 
   it('reveals labelled execution Sessions through the filters and selects them with their sub-agent flag', async () => {
     api.listSessions.mockResolvedValue({
       sessions: [
         session('user-session', { run_kinds: ['user'] }),
+        // Scheduled and reflection Runs work in forks; a row shows only its
+        // most specific kind.
         ...['cron', 'reflection', 'memory_reflection', 'skill_reflection'].map(
-          (runKind) => session(`${runKind}-session`, { run_kinds: [runKind] }),
+          (runKind) =>
+            session(`${runKind}-session`, {
+              run_kinds: [runKind],
+              fork_source: { agent_id: 'alpha', session_id: 'user-session' },
+            }),
         ),
         session('subagent-session', {
           is_subagent_session: true,

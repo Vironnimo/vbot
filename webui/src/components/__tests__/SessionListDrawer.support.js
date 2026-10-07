@@ -166,9 +166,9 @@ export function chooseRowAction(itemText, title) {
     : document.querySelector('.session-row');
   row.querySelector('.session-row__menu-trigger').click();
   flushSync();
-  const item = [...document.querySelectorAll('.session-row__menu-item')].find(
-    (candidate) => candidate.textContent.trim() === itemText,
-  );
+  const item = [
+    ...document.querySelectorAll('.context-menu [role="menuitem"]'),
+  ].find((candidate) => candidate.textContent.trim() === itemText);
   expect(item, `row menu item not found: ${itemText}`).toBeTruthy();
   item.click();
   flushSync();

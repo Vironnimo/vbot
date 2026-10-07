@@ -56,8 +56,15 @@ export function sessionHoverDetails(
     );
   }
 
+  // The row shows one marker, hidden while the row is hovered or focused, so
+  // the card names the kinds its origin rows do not.
+  const kindText = sessionKinds(session)
+    .filter(({ kind }) => kind !== 'fork' && kind !== 'subagent')
+    .map(({ label }) => label)
+    .join(' · ');
   return {
     title: session.display_name || sessionDisplayName(session),
+    ...(kindText ? { text: kindText } : {}),
     rows,
     placement: 'right',
   };
@@ -146,16 +153,45 @@ export const resolvePlatformLabel = (platform) => {
   return `${normalizedPlatform.slice(0, 1).toUpperCase()}${normalizedPlatform.slice(1)}`;
 };
 
-export const REFLECTION_BADGE_RUN_KINDS = [
+const REFLECTION_RUN_KINDS = [
   'memory_reflection',
   'skill_reflection',
   'reflection',
 ];
 
-export function reflectionBadgeKinds(session) {
-  return REFLECTION_BADGE_RUN_KINDS.filter((runKind) =>
+// What kind of Session a row lists, most specific first: why the Session
+// exists (a reflection, a Subagent, a Channel conversation, a Schedule)
+// before how it began (a fork). A reflection is itself a fork, so the fork
+// only marks Sessions without a more specific kind.
+export function sessionKinds(session) {
+  const kinds = REFLECTION_RUN_KINDS.filter((runKind) =>
     session.run_kinds.includes(runKind),
-  );
+  ).map((runKind) => ({
+    kind: runKind,
+    label: t(`sessions.runKind.${runKind}`),
+  }));
+  if (session.is_subagent_session) {
+    kinds.push({ kind: 'subagent', label: t('chat.subagent.label') });
+  }
+  if (session.platform) {
+    kinds.push({
+      kind: `platform-${session.platform}`,
+      platform: session.platform,
+      label: resolvePlatformLabel(session.platform),
+    });
+  }
+  if (session.run_kinds.includes('cron')) {
+    kinds.push({ kind: 'cron', label: t('sessions.runKind.cron') });
+  }
+  if (session.is_fork) {
+    kinds.push({ kind: 'fork', label: t('sessions.fork') });
+  }
+  return kinds;
+}
+
+// The one marker icon a row shows: its most specific kind.
+export function sessionMarker(session) {
+  return sessionKinds(session)[0] ?? null;
 }
 
 export function asText(value) {
