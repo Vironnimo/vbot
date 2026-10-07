@@ -359,8 +359,13 @@ class LiveCallSession:
             self._usage = event.usage
             self._save_usage()
         elif isinstance(event, WireProblem):
+            # The Provider's own text names the cause (for example an unreachable
+            # hosted backend); it carries no credentials.
             _LOGGER.warning(
-                "Live provider reported an error (call=%s code=%s)", self._log_id, event.code
+                "Live provider reported an error (call=%s code=%s message=%r)",
+                self._log_id,
+                event.code,
+                event.message[:200],
             )
 
     def _on_caption(self, event: WireCaption) -> None:
