@@ -10,6 +10,7 @@
   // Like a desktop file dialog, a click highlights an entry and a double
   // click or Enter opens a folder or chooses a file; Select takes the
   // highlighted entry, or else the open folder (directory and any modes).
+  // Typing a filter highlights its first match, so Enter opens that one.
   //
   // The dialog is moved to <body> before it renders, so the form dialog it
   // may open from neither styles nor submits it; Modal keeps only the newest
@@ -300,6 +301,12 @@
     onSelect(chosenValue);
   }
 
+  // A filtered list highlights its first match; an empty filter, nothing.
+  function highlightFirstMatch() {
+    activeKey = filter.trim() ? (rows[0]?.key ?? '') : '';
+    void revealActive();
+  }
+
   async function revealActive() {
     await tick();
     const index = rows.findIndex((row) => row.key === activeKey);
@@ -344,7 +351,8 @@
       case 'Enter':
         if (activeRow) {
           open(activeRow);
-        } else if (chosenPath !== null) {
+        } else if (!filter.trim() && chosenPath !== null) {
+          // A filter without matches chooses nothing.
           choose();
         } else {
           return;
@@ -458,7 +466,7 @@
                 disabled={!folderReady}
                 onInput={(next) => {
                   filter = next;
-                  activeKey = '';
+                  highlightFirstMatch();
                 }}
                 onkeydown={(event) => handleNavigationKey(event)}
               />
@@ -467,7 +475,10 @@
                   size="sm"
                   checked={showHidden}
                   ariaLabel={t('pathPicker.showHidden')}
-                  onChange={(next) => (showHidden = next)}
+                  onChange={(next) => {
+                    showHidden = next;
+                    if (filter.trim()) highlightFirstMatch();
+                  }}
                 />{t('pathPicker.showHidden')}</label
               >
             </div>

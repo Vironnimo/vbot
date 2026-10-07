@@ -246,9 +246,13 @@ describe('PathField', () => {
     flushSync();
     expect(rows()).toEqual(['.git', 'webui']);
 
-    dialog
-      .querySelectorAll('.path-browser__row')[1]
-      .dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    // A filter highlights its first match, and Enter opens it.
+    const filter = dialog.querySelector('.path-browser__filter');
+    type(filter, 'WE');
+    expect(
+      dialog.querySelector('.path-browser__row.active').textContent.trim(),
+    ).toBe('webui');
+    press(filter, 'Enter');
     await settle();
     expect(dialog.querySelector('.path-browser__state').textContent).toContain(
       'This folder has no subfolders.',
