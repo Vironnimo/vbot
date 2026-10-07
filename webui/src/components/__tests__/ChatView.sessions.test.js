@@ -994,4 +994,86 @@ describe('ChatView Sessions', () => {
       });
     });
   });
+
+  describe('Identity Agent rename', () => {
+    it.each([
+      ['the first Agent on an older Session', 'alpha', 'gamma', 'Older'],
+      ['a later Agent on its current Session', 'beta', 'delta', 'Beta'],
+    ])(
+      'keeps %s with its transcript',
+      async (_case, oldId, newId, shownText) => {
+        let agents = [
+          createAgent(),
+          createAgent({
+            id: 'beta',
+            name: 'Beta',
+            current_session_id: 'session-beta',
+          }),
+        ];
+        listedSessions({
+          id: 'session-2',
+          title: 'Older topic',
+          created_at: '2026-05-09T00:00:00+00:00',
+          last_active_at: '2026-05-09T00:00:00+00:00',
+        });
+        const baseRpc = createChatRpcMock({
+          sessionMessages: {
+            'session-beta': [message('beta-reply', 'Beta session reply')],
+            'session-2': [message('older-reply', 'Older session reply')],
+          },
+        });
+        rpcMock.mockImplementation(async (method, params) =>
+          method === 'agent.list' ? { agents } : baseRpc(method, params),
+        );
+        const renameListeners = [];
+        const props = reactiveProps({
+          sharedAgents: agents,
+          sharedSelectedAgentId: oldId,
+          agentsRefreshToken: 0,
+          subscribeAgentRenames: (listener) => {
+            renameListeners.push(listener);
+            return () =>
+              renameListeners.splice(renameListeners.indexOf(listener), 1);
+          },
+        });
+        await chat.mountChat(props, { ready: null });
+        if (oldId === 'alpha') {
+          await waitForText('Hello');
+          await openFromDrawer('Older topic');
+        }
+        await waitForText(`${shownText} session reply`);
+        const chatState = testChatStateRefs[0];
+        const shownSessionId = chatState.agents.find(
+          (agent) => agent.id === oldId,
+        ).current_session_id;
+        const oldName = selectedAgentName();
+
+        // App's order: the rename mapping reaches Chat synchronously, then the
+        // shared selection follows and the roster reloads under the new id.
+        for (const listener of renameListeners) listener(oldId, newId);
+        agents = agents.map((agent) =>
+          agent.id === oldId ? { ...agent, id: newId } : agent,
+        );
+        props.sharedSelectedAgentId = newId;
+        props.sharedAgents = agents;
+        props.agentsRefreshToken += 1;
+        await settle(3);
+
+        expect(document.body.textContent).toContain(
+          `${shownText} session reply`,
+        );
+        expect(selectedAgentName()).toBe(oldName);
+        expect(chatState.selectedAgentId).toBe(newId);
+        expect(
+          chatState.agents.find((agent) => agent.id === newId)
+            .current_session_id,
+        ).toBe(shownSessionId);
+        const keys = Object.keys(chatState.sessions);
+        expect(keys.filter((key) => key.startsWith(`${oldId}::`))).toEqual([]);
+        expect(chatState.sessions[`${newId}::${shownSessionId}`].agentId).toBe(
+          newId,
+        );
+      },
+    );
+  });
 });

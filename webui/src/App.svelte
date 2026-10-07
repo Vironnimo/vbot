@@ -115,7 +115,10 @@
     createAutosaveCoordinator,
     provideAutosaveContext,
   } from '$lib/autosave.js';
-  import { flushComposerMemory } from '$lib/composerMemory.js';
+  import {
+    flushComposerMemory,
+    renameComposerAgent,
+  } from '$lib/composerMemory.js';
   import {
     isDesktopAccessor,
     onDesktopOpenSession,
@@ -717,7 +720,13 @@
     },
     onLoadProjects: selection.loadProjects,
     onAgentIdChanged: (oldAgentId, newAgentId) => {
+      renameComposerAgent(oldAgentId, newAgentId);
+      // Chat areas re-key their Sessions here; the place Chat's first area
+      // reported follows, so the remapped place reads as already shown.
       selection.remapIdentityAgentId(oldAgentId, newAgentId);
+      if (chatShownSession?.agentId === oldAgentId) {
+        chatShownSession = { ...chatShownSession, agentId: newAgentId };
+      }
       navigator.remapAll((location) =>
         renameAgentInLocation(location, oldAgentId, newAgentId),
       );
@@ -946,6 +955,7 @@
         {commandsRefreshToken}
         {queueInvalidation}
         {sessionDeletion}
+        subscribeAgentRenames={selection.subscribeAgentRenames}
         subscribeExtensionInvalidations={extensions.subscribeInvalidations}
         hasConnectedProvider={setup.settings === null
           ? null

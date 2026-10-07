@@ -600,6 +600,14 @@ export function createChatViewNavigation(context) {
     }
   });
 
+  // An Identity Agent rename keeps a Session shown from that Agent as a
+  // foreign override on the same Session under the new id.
+  const renameAgent = (oldAgentId, newAgentId) => {
+    if (viewingSessionAgentId === oldAgentId) {
+      viewingSessionAgentId = newAgentId;
+    }
+  };
+
   const clearSessionOverride = () => {
     viewingSessionId = '';
     viewingSessionAgentId = '';
@@ -969,6 +977,9 @@ export function createChatViewNavigation(context) {
     },
     get clearSessionOverride() {
       return clearSessionOverride;
+    },
+    get renameAgent() {
+      return renameAgent;
     },
     get asStep() {
       return asStep;

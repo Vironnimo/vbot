@@ -37,6 +37,8 @@ import {
   selectedAgent,
   sessionKey,
   ensureSessionState,
+  renameAgentInState,
+  supersedeRenamedSessionKey,
   syncQueueFromServer,
   addServerQueuedMessage,
   updateQueuedMessageContent,
@@ -260,6 +262,29 @@ export function createChatController({
       await loadCurrentHistory();
     }
     return true;
+  }
+
+  // An Identity Agent was renamed: its Sessions keep their ids and History
+  // under the new address. Their Run streams close (a rename admits no
+  // active Run); requests still in flight for the old address are superseded.
+  function renameAgent(oldAgentId, newAgentId) {
+    if (!oldAgentId || !newAgentId || oldAgentId === newAgentId) {
+      return;
+    }
+    const renamed = Object.values(chatState.sessions).filter(
+      (sessionState) => sessionState.agentId === oldAgentId,
+    );
+    const oldKeys = renamed.map((sessionState) => sessionState.key);
+    for (const key of oldKeys) {
+      runStream.closeSubscriptionFor(key);
+    }
+    renameAgentInState(chatState, oldAgentId, newAgentId);
+    renamed.forEach((sessionState, index) => {
+      for (const versions of [historyLoadVersions, queueSyncVersions]) {
+        supersedeRenamedSessionKey(versions, oldKeys[index], sessionState.key);
+      }
+      reflections.renameSession(oldKeys[index], sessionState.key);
+    });
   }
 
   async function loadCurrentHistory() {
@@ -1026,6 +1051,7 @@ export function createChatController({
     refreshAgentActivity,
     refreshReflections: reflections.refresh,
     removeQueued,
+    renameAgent,
     steerQueued,
     sendMessage,
     setSessionAgentOverrides: (...args) =>

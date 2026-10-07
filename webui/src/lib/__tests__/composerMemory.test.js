@@ -248,6 +248,34 @@ describe('composerMemory across browser tabs', () => {
     expect(tabB.getDraft('alpha::local')).toBe('still typing here');
   });
 
+  it("moves a renamed Agent's drafts and history in every tab", async () => {
+    localStorage.setItem(HISTORY, JSON.stringify({ gamma: ['former gamma'] }));
+    const tabA = await openTab();
+    const tabB = await openTab();
+    tabA.setDraft('alpha::s1', 'draft in tab A');
+    tabA.pushHistory('alpha', 'sent as alpha');
+    tabA.flushComposerMemory();
+    tabB.setDraft('alpha::~draft-0', 'unsaved draft in tab B');
+    tabB.setDraft('beta::s1', 'other Agent');
+
+    // Every open tab hears of the rename and applies it.
+    for (const tab of [tabA, tabB]) {
+      tab.renameComposerAgent('alpha', 'gamma');
+      tab.flushComposerMemory();
+    }
+
+    expect(storedDrafts()).toEqual({
+      'gamma::s1': 'draft in tab A',
+      'gamma::~draft-0': 'unsaved draft in tab B',
+      'beta::s1': 'other Agent',
+    });
+    expect(JSON.parse(localStorage.getItem(HISTORY))).toEqual({
+      gamma: ['sent as alpha', 'former gamma'],
+    });
+    expect(tabB.getDraft('gamma::~draft-0')).toBe('unsaved draft in tab B');
+    expect(tabA.getHistory('gamma')).toEqual(['sent as alpha', 'former gamma']);
+  });
+
   it('keeps the merged store bounded to the newest sessions', async () => {
     const seeded = Object.fromEntries(
       Array.from({ length: 80 }, (_, index) => [`alpha::s${index}`, 'draft']),

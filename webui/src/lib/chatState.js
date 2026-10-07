@@ -7,6 +7,8 @@ export {
   selectAgent,
   selectedAgent,
   ensureSessionState,
+  renameAgentInKey,
+  renameAgentInKeys,
   agentActivityStatus,
   agentUnreadResults,
   newestUnreadSessionForAgent,

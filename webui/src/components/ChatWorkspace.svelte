@@ -55,6 +55,22 @@
   let siblingDeletions = $state([null, null]);
   let deletionSequence = 0;
 
+  // An Identity Agent rename keeps the second area on its Agent and both
+  // areas' shown Sessions under the new id; each ChatView re-keys its own
+  // state through the same subscription.
+  $effect(() =>
+    chatProps.subscribeAgentRenames?.((oldAgentId, newAgentId) => {
+      if (secondAgent === oldAgentId) {
+        secondAgent = newAgentId;
+      }
+      sessions = sessions.map((session) =>
+        session?.agentId === oldAgentId
+          ? { ...session, agentId: newAgentId }
+          : session,
+      );
+    }),
+  );
+
   function forwardSessionDeletion(fromIndex, deletion) {
     deletionSequence += 1;
     siblingDeletions[1 - fromIndex] = {

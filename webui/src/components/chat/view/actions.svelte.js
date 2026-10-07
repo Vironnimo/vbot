@@ -1,6 +1,7 @@
 import { onDestroy } from 'svelte';
 import {
   isRunActive,
+  renameAgentInKey,
   visibleTimelineItemsForRender,
   selectAgent,
 } from '../../../lib/chatState.js';
@@ -55,6 +56,21 @@ export function createChatViewActions(context) {
       displayedSessionGeneration += 1;
     }
     return key;
+  };
+
+  // An Identity Agent rename keeps the displayed Session under a new key: it
+  // keeps its transient cards and presentation generation.
+  const renameAgent = (oldAgentId, newAgentId) => {
+    transientCardsSessionKey = renameAgentInKey(
+      transientCardsSessionKey,
+      oldAgentId,
+      newAgentId,
+    );
+    generationSessionKey = renameAgentInKey(
+      generationSessionKey,
+      oldAgentId,
+      newAgentId,
+    );
   };
 
   // Capture synchronously too: a navigation can change the displayed key
@@ -438,6 +454,7 @@ export function createChatViewActions(context) {
     loadCurrentHistory,
     loadHistoryForSession,
     loadOlderHistory,
+    renameAgent,
     get chatToast() {
       return chatToast;
     },

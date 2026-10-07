@@ -127,6 +127,61 @@ export function sessionKey(agentId, sessionId) {
   return `${agentId}::${sessionId}`;
 }
 
+// A key that starts with an Identity Agent's address (`<agentId>::...`, such
+// as a Session or draft key) with that Agent's old id replaced by its new one;
+// any other key unchanged. A Project Agent's `agent@project` address never
+// matches a bare id.
+export function renameAgentInKey(key, oldAgentId, newAgentId) {
+  const prefix = `${oldAgentId}::`;
+  return typeof key === 'string' && oldAgentId && key.startsWith(prefix)
+    ? `${newAgentId}::${key.slice(prefix.length)}`
+    : key;
+}
+
+// The same entries with every key naming the old Agent id renamed.
+export function renameAgentInKeys(entries, oldAgentId, newAgentId) {
+  return Object.fromEntries(
+    Object.entries(entries ?? {}).map(([key, value]) => [
+      renameAgentInKey(key, oldAgentId, newAgentId),
+      value,
+    ]),
+  );
+}
+
+// An Identity Agent rename keeps the Agent's Sessions, ids and all, under the
+// new id: its roster entry (with this area's current Session), the selection
+// and every held Session state move to the new address.
+export function renameAgentInState(state, oldAgentId, newAgentId) {
+  state.agents = state.agents.map((agent) =>
+    agent.id === oldAgentId ? { ...agent, id: newAgentId } : agent,
+  );
+  if (state.selectedAgentId === oldAgentId) {
+    state.selectedAgentId = newAgentId;
+  }
+  const sessions = {};
+  for (const sessionState of Object.values(state.sessions)) {
+    if (sessionState.agentId === oldAgentId) {
+      sessionState.agentId = newAgentId;
+      sessionState.key = sessionKey(newAgentId, sessionState.sessionId);
+    }
+    sessions[sessionState.key] = sessionState;
+  }
+  state.sessions = sessions;
+}
+
+// Request versions keyed by Session key, as their latest-request guards read
+// them: a renamed Session's version moves to its new key one past any version
+// issued under either key, so a request in flight for the old address never
+// passes for the latest one.
+export function supersedeRenamedSessionKey(versions, oldKey, newKey) {
+  const version = Math.max(
+    versions.get(oldKey) ?? 0,
+    versions.get(newKey) ?? 0,
+  );
+  versions.delete(oldKey);
+  versions.set(newKey, version + 1);
+}
+
 export function ensureSessionState(state, agentId, sessionId) {
   const key = sessionKey(agentId, sessionId);
   if (!state.sessions[key]) {
