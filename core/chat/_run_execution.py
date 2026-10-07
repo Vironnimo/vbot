@@ -16,7 +16,7 @@ from core.chat._run_state import (
     RequestBuildInputs,
     _SessionSnapshot,
     create_run_execution_context,
-    record_subagent_takeover,
+    report_subagent_takeover,
     takes_over_subagent_session,
 )
 from core.chat._skill_activation import _activate_triggered_skills
@@ -297,20 +297,24 @@ class RunExecution:
                             input_origin=request.input_origin,
                         )
                         persisted_messages = [*session.take_deferred_notes(), user_message]
-                    # One transaction persists the input and records the announced
-                    # Skills. An edit also replaces the edited history in that
+                    # One transaction persists the input, records the announced
+                    # Skills and a Sub-Agent takeover, so a cancellation cannot
+                    # keep the user's message while the Session still forwards to
+                    # its Parent. An edit also replaces the edited history in that
                     # transaction.
                     if request.edit_message_id is not None:
                         await context.session_snapshot.apply_edit(
                             session,
                             persisted_messages,
                             seen_skills=record_seen_skills,
+                            subagent_takeover=takeover,
                         )
                     elif persisted_messages:
                         await context.session_snapshot.append(
                             session,
                             persisted_messages,
                             seen_skills=record_seen_skills,
+                            subagent_takeover=takeover,
                         )
                     elif record_seen_skills is not None:
                         await _CHAT_TRANSFORM_WORKERS.run(
@@ -322,7 +326,7 @@ class RunExecution:
                     if not persisted_messages:
                         await context.session_snapshot.refresh(session)
                     if takeover:
-                        await record_subagent_takeover(self._dependencies, session_address)
+                        report_subagent_takeover(self._dependencies, session_address)
                     if not internal and not request.input_already_persisted:
                         _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
                     if request.input_persisted_hook is not None:

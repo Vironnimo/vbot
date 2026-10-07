@@ -7,6 +7,7 @@ import sqlite3
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from core.chat.errors import ChatSessionError
@@ -21,6 +22,8 @@ from core.sessions._metadata import _RUN_KIND_VALUES
 from core.sessions._types import (
     SESSION_FORK_ALWAYS_STRIP_META_KEYS,
     SESSION_TITLE_KEY,
+    SUBAGENT_PARENT_META_KEY,
+    SUBAGENT_TAKEN_OVER_AT_META_KEY,
     JsonObject,
     SessionIdentityReferenceUpdate,
     ToolResultFacts,
@@ -177,6 +180,20 @@ def mutate_metadata(
     if storage is not None:
         _store_values._write_metadata_storage(connection, int(state["session_key"]), storage)
     return previous, updated
+
+
+def record_subagent_takeover(connection: sqlite3.Connection, address: SessionAddress) -> None:
+    """Record the user's takeover of a linked Sub-Agent Session, once, as ISO 8601 UTC.
+
+    A Session without a Parent link stays unchanged.
+    """
+    stamp = datetime.now(UTC).isoformat()
+
+    def update(metadata: JsonObject) -> None:
+        if isinstance(metadata.get(SUBAGENT_PARENT_META_KEY), dict):
+            metadata.setdefault(SUBAGENT_TAKEN_OVER_AT_META_KEY, stamp)
+
+    mutate_metadata(connection, address, update)
 
 
 def ensure_metadata(

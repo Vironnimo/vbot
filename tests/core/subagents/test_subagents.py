@@ -17,7 +17,11 @@ import pytest
 import core.subagents.subagents as subagents_module
 from core.projects import AgentResolutionError, ResolutionProjectNotFoundError
 from core.runs import RunKind, RunStatus
-from core.sessions import SESSION_WORKING_PROJECT_META_KEY, SUBAGENT_PARENT_META_KEY
+from core.sessions import (
+    SESSION_WORKING_PROJECT_META_KEY,
+    SUBAGENT_PARENT_META_KEY,
+    SUBAGENT_TAKEN_OVER_AT_META_KEY,
+)
 from core.subagents._constants import (
     FACTS_NO_SIBLINGS_PENDING_TEXT,
     FACTS_NOTHING_RUNNING_TEXT,
@@ -621,8 +625,12 @@ async def test_takeover_ends_forwarding_and_parent_messages(harness: SubAgentHar
     data = await harness.spawn("review")
     child = harness.subagent_session(data["id"])
 
-    assert harness.sessions.mark_subagent_taken_over(child) is True
-    assert harness.sessions.mark_subagent_taken_over(child) is False
+    harness.sessions.mutate_metadata(
+        child,
+        lambda metadata: metadata.__setitem__(
+            SUBAGENT_TAKEN_OVER_AT_META_KEY, "2026-10-07T12:00:00+00:00"
+        ),
+    )
     harness.coordinator.subagent_taken_over(child)
     await harness.finished("review")
 

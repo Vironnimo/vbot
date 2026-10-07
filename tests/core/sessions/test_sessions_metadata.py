@@ -275,13 +275,19 @@ def test_subagent_takeover_is_recorded_once_and_only_for_a_linked_session(manage
         },
     )
 
-    assert manager.mark_subagent_taken_over(linked) is True
+    session = manager.get(linked)
+    first = ChatMessage.user("first")
+    session.append(first)
+    assert SUBAGENT_TAKEN_OVER_AT_META_KEY not in manager.get_metadata(linked)
+
+    # The takeover commits in the transaction that persists the user's message.
+    session.apply_edit(first.id, [ChatMessage.user("second")], subagent_takeover=True)
     stamp = manager.get_metadata(linked)[SUBAGENT_TAKEN_OVER_AT_META_KEY]
     assert datetime.fromisoformat(stamp).utcoffset() == timedelta(0)
-    assert manager.mark_subagent_taken_over(linked) is False
+    session.append_many([ChatMessage.user("third")], subagent_takeover=True)
     assert manager.get_metadata(linked)[SUBAGENT_TAKEN_OVER_AT_META_KEY] == stamp
 
-    assert manager.mark_subagent_taken_over(plain) is False
+    manager.get(plain).append_many([ChatMessage.user("hi")], subagent_takeover=True)
     assert SUBAGENT_TAKEN_OVER_AT_META_KEY not in manager.get_metadata(plain)
 
 

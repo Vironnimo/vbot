@@ -20,11 +20,12 @@ from core.chat.messages import (
     SUBAGENT_TAKEN_OVER_SYSTEM_REMINDER,
     ChatMessage,
 )
-from core.runs import RunAdmission, RunKind
+from core.runs import RunAdmission, RunCancelledError, RunKind
 from core.sessions import (
     SUBAGENT_PARENT_META_KEY,
     SUBAGENT_SESSION_META_KEY,
     SUBAGENT_TAKEN_OVER_AT_META_KEY,
+    ChatSession,
     SessionAddress,
 )
 from core.tools import ToolRegistry, tool_success
@@ -185,6 +186,42 @@ async def test_steered_input_is_framed_and_a_steered_user_message_takes_over(
         ("Hi", [SUBAGENT_TAKEN_OVER_SYSTEM_REMINDER, STEERING_SYSTEM_REMINDER]),
     ]
     assert runtime.takeovers == [address]
+
+
+async def test_a_run_cancelled_as_its_takeover_input_commits_keeps_the_takeover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = _runtime(tmp_path, StubAdapter(_answers(1)))
+    address = _create(runtime, "one", linked=True)
+    loop = build_chat_loop(runtime)
+    append = ChatSession.append_many_async
+    cancelled: list[bool] = []
+
+    async def cancelled_after_commit(
+        self: ChatSession, messages: list[ChatMessage], **options: Any
+    ) -> Any:
+        committed = await append(self, messages, **options)
+        if not cancelled and any(message.role == "user" for message in messages):
+            cancelled.append(True)
+            task = asyncio.current_task()
+            assert task is not None
+            task.cancel()
+            await asyncio.sleep(0)
+        return committed
+
+    monkeypatch.setattr(ChatSession, "append_many_async", cancelled_after_commit)
+    with pytest.raises(RunCancelledError):
+        await (await loop.start_run("coder", "Hi", session_id="one")).wait()
+    monkeypatch.undo()
+
+    assert cancelled == [True]
+    assert runtime.chat_sessions.metadata_value(address, SUBAGENT_TAKEN_OVER_AT_META_KEY)
+    await (await loop.start_run("coder", "Again", session_id="one")).wait()
+    history = runtime.chat_sessions.get(address).load()
+    assert _framing(history) == [
+        ("Hi", [SUBAGENT_TAKEN_OVER_SYSTEM_REMINDER]),
+        ("Again", []),
+    ]
 
 
 async def test_message_parent_is_offered_only_in_a_subagent_session(tmp_path: Path) -> None:

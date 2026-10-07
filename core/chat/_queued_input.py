@@ -10,7 +10,7 @@ from core.chat._request_history import _assign_session_image_references
 from core.chat._run_state import (
     RequestBuildInputs,
     _RunRequest,
-    record_subagent_takeover,
+    report_subagent_takeover,
     takes_over_subagent_session,
 )
 from core.chat._skill_activation import _activate_triggered_skills
@@ -92,9 +92,12 @@ async def persist_steering_input(
         _assign_session_image_references(request.content, context.session_snapshot.active_messages),
         input_origin=request.input_origin,
     )
-    await session.append_many_async([*session.take_deferred_notes(), message])
+    # The takeover commits with the message, so a cancellation cannot split them.
+    await session.append_many_async(
+        [*session.take_deferred_notes(), message], subagent_takeover=takeover
+    )
     if takeover:
-        await record_subagent_takeover(dependencies, session.address)
+        report_subagent_takeover(dependencies, session.address)
     context.run.emit(
         USER_MESSAGE_EVENT,
         {
