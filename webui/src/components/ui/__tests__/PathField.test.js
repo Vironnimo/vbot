@@ -191,7 +191,7 @@ describe('PathField', () => {
     });
     const listDirectory = fakeServer({
       places: {
-        path: null,
+        path: '',
         entries: [dir('C:/'), dir('D:/')],
         home: 'C:/Users/me',
       },
