@@ -64,7 +64,7 @@
   const initialFormMode = initialAgent
     ? AGENT_FORM_MODE_EDIT
     : AGENT_FORM_MODE_CREATE;
-  const editorAgentId = initialAgent?.id ?? '';
+  let editorAgentId = $state(initialAgent?.id ?? '');
 
   let formMode = $state(initialFormMode);
   let editorForm = $state(null);
@@ -134,13 +134,16 @@
 
   // The saved Agent changed - by a save here, in another window, or by the
   // Agent itself: fields the user has not edited show the new saved values,
-  // edited fields keep the user's input.
+  // edited fields keep the user's input. AgentsView keeps this editor across
+  // a rename of its Agent only, so a changed id is that rename: the editor
+  // follows the new id and the unedited id field takes it.
   $effect(() => {
     const savedAgent = agent;
-    if (formMode !== AGENT_FORM_MODE_EDIT || savedAgent?.id !== editorAgentId) {
-      return;
-    }
-    untrack(() => adoptSavedAgent(savedAgent));
+    if (formMode !== AGENT_FORM_MODE_EDIT || !savedAgent?.id) return;
+    untrack(() => {
+      editorAgentId = savedAgent.id;
+      adoptSavedAgent(savedAgent);
+    });
   });
 
   $effect(() => {

@@ -1188,4 +1188,38 @@ describe('AgentsView', () => {
       memory_prompt_mode: 'off',
     });
   });
+
+  it('keeps the open editor and its draft when the shown Agent is renamed elsewhere', async () => {
+    const agents = [baseAgent()];
+    rpcMock.mockImplementation(createAgentsRpcMock({ agents }));
+    let notifyRename = () => {};
+    const props = reactiveProps({
+      agentsRefreshToken: 0,
+      subscribeAgentRenames: (listener) => {
+        notifyRename = listener;
+        return () => {};
+      },
+    });
+    mountedComponent = mount(AgentsView, { target: document.body, props });
+    flushSync();
+    await waitForCondition(() => textInputValue('agent-name') === 'Alpha', 100);
+
+    // No automatic save may land meanwhile; the draft must survive unsaved.
+    vi.useFakeTimers();
+    setTextInputValue('agent-name', 'Alpha Draft');
+
+    agents[0] = { ...baseAgent(), id: 'alpha-2' };
+    notifyRename('alpha', 'alpha-2');
+    props.agentsRefreshToken += 1;
+    await flushAsyncUpdates(8);
+    expect(textInputValue('agent-name')).toBe('Alpha Draft');
+
+    submitAgentForm();
+    await flushAsyncUpdates();
+    expect(getAgentUpdateCalls()).toHaveLength(1);
+    expect(getAgentUpdateCalls()[0][1]).toEqual({
+      id: 'alpha-2',
+      name: 'Alpha Draft',
+    });
+  });
 });

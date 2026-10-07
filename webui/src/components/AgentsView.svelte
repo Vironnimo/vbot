@@ -58,6 +58,9 @@
     onNavigateToAgentPrompt = noop,
     // Opens a Skill's page in the Skills manager: (agentId, skillId).
     onOpenSkill = noop,
+    // Calls the listener with (oldId, newId) when an Agent's id changes,
+    // before the roster reloads; returns the unsubscribe function.
+    subscribeAgentRenames = null,
     modelsRefreshToken = 0,
     projectsRefreshToken = 0,
     agentsRefreshToken = 0,
@@ -183,6 +186,25 @@
   let selectedAgent = $derived(
     agents.find((agent) => agent.id === selectedAgentId) ?? null,
   );
+  // The editor's key: a new number whenever the shown Agent changes, except
+  // when it changes because that Agent's id was renamed, so the open editor
+  // and its unsaved draft stay. Plain variables, read and written only here.
+  let editorKeyState = { agentId: null, key: 0 };
+  let pendingEditorRename = null;
+  let editorKey = $derived.by(() => {
+    const agentId = selectedAgent?.id ?? '';
+    if (agentId !== editorKeyState.agentId) {
+      const renamed =
+        pendingEditorRename?.oldId === editorKeyState.agentId &&
+        pendingEditorRename?.newId === agentId;
+      editorKeyState = {
+        agentId,
+        key: renamed ? editorKeyState.key : editorKeyState.key + 1,
+      };
+      pendingEditorRename = null;
+    }
+    return editorKeyState.key;
+  });
   let availableAgentTargets = $derived(
     buildAgentTargetCatalog({
       identityAgents: agents,
@@ -252,6 +274,22 @@
     void loadProjectCatalog();
     void loadAgents();
   });
+
+  // A rename from anywhere (this editor, another window, the CLI) keeps the
+  // shown Agent and its open editor on the renamed id. Roster and selection
+  // change together, so the editor key never sees the id missing.
+  function followAgentRename(oldId, newId) {
+    if (!oldId || !newId || oldId === newId) return;
+    if (selectedAgentId === oldId) {
+      pendingEditorRename = { oldId, newId };
+      selectedAgentId = newId;
+    }
+    agents = agents.map((agent) =>
+      agent.id === oldId ? { ...agent, id: newId } : agent,
+    );
+  }
+
+  onMount(() => subscribeAgentRenames?.(followAgentRename));
 
   onDestroy(() => {
     targetCatalog.dispose();
@@ -516,11 +554,10 @@
   }
 
   function handleAgentRenamed(nextAgent, { oldId, newId }) {
-    agents = agents.map((agent) => (agent.id === oldId ? nextAgent : agent));
-    if (selectedAgentId === oldId) {
-      selectedAgentId = newId;
-      onAgentSelected?.(nextAgent);
-    }
+    const shown = selectedAgentId === oldId;
+    followAgentRename(oldId, newId);
+    agents = agents.map((agent) => (agent.id === newId ? nextAgent : agent));
+    if (shown) onAgentSelected?.(nextAgent);
     notifyAgentsChanged();
   }
 
@@ -641,7 +678,7 @@
     />
 
     <div class="agent-editor-host" hidden={sharedDefaultsOpen}>
-      {#key selectedAgent?.id ?? 'new-agent'}
+      {#key editorKey}
         <AgentEditor
           agent={selectedAgent}
           agentsCount={agents.length}

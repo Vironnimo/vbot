@@ -990,6 +990,7 @@
           onNavigateToSettingsPanel={navigateToSettingsPanel}
           onNavigateToAgentPrompt={navigateToAgentPromptScope}
           onOpenSkill={navigateToAgentSkill}
+          subscribeAgentRenames={selection.subscribeAgentRenames}
           agentsRefreshToken={selection.agentsRefreshToken}
           {memoriesRefreshToken}
           {modelsRefreshToken}
