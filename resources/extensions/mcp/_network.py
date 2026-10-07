@@ -12,7 +12,10 @@ later DNS answer can steer a connection to another address.
   always refused.
 - Loopback and private addresses are refused when the configured server is
   public, and allowed when every address of the configured server is itself
-  loopback or private. That decision is made once per connection attempt.
+  loopback or private. The configured server's host is resolved once per
+  connection attempt; that one answer decides this and is the only one its
+  connections use, so a changing DNS answer cannot make a public server count
+  as private.
 
 Environment proxies are ignored (``trust_env=False``): through a proxy the
 guard could not check the destination.
@@ -100,12 +103,22 @@ class DestinationGuard(httpcore2.AsyncNetworkBackend):
         resolve: Resolver = _resolve,
         inner: httpcore2.AsyncNetworkBackend | None = None,
     ) -> None:
-        self._server_host = server_host.strip("[]")
+        self._server_host = server_host.strip("[]").lower()
         self._resolve = resolve
         self._inner = inner or httpcore2.AnyIOBackend()
-        self._private_server: bool | None = None
+        self._server_addresses: list[IPAddress] | None = None
 
     async def _addresses(self, host: str, port: int) -> list[IPAddress]:
+        if host.strip("[]").lower() != self._server_host:
+            return await self._lookup(host, port)
+        if self._server_addresses is None:
+            addresses = await self._lookup(host, port)
+            # A concurrent first lookup may have finished first; keep its answer.
+            if self._server_addresses is None:
+                self._server_addresses = addresses
+        return self._server_addresses
+
+    async def _lookup(self, host: str, port: int) -> list[IPAddress]:
         literal = _ip(host)
         if literal is not None:
             return [literal]
@@ -119,10 +132,8 @@ class DestinationGuard(httpcore2.AsyncNetworkBackend):
         return addresses
 
     async def _server_is_private(self, port: int) -> bool:
-        if self._private_server is None:
-            addresses = await self._addresses(self._server_host, port)
-            self._private_server = all(classify(address) == "private" for address in addresses)
-        return self._private_server
+        addresses = await self._addresses(self._server_host, port)
+        return all(classify(address) == "private" for address in addresses)
 
     async def permitted(self, host: str, port: int) -> list[str]:
         """The addresses of *host* this connection may connect to, or ``ConnectError``."""

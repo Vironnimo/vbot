@@ -335,6 +335,8 @@ class _RecordingBackend(httpcore2.AsyncNetworkBackend):
         ("mcp.example", "auth.internal", None),
         ("mcp.example", "auth.example", ["93.184.216.35"]),
         ("mcp.example", "split.example", ["93.184.216.36"]),
+        # A server whose name answers differently on a later lookup stays public.
+        ("rebind.example", "auth.internal", None),
         # A server on this machine or the private network may use private addresses ...
         ("mcp.internal", "auth.internal", ["10.0.0.5"]),
         ("127.0.0.1", "localhost", ["127.0.0.1"]),
@@ -352,12 +354,16 @@ async def test_connections_reach_only_permitted_addresses(server, target, connec
         "auth.internal": ["10.0.0.5"],
         "localhost": ["127.0.0.1"],
     }
+    rebinding = iter([["93.184.216.37"], ["192.168.1.11"]])
 
     async def resolve(host, port):
-        return names[host]
+        return next(rebinding) if host == "rebind.example" else names[host]
 
     inner = _RecordingBackend()
     guard = DestinationGuard(server, resolve=resolve, inner=inner)
+    # The MCP traffic reaches the configured server first.
+    await guard.connect_tcp(server, 443)
+    inner.connected.clear()
 
     if connected is None:
         with pytest.raises(httpcore2.ConnectError, match="refused to reach"):
