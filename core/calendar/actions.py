@@ -769,14 +769,19 @@ class CalendarActions:
         """:meth:`can_fire` for ``event`` as given, which may be an unsaved edit."""
         if any(self._executions[key]["action_id"] == action["id"] for key in self._workers):
             return True
-        if self._calendar.occurs_from(event, now):
+        anchor, offset, _ = parse_action_when(action["when"])
+        duration = timedelta(days=event.duration_days or 0, minutes=event.duration_minutes or 0)
+        shift = timedelta(minutes=offset) + (duration if anchor == "end" else timedelta())
+        # An occurrence starting at or after the horizon is not due yet; one
+        # starting before it may already have fired, even ahead of its start.
+        horizon = now - shift + timedelta(days=1)
+        if self._calendar.occurs_from(event, horizon):
             return True
         # An occurrence that started earlier expires at most an hour after its
         # end plus a positive offset, so older ones can no longer fire.
-        _, offset, _ = parse_action_when(action["when"])
         lower = now - timedelta(minutes=max(offset, 0), hours=2)
         created = _instant(action["created_at"])
-        for occurrence in self._calendar.event_occurrences(event, lower, now):
+        for occurrence in self._calendar.event_occurrences(event, lower, max(now, horizon)):
             key, row = self._execution(action, event, occurrence)
             expires = _instant(row["expires_at"])
             if expires <= now or expires <= created:

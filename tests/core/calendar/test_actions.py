@@ -551,6 +551,13 @@ async def _fired(service, event, trigger, now):
     return now + timedelta(minutes=45)
 
 
+async def _fired_ahead_of_its_event(service, event, trigger, now):
+    await service.actions.tick(now + timedelta(minutes=11))
+    await drain(service)
+    # The event itself still lies ahead.
+    return now + timedelta(minutes=12)
+
+
 async def _starting(service, event, trigger, now):
     admitting = asyncio.Event()
 
@@ -571,25 +578,31 @@ async def _yearly(service, event, trigger, now):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("recurring", "arrange", "can_fire"),
+    ("recurring", "when", "arrange", "can_fire"),
     [
-        pytest.param(False, _at(timedelta()), True, id="upcoming"),
+        pytest.param(False, "start", _at(timedelta()), True, id="upcoming"),
         # Due and within its expiry, but not started yet.
-        pytest.param(False, _at(timedelta(minutes=45)), True, id="due"),
-        pytest.param(False, _starting, True, id="starting-its-run"),
-        pytest.param(False, _fired, False, id="fired"),
-        pytest.param(False, _at(timedelta(hours=2)), False, id="expired-unused"),
-        pytest.param(True, _fired, True, id="series-continues"),
-        pytest.param(True, _at(timedelta(days=3, hours=2)), False, id="series-ended"),
+        pytest.param(False, "start", _at(timedelta(minutes=45)), True, id="due"),
+        pytest.param(False, "start", _starting, True, id="starting-its-run"),
+        pytest.param(False, "start", _fired, False, id="fired"),
+        pytest.param(
+            False, "start - 20m", _fired_ahead_of_its_event, False, id="fired-ahead-of-its-event"
+        ),
+        pytest.param(False, "start", _at(timedelta(hours=2)), False, id="expired-unused"),
+        pytest.param(True, "start", _fired, True, id="series-continues"),
+        pytest.param(
+            True, "start - 20m", _fired_ahead_of_its_event, True, id="series-continues-ahead"
+        ),
+        pytest.param(True, "start", _at(timedelta(days=3, hours=2)), False, id="series-ended"),
         # The next occurrence lies far beyond any scan window.
-        pytest.param(False, _yearly, True, id="next-occurrence-next-year"),
+        pytest.param(False, "start", _yearly, True, id="next-occurrence-next-year"),
     ],
 )
 async def test_an_action_can_fire_until_its_occurrences_are_used_up(
-    tmp_path, recurring, arrange, can_fire
+    tmp_path, recurring, when, arrange, can_fire
 ):
     service, event, trigger, now = setup(tmp_path, recurring=recurring)
-    action = await service.actions.add(event.id, when="start", prompt="prepare", target="main")
+    action = await service.actions.add(event.id, when=when, prompt="prepare", target="main")
 
     at = await arrange(service, event, trigger, now)
 
