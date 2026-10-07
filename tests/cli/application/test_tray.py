@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from typing import override
 
@@ -91,6 +92,7 @@ class Actions(TrayActions):
 class View:
     def __init__(self) -> None:
         self.presented: list[TrayPresentation] = []
+        self._presented = threading.Condition()
         self.toasts: list[Toast] = []
         self.dismissed: list[str] = []
         self.status_shown = 0
@@ -98,7 +100,18 @@ class View:
         self.busy = False
 
     def present(self, presentation: TrayPresentation) -> None:
-        self.presented.append(presentation)
+        with self._presented:
+            self.presented.append(presentation)
+            self._presented.notify_all()
+
+    def showing(self, condition: Callable[[TrayPresentation], bool]) -> TrayPresentation:
+        """Wait until the latest presentation meets the condition, and return it."""
+
+        with self._presented:
+            assert self._presented.wait_for(
+                lambda: bool(self.presented) and condition(self.presented[-1]), timeout=5
+            )
+            return self.presented[-1]
 
     def show_toast(self, toast: Toast) -> None:
         self.toasts.append(toast)
@@ -325,24 +338,31 @@ def test_callbacks_use_one_worker_and_recover_after_a_facade_exception():
     release_start = threading.Event()
     logs_entered = threading.Event()
     release_logs = threading.Event()
+    server_logs_entered = threading.Event()
     callback_threads: list[int] = []
 
+    # The callbacks block without a deadline: `finally` releases them, and a
+    # timed-out wait would only turn into a facade failure the worker swallows.
     class ControlledActions(Actions):
         @override
         def start_server(self) -> None:
             callback_threads.append(threading.get_ident())
             start_entered.set()
-            assert release_start.wait(timeout=5)
+            release_start.wait()
             raise RuntimeError("test failure")
 
         @override
         def open_logs(self) -> None:
             callback_threads.append(threading.get_ident())
             logs_entered.set()
-            assert release_logs.wait(timeout=5)
+            release_logs.wait()
+
+        @override
+        def open_server_logs(self) -> None:
+            server_logs_entered.set()
 
     actions = ControlledActions(TrayState("stopped", "server"))
-    controller = TrayController(actions, poll_interval=0.01)
+    controller = TrayController(actions)
     controller._poll_state()
     normal_status = controller.menu_items()[0].label
     controller.start()
@@ -359,9 +379,11 @@ def test_callbacks_use_one_worker_and_recover_after_a_facade_exception():
         assert controller.menu_items()[0].label != normal_status
         assert callback_threads[0] == callback_threads[1] != threading.get_ident()
 
+        controller.invoke("open_server_logs")
         release_logs.set()
-        # A state poll can precede the action worker clearing its error.
-        _wait_until(lambda: controller.menu_items()[0].label == normal_status)
+        # Entering the callback queued behind it proves the successful one finished.
+        assert server_logs_entered.wait(timeout=5)
+        assert controller.menu_items()[0].label == normal_status
     finally:
         release_start.set()
         release_logs.set()
@@ -377,8 +399,11 @@ def test_a_running_lifecycle_action_shows_its_transition_while_the_state_keeps_r
         def start_server(self) -> None:
             super().start_server()
             start_entered.set()
-            assert release_start.wait(timeout=5)
+            release_start.wait()  # released at the latest by `finally`
             self.current = replace(self.current, server_state="running")
+
+    def menu(presentation: TrayPresentation) -> set[str]:
+        return {item.label for item in presentation.menu}
 
     actions = SlowStart(TrayState("stopped", "server", version="0.5.0"))
     view = View()
@@ -388,16 +413,20 @@ def test_a_running_lifecycle_action_shows_its_transition_while_the_state_keeps_r
     controller.start(start_server=True)
     try:
         assert start_entered.wait(timeout=5)
-        _wait_until(lambda: "Server starting…" in view.presented[-1].tooltip)
-        assert view.presented[-1].icon == "busy"
-        assert not {"Start server", "Stop server", "Restart server"} & _labels(controller).keys()
+        starting = view.showing(lambda shown: "Server starting…" in shown.tooltip)
+        assert starting.icon == "busy"
+        assert not {"Start server", "Stop server", "Restart server"} & menu(starting)
         # The facade is still polled while the action runs.
         actions.current = replace(actions.current, version="0.5.1")
-        _wait_until(lambda: view.presented[-1].tooltip.startswith("vBot 0.5.1"))
+        view.showing(
+            lambda shown: (
+                shown.tooltip.startswith("vBot 0.5.1") and "Server starting…" in shown.tooltip
+            )
+        )
 
         release_start.set()
-        _wait_until(lambda: "Server running" in view.presented[-1].tooltip)
-        assert "Stop server" in _labels(controller)
+        running = view.showing(lambda shown: "Server running" in shown.tooltip)
+        assert "Stop server" in menu(running)
     finally:
         release_start.set()
         controller.close()
