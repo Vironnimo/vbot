@@ -30,14 +30,16 @@ _OOXML_PREFIX = "application/vnd.openxmlformats-officedocument."
 _DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
-def _build_ooxml_payload(content_types_xml: bytes) -> bytes:
+def _build_ooxml_payload(
+    content_types_xml: bytes, *, compression: int = zipfile.ZIP_DEFLATED
+) -> bytes:
     """Build a minimal ZIP carrying one ``[Content_Types].xml`` entry."""
     buffer = io.BytesIO()
     # A fixed timestamp keeps the bytes, and the test ids derived from them, identical
     # across collections; xdist workers collect independently and must agree.
     entry = zipfile.ZipInfo("[Content_Types].xml", date_time=(2020, 1, 1, 0, 0, 0))
     with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr(entry, content_types_xml, compress_type=zipfile.ZIP_DEFLATED)
+        archive.writestr(entry, content_types_xml, compress_type=compression)
     return buffer.getvalue()
 
 
@@ -74,9 +76,7 @@ _DOCX_CONTENT_TYPES = (
         # Global colour tables (flag 0x80) of 2 and 256 entries precede the first block.
         ("file.bin", b"GIF89a\x01\x00\x01\x00\x80\x00\x00" + b"\x00" * 6 + b"\x2c", "image/gif"),
         ("file.bin", b"GIF89a\x01\x00\x01\x00\x87\x00\x00" + b"\xff" * 768 + b"\x21", "image/gif"),
-        # A small, well-formed [Content_Types].xml classifies as docx. One that
-        # decompresses past the sniff cap is a zip bomb, not an Office file, even
-        # though it carries the docx marker; the bounded read keeps memory flat.
+        # An oversized manifest is refused even when it carries the docx marker.
         ("report.docx", _build_ooxml_payload(_DOCX_CONTENT_TYPES), _DOCX_MEDIA_TYPE),
         (
             "bomb.docx",
@@ -95,19 +95,53 @@ def test_sniff_media_type_classifies_by_content(
     assert sniff_media_type(data, filename) == expected_media_type
 
 
-@pytest.mark.parametrize("damage", ["encrypted", "unsupported_compression", "invalid_deflate"])
-def test_store_rejects_unreadable_ooxml_as_unsupported_type(tmp_path: Path, damage: str) -> None:
-    payload = bytearray(_build_ooxml_payload(b"wordprocessingml.document"))
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "encrypted",
+        "unsupported_compression",
+        "invalid_deflate",
+        "bzip2",
+        "lzma",
+        "zstandard",
+        "oversized",
+    ],
+)
+def test_store_rejects_unreadable_ooxml_as_unsupported_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damage: str
+) -> None:
+    compression = {
+        "unsupported_compression": 99,
+        "bzip2": zipfile.ZIP_BZIP2,
+        "lzma": zipfile.ZIP_LZMA,
+        "zstandard": zipfile.ZIP_ZSTANDARD,
+    }.get(damage, zipfile.ZIP_DEFLATED)
+    payload = bytearray(_build_ooxml_payload(_DOCX_CONTENT_TYPES))
     central_header = payload.index(b"PK\x01\x02")
     if damage == "encrypted":
         payload[6] |= 1
         payload[central_header + 8] |= 1
-    elif damage == "unsupported_compression":
-        payload[8:10] = (99).to_bytes(2, "little")
-        payload[central_header + 10 : central_header + 12] = (99).to_bytes(2, "little")
-    else:
+    elif compression != zipfile.ZIP_DEFLATED:
+        # These methods must be rejected from their headers, without needing
+        # the optional codec module to be present on the host.
+        payload[8:10] = compression.to_bytes(2, "little")
+        payload[central_header + 10 : central_header + 12] = compression.to_bytes(2, "little")
+    elif damage == "invalid_deflate":
         compressed_start = 30 + len(b"[Content_Types].xml")
         payload[compressed_start:central_header] = b"\xff" * (central_header - compressed_start)
+    elif damage == "oversized":
+        # A tiny fixture with an oversized declaration suffices: sniffing must
+        # refuse it without creating any entry reader or decompressor.
+        declared_size = (_MAX_OOXML_CONTENT_TYPES_BYTES + 1).to_bytes(4, "little")
+        payload[22:26] = declared_size
+        payload[central_header + 24 : central_header + 28] = declared_size
+
+    if damage in {"unsupported_compression", "bzip2", "lzma", "zstandard", "oversized"}:
+
+        def refuse_entry_open(*args: object, **kwargs: object) -> None:
+            pytest.fail("Unsupported or oversized manifests must be rejected before opening")
+
+        monkeypatch.setattr(zipfile.ZipFile, "open", refuse_entry_open)
 
     assert sniff_media_type(bytes(payload), "report.docx") == "application/octet-stream"
     with pytest.raises(AttachmentTypeNotAllowedError):
@@ -122,6 +156,23 @@ def test_store_rejects_unreadable_ooxml_as_unsupported_type(tmp_path: Path, dama
         ("diagram.png", b"\x89PNG\r\n\x1a\n\x00\x00\x00", "image/png", ".png"),
         ("report.pdf", b"%PDF-1.7\n1 0 obj\n", "application/pdf", ".pdf"),
         ("notes.txt", b"line one\nline two\n", "text/plain", ".txt"),
+        *[
+            (
+                f"report.{extension}",
+                _build_ooxml_payload(
+                    _DOCX_CONTENT_TYPES.replace(b"wordprocessingml.document", subtype.encode()),
+                    compression=compression,
+                ),
+                _OOXML_PREFIX + subtype,
+                f".{extension}",
+            )
+            for extension, subtype in [
+                ("docx", "wordprocessingml.document"),
+                ("xlsx", "spreadsheetml.sheet"),
+                ("pptx", "presentationml.presentation"),
+            ]
+            for compression in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
+        ],
     ],
 )
 def test_store_happy_path_persists_blob_and_sidecar(
