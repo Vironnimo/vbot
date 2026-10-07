@@ -16,6 +16,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+from core.skills.skill_validator import SKILL_MD_ADVISED_LENGTH
+
 ReflectionScope = Literal["memory", "skill", "combined"]
 
 _COMBINED_INTRO = "review-intro-combined.md"
@@ -115,8 +117,6 @@ BRIEF_FRAGMENT_NAMES: frozenset[str] = frozenset(
 _LIBRARIAN_MAX_CHARS = "{max_chars}"
 _LIBRARIAN_AGENT = "{generated:agent}"
 _LIBRARIAN_CANDIDATES = "{generated:candidates}"
-# A SKILL.md longer than about this many characters is hard to use.
-LIBRARIAN_SKILL_MD_MAX_CHARS = 12000
 # Who created a candidate, in the words of the Agent the brief addresses.
 _LIBRARIAN_ORIGIN_TEXTS = {
     "human": "the user",
@@ -197,7 +197,7 @@ def librarian_brief(
     brief = (
         fragments.read_prompt_fragment(_LIBRARIAN)
         .strip()
-        .replace(_LIBRARIAN_MAX_CHARS, str(LIBRARIAN_SKILL_MD_MAX_CHARS))
+        .replace(_LIBRARIAN_MAX_CHARS, str(SKILL_MD_ADVISED_LENGTH))
     )
     named = agent_id if agent_name in ("", agent_id) else f"{agent_name} (id {agent_id})"
     if _LIBRARIAN_AGENT in brief:
