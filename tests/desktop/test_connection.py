@@ -528,6 +528,9 @@ def test_prepare_connect_returns_url_without_replacing_calling_document(tmp_path
     assert window.loaded_urls == []
     assert window.loaded_html == []
     assert desktop_connection.resolve_last_used(settings_file) == ServerEntry("pi.lan", 9000, "Pi")
+    # Choosing the saved server again (the connection screen passes no label) keeps its name.
+    controller.prepare_connect("pi.lan", 9000)
+    assert controller.list_servers() == [ServerEntry("pi.lan", 9000, "Pi")]
 
 
 def test_prepare_connect_returns_inline_error_without_replacing_calling_document(

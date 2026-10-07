@@ -612,6 +612,16 @@ class ConnectionController:
 
         waited_note = "" if waited is None else f" (waited={waited:.0f}s)"
         if result.status == PROBE_WEBUI_AVAILABLE:
+            if label is None:
+                # A connect without a name keeps the one the server was saved with.
+                label = next(
+                    (
+                        entry.label
+                        for entry in self.list_servers()
+                        if entry.key == (target.host, target.port)
+                    ),
+                    None,
+                )
             self.add_server(target.host, target.port, label)
             select_server(target.host, target.port, settings_file=self._settings_file)
             logger.info("Desktop connecting to %s:%s%s", target.host, target.port, waited_note)
