@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast, override
@@ -29,6 +31,9 @@ from tests.core.chat.chat_loop_support import (
 JsonObject = dict[str, Any]
 
 WAIT_SECONDS = 10.0
+
+# Every Compaction prompt fragment of CompactionPromptStorage.
+COMPACTION_INSTRUCTION = "Summarize the earlier Context and preserve unfinished work."
 
 # Automatic Compaction at 80% of the window; tests pair it with a 100-token window.
 AUTO_COMPACTION: JsonObject = {
@@ -100,19 +105,17 @@ def word_count_tools() -> ToolRegistry:
 
 
 class RecordingCompactionAdapter(StubAdapter):
-    """Serve Agent steps via ``send`` and Compaction summaries via ``stream``, in order."""
+    """Stream Agent steps from ``responses`` and Compaction summaries from ``summaries``.
+
+    A request that ends with the Compaction instruction of
+    :class:`CompactionPromptStorage` is a Compaction request, recorded in
+    ``stream_requests``; every other request is an Agent step, recorded in
+    ``requests``. ``events`` names them in request order.
+    """
 
     def __init__(self, responses: list[Any], *, summaries: list[str]) -> None:
-        super().__init__(
-            responses,
-            stream_responses=[
-                [
-                    {"type": "content_delta", "text": summary},
-                    {"type": "finish", "reason": "stop"},
-                ]
-                for summary in summaries
-            ],
-        )
+        super().__init__(responses)
+        self._summaries = list(summaries)
         self.events: list[str] = []
 
     @override
@@ -122,9 +125,18 @@ class RecordingCompactionAdapter(StubAdapter):
 
     @override
     async def stream(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> Any:
+        if COMPACTION_INSTRUCTION not in json.dumps(messages[-1]):
+            async for delta in super().stream(messages, model_id=model_id, **kwargs):
+                yield delta
+            return
         self.events.append("compaction")
-        async for delta in super().stream(messages, model_id=model_id, **kwargs):
-            yield delta
+        self.stream_requests.append(
+            {"messages": deepcopy(messages), "model_id": model_id, "kwargs": deepcopy(kwargs)}
+        )
+        if not self._summaries:
+            raise AssertionError("unexpected Compaction request")
+        yield {"type": "content_delta", "text": self._summaries.pop(0)}
+        yield {"type": "finish", "reason": "stop"}
 
 
 class CompactionPromptStorage(StubStorage):
@@ -142,7 +154,7 @@ class CompactionPromptStorage(StubStorage):
             "compaction-continuation.md",
             "compaction-continuation-manual.md",
         }
-        return "Summarize the earlier Context and preserve unfinished work."
+        return COMPACTION_INSTRUCTION
 
 
 class CompactOnceService:

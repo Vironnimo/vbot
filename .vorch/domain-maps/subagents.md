@@ -46,7 +46,7 @@ The user's first own message in a Sub-Agent Session. It permanently ends forward
 - `references_identity_agent(agent_id)` guards Identity rename while a followed Run in that Identity's Session is still forwarding.
 - `prompt_targets(agent, project_id)` feeds the `tool:subagent` block; `drain_activity()` is for shutdown.
 - Events (WebUI, through `ToolContext.emit`): `subagent_session_started` on `run` and `send` (`id`, bare `agent_id`, `session_id`, `project_id` when set, `status` `running`/`queued`, `delivery: "automatic"`, `activity_file`, `run_id` for `run`), `subagent_status_changed` on `cancel`. Events and metadata keep bare ids; Agent-facing results use the qualified address.
-- Sub-Agent Runs are admitted with `RunKind.SUBAGENT`, `work_id` = public id, `owner` = the caller's execution owner, and count toward Agent activity only without an owner. The executor is `streaming_chat_loop.run_executor(content, parent_agent_input=True, temporary_parent_binding=...)`, which is steerable.
+- Sub-Agent Runs are admitted with `RunKind.SUBAGENT`, `work_id` = public id, `owner` = the caller's execution owner, and count toward Agent activity only without an owner. The executor is `chat_loop.run_executor(content, parent_agent_input=True, temporary_parent_binding=...)`, which is steerable.
 - Deliveries go through `TriggerService.submit_completion`: forwarded answers with notice id `subagent:<run_id>`, the Run's execution owner, and `on_persisted` marking that terminal Run read; Parent messages with a fresh notice id; the takeover notice `subagent-takeover:<id>` with `wake=False` (persisted without starting a Run; an active Parent Run reads it at its next boundary).
 
 ## Conventions

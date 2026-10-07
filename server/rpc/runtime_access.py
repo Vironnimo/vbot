@@ -9,11 +9,11 @@ from core.chat.content_blocks import ContentBlock
 from core.runs import ChatRunManager, QueuedRunItem, RunExecutor
 
 
-def _streaming_chat_loop(state: Any) -> ChatLoop:
-    return cast(ChatLoop, state.streaming_chat_loop)
+def _chat_loop(state: Any) -> ChatLoop:
+    return cast(ChatLoop, state.chat_loop)
 
 
-async def _build_streaming_queue_update(
+async def _build_queue_update(
     state: Any,
     agent_id: str,
     session_id: str,
@@ -23,8 +23,7 @@ async def _build_streaming_queue_update(
     input_origin: str | None = None,
     project_id: str | None = None,
 ) -> tuple[str, RunExecutor, str]:
-    streaming_chat_loop = _streaming_chat_loop(state)
-    return await streaming_chat_loop.build_queue_update(
+    return await _chat_loop(state).build_queue_update(
         agent_id,
         session_id,
         content,

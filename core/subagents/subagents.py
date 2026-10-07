@@ -457,7 +457,7 @@ class SubAgentCoordinator:
             )
             address = session.address
             activity = await self._activities.ensure(address)
-            executor = runtime.streaming_chat_loop.run_executor(
+            executor = runtime.chat_loop.run_executor(
                 cast(str, arguments["content"]),
                 parent_agent_input=True,
                 temporary_parent_binding=temporary_parent,
@@ -600,7 +600,7 @@ class SubAgentCoordinator:
                 await sessions.run_async(
                     runtime.agent_resolver.update_session_overrides, address, overrides
                 )
-            executor = runtime.streaming_chat_loop.run_executor(
+            executor = runtime.chat_loop.run_executor(
                 content, parent_agent_input=True, temporary_parent_binding=temporary_parent
             )
             item = await manager.enqueue(

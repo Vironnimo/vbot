@@ -426,7 +426,6 @@ async def test_idle_completion_relays_through_latest_channel_surface(
         cast(Any, completion_loop),
         run_manager,
         cast(Any, Mock()),
-        trigger_chat_loop=cast(Any, completion_loop),
         sessions=sessions,
     )
 
@@ -467,7 +466,6 @@ async def test_idle_completion_does_not_send_webui_surface_to_channel_relay(
         cast(Any, completion_loop),
         run_manager,
         cast(Any, Mock()),
-        trigger_chat_loop=cast(Any, completion_loop),
         sessions=sessions,
     )
     relay_mock = AsyncMock()
@@ -515,7 +513,6 @@ async def test_completion_delivery_aclose_persists_pending_results_and_rejects_l
         cast(Any, completion_loop),
         run_manager,
         cast(Any, Mock()),
-        trigger_chat_loop=cast(Any, completion_loop),
         sessions=sessions,
     )
     trigger_service.set_owned_completion_validator(_OwnerAdmission(_LIVE_OWNER))
@@ -631,7 +628,6 @@ async def test_completion_start_failure_persists_system_reminder_without_run(
         cast(Any, completion_loop),
         run_manager,
         cast(Any, Mock()),
-        trigger_chat_loop=cast(Any, completion_loop),
         sessions=sessions,
     )
 
@@ -666,7 +662,6 @@ async def test_completion_fallback_retries_transient_persistence_failure(
         cast(Any, completion_loop),
         run_manager,
         cast(Any, Mock()),
-        trigger_chat_loop=cast(Any, completion_loop),
         sessions=sessions,
     )
     original_add_note = ChatSession.add_note

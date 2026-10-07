@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -15,6 +16,7 @@ from core.chat._run_state import (
 )
 from core.chat._step_outcomes import (
     OUTPUT_INTEGRITY_RECOVERY_NOTE,
+    TOOL_CALLS_STREAM_RECOVERY_NOTE,
     _with_assistant_output_files,
 )
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
@@ -48,6 +50,7 @@ from core.providers.accounts import ConnectionRef
 from core.providers.adapter import (
     TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
     TERMINAL_OUTCOME_STOP,
+    TERMINAL_OUTCOME_TOOL_CALLS,
     TerminalOutcome,
     terminal_outcome_from_response,
 )
@@ -71,6 +74,9 @@ if TYPE_CHECKING:
     from core.runs import Run
 
 _LOGGER = get_logger("chat")
+
+ToolCallSink = Callable[[list[JsonObject]], None]
+"""Receives complete Tool Calls (normalized response dicts) while the Model streams."""
 
 
 def _record_first_token(run: Run, started: float) -> None:
@@ -103,6 +109,7 @@ def _normalize_non_streaming_step(
     model_id: str,
     response_model: str,
     public_model: str,
+    message_id: str | None = None,
 ) -> _AssistantStep:
     """Normalize one Provider response and build its canonical Assistant step."""
     terminal_outcome = terminal_outcome_from_response(normalized)
@@ -111,6 +118,7 @@ def _normalize_non_streaming_step(
         public_model,
         normalized,
         reasoning_scope=response_model,
+        message_id=message_id,
     )
     if _needs_visible_answer_recovery(
         terminal_outcome,
@@ -252,7 +260,11 @@ class _StreamingRunDeltaEmitter:
 class WireRequestRunner:
     """Sends one ChatLoop Model step over the wire and recovers its stream.
 
-    Stateless besides its two injected fields: the resolved target, tools, and
+    Every request streams. Only a Provider that declares a request cannot
+    stream (``ProviderStreamingUnsupportedError`` before any output) is asked
+    for a completed response instead; no other path sends without streaming.
+
+    Stateless besides its injected dependencies: the resolved target, tools, and
     Run travel through the arguments, and the loop's collaborators are reached
     through the injected dependencies object.
     """
@@ -261,10 +273,8 @@ class WireRequestRunner:
         self,
         *,
         dependencies: ChatLoopDependencies,
-        streaming: bool,
     ) -> None:
         self._dependencies = dependencies
-        self._streaming = streaming
 
     async def send_assistant_request(
         self,
@@ -283,11 +293,19 @@ class WireRequestRunner:
         public_model: str,
         provider_id: str = "",
         recovery: RecoveryBudget | None = None,
+        message_id: str | None = None,
+        on_tool_calls: ToolCallSink | None = None,
     ) -> _AssistantStep:
         """Send one Model step; its Assistant messages name ``public_model``.
 
         ``public_model`` is the user-facing Model string of the answering route:
         the Agent's primary Model, or the fallback candidate serving this Run.
+        ``message_id`` names the Assistant turn this step builds. ``on_tool_calls``
+        receives each Tool Call as soon as the stream has moved past it, in
+        order; calls that arrive only with the end of the response are not
+        passed. Once a call was passed, the stream is never replayed: a break
+        keeps the output so far with exactly the passed calls (see
+        :data:`TOOL_CALLS_STREAM_RECOVERY_NOTE`).
         """
         # The projection reads every request text, so it stays off the Event Loop.
         messages, tools = await _CHAT_TRANSFORM_WORKERS.run(model_facing_request, messages, tools)
@@ -327,7 +345,7 @@ class WireRequestRunner:
 
         run.emit(PROVIDER_REQUEST_STATUS_EVENT, {"state": "waiting", "model": response_model})
         budget = recovery if recovery is not None else RecoveryBudget()
-        use_streaming = self._streaming
+        use_streaming = True
         try:
             while True:
                 run.raise_if_cancelled()
@@ -355,6 +373,8 @@ class WireRequestRunner:
                                 top_p=top_p,
                                 has_fallback_chain=_has_fallback_chain(agent),
                                 recovery_deadline=budget.deadline,
+                                message_id=message_id,
+                                on_tool_calls=on_tool_calls,
                             )
                         else:
                             remaining = (
@@ -376,20 +396,20 @@ class WireRequestRunner:
                                         request_context=request_context,
                                         temperature=temperature,
                                         top_p=top_p,
+                                        message_id=message_id,
                                     )
                             except TimeoutError as exc:
                                 raise ProviderTimeoutError(
                                     "Model recovery time budget exhausted"
                                 ) from exc
-                            if self._streaming:
-                                step = replace(
-                                    step,
-                                    message=_with_assistant_output_files(
-                                        step.message,
-                                        cwd=output_cwd,
-                                    ),
-                                )
-                                _emit_assistant_events(run, step.message)
+                            step = replace(
+                                step,
+                                message=_with_assistant_output_files(
+                                    step.message,
+                                    cwd=output_cwd,
+                                ),
+                            )
+                            _emit_assistant_events(run, step.message)
                 except _StreamRestartNeeded as restart:
                     if restart.non_streaming:
                         use_streaming = False
@@ -440,7 +460,9 @@ class WireRequestRunner:
         request_context: dict[str, Any],
         temperature: float | None,
         top_p: float | None,
+        message_id: str | None,
     ) -> _AssistantStep:
+        """Ask for a completed response: only after the Provider refused to stream."""
         send_started = time.perf_counter()
         recorder = self._dependencies.usage_recorder
         call_id = await self._start_usage_call(public_model, run)
@@ -466,6 +488,7 @@ class WireRequestRunner:
                 model_id=model_id,
                 response_model=response_model,
                 public_model=public_model,
+                message_id=message_id,
             )
         except BaseException as exc:
             if recorder is not None and call_id is not None:
@@ -519,6 +542,8 @@ class WireRequestRunner:
         top_p: float | None = None,
         has_fallback_chain: bool = False,
         recovery_deadline: float | None = None,
+        message_id: str | None = None,
+        on_tool_calls: ToolCallSink | None = None,
     ) -> _AssistantStep:
         accumulator = StreamingAccumulator()
         recorder = self._dependencies.usage_recorder
@@ -543,6 +568,8 @@ class WireRequestRunner:
                 top_p=top_p,
                 has_fallback_chain=has_fallback_chain,
                 recovery_deadline=recovery_deadline,
+                message_id=message_id,
+                on_tool_calls=on_tool_calls,
             )
         except BaseException as exc:
             if recorder is not None and call_id is not None:
@@ -561,7 +588,9 @@ class WireRequestRunner:
                 "cancelled"
                 if run.cancel_requested
                 else "failed"
-                if step.message.interrupted or step.failure is not None
+                if step.message.interrupted
+                or step.failure is not None
+                or step.recovery_error is not None
                 else "completed"
             )
             usage = await _finish_visible_boundary(
@@ -597,6 +626,8 @@ class WireRequestRunner:
         top_p: float | None,
         has_fallback_chain: bool,
         recovery_deadline: float | None,
+        message_id: str | None,
+        on_tool_calls: ToolCallSink | None,
     ) -> _AssistantStep:
         delta_emitter = _StreamingRunDeltaEmitter(run)
         attempt_started = time.perf_counter()
@@ -646,6 +677,14 @@ class WireRequestRunner:
                             content=str(visible_delta.payload.get("content_delta", "")),
                         )
                     delta_emitter.add(visible_delta)
+                if on_tool_calls is not None and accumulator.finish_reason is None:
+                    # After the finish, Chat decides on the remaining calls
+                    # with the terminal outcome in hand.
+                    completed = accumulator.take_completed_tool_calls()
+                    if completed:
+                        # Every fragment of these calls reaches the Run first.
+                        delta_emitter.flush()
+                        on_tool_calls(completed)
                 run.raise_if_cancelled()
             delta_emitter.flush()
             if accumulator.finish_reason is None:
@@ -661,6 +700,7 @@ class WireRequestRunner:
             StreamingProgressTimeoutError,
         ) as exc:
             delta_emitter.flush()
+            tools_started = accumulator.has_taken_tool_calls
             # One provider-agnostic owner decides what a stream break means; the
             # action stays here (the chat loop owns side effects, not the policy).
             action = decide_stream_recovery(
@@ -672,6 +712,7 @@ class WireRequestRunner:
                     and not isinstance(exc, IncompleteResponseError)
                 ),
                 has_fallback_chain=has_fallback_chain,
+                tools_started=tools_started,
             )
             if action is StreamRecoveryAction.ACCEPT_COMPLETE:
                 # The Run keeps the completed response; its terminal line reports the outcome.
@@ -699,6 +740,34 @@ class WireRequestRunner:
                     },
                 )
                 raise _StreamRestartNeeded(exc) from exc
+            elif tools_started and action in {
+                StreamRecoveryAction.PRESERVE_PARTIAL,
+                StreamRecoveryAction.FAIL,
+            }:
+                _LOGGER.debug(
+                    "Provider stream broke after Tool Calls started; keeping them "
+                    "(run=%s model=%s error_type=%s error=%s)",
+                    run.id,
+                    model_id,
+                    type(exc).__name__,
+                    exc,
+                )
+                step = self._finalize_after_started_tools(
+                    public_model,
+                    response_model,
+                    accumulator,
+                    run,
+                    message_id=message_id,
+                    output_cwd=output_cwd,
+                )
+                if action is StreamRecoveryAction.FAIL:
+                    return replace(step, failure=exc)
+                return replace(
+                    step,
+                    recovery="continue",
+                    recovery_note=TOOL_CALLS_STREAM_RECOVERY_NOTE,
+                    recovery_error=exc,
+                )
             elif action is StreamRecoveryAction.PRESERVE_PARTIAL:
                 interruption_cause = normalize_interruption_cause(exc)
                 run.stream_recovery_count += 1
@@ -719,6 +788,7 @@ class WireRequestRunner:
                     recovery="continue",
                     recovery_error=exc,
                     output_cwd=output_cwd,
+                    message_id=message_id,
                 )
             elif action is StreamRecoveryAction.INTERRUPT:
                 interruption_cause = normalize_interruption_cause(exc)
@@ -740,6 +810,7 @@ class WireRequestRunner:
                         interruption_cause=interruption_cause,
                         recovery="interrupt",
                         output_cwd=output_cwd,
+                        message_id=message_id,
                     )
                 raise RunInterruptedError(interruption_cause) from exc
             else:
@@ -755,6 +826,7 @@ class WireRequestRunner:
                             run,
                             interruption_cause=normalize_interruption_cause(exc),
                             output_cwd=output_cwd,
+                            message_id=message_id,
                         ),
                         failure=exc,
                     )
@@ -773,9 +845,12 @@ class WireRequestRunner:
                 assistant_fields = accumulator.finalize_assistant_fields()
                 preserve_complete_after_cancel = True
             elif run.cancel_requested and (
-                accumulator.partial_content is not None or accumulator.partial_reasoning is not None
+                accumulator.partial_content is not None
+                or accumulator.partial_reasoning is not None
+                or accumulator.has_taken_tool_calls
             ):
-                # Preserve readable evidence of a genuinely unfinished step.
+                # Preserve readable evidence of a genuinely unfinished step,
+                # including the Tool Calls that already started.
                 return self._finalize_interrupted_partial(
                     public_model,
                     response_model,
@@ -783,6 +858,7 @@ class WireRequestRunner:
                     run,
                     interruption_cause=("user" if run.cancel_reason == "user" else "internal"),
                     output_cwd=output_cwd,
+                    message_id=message_id,
                 )
             else:
                 raise
@@ -796,6 +872,7 @@ class WireRequestRunner:
             assistant_fields.to_response_dict(),
             reasoning_scope=response_model,
             reasoning_timing=assistant_fields.reasoning_timing,
+            message_id=message_id,
         )
         if _needs_visible_answer_recovery(
             assistant_fields.finish_reason,
@@ -817,6 +894,7 @@ class WireRequestRunner:
                 recovery="none" if run.cancel_requested else "continue",
                 recovery_note=OUTPUT_INTEGRITY_RECOVERY_NOTE,
                 output_cwd=output_cwd,
+                message_id=message_id,
             )
         assistant_message = _with_assistant_output_files(assistant_message, cwd=output_cwd)
         _emit_streaming_assistant_events(
@@ -825,6 +903,39 @@ class WireRequestRunner:
         return _AssistantStep(
             message=assistant_message,
             terminal_outcome=assistant_fields.finish_reason,
+        )
+
+    def _finalize_after_started_tools(
+        self,
+        public_model: str,
+        response_model: str,
+        accumulator: StreamingAccumulator,
+        run: Run,
+        *,
+        message_id: str | None,
+        output_cwd: Path | None,
+    ) -> _AssistantStep:
+        """Keep a stream that broke after some of its Tool Calls started.
+
+        Replaying would run those calls again, so the turn keeps the output that
+        arrived with exactly the started calls, as a complete Tool-call turn
+        whose results the Model continues from. A call still being written was
+        never started and is dropped.
+        """
+        run.stream_recovery_count += 1
+        fields = accumulator.finalize_partial_fields()
+        assistant_message = _assistant_message_from_response(
+            public_model,
+            fields.to_response_dict(),
+            reasoning_scope=response_model,
+            reasoning_timing=fields.reasoning_timing,
+            message_id=message_id,
+        )
+        assistant_message = _with_assistant_output_files(assistant_message, cwd=output_cwd)
+        _emit_streaming_assistant_events(run, assistant_message)
+        return _AssistantStep(
+            message=assistant_message,
+            terminal_outcome=TERMINAL_OUTCOME_TOOL_CALLS,
         )
 
     def _finalize_interrupted_partial(
@@ -839,12 +950,16 @@ class WireRequestRunner:
         recovery: Literal["none", "continue", "interrupt"] = "none",
         recovery_note: str | None = None,
         recovery_error: Exception | None = None,
+        message_id: str | None = None,
     ) -> _AssistantStep:
         """Preserve a stream broken after visible output as an interrupted turn.
 
         The visible answer streamed so far is finalized into an assistant message
         flagged ``interrupted`` (no finish reason; any in-flight tool call is
         dropped — it was never executed, so dropping it is side-effect-free).
+        Tool Calls that already started stay with the turn (only a cancelled
+        Run ends with them; any other break keeps them through
+        :meth:`_finalize_after_started_tools`).
         A provider break after answer text asks the progression loop for a fresh
         continuation request in the same Run. Exhausted replay may instead ask
         the loop to terminate after preserving readable Reasoning. Both paths
@@ -863,6 +978,7 @@ class WireRequestRunner:
             reasoning_timing=partial_fields.reasoning_timing,
             interrupted=True,
             interruption_cause=interruption_cause,
+            message_id=message_id,
         )
         assistant_message = _with_assistant_output_files(assistant_message, cwd=output_cwd)
         _emit_streaming_assistant_events(run, assistant_message, allow_after_cancel=True)

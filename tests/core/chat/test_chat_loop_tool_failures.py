@@ -18,11 +18,19 @@ from core.chat._step_outcomes import (
     tool_result_facts,
 )
 from core.chat.messages import ToolCall, ToolCallRejection
+from core.providers.errors import ProviderStreamingUnsupportedError
 from core.runs import TOOL_CALL_RESULT_EVENT, RunStatus
 from core.sessions import ToolResultFacts
 from core.tools import ToolContext, ToolContractError, ToolRegistry, tool_failure, tool_success
 from core.utils.errors import ProviderError
-from tests.core.chat.chat_loop_support import build_chat_loop, history, last_run, persisted_roles
+from tests.core.chat.chat_loop_streaming_test_support import answer
+from tests.core.chat.chat_loop_support import (
+    StubAdapter,
+    build_chat_loop,
+    history,
+    last_run,
+    persisted_roles,
+)
 from tests.core.chat.chat_loop_tools_test_support import (
     JsonObject,
     final,
@@ -158,7 +166,7 @@ async def test_failed_tool_call_persists_its_failure_and_the_run_continues(
 
 
 @pytest.mark.asyncio
-async def test_output_truncated_tool_calls_persist_failures_without_handler_side_effects(
+async def test_output_truncated_turn_fails_its_unstarted_tool_calls_without_running_them(
     tmp_path: Path,
 ) -> None:
     invocations: list[JsonObject] = []
@@ -180,13 +188,14 @@ async def test_output_truncated_tool_calls_persist_failures_without_handler_side
 
     messages = history(runtime)
     assert assistant.content == "I will reissue complete calls if needed."
-    assert invocations == []
+    # The stream moved past the first call, so it started and keeps its real
+    # Result; the call that arrived only with the truncated finish never runs.
+    assert invocations == [{"value": "first"}]
     assert messages[1].content == "I started preparing both calls."
     assert persisted_roles(messages) == ["user", "assistant", "tool", "tool", "assistant"]
-    assert [result["error"]["code"] for result in tool_results(messages)] == [
-        "tool_call_truncated",
-        "tool_call_truncated",
-    ]
+    first, second = tool_results(messages)
+    assert first == tool_success({"value": "first"})
+    assert second["error"]["code"] == "tool_call_truncated"
     assert [m["tool_call_id"] for m in runtime.adapter.requests[1]["messages"][-2:]] == [
         "call_first",
         "call_second",
@@ -220,7 +229,7 @@ async def test_unsafe_terminal_outcome_fails_closed_before_tool_handler(
 
 
 @pytest.mark.asyncio
-async def test_malformed_non_streaming_call_fails_without_blocking_valid_sibling(
+async def test_malformed_call_fails_without_blocking_valid_sibling(
     tmp_path: Path,
 ) -> None:
     invocations: list[JsonObject] = []
@@ -249,14 +258,16 @@ async def test_malformed_non_streaming_call_fails_without_blocking_valid_sibling
 
 @pytest.mark.asyncio
 async def test_malformed_tool_calls_container_becomes_rejected_call(tmp_path: Path) -> None:
-    runtime = tool_runtime(
-        tmp_path,
-        None,
-        [
-            {"content": None, "tool_calls": "broken-container"},
-            final("Recovered from the malformed Tool Call container."),
+    # Only a completed response can carry a whole Tool Call container; a stream
+    # delivers each call separately. The Provider refuses to stream the first step.
+    adapter = StubAdapter(
+        [{"content": None, "tool_calls": "broken-container"}],
+        stream_responses=[
+            ProviderStreamingUnsupportedError("no streaming"),
+            answer("Recovered from the malformed Tool Call container."),
         ],
     )
+    runtime = tool_runtime(tmp_path, None, [], adapter=adapter)
 
     result = await build_chat_loop(runtime).send("coder", "Try it", session_id="session-one")
 

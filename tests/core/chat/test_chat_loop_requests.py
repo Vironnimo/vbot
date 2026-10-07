@@ -21,6 +21,7 @@ from core.chat import (
     ReplySurface,
 )
 from core.chat.content_blocks import ContentBlock, FileBlock
+from core.providers.errors import ProviderStreamingUnsupportedError
 from core.runs import MODEL_STEP_USAGE_EVENT
 from core.tools import JsonObject as ToolJsonObject
 from core.tools import ToolContext, ToolRegistry, tool_success
@@ -125,8 +126,9 @@ async def test_send_persists_the_exchange_and_sends_the_agent_request(tmp_path: 
     assert await event_types(runtime, run) == [
         "run_started",
         "user_message_persisted",
-        MODEL_STEP_USAGE_EVENT,
+        "assistant_output_delta",
         "assistant_output",
+        MODEL_STEP_USAGE_EVENT,
         "run_completed",
     ]
     events = await runtime.timelines.events(run)
@@ -136,12 +138,16 @@ async def test_send_persists_the_exchange_and_sends_the_agent_request(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_non_streaming_provider_normalization_runs_off_event_loop(tmp_path: Path) -> None:
+async def test_completed_response_fallback_normalizes_off_event_loop(tmp_path: Path) -> None:
     loop_thread = threading.get_ident()
 
     class RecordingAdapter(StubAdapter):
         def __init__(self) -> None:
-            super().__init__([{"content": "Hello", "tool_calls": None}])
+            # The Provider refuses to stream, so Chat asks for a completed response.
+            super().__init__(
+                [{"content": "Hello", "tool_calls": None}],
+                stream_responses=[ProviderStreamingUnsupportedError("no streaming")],
+            )
             self.send_threads: list[int] = []
             self.normalize_threads: list[int] = []
 
@@ -388,8 +394,9 @@ async def test_internal_run_sends_its_prompt_as_a_reminder_after_the_reply_surfa
     assert messages[1].content == prompt
     assert await event_types(runtime, run) == [
         "run_started",
-        MODEL_STEP_USAGE_EVENT,
+        "assistant_output_delta",
         "assistant_output",
+        MODEL_STEP_USAGE_EVENT,
         "run_completed",
     ]
     request_messages = runtime.adapter.requests[0]["messages"]
@@ -646,7 +653,6 @@ async def test_background_completion_joins_next_request_in_same_run(tmp_path: Pa
         chat_loop,
         runtime.chat_run_manager,
         runtime,
-        trigger_chat_loop=chat_loop,
         sessions=runtime.chat_sessions,
     )
     runtime.deliver_background_completions = trigger_service.deliver_background_completions

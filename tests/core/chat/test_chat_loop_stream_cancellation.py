@@ -22,7 +22,6 @@ from tests.core.chat.chat_loop_streaming_test_support import JsonObject, stream_
 from tests.core.chat.chat_loop_support import (
     BlockingReasoningStreamingStubAdapter,
     BlockingStreamingStubAdapter,
-    BlockingStubAdapter,
     MidStreamCancelledStubAdapter,
     PolicyStubAdapter,
     SilentBlockingStreamingStubAdapter,
@@ -102,9 +101,7 @@ async def test_user_cancel_after_visible_stream_closes_the_adapter_and_keeps_the
     runtime = stream_runtime(tmp_path, adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
-    run = await build_chat_loop(runtime, streaming=True).start_run(
-        "coder", "Hi", session_id="session-one"
-    )
+    run = await build_chat_loop(runtime).start_run("coder", "Hi", session_id="session-one")
     await cancellation_boundary.wait()
     run.request_cancel(reason="user")
     await asyncio.sleep(0)
@@ -160,9 +157,7 @@ async def test_user_cancel_after_complete_stream_preserves_answer(
     runtime = stream_runtime(tmp_path, adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
-    run = await build_chat_loop(runtime, streaming=True).start_run(
-        "coder", "Hi", session_id="session-one"
-    )
+    run = await build_chat_loop(runtime).start_run("coder", "Hi", session_id="session-one")
     await adapter.finish_emitted.wait()
 
     if cancel_boundary == "persistence":
@@ -230,9 +225,7 @@ async def test_user_cancel_keeps_interrupted_reasoning_out_of_later_requests(
     runtime = stream_runtime(tmp_path, adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
-    run = await build_chat_loop(runtime, streaming=True).start_run(
-        "coder", "Hi", session_id="session-one"
-    )
+    run = await build_chat_loop(runtime).start_run("coder", "Hi", session_id="session-one")
     await adapter.stream_started.wait()
     run.request_cancel(reason="user")
     await asyncio.sleep(0)
@@ -277,18 +270,15 @@ async def test_user_cancel_keeps_interrupted_reasoning_out_of_later_requests(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("streaming", [True, False], ids=["streaming", "non-streaming"])
 async def test_user_cancel_before_visible_output_does_not_persist_assistant(
-    tmp_path: Path, streaming: bool
+    tmp_path: Path,
 ) -> None:
-    adapter: Any = SilentBlockingStreamingStubAdapter() if streaming else BlockingStubAdapter()
+    adapter = SilentBlockingStreamingStubAdapter()
     runtime = stream_runtime(tmp_path, adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
-    run = await build_chat_loop(runtime, streaming=streaming).start_run(
-        "coder", "Hi", session_id="session-one"
-    )
-    await (adapter.stream_started if streaming else adapter.request_started).wait()
+    run = await build_chat_loop(runtime).start_run("coder", "Hi", session_id="session-one")
+    await adapter.stream_started.wait()
     run.request_cancel(reason="user")
     # Output the Provider delivers after the cancel is discarded.
     adapter.release.set()
@@ -318,9 +308,7 @@ async def test_cancel_during_completed_answer_preparation_preserves_visible_answ
     adapter = CompletedStreamingStubAdapter()
     runtime = stream_runtime(tmp_path, adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
-    run = await build_chat_loop(runtime, streaming=True).start_run(
-        "coder", "Hi", session_id="session-one"
-    )
+    run = await build_chat_loop(runtime).start_run("coder", "Hi", session_id="session-one")
     await adapter.finish_emitted.wait()
     entered, release = asyncio.Event(), asyncio.Event()
     original = _CHAT_TRANSFORM_WORKERS.run
@@ -353,7 +341,7 @@ async def test_internal_cancellation_after_reasoning_leaves_only_its_summary(
     runtime = stream_runtime(tmp_path, MidStreamCancelledStubAdapter([]))
 
     with pytest.raises(RunCancelledError):
-        await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     messages = history(runtime)
     assert persisted_roles(messages) == ["user"]

@@ -26,7 +26,8 @@ class StubAdapter(AdapterHookDefaults):
         list_announced_tools: bool = False,
     ) -> None:
         self._responses = responses
-        self._stream_responses = stream_responses or []
+        # Without scripted stream responses, the ``send`` responses stream.
+        self._stream_responses = stream_responses
         self._wire_media_types = wire_media_types
         self._list_announced_tools = list_announced_tools
         self.requests: list[JsonObject] = []
@@ -70,6 +71,7 @@ class StubAdapter(AdapterHookDefaults):
         estimated, _ = estimate_request_input_tokens(messages, tools)
         return estimated
 
+    @override
     async def stream(
         self,
         messages: list[JsonObject],
@@ -77,6 +79,10 @@ class StubAdapter(AdapterHookDefaults):
         model_id: str,
         **kwargs: Any,
     ) -> Any:
+        if self._stream_responses is None:
+            async for delta in super().stream(messages, model_id=model_id, **kwargs):
+                yield delta
+            return
         self.stream_requests.append(
             {"messages": deepcopy(messages), "model_id": model_id, "kwargs": deepcopy(kwargs)}
         )

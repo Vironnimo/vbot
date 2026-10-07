@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
+from collections.abc import AsyncIterator, Awaitable, Callable
 from types import SimpleNamespace
 from typing import Any
 
@@ -18,8 +20,8 @@ from core.model_tasks._live_brain import (
 from core.model_tasks.live import LiveToolRun
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
-from core.providers.github_copilot_responses import normalize_responses_response
 from core.usage import UsageRecorder
+from tests.core.providers.adapter_test_support import response_deltas
 from tests.core.usage.usage_test_support import read_ledger
 
 TARGET = BrainTarget(
@@ -37,23 +39,38 @@ TOOLS = (
 CHANGING = {"send_message", "start_coding_terminal"}
 # The closing line of an answer whose Tools changed nothing.
 NOTHING = f"\n\n{EFFECTS_LABEL} nothing."
+SEND = {"target": "s1", "text": "go"}
 
 
 class FakeAdapter:
+    """Streams one scripted response per request.
+
+    A script is a normalized response (streamed as deltas), an exception (the
+    request fails), or a list of deltas in which an exception breaks the stream
+    and an async callable is awaited before the next delta.
+    """
+
     def __init__(self, responses: list[Any]) -> None:
         self.responses = list(responses)
         self.requests: list[tuple[list[dict[str, Any]], str, dict[str, Any]]] = []
         self.closed = False
 
-    async def send(self, messages: list[dict[str, Any]], *, model_id: str, **kwargs: Any) -> Any:
+    def stream(
+        self, messages: list[dict[str, Any]], *, model_id: str, **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
         self.requests.append((copy.deepcopy(messages), model_id, kwargs))
-        response = self.responses.pop(0)
-        if isinstance(response, Exception):
-            raise response
-        return response
+        return self._deltas(self.responses.pop(0))
 
-    def normalize_response(self, response: Any, *, model_id: str | None = None) -> Any:
-        return response
+    async def _deltas(self, script: Any) -> AsyncIterator[dict[str, Any]]:
+        if isinstance(script, Exception):
+            raise script
+        for step in script if isinstance(script, list) else response_deltas(script):
+            if isinstance(step, Exception):
+                raise step
+            if callable(step):
+                await step()
+                continue
+            yield step
 
     def request_context_kwargs(self, *, agent_id: str, session_id: str) -> dict[str, Any]:
         return {"conversation_id": f"{agent_id}:{session_id}"}
@@ -74,6 +91,8 @@ class Harness:
         self.adapter = FakeAdapter(responses)
         self.connections: list[ConnectionRef] = []
         self.calls: list[tuple[Any, Any, Any]] = []
+        # Awaited inside each Tool execution, with the Tool's name.
+        self.tool_hook: Callable[[Any], Awaitable[None]] | None = None
         self.sleeps: list[float] = []
         self.tool_results: list[dict[str, Any]] = []
         self.records: list[dict[str, Any]] = []
@@ -101,6 +120,8 @@ class Harness:
         self, name: Any, arguments: Any, *, rejection: dict[str, Any] | None = None
     ) -> LiveToolRun:
         self.calls.append((name, arguments, rejection))
+        if self.tool_hook is not None:
+            await self.tool_hook(name)
         result = self.tool_results.pop(0) if self.tool_results else {"ok": True}
         return LiveToolRun(result=result, changed=name if name in CHANGING else "")
 
@@ -125,6 +146,11 @@ def _tool_turn(*calls: tuple[str, Any], meta: Any = None) -> dict[str, Any]:
 
 def _answer(text: str) -> dict[str, Any]:
     return {"content": text, "tool_calls": []}
+
+
+def _call_delta(call_id: str, name: str = "", arguments: Any = "") -> dict[str, Any]:
+    text = arguments if isinstance(arguments, str) else json.dumps(arguments)
+    return {"type": "tool_call_delta", "id": call_id, "name_delta": name, "arguments_delta": text}
 
 
 DELEGATION = DelegationInput(
@@ -172,8 +198,8 @@ async def test_tool_loop_runs_host_tools_and_replays_reasoning_to_the_same_conne
     # The answer ends with what the changing Tool reported.
     assert answer == f"One Codex terminal is running.\n\n{EFFECTS_LABEL} Started Codex: t1."
     assert harness.connections == [ConnectionRef("openai", "subscription")]
-    # The host gets the call as the Model made it.
-    assert harness.calls == [("start_coding_terminal", '{"program": "codex"}', None)]
+    # The host gets the streamed call without a rejection.
+    assert harness.calls == [("start_coding_terminal", {"program": "codex"}, None)]
     first_messages, model_id, kwargs = harness.adapter.requests[0]
     assert model_id == "gpt-5.6-terra"
     assert first_messages[0] == {"role": "system", "content": INSTRUCTIONS}
@@ -190,6 +216,58 @@ async def test_tool_loop_runs_host_tools_and_replays_reasoning_to_the_same_conne
         # The Provider Adapter renders the envelope to text at its wire boundary.
         "content": json.dumps(result),
     }
+
+
+@pytest.mark.asyncio
+async def test_each_tool_call_starts_once_streamed_and_calls_run_one_at_a_time_in_order():
+    first_started, stream_ended = asyncio.Event(), asyncio.Event()
+    log: list[str] = []
+
+    async def first_call_started() -> None:
+        # The safety bound only ends a regression that waits for the stream end.
+        async with asyncio.timeout(5):
+            await first_started.wait()
+
+    async def end_of_stream() -> None:
+        log.append("stream ended")
+        stream_ended.set()
+
+    async def tool_hook(name: Any) -> None:
+        log.append(f"start {name}")
+        if name == "send_message":
+            first_started.set()
+            async with asyncio.timeout(5):
+                await stream_ended.wait()
+        log.append(f"end {name}")
+
+    harness = Harness(
+        [
+            [
+                _call_delta("call-0", "send_message", SEND),
+                # The second call begins, so the first one is complete.
+                _call_delta("call-1", "overview"),
+                first_call_started,
+                _call_delta("call-1", arguments={}),
+                {"type": "finish", "reason": "tool_calls"},
+                end_of_stream,
+            ],
+            _answer("Sent."),
+        ]
+    )
+    harness.tool_hook = tool_hook
+
+    assert await harness.brain.answer(DELEGATION) == f"Sent.\n\n{EFFECTS_LABEL} Done."
+    # The first call ran while the Model still wrote; the second waited for it.
+    assert log == [
+        "start send_message",
+        "stream ended",
+        "end send_message",
+        "start overview",
+        "end overview",
+    ]
+    messages = harness.adapter.requests[-1][0]
+    assert [call["id"] for call in messages[-3]["tool_calls"]] == ["call-0", "call-1"]
+    assert [message["tool_call_id"] for message in messages[-2:]] == ["call-0", "call-1"]
 
 
 @pytest.mark.asyncio
@@ -271,18 +349,48 @@ async def test_an_empty_answer_is_the_effects_line_after_a_change_and_a_failure_
 
 
 @pytest.mark.asyncio
-async def test_retryable_model_failures_are_retried_but_tools_never_replayed():
-    harness = Harness(
-        [
-            _tool_turn(("send_message", {"target": "s1", "text": "go"})),
-            ProviderError("busy", retryable=True),
-            _answer("Sent."),
-        ]
-    )
+@pytest.mark.parametrize(
+    ("responses", "sleeps"),
+    [
+        pytest.param(
+            [
+                _tool_turn(("send_message", SEND)),
+                ProviderError("busy", retryable=True),
+                _answer("Sent."),
+            ],
+            [0.5],
+            id="before-any-tool-call",
+        ),
+        # A stream that breaks after a call started is continued, never replayed;
+        # the call it had not finished never runs.
+        pytest.param(
+            [
+                [
+                    {"type": "content_delta", "text": "Sending."},
+                    _call_delta("call-0", "send_message", SEND),
+                    _call_delta("call-1", "overview"),
+                    ProviderError("dropped", retryable=True),
+                ],
+                _answer("Sent."),
+            ],
+            [],
+            id="after-a-started-tool-call",
+        ),
+    ],
+)
+async def test_retryable_model_failures_are_retried_but_tools_never_replayed(
+    responses: list[Any], sleeps: list[float]
+):
+    harness = Harness(responses)
 
     assert await harness.brain.answer(DELEGATION) == f"Sent.\n\n{EFFECTS_LABEL} Done."
-    assert harness.sleeps == [0.5]
-    assert len(harness.calls) == 1
+    assert harness.sleeps == sleeps
+    assert harness.calls == [("send_message", SEND, None)]
+    # The Model continues after the call it made, with its result.
+    messages = harness.adapter.requests[-1][0]
+    assert [message["role"] for message in messages[-2:]] == ["assistant", "tool"]
+    assert [call["id"] for call in messages[-2]["tool_calls"]] == ["call-0"]
+    assert messages[-1]["tool_call_id"] == "call-0"
 
 
 @pytest.mark.asyncio
@@ -336,35 +444,16 @@ async def test_step_limit_stops_the_loop():
         ("overview", '["explicit-agent"]'),
     ],
 )
-async def test_adapter_rejections_reach_the_host_with_the_call(
-    name: str, arguments: str, monkeypatch: pytest.MonkeyPatch
-):
+async def test_adapter_rejections_reach_the_host_with_the_call(name: str, arguments: str):
     harness = Harness(
         [
-            {
-                "status": "completed",
-                "output": [
-                    {
-                        "type": "function_call",
-                        "call_id": "rejected-call",
-                        "name": name,
-                        "arguments": arguments,
-                    },
-                    {
-                        "type": "function_call",
-                        "call_id": "valid-call",
-                        "name": "overview",
-                        "arguments": "{}",
-                    },
-                ],
-            },
-            {"status": "completed", "output": [{"type": "output_text", "text": "Done"}]},
+            [
+                _call_delta("rejected-call", name, arguments),
+                _call_delta("valid-call", "overview", "{}"),
+                {"type": "finish", "reason": "tool_calls"},
+            ],
+            _answer("Done"),
         ]
-    )
-    monkeypatch.setattr(
-        harness.adapter,
-        "normalize_response",
-        lambda response, **_kwargs: normalize_responses_response(response),
     )
 
     assert await harness.brain.answer(DELEGATION) == "Done" + NOTHING

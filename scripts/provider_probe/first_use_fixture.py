@@ -86,7 +86,7 @@ class FirstUseFixture:
             storage=SimpleNamespace(
                 temporary_files=self.temporary, load_subagent_settings=lambda: {}
             ),
-            streaming_chat_loop=self,
+            chat_loop=self,
         )
         self.coordinator = SubAgentCoordinator(runtime, self)
         self.coordinator.install(self.runs)

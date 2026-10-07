@@ -159,7 +159,6 @@ def test_stub_runtime_lifespan_wires_state_and_closes_services(tmp_path: Path, c
         preload.assert_called_once_with()
         assert app.state.chat_runs is runtime.chat_run_manager
         assert app.state.chat_loop is runtime.chat_loop
-        assert app.state.streaming_chat_loop is runtime.streaming_chat_loop
         assert app.state.command_dispatcher is runtime.command_dispatcher
         assert runtime.bootstrap_activated is True
         app.state.device_flow_engine = engine

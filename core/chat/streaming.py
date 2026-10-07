@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import time
 from collections import OrderedDict
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -19,6 +20,7 @@ from core.providers.adapter import (
     terminal_outcome_from_response,
 )
 from core.providers.errors import (
+    NetworkError,
     ProviderAuthError,
     ProviderRateLimitError,
     ProviderStreamingUnsupportedError,
@@ -32,9 +34,12 @@ from core.runs import (
 )
 from core.tools import registry_tool_name
 from core.utils.errors import ProviderError, VBotError
+from core.utils.logging import get_logger
 from core.utils.timestamps import utc_now_timestamp
 
 JsonObject = dict[str, Any]
+
+_LOGGER = get_logger("chat")
 
 STREAM_CHUNK_TIMEOUT_SECONDS = 180.0
 STREAM_PROGRESS_TIMEOUT_SECONDS = 900.0
@@ -55,6 +60,19 @@ class StreamingChunkTimeoutError(StreamingError):
 
 class StreamingProgressTimeoutError(StreamingError):
     """Raised when heartbeats continue but the Model produces no delta."""
+
+
+class StreamBrokenAfterToolCallsError(StreamingError):
+    """A stream broke after some of its Tool Calls were handed out to run.
+
+    ``response`` holds the output that arrived, with exactly the handed-out
+    Tool Calls; a replay would run them twice, so the caller continues from it.
+    """
+
+    def __init__(self, cause: Exception, response: JsonObject) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.response = response
 
 
 class StreamRecoveryAction(Enum):
@@ -81,6 +99,7 @@ def decide_stream_recovery(
     has_partial_content: bool,
     finish_received: bool = False,
     has_fallback_chain: bool = False,
+    tools_started: bool = False,
 ) -> StreamRecoveryAction:
     """Decide how to recover from a broken streaming attempt.
 
@@ -100,7 +119,9 @@ def decide_stream_recovery(
     exhausted; anything else fails. Once answer text has escaped, the stream is
     never replayed and accumulated content is preserved as an interrupted
     Assistant boundary. Transient failures permit same-Run continuation; fatal
-    failures are raised after preserving that boundary.
+    failures are raised after preserving that boundary. Started Tool Calls
+    (``tools_started``) block replay the same way: a second attempt would run
+    them again.
 
     A rate-limit failure with a configured model-fallback chain fails
     immediately (advancing the chain) instead of burning same-model restarts:
@@ -109,7 +130,7 @@ def decide_stream_recovery(
     """
     if finish_received:
         return StreamRecoveryAction.ACCEPT_COMPLETE
-    if not has_partial_content:
+    if not has_partial_content and not tools_started:
         if _is_streaming_fallback_error(error):
             return StreamRecoveryAction.FALLBACK
         if _is_stream_restartable_error(error):
@@ -419,6 +440,17 @@ class _ToolCallFragments:
         self.name_text += name_delta
         self.arguments_text += arguments_delta
 
+    def arguments_closed(self) -> bool:
+        """Whether the call has a name and its arguments form one complete JSON value."""
+        text = self.arguments_text.strip()
+        if not self.name_text or not text:
+            return False
+        try:
+            json.loads(text)
+        except ValueError:
+            return False
+        return True
+
     def to_tool_calls(self) -> list[JsonObject]:
         return normalize_tool_call_candidates(
             tool_call_id=self.provider_id,
@@ -429,7 +461,18 @@ class _ToolCallFragments:
 
 
 class StreamingAccumulator:
-    """Accumulate normalized provider deltas into final assistant fields."""
+    """Accumulate normalized provider deltas into final assistant fields.
+
+    A Tool Call is complete once the stream has moved past it (a later Tool
+    Call, answer text or Reasoning began) and its arguments form one complete
+    JSON value, or once the stream finished. Providers stream one Tool Call
+    after another, so this needs no Provider-specific end marker; a call whose
+    arguments are still open when the stream moves on (interleaved fragments)
+    waits for the finish. :meth:`take_completed_tool_calls` hands complete
+    calls to a caller that runs them while the Model is still writing; a taken
+    call is final, and the finished Assistant fields carry exactly the calls
+    that were taken.
+    """
 
     def __init__(self) -> None:
         self._content_parts: list[str] = []
@@ -442,6 +485,10 @@ class StreamingAccumulator:
         self._reasoning_started_at: str | None = None
         self._reasoning_completed_at: str | None = None
         self._tool_calls: OrderedDict[str, _ToolCallFragments] = OrderedDict()
+        # The slot whose fragments are still arriving; every earlier slot is complete.
+        self._open_tool_slot: str | None = None
+        # Calls already handed out, frozen per slot in the order they were taken.
+        self._taken_tool_calls: OrderedDict[str, list[JsonObject]] = OrderedDict()
         self._finish_reason: TerminalOutcome | None = None
         self._usage: JsonObject | None = None
 
@@ -494,6 +541,31 @@ class StreamingAccumulator:
         """Whether any Tool Call fragment arrived during this attempt."""
         return bool(self._tool_calls)
 
+    @property
+    def has_taken_tool_calls(self) -> bool:
+        """Whether a caller took complete Tool Calls during this attempt."""
+        return bool(self._taken_tool_calls)
+
+    def take_completed_tool_calls(self) -> list[JsonObject]:
+        """Return the Tool Calls completed since the last take, in stream order.
+
+        Only a leading run of complete slots is handed out, so taken calls are
+        always a prefix of the final Tool Calls and keep their final positions.
+        A slot can expand into several calls (consecutive JSON argument values).
+        """
+        taken: list[JsonObject] = []
+        for slot, fragments in self._tool_calls.items():
+            if slot in self._taken_tool_calls:
+                continue
+            if self._finish_reason is None and (
+                slot == self._open_tool_slot or not fragments.arguments_closed()
+            ):
+                break
+            calls = fragments.to_tool_calls()
+            self._taken_tool_calls[slot] = calls
+            taken.extend(calls)
+        return taken
+
     def add_delta(self, delta: JsonObject) -> list[StreamingVisibleDelta]:
         """Accept one normalized provider delta and return public deltas to emit."""
         delta_type = _require_delta_type(delta)
@@ -523,8 +595,9 @@ class StreamingAccumulator:
     def finalize_assistant_fields(self) -> StreamingAssistantFields:
         """Build final fields, preserving malformed Tool Calls as rejected calls."""
         tool_calls: list[JsonObject] = []
-        for fragments in self._tool_calls.values():
-            tool_calls.extend(fragments.to_tool_calls())
+        for slot, fragments in self._tool_calls.items():
+            taken = self._taken_tool_calls.get(slot)
+            tool_calls.extend(taken if taken is not None else fragments.to_tool_calls())
         return StreamingAssistantFields(
             content=_joined_or_none(self._content_parts),
             reasoning=_joined_or_none(self._reasoning_parts),
@@ -537,18 +610,19 @@ class StreamingAccumulator:
         )
 
     def finalize_partial_fields(self) -> StreamingAssistantFields:
-        """Build assistant fields from a stream interrupted after visible output.
+        """Build assistant fields from a stream that broke before it finished.
 
-        This never normalizes tool-call arguments: a Tool Call cut off mid-stream
-        was never completed or executed, so its in-flight fragment is dropped.
-        No ``finish_reason`` is set, so the result reads as an interrupted
+        Taken Tool Calls stay, because the caller already runs them. Any other
+        Tool Call fragment was never handed out or executed and is dropped. No
+        ``finish_reason`` is set, so the result reads as an unfinished
         Assistant turn the next request can continue.
         """
+        taken = [call for calls in self._taken_tool_calls.values() for call in calls]
         return StreamingAssistantFields(
             content=_joined_or_none(self._content_parts),
             reasoning=_joined_or_none(self._reasoning_parts),
             reasoning_meta=dict(self._reasoning_meta) if self._reasoning_meta is not None else None,
-            tool_calls=None,
+            tool_calls=taken or None,
             finish_reason=None,
             usage=dict(self._usage) if self._usage is not None else None,
             reasoning_timing=self.reasoning_timing,
@@ -559,6 +633,7 @@ class StreamingAccumulator:
         text = _optional_delta_string(delta, "text")
         if not text:
             return None
+        self._open_tool_slot = None
         self._last_text_delta_type = "content_delta"
         self._content_parts.append(text)
         return StreamingVisibleDelta(
@@ -570,6 +645,7 @@ class StreamingAccumulator:
         text = _optional_delta_string(delta, "text")
         if not text:
             return None
+        self._open_tool_slot = None
         self._last_text_delta_type = "reasoning_delta"
         self._record_reasoning_activity()
         self._reasoning_parts.append(text)
@@ -598,6 +674,16 @@ class StreamingAccumulator:
         provider_id = _optional_tool_call_provider_id(delta)
         name_delta = _optional_delta_string(delta, "name_delta")
         arguments_delta = _optional_delta_string(delta, "arguments_delta")
+        if stream_slot in self._taken_tool_calls:
+            # The call already runs as it was when the stream moved past it.
+            # A Provider that returns to it breaks stream order; keep what ran.
+            if name_delta or arguments_delta:
+                _LOGGER.warning(
+                    "Provider stream returned to a Tool Call that already started; "
+                    "ignoring the late fragment"
+                )
+            return None
+        self._open_tool_slot = stream_slot
 
         fragments = self._tool_calls.setdefault(
             stream_slot,
@@ -667,6 +753,71 @@ class StreamingAccumulator:
             self._finish_reason = TERMINAL_OUTCOME_UNKNOWN
             return
         self._finish_reason = terminal_outcome_from_response({"terminal_outcome": reason})
+
+
+async def stream_model_response(
+    adapter: Any,
+    messages: list[JsonObject],
+    *,
+    model_id: str,
+    on_tool_calls: Callable[[list[JsonObject]], None] | None = None,
+    chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
+    **request_options: Any,
+) -> JsonObject:
+    """Stream one Model request and return its completed, normalized response.
+
+    The result has the shape ``normalize_response`` returns (``content``,
+    ``reasoning``, ``reasoning_meta``, ``tool_calls``, ``terminal_outcome``,
+    ``usage``). Every kernel Model request outside Chat goes through here, so
+    stall timeouts apply and a Provider that rejects large completed responses
+    still answers. ``on_tool_calls`` receives each Tool Call once the stream
+    has moved past it, while the Model is still writing. A stream that breaks
+    after that raises :class:`StreamBrokenAfterToolCallsError` with the output
+    so far instead of a replayable error.
+
+    Only a Provider that declares this request cannot stream
+    (``ProviderStreamingUnsupportedError``, before any output) is asked for a
+    completed response instead.
+    """
+    accumulator = StreamingAccumulator()
+    try:
+        async for delta in iter_with_chunk_timeout(
+            adapter.stream(messages, model_id=model_id, **request_options),
+            timeout_seconds=chunk_timeout_seconds,
+            progress_timeout_seconds=(
+                STREAM_PROGRESS_TIMEOUT_SECONDS if chunk_timeout_seconds is not None else None
+            ),
+        ):
+            if delta.get("type") == "heartbeat":
+                continue
+            accumulator.add_delta(delta)
+            if on_tool_calls is not None and (completed := accumulator.take_completed_tool_calls()):
+                on_tool_calls(completed)
+        if accumulator.finish_reason is None:
+            raise NetworkError("Provider stream ended without finish delta")
+        if on_tool_calls is not None and (completed := accumulator.take_completed_tool_calls()):
+            on_tool_calls(completed)
+    except ProviderStreamingUnsupportedError as exc:
+        if accumulator.has_taken_tool_calls:
+            raise StreamBrokenAfterToolCallsError(
+                exc, accumulator.finalize_partial_fields().to_response_dict()
+            ) from exc
+        if accumulator.has_partial_tool_call or accumulator.partial_content is not None:
+            raise
+        if accumulator.partial_reasoning is not None:
+            raise
+        response = await adapter.send(messages, model_id=model_id, **request_options)
+        normalized: JsonObject = adapter.normalize_response(response, model_id=model_id)
+        if on_tool_calls is not None and normalized.get("tool_calls"):
+            on_tool_calls(list(normalized["tool_calls"]))
+        return normalized
+    except Exception as exc:
+        if accumulator.has_taken_tool_calls:
+            raise StreamBrokenAfterToolCallsError(
+                exc, accumulator.finalize_partial_fields().to_response_dict()
+            ) from exc
+        raise
+    return accumulator.finalize_assistant_fields().to_response_dict()
 
 
 async def iter_with_chunk_timeout(

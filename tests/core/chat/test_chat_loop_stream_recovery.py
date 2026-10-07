@@ -242,9 +242,8 @@ async def test_generic_provider_error_fails_without_a_plain_request(tmp_path: Pa
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("streaming", [True, False], ids=["streaming", "plain"])
 async def test_reasoning_only_stop_recovers_with_a_visible_continuation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, streaming: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     recovery_sentinel = "test-owned output-integrity recovery"
     monkeypatch.setattr(
@@ -252,10 +251,7 @@ async def test_reasoning_only_stop_recovers_with_a_visible_continuation(
     )
     misrouted = "Answer text routed as reasoning."
     adapter = StubAdapter(
-        [
-            {"content": None, "reasoning": misrouted},
-            {"content": "Recovered visible answer.", "reasoning": None},
-        ],
+        [],
         stream_responses=[
             [{"type": "reasoning_delta", "text": misrouted}, {"type": "finish", "reason": "stop"}],
             answer("Recovered visible answer."),
@@ -263,12 +259,10 @@ async def test_reasoning_only_stop_recovers_with_a_visible_continuation(
     )
     runtime = stream_runtime(tmp_path, adapter)
 
-    assistant = await build_chat_loop(runtime, streaming=streaming).send(
-        "coder", "Hi", session_id="session-one"
-    )
+    assistant = await send_streaming(runtime)
 
     messages = history(runtime)
-    requests = adapter.stream_requests if streaming else adapter.requests
+    requests = adapter.stream_requests
     assert assistant.content == "Recovered visible answer."
     assert last_run(runtime).status == RunStatus.COMPLETED
     assert persisted_roles(messages) == ["user", "assistant", "note", "assistant"]

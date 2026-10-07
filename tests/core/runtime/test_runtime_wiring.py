@@ -156,14 +156,12 @@ def test_runtime_wires_its_services_to_the_data_directory(shared_runtime: Runtim
         ("embeddings", EmbeddingService),
         ("live_voice", LiveVoiceService),
         ("cron_service", CronService),
-        ("streaming_chat_loop", ChatLoop),
+        ("chat_loop", ChatLoop),
     ):
         assert isinstance(getattr(runtime, name), service_type), name
     assert runtime.agents.data_dir == runtime.storage.data_dir
     assert runtime.statistics_index.data_dir == runtime.storage.data_dir
-    # Triggers run on the streaming loop; image understanding availability is
-    # answered by the Runtime's image service.
-    assert runtime.trigger_service._trigger_chat_loop is runtime.streaming_chat_loop  # noqa: SLF001
+    # Image understanding availability is answered by the Runtime's image service.
     availability = runtime.chat_loop._dependencies.image_understanding_available  # noqa: SLF001
     assert getattr(availability, "__self__", None) is runtime._image  # noqa: SLF001
 

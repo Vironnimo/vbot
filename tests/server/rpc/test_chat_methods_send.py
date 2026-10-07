@@ -58,16 +58,15 @@ WEBUI = ReplySurface.webui()
         ("chat.stream", "tester@vbot", "tester", "vbot"),
     ],
 )
-async def test_submission_starts_the_run_on_the_method_loop_for_the_addressed_agent(
+async def test_submission_starts_the_run_for_the_addressed_agent(
     method: str, agent_address: str, agent_id: str, project_id: str | None
 ) -> None:
-    send_loop, stream_loop = _RecordingLoop(), _RecordingLoop()
-    state = chat_state(send_loop, streaming_loop=stream_loop)
+    loop = _RecordingLoop()
+    state = chat_state(loop)
 
     response = await call(state, method, agent_id=agent_address, session_id="s1", content="hi")
 
-    used, unused = (send_loop, stream_loop) if method == "chat.send" else (stream_loop, send_loop)
-    assert used.start_calls == [
+    assert loop.start_calls == [
         {
             "agent_id": agent_id,
             "content": "hi",
@@ -76,7 +75,6 @@ async def test_submission_starts_the_run_on_the_method_loop_for_the_addressed_ag
             "project_id": project_id,
         }
     ]
-    assert unused.start_calls == []
     result = response["result"]
     if method == "chat.send":
         assert result["status"] == "completed"
@@ -328,9 +326,9 @@ async def test_cancelled_enqueue_is_a_run_cancelled_error(method: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_edit_starts_an_idle_streaming_run() -> None:
-    send_loop, stream_loop = _RecordingLoop(), _RecordingLoop()
-    state = chat_state(send_loop, streaming_loop=stream_loop)
+async def test_edit_starts_an_idle_run() -> None:
+    loop = _RecordingLoop()
+    state = chat_state(loop)
 
     response = await call(
         state,
@@ -343,7 +341,7 @@ async def test_edit_starts_an_idle_streaming_run() -> None:
 
     assert response["result"]["run_id"] == "run-edit"
     assert response["result"]["sse_url"] == "/api/runs/run-edit/events"
-    assert stream_loop.edit_calls == [
+    assert loop.edit_calls == [
         {
             "agent_id": "agent-1",
             "content": "edited request",
@@ -353,7 +351,6 @@ async def test_edit_starts_an_idle_streaming_run() -> None:
             "project_id": "vbot",
         }
     ]
-    assert send_loop.edit_calls == []
     assert await bridged_run_ids(state) == {"run-edit"}
 
 
@@ -382,7 +379,7 @@ async def test_edit_of_a_busy_session_is_rejected_without_queueing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_waits_for_the_run_and_returns_its_visible_timeline(
+async def test_send_waits_for_the_run_and_returns_its_settled_ending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     adapter = StubAdapter(
@@ -426,56 +423,16 @@ async def test_send_waits_for_the_run_and_returns_its_visible_timeline(
     assert result["message"]["content"] == "Read the file"
     assert result["message"]["reasoning"] == "Readable thinking"
     assert "reasoning_meta" not in str(result)
-    assert "batch" not in str(result["events"])
+    # A finished Run keeps only its settled ending; the Tool step is in History
+    # (the live timeline with its Tool events: tests/server/test_sse.py).
     assert [
         event["type"] for event in result["events"] if event["type"] != "provider_request_status"
-    ] == [
-        "run_started",
-        "user_message_persisted",
-        "model_step_usage",
-        "tool_call_started",
-        "tool_call_result",
-        "model_step_usage",
-        "reasoning",
-        "assistant_output",
-        "run_completed",
-    ]
-    # chat.send drives the non-streaming loop.
-    assert len(adapter.requests) == 2
-    assert adapter.stream_requests == []
-
-    tool_started = next(event for event in result["events"] if event["type"] == "tool_call_started")
-    tool_result = next(event for event in result["events"] if event["type"] == "tool_call_result")
-    fingerprint = state.runtime.tools.schema_fingerprint("read")
-    assistant = next(
-        message
-        for message in state.runtime.chat_sessions.get(
-            SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
-        ).load()
-        if message.role == "assistant" and message.tool_calls
-    )
-    started_payload = dict(tool_started["payload"])
-    assert started_payload.pop("display")["summary"] == "note.txt"
-    assert started_payload == {
-        "assistant_message_id": assistant.id,
-        "tool_call": {
-            "id": "call_read",
-            "index": 0,
-            "name": "read",
-            "arguments": {"path": "note.txt"},
-        },
-        "schema_fingerprint": fingerprint,
-    }
-    assert tool_result["payload"]["assistant_message_id"] == assistant.id
-    assert tool_result["payload"]["tool_call"] == {"id": "call_read", "index": 0, "name": "read"}
-    assert tool_result["payload"]["result"] == {
-        "ok": True,
-        "error": None,
-        "data": {"content": "1| rpc content"},
-        "artifacts": [],
-    }
-    assert tool_result["payload"]["schema_fingerprint"] == fingerprint
-    assert tool_result["payload"]["error_code"] is None
+    ] == ["reasoning", "assistant_output", "model_step_usage", "run_completed"]
+    history = state.runtime.chat_sessions.get(
+        SessionAddress(project_id=None, agent_id="coder", session_id="session-one")
+    ).load()
+    [tool_message] = [message for message in history if message.role == "tool"]
+    assert json.loads(str(tool_message.content))["data"] == {"content": "1| rpc content"}
 
 
 @pytest.mark.asyncio
@@ -501,8 +458,6 @@ async def test_stream_returns_the_running_run_without_waiting_for_it(
     result = response["result"]
     assert result["status"] == "running"
     assert result["sse_url"] == f"/api/runs/{result['run_id']}/events"
-    # chat.stream drives the streaming loop.
-    assert adapter.requests == []
     assert len(adapter.stream_requests) == 1
     adapter.release.set()
     final_message = await state.chat_runs.get(result["run_id"]).wait()
@@ -726,17 +681,8 @@ def test_http_send_persists_the_run_and_serves_its_timeline_and_history(
         "result": {"agent_id": "coder", "session_id": "session-one", "working_project_id": None},
     }
     assert send_result["message"]["content"] == "Lookup complete."
-    timeline = [
-        "run_started",
-        "user_message_persisted",
-        "model_step_usage",
-        "reasoning",
-        "tool_call_started",
-        "tool_call_result",
-        "model_step_usage",
-        "assistant_output",
-        "run_completed",
-    ]
+    # The finished Run's response and SSE replay hold only its settled ending.
+    timeline = ["assistant_output", "model_step_usage", "run_completed"]
     assert [
         event["type"]
         for event in send_result["events"]

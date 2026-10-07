@@ -596,15 +596,6 @@ def bootstrap(runtime: Runtime) -> None:
         )
         runtime._chat_loop = ChatLoop(
             chat_dependencies,
-            streaming=False,
-            attachment_resolver=resolver,
-            compaction_service=compaction_service,
-            reflection_service=runtime._reflection_service,
-            session_title_service=runtime._session_title_service,
-        )
-        runtime._streaming_chat_loop = ChatLoop(
-            chat_dependencies,
-            streaming=True,
             attachment_resolver=resolver,
             compaction_service=compaction_service,
             reflection_service=runtime._reflection_service,
@@ -614,7 +605,6 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._chat_loop,
             runtime._chat_run_manager,
             runtime,
-            trigger_chat_loop=runtime._streaming_chat_loop,
             sessions=runtime._chat_sessions,
         )
         runtime._trigger_service.set_owned_completion_starter(runtime._start_owned_completion)

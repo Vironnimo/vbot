@@ -1084,7 +1084,7 @@ class LibrarianService:
             },
         )
         try:
-            run = await self._runtime.streaming_chat_loop.start_run(
+            run = await self._runtime.chat_loop.start_run(
                 LIBRARIAN_AGENT_ID,
                 brief,
                 session_id=session.id,

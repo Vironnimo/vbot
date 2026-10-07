@@ -736,15 +736,13 @@ class TriggerService:
         chat_run_manager: ChatRunManager,
         runtime: Runtime,
         *,
-        trigger_chat_loop: ChatLoop | None = None,
         sessions: ChatSessionManager | None = None,
     ) -> None:
         self._chat_loop = chat_loop
-        self._trigger_chat_loop = trigger_chat_loop or chat_loop
         self._chat_run_manager = chat_run_manager
         self._runtime = runtime
         self._completion_delivery = _CompletionDeliveryCoordinator(
-            self._trigger_chat_loop,
+            self._chat_loop,
             chat_run_manager,
             sessions,
         )
@@ -865,7 +863,7 @@ class TriggerService:
         if session_id is None:
             try:
                 if internal:
-                    return await self._trigger_chat_loop.start_run_in_new_session(
+                    return await self._chat_loop.start_run_in_new_session(
                         agent_id,
                         message,
                         internal=True,
@@ -878,7 +876,7 @@ class TriggerService:
                             run_kind,
                         ),
                     )
-                return await self._trigger_chat_loop.start_run_in_new_session(
+                return await self._chat_loop.start_run_in_new_session(
                     agent_id,
                     message,
                     sender=sender,
@@ -897,7 +895,7 @@ class TriggerService:
         target_session_id = session_id
         try:
             if internal:
-                run = await self._trigger_chat_loop.start_run(
+                run = await self._chat_loop.start_run(
                     agent_id,
                     message,
                     session_id=target_session_id,
@@ -912,7 +910,7 @@ class TriggerService:
                     ),
                 )
             else:
-                run = await self._trigger_chat_loop.start_run(
+                run = await self._chat_loop.start_run(
                     agent_id,
                     message,
                     session_id=target_session_id,
@@ -930,7 +928,7 @@ class TriggerService:
             try:
                 if internal:
                     if waiting_work_admission is None:
-                        queued_item = await self._trigger_chat_loop.queue_run(
+                        queued_item = await self._chat_loop.queue_run(
                             agent_id,
                             message,
                             session_id=target_session_id,
@@ -945,7 +943,7 @@ class TriggerService:
                             ),
                         )
                     else:
-                        queued_item = await self._trigger_chat_loop.queue_run(
+                        queued_item = await self._chat_loop.queue_run(
                             agent_id,
                             message,
                             session_id=target_session_id,
@@ -962,7 +960,7 @@ class TriggerService:
                         )
                 else:
                     if waiting_work_admission is None:
-                        queued_item = await self._trigger_chat_loop.queue_run(
+                        queued_item = await self._chat_loop.queue_run(
                             agent_id,
                             message,
                             session_id=target_session_id,
@@ -977,7 +975,7 @@ class TriggerService:
                             ),
                         )
                     else:
-                        queued_item = await self._trigger_chat_loop.queue_run(
+                        queued_item = await self._chat_loop.queue_run(
                             agent_id,
                             message,
                             session_id=target_session_id,

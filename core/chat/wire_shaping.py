@@ -1205,6 +1205,7 @@ def _assistant_message_from_response(
     reasoning_timing: JsonObject | None = None,
     interrupted: bool = False,
     interruption_cause: str | None = None,
+    message_id: str | None = None,
 ) -> ChatMessage:
     tool_calls = _parse_response_tool_calls(response.get("tool_calls"))
     reasoning = _nullable_response_string(response, "reasoning")
@@ -1234,6 +1235,7 @@ def _assistant_message_from_response(
         tool_calls=tool_calls,
         interrupted=interrupted,
         interruption_cause=interruption_cause,
+        message_id=message_id,
     )
 
 

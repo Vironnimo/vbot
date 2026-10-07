@@ -8,7 +8,7 @@ import io
 import logging
 import random
 import threading
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast, override
@@ -41,6 +41,7 @@ from core.utils.errors import ConfigError
 from tests.core.model_tasks.image_test_support import (
     _MissingModelTasks,
 )
+from tests.core.providers.adapter_test_support import response_deltas
 from tests.core.usage.usage_test_support import read_ledger
 
 
@@ -118,26 +119,21 @@ class _UnderstandingAdapter:
     def image_size_limit(self, model_id: str) -> int | None:
         return self.max_image_bytes
 
-    async def send(
+    def stream(
         self,
         messages: list[dict[str, Any]],
         *,
         model_id: str,
         **kwargs: Any,
-    ) -> dict[str, Any]:
+    ) -> AsyncIterator[dict[str, Any]]:
         self.requests.append({"messages": messages, "model_id": model_id, "kwargs": kwargs})
+        return self._deltas()
+
+    async def _deltas(self) -> AsyncIterator[dict[str, Any]]:
         if isinstance(self.response, Exception):
             raise self.response
-        return cast(dict[str, Any], self.response)
-
-    def normalize_response(
-        self,
-        response: dict[str, Any],
-        *,
-        model_id: str | None = None,
-    ) -> dict[str, Any]:
-        del model_id
-        return response
+        for delta in response_deltas(cast(dict[str, Any], self.response)):
+            yield delta
 
     async def aclose(self) -> None:
         self.closed = True
@@ -154,19 +150,14 @@ class _BlockingUnderstandingAdapter(_UnderstandingAdapter):
         self.max_active_requests = 0
 
     @override
-    async def send(
-        self,
-        messages: list[dict[str, Any]],
-        *,
-        model_id: str,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
+    async def _deltas(self) -> AsyncIterator[dict[str, Any]]:
         self.active_requests += 1
         self.max_active_requests = max(self.max_active_requests, self.active_requests)
         self.started.set()
         try:
             await self.release.wait()
-            return await super().send(messages, model_id=model_id, **kwargs)
+            async for delta in super()._deltas():
+                yield delta
         finally:
             self.active_requests -= 1
 
@@ -341,7 +332,7 @@ async def test_analyze_sends_fixed_isolated_prompt_and_ordered_images(tmp_path: 
             provider_id="openrouter",
             connection_id="openrouter:api-key",
             model_id="vision-model",
-            streaming=False,
+            streaming=True,
             iteration_number=3,
         )
     ]

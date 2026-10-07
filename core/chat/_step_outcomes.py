@@ -61,6 +61,14 @@ STREAM_RECOVERY_NOTE = (
     "needed, emit every intended Tool Call again as a complete call."
 )
 
+TOOL_CALLS_STREAM_RECOVERY_NOTE = (
+    "The previous Model response stream ended unexpectedly. The Tool Calls it had "
+    "completed were executed and their results are above; a Tool Call that was still "
+    "being written was not executed. Continue the same task from where it stopped "
+    "without repeating visible answer text or completed Tool Calls; emit any "
+    "still-needed Tool Call again as a complete call."
+)
+
 OUTPUT_INTEGRITY_RECOVERY_NOTE = (
     "The previous response ended before completing the task. Continue from the work and "
     "partial answer already present without repeating visible text. Use Tools if further "
@@ -106,14 +114,27 @@ def _with_offered_tool_names(
     tool_calls = assistant_message.tool_calls
     if not tool_calls or not offered:
         return assistant_message
-    registered = _RegisteredNames(registry, frozenset(removed))
-    resolved = [
-        replace(call, name=called_tool_name(call.name, offered, registered=registered))
-        for call in tool_calls
-    ]
+    resolved = _offered_tool_calls(tool_calls, offered, registry, removed=removed)
     if all(new.name == old.name for new, old in zip(resolved, tool_calls, strict=True)):
         return assistant_message
     return replace(assistant_message, tool_calls=resolved)
+
+
+def _offered_tool_calls(
+    tool_calls: list[ToolCall],
+    offered: Collection[str],
+    registry: Any,
+    *,
+    removed: Collection[str] = (),
+) -> list[ToolCall]:
+    """Resolve each call's name as :func:`_with_offered_tool_names` does."""
+    if not offered:
+        return list(tool_calls)
+    registered = _RegisteredNames(registry, frozenset(removed))
+    return [
+        replace(call, name=called_tool_name(call.name, offered, registered=registered))
+        for call in tool_calls
+    ]
 
 
 @dataclass(frozen=True)

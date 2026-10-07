@@ -11,7 +11,6 @@ import base64
 import io
 import json
 import random
-from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, override
 
@@ -133,9 +132,10 @@ async def test_image_validation_and_known_limits_reach_chat_requests(
     ids=["user-over-budget", "tool-within-budget", "tool-over-budget"],
 )
 async def test_fresh_images_are_delivered_together_or_fail_explicitly(
-    start_runtime: StartRuntime, source: str, groups: list[int]
+    resources_dir: Path, start_runtime: StartRuntime, source: str, groups: list[int]
 ) -> None:
     count = sum(groups)
+    _isolate_from_compaction(resources_dir)
 
     class LimitedAdapter(FakeAdapter):
         @override
@@ -217,13 +217,9 @@ async def test_fresh_images_are_delivered_together_or_fail_explicitly(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("source", "streaming"),
-    [("user", False), ("tool", True), ("text", False)],
-    ids=["user-plain", "tool-streaming", "text-plain"],
-)
+@pytest.mark.parametrize("source", ["user", "tool", "text"])
 async def test_provider_body_overflow_preserves_fresh_inputs_and_stops_without_retry(
-    start_runtime: StartRuntime, source: str, streaming: bool
+    start_runtime: StartRuntime, source: str
 ) -> None:
     rejected: list[list[JsonObject]] = []
 
@@ -234,20 +230,6 @@ async def test_provider_body_overflow_preserves_fresh_inputs_and_stops_without_r
                 return await super().send(messages, model_id=model_id, **kwargs)
             rejected.append(messages)
             raise ProviderRequestTooLargeError(1001, 1000)
-
-        @override
-        async def stream(
-            self, messages: list[dict], *, model_id: str, **kwargs: Any
-        ) -> AsyncIterator[dict]:
-            response = await self.send(messages, model_id=model_id, **kwargs)
-            for call in response.get("tool_calls") or []:
-                yield {
-                    "type": "tool_call_delta",
-                    "id": call["id"],
-                    "name_delta": call["name"],
-                    "arguments_delta": json.dumps(call["arguments"]),
-                }
-            yield {"type": "finish", "reason": "tool_calls"}
 
     adapter = LimitedAdapter(
         {
@@ -265,9 +247,8 @@ async def test_provider_body_overflow_preserves_fresh_inputs_and_stops_without_r
         if source == "user":
             record = runtime.attachment_store.store("frame.png", _PNG_BYTES)
             content = [MediaBlock("media", record.id, record.filename, record.media_type)]
-        loop = runtime.streaming_chat_loop if streaming else runtime.chat_loop
         with pytest.raises(ProviderRequestTooLargeError) as failure:
-            await loop.send("coder", content, session_id="too-large")
+            await runtime.chat_loop.send("coder", content, session_id="too-large")
         assert failure.value.size_bytes == 1001
         assert failure.value.max_bytes == 1000
         assert len(rejected) == 1
@@ -283,6 +264,14 @@ async def test_provider_body_overflow_preserves_fresh_inputs_and_stops_without_r
         )
         assert "base64" not in json.dumps([message.to_dict() for message in persisted])
         assert image_path.read_bytes() == _PNG_BYTES
+
+
+def _isolate_from_compaction(resources_dir: Path) -> None:
+    """Give the vision Model a Context large enough that no image Run compacts."""
+    model_file = resources_dir / "models" / "fake-provider.json"
+    catalog = json.loads(model_file.read_text(encoding="utf-8"))
+    catalog["models"]["fake-model-vision"]["context_window"] = 1_000_000
+    model_file.write_text(json.dumps(catalog), encoding="utf-8")
 
 
 def _tool_result_content_parts(messages: list[JsonObject]) -> list[JsonObject]:
@@ -475,9 +464,7 @@ async def test_rereading_overwritten_image_delivers_each_calls_own_pixels(
 
 # About 2 s per case: sixteen durable Model steps on a real Runtime, each re-encoding up
 # to fourteen images, are what exercise the eviction and reopening sequence end to end.
-# Each case also covers the run without pressure until its first eviction. The retirement
-# after a Provider rejection does not depend on the transport; that a streaming rejection
-# reaches it is covered by the streaming body-overflow case above.
+# Each case also covers the run without pressure until its first eviction.
 @pytest.mark.asyncio
 @pytest.mark.parametrize("budget_kind", ["count", "body"])
 async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
@@ -489,10 +476,7 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
     count_limit = budget_kind == "count"
     provider_pressure = budget_kind == "body"
     # Isolate byte pressure from token Compaction with a realistic large Context.
-    model_file = resources_dir / "models" / "fake-provider.json"
-    catalog = json.loads(model_file.read_text(encoding="utf-8"))
-    catalog["models"]["fake-model-vision"]["context_window"] = 1_000_000
-    model_file.write_text(json.dumps(catalog), encoding="utf-8")
+    _isolate_from_compaction(resources_dir)
     rejected_sizes: list[int | None] = []
     frames = [_PNG_BYTES + bytes([index]) * 140_000 for index in range(14)]
     responses: list[JsonObject] = [

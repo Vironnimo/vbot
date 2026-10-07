@@ -32,6 +32,7 @@ from core.sessions._archive_types import (
     ArchiveScope,
     ArchiveTree,
 )
+from core.sessions._io import SessionWriteLeaseScope
 from core.sessions._types import (
     AGENT_DEFAULT_PROJECT,
     CHANNEL_MESSAGE_NOTE_PREFIX,
@@ -166,6 +167,7 @@ __all__ = [
     "SessionNotFoundError",
     "SessionPageCursorError",
     "SessionStoreCorruptError",
+    "SessionWriteLeaseScope",
     "ChatSessionManager",
     "DeliveryReceipt",
     "OwnedRunRecord",

@@ -20,6 +20,7 @@ from core.chat.model_resolution import (
     _model_connection_allowlist,
     parse_model_with_connection,
 )
+from core.chat.streaming import stream_model_response
 from core.debug import DebugContext
 from core.models.pricing import TokenPricing
 from core.providers.accounts import ConnectionRef
@@ -431,7 +432,7 @@ class SessionTitleService:
                     provider_id=provider_id,
                     connection_id=connection_id,
                     model_id=model_id,
-                    streaming=False,
+                    streaming=True,
                     iteration_number=0,
                 )
             )
@@ -483,7 +484,8 @@ class SessionTitleService:
         recorder = self._usage_recorder
         call_id = await recorder.start(**usage_context) if recorder is not None else None
         try:
-            response: dict[str, Any] = await adapter.send(
+            normalized = await stream_model_response(
+                adapter,
                 [
                     {"role": "system", "content": TITLE_SYSTEM_PROMPT},
                     {"role": "user", "content": title_input},
@@ -491,9 +493,6 @@ class SessionTitleService:
                 model_id=model_id,
                 thinking_effort=thinking_effort,
                 **request_context,
-            )
-            normalized: dict[str, Any] = await _SESSION_TITLE_WORKERS.run(
-                adapter.normalize_response, response, model_id=model_id
             )
         except BaseException as exc:
             if recorder is not None and call_id is not None:

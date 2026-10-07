@@ -54,8 +54,12 @@ class _Borrowed:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._adapter, name)
 
-    async def send(self, messages: list[JsonObject], **kwargs: Any) -> Any:
+    def stream(self, messages: list[JsonObject], **kwargs: Any) -> Any:
         self.requests.append([dict(message) for message in messages])
+        return self._adapter.stream(messages, **kwargs)
+
+    async def send(self, messages: list[JsonObject], **kwargs: Any) -> Any:
+        # Only reached when the Provider cannot stream; that request is already kept.
         return await self._adapter.send(messages, **kwargs)
 
     async def aclose(self) -> None:

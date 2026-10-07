@@ -152,18 +152,11 @@ class CurrentSessionAgents:
         self.updates.append((agent_id, changes["current_session_id"]))
 
 
-def chat_state(
-    loop: _RecordingLoop | None = None,
-    *,
-    streaming_loop: _RecordingLoop | None = None,
-    **runtime: Any,
-) -> SimpleNamespace:
-    """Minimal server state for chat RPCs: recording loops, real Runs and event bus."""
-    chat_loop = loop or _RecordingLoop()
+def chat_state(loop: _RecordingLoop | None = None, **runtime: Any) -> SimpleNamespace:
+    """Minimal server state for chat RPCs: a recording loop, real Runs and event bus."""
     runtime.setdefault("agents", CurrentSessionAgents())
     return SimpleNamespace(
-        chat_loop=chat_loop,
-        streaming_chat_loop=streaming_loop or chat_loop,
+        chat_loop=loop or _RecordingLoop(),
         chat_runs=ChatRunManager(),
         command_dispatcher=CommandDispatcher(ChatRunManager()),
         event_bus=ServerEventBus(),

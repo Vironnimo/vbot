@@ -474,8 +474,13 @@ class ImageService:
                 if run_context is not None
                 else None,
             )
+            # Deferred: core.chat.streaming imports core.tools, whose image Tool
+            # imports this module.
+            from core.chat.streaming import stream_model_response
+
             async with accounting.attempt() as call_id:
-                response = await adapter.send(
+                normalized = await stream_model_response(
+                    adapter,
                     [
                         {"role": "system", "content": IMAGE_UNDERSTANDING_SYSTEM_PROMPT},
                         {"role": "user", "content": content},
@@ -483,7 +488,6 @@ class ImageService:
                     model_id=target_ref.model_id,
                     tools=[],
                 )
-                normalized = adapter.normalize_response(response, model_id=target_ref.model_id)
                 usage = normalized.get("usage")
                 await accounting.update(call_id, usage)
                 analysis = normalized.get("content")
@@ -629,7 +633,7 @@ def _set_analysis_debug_context(
             provider_id=target_ref.provider_id,
             connection_id=target_ref.connection_id,
             model_id=target_ref.model_id,
-            streaming=False,
+            streaming=True,
             iteration_number=run_context.iteration_number,
         )
     )

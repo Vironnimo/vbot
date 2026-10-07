@@ -61,10 +61,10 @@ from server.rpc.payloads import (
     history_message,
 )
 from server.rpc.runtime_access import (
-    _build_streaming_queue_update,
+    _build_queue_update,
+    _chat_loop,
     _state_chat_runs,
     _state_command_dispatcher,
-    _streaming_chat_loop,
 )
 from server.rpc.validation import (
     ChatInputOrigin,
@@ -762,8 +762,6 @@ async def _mark_current_session(state: Any, agent_id: str, session_id: str) -> N
 async def _submit_chat(
     state: Any,
     params: JsonObject,
-    *,
-    streaming: bool,
 ) -> Run | JsonObject:
     """Submit one accessor chat request and return its immediate disposition.
 
@@ -796,7 +794,6 @@ async def _submit_chat(
             target,
             input_origin=input_origin,
             file_mentions=file_mentions,
-            streaming=streaming,
         )
     session_id = target
     if prepared_command is not None:
@@ -820,7 +817,7 @@ async def _submit_chat(
     if project_id is None:
         await _mark_current_session(state, agent_id, session_id)
 
-    chat_loop = _streaming_chat_loop(state) if streaming else state.chat_loop
+    chat_loop = _chat_loop(state)
     try:
         if input_origin is None:
             run = await chat_loop.start_run(
@@ -913,7 +910,6 @@ async def _start_chat_in_new_session(
     *,
     input_origin: ChatInputOrigin | None,
     file_mentions: list[str],
-    streaming: bool,
 ) -> Run:
     """Create the Session of a new conversation with its first Run, or nothing.
 
@@ -933,7 +929,7 @@ async def _start_chat_in_new_session(
             file_mentions,
             new_session_project=target.working_project_id,
         )
-    chat_loop = _streaming_chat_loop(state) if streaming else state.chat_loop
+    chat_loop = _chat_loop(state)
     try:
         run = await chat_loop.start_run_in_new_session(
             agent_id,
@@ -955,7 +951,7 @@ async def _start_chat_in_new_session(
 
 
 async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
-    submission = await _submit_chat(state, params, streaming=False)
+    submission = await _submit_chat(state, params)
     if isinstance(submission, dict):
         return submission
 
@@ -972,7 +968,7 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
-    submission = await _submit_chat(state, params, streaming=True)
+    submission = await _submit_chat(state, params)
     if isinstance(submission, dict):
         return submission
 
@@ -999,7 +995,7 @@ async def _edit_chat(state: Any, params: JsonObject) -> JsonObject:
     content = _required_string(params, "content")
 
     try:
-        run = await _streaming_chat_loop(state).edit_run(
+        run = await _chat_loop(state).edit_run(
             agent_id,
             content,
             session_id=session_id,
@@ -1198,7 +1194,7 @@ async def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
             resolved_session_id,
             updated_executor,
             updated_display_content,
-        ) = await _build_streaming_queue_update(
+        ) = await _build_queue_update(
             state,
             agent_id,
             session_id,

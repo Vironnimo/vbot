@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -24,6 +24,7 @@ from core.chat._step_outcomes import (
     TOOL_ITERATION_LIMIT_FAILURE_CODE,
     TOOL_ITERATION_LIMIT_FAILURE_MESSAGE,
     _combined_interrupted_result,
+    _offered_tool_calls,
     _prepare_completed_assistant,
     _terminal_outcome_error,
     _terminal_tool_failure,
@@ -33,14 +34,15 @@ from core.chat._step_outcomes import (
 )
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.errors import ChatError
-from core.chat.events import _emit_assistant_events
 from core.chat.messages import (
     ChatMessage,
     JsonObject,
+    ToolCall,
+    _new_message_id,
 )
 from core.chat.tool_dispatch import (
     ToolDispatchContext,
-    _dispatch_tool_calls,
+    ToolRound,
     _fail_tool_calls_without_dispatch,
 )
 from core.chat.usage import (
@@ -51,6 +53,7 @@ from core.chat.wire_shaping import (
     _assistant_continuation_dict,
     _message_to_request_dict,
     _notes_to_request_messages,
+    _parse_response_tool_calls,
     extend_request_with_notes,
     limit_request_images,
 )
@@ -73,6 +76,7 @@ from core.runs import (
 )
 from core.sessions import (
     SessionAddress,
+    SessionWriteLeaseScope,
     project_tool_context_id,
 )
 from core.tools import model_tool_name
@@ -100,7 +104,6 @@ class AgenticProgression:
         compaction_service: CompactionService | None,
         *,
         max_tool_iterations: int,
-        streaming: bool,
     ) -> None:
         self._dependencies = dependencies
         self._requests = requests
@@ -108,7 +111,6 @@ class AgenticProgression:
         self._compaction_runs = compaction_runs
         self._compaction_service = compaction_service
         self._max_tool_iterations = max_tool_iterations
-        self._streaming = streaming
 
     def _tool_iteration_limit(self, context: _RunExecutionContext) -> int:
         """Return the loop's iteration limit, narrowed by the Run's own limit."""
@@ -150,6 +152,21 @@ class AgenticProgression:
         self,
         context: _RunExecutionContext,
         target: _ModelTarget,
+    ) -> ChatMessage:
+        # Tool Calls start while the Model still streams. However the
+        # progression ends, none of them outlives it. They start before the
+        # progression takes the Session write lock to persist their turn and
+        # waits for them there; the lease scope lets them write to the Session
+        # under that lease instead of waiting for it.
+        with SessionWriteLeaseScope():
+            async with AsyncExitStack() as tool_rounds:
+                return await self._advance_until_final(context, target, tool_rounds)
+
+    async def _advance_until_final(
+        self,
+        context: _RunExecutionContext,
+        target: _ModelTarget,
+        tool_rounds: AsyncExitStack,
     ) -> ChatMessage:
         if context.request_state is None:
             raise AssertionError("Run request state must be built before Model progression")
@@ -357,7 +374,7 @@ class AgenticProgression:
                     provider_id=target.provider_id,
                     connection_id=target.connection_id,
                     model_id=target.model_id,
-                    streaming=self._streaming,
+                    streaming=True,
                     iteration_number=request_iteration_number,
                 )
             )
@@ -395,6 +412,60 @@ class AgenticProgression:
                 if workspace
                 else None
             )
+            tool_dispatch_context = ToolDispatchContext(
+                registry=self._dependencies.tools,
+                extension_registry=self._dependencies.get_extension_registry(),
+                agent=agent,
+                session=session,
+                run=run,
+                vbot_root=Path(self._dependencies.get_system_prompts().vbot_root),
+                data_root=Path(self._dependencies.storage.data_dir),
+                project_cwd=context.project_cwd,
+                project_id=project_id,
+                skill_project_id=context.skill_project_id,
+                skill_registry=context.skill_registry,
+                tool_restriction=context.request.tool_restriction,
+                tool_denial_resolver=context.request.tool_denial_resolver,
+                base_allowed_tools=state.allowed_tool_names,
+                session_tool_grants=state.session_tool_grants,
+                tool_contracts=state.tool_contracts,
+                removed_tool_names=removed_tool_names,
+                change_tracker=self._dependencies.change_tracker,
+                allow_owned_effects=context.request.temporary_binding is not None,
+            )
+            # The Assistant turn is named before the request, so the Tool Calls
+            # that start while it streams report the turn they belong to.
+            assistant_message_id = _new_message_id()
+            tool_round: ToolRound | None = None
+            if (
+                context.tool_progress.finalization_reason is None
+                and context.tool_progress.iteration_count < self._tool_iteration_limit(context)
+            ):
+                # Only a turn whose Tool Calls may run starts them early; the
+                # others are refused once the response is complete.
+                tool_round = ToolRound(
+                    tool_dispatch_context,
+                    assistant_message_id=assistant_message_id,
+                    iteration_number=request_iteration_number,
+                )
+                tool_rounds.push_async_callback(tool_round.aclose)
+
+            def start_tool_calls(
+                raw_calls: list[JsonObject],
+                tool_round: ToolRound | None = tool_round,
+                offered_tool_names: list[str] = offered_tool_names,
+                removed_tool_names: frozenset[str] = removed_tool_names,
+            ) -> None:
+                assert tool_round is not None
+                tool_round.start(
+                    _offered_tool_calls(
+                        _parse_response_tool_calls(raw_calls) or [],
+                        offered_tool_names,
+                        self._dependencies.tools,
+                        removed=removed_tool_names,
+                    )
+                )
+
             while True:
                 run.raise_if_cancelled()
                 request_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
@@ -440,6 +511,8 @@ class AgenticProgression:
                             public_model=target.public_model,
                             provider_id=target.provider_id,
                             recovery=context.recovery,
+                            message_id=assistant_message_id,
+                            on_tool_calls=start_tool_calls if tool_round is not None else None,
                         )
                 except ProviderRequestTooLargeError as exc:
                     smaller = await _CHAT_TRANSFORM_WORKERS.run(
@@ -469,19 +542,24 @@ class AgenticProgression:
             terminal_outcome = assistant_step.terminal_outcome
             recovery = assistant_step.recovery
             recovery_note = assistant_step.recovery_note
+            started_tool_calls = tool_round.calls if tool_round is not None else []
             # Both an interrupted partial and a finished readable stream may
-            # already be visible when Cancel arrives. Preparation and lock admission
-            # are both cancellable; neither may lose this visible boundary.
-            preserve_after_cancel = assistant_message.interrupted or (
-                self._streaming
-                and not assistant_message.tool_calls
-                and (
-                    (
-                        bool(assistant_message.content)
-                        if isinstance(assistant_message.content, str)
-                        else False
+            # already be visible when Cancel arrives, and started Tool Calls may
+            # already have effects. Preparation and lock admission are both
+            # cancellable; neither may lose this boundary.
+            preserve_after_cancel = (
+                assistant_message.interrupted
+                or bool(started_tool_calls)
+                or (
+                    not assistant_message.tool_calls
+                    and (
+                        (
+                            bool(assistant_message.content)
+                            if isinstance(assistant_message.content, str)
+                            else False
+                        )
+                        or bool(assistant_message.reasoning)
                     )
-                    or bool(assistant_message.reasoning)
                 )
             )
             if not preserve_after_cancel:
@@ -497,6 +575,7 @@ class AgenticProgression:
                 request_tools: list[JsonObject] = tools,
                 offered_tool_names: list[str] = offered_tool_names,
                 removed_tool_names: frozenset[str] = removed_tool_names,
+                started_tool_calls: list[ToolCall] = started_tool_calls,
             ) -> tuple[ChatMessage, JsonObject, list[JsonObject], JsonObject]:
                 if (
                     not assistant_message.interrupted
@@ -517,6 +596,12 @@ class AgenticProgression:
                     self._dependencies.tools,
                     removed=removed_tool_names,
                 )
+                if started_tool_calls:
+                    # The turn records its started calls exactly as they run.
+                    later_calls = (assistant_message.tool_calls or [])[len(started_tool_calls) :]
+                    assistant_message = replace(
+                        assistant_message, tool_calls=[*started_tool_calls, *later_calls]
+                    )
                 assistant_message = await _CHAT_TRANSFORM_WORKERS.run(
                     _prepare_completed_assistant,
                     assistant_message,
@@ -641,8 +726,6 @@ class AgenticProgression:
                     },
                     allow_after_cancel=preserved_cancelled_output,
                 )
-                if not self._streaming:
-                    _emit_assistant_events(run, assistant_message)
                 messages.extend(assistant_request_messages)
                 if assistant_message.interrupted:
                     if (
@@ -695,6 +778,10 @@ class AgenticProgression:
                     # Input selected after this check starts the next Run.
                     break
 
+                if preserved_cancelled_output:
+                    # Cancel arrived while started Tool Calls ran. The turn is
+                    # durable; the next request repairs their missing results.
+                    return assistant_message
                 finalization_violation = context.tool_progress.finalization_reason is not None
                 finalization_request_reason: str | None = None
                 tool_iteration_limit = self._tool_iteration_limit(context)
@@ -706,31 +793,6 @@ class AgenticProgression:
 
                 session.begin_defer_notes()
                 try:
-                    tool_dispatch_context = ToolDispatchContext(
-                        registry=self._dependencies.tools,
-                        extension_registry=self._dependencies.get_extension_registry(),
-                        agent=agent,
-                        session=session,
-                        run=run,
-                        vbot_root=Path(self._dependencies.get_system_prompts().vbot_root),
-                        data_root=Path(self._dependencies.storage.data_dir),
-                        project_cwd=context.project_cwd,
-                        project_id=project_id,
-                        skill_project_id=context.skill_project_id,
-                        skill_registry=context.skill_registry,
-                        tool_restriction=context.request.tool_restriction,
-                        tool_denial_resolver=context.request.tool_denial_resolver,
-                        base_allowed_tools=state.allowed_tool_names,
-                        session_tool_grants=state.session_tool_grants,
-                        tool_contracts=state.tool_contracts,
-                        removed_tool_names=(
-                            state.tool_epoch.removed_names
-                            if state.tool_epoch is not None
-                            else frozenset()
-                        ),
-                        change_tracker=self._dependencies.change_tracker,
-                        allow_owned_effects=context.request.temporary_binding is not None,
-                    )
                     terminal_error = _terminal_outcome_error(
                         terminal_outcome,
                         has_tool_calls=True,
@@ -761,6 +823,7 @@ class AgenticProgression:
                             )
                             media_outputs = []
                         else:
+                            assert tool_round is not None
                             context.tool_progress.iteration_count += 1
                             with measure(
                                 "chat.tool_round",
@@ -768,19 +831,28 @@ class AgenticProgression:
                                 name="tool round",
                                 args={**run_args, "tool_calls": len(assistant_message.tool_calls)},
                             ):
-                                tool_messages, media_outputs = await _dispatch_tool_calls(
-                                    tool_dispatch_context,
-                                    assistant_message.tool_calls,
+                                # Calls that arrived only with the end of the
+                                # response start now, after the started ones.
+                                tool_messages, media_outputs = await tool_round.finish(
+                                    assistant_message.tool_calls[len(started_tool_calls) :]
                                 )
                     else:
+                        # The terminal outcome forbids starting further calls.
+                        # Calls that already started keep their real results.
+                        tool_messages, media_outputs = [], []
+                        if tool_round is not None and started_tool_calls:
+                            context.tool_progress.iteration_count += 1
+                            tool_messages, media_outputs = await tool_round.finish()
                         failure_code, failure_message = _terminal_tool_failure(terminal_outcome)
-                        tool_messages = _fail_tool_calls_without_dispatch(
-                            tool_dispatch_context,
-                            assistant_message.tool_calls,
-                            code=failure_code,
-                            message=failure_message,
+                        tool_messages.extend(
+                            _fail_tool_calls_without_dispatch(
+                                tool_dispatch_context,
+                                assistant_message.tool_calls[len(started_tool_calls) :],
+                                code=failure_code,
+                                message=failure_message,
+                                start_index=len(started_tool_calls),
+                            )
                         )
-                        media_outputs = []
                     tool_messages, media_outputs = await self._requests.store_tool_media(
                         tool_messages, media_outputs
                     )
@@ -804,6 +876,10 @@ class AgenticProgression:
                         session.add_note(
                             TOOL_FINALIZATION_NOTE.format(reason=finalization_request_reason)
                         )
+                    if recovery == "continue" and recovery_note is not None:
+                        # The stream broke after these calls started; the note
+                        # follows their results.
+                        session.add_note(recovery_note)
                     deferred_notes = session.take_deferred_notes()
                     session.assistant_message_id = assistant_message.id
                     batch_messages = [*tool_messages, *deferred_notes]
@@ -870,6 +946,8 @@ class AgenticProgression:
                             await self._requests._apply_project_skill_context(
                                 context, loaded_project_id
                             )
+                    if assistant_step.failure is not None:
+                        raise assistant_step.failure
                     if terminal_error is not None:
                         raise terminal_error
                     await self._requests._attach_tool_result_content(

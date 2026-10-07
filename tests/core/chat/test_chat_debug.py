@@ -39,34 +39,14 @@ def _echo_call(call_id: str, value: str) -> JsonObject:
     return {"id": call_id, "name": "echo", "arguments": {"value": value}}
 
 
-def _echo_stream(call_id: str, value: str) -> list[JsonObject]:
-    return [
-        {
-            "type": "tool_call_delta",
-            "id": call_id,
-            "name_delta": "echo",
-            "arguments_delta": f'{{"value":"{value}"}}',
-        },
-        {"type": "finish", "reason": "tool_calls"},
-    ]
-
-
 @pytest.mark.asyncio
-@pytest.mark.parametrize("streaming", [False, True], ids=["plain", "streaming"])
-async def test_every_model_request_of_a_run_carries_its_debug_context(
-    tmp_path: Path, streaming: bool
-) -> None:
+async def test_every_model_request_of_a_run_carries_its_debug_context(tmp_path: Path) -> None:
     adapter = DebugTrackingAdapter(
         [
             {"content": None, "tool_calls": [_echo_call("call_1", "first")]},
             {"content": None, "tool_calls": [_echo_call("call_2", "second")]},
             {"content": "Done", "tool_calls": None},
-        ],
-        stream_responses=[
-            _echo_stream("call_1", "first"),
-            _echo_stream("call_2", "second"),
-            [{"type": "content_delta", "text": "Done"}, {"type": "finish", "reason": "stop"}],
-        ],
+        ]
     )
     tools = ToolRegistry()
     tools.register(
@@ -78,9 +58,7 @@ async def test_every_model_request_of_a_run_carries_its_debug_context(
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["echo"])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    await build_chat_loop(runtime, streaming=streaming).send(
-        "coder", "echo twice", session_id="session-one"
-    )
+    await build_chat_loop(runtime).send("coder", "echo twice", session_id="session-one")
 
     run_id = last_run(runtime).id
     assert [
@@ -96,7 +74,7 @@ async def test_every_model_request_of_a_run_carries_its_debug_context(
         )
         for context in adapter.debug_contexts
     ] == [
-        (run_id, "coder", "session-one", "openai", "openai:api-key", "gpt-5.2", streaming, step)
+        (run_id, "coder", "session-one", "openai", "openai:api-key", "gpt-5.2", True, step)
         for step in (1, 2, 3)
     ]
 

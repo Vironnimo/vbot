@@ -447,7 +447,7 @@ class _Reflect:
             agent_resolver=resolver,
             chat_sessions=self.sessions,
             storage=_fragment_storage(),
-            streaming_chat_loop=SimpleNamespace(start_run=start_run),
+            chat_loop=SimpleNamespace(start_run=start_run),
             tools=SimpleNamespace(list_tools=lambda: list(_TOOLS)),
         )
         self.dispatcher = CommandDispatcher(

@@ -119,41 +119,6 @@ async def test_trigger_run_starts_existing_idle_session_immediately() -> None:
     assert run.id == "run-one"
 
 
-async def test_trigger_run_uses_trigger_chat_loop_when_provided() -> None:
-    # Arrange
-    runtime = Mock()
-    chat_loop = SimpleNamespace(
-        start_run=AsyncMock(),
-        queue_run=AsyncMock(),
-    )
-    trigger_chat_loop = SimpleNamespace(
-        start_run=AsyncMock(return_value=make_run("run-streaming", "coder", "existing")),
-        queue_run=AsyncMock(),
-    )
-    chat_run_manager = Mock()
-    trigger_service = TriggerService(
-        cast(Any, chat_loop),
-        cast(Any, chat_run_manager),
-        cast(Any, runtime),
-        trigger_chat_loop=cast(Any, trigger_chat_loop),
-    )
-
-    # Act
-    run = await trigger_service.trigger_run("coder", "Continue", session_id="existing")
-
-    # Assert
-    trigger_chat_loop.start_run.assert_awaited_once_with(
-        "coder",
-        "Continue",
-        session_id="existing",
-        sender=None,
-        reply_surface=None,
-        project_id=None,
-    )
-    chat_loop.start_run.assert_not_awaited()
-    assert run.id == "run-streaming"
-
-
 async def test_trigger_run_queues_busy_session_until_active_run_terminal_event() -> None:
     # Arrange
     queued_run = make_run("queued-run")
@@ -278,15 +243,9 @@ async def test_has_active_run_reports_the_session_state(active: bool) -> None:
     )
 
 
-async def test_compact_session_delegates_to_the_command_chat_loop() -> None:
+async def test_compact_session_delegates_to_the_chat_loop() -> None:
     chat_loop = SimpleNamespace(compact_session=AsyncMock(return_value="Context compacted."))
-    trigger_chat_loop = SimpleNamespace(compact_session=AsyncMock())
-    trigger_service = TriggerService(
-        cast(Any, chat_loop),
-        cast(Any, Mock()),
-        cast(Any, Mock()),
-        trigger_chat_loop=cast(Any, trigger_chat_loop),
-    )
+    trigger_service = TriggerService(cast(Any, chat_loop), cast(Any, Mock()), cast(Any, Mock()))
 
     reply = await trigger_service.compact_session("coder", "session-one")
     # A /compact in a project chat keeps its instruction and project scope.
@@ -299,10 +258,9 @@ async def test_compact_session_delegates_to_the_command_chat_loop() -> None:
         call("coder", "session-one", None, project_id=None),
         call("coder", "session-one", "keep the API design", project_id="proj"),
     ]
-    trigger_chat_loop.compact_session.assert_not_awaited()
 
 
-async def test_start_compaction_run_delegates_to_command_chat_loop() -> None:
+async def test_start_compaction_run_delegates_to_the_chat_loop() -> None:
     run = object()
     chat_loop = SimpleNamespace(start_compaction_run=AsyncMock(return_value=run))
     trigger_service = TriggerService(
