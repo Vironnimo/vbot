@@ -15,6 +15,10 @@ ALLOWED_OPTION_TYPES: frozenset[str] = frozenset(
     {"text", "textarea", "select", "number", "boolean", "json"}
 )
 
+# What a ``text`` field holding a path on the vBot server names; accessors offer
+# the server's folders for it instead of a plain text input.
+SERVER_PATH_KINDS: frozenset[str] = frozenset({"directory", "file", "any"})
+
 EMBEDDING_RESERVED_PAYLOAD_FIELDS: frozenset[str] = frozenset(
     {"model", "input", "encoding_format", "dimensions", "input_type"}
 )
@@ -227,6 +231,9 @@ class TaskModelOptionField:
     # Hint shown in an empty text or number field, such as what leaving it
     # empty means.
     placeholder: str = ""
+    # A text field whose value is a path on the vBot server: one of
+    # SERVER_PATH_KINDS, or empty for ordinary text.
+    server_path: str = ""
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
@@ -240,6 +247,12 @@ class TaskModelOptionField:
             )
         if self.options_by is not None:
             self._validate_options_by(self.options_by)
+        if self.server_path and (self.type != "text" or self.server_path not in SERVER_PATH_KINDS):
+            kinds = ", ".join(sorted(SERVER_PATH_KINDS))
+            raise TaskModelOptionValidationError(
+                f"Field '{self.name}' names a server path but is not a text field "
+                f"of a known path kind ({kinds})"
+            )
 
     def _validate_options_by(self, options_by: TaskModelOptionsBy) -> None:
         if self.type != "select":
@@ -281,6 +294,8 @@ class TaskModelOptionField:
             payload["options_by"] = self.options_by.to_dict()
         if self.placeholder:
             payload["placeholder"] = self.placeholder
+        if self.server_path:
+            payload["server_path"] = self.server_path
         return payload
 
 

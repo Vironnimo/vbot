@@ -370,8 +370,15 @@ describe('SettingsSpecializedModelsPanel', () => {
         type: 'number',
         value: 0.7,
       },
+      {
+        target: 'local/chatterbox',
+        name: 'model_path',
+        type: 'text',
+        server_path: 'directory',
+        value: 'C:/models/voice',
+      },
     ])(
-      'shows $target options before the preview and autosaves edits without a disclosure',
+      'shows $target $name before the preview and autosaves edits without a disclosure',
       async (scenario) => {
         targetsFor('text_to_speech', [
           {
@@ -388,6 +395,9 @@ describe('SettingsSpecializedModelsPanel', () => {
               type: scenario.type,
               label: 'Test option',
               default: scenario.type === 'number' ? 0.5 : '',
+              ...(scenario.server_path
+                ? { server_path: scenario.server_path }
+                : {}),
             },
           ],
         });
@@ -409,6 +419,10 @@ describe('SettingsSpecializedModelsPanel', () => {
         );
         const preview = document.querySelector('.speech-preview textarea');
         expect(input.closest('[hidden]')).toBeNull();
+        // A server path option completes and browses the server's folders.
+        expect(Boolean(input.closest('.path-field'))).toBe(
+          Boolean(scenario.server_path),
+        );
         expect(
           input.compareDocumentPosition(preview) &
             Node.DOCUMENT_POSITION_FOLLOWING,
