@@ -541,6 +541,30 @@
     return openView('chat');
   };
 
+  // Open in split view on an Agent row: Chat shows that Agent beside the area
+  // it shows now. A request whose switch to Chat did not happen (an autosave
+  // prompt, then another view) is dropped instead of applying later.
+  let chatSplitRequest = $state(null);
+  const openAgentInSplit = (agentId) => {
+    if (!agentId) return false;
+    chatSplitRequest = {
+      target: { agentAddress: agentId },
+      requestId: (chatSplitRequest?.requestId ?? 0) + 1,
+      revision: navigator.location.revision,
+    };
+    return openView('chat');
+  };
+  $effect(() => {
+    const location = navigator.location;
+    if (
+      chatSplitRequest &&
+      location.view !== 'chat' &&
+      location.revision !== untrack(() => chatSplitRequest.revision)
+    ) {
+      chatSplitRequest = null;
+    }
+  });
+
   // A remembered Location with an Identity Agent's old id replaced by its
   // new one.
   function renameAgentInLocation(location, oldAgentId, newAgentId) {
@@ -955,6 +979,7 @@
         {commandsRefreshToken}
         {queueInvalidation}
         {sessionDeletion}
+        splitRequest={chatSplitRequest}
         subscribeAgentRenames={selection.subscribeAgentRenames}
         subscribeExtensionInvalidations={extensions.subscribeInvalidations}
         hasConnectedProvider={setup.settings === null
@@ -986,6 +1011,7 @@
           onAgentsChanged={selection.refreshAgents}
           onAgentSelected={selectAgentFromView}
           onOpenChat={openAgentChat}
+          onOpenInSplit={openAgentInSplit}
           onToast={desktop.showToast}
           onNavigateToSettingsPanel={navigateToSettingsPanel}
           onNavigateToAgentPrompt={navigateToAgentPromptScope}

@@ -53,6 +53,9 @@
     onAgentSelected,
     // Shows the Agent's Chat (its list row's Open chat).
     onOpenChat = noop,
+    // Shows the Agent's Chat beside the Chat area shown now (its list row's
+    // Open in split view).
+    onOpenInSplit = noop,
     onToast = noop,
     onNavigateToSettingsPanel = noop,
     onNavigateToAgentPrompt = noop,
@@ -673,6 +676,7 @@
       onReorderInteractionChange={handleReorderInteractionChange}
       {deletingAgentId}
       {onOpenChat}
+      {onOpenInSplit}
       onCopyId={(agentId) => void copyAgentId(agentId)}
       onDelete={requestAgentDelete}
     />

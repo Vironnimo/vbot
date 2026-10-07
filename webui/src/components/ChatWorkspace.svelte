@@ -11,6 +11,7 @@
   } from '$lib/sessionListView.js';
   import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
   import { useNavigation } from '$lib/navigation.svelte.js';
+  import { parseAgentAddress } from '$lib/agentAddress.js';
   import { writeClipboardText } from '$lib/clipboard.js';
   import {
     isDesktopAccessor,
@@ -21,6 +22,9 @@
     active = true,
     onToast = () => {},
     sessionDeletion = null,
+    // A request from another view to show an Agent beside the area shown now
+    // (`{ target: { agentAddress }, requestId }`), applied once Chat shows.
+    splitRequest = null,
     ...chatProps
   } = $props();
   const id = $props.id();
@@ -54,6 +58,16 @@
   // releases its retained pointer to that Session.
   let siblingDeletions = $state([null, null]);
   let deletionSequence = 0;
+  // Open in split view: a Session or Agent chosen in one area for the other
+  // (`{ target, requestId }` per area).
+  let openRequests = $state([null, null]);
+  let openSequence = 0;
+  let otherAreas = $derived(
+    paneIds.map((index) => ({
+      label: split ? t('split.openInOtherArea') : t('split.openInSplit'),
+      open: (target) => openInOtherArea(index, target),
+    })),
+  );
 
   // An Identity Agent rename keeps the second area on its Agent and both
   // areas' shown Sessions under the new id; each ChatView re-keys its own
@@ -218,13 +232,47 @@
     }
   }
 
-  function createSecond() {
+  // The second area starts on the first area's selection, or on the Identity
+  // Agent it is opened for.
+  function createSecond(agentId = '') {
     if (secondCreated) return;
-    secondAgent = chatProps.sharedSelectedAgentId || '';
-    secondProject = chatProps.selectedProjectId || '';
-    secondProjectAgent = chatProps.sharedSelectedProjectAgentId ?? null;
+    secondAgent = agentId || chatProps.sharedSelectedAgentId || '';
+    secondProject = agentId ? '' : chatProps.selectedProjectId || '';
+    secondProjectAgent = agentId
+      ? ''
+      : (chatProps.sharedSelectedProjectAgentId ?? null);
     secondCreated = true;
   }
+
+  // Shows `target` (`{ agentAddress, sessionId?, subAgent? }`: a Session, or
+  // an Agent at its current Session) in the area beside `fromIndex`, opening
+  // the split view when it is closed. That area applies it like a choice in
+  // its own Session list or Agent bar.
+  function openInOtherArea(fromIndex, target) {
+    if (!target?.agentAddress) return;
+    closeMenu();
+    const index = 1 - fromIndex;
+    if (index === 1) {
+      const owner = target.subAgent ? '' : target.agentAddress;
+      createSecond(parseAgentAddress(owner).projectId ? '' : owner);
+      secondChatCreated = true;
+    }
+    kinds[index] = 'chat';
+    split = true;
+    focusedPane = index;
+    openSequence += 1;
+    openRequests[index] = { target, requestId: openSequence };
+  }
+
+  // Another view's request opens beside the area shown now, or in the second
+  // area when both are shown.
+  let handledSplitRequest = untrack(() => splitRequest);
+  $effect(() => {
+    const request = splitRequest;
+    if (!active || !request || request === handledSplitRequest) return;
+    handledSplitRequest = request;
+    untrack(() => openInOtherArea(split ? 0 : singlePane, request.target));
+  });
 
   function openSplit() {
     closeMenu();
@@ -633,6 +681,8 @@
               composerAvailable={!sameSession || editorPane === index}
               preserveSessionSelection
               draftScope={index}
+              otherArea={otherAreas[index]}
+              openRequest={openRequests[index]}
               siblingSessionDeletion={siblingDeletions[index]}
               onSessionDeleted={(deletion) =>
                 forwardSessionDeletion(index, deletion)}
@@ -654,6 +704,8 @@
               composerAvailable={!sameSession || editorPane === index}
               preserveSessionSelection
               draftScope={index}
+              otherArea={otherAreas[index]}
+              openRequest={openRequests[index]}
               siblingSessionDeletion={siblingDeletions[index]}
               onSessionDeleted={(deletion) =>
                 forwardSessionDeletion(index, deletion)}

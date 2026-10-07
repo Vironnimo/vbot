@@ -24,6 +24,8 @@
   import ImageLightbox from './ImageLightbox.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
+  import ContextMenu from './ui/ContextMenu.svelte';
+  import { contextMenuAnchor } from './ui/contextMenu.js';
   import CopyButton from './ui/CopyButton.svelte';
   import EmptyState from './ui/EmptyState.svelte';
 
@@ -53,6 +55,9 @@
     backgroundCommandStatuses = {},
     commandStatuses = {},
     onNavigateToSubAgent = () => {},
+    // Open in split view for Sub-Agent links (`{ label, open(target) }`, with
+    // the link's `{ agentId, sessionId }` target); null offers no link menu.
+    otherArea = null,
     onCancelToolCall = () => {},
     onBackgroundToolCall = () => {},
     onCancelSubAgent = () => {},
@@ -73,6 +78,24 @@
   } = $props();
 
   let nowMs = $state(Date.now());
+
+  // The open Sub-Agent link menu (./ui/ContextMenu.svelte), or null.
+  let subAgentMenu = $state(null);
+
+  function openSubAgentMenu(event, target) {
+    event.preventDefault();
+    subAgentMenu = {
+      ...contextMenuAnchor(event),
+      label: t('chat.subagent.openSession'),
+      items: [
+        {
+          id: 'open-in-other-area',
+          label: otherArea.label,
+          onSelect: () => otherArea.open(target),
+        },
+      ],
+    };
+  }
   // Transient cards interleaved with the timeline: each renders after the
   // item it was anchored to; a card whose anchor is gone after a history
   // reload keeps its chronological position by creation time (see
@@ -578,6 +601,8 @@
   </div>
 </div>
 
+<ContextMenu menu={subAgentMenu} onClose={() => (subAgentMenu = null)} />
+
 {#snippet timelineRow(item)}
   {@const itemIndex = itemIndexById.get(item.id)}
   <div class="timeline-item" data-timeline-item-id={item.id}>
@@ -598,6 +623,7 @@
         {isReasoningOpen}
         onReasoningOpenChange={setReasoningOpen}
         {onNavigateToSubAgent}
+        onSubAgentContextMenu={otherArea ? openSubAgentMenu : null}
         {onCancelToolCall}
         {onBackgroundToolCall}
         backgroundToolCallIds={currentRun?.runId === item.runId &&

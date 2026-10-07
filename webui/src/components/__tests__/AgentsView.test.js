@@ -702,8 +702,9 @@ describe('AgentsView', () => {
     });
   });
 
-  it('offers Open chat, Copy ID and a confirmed Delete on another Agent row', async () => {
+  it('offers Open chat, Open in split view, Copy ID and a confirmed Delete on another Agent row', async () => {
     const onOpenChat = vi.fn();
+    const onOpenInSplit = vi.fn();
     const onToast = vi.fn();
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', {
@@ -718,17 +719,24 @@ describe('AgentsView', () => {
     );
     mountedComponent = mount(AgentsView, {
       target: document.body,
-      props: { navigation, onOpenChat, onToast },
+      props: { navigation, onOpenChat, onOpenInSplit, onToast },
     });
     flushSync();
     await waitForCondition(() => listedAgentIds().length === 2, 100);
 
     let items = openRowMenu(agentButton('bravo'));
-    expect(menuLabels(items)).toEqual(['Open chat', 'Copy ID', 'Delete…']);
+    expect(menuLabels(items)).toEqual([
+      'Open chat',
+      'Open in split view',
+      'Copy ID',
+      'Delete…',
+    ]);
     items[0].click();
     expect(onOpenChat).toHaveBeenCalledWith('bravo');
-
     openRowMenu(agentButton('bravo'))[1].click();
+    expect(onOpenInSplit).toHaveBeenCalledWith('bravo');
+
+    openRowMenu(agentButton('bravo'))[2].click();
     await waitForCondition(() => onToast.mock.calls.length === 1);
     expect(writeText).toHaveBeenCalledWith('bravo');
     expect(onToast).toHaveBeenCalledWith(
@@ -736,13 +744,13 @@ describe('AgentsView', () => {
     );
 
     // Cancelling the confirmation deletes nothing.
-    openRowMenu(agentButton('bravo'))[2].click();
+    openRowMenu(agentButton('bravo'))[3].click();
     flushSync();
     getButton(t('common.cancel')).click();
     flushSync();
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
 
-    openRowMenu(agentButton('bravo'))[2].click();
+    openRowMenu(agentButton('bravo'))[3].click();
     flushSync();
     expect(getDialog(t('agents.delete')).textContent).toContain('Bravo');
     getButton(t('common.delete')).click();
@@ -755,8 +763,8 @@ describe('AgentsView', () => {
     expect(textInputValue('agent-name')).toBe('Alpha');
 
     items = openRowMenu(agentButton('alpha'));
-    expect(items[2].disabled).toBe(true);
-    expect(items[2].textContent).toContain(t('agents.menu.lastAgent'));
+    expect(items[3].disabled).toBe(true);
+    expect(items[3].textContent).toContain(t('agents.menu.lastAgent'));
   });
 
   it('confirms deleting the shown Agent from its editor, reports a refusal and then shows another Agent', async () => {
