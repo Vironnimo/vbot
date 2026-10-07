@@ -703,9 +703,37 @@ async def test_files_list_returns_project_repo_files(tmp_path) -> None:
 
     result = await _list_files(state, {"agent_id": "builder@vbot"})
 
-    assert result["files"] == ["src/app.py"]
-    assert result["truncated"] is False
-    assert result["root"] == str(repo)
+    assert result == {
+        "root": str(repo),
+        "files": ["src/app.py"],
+        "directories": ["src"],
+        "truncated": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_files_list_lists_one_directory_with_ignored_entries(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    (repo / "build").mkdir(parents=True)
+    (repo / "src").mkdir()
+    (repo / ".gitignore").write_text("build/\n", encoding="utf-8")
+    state = _files_state(
+        project_cwd=str(repo), workspace=str(tmp_path / "ws"), data_dir=str(tmp_path)
+    )
+
+    result = await _list_files(state, {"agent_id": "builder@vbot", "directory": ""})
+
+    assert result == {
+        "root": str(repo),
+        "files": [],
+        "directories": [],
+        "truncated": False,
+        "entries": [
+            {"name": "build", "kind": "directory", "ignored": True},
+            {"name": "src", "kind": "directory", "ignored": False},
+            {"name": ".gitignore", "kind": "file", "ignored": False},
+        ],
+    }
 
 
 @pytest.mark.asyncio
@@ -780,9 +808,26 @@ async def test_files_list_missing_rooted_cwd_maps_error_without_workspace_fallba
     assert exc_info.value.code == "domain_error"
 
 
+@pytest.mark.parametrize(
+    ("params", "code", "data"),
+    [
+        pytest.param({"limit": 5}, "invalid_request", None, id="unknown-param"),
+        pytest.param({"directory": 3}, "invalid_request", None, id="directory-not-a-string"),
+        pytest.param({"directory": "../x"}, "invalid_request", None, id="outside-the-root"),
+        pytest.param(
+            {"directory": "missing"},
+            "domain_error",
+            {"reason": "not_found"},
+            id="no-such-directory",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_files_list_rejects_unknown_params(tmp_path) -> None:
+async def test_files_list_refusals(
+    tmp_path: Path, params: dict[str, Any], code: str, data: dict[str, str] | None
+) -> None:
     state = _files_state(project_cwd=str(tmp_path), workspace=str(tmp_path), data_dir=str(tmp_path))
 
-    with pytest.raises(RpcError):
-        await _list_files(state, {"agent_id": "main", "limit": 5})
+    with pytest.raises(RpcError) as exc_info:
+        await _list_files(state, {"agent_id": "main", **params})
+    assert (exc_info.value.code, exc_info.value.data) == (code, data)

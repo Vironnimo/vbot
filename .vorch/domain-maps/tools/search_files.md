@@ -27,8 +27,12 @@ services:
   `content_window`, `content_page`) and the `summary`.
 
 Two shared modules help. `core/tools/search.py` provides `SearchBudget`,
-`MAX_OUTPUT_BYTES` and path display; its old walker remains only for Chat file
-mentions, which have their own UI discovery contract. `core/tools/_path_suggestions.py`
+`MAX_OUTPUT_BYTES` and path display, plus the listings the Chat `@` file picker
+runs outside a Tool call: `list_selected_files` (the files a `files` listing
+without arguments returns) and `unselected_names` (which entries of one directory
+that selection leaves out, from ripgrep's `--debug` skip reports). They call
+`native_lines` without a `ToolContext`, so only their budget stops the child, and
+keep the picker on the same selection as the Tool. `core/tools/_path_suggestions.py`
 (shared with `read`) suggests similar paths. The async handler runs the whole
 operation through `run_tool_worker`.
 

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.chat.file_mentions import list_mention_files, resolve_mention_root
+from core.chat.file_mentions import (
+    list_mention_directory,
+    list_mention_files,
+    resolve_mention_root,
+)
 from core.projects import (
     WorkingProjectMissingError,
     project_tool_configurability_reason,
@@ -207,21 +211,27 @@ def _sorted_filtered_skills(skill_registry: Any, allowed_skills: list[str]) -> l
 
 
 async def _list_files(state: Any, params: JsonObject) -> JsonObject:
-    """List cwd files for the composer's ``@``-mention picker.
+    """List the mention root for the composer's ``@``-mention picker.
 
     Resolves the working directory exactly like tool path resolution (the repo
-    of the Project the Session works in, else the agent workspace) and returns
-    gitignore-filtered relative paths. The optional ``session_id`` names the
-    Session whose working Project counts; without one, the optional
-    ``working_project_id`` names a draft's (left out: the Agent's default
-    Project; null: its Workspace). The client fetches once per picker open and
-    filters locally, so this stays a single call per interaction. The walk runs
-    in a worker thread — a large tree must not block the event loop.
+    of the Project the Session works in, else the agent workspace). The optional
+    ``session_id`` names the Session whose working Project counts; without one,
+    the optional ``working_project_id`` names a draft's (left out: the Agent's
+    default Project; null: its Workspace). Without ``directory`` the result is
+    the index of the files and directories the search Tools would search there;
+    the client fetches it once per picker open and filters locally. With
+    ``directory`` (relative to the root, ``""`` is the root) it carries that
+    directory's direct ``entries`` instead, ignored ones included and marked.
     """
-    _reject_unsupported(params, {"agent_id", "session_id", "working_project_id"}, "files.list")
+    _reject_unsupported(
+        params, {"agent_id", "session_id", "working_project_id", "directory"}, "files.list"
+    )
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _optional_string(params, "session_id")
     working_project_id = _draft_working_project(params, project_id, session_id)
+    directory = params.get("directory")
+    if directory is not None and not isinstance(directory, str):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.directory must be a string or null")
     try:
         # Resolving the root reads the Agent, whose current-Session pointer it
         # verifies, and the Session, so it runs on the Session database's pool.
@@ -234,10 +244,27 @@ async def _list_files(state: Any, params: JsonObject) -> JsonObject:
                 working_project_id=working_project_id,
             )
         )
-        files, truncated = await _CATALOG_WORKERS.run(list_mention_files, root)
+        if directory is not None:
+            listed = await list_mention_directory(root, directory)
+            return {
+                "root": str(root),
+                "files": [],
+                "directories": [],
+                "truncated": listed.truncated,
+                "entries": [
+                    {"name": entry.name, "kind": entry.kind, "ignored": entry.ignored}
+                    for entry in listed.entries
+                ],
+            }
+        index = await list_mention_files(root)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {"root": str(root), "files": files, "truncated": truncated}
+    return {
+        "root": str(root),
+        "files": list(index.files),
+        "directories": list(index.directories),
+        "truncated": index.truncated,
+    }
 
 
 def method_handlers() -> dict[str, RpcMethodHandler]:

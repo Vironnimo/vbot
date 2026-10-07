@@ -22,15 +22,18 @@ import unicodedata
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import psutil  # type: ignore[import-untyped]
 
 from core.tools._search_query import SearchQuery
 from core.tools.file_state import os_error_reason
-from core.tools.search import SearchBudget
-from core.tools.tools import ToolContext
 from core.utils.processes import subprocess_creation_flags
+
+if TYPE_CHECKING:
+    # Annotations only: core.tools.search runs its listings through this module.
+    from core.tools.search import SearchBudget
+    from core.tools.tools import ToolContext
 
 MAX_PROTOCOL_LINE = 8 * 1024 * 1024
 # Bound on one native command line; a longer path list runs in several batches.
@@ -70,7 +73,7 @@ class NativeOutcome:
 def native_lines(
     binary: Path,
     arguments: list[str],
-    context: ToolContext,
+    context: ToolContext | None,
     budget: SearchBudget,
     *,
     cwd: Path | None = None,
@@ -79,13 +82,18 @@ def native_lines(
     """Drain both pipes with bounded storage and interrupt even a silent process.
 
     With ``outcome``, the exit code and diagnostics are recorded there for the
-    caller to judge. Without it, a failed run raises ``RuntimeError``.
+    caller to judge. Without it, a failed run raises ``RuntimeError``. A caller
+    outside a Tool call passes no ``context`` and its ``cwd``; only its budget
+    stops the child then.
     """
+    if context is None and cwd is None:
+        raise ValueError("A native search outside a Tool call needs its working directory.")
     cancelled = threading.Event()
-    # The Run retains this callback until dispatch finishes on the Event Loop.
-    # Retaining Popen here would defer its Windows handle destructor to that
-    # thread. Native process operations and lifetime belong to this worker.
-    context.on_cancel(cancelled.set)
+    if context is not None:
+        # The Run retains this callback until dispatch finishes on the Event Loop.
+        # Retaining Popen here would defer its Windows handle destructor to that
+        # thread. Native process operations and lifetime belong to this worker.
+        context.on_cancel(cancelled.set)
 
     def keep_going() -> bool:
         return budget.keep_going() and not cancelled.is_set()
@@ -159,9 +167,12 @@ def native_lines(
     started_threads = []
     next_memory_poll = 0.0
     output_finished = False
+    if cwd is None:
+        assert context is not None
+        cwd = context.effective_cwd
     process = subprocess.Popen(
         [str(binary), "--no-config", *arguments],
-        cwd=cwd or context.effective_cwd,
+        cwd=cwd,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
