@@ -23,7 +23,7 @@ import unicodedata
 from collections.abc import Generator, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import psutil  # type: ignore[import-untyped]
 
@@ -42,7 +42,8 @@ MAX_PROTOCOL_LINE = 8 * 1024 * 1024
 _READ_BYTES = 64 * 1024
 # Bound on one native command line; a longer path list runs in several batches.
 MAX_COMMAND_LINE_BYTES = 28000
-# Polling interval for the child memory bound; each poll is a process query.
+# Bound on a child's resident memory, and its polling interval; each poll is a process query.
+MAX_CHILD_MEMORY = 512 * 1024 * 1024
 MEMORY_POLL_SECONDS = 0.05
 # Bound on the entries one search collects before ordering them.
 MAX_ENTRIES = 500_000
@@ -59,6 +60,24 @@ _SKIPPED = re.compile(
 # Defaults that differ from ripgrep's own; later args items override them.
 DEFAULT_ARGUMENTS = ("--no-config", "--hidden", "--no-require-git", "--glob-case-insensitive")
 ALWAYS_EXCLUDED = "!.git"
+
+
+class SearchBoundError(RuntimeError):
+    """A native run stopped at a processing bound, so its output is unusable.
+
+    ``bound`` is ``"record"`` when one output record exceeded ``MAX_PROTOCOL_LINE``
+    and ``"memory"`` when the child exceeded ``MAX_CHILD_MEMORY``. ``path`` is the
+    absolute path of the file whose output record was too large, when known.
+    """
+
+    def __init__(self, bound: Literal["record", "memory"], path: Path | None = None) -> None:
+        if bound == "record":
+            message = f"A native search output record exceeds {MAX_PROTOCOL_LINE} bytes."
+        else:
+            message = f"A native search child exceeds {MAX_CHILD_MEMORY} bytes of memory."
+        super().__init__(message)
+        self.bound: Literal["record", "memory"] = bound
+        self.path = path
 
 
 @dataclass
@@ -91,8 +110,9 @@ def native_lines(
     bounded at ``MAX_PROTOCOL_LINE``, never the whole output. Even a silent
     process is interrupted. With ``outcome``, the exit code and diagnostics are
     recorded there for the caller to judge. Without it, a failed run raises
-    ``RuntimeError``. A caller outside a Tool call passes no ``context`` and its
-    ``cwd``; only its budget stops the child then.
+    ``RuntimeError``. A record over its bound or a child over its memory bound
+    raises ``SearchBoundError`` either way. A caller outside a Tool call passes no
+    ``context`` and its ``cwd``; only its budget stops the child then.
     """
     if context is None and cwd is None:
         raise ValueError("A native search outside a Tool call needs its working directory.")
@@ -194,10 +214,8 @@ def native_lines(
             if monitored is not None and time.monotonic() >= next_memory_poll:
                 next_memory_poll = time.monotonic() + MEMORY_POLL_SECONDS
                 with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
-                    if monitored.memory_info().rss > 512 * 1024 * 1024:
-                        raise RuntimeError(
-                            "Search exceeded its memory bound; narrow files or patterns."
-                        )
+                    if monitored.memory_info().rss > MAX_CHILD_MEMORY:
+                        raise SearchBoundError("memory")
             try:
                 kind, records = messages.get(timeout=0.05)
             except queue.Empty:
@@ -206,10 +224,7 @@ def native_lines(
                 output_finished = True
                 break
             if kind == "too_long":
-                raise RuntimeError(
-                    "A source record exceeds the 8 MiB processing bound; narrow the search or "
-                    "use a file/count output mode."
-                )
+                raise SearchBoundError("record")
             yield from records
         # EOF can precede process exit. Keep checking cancellation here as well
         # instead of waiting for the entire remaining search budget at once.
@@ -560,19 +575,28 @@ def line_events(
     def execute() -> None:
         outcome = NativeOutcome()
         current: list[dict[str, Any]] | None = None
+        current_path: bytes | None = None
         lines = native_lines(
             binary, [*base, *batch], context, budget, cwd=scope.cwd, outcome=outcome
         )
-        with contextlib.closing(lines):
-            for line in lines:
-                event = json.loads(line)
-                kind = event["type"]
-                if kind == "begin":
-                    current = events.setdefault(_event_path(event["data"]["path"]), [])
-                elif kind in {"match", "context"} and current is not None:
-                    current.append(event)
-                elif kind == "end":
-                    current = None
+        try:
+            with contextlib.closing(lines):
+                for line in lines:
+                    event = json.loads(line)
+                    kind = event["type"]
+                    if kind == "begin":
+                        current_path = _event_path(event["data"]["path"])
+                        current = events.setdefault(current_path, [])
+                    elif kind in {"match", "context"} and current is not None:
+                        current.append(event)
+                    elif kind == "end":
+                        current, current_path = None, None
+        except SearchBoundError as error:
+            # Only a match or context event can be that large; its file began before it.
+            if error.bound != "record" or current_path is None:
+                raise
+            path = Path(os.path.normpath(scope.cwd / os.fsdecode(current_path)))
+            raise SearchBoundError("record", path) from None
         judged = _judge(outcome, scope, cwd)
         warnings.extend(judged.warnings)
 

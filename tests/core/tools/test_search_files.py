@@ -9,10 +9,12 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from core.tools._search_execution import MAX_CHILD_MEMORY
 from core.utils.search_binary import require_binary
 from tests.core.tools.search_files_test_support import context, dispatch, search, search_registry
 
@@ -264,6 +266,59 @@ def test_the_record_bound_applies_to_each_listed_path_and_name(
     # Each path or name ripgrep prints is shorter than the bound; all of them are longer.
     monkeypatch.setattr("core.tools._search_execution.MAX_PROTOCOL_LINE", 32)
     assert set(_all_pages(tmp_path, arguments, limit=10000)) == expected
+
+
+def test_a_result_over_the_record_bound_fails_naming_the_file_to_leave_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write(tmp_path, {"data/big.min.js": "needle " + "x" * 5000 + "\n", "src/a.py": "needle\n"})
+    # The long line's match event exceeds the bound; every other record stays below it.
+    monkeypatch.setattr("core.tools._search_execution.MAX_PROTOCOL_LINE", 4096)
+
+    result = asyncio.run(dispatch(tmp_path, {"pattern": "needle"}))
+
+    assert result["error"] == {
+        "code": "search_error",
+        "message": "The search stopped without results: a line in data/big.min.js exceeds the "
+        '8 MiB limit for one result. Exclude that file with glob "!data/big.min.js" to see the '
+        'other results, or set output to "files" or "count", which show no lines.',
+    }
+    # The calls the error names succeed.
+    excluded = search(tmp_path, pattern="needle", glob="!data/big.min.js")
+    assert excluded["content"] == "src/a.py:1:needle"
+    listed = search(tmp_path, pattern="needle", output="files")
+    assert listed["content"] == "data/big.min.js\nsrc/a.py"
+
+
+@pytest.mark.parametrize(
+    ("arguments", "advice"),
+    [
+        ({"pattern": "needle"}, 'add "--max-filesize", "50M" to args'),
+        ({"pattern": "needle", "args": ["-U"]}, "Leave out -U unless matches need to span lines."),
+        ({}, "Narrow path or glob to list fewer files."),
+        ({"args": ["--dirs"]}, "Narrow path or glob to list fewer directories."),
+    ],
+)
+def test_a_search_over_the_memory_bound_fails_with_advice_for_its_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arguments: dict[str, Any], advice: str
+) -> None:
+    _write(tmp_path, {"src/a.py": "needle\n"})
+
+    class Oversized:
+        def __init__(self, _pid: int) -> None:
+            pass
+
+        def memory_info(self) -> SimpleNamespace:
+            return SimpleNamespace(rss=MAX_CHILD_MEMORY + 1)
+
+    monkeypatch.setattr("core.tools._search_execution.psutil.Process", Oversized)
+
+    result = asyncio.run(dispatch(tmp_path, arguments))
+
+    assert result["error"]["code"] == "search_error"
+    message = result["error"]["message"]
+    assert "stopped without results: it exceeded its 512 MiB memory limit." in message
+    assert advice in message
 
 
 @pytest.mark.parametrize(

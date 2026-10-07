@@ -15,7 +15,7 @@ from typing import override
 import psutil  # type: ignore[import-untyped]
 import pytest
 
-from core.tools._search_execution import native_lines
+from core.tools._search_execution import MAX_CHILD_MEMORY, SearchBoundError, native_lines
 from core.tools.search import SearchBudget
 from core.tools.tools import run_tool_worker
 from tests.core.tools.search_files_test_support import context, dispatch
@@ -392,6 +392,7 @@ def test_child_memory_is_bounded_and_polled_at_an_interval(tmp_path, monkeypatch
     assert len(list(native_lines(Path(sys.executable), [], ctx, SearchBudget(ctx)))) == 2000
     # Polls follow elapsed time, not output volume.
     assert 1 <= len(polls) < 200
-    Monitored.rss = 513 * 1024 * 1024
-    with pytest.raises(RuntimeError, match="memory bound"):
+    Monitored.rss = MAX_CHILD_MEMORY + 1
+    with pytest.raises(SearchBoundError) as stopped:
         list(native_lines(Path(sys.executable), [], ctx, SearchBudget(ctx)))
+    assert stopped.value.bound == "memory"

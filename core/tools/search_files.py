@@ -19,9 +19,12 @@ from typing import Any
 
 from core.tools._path_suggestions import corrected_paths
 from core.tools._search_execution import (
+    MAX_CHILD_MEMORY,
     MAX_ENTRIES,
+    MAX_PROTOCOL_LINE,
     ScanResult,
     Scope,
+    SearchBoundError,
     SearchRefusedError,
     count_scan,
     explain_failure,
@@ -573,6 +576,50 @@ def _ignored_summary(paths: list[Path], cwd: Path) -> str:
     return f"Ignore rules such as .gitignore excluded {listed}. Add -u to args to include them."
 
 
+def _mebibytes(size: int) -> str:
+    return f"{size // (1024 * 1024)} MiB"
+
+
+def _bound_failure(error: SearchBoundError, query: SearchQuery, cwd: Path) -> str:
+    """Say which bound stopped the search and which call gets results.
+
+    Only the line pass prints records that large, one per matching or context
+    line (or match, with -U), so it names the file and how to leave it out. The
+    memory bound depends on how many and how large the files are, and on -U.
+    """
+    stopped = "The search stopped without results"
+    if error.bound == "record":
+        limit = f"the {_mebibytes(MAX_PROTOCOL_LINE)} limit"
+        if error.path is None:
+            return f"{stopped}: one result exceeds {limit}. Narrow path or glob."
+        # A glob with a slash selects that path below the working directory; a name
+        # selects it at any depth, also below a root outside the working directory.
+        if error.path.is_relative_to(cwd):
+            excluded = "!" + error.path.relative_to(cwd).as_posix()
+        else:
+            excluded = "!" + error.path.name
+        unit = "match" if query.multiline else "line"
+        return (
+            f"{stopped}: a {unit} in {path_label(error.path, cwd)} exceeds {limit} for one "
+            f"result. Exclude that file with glob {json.dumps(excluded, ensure_ascii=False)} to "
+            'see the other results, or set output to "files" or "count", which show no lines.'
+        )
+    limit = f"its {_mebibytes(MAX_CHILD_MEMORY)} memory limit"
+    if query.mode in LIST_MODES:
+        listed = "files" if query.mode == "list_files" else "directories"
+        return (
+            f"The listing stopped without results: it exceeded {limit}. Narrow path or glob "
+            f"to list fewer {listed}."
+        )
+    text = (
+        f'{stopped}: it exceeded {limit}. Narrow path or glob, or add "--max-filesize", "50M" '
+        "to args to skip files over 50M."
+    )
+    if query.multiline:
+        text += " Leave out -U unless matches need to span lines."
+    return text
+
+
 def _scopes(roots: list[Path], cwd: Path) -> list[Scope]:
     """Group roots into ripgrep runs: one at the working directory, one per outside root."""
     inside = Scope(cwd=cwd, paths=[])
@@ -895,10 +942,10 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         if query.mode == "help":
             return tool_success({"content": help_text()})
         budget = SearchBudget(context)
+        cwd = Path(os.path.abspath(context.effective_cwd.expanduser()))
         if query.mode == "reference":
             text = reference_text(binary, query.reference_args, context, budget)
             return tool_success({"content": text})
-        cwd = Path(os.path.abspath(context.effective_cwd.expanduser()))
         roots = _resolve_roots(query, cwd)
         missing = _missing_warnings(query, roots, cwd)
         if not roots.paths:
@@ -913,6 +960,9 @@ def search_files_handler(context: ToolContext, arguments: JsonObject) -> JsonObj
         return tool_failure("invalid_arguments", str(error))
     except SearchRefusedError as error:
         return tool_failure("search_error", explain_failure(str(error)))
+    except SearchBoundError as error:
+        # Only native runs raise it, and they start after query and cwd are set.
+        return tool_failure("search_error", _bound_failure(error, query, cwd))
     except OSError as error:
         return tool_failure(
             "search_error",

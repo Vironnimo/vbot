@@ -14,8 +14,9 @@ services:
 
 - `core/tools/search_files.py`: registration, the owner normalizer
   (`normalize_search_arguments`), `interpret_search_call` (the provider probes use
-  it too), root resolution, scopes, orchestration (`_search`), the handler, the
-  display, the help text and the definition.
+  it too), root resolution, scopes, orchestration (`_search`), the handler and its
+  bound failure texts (`_bound_failure`), the display, the help text and the
+  definition.
 - `core/tools/_search_query.py`: `interpret` turns the named fields and `args`
   into one `SearchQuery`, with mode, patterns, roots, globs, the rg arguments,
   context, page and notes.
@@ -308,15 +309,28 @@ notice about the next page and each warning
 - **Budget:** the shared 30-second `SearchBudget` covers all phases. A timeout or
   a Run cancellation returns partial results with a warning. A user cancellation
   kills the child and returns `cancelled_by_user`.
-- **Child process:** each child's RSS is bounded at 512 MiB, polled every 50 ms.
-  One output record is bounded at 8 MiB, the output queue and stderr are
-  bounded, and one counting or listing pass is bounded at 256 MiB of output.
-  A record is a line, or one path or name where ripgrep ends them with NUL
-  (`--files --null`, `--files-without-match --null`, `--null-data`, and the
+- **Child process:** each child's RSS is bounded at 512 MiB (`MAX_CHILD_MEMORY`),
+  polled every 50 ms. One output record is bounded at 8 MiB, the output queue and
+  stderr are bounded, and one counting or listing pass is bounded at 256 MiB of
+  output. A record is a line, or one path or name where ripgrep ends them with
+  NUL (`--files --null`, `--files-without-match --null`, `--null-data`, and the
   picker's `list_selected_files`); those callers pass `native_lines` the NUL
   `terminator`. Read as lines, a file list over 8 MiB was one record and failed
-  the call (probe, 2026-10: 66,000 files; `--dirs` failed alike, since it reads
-  a file list first).
+  the call (probe, 2026-10: 66,000 files; `--dirs` failed alike, since it reads a
+  file list first).
+- **Bound failures:** a record over 8 MiB or a child over 512 MiB raises
+  `SearchBoundError` (`bound` `record` or `memory`), and the handler returns
+  `search_error` from `_bound_failure`, worded for what the call did, never the
+  generic `tool_execution_error` (which claimed unknown effects and advised a
+  file/count mode for listings). Only the line pass prints records that large, a
+  match or context event of a very long line (or of a long match with `-U`), so
+  `line_events` attaches the file from its `begin` event; the error names it,
+  suggests the excluding glob (cwd-relative path, or the bare name outside the
+  cwd) and `output` `files` or `count`. The memory error advises narrowing
+  `path`/`glob` and `--max-filesize` for content searches, also leaving out `-U`
+  when set, and narrowing alone for listings
+  (`test_a_result_over_the_record_bound_fails_naming_the_file_to_leave_out`,
+  `test_a_search_over_the_memory_bound_fails_with_advice_for_its_mode`).
 - **Entries:** at most 500,000 entries are collected; more makes the result
   incomplete, with a warning.
 - **Process ownership:** native subprocess creation, termination and release stay
@@ -388,7 +402,8 @@ Tests live in `tests/core/tools/test_search_files*.py`:
   - a git differential (`git ls-files --others --exclude-standard`) checks ignore
     selection;
   - other tests cover totals, ordering, context at page edges, the byte limit,
-    the output record bound per listed path and name, multiline paging, outside
+    the output record bound per listed path and name, the bound failures,
+    multiline paging, outside
     roots, `.git`, excerpts, encodings, link loops,
     junctions, unusual names, timeout and cancel, English OS errors, the missing
     engine, and the display.
