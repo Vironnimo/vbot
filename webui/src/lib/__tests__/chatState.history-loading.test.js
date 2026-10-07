@@ -69,7 +69,7 @@ describe('History reads', () => {
     });
   });
 
-  it('folds background status deltas across incremental pages', async () => {
+  it('folds background status deltas and Run records across incremental pages', async () => {
     const loadChatHistory = vi
       .fn()
       .mockResolvedValueOnce({
@@ -91,6 +91,7 @@ describe('History reads', () => {
         has_newer: true,
         context_usage: { used_tokens: 7 },
         background_command_statuses: { term_one: 'completed' },
+        runs: [{ run_id: 'run-one', status: 'completed' }],
       })
       .mockResolvedValueOnce({
         messages: [],
@@ -99,6 +100,7 @@ describe('History reads', () => {
         incremental: true,
         context_usage: null,
         background_command_statuses: { term_two: 'failed' },
+        runs: [{ run_id: 'run-two', status: 'failed' }],
       });
     const { chatState, controller } = setupController({
       operationOverrides: { loadChatHistory },
@@ -113,6 +115,10 @@ describe('History reads', () => {
       term_one: 'completed',
       term_two: 'failed',
     });
+    expect(Object.keys(source.historyRuns).sort()).toEqual([
+      'run-one',
+      'run-two',
+    ]);
     // A page that read the context and found none clears it.
     expect(source.contextUsage).toBeNull();
   });
