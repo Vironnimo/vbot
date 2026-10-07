@@ -138,8 +138,9 @@ _DELIVERY = (
             True,
             "Start and operate programs in a live terminal: interactive programs you drive by "
             "typing, such as REPLs, TUIs and coding-agent CLIs, and commands that {shell} left "
-            "running. Run commands that finish on their own with {shell}. A program keeps "
-            "running after your turn ends, until it exits or is stopped. "
+            "running. Run all other commands with {shell}, servers and watchers with its mode "
+            "background. A program keeps running after your turn ends, until it exits or is "
+            "stopped. "
             f"{_DELIVERY} Screen text is rendered terminal text, not exact file content.",
         ),
         (

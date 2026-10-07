@@ -116,7 +116,9 @@ def _terminal_description(*, shell: str | None) -> str:
         f"typing, such as REPLs, TUIs and coding-agent CLIs{commands}."
     ]
     if shell:
-        sentences.append(f"Run commands that finish on their own with {shell}.")
+        sentences.append(
+            f"Run all other commands with {shell}, servers and watchers with its mode background."
+        )
     sentences.append("A program keeps running after your turn ends, until it exits or is stopped.")
     sentences.append(
         "For terminals attached to this Session, a program's exit arrives as a new "
