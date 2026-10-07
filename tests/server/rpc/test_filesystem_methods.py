@@ -25,6 +25,7 @@ async def test_lists_places_and_directories_in_the_public_shape(tmp_path: Path) 
     places = await _call({})
     folders = await _call({"path": tmp_path.as_posix()})
     files = await _call({"path": "", "root": str(tmp_path), "include_files": True})
+    named = await _call({"path": tmp_path.as_posix(), "include_files": True, "prefix": "r"})
 
     assert places["ok"] is True
     assert set(places["result"]) == {"path", "parent", "entries", "truncated", "separator", "home"}
@@ -37,6 +38,7 @@ async def test_lists_places_and_directories_in_the_public_shape(tmp_path: Path) 
     }
     assert (files["result"]["path"], files["result"]["parent"]) == ("", None)
     assert [entry["name"] for entry in files["result"]["entries"]] == ["src", "README.md"]
+    assert [entry["name"] for entry in named["result"]["entries"]] == ["README.md"]
 
 
 @pytest.mark.asyncio
@@ -51,6 +53,7 @@ async def test_lists_places_and_directories_in_the_public_shape(tmp_path: Path) 
         pytest.param(
             {"include_files": "yes"}, "invalid_request", None, False, id="flag-not-a-bool"
         ),
+        pytest.param({"prefix": 3}, "invalid_request", None, False, id="prefix-not-a-string"),
         pytest.param({"depth": 1}, "invalid_request", None, False, id="unknown-field"),
         pytest.param(
             {"path": "missing", "root": "<root>"},

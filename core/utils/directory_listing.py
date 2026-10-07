@@ -10,7 +10,9 @@ holding the caller.
 
 An optional ``root`` confines a listing to one directory tree: paths are relative
 to it, ``..`` cannot climb out of it, and a link or junction that resolves outside
-it is refused. Paths in results use ``/`` separators.
+it is refused. Paths in results use ``/`` separators. An optional name ``prefix``
+keeps only the entries whose names start with it, ignoring case, before the entry
+limit applies, so a large directory still yields every entry a typed name can reach.
 
 A directory that exists but cannot be read is ``unreadable``, never ``not_found``.
 """
@@ -99,14 +101,19 @@ class ListingPathError(VBotError):
 
 
 async def list_directory(
-    path: str | None, *, root: str | None = None, include_files: bool = False
+    path: str | None,
+    *,
+    root: str | None = None,
+    include_files: bool = False,
+    prefix: str | None = None,
 ) -> DirectoryListing:
     """List ``path`` off the Event Loop within the listing budget.
 
     ``path`` ``None`` lists the places (filesystem roots, plus ``home``); with
     ``root`` it lists the root. Otherwise ``path`` is absolute, or ``~`` / ``~/...``,
     and with ``root`` relative to it (``""`` is the root). ``include_files=False``
-    lists only directories.
+    lists only directories. A non-empty ``prefix`` lists only entries whose names
+    start with it, ignoring case; ``truncated`` then refers to those entries.
 
     Raises :class:`ListingPathError` for a path the request may not name and
     :class:`DirectoryListingError` when the directory cannot be listed, also with
@@ -116,7 +123,14 @@ async def list_directory(
     timeout_seconds = DIRECTORY_LISTING_TIMEOUT_SECONDS
     deadline = _monotonic() + timeout_seconds
     task = asyncio.ensure_future(
-        _POOL.run(_list, path, root=root, include_files=include_files, deadline=deadline)
+        _POOL.run(
+            _list,
+            path,
+            root=root,
+            include_files=include_files,
+            prefix=prefix,
+            deadline=deadline,
+        )
     )
     try:
         done, _pending = await asyncio.wait((task,), timeout=timeout_seconds)
@@ -134,6 +148,7 @@ def list_directory_sync(
     *,
     root: str | None = None,
     include_files: bool = False,
+    prefix: str | None = None,
     timeout_seconds: float | None = None,
 ) -> DirectoryListing:
     """List ``path`` like :func:`list_directory`, blocking the calling thread.
@@ -142,22 +157,36 @@ def list_directory_sync(
     not return holds the caller; :func:`list_directory` does not wait for it.
     """
     budget = DIRECTORY_LISTING_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
-    return _list(path, root=root, include_files=include_files, deadline=_monotonic() + budget)
+    return _list(
+        path,
+        root=root,
+        include_files=include_files,
+        prefix=prefix,
+        deadline=_monotonic() + budget,
+    )
 
 
 def _list(
-    path: str | None, *, root: str | None, include_files: bool, deadline: float
+    path: str | None,
+    *,
+    root: str | None,
+    include_files: bool,
+    prefix: str | None,
+    deadline: float,
 ) -> DirectoryListing:
     if "\x00" in (path or "") or "\x00" in (root or ""):
         raise ListingPathError("A path cannot contain a NUL character.")
+    needle = (prefix or "").casefold()
     if root is None and path is None:
-        return _places()
+        return _places(needle)
     if root is None:
         assert path is not None
         absolute = _absolute(path)
         parent = os.path.dirname(absolute)
         shown = PurePath(absolute).as_posix()
-        entries, truncated = _read(absolute, shown, include_files=include_files, deadline=deadline)
+        entries, truncated = _read(
+            absolute, shown, include_files=include_files, needle=needle, deadline=deadline
+        )
         return DirectoryListing(
             path=shown,
             parent=None if parent == absolute else PurePath(parent).as_posix(),
@@ -176,6 +205,7 @@ def _list(
         str(target),
         relative or "The listing root",
         include_files=include_files,
+        needle=needle,
         deadline=deadline,
     )
     return DirectoryListing(
@@ -187,7 +217,7 @@ def _list(
     )
 
 
-def _places() -> DirectoryListing:
+def _places(needle: str) -> DirectoryListing:
     if sys.platform == "win32":
         roots = sorted(PurePath(drive).as_posix() for drive in os.listdrives())
     else:
@@ -196,7 +226,9 @@ def _places() -> DirectoryListing:
         path="",
         parent=None,
         entries=tuple(
-            DirectoryEntry(name=name, kind="directory", link=False, hidden=False) for name in roots
+            DirectoryEntry(name=name, kind="directory", link=False, hidden=False)
+            for name in roots
+            if name.casefold().startswith(needle)
         ),
         truncated=False,
         separator=os.sep,
@@ -252,8 +284,9 @@ def _split(path: str, separators: str) -> list[str]:
 
 
 def _read(
-    directory: str, shown: str, *, include_files: bool, deadline: float
+    directory: str, shown: str, *, include_files: bool, needle: str, deadline: float
 ) -> tuple[tuple[DirectoryEntry, ...], bool]:
+    """Read ``directory``'s entries whose casefolded names start with ``needle``."""
     _check_deadline(deadline, shown)
     entries: list[DirectoryEntry] = []
     truncated = False
@@ -261,6 +294,9 @@ def _read(
         with os.scandir(directory) as listing:
             for entry in listing:
                 _check_deadline(deadline, shown)
+                # Filtered before the limit: the entries a typed name reaches all fit.
+                if needle and not entry.name.casefold().startswith(needle):
+                    continue
                 described = _describe(entry)
                 if described is None or (described.kind == "file" and not include_files):
                     continue

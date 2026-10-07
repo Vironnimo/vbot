@@ -18,17 +18,21 @@ async def _list_filesystem(_state: Any, params: JsonObject) -> JsonObject:
 
     ``path`` null or absent lists the places (filesystem roots plus ``home``);
     otherwise it names an absolute directory, ``~`` or ``~/...``, or with ``root``
-    a directory relative to that root (``""`` is the root). The listing runs off
-    the Event Loop within its own budget.
+    a directory relative to that root (``""`` is the root). A non-empty ``prefix``
+    lists only the entries whose names start with it, ignoring case, before the
+    entry limit applies. The listing runs off the Event Loop within its own budget.
     """
-    _reject_unsupported(params, {"path", "root", "include_files"}, "filesystem.list")
+    _reject_unsupported(params, {"path", "root", "include_files", "prefix"}, "filesystem.list")
     path = params.get("path")
     if path is not None and not isinstance(path, str):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.path must be a string or null")
     root = _optional_string(params, "root")
     include_files = _optional_bool(params, "include_files", default=False)
+    prefix = params.get("prefix")
+    if prefix is not None and not isinstance(prefix, str):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.prefix must be a string or null")
     try:
-        listing = await list_directory(path, root=root, include_files=include_files)
+        listing = await list_directory(path, root=root, include_files=include_files, prefix=prefix)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return _listing_payload(listing)
