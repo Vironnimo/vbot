@@ -4,12 +4,14 @@
   // time. Without a `root` it starts at the places (filesystem roots, home,
   // and the shortcuts `loadShortcuts` returns) and chooses absolute paths in
   // the server's own separators; with a `root` it never leaves that folder
-  // and chooses paths relative to it. It opens at `value` when that names a
-  // listable folder (or its parent, highlighting the named entry).
+  // and chooses paths relative to it. It opens at the nearest folder of
+  // `value` that lists (the value itself or an ancestor, highlighting the
+  // entry it came from), or of `startPath` when the value names none.
   //
   // Like a desktop file dialog, a click highlights an entry and a double
   // click or Enter opens a folder or chooses a file; Select takes the
   // highlighted entry, or else the open folder (directory and any modes).
+  // Typing a filter highlights its first match, so Enter opens that one.
   //
   // The dialog is moved to <body> before it renders, so the form dialog it
   // may open from neither styles nor submits it; Modal keeps only the newest
@@ -18,6 +20,7 @@
 
   import { portal } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
   import {
     breadcrumbTrail,
     browseStartPaths,
@@ -26,6 +29,8 @@
     joinPath,
     listingErrorReason,
     listingFailureText,
+    normalizeServerPath,
+    parentMayList,
     parentPath,
     toNativePath,
   } from '$lib/pathPicker.js';
@@ -43,6 +48,7 @@
     mode = 'directory',
     root = '',
     value = '',
+    startPath = '',
     listDirectory,
     loadShortcuts = null,
     onSelect = noop,
@@ -53,10 +59,13 @@
 
   let portaled = $state(false);
   let listElement = $state();
+  let trailElement = $state();
   // 'places' | 'folder'
   let view = $state('');
   let status = $state('loading');
   let failure = $state('');
+  // A refused request (a folder outside the root) fails the same way again.
+  let retryable = $state(true);
   // The folder shown or being opened, in listing form.
   let target = $state('');
   let listing = $state.raw(null);
@@ -167,8 +176,18 @@
     };
   }
 
-  // Opens a folder. A quiet attempt (the start candidates) changes nothing
-  // when it fails and reports whether it worked.
+  // Navigation replaces the row or crumb that was clicked, which would drop
+  // keyboard focus to the page: the list takes it, so arrow keys and
+  // Backspace keep working. The filter keeps it while the user types there.
+  function focusList() {
+    const focused = listElement?.ownerDocument.activeElement;
+    if (focused?.classList.contains('path-browser__filter')) return;
+    listElement?.focus();
+  }
+
+  // Opens a folder and resolves to null, or to why it did not open: a
+  // `listingErrorReason`, or 'superseded' once a newer navigation started. A
+  // quiet attempt (a start candidate) changes nothing when it fails.
   async function openFolder(
     path,
     { highlight = '', refresh = false, quiet = false } = {},
@@ -180,10 +199,11 @@
       target = path;
       filter = '';
       activeKey = '';
+      focusList();
     }
     try {
       const result = await listings.list(listingParams(path), { refresh });
-      if (token !== loadToken) return false;
+      if (token !== loadToken) return 'superseded';
       listing = result;
       separator = result?.separator === '\\' ? '\\' : '/';
       view = 'folder';
@@ -197,12 +217,12 @@
         );
       }
       await revealActive();
-      return true;
+      return null;
     } catch (error) {
-      if (token !== loadToken || quiet) return false;
-      status = 'error';
-      failure = listingFailureText(listingErrorReason(error));
-      return false;
+      if (token !== loadToken) return 'superseded';
+      const reason = listingErrorReason(error);
+      if (!quiet) showFailure(reason);
+      return reason;
     }
   }
 
@@ -213,6 +233,7 @@
     target = '';
     filter = '';
     activeKey = '';
+    focusList();
     try {
       const [result, found] = await Promise.all([
         listings.list({ path: null }, { refresh }),
@@ -225,9 +246,16 @@
       status = 'ready';
     } catch (error) {
       if (token !== loadToken) return;
-      status = 'error';
-      failure = listingFailureText(listingErrorReason(error));
+      showFailure(listingErrorReason(error));
     }
+  }
+
+  function showFailure(reason) {
+    status = 'error';
+    retryable = reason !== 'invalid';
+    failure = listingFailureText(reason, {
+      root: root && toNativePath(normalizeServerPath(root), separator),
+    });
   }
 
   let shortcutRequest = null;
@@ -246,10 +274,14 @@
   }
 
   async function start() {
-    for (const candidate of browseStartPaths(value, { root })) {
-      if (await openFolder(candidate.path, { ...candidate, quiet: true })) {
-        return;
-      }
+    const fromValue = browseStartPaths(value, { root });
+    const candidates = fromValue.length
+      ? fromValue
+      : browseStartPaths(startPath, { root });
+    for (const { path, highlight } of candidates) {
+      const failure = await openFolder(path, { highlight, quiet: true });
+      if (failure === null || failure === 'superseded') return;
+      if (!parentMayList(failure)) break;
     }
     await openStart();
   }
@@ -300,6 +332,12 @@
     onSelect(chosenValue);
   }
 
+  // A filtered list highlights its first match; an empty filter, nothing.
+  function highlightFirstMatch() {
+    activeKey = filter.trim() ? (rows[0]?.key ?? '') : '';
+    void revealActive();
+  }
+
   async function revealActive() {
     await tick();
     const index = rows.findIndex((row) => row.key === activeKey);
@@ -344,7 +382,8 @@
       case 'Enter':
         if (activeRow) {
           open(activeRow);
-        } else if (chosenPath !== null) {
+        } else if (!filter.trim() && chosenPath !== null) {
+          // A filter without matches chooses nothing.
           choose();
         } else {
           return;
@@ -365,6 +404,12 @@
     portaled = true;
     return placement;
   }
+
+  // A deep folder's trail shows its end: the folder that is open.
+  $effect(() => {
+    void crumbs;
+    if (trailElement) trailElement.scrollLeft = trailElement.scrollWidth;
+  });
 
   $effect(() => {
     if (!listElement || initialFocusDone) return;
@@ -408,7 +453,11 @@
                 />
               </svg>
             </Button>
-            <nav class="path-browser__trail" aria-label={t('pathPicker.trail')}>
+            <nav
+              bind:this={trailElement}
+              class="path-browser__trail"
+              aria-label={t('pathPicker.trail')}
+            >
               <ol>
                 {#if !root}
                   <li>
@@ -458,7 +507,7 @@
                 disabled={!folderReady}
                 onInput={(next) => {
                   filter = next;
-                  activeKey = '';
+                  highlightFirstMatch();
                 }}
                 onkeydown={(event) => handleNavigationKey(event)}
               />
@@ -467,7 +516,10 @@
                   size="sm"
                   checked={showHidden}
                   ariaLabel={t('pathPicker.showHidden')}
-                  onChange={(next) => (showHidden = next)}
+                  onChange={(next) => {
+                    showHidden = next;
+                    if (filter.trim()) highlightFirstMatch();
+                  }}
                 />{t('pathPicker.showHidden')}</label
               >
             </div>
@@ -481,9 +533,11 @@
             {:else if status === 'error'}
               <div class="path-browser__state" role="alert">
                 <p>{failure}</p>
-                <Button variant="secondary" onClick={retry}
-                  >{t('common.retry')}</Button
-                >
+                {#if retryable}
+                  <Button variant="secondary" onClick={retry}
+                    >{t('common.retry')}</Button
+                  >
+                {/if}
               </div>
             {:else if emptyText}
               <p class="path-browser__state">{emptyText}</p>
@@ -593,7 +647,12 @@
         </div>
       {/snippet}
       {#snippet footer()}
-        <code class="path-browser__choice">{chosenValue}</code>
+        <!-- A long path loses its start; the tooltip shows it whole. -->
+        <code
+          class="path-browser__choice"
+          use:tooltip={{ text: chosenValue, mono: true, whenTruncated: true }}
+          ><bdi>{chosenValue}</bdi></code
+        >
         <Button variant="secondary" onClick={onClose}
           >{t('common.cancel')}</Button
         >
@@ -619,7 +678,10 @@
     flex-direction: column;
   }
 
+  /* One height for the places and every folder, whatever tools and notices
+     show; the list takes the room they leave. */
   .path-browser__body {
+    height: min(460px, 64vh);
     min-height: 0;
     gap: 10px;
     padding-bottom: 12px;
@@ -698,7 +760,8 @@
 
   .path-browser__panel {
     display: flex;
-    height: min(340px, 48vh);
+    min-height: 0;
+    flex: 1;
     flex-direction: column;
     overflow-y: auto;
     border: 1px solid var(--border-2);
@@ -807,6 +870,8 @@
     font-size: var(--fs-body-sm);
   }
 
+  /* Right-to-left only to clip the start; the path itself stays isolated
+     left-to-right, so its separators keep their places. */
   .path-browser__choice {
     min-width: 0;
     flex: 1;
@@ -814,7 +879,9 @@
     color: var(--text-med);
     font-family: var(--font-mono);
     font-size: var(--fs-mono-xs);
+    text-align: left;
     text-overflow: ellipsis;
     white-space: nowrap;
+    direction: rtl;
   }
 </style>

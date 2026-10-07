@@ -10,6 +10,7 @@ import {
 import { setApplicationTimeZone } from '../../../../webui/src/lib/dateTimePrefs.svelte.js';
 import { onMount, tick } from 'svelte';
 import { createExtensionPageClient } from '$lib/extensionPageClient.js';
+import { sameServerPath } from '$lib/pathPicker.js';
 import {
   createPageRefresh,
   everythingChanged,
@@ -541,7 +542,7 @@ export function createSwarmPageModel(host) {
       previousProfile?.id !== selectedProfile?.id ||
       (!editor &&
         !selectedSwarm &&
-        runDirectory === defaultDirectory &&
+        sameServerPath(runDirectory, defaultDirectory) &&
         JSON.stringify(previousProfile?.working_directory) !==
           JSON.stringify(selectedProfile?.working_directory))
     )
@@ -949,9 +950,10 @@ export function createSwarmPageModel(host) {
         expected_profile_revision: selectedProfile.revision,
         prompt: goal,
         request_id: requestId(),
-        ...(runDirectory !== defaultDirectory
-          ? { working_directory: runDirectory }
-          : {}),
+        // The default spelled another way (`C:/work/`) is still the default.
+        ...(sameServerPath(runDirectory, defaultDirectory)
+          ? {}
+          : { working_directory: runDirectory }),
       });
       goal = '';
       await refresh();

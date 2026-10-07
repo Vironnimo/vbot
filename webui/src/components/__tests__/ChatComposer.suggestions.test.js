@@ -285,6 +285,20 @@ describe('ChatComposer suggestions', () => {
           ignored: option.classList.contains('ignored'),
         }));
 
+      // A list opening on ignored entries highlights the first one the index
+      // holds; the arrow keys still reach the others.
+      const active = () =>
+        rows()[
+          suggestionOptions('file').findIndex(
+            (option) => option.getAttribute('aria-selected') === 'true',
+          )
+        ]?.text;
+      typeInComposer('see @');
+      await settle();
+      expect(active()).toBe('src/');
+      pressKey('ArrowUp');
+      expect(active()).toBe('build/ ignored');
+
       typeInComposer('see @bu');
       await settle();
       expect(rows()).toEqual([{ text: 'build/ ignored', ignored: true }]);
@@ -329,6 +343,14 @@ describe('ChatComposer suggestions', () => {
 
       await chooseSuggestion('file');
       expect(composerInput().value).toBe('@"my notes/plan.md" ');
+
+      // A path leaving the listing's root lists no folder, only the index.
+      onListFiles.mockClear();
+      for (const typed of ['@../rea', 'a @/etc/rea', 'ab @"C:\\x\\rea']) {
+        typeInComposer(typed);
+        await settle(2);
+      }
+      expect(onListFiles.mock.calls).toEqual([[], [], []]);
     });
 
     it('sends picked paths with spaces or symbols as file mentions', async () => {

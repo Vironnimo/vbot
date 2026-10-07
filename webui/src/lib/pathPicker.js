@@ -9,6 +9,8 @@ import { t } from './i18n.js';
 const DRIVE_ROOT = /^[A-Za-z]:\/$/;
 const DRIVE_PREFIX = /^[A-Za-z]:[\\/]/;
 const UNC_SHARE = /^\/\/[^/]+\/[^/]+$/;
+// A typed filesystem root: `/`, `\`, `C:/` or `C:\`.
+const TYPED_ROOT = /^(?:[A-Za-z]:)?[\\/]$/;
 
 const LISTING_REASONS = new Set([
   'not_found',
@@ -57,6 +59,35 @@ export function normalizeServerPath(text) {
     path = path.slice(0, -1);
   }
   return path;
+}
+
+/**
+ * Typed text without its trailing separators, in the separators the user
+ * chose; a root (`/`, `C:/`, `C:\`) keeps its own. A folder accepted while
+ * typing ends with one so completion can continue, the field's value not.
+ */
+export function trimTrailingSeparator(text) {
+  let path = typeof text === 'string' ? text : '';
+  while (/[\\/]$/.test(path) && !TYPED_ROOT.test(path)) {
+    path = path.slice(0, -1);
+  }
+  return path;
+}
+
+/**
+ * Whether two typed paths spell the same server folder: trailing separators
+ * aside and, on a Windows path (a drive or `\\host\share`), with `\` and `/`
+ * alike and the drive letter in either case.
+ */
+export function sameServerPath(left, right) {
+  return comparablePath(left) === comparablePath(right);
+}
+
+function comparablePath(text) {
+  const path = trimTrailingSeparator(text);
+  if (!DRIVE_PREFIX.test(path) && !path.startsWith('\\\\')) return path;
+  const slashed = path.replace(/\\/g, '/');
+  return `${slashed.charAt(0).toUpperCase()}${slashed.slice(1)}`;
 }
 
 /** A path inside a root in listing form ('' = the root); null leaves it. */
@@ -246,9 +277,10 @@ export function breadcrumbTrail(path, { root = '' } = {}) {
 }
 
 /**
- * Where the dialog tries to open for a field value, in order: the value as a
- * directory, then its parent with the value's own name highlighted. Empty
- * when the value names nothing listable (start at the places or the root).
+ * Where a picker tries to start for a path, nearest first: the path as a
+ * directory, then each ancestor up to the filesystem root (or the `root`
+ * itself), highlighting the name it came from. Empty when the path names
+ * nothing listable (start at the places or the root).
  */
 export function browseStartPaths(value, { root = '' } = {}) {
   const text = typeof value === 'string' ? value.trim() : '';
@@ -262,11 +294,23 @@ export function browseStartPaths(value, { root = '' } = {}) {
     path = normalizeServerPath(text);
   }
   const candidates = [{ path, highlight: '' }];
-  const parent = parentPath(path, { relative: Boolean(root) });
-  if (parent !== null) {
-    candidates.push({ path: parent, highlight: baseName(path) });
+  for (
+    let child = path, parent = parentPath(path, { relative: Boolean(root) });
+    parent !== null;
+    child = parent, parent = parentPath(parent, { relative: Boolean(root) })
+  ) {
+    candidates.push({ path: parent, highlight: baseName(child) });
   }
   return candidates;
+}
+
+/**
+ * Whether a start candidate's parent is worth trying after the candidate
+ * failed for `reason`: not after a folder that did not answer in time or a
+ * failed request, which its parents would only repeat.
+ */
+export function parentMayList(reason) {
+  return reason !== 'timeout' && reason !== 'failed';
 }
 
 /**
@@ -280,8 +324,11 @@ export function listingErrorReason(error) {
   return 'failed';
 }
 
-/** The sentence for a `listingErrorReason`. */
-export function listingFailureText(reason) {
+/**
+ * The sentence for a `listingErrorReason`. With the `root` a picker keeps
+ * to, a refused folder is one that lies outside it, such as a link.
+ */
+export function listingFailureText(reason, { root = '' } = {}) {
   switch (reason) {
     case 'not_found':
       return t('pathPicker.failure.notFound');
@@ -292,19 +339,23 @@ export function listingFailureText(reason) {
     case 'timeout':
       return t('pathPicker.failure.timeout');
     case 'invalid':
-      return t('pathPicker.failure.invalid');
+      return root
+        ? t('pathPicker.failure.outsideRoot', { root })
+        : t('pathPicker.failure.invalid');
     default:
       return t('pathPicker.failure.failed');
   }
 }
 
 /**
- * Per-picker memory of listings, keyed by path, root and file inclusion. A
- * listing is requested once, its failure is remembered too, and `refresh`
- * asks again.
+ * Per-picker memory of listings: per folder (path, root and file inclusion)
+ * and name `prefix`, a listing is requested once. A folder that failed fails
+ * for every prefix, and a complete (not truncated) listing answers every
+ * longer prefix of its own, since it holds all their entries; callers match
+ * names themselves. `refresh` forgets the folder and asks again.
  */
 export function createListingCache(listDirectory) {
-  const listings = new Map();
+  const folders = new Map();
   return {
     list(params, { refresh = false } = {}) {
       const key = JSON.stringify([
@@ -312,15 +363,33 @@ export function createListingCache(listDirectory) {
         params.root ?? '',
         Boolean(params.include_files),
       ]);
-      if (!refresh && listings.has(key)) return listings.get(key);
+      let folder = folders.get(key);
+      if (!folder || refresh) {
+        folder = { requests: new Map(), complete: [], failed: null };
+        folders.set(key, folder);
+      }
+      const needle = String(params.prefix ?? '').toLowerCase();
+      if (folder.failed) return folder.failed;
+      if (folder.requests.has(needle)) return folder.requests.get(needle);
+      const covering = folder.complete.find((known) =>
+        needle.startsWith(known.needle),
+      );
+      if (covering) return Promise.resolve(covering.listing);
       const pending = Promise.resolve().then(() => listDirectory(params));
+      folder.requests.set(needle, pending);
       // Callers handle the failure; the cached copy must not report it again.
-      pending.catch(() => {});
-      listings.set(key, pending);
+      pending.then(
+        (listing) => {
+          if (!listing?.truncated) folder.complete.push({ needle, listing });
+        },
+        () => {
+          folder.failed ??= pending;
+        },
+      );
       return pending;
     },
     clear() {
-      listings.clear();
+      folders.clear();
     },
   };
 }

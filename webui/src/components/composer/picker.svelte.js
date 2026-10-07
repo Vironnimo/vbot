@@ -37,6 +37,11 @@ export function createComposerPicker(context) {
 
   let activeSkillIndex = $state(0);
 
+  // Whether arrow keys or the pointer moved the highlight since the list last
+  // reset. Until then an @-list that opens on ignored entries highlights the
+  // first entry the index holds, the likelier choice.
+  let activeIndexMoved = $state(false);
+
   // @-mention picker data: `null` = never fetched for this session. The index
   // (files plus the folders holding them) is fetched once per picker open
   // (fresh list, no cache-invalidation problem) and reused at submit to decide
@@ -105,7 +110,8 @@ export function createComposerPicker(context) {
     }),
   );
 
-  // The directory the @-query is in ('' = the listing's root), or null.
+  // The directory the @-query is in ('' = the listing's root), or null when
+  // there is no @-query or its path leaves the root (only the index answers).
   let mentionDirectory = $derived(
     triggerContext?.marker === '@'
       ? mentionQueryParts(autocompleteQuery).directory
@@ -119,23 +125,35 @@ export function createComposerPicker(context) {
   );
 
   let fileRows = $derived.by(() =>
-    mentionDirectory === null
-      ? []
-      : mentionCandidates({
+    triggerContext?.marker === '@'
+      ? mentionCandidates({
           index: mentionIndex,
-          directory: mentionDirectory,
+          directory: mentionDirectory ?? '',
           entries: mentionListing?.entries ?? [],
           query: autocompleteQuery,
           limit: MAX_FILE_MATCHES,
-        }),
+        })
+      : [],
   );
 
   let fileRowsLoading = $derived(
-    mentionDirectory !== null &&
+    triggerContext?.marker === '@' &&
       (fileListLoading ||
-        Boolean(mentionListing?.loading) ||
-        pendingEntriesDirectory === mentionDirectory),
+        (mentionDirectory !== null &&
+          (Boolean(mentionListing?.loading) ||
+            pendingEntriesDirectory === mentionDirectory))),
   );
+
+  let activeIndex = $derived.by(() => {
+    if (activeIndexMoved || triggerContext?.marker !== '@') {
+      return activeSkillIndex;
+    }
+    if (!fileRows[0]?.ignored) return activeSkillIndex;
+    return Math.max(
+      0,
+      fileRows.findIndex((row) => !row.ignored),
+    );
+  });
 
   let fileRowsTruncated = $derived(
     fileListTruncated || Boolean(mentionListing?.truncated),
@@ -258,7 +276,7 @@ export function createComposerPicker(context) {
 
     if (!context.inputElement) {
       triggerContext = null;
-      activeSkillIndex = 0;
+      resetActiveIndex();
       return;
     }
 
@@ -270,7 +288,7 @@ export function createComposerPicker(context) {
       ? null
       : detectModelArgumentTrigger(context.content, cursorPosition);
     triggerContext = skillTrigger ?? modelTrigger;
-    activeSkillIndex = 0;
+    resetActiveIndex();
 
     // Reset show-all when leaving the model trigger.
     if (
@@ -351,9 +369,9 @@ export function createComposerPicker(context) {
 
   // Lists a directory's direct entries once per picker open: at once when the
   // picker opens or a folder is chosen, otherwise after typing pauses (a
-  // directory typed past is never listed).
+  // directory typed past is never listed). A null directory lists nothing.
   function requestEntries(directory, { immediate = false } = {}) {
-    if (listingOf(directoryEntries, directory)) {
+    if (directory === null || listingOf(directoryEntries, directory)) {
       cancelPendingEntries();
       return;
     }
@@ -420,6 +438,17 @@ export function createComposerPicker(context) {
     };
   }
 
+  function resetActiveIndex() {
+    activeSkillIndex = 0;
+    activeIndexMoved = false;
+  }
+
+  // The user moved the highlight (arrow keys or pointer): it stays put.
+  function moveActiveIndex(index) {
+    activeSkillIndex = index;
+    activeIndexMoved = true;
+  }
+
   const refreshModelCatalog = async () => {
     if (typeof context.onLoadModelCatalog !== 'function') {
       modelCatalog = { models: [], connections: [] };
@@ -470,7 +499,8 @@ export function createComposerPicker(context) {
     return { marker: 'model', start: 6, end: boundedCursor };
   };
 
-  // The directory an @-trigger's text is in ('' = the listing's root).
+  // The directory an @-trigger's text is in ('' = the listing's root), or
+  // null when its path leaves the root.
   const triggerDirectory = (trigger) =>
     mentionQueryParts(
       typeof trigger.query === 'string'
@@ -570,7 +600,7 @@ export function createComposerPicker(context) {
     const nextCursorPosition = prefix.length + insertedToken.length;
     context.content = `${prefix}${insertedToken}${suffix}`;
     context.noteContentEdited();
-    activeSkillIndex = 0;
+    resetActiveIndex();
     if (isDirectory) {
       triggerContext = {
         marker: '@',
@@ -620,7 +650,7 @@ export function createComposerPicker(context) {
     context.content = `${prefix}${insertedToken}${suffix}`;
     context.noteContentEdited();
     triggerContext = null;
-    activeSkillIndex = 0;
+    resetActiveIndex();
     _triggerClosed = true;
 
     await tick();
@@ -644,7 +674,7 @@ export function createComposerPicker(context) {
 
   function resetForDraft() {
     triggerContext = null;
-    activeSkillIndex = 0;
+    resetActiveIndex();
     _triggerClosed = false;
     // A different session may sit on a different cwd — drop the file list.
     resetFileCandidates();
@@ -682,12 +712,16 @@ export function createComposerPicker(context) {
     set triggerContext(value) {
       triggerContext = value;
     },
+    // The highlighted row of the open list; assigning it resets the list's
+    // highlight, `moveActiveIndex` moves it for the user.
     get activeSkillIndex() {
-      return activeSkillIndex;
+      return activeIndex;
     },
     set activeSkillIndex(value) {
       activeSkillIndex = value;
+      activeIndexMoved = false;
     },
+    moveActiveIndex,
     get fileCandidates() {
       return fileCandidates;
     },

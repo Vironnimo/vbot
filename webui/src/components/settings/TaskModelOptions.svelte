@@ -7,6 +7,7 @@
   import Button from '../ui/Button.svelte';
   import FormField from '../ui/FormField.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
+  import PathField from '../ui/PathField.svelte';
   import TextArea from '../ui/TextArea.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
@@ -133,6 +134,17 @@
           ariaLabel={field.label}
           aria-describedby={formField.describedBy}
           onChange={(next) => editor.setOption(taskType, field, next)}
+        />
+      {:else if field.serverPath}
+        <!-- A path on the vBot server ('directory', 'file' or 'any'). -->
+        <PathField
+          id={formField.controlId}
+          mode={field.serverPath}
+          value={editor.optionValue(taskType, field)}
+          ariaLabel={field.label}
+          placeholder={field.placeholder}
+          aria-describedby={formField.describedBy}
+          onInput={(next) => editor.setOption(taskType, field, next)}
         />
       {:else}
         <TextField

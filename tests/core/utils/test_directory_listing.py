@@ -53,6 +53,9 @@ async def test_places_list_the_filesystem_roots_and_the_home_directory() -> None
     assert {(entry.kind, entry.link, entry.hidden) for entry in listing.entries} == {
         ("directory", False, False)
     }
+    # A name prefix filters the roots too; the home directory stays.
+    unmatched = await list_directory(None, prefix="no such root")
+    assert (unmatched.entries, unmatched.home) == ((), listing.home)
 
 
 @pytest.mark.asyncio
@@ -175,22 +178,26 @@ async def test_a_directory_that_cannot_be_listed_names_the_reason(
 
 
 @pytest.mark.asyncio
-async def test_a_large_directory_is_truncated_at_the_entry_limit(
+async def test_a_large_directory_is_truncated_at_the_entry_limit_after_the_name_prefix(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The real limit holds ordinary directories; the test lowers it.
     assert directory_listing.DIRECTORY_LISTING_LIMIT >= 1000
-    for name in ("a", "b", "c"):
+    for name in ("a", "b", "c", "Cache"):
         (tmp_path / name).mkdir()
     (tmp_path / "file.txt").write_text("x", encoding="utf-8")
 
-    monkeypatch.setattr(directory_listing, "DIRECTORY_LISTING_LIMIT", 3)
+    monkeypatch.setattr(directory_listing, "DIRECTORY_LISTING_LIMIT", 4)
     complete = await list_directory(tmp_path.as_posix())
     monkeypatch.setattr(directory_listing, "DIRECTORY_LISTING_LIMIT", 2)
     cut = await list_directory(tmp_path.as_posix())
+    # The prefix applies before the limit and ignores case, so a typed name reaches
+    # every entry it starts, also those a listing without it leaves out.
+    named = await list_directory(tmp_path.as_posix(), include_files=True, prefix="C")
 
-    assert (len(complete.entries), complete.truncated) == (3, False)
+    assert (len(complete.entries), complete.truncated) == (4, False)
     assert (len(cut.entries), cut.truncated) == (2, True)
+    assert ([entry.name for entry in named.entries], named.truncated) == (["c", "Cache"], False)
 
 
 def test_a_listing_that_outlasts_its_budget_times_out(

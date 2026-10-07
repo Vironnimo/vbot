@@ -146,6 +146,7 @@
               variant="modal"
               mode="directory"
               value={projectsState.rePointCwd}
+              startPath={projectsState.rePointProject.cwd}
               placeholder={t('projects.rePoint.cwdPlaceholder')}
               disabled={projectsState.rePointing}
               onInput={(next) => {

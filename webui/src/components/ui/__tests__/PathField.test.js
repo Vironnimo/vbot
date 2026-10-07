@@ -28,6 +28,11 @@ const listingFailure = (reason) =>
     code: 'domain_error',
     details: { code: 'domain_error', data: { reason } },
   });
+const refusal = () =>
+  Object.assign(new Error('leads outside the listing root'), {
+    code: 'invalid_request',
+    details: { code: 'invalid_request' },
+  });
 
 // A fake server: listings by path; a listed Error is thrown.
 function fakeServer(listings, separator = '\\') {
@@ -125,6 +130,7 @@ describe('PathField', () => {
     expect(listDirectory).toHaveBeenCalledWith({
       path: 'C:/',
       include_files: false,
+      prefix: 'us',
     });
     expect(suggestions()).toEqual(['Users/']);
     expect(input.getAttribute('aria-expanded')).toBe('true');
@@ -147,11 +153,34 @@ describe('PathField', () => {
     expect(props.value).toBe('C:\\Users\\me\\');
     expect(callerKeydown).toHaveBeenCalledTimes(1);
 
+    // The complete listing of the folder answers every typed prefix.
     type(input, 'C:\\Users\\P');
     await settle();
+    expect(suggestions()).toEqual(['Public/']);
+    expect(listDirectory).toHaveBeenCalledTimes(3);
     expect(press(input, 'Escape').defaultPrevented).toBe(true);
     expect(suggestions()).toEqual([]);
     expect(press(input, 'Escape').defaultPrevented).toBe(false);
+
+    // Tab stays in the field while it offers folders without a longer shared
+    // start; with nothing offered it moves on.
+    type(input, 'C:\\');
+    await settle();
+    expect(press(input, 'Tab').defaultPrevented).toBe(true);
+    expect(suggestions()).toEqual(['Users/', 'Windows/']);
+    press(input, 'Escape');
+    expect(press(input, 'Tab').defaultPrevented).toBe(false);
+
+    // Leaving the field drops a completed folder's separator, not a root's.
+    type(input, 'C:\\Users\\me\\');
+    input.blur();
+    flushSync();
+    expect(props.value).toBe('C:\\Users\\me');
+    input.focus();
+    type(input, 'C:\\');
+    input.blur();
+    flushSync();
+    expect(props.value).toBe('C:\\');
   });
 
   it('shows only the newest listing and says when a folder cannot be read', async () => {
@@ -219,8 +248,30 @@ describe('PathField', () => {
       'vBot C:\\work\\vBot',
     ]);
 
-    dialog.querySelectorAll('.path-browser__row')[3].click();
+    // The trail scrolls to its end, the open folder.
+    const trail = dialog.querySelector('.path-browser__trail');
+    let trailScroll = 0;
+    Object.defineProperties(trail, {
+      scrollWidth: { value: 480, configurable: true },
+      scrollLeft: {
+        get: () => trailScroll,
+        set: (next) => {
+          trailScroll = next;
+        },
+        configurable: true,
+      },
+    });
+
+    // Rows and crumbs a click replaces hand keyboard focus to the list.
+    const list = dialog.querySelector('[role="listbox"]');
+    const clickWithFocus = (element) => {
+      element.focus();
+      element.click();
+    };
+    clickWithFocus(dialog.querySelectorAll('.path-browser__row')[3]);
     await settle();
+    expect(document.activeElement).toBe(list);
+    expect(trailScroll).toBe(480);
     expect(listDirectory).toHaveBeenLastCalledWith({
       path: 'C:/work/vBot',
       include_files: false,
@@ -235,13 +286,32 @@ describe('PathField', () => {
     flushSync();
     expect(rows()).toEqual(['.git', 'webui']);
 
-    dialog
-      .querySelectorAll('.path-browser__row')[1]
-      .dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    // A filter highlights its first match, and Enter opens it.
+    const filter = dialog.querySelector('.path-browser__filter');
+    filter.focus();
+    type(filter, 'WE');
+    expect(
+      dialog.querySelector('.path-browser__row.active').textContent.trim(),
+    ).toBe('webui');
+    press(filter, 'Enter');
     await settle();
     expect(dialog.querySelector('.path-browser__state').textContent).toContain(
       'This folder has no subfolders.',
     );
+    expect(document.activeElement).toBe(filter);
+
+    clickWithFocus(
+      [...dialog.querySelectorAll('button.path-browser__crumb')].find(
+        (crumb) => crumb.textContent.trim() === 'vBot',
+      ),
+    );
+    await settle();
+    expect(document.activeElement).toBe(list);
+    const webui = dialog.querySelectorAll('.path-browser__row')[1];
+    webui.focus();
+    webui.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    await settle();
+    expect(document.activeElement).toBe(list);
     expect(dialog.querySelector('.path-browser__choice').textContent).toBe(
       'C:\\work\\vBot\\webui',
     );
@@ -251,14 +321,61 @@ describe('PathField', () => {
     expect(document.body.querySelector('.path-browser')).toBeNull();
   });
 
+  it('starts an empty field at the nearest folder of its start path that lists', async () => {
+    const listDirectory = fakeServer({
+      places: { path: '', entries: [dir('C:/')] },
+      'C:/repos': { entries: [dir('moved'), dir('other')] },
+      'C:/repos/moved': { entries: [] },
+      '//host/share/team': listingFailure('timeout'),
+    });
+    const input = render({ listDirectory, startPath: 'C:\\repos\\gone' });
+    input.focus();
+
+    // ArrowDown offers the folder; taking it lists inside it.
+    press(input, 'ArrowDown');
+    await settle();
+    expect(suggestions()).toEqual(['C:\\repos\\']);
+    expect(props.value).toBe('');
+    press(input, 'Tab');
+    expect(props.value).toBe('C:\\repos\\');
+    await settle();
+    expect(suggestions()).toEqual(['moved/', 'other/']);
+
+    // Browse opens there while the field is empty.
+    type(input, '');
+    input.blur();
+    const browse = async () => {
+      listDirectory.mockClear();
+      document.body.querySelector('.path-field__browse').click();
+      await settle();
+      const dialog = document.body.querySelector('.modal.path-browser');
+      const opened = [...dialog.querySelectorAll('.path-browser__crumb')].map(
+        (crumb) => crumb.textContent.trim(),
+      );
+      dialog.querySelector('.modal-footer .btn-secondary').click();
+      flushSync();
+      return [opened, listDirectory.mock.calls.map(([params]) => params.path)];
+    };
+    expect(await browse()).toEqual([
+      ['Places', 'C:', 'repos'],
+      ['C:/repos/gone', 'C:/repos'],
+    ]);
+
+    // A folder that does not answer ends the search: its parents would not.
+    props.startPath = '\\\\host\\share\\team';
+    flushSync();
+    expect(await browse()).toEqual([['Places'], ['//host/share/team', null]]);
+  });
+
   it('keeps a root, opens at the value and returns files relative to it', async () => {
     const listDirectory = fakeServer(
       {
         'docs/a.md': listingFailure('not_a_directory'),
         docs: {
-          entries: [dir('locked'), file('a.md'), file('b.md')],
+          entries: [dir('locked'), dir('out'), file('a.md'), file('b.md')],
         },
         'docs/locked': listingFailure('unreadable'),
+        'docs/out': refusal(),
       },
       '/',
     );
@@ -286,18 +403,30 @@ describe('PathField', () => {
       dialog.querySelector('.path-browser__row.active').textContent.trim(),
     ).toBe('a.md');
 
+    // A link out of the root fails for good; an unreadable folder may not.
     const list = dialog.querySelector('[role="listbox"]');
+    const alert = () => dialog.querySelector('[role="alert"]');
     press(list, 'ArrowUp');
     press(list, 'Enter');
     await settle();
-    expect(dialog.querySelector('[role="alert"]').textContent).toContain(
+    expect(alert().textContent).toContain(
+      'This folder lies outside C:/work/vBot, so it cannot be opened here.',
+    );
+    expect(alert().querySelector('button')).toBeNull();
+    press(list, 'Backspace');
+    await settle();
+    press(list, 'ArrowUp');
+    press(list, 'Enter');
+    await settle();
+    expect(alert().textContent).toContain(
       'vBot is not allowed to read this folder.',
     );
+    expect(alert().querySelector('button').textContent.trim()).toBe('Retry');
     press(list, 'Backspace');
     await settle();
     expect(crumbs()).toEqual(['vBot', 'docs']);
 
-    dialog.querySelectorAll('.path-browser__row')[2].click();
+    dialog.querySelectorAll('.path-browser__row')[3].click();
     flushSync();
     dialog.querySelector('.modal-footer .btn-primary').click();
     flushSync();

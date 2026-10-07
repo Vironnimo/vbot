@@ -12,8 +12,10 @@ import {
   listingPathFor,
   matchingEntries,
   parentPath,
+  sameServerPath,
   splitTypedPath,
   toNativePath,
+  trimTrailingSeparator,
 } from '../pathPicker.js';
 
 const dir = (name, extra = {}) => ({ name, kind: 'directory', ...extra });
@@ -79,6 +81,32 @@ describe('typed text', () => {
     ['', dir('C:/'), 'C:/'],
   ])('completes %j with %j to %j', (text, entry, expected) => {
     expect(completeTypedPath(text, entry)).toBe(expected);
+  });
+
+  it.each([
+    ['C:/work/', 'C:/work'],
+    ['C:\\Users\\me\\\\', 'C:\\Users\\me'],
+    ['/home//', '/home'],
+    ['~/', '~'],
+    ['\\\\host\\share\\', '\\\\host\\share'],
+    ['docs/', 'docs'],
+    ['C:\\', 'C:\\'],
+    ['C:/', 'C:/'],
+    ['/', '/'],
+    ['~', '~'],
+  ])('leaves %j as %j', (text, expected) => {
+    expect(trimTrailingSeparator(text)).toBe(expected);
+  });
+
+  it.each([
+    ['C:/work/', 'C:/work', true],
+    ['c:\\work', 'C:/work/', true],
+    ['\\\\host\\share\\team', '//host/share/team', true],
+    ['/srv/data/', '/srv/data', true],
+    ['C:/work', 'C:/Work', false],
+    ['/srv/a\\b', '/srv/a/b', false],
+  ])('compares %j with %j as the same folder: %j', (left, right, same) => {
+    expect(sameServerPath(left, right)).toBe(same);
   });
 
   it('extends the prefix to what every match shares', () => {
@@ -201,6 +229,7 @@ describe('opening the dialog', () => {
       [
         { path: 'C:/repo/app', highlight: '' },
         { path: 'C:/repo', highlight: 'app' },
+        { path: 'C:/', highlight: 'repo' },
       ],
     ],
     ['C:\\', {}, [{ path: 'C:/', highlight: '' }]],
@@ -212,6 +241,7 @@ describe('opening the dialog', () => {
       [
         { path: 'docs/a.md', highlight: '' },
         { path: 'docs', highlight: 'a.md' },
+        { path: '', highlight: 'docs' },
       ],
     ],
     ['C:/elsewhere/a.md', { root: 'C:/repo' }, []],
@@ -246,6 +276,9 @@ describe('createListingCache', () => {
 
     await expect(cache.list(params)).rejects.toThrow('slow share');
     await expect(cache.list({ ...params })).rejects.toThrow('slow share');
+    await expect(cache.list({ ...params, prefix: 'x' })).rejects.toThrow(
+      'slow share',
+    );
     expect(listDirectory).toHaveBeenCalledTimes(1);
 
     await expect(cache.list(params, { refresh: true })).resolves.toEqual({
@@ -253,5 +286,23 @@ describe('createListingCache', () => {
     });
     await cache.list({ ...params, include_files: true });
     expect(listDirectory).toHaveBeenCalledTimes(3);
+  });
+
+  it('answers a longer name prefix from a complete listing, not a cut one', async () => {
+    const listDirectory = vi.fn(async ({ prefix }) => ({
+      entries: [],
+      truncated: prefix === 'p',
+    }));
+    const cache = createListingCache(listDirectory);
+    const folder = { path: 'C:/', include_files: false };
+
+    for (const prefix of ['p', 'pr', 'PRO', 'pro', 'q']) {
+      await cache.list({ ...folder, prefix });
+    }
+    expect(listDirectory.mock.calls.map(([params]) => params.prefix)).toEqual([
+      'p',
+      'pr',
+      'q',
+    ]);
   });
 });

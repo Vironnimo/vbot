@@ -11,6 +11,10 @@ const TASK_LIVE_VOICE = 'live_voice';
 
 export const JSON_OPTION_TYPE = 'json';
 
+// What a text field's `server_path` hint says it holds: a path on the vBot
+// server, which the Settings UI completes and browses there.
+const SERVER_PATH_KINDS = new Set(['directory', 'file', 'any']);
+
 // Result of parsing a JSON field's text input. The Settings UI keeps the
 // last valid value in the binding and shows the error message inline;
 // when ``error`` is non-empty, ``value`` is ``undefined`` and the binding
@@ -177,6 +181,9 @@ export function normalizeOptionSchema(result) {
       step: Number.isFinite(field?.step) ? field.step : null,
       options: normalizeFieldOptions(field?.options),
       optionsBy: normalizeOptionsBy(field?.options_by),
+      serverPath: SERVER_PATH_KINDS.has(field?.server_path)
+        ? field.server_path
+        : '',
     }))
     .filter((field) => field.name.length > 0);
 }

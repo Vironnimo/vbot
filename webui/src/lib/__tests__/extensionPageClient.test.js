@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createAutosaveParticipant } from '../autosave.js';
 import { createExtensionPageClient } from '../extensionPageClient.js';
+import { listingErrorReason } from '../pathPicker.js';
 
 const descriptor = { owner: 'alpha', page: 'main' };
 let client = null;
@@ -201,6 +202,41 @@ describe('extension page client', () => {
       method,
       params: { route: '/swarms/swr-a' },
     });
+  });
+
+  it('lists server folders through the host and rejects a failed listing with its reason', async () => {
+    const target = parent();
+    client = createExtensionPageClient({ target });
+    initialize(target);
+    const lastCall = () => target.postMessage.mock.calls.at(-1)[0];
+    const reply = (fields) =>
+      dispatchFrom(target, { ...lastCall(), ...fields });
+
+    const places = client.listDirectory();
+    expect(lastCall()).toMatchObject({
+      type: 'vbot.extension.call',
+      method: 'directory.list',
+      params: { path: null },
+    });
+    const listing = { path: '', entries: [], truncated: false, home: '/home' };
+    reply({ type: 'vbot.extension.result', result: listing });
+    await expect(places).resolves.toEqual(listing);
+
+    const failures = [];
+    for (const [fields, params] of [
+      [
+        { code: 'domain_error', reason: 'unreadable' },
+        { path: 'C:/locked', include_files: true, prefix: 'Re' },
+      ],
+      [{ code: 'invalid_request' }, { path: '../out', root: 'C:/work' }],
+    ]) {
+      const failed = client.listDirectory(params);
+      expect(lastCall().params).toEqual(params);
+      reply({ type: 'vbot.extension.error', error: 'Not listed', ...fields });
+      failures.push(await failed.catch((error) => error));
+    }
+    // The shared path field reads the failure as it reads the app's.
+    expect(failures.map(listingErrorReason)).toEqual(['unreadable', 'invalid']);
   });
 
   it('reports whether layers are open and closes the topmost one when the host asks', () => {

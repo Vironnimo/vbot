@@ -13,6 +13,7 @@ import {
   callsTo,
   settle,
   fill,
+  pickFolder,
   choose,
   render,
   fixtureState,
@@ -197,8 +198,12 @@ describe('Swarm profile settings', () => {
     fill('swarm-profile-name', 'New profile');
     await choose('swarm-model-0', 'demo/model');
     await choose('swarm-effort-0', 'high');
-    fill('swarm-directory', 'C:/work');
-    await tick();
+    await pickFolder('swarm-directory', 'C:/w', 'work');
+    expect(bridge.listDirectory).toHaveBeenCalledWith({
+      path: 'C:/',
+      include_files: false,
+      prefix: 'w',
+    });
     button(SAVE_SWARM).click();
     await settle(20);
     expect(document.body.textContent).not.toContain(
@@ -214,6 +219,7 @@ describe('Swarm profile settings', () => {
           participants: [
             { model: 'demo/model', count: 2, thinking_effort: 'high' },
           ],
+          working_directory: { kind: 'directory', path: 'C:/work/' },
         }),
       }),
     );
@@ -226,7 +232,9 @@ describe('Swarm profile settings', () => {
     await openNewProfile(bridge);
     document.getElementById('swarm-model-0').click();
     await tick();
-    const search = document.querySelector('[role="combobox"]');
+    const search = document.querySelector(
+      '.searchable-dropdown__search [role="combobox"]',
+    );
     search.value = 'plain';
     search.dispatchEvent(new Event('input', { bubbles: true }));
     await tick();

@@ -103,7 +103,8 @@ with remote code disabled and `local_files_only`. The executor passes the target
 installed Model directory as the `model_path` option unless the binding sets its own
 ("Model directory": a server directory with a Transformers model of that engine's
 architecture, loaded instead of the installed Model; a missing directory fails with a
-configuration message). There is no offline option in the schema; a ready target
+configuration message; the field is a `server_path` directory, so Settings browses the
+server's folders for it). There is no offline option in the schema; a ready target
 always runs offline. Coverage: `test_speech_local.py` checks the injected `model_path`
 and all three STT adapter contracts, `test_speech_tts.py` the TTS worker's offline load.
 

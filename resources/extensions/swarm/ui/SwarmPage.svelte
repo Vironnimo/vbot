@@ -25,7 +25,7 @@
   import ChatAssistantRun from '../../../../webui/src/components/chat/ChatAssistantRun.svelte';
   import ChatTimelineEntry from '../../../../webui/src/components/chat/ChatTimelineEntry.svelte';
   import Dropdown from '../../../../webui/src/components/Dropdown.svelte';
-  import TextField from '../../../../webui/src/components/ui/TextField.svelte';
+  import PathField from '../../../../webui/src/components/ui/PathField.svelte';
   import TextArea from '../../../../webui/src/components/ui/TextArea.svelte';
   import Modal from '../../../../webui/src/components/ui/Modal.svelte';
   import { provideNavigation } from '../../../../webui/src/lib/navigation.svelte.js';
@@ -708,9 +708,10 @@
               controlId="swarm-start-directory"
               label={t('swarm.profile.directoryHeading')}
             >
-              <TextField
+              <PathField
                 id="swarm-start-directory"
-                code
+                mode="directory"
+                listDirectory={model.client.listDirectory}
                 value={model.runDirectory}
                 disabled={!model.selectedProfile ||
                   model.directoryLoading ||

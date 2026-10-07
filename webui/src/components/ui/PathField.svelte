@@ -10,6 +10,9 @@
   // absolute `root`, completion and browsing stay inside it and chosen values
   // are relative to it; typing an absolute path stays possible.
   // `projectShortcuts` adds the configured Projects to the dialog's places.
+  // `startPath` is where an empty field starts: Browse… opens at its nearest
+  // folder that lists, and ArrowDown offers that folder to complete from,
+  // while the value stays empty (Re-point starts near a missing folder).
   // Other props reach the TextField input (`id`, `aria-*`, `onkeydown`): the
   // field handles its own keys first and passes the rest on, so Enter still
   // submits or adds unless it picks a highlighted suggestion.
@@ -19,6 +22,7 @@
   import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
   import {
+    browseStartPaths,
     completeTypedPath,
     createListingCache,
     extendPrefix,
@@ -27,7 +31,10 @@
     listingPathFor,
     matchingEntries,
     normalizeServerPath,
+    parentMayList,
     splitTypedPath,
+    toNativePath,
+    trimTrailingSeparator,
   } from '$lib/pathPicker.js';
   import Button from './Button.svelte';
   import PathBrowserDialog from './PathBrowserDialog.svelte';
@@ -43,6 +50,7 @@
     onInput = noop,
     mode = 'directory',
     root = '',
+    startPath = '',
     listDirectory = null,
     projectShortcuts = false,
     id = '',
@@ -93,13 +101,17 @@
     return Boolean(input) && input.ownerDocument.activeElement === input;
   }
 
+  // The server lists only the names the typed prefix can complete to, so a
+  // huge folder still offers them; the cache answers longer prefixes.
   function listingParams(text) {
-    const path = listingPathFor(splitTypedPath(text).parent, { root });
+    const { parent, prefix } = splitTypedPath(text);
+    const path = listingPathFor(parent, { root });
     if (path === null) return null;
     return {
       path,
       ...(root ? { root } : {}),
       include_files: mode !== 'directory',
+      ...(prefix ? { prefix } : {}),
     };
   }
 
@@ -158,6 +170,52 @@
     panelOpen = matches.length > 0 || Boolean(failure);
     await tick();
     positionPanel();
+  }
+
+  // An empty field offers the nearest folder of `startPath` that lists, as
+  // the one suggestion to complete from.
+  async function offerStartFolder() {
+    clearTimeout(listingTimer);
+    listingTimer = null;
+    listingToken += 1;
+    const token = listingToken;
+    for (const { path } of browseStartPaths(startPath, { root })) {
+      let listing = null;
+      let reason = '';
+      try {
+        listing = await listings.list({
+          path,
+          ...(root ? { root } : {}),
+          include_files: mode !== 'directory',
+        });
+      } catch (error) {
+        reason = listingErrorReason(error);
+      }
+      if (token !== listingToken || !isFocused()) return;
+      if (reason) {
+        if (parentMayList(reason)) continue;
+        return;
+      }
+      // Inside a root, the root itself is what the empty field names.
+      if (root && path === '') return;
+      const separator = root || listing?.separator !== '\\' ? '/' : '\\';
+      const shown = toNativePath(path, separator);
+      matches = [
+        {
+          name: /[\\/]$/.test(shown) ? shown : `${shown}${separator}`,
+          kind: 'directory',
+          link: false,
+          hidden: false,
+        },
+      ];
+      moreAvailable = false;
+      failure = '';
+      activeIndex = -1;
+      panelOpen = true;
+      await tick();
+      positionPanel();
+      return;
+    }
   }
 
   function positionPanel() {
@@ -244,12 +302,19 @@
           scheduleListing(value, { immediate: true });
           return true;
         }
+        if (event.key === 'ArrowDown' && !value && startPath) {
+          void offerStartFolder();
+          return true;
+        }
         return false;
       case 'Enter':
         if (!showsOptions || activeIndex < 0) return false;
         accept(matches[activeIndex]);
         return true;
       case 'Tab': {
+        // Like a shell, Tab completes while there is something to complete:
+        // offered entries keep it in the field, even when they share no
+        // longer start (Escape closes them, then Tab moves on).
         if (!showsOptions || event.shiftKey) return false;
         if (activeIndex >= 0 || matches.length === 1) {
           accept(matches[Math.max(activeIndex, 0)]);
@@ -257,9 +322,10 @@
         }
         const { parent, prefix } = splitTypedPath(value);
         const extended = extendPrefix(matches, prefix);
-        if (extended === prefix) return false;
-        setText(`${parent}${extended}`);
-        scheduleListing(`${parent}${extended}`, { immediate: true });
+        if (extended !== prefix) {
+          setText(`${parent}${extended}`);
+          scheduleListing(`${parent}${extended}`, { immediate: true });
+        }
         return true;
       }
       case 'Escape':
@@ -293,6 +359,13 @@
 
   function handleBlur(event) {
     stopSuggesting();
+    // A folder accepted while typing ends with a separator; the value does
+    // not, once focus moves on. A window losing focus keeps the field focused
+    // and the text as typed.
+    if (!isFocused()) {
+      const trimmed = trimTrailingSeparator(value);
+      if (trimmed !== value) onInput(trimmed);
+    }
     callerBlur?.(event);
   }
 
@@ -310,7 +383,7 @@
 
   function chooseFromBrowser(path) {
     browsing = false;
-    onInput(path);
+    onInput(trimTrailingSeparator(path));
   }
 
   async function loadProjectShortcuts() {
@@ -425,7 +498,7 @@
           >
             <span class="path-field__name"
               >{entry.name}{entry.kind === 'directory' &&
-              !entry.name.endsWith('/')
+              !/[\\/]$/.test(entry.name)
                 ? '/'
                 : ''}</span
             >
@@ -446,6 +519,7 @@
     {mode}
     {root}
     {value}
+    {startPath}
     listDirectory={(params) => (listDirectory ?? listServerDirectory)(params)}
     loadShortcuts={projectShortcuts ? loadProjectShortcuts : null}
     onSelect={chooseFromBrowser}

@@ -15,6 +15,7 @@
     openExtensionPageRun,
     cancelExtensionPageToolCall,
     readExtensionPageHistory,
+    listServerDirectory,
     subscribeRunEvents,
   } from '$lib/api.js';
 
@@ -33,6 +34,7 @@
     'run.subscribe',
     'run.unsubscribe',
     'run.cancel_tool',
+    'directory.list',
   ]);
 
   let {
@@ -305,6 +307,28 @@
     );
   }
 
+  function validListing(params) {
+    return (
+      (params.path == null || typeof params.path === 'string') &&
+      (params.root === undefined || typeof params.root === 'string') &&
+      (params.include_files === undefined ||
+        typeof params.include_files === 'boolean') &&
+      (params.prefix == null || typeof params.prefix === 'string')
+    );
+  }
+
+  // A failed listing keeps the API error's code and the server's reason
+  // (not_found, not_a_directory, unreadable, timeout), so the page's path
+  // field shows the same failure as the app's.
+  function listingFailure(error) {
+    const failure = {};
+    if (typeof error?.code === 'string' && error.code)
+      failure.code = error.code;
+    const reason = error?.details?.data?.reason;
+    if (typeof reason === 'string' && reason) failure.reason = reason;
+    return failure;
+  }
+
   function validRunSubscription(params) {
     return (
       typeof params.group_id === 'string' &&
@@ -508,6 +532,17 @@
           data.params.tool_call_id,
         );
       } else if (
+        data.method === 'directory.list' &&
+        validListing(data.params)
+      ) {
+        // Path fields of the page browse the server's folders, as in the app.
+        result = await listServerDirectory({
+          path: data.params.path ?? null,
+          root: data.params.root,
+          include_files: data.params.include_files === true,
+          prefix: data.params.prefix ?? null,
+        });
+      } else if (
         data.method === 'run.unsubscribe' &&
         typeof data.params.id === 'string'
       ) {
@@ -548,6 +583,7 @@
         descriptor: context.descriptor,
         id: data.id,
         error: error.message,
+        ...(data.method === 'directory.list' ? listingFailure(error) : {}),
       });
     }
   }

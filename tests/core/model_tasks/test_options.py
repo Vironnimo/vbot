@@ -30,8 +30,8 @@ from core.models import Capabilities, Model, ReasoningCapabilities
 
 def test_field_types_are_the_renderable_set_and_render_hints_pass_through() -> None:
     """The Settings UI renders exactly these field types; a ``json`` field hands
-    its raw array/object default to the frontend unchanged, and a placeholder
-    reaches the frontend only when set."""
+    its raw array/object default to the frontend unchanged, and a placeholder or
+    server path kind reaches the frontend only when set."""
 
     assert {"text", "textarea", "select", "number", "boolean", "json"} == ALLOWED_OPTION_TYPES
     default = [{"text": "hi", "bbox": [[0, 0], [1, 0], [1, 1], [0, 1]]}]
@@ -42,22 +42,31 @@ def test_field_types_are_the_renderable_set_and_render_hints_pass_through() -> N
     assert field.to_dict()["type"] == "json"
     assert field.to_dict()["default"] == default
     assert "placeholder" not in field.to_dict()
+    assert "server_path" not in field.to_dict()
     hinted = TaskModelOptionField(
         name="threads", type="number", label="Threads", placeholder="Automatic (5)"
     )
     assert hinted.to_dict()["placeholder"] == "Automatic (5)"
+    path = TaskModelOptionField(
+        name="model_path", type="text", label="Model directory", server_path="directory"
+    )
+    assert path.to_dict()["server_path"] == "directory"
 
 
 @pytest.mark.parametrize(
-    ("name", "field_type", "message"),
+    ("name", "field_type", "server_path", "message"),
     [
-        pytest.param("x", "json-list", "json-list", id="unknown-type"),
-        pytest.param("", "json", "name", id="empty-name"),
+        pytest.param("x", "json-list", "", "json-list", id="unknown-type"),
+        pytest.param("", "json", "", "name", id="empty-name"),
+        pytest.param("x", "textarea", "directory", "server path", id="path-not-text"),
+        pytest.param("x", "text", "folder", "server path", id="unknown-path-kind"),
     ],
 )
-def test_invalid_field_declaration_is_rejected(name: str, field_type: str, message: str) -> None:
+def test_invalid_field_declaration_is_rejected(
+    name: str, field_type: str, server_path: str, message: str
+) -> None:
     with pytest.raises(TaskModelOptionValidationError, match=message):
-        TaskModelOptionField(name=name, type=field_type, label="X")
+        TaskModelOptionField(name=name, type=field_type, label="X", server_path=server_path)
 
 
 def test_numeric_options_reject_overflow_as_validation_error() -> None:

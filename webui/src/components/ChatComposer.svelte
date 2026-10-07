@@ -685,9 +685,8 @@
       if (event.key === 'ArrowDown') {
         event.preventDefault();
         picker._suppressSelectionUpdate = true;
-        picker.activeSkillIndex = Math.min(
-          picker.activeSkillIndex + 1,
-          picker.activeMatchCount() - 1,
+        picker.moveActiveIndex(
+          Math.min(picker.activeSkillIndex + 1, picker.activeMatchCount() - 1),
         );
         return;
       }
@@ -695,7 +694,7 @@
       if (event.key === 'ArrowUp') {
         event.preventDefault();
         picker._suppressSelectionUpdate = true;
-        picker.activeSkillIndex = Math.max(picker.activeSkillIndex - 1, 0);
+        picker.moveActiveIndex(Math.max(picker.activeSkillIndex - 1, 0));
         return;
       }
 
@@ -891,9 +890,7 @@
       marker={picker.triggerContext.marker}
       activeIndex={picker.activeSkillIndex}
       onSelect={picker.selectSkill}
-      onHover={(index) => {
-        picker.activeSkillIndex = index;
-      }}
+      onHover={picker.moveActiveIndex}
     />
   {/if}
   {#if picker.showFileAutocomplete}
@@ -904,9 +901,7 @@
       loading={picker.fileRowsLoading}
       activeIndex={picker.activeSkillIndex}
       onSelect={picker.selectFile}
-      onHover={(index) => {
-        picker.activeSkillIndex = index;
-      }}
+      onHover={picker.moveActiveIndex}
     />
   {/if}
   {#if picker.showModelAutocomplete}
@@ -919,9 +914,7 @@
       onFooterAction={() => (picker.showAllModels = !picker.showAllModels)}
       activeIndex={picker.activeSkillIndex}
       onSelect={selectModel}
-      onHover={(index) => {
-        picker.activeSkillIndex = index;
-      }}
+      onHover={picker.moveActiveIndex}
     />
   {/if}
   {#if media.voiceBusy}

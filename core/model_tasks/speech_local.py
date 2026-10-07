@@ -157,6 +157,7 @@ def builtin_speech_engines() -> tuple[SpeechEngineDefinition, ...]:
             description="Optional directory on the vBot server with a Transformers model of "
             "this engine's architecture, loaded instead of the installed model. "
             "Leave empty to use the installed model.",
+            server_path="directory",
         ),
         TaskModelOptionField(
             PRELOAD_OPTION,
