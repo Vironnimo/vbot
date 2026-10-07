@@ -46,6 +46,8 @@
     onToast = () => {},
     serverUnavailable = false,
     calendarRefreshToken = 0,
+    // Bumped when the Agents change; event actions name their Agents.
+    agentsRefreshToken = 0,
     onOpenCronJob = null,
     onOpenSession = null,
   } = $props();
@@ -967,6 +969,7 @@
             executions={viewState.executions}
             timeZone={viewState.systemTimeZone}
             {serverUnavailable}
+            {agentsRefreshToken}
             onChanged={() => controller.load({ silent: true })}
             {onOpenSession}
           />

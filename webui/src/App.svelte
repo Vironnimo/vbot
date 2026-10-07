@@ -1013,6 +1013,7 @@
           onToast={desktop.showToast}
           {serverUnavailable}
           {calendarRefreshToken}
+          agentsRefreshToken={selection.agentsRefreshToken}
           onOpenCronJob={openCronJobFromCalendar}
           onOpenSession={navigateToSession}
         />
@@ -1041,6 +1042,7 @@
         <SystemPromptView
           navigation={navigator.view('system-prompt')}
           onToast={desktop.showToast}
+          agentsRefreshToken={selection.agentsRefreshToken}
         />
       {:else if activeViewId === 'settings'}
         <SettingsView

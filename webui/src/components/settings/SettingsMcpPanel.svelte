@@ -29,9 +29,13 @@
   import { tooltip } from '$lib/tooltip.js';
 
   const componentId = $props.id();
-  // The App's Extension invalidations; the connections refresh on their
-  // changes instead of on a timer.
-  let { subscribeInvalidations = null } = $props();
+  let {
+    // The App's Extension invalidations; the connections refresh on their
+    // changes instead of on a timer.
+    subscribeInvalidations = null,
+    // Bumped when the Agents change; the catalog dialog lists Agents.
+    agentsRefreshToken = 0,
+  } = $props();
   let state = $state({
     connections: [],
     loading: true,
@@ -1109,6 +1113,7 @@
 {#if catalog}
   <McpCatalogDialog
     {subscribeInvalidations}
+    {agentsRefreshToken}
     signInConnection={catalog.signIn}
     onClose={() => {
       catalog = null;

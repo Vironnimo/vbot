@@ -442,13 +442,28 @@ def _apply_agent_order(
     return ordered
 
 
+AGENT_NAME_MAX_LENGTH = 80
+
+
 def _normalize_agent_name(agent_id: str, value: Any) -> str:
-    """Use the immutable id as the display name when no name is configured."""
+    """Return a written display name: trimmed, one line, the id when none is configured.
+
+    The name reaches the Agent's System Prompt and other Models' prompts, so a
+    write refuses line breaks and other control characters instead of letting a
+    name add its own lines there. Readers keep accepting stored names.
+    """
     if value is None:
         return agent_id
     if not isinstance(value, str):
         raise AgentError("name must be a string or null")
-    return value if value.strip() else agent_id
+    name = value.strip()
+    if not name:
+        return agent_id
+    if any(not character.isprintable() for character in name):
+        raise AgentError("name must be one line without control characters")
+    if len(name) > AGENT_NAME_MAX_LENGTH:
+        raise AgentError(f"name must be at most {AGENT_NAME_MAX_LENGTH} characters")
+    return name
 
 
 def _validate_temperature(value: Any) -> float | None:

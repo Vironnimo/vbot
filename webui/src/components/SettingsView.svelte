@@ -919,12 +919,14 @@
     <SettingsChannelsPanel
       {onToast}
       {channelsRefreshToken}
+      {agentsRefreshToken}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if panelId === 'extensions'}
     <SettingsExtensionsPanel
       {onToast}
       {subscribeExtensionInvalidations}
+      {agentsRefreshToken}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if modelTasksBySection[panelId]}

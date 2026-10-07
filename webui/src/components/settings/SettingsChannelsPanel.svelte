@@ -47,7 +47,12 @@
 
   const noop = () => {};
 
-  let { onToast = noop, onError = noop, channelsRefreshToken = 0 } = $props();
+  let {
+    onToast = noop,
+    onError = noop,
+    channelsRefreshToken = 0,
+    agentsRefreshToken = 0,
+  } = $props();
   const uid = $props.id();
 
   let channelPanelState = $state(createChannelPanelState());
@@ -65,6 +70,11 @@
   // only runs once the confirm dialog resolves.
   let deleteConfirmChannel = $state(null);
   let lastChannelsRefreshToken = $state(null);
+  let lastAgentsRefreshToken = null;
+  // Agent list reads are numbered; a response older than the shown Agents is
+  // dropped, also when a newer read failed.
+  let channelAgentsRequested = 0;
+  let channelAgentsShown = 0;
   let pendingExternalReload = $state(false);
 
   let channelBaseline = $state('');
@@ -136,6 +146,21 @@
     }
     lastChannelsRefreshToken = token;
     pendingExternalReload = true;
+  });
+
+  // Agent names and the Agent picker follow the roster at once: rereading the
+  // Agents changes no form value or selection.
+  $effect(() => {
+    const token = agentsRefreshToken;
+    if (lastAgentsRefreshToken === null) {
+      lastAgentsRefreshToken = token;
+      return;
+    }
+    if (token === lastAgentsRefreshToken) {
+      return;
+    }
+    lastAgentsRefreshToken = token;
+    void reloadChannelAgents();
   });
 
   // An open row's edit form does not hold outside changes back; only a new
@@ -316,12 +341,13 @@
       error: null,
     };
 
+    const agentsRequest = ++channelAgentsRequested;
     try {
       const [agentsResult, channelsResult] = await Promise.all([
         listAgents(),
         listChannels(),
       ]);
-      channelAgents = getAgentItems(agentsResult);
+      showChannelAgents(agentsRequest, agentsResult);
 
       const nextState = applyChannelPanelList(
         channelPanelState,
@@ -371,6 +397,21 @@
         error: `${t('settings.loadError')} ${error.message}`,
       };
     }
+  }
+
+  async function reloadChannelAgents() {
+    const request = ++channelAgentsRequested;
+    try {
+      showChannelAgents(request, await listAgents());
+    } catch {
+      // The shown names stay until the next roster change or panel load.
+    }
+  }
+
+  function showChannelAgents(request, result) {
+    if (request < channelAgentsShown) return;
+    channelAgentsShown = request;
+    channelAgents = getAgentItems(result);
   }
 
   async function persistChannelForm() {

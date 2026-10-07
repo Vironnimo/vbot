@@ -5,6 +5,7 @@
     agentIdValidationError,
     createAgentFormValues,
     normalizeAgentForm,
+    rebaseAgentFormValues,
   } from '$lib/agentForm.js';
   import { t } from '$lib/i18n.js';
   import Banner from '../ui/Banner.svelte';
@@ -129,6 +130,17 @@
     if (loadError) {
       errorMessage = loadError;
     }
+  });
+
+  // The saved Agent changed - by a save here, in another window, or by the
+  // Agent itself: fields the user has not edited show the new saved values,
+  // edited fields keep the user's input.
+  $effect(() => {
+    const savedAgent = agent;
+    if (formMode !== AGENT_FORM_MODE_EDIT || savedAgent?.id !== editorAgentId) {
+      return;
+    }
+    untrack(() => adoptSavedAgent(savedAgent));
   });
 
   $effect(() => {
@@ -393,6 +405,20 @@
     if (formValuesMatch(formValues, draftValues)) {
       formValues = createAgentFormValues(nextAgent);
     }
+  }
+
+  function adoptSavedAgent(savedAgent) {
+    const savedValues = createAgentFormValues(savedAgent);
+    if (formValuesMatch(savedValues, editBaselineValues)) {
+      return;
+    }
+    // A second copy, so the draft never shares nested values with the baseline.
+    formValues = rebaseAgentFormValues(
+      formValues,
+      editBaselineValues,
+      createAgentFormValues(savedAgent),
+    );
+    editBaselineValues = savedValues;
   }
 
   function formValuesMatch(left, right) {

@@ -48,6 +48,8 @@
     onError = noop,
     // The App's Extension invalidations, which keep the MCP connections live.
     subscribeExtensionInvalidations = null,
+    // Bumped when the Agents change; the MCP catalog lists Agents.
+    agentsRefreshToken = 0,
   } = $props();
   const uid = $props.id();
 
@@ -807,6 +809,7 @@
   {#if mcpLoaded}
     <SettingsMcpPanel
       subscribeInvalidations={subscribeExtensionInvalidations}
+      {agentsRefreshToken}
     />
   {/if}
 {/if}

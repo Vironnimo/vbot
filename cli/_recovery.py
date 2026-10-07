@@ -100,6 +100,13 @@ _AGENT_NOT_FOUND_EXPLANATION = (
 )
 
 
+_OWN_RUN_BUSY_EXPLANATION = (
+    "This command runs in a Run of Agent '{agent_id}', and that Run keeps the Agent busy "
+    "until it ends, so the Agent cannot run this command on itself. Ask the user to run it "
+    "outside this Agent's Runs, for example in a terminal."
+)
+
+
 def recovery_guidance(args: argparse.Namespace, result: CommandResult | None) -> RecoveryGuidance:
     """Choose valid read/help commands from known context, without inferring rollback."""
     failure = result.failure if result else None
@@ -132,7 +139,11 @@ def recovery_guidance(args: argparse.Namespace, result: CommandResult | None) ->
     elif code == "skill_not_found":
         inspection = ["skill", "inventory"]
     elif code == "agent_busy" and getattr(args, "id", None) and area == "agent":
-        inspection = ["session", "list", args.id]
+        if args.id == os.environ.get("VBOT_RUN_AGENT_ID", "").strip():
+            # The Agent's own Run keeps it busy; waiting inside that Run never ends it.
+            explanation = _OWN_RUN_BUSY_EXPLANATION.format(agent_id=args.id)
+        else:
+            inspection = ["session", "list", args.id]
     elif code == "oauth_not_supported":
         inspection = ["provider", "list"]
     elif code in _ARCHIVE_CODES:

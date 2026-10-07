@@ -33,6 +33,8 @@
     // empty place shows the Prompt tab with the default scope.
     navigation = createStandaloneNavigation(),
     onToast = noop,
+    // Bumped when the Agents change, such as a new name.
+    agentsRefreshToken = 0,
   } = $props();
 
   let activeTab = $derived(
@@ -102,6 +104,18 @@
       scope.destroy();
       editor.destroy();
     };
+  });
+
+  let lastAgentsRefreshToken = null;
+  $effect(() => {
+    const token = agentsRefreshToken;
+    if (lastAgentsRefreshToken === null) {
+      lastAgentsRefreshToken = token;
+      return;
+    }
+    if (token === lastAgentsRefreshToken) return;
+    lastAgentsRefreshToken = token;
+    void scope.reloadAgents();
   });
 
   let scopesLoaded = $derived(scope.promptScopes.length > 0);

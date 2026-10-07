@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import { init, t } from '../../lib/i18n.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 const rpcMock = vi.fn();
 vi.mock(
@@ -329,5 +330,46 @@ it('hides the offset fields for an action at the event anchor', async () => {
   expect(rpcMock).toHaveBeenCalledWith(
     'calendar.add_action',
     expect.objectContaining({ when: 'start' }),
+  );
+});
+
+it('names the Agents anew after an Agent change and keeps the open edit', async () => {
+  let name = 'Main';
+  rpcMock.mockImplementation(async (method) => {
+    if (method === 'agent.list') return { agents: [{ id: 'main', name }] };
+    if (method === 'project.list') return { projects: [] };
+    return { sessions: [], next_cursor: null };
+  });
+  const props = reactiveProps({
+    eventId: 'event1',
+    occurrenceStart: '2027-01-01T12:00',
+    agentsRefreshToken: 0,
+    actions: [
+      {
+        id: 'a1',
+        event_id: 'event1',
+        target: 'main',
+        when: 'start',
+        session: null,
+        prompt: 'Review meeting',
+      },
+    ],
+  });
+  component = mount(CalendarActions, { target: document.body, props });
+  await settle();
+  button(t('common.edit')).click();
+  await settle();
+  change('calendar-action-prompt', 'Review the agenda');
+
+  name = 'Main Desk';
+  props.agentsRefreshToken += 1;
+  await settle();
+
+  expect(
+    document.querySelector('.calendar-action-summary').textContent,
+  ).toContain('Main Desk');
+  expect(triggerLabel('calendar-action-target')).toBe('Main Desk');
+  expect(document.getElementById('calendar-action-prompt').value).toBe(
+    'Review the agenda',
   );
 });
