@@ -50,6 +50,7 @@ from core.chat.model_resolution import (
     _split_agent_model,
     parse_model_with_connection,
 )
+from core.chat.streaming import stream_stall_timeout
 from core.chat.usage import latest_session_context_usage
 from core.chat.wire_shaping import (
     PINNED_IMAGE_RETIREMENT_SLOT,
@@ -256,7 +257,7 @@ class RequestBuilder:
                 model_id,
             ),
             wire_media_types=adapter.wire_media_support(model_id),
-            chunk_timeout_seconds=self._wire_requests.resolve_chunk_timeout(connection),
+            chunk_timeout_seconds=stream_stall_timeout(adapter),
             max_image_bytes=self._image_size_limit(adapter, model_id),
             max_request_images=_resolve_request_image_limit(adapter, model_id),
             unlisted_tool_calls=not adapter.list_announced_tools(model_id),

@@ -424,6 +424,7 @@ def test_get_adapter_scopes_model_lookup_wire_profiles_and_replay_to_its_connect
     monkeypatch.setenv("OLLAMA_API_KEY", "ollama-token")
 
     anthropic = shared_runtime.get_adapter(ConnectionRef("anthropic", "anthropic:api-key"))
+    assert anthropic.local_endpoint is False
     lookup = anthropic._model_lookup
     assert lookup is not None
     assert lookup("claude-sonnet-4-6") == shared_runtime.models.get(

@@ -370,17 +370,13 @@ class StubAgentResolver:
 
 
 class StubProviders:
-    def __init__(self, provider_ids: set[str], *, base_url: str | None = None) -> None:
+    def __init__(self, provider_ids: set[str]) -> None:
         self._provider_ids = provider_ids
-        self._base_url = base_url
 
     def get(self, provider_id: str) -> object:
         if provider_id not in self._provider_ids:
             raise KeyError(provider_id)
-        return StubProviderConfig(
-            [StubConnection("subscription"), StubConnection("api-key")],
-            base_url=self._base_url,
-        )
+        return StubProviderConfig([StubConnection("subscription"), StubConnection("api-key")])
 
 
 @dataclass(frozen=True)
@@ -392,7 +388,6 @@ class StubConnection:
 class StubProviderConfig:
     connections: list[StubConnection]
     context_window: int | None = None
-    base_url: str | None = None
 
 
 class StubPrompts:
@@ -682,7 +677,6 @@ class StubRuntime:
         adapters_by_connection: dict[str, StubAdapter] | None = None,
         raise_on_connection: dict[str, Exception] | None = None,
         provider_ids: set[str] | None = None,
-        provider_base_url: str | None = None,
         tools: ToolRegistry | None = None,
         storage: Any | None = None,
         models: Any | None = None,
@@ -713,10 +707,7 @@ class StubRuntime:
         self.timelines = RunTimelines(self.chat_runs)
         self.terminal_manager = StubTerminalManager()
         self.extensions: Any = None
-        self.providers = StubProviders(
-            provider_ids or {agent.model.split("/", 1)[0]},
-            base_url=provider_base_url,
-        )
+        self.providers = StubProviders(provider_ids or {agent.model.split("/", 1)[0]})
         # Usable connections mirror reality: the primary provider's key plus
         # every connection a test wired an adapter for — fallback candidates on
         # unwired providers resolve as unresolvable, like production.

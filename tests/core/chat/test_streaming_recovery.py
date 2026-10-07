@@ -16,9 +16,9 @@ from core.chat.streaming import (
     StreamingProgressTimeoutError,
     StreamRecoveryAction,
     decide_stream_recovery,
-    is_local_provider_base_url,
     iter_with_chunk_timeout,
 )
+from core.providers.adapter import is_local_provider_base_url
 from core.providers.errors import (
     NetworkError,
     ProviderRateLimitError,

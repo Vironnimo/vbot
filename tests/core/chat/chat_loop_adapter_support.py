@@ -17,6 +17,9 @@ JsonObject = dict[str, Any]
 
 
 class StubAdapter(AdapterHookDefaults):
+    # Set like ``ProviderRuntime.get_adapter`` does for a local Connection.
+    local_endpoint = False
+
     def __init__(
         self,
         responses: list[Any],
