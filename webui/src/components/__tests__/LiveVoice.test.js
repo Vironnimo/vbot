@@ -297,6 +297,30 @@ describe('sidebar Live control', () => {
       variant: 'warn',
     });
 
+    // The call's own Sessions open in Chat; the backend's once it exists.
+    const sessionLink = (which) =>
+      panel().querySelector(`[data-live-session="${which}"]`);
+    fake.state.sessions = {
+      voice: { agent_id: 'live-voice', session_id: 'call-1' },
+      backend: null,
+    };
+    flushSync();
+    expect(sessionLink('voice').textContent).toBe(
+      t('live.activity.voiceSession'),
+    );
+    expect(sessionLink('backend')).toBeNull();
+    fake.state.sessions = {
+      ...fake.state.sessions,
+      backend: { agent_id: 'live-backend', session_id: 'call-2' },
+    };
+    flushSync();
+    sessionLink('backend').click();
+    await settle();
+    expect(uiActions.open).toHaveBeenLastCalledWith(
+      { view: 'chat', agent_id: 'live-backend', session_id: 'call-2' },
+      expect.anything(),
+    );
+
     // The record stays readable after the call, until Escape closes it.
     fake.state.phase = 'off';
     flushSync();

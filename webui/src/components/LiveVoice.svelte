@@ -40,7 +40,9 @@
   const running = $derived(voice.phase !== 'off');
   const caption = $derived(voice.captions.at(-1) ?? null);
   const hasActivity = $derived(
-    voice.captions.length > 0 || voice.actions.length > 0,
+    voice.captions.length > 0 ||
+      voice.actions.length > 0 ||
+      voice.sessions.voice !== null,
   );
   const callTime = $derived(
     voice.phase === 'live' && voice.liveSince

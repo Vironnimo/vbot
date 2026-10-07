@@ -1,6 +1,6 @@
 import { asText, isPlainObject } from '../values.js';
 import { normalizeCompactionPolicy } from '../compactionPolicy.js';
-import { normalizeToolAccess } from '../toolAccess.js';
+import { normalizeToolAccess, toolCatalogForEditor } from '../toolAccess.js';
 
 export const emptyScanSkills = () => ({ project: [], bundled: [], global: [] });
 
@@ -282,7 +282,8 @@ export function buildManageProjectPayload(formValues, project) {
 }
 
 // Build the tool toggle rows for the editor: every server-marked Project-configurable
-// catalog tool with whether it is in the project's current Tool Whitelist. The
+// catalog tool (without the Live call Tools, which only the Live voice Agents use)
+// with whether it is in the project's current Tool Whitelist. The
 // tool-catalog RPC owns that policy, so new tools and policy changes appear without a
 // frontend name list. Rows are sorted by
 // name for a stable display. Each row carries the tool's readiness fields
@@ -292,7 +293,7 @@ export function buildManageProjectPayload(formValues, project) {
 export function buildToolToggleList({ catalog = [], allowedTools = [] } = {}) {
   const enabled = new Set(normalizeStringList(allowedTools));
   const byName = new Map();
-  for (const tool of catalog) {
+  for (const tool of toolCatalogForEditor(catalog)) {
     const name = asText(tool.name).trim();
     if (
       name.length === 0 ||

@@ -10,6 +10,7 @@ import {
 import { formatAgentAddress, parseAgentAddress } from '$lib/agentAddress.js';
 import { t } from '$lib/i18n.js';
 import { LIBRARIAN_AGENT_ID, librarianName } from '$lib/librarian.js';
+import { isLiveAgentId, liveAgentName } from '$lib/liveAgents.js';
 import {
   projectTeam as normalizeProjectTeam,
   normalizeScanReport,
@@ -291,21 +292,25 @@ export function createChatViewTarget(context) {
 
   // Minimal agent-like object for an overridden session whose owner is not an
   // identity-roster agent — a project team agent's session (or a project
-  // child), the hidden Librarian's session, or an identity agent deleted
-  // while its session is still viewed. Keeps the chat surface (header,
-  // banner, return button) alive instead of dead-ending on "choose an
-  // agent". The bare id stays in `id` so queue and cancel-tool payloads keep
-  // the bare spelling (trap 2).
+  // child), the hidden Librarian's or a Live Agent's session, or an identity
+  // agent deleted while its session is still viewed. Keeps the chat surface
+  // (header, banner, return button) alive instead of dead-ending on "choose
+  // an agent". The bare id stays in `id` so queue and cancel-tool payloads
+  // keep the bare spelling (trap 2). `__liveCall` marks a Session of a Live
+  // voice call, which only the call writes to.
   function overrideAgentDisplayStandIn(agentAddress) {
     const { agentId, projectId } = parseAgentAddress(agentAddress);
+    const liveCall = !projectId && isLiveAgentId(agentId);
     return {
       id: agentId,
-      name:
-        agentId === LIBRARIAN_AGENT_ID && !projectId
+      name: liveCall
+        ? liveAgentName(agentId)
+        : agentId === LIBRARIAN_AGENT_ID && !projectId
           ? librarianName()
           : agentId || agentAddress,
       current_session_id: '',
       __overrideAddress: agentAddress,
+      __liveCall: liveCall,
     };
   }
 

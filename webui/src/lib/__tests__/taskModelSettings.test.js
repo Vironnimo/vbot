@@ -178,7 +178,7 @@ describe('select choices narrowed by another option', () => {
   const fields = normalizeOptionSchema({
     fields: [
       {
-        name: 'backend_model',
+        name: 'variant',
         type: 'select',
         default: 'terra',
         options: [
@@ -188,7 +188,7 @@ describe('select choices narrowed by another option', () => {
         ],
       },
       {
-        name: 'backend_thinking_effort',
+        name: 'effort',
         type: 'select',
         default: 'low',
         options: EFFORTS.map((value) => ({
@@ -196,7 +196,7 @@ describe('select choices narrowed by another option', () => {
           label: value || 'Model default',
         })),
         options_by: {
-          field: 'backend_model',
+          field: 'variant',
           values: {
             terra: ['', 'none', 'low', 'high'],
             astra: ['', 'none', 'medium', 'max'],
@@ -207,7 +207,7 @@ describe('select choices narrowed by another option', () => {
       },
     ],
   });
-  const [backendField, effortField] = fields;
+  const [variantField, effortField] = fields;
   const shownValues = (options) =>
     visibleFieldOptions(effortField, fields, options).map(
       (choice) => choice.value,
@@ -219,7 +219,7 @@ describe('select choices narrowed by another option', () => {
       label: 'Model default',
     });
     expect(effortField.optionsBy).toEqual({
-      field: 'backend_model',
+      field: 'variant',
       values: {
         terra: ['', 'none', 'low', 'high'],
         astra: ['', 'none', 'medium', 'max'],
@@ -227,7 +227,7 @@ describe('select choices narrowed by another option', () => {
         '': [],
       },
     });
-    expect(backendField.optionsBy).toBeNull();
+    expect(variantField.optionsBy).toBeNull();
     const [malformed] = normalizeOptionSchema({
       fields: [
         {
@@ -244,82 +244,74 @@ describe('select choices narrowed by another option', () => {
 
   it('filters by the stored or default value of the referenced option', () => {
     expect(shownValues({})).toEqual(['', 'none', 'low', 'high']);
-    expect(shownValues({ backend_model: 'astra' })).toEqual([
+    expect(shownValues({ variant: 'astra' })).toEqual([
       '',
       'none',
       'medium',
       'max',
     ]);
-    expect(shownValues({ backend_model: 'unlisted' })).toEqual(EFFORTS);
-    expect(visibleFieldOptions(backendField, fields, {})).toBe(
-      backendField.options,
+    expect(shownValues({ variant: 'unlisted' })).toEqual(EFFORTS);
+    expect(visibleFieldOptions(variantField, fields, {})).toBe(
+      variantField.options,
     );
   });
 
   it('hides a field whose entry for the referenced value is an empty list', () => {
-    const none = { backend_model: '', backend_thinking_effort: 'high' };
+    const hiding = { variant: '', effort: 'high' };
 
-    expect(isOptionFieldHidden(effortField, fields, none)).toBe(true);
-    expect(shownValues(none)).toEqual([]);
+    expect(isOptionFieldHidden(effortField, fields, hiding)).toBe(true);
+    expect(shownValues(hiding)).toEqual([]);
     expect(isOptionFieldHidden(effortField, fields, {})).toBe(false);
     expect(
-      isOptionFieldHidden(effortField, fields, { backend_model: 'unlisted' }),
+      isOptionFieldHidden(effortField, fields, { variant: 'unlisted' }),
     ).toBe(false);
-    expect(isOptionFieldHidden(backendField, fields, none)).toBe(false);
+    expect(isOptionFieldHidden(variantField, fields, hiding)).toBe(false);
     // The hidden field keeps its stored value; the server ignores it.
-    expect(reconcileDependentOptions(fields, none, 'backend_model')).toBe(none);
+    expect(reconcileDependentOptions(fields, hiding, 'variant')).toBe(hiding);
     expect(
       reconcileDependentOptions(
         fields,
-        { ...none, backend_model: 'astra' },
-        'backend_model',
+        { ...hiding, variant: 'astra' },
+        'variant',
       ),
-    ).toEqual({ backend_model: 'astra', backend_thinking_effort: '' });
+    ).toEqual({ variant: 'astra', effort: '' });
   });
 
   it('keeps a value that stays visible after the referenced option changes', () => {
-    const options = { backend_model: 'astra', backend_thinking_effort: 'none' };
+    const options = { variant: 'astra', effort: 'none' };
 
-    expect(reconcileDependentOptions(fields, options, 'backend_model')).toBe(
-      options,
-    );
-    expect(
-      reconcileDependentOptions(fields, options, 'backend_thinking_effort'),
-    ).toBe(options);
+    expect(reconcileDependentOptions(fields, options, 'variant')).toBe(options);
+    expect(reconcileDependentOptions(fields, options, 'effort')).toBe(options);
   });
 
   it.each([
-    ['the default when shown', { backend_model: 'terra' }, 'medium', 'low'],
+    ['the default when shown', { variant: 'terra' }, 'medium', 'low'],
     [
       'Model default when the default is hidden',
-      { backend_model: 'astra' },
+      { variant: 'astra' },
       'high',
       '',
     ],
     [
       'the first choice when neither is shown',
-      { backend_model: 'luna' },
+      { variant: 'luna' },
       'none',
       'medium',
     ],
-  ])('moves a hidden value to %s', (_label, backend, current, expected) => {
+  ])('moves a hidden value to %s', (_label, chosen, current, expected) => {
     const next = reconcileDependentOptions(
       fields,
-      { ...backend, backend_thinking_effort: current },
-      'backend_model',
+      { ...chosen, effort: current },
+      'variant',
     );
 
-    expect(next).toEqual({ ...backend, backend_thinking_effort: expected });
+    expect(next).toEqual({ ...chosen, effort: expected });
   });
 
   it('moves an unstored default that the new choice hides', () => {
     expect(
-      reconcileDependentOptions(
-        fields,
-        { backend_model: 'astra' },
-        'backend_model',
-      ),
-    ).toEqual({ backend_model: 'astra', backend_thinking_effort: '' });
+      reconcileDependentOptions(fields, { variant: 'astra' }, 'variant'),
+    ).toEqual({ variant: 'astra', effort: '' });
   });
 
   it('follows chains of narrowed options', () => {
