@@ -12,7 +12,6 @@
     attachmentUrlForBlock,
     fileMentionDetails,
     fileMentionStatusLabel,
-    avatarForItem,
     errorMessagePresentation,
     formatTime,
     hasAssistantContent,
@@ -76,6 +75,14 @@
   let editedContent = $state('');
   let editSaving = $state(false);
   let messageElement = $state();
+  // The user's own messages carry no author label (`labelForMessage`).
+  let messageAuthor = $derived(
+    item.type !== 'message'
+      ? ''
+      : item.message.role === 'assistant'
+        ? agentName || labelForMessage(item.message)
+        : labelForMessage(item.message),
+  );
   // Disclosure state lives in the timeline's view state, so it survives this
   // row being unmounted and mounted again.
   const viewState = timelineViewState();
@@ -307,12 +314,9 @@
     class="msg"
   >
     <div class="msg-header">
-      <div class="msg-avatar">{avatarForItem(item)}</div>
-      <span class="msg-author"
-        >{item.message.role === 'assistant'
-          ? agentName || labelForMessage(item.message)
-          : labelForMessage(item.message)}</span
-      >
+      {#if messageAuthor}
+        <span class="msg-author">{messageAuthor}</span>
+      {/if}
       {#if formatTime(item.message.timestamp)}
         <span
           class="msg-timestamp"
@@ -457,7 +461,6 @@
     {@const eventPresentation = toolRowPresentation(eventToolRow)}
     <article class="msg assistant">
       <div class="msg-header">
-        <div class="msg-avatar">{avatarForItem(item)}</div>
         <span class="msg-author">{labelForEvent(item.event)}</span>
         {#if formatTime(item.event.timestamp)}
           <span
@@ -542,8 +545,9 @@
       class="msg"
     >
       <div class="msg-header">
-        <div class="msg-avatar">{avatarForItem(item)}</div>
-        <span class="msg-author">{labelForEvent(item.event)}</span>
+        {#if labelForEvent(item.event)}
+          <span class="msg-author">{labelForEvent(item.event)}</span>
+        {/if}
         {#if formatTime(item.event.timestamp)}
           <span
             class="msg-timestamp"

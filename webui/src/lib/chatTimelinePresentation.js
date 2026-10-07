@@ -95,7 +95,6 @@ export {
   compactionSeparatorLabel,
   compactionSeparatorDetails,
   compactionSummaryText,
-  avatarForItem,
   metaForEvent,
   isToolEvent,
   isFailedToolEvent,

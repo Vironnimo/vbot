@@ -13,7 +13,6 @@
   import ToolDetails from './ToolDetails.svelte';
   import ToolPrimaryLine from './ToolPrimaryLine.svelte';
   import {
-    avatarForItem,
     backgroundCommandRowState,
     backgroundCommandStatusDetails,
     backgroundCommandToolStatusLabel,
@@ -247,7 +246,6 @@
 
 <article class="msg assistant assistant-run">
   <div class="msg-header">
-    <div class="msg-avatar">{avatarForItem(item)}</div>
     <span class="msg-author"
       >{agentName || t('chat.role.assistant').toUpperCase()}</span
     >

@@ -1,12 +1,8 @@
 /* The composer stack (queue, feedback, toast, input box and its footer row)
-   shares the left and right edges of the message text: the column's gutter
-   plus the content indent at the start, the gutter at the end. On phones it
-   keeps using the whole width. */
+   shares the left and right edges of the message text, the column's gutter.
+   On phones it keeps using the whole width. */
 .chat-view {
-  --chat-footer-inset-start: calc(
-    var(--chat-msg-gutter) + var(--chat-msg-indent)
-  );
-  --chat-footer-inset-end: var(--chat-msg-gutter);
+  --chat-footer-inset: var(--chat-msg-gutter);
 
   display: flex;
   width: 100%;
@@ -124,7 +120,7 @@
   width: 100%;
   max-width: var(--chat-measure);
   margin-inline: auto;
-  padding-inline: var(--chat-footer-inset-start) var(--chat-footer-inset-end);
+  padding-inline: var(--chat-footer-inset);
 }
 
 .chat-view__feedback-inner {
@@ -142,8 +138,8 @@
 .chat-view__command-toast {
   position: absolute;
   bottom: calc(100% + 10px);
-  left: var(--chat-footer-inset-start);
-  right: var(--chat-footer-inset-end);
+  left: var(--chat-footer-inset);
+  right: var(--chat-footer-inset);
   z-index: 20;
   padding: 10px 12px;
   border: 1px solid var(--border-2);
@@ -165,14 +161,8 @@
 .chat-view__footer-banner {
   flex-shrink: 0;
   margin: 0
-    calc(
-      max(0px, (100% - var(--chat-measure)) / 2) + var(--chat-footer-inset-end)
-    )
-    10px
-    calc(
-      max(0px, (100% - var(--chat-measure)) / 2) +
-        var(--chat-footer-inset-start)
-    );
+    calc(max(0px, (100% - var(--chat-measure)) / 2) + var(--chat-footer-inset))
+    10px;
 }
 
 @media (max-width: 640px) {
@@ -183,8 +173,7 @@
   }
 
   .chat-view {
-    --chat-footer-inset-start: 0px;
-    --chat-footer-inset-end: 0px;
+    --chat-footer-inset: 0px;
   }
 
   .chat-view__composer-feedback {

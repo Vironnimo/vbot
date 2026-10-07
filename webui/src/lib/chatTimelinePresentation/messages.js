@@ -35,14 +35,16 @@ export const shouldRenderMessage = (message) =>
 const senderDisplayName = (message) =>
   trimmedString(message?.sender?.display_name);
 
-// A User message names its sender and whether Live voice passed it on.
+// A User message names its sender and whether Live voice passed it on; the
+// user's own typed message needs no label.
 const userLabel = (message) => {
-  const name = senderDisplayName(message) || t('chat.role.user');
-  const label =
-    message?.input_origin === 'live_voice'
-      ? t('chat.role.userViaLive', { name })
-      : name;
-  return label.toUpperCase();
+  const sender = senderDisplayName(message);
+  if (message?.input_origin === 'live_voice') {
+    return t('chat.role.userViaLive', {
+      name: sender || t('chat.role.user'),
+    }).toUpperCase();
+  }
+  return sender.toUpperCase();
 };
 
 export const labelForMessage = (message) => {
@@ -559,16 +561,6 @@ function parseTakeoverContent(content) {
     to: trimmedString(parsed.to),
   };
 }
-
-export const avatarForItem = (item) => {
-  if (isUserItem(item)) {
-    return t('chat.role.userAvatar');
-  }
-  if (isAssistantItem(item)) {
-    return t('chat.role.assistantAvatar');
-  }
-  return t('chat.role.systemAvatar');
-};
 
 export const metaForEvent = (event) => {
   if (event.type === 'run_failed') {

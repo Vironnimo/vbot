@@ -467,7 +467,7 @@ describe('ChatTimeline Runs', () => {
       const [ordinary, ...steered] = document.querySelectorAll('.msg.user');
       expect(steered).toHaveLength(2);
       const appearance = (message) =>
-        ['.msg-body-text', '.msg-avatar', '.msg-author'].map((selector) => {
+        ['.msg-body-text', '.msg-header'].map((selector) => {
           const style = getComputedStyle(message.querySelector(selector));
           return [
             style.padding,

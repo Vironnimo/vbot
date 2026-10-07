@@ -134,8 +134,6 @@
 }
 
 .msg {
-  --msg-content-indent: var(--chat-msg-indent);
-
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -146,33 +144,6 @@
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.msg-avatar {
-  display: flex;
-  width: 26px;
-  height: 26px;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--r-sm);
-  font-size: 10px;
-  font-weight: 600;
-}
-
-.msg.user > .msg-header > .msg-avatar {
-  color: var(--accent);
-  background: var(--accent-pale);
-}
-
-.msg.assistant > .msg-header > .msg-avatar {
-  color: var(--text-med);
-  background: var(--surface-3);
-}
-
-.msg.error > .msg-header > .msg-avatar {
-  color: var(--red);
-  background: color-mix(in srgb, var(--red) 10%, transparent);
 }
 
 .msg-author {
@@ -212,7 +183,6 @@
   display: flex;
   flex-direction: column;
   gap: 7px;
-  padding-left: var(--msg-content-indent);
 }
 
 .msg.user {
@@ -226,14 +196,11 @@
 .msg.user > .msg-content {
   width: 100%;
   align-items: flex-end;
-  padding-right: var(--msg-content-indent);
-  padding-left: 0;
 }
 
 /* Steered User messages share the ordinary message component inside a Run.
-   Undo only that container's indent and duplicate horizontal message padding. */
+   Undo only its duplicate horizontal message padding. */
 .assistant-run-content > .msg.user {
-  margin-left: calc(-1 * var(--msg-content-indent));
   padding-right: 0;
   padding-left: 0;
 }

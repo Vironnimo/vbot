@@ -123,30 +123,19 @@ describe('message presentation', () => {
       {},
       'ALICE',
     ],
-    ['You without a sender', undefined, {}, null],
-    [
-      'You for a blank sender name',
-      { id: '50', display_name: '   ' },
-      {},
-      null,
-    ],
+    ['no sender', undefined, {}, ''],
+    ['a blank sender name', { id: '50', display_name: '   ' }, {}, ''],
     [
       'the Live voice origin',
       undefined,
       { input_origin: 'live_voice' },
       t('chat.role.userViaLive', { name: t('chat.role.user') }).toUpperCase(),
     ],
-    [
-      'You for a dictation',
-      undefined,
-      { input_origin: 'speech_transcription' },
-      null,
-    ],
+    ['a dictation', undefined, { input_origin: 'speech_transcription' }, ''],
   ])(
     'labels persisted and live User messages with %s',
-    (_label, sender, extra, label) => {
+    (_label, sender, extra, expected) => {
       const message = { role: 'user', content: 'hello', sender, ...extra };
-      const expected = label ?? t('chat.role.user').toUpperCase();
 
       expect(labelForMessage(message)).toBe(expected);
       expect(
