@@ -285,6 +285,20 @@ describe('ChatComposer suggestions', () => {
           ignored: option.classList.contains('ignored'),
         }));
 
+      // A list opening on ignored entries highlights the first one the index
+      // holds; the arrow keys still reach the others.
+      const active = () =>
+        rows()[
+          suggestionOptions('file').findIndex(
+            (option) => option.getAttribute('aria-selected') === 'true',
+          )
+        ]?.text;
+      typeInComposer('see @');
+      await settle();
+      expect(active()).toBe('src/');
+      pressKey('ArrowUp');
+      expect(active()).toBe('build/ ignored');
+
       typeInComposer('see @bu');
       await settle();
       expect(rows()).toEqual([{ text: 'build/ ignored', ignored: true }]);
