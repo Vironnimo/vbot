@@ -13,6 +13,7 @@ import {
   callsTo,
   settle,
   fill,
+  pickFolder,
   choose,
   render,
   openSwarm,
@@ -410,12 +411,17 @@ describe('Swarm Run start', () => {
           ].includes(id),
         ),
     ).toEqual(['swarm-start-profile', 'swarm-start-directory', 'swarm-goal']);
-    fill('swarm-start-directory', 'D:/run-only');
+    // The field completes the server's folders through the page bridge.
+    await pickFolder('swarm-start-directory', 'D:/r', 'run-only');
+    expect(bridge.listDirectory).toHaveBeenCalledWith({
+      path: 'D:/',
+      include_files: false,
+    });
     fill('swarm-goal', 'goal-sentinel');
     await tick();
     bridge.invalidate();
     await settle();
-    expect(input.value).toBe('D:/run-only');
+    expect(input.value).toBe('D:/run-only/');
     button(START_RUN).click();
     await vi.waitFor(() =>
       expect(operation).toHaveBeenCalledWith(
@@ -423,7 +429,7 @@ describe('Swarm Run start', () => {
         expect.objectContaining({
           profile_id: profile.id,
           prompt: 'goal-sentinel',
-          working_directory: 'D:/run-only',
+          working_directory: 'D:/run-only/',
         }),
       ),
     );

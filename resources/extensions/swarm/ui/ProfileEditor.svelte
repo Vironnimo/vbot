@@ -6,6 +6,7 @@
   import Banner from '../../../../webui/src/components/ui/Banner.svelte';
   import FormField from '../../../../webui/src/components/ui/FormField.svelte';
   import TextField from '../../../../webui/src/components/ui/TextField.svelte';
+  import PathField from '../../../../webui/src/components/ui/PathField.svelte';
   import {
     filterModelSelectOptions,
     modelFilterFooterLabel,
@@ -658,8 +659,10 @@
                 label={t('swarm.profile.directory')}
                 required
               >
-                <TextField
+                <PathField
                   id="swarm-directory"
+                  mode="directory"
+                  listDirectory={bridgeClient.listDirectory}
                   value={draft.working_directory.path}
                   onInput={(value) => (draft.working_directory.path = value)}
                 />

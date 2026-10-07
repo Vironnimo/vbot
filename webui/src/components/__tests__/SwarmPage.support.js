@@ -74,6 +74,9 @@ const swarm = {
   ],
 };
 
+// The server's folders the page's path fields list, by listed path.
+const serverFolders = { 'C:/': ['project', 'work'], 'D:/': ['run-only'] };
+
 function button(text) {
   return [...document.querySelectorAll('button')].find((item) =>
     (item.getAttribute('aria-label') || item.textContent).includes(text),
@@ -277,6 +280,20 @@ function createBridge(initialProfile = profile, detail = swarm) {
         }),
       ),
       cancelToolCall: vi.fn().mockResolvedValue({ ok: true }),
+      listDirectory: vi.fn(({ path }) =>
+        Promise.resolve({
+          path,
+          parent: null,
+          entries: (serverFolders[path] ?? []).map((name) => ({
+            name,
+            kind: 'directory',
+            link: false,
+            hidden: false,
+          })),
+          truncated: false,
+          separator: '/',
+        }),
+      ),
       subscribeRun: vi.fn(),
       unsubscribeRun: vi.fn().mockResolvedValue({}),
       onContext(callback) {
@@ -345,6 +362,22 @@ function fill(id, value) {
   const input = document.getElementById(id);
   input.value = value;
   input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+// Types `text` into the focused path field `id` and accepts the folder
+// `name` it suggests from the bridge's listing.
+async function pickFolder(id, text, name) {
+  document.getElementById(id).focus();
+  fill(id, text);
+  let option;
+  await vi.waitFor(() => {
+    option = [...document.querySelectorAll('[role="option"]')].find(
+      (el) => el.textContent.trim() === `${name}/`,
+    );
+    expect(option).toBeDefined();
+  });
+  option.click();
+  await tick();
 }
 
 async function choose(id, text) {
@@ -420,6 +453,7 @@ export {
   callsTo,
   settle,
   fill,
+  pickFolder,
   choose,
   render,
   openSwarm,
