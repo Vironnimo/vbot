@@ -23,7 +23,7 @@ import unicodedata
 from collections.abc import Generator, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import psutil  # type: ignore[import-untyped]
 
@@ -42,23 +42,45 @@ MAX_PROTOCOL_LINE = 8 * 1024 * 1024
 _READ_BYTES = 64 * 1024
 # Bound on one native command line; a longer path list runs in several batches.
 MAX_COMMAND_LINE_BYTES = 28000
-# Polling interval for the child memory bound; each poll is a process query.
+# Bound on a child's resident memory, and its polling interval; each poll is a process query.
+MAX_CHILD_MEMORY = 512 * 1024 * 1024
 MEMORY_POLL_SECONDS = 0.05
-# Bound on the entries one search collects before ordering them.
+# Bound on the entries one counting or listing pass collects before they are ordered.
 MAX_ENTRIES = 500_000
 # Bound on the bytes one counting or listing pass may print.
 MAX_SCAN_BYTES = 256 * 1024 * 1024
 
-# A --debug line naming a path ripgrep's walker skipped, and the kind of rule that
+# A --debug message naming a path ripgrep's walker skipped, and the kind of rule that
 # skipped it. File type filters skip files only and report every file, so their
-# lines are left out.
+# messages are left out. A path can hold a line break outside Windows.
 _SKIPPED = re.compile(
-    rb"^rg: DEBUG\|ignore::walk\|.*?: ignoring (.*?): Ignore\(IgnoreMatch\((?!Types\()(\w+)"
+    rb"^rg: DEBUG\|ignore::walk\|.*?: ignoring (.*?): Ignore\(IgnoreMatch\((?!Types\()(\w+)",
+    re.DOTALL,
 )
+# Bound on one --debug message kept for matching; a longer one is matched on its start.
+_DEBUG_MESSAGE_BYTES = 1024 * 1024
 
 # Defaults that differ from ripgrep's own; later args items override them.
 DEFAULT_ARGUMENTS = ("--no-config", "--hidden", "--no-require-git", "--glob-case-insensitive")
 ALWAYS_EXCLUDED = "!.git"
+
+
+class SearchBoundError(RuntimeError):
+    """A native run stopped at a processing bound, so its output is unusable.
+
+    ``bound`` is ``"record"`` when one output record exceeded ``MAX_PROTOCOL_LINE``
+    and ``"memory"`` when the child exceeded ``MAX_CHILD_MEMORY``. ``path`` is the
+    absolute path of the file whose output record was too large, when known.
+    """
+
+    def __init__(self, bound: Literal["record", "memory"], path: Path | None = None) -> None:
+        if bound == "record":
+            message = f"A native search output record exceeds {MAX_PROTOCOL_LINE} bytes."
+        else:
+            message = f"A native search child exceeds {MAX_CHILD_MEMORY} bytes of memory."
+        super().__init__(message)
+        self.bound: Literal["record", "memory"] = bound
+        self.path = path
 
 
 @dataclass
@@ -91,8 +113,9 @@ def native_lines(
     bounded at ``MAX_PROTOCOL_LINE``, never the whole output. Even a silent
     process is interrupted. With ``outcome``, the exit code and diagnostics are
     recorded there for the caller to judge. Without it, a failed run raises
-    ``RuntimeError``. A caller outside a Tool call passes no ``context`` and its
-    ``cwd``; only its budget stops the child then.
+    ``RuntimeError``. A record over its bound or a child over its memory bound
+    raises ``SearchBoundError`` either way. A caller outside a Tool call passes no
+    ``context`` and its ``cwd``; only its budget stops the child then.
     """
     if context is None and cwd is None:
         raise ValueError("A native search outside a Tool call needs its working directory.")
@@ -144,23 +167,32 @@ def native_lines(
         finally:
             put("end", [])
 
+    def note_skip(message: bytearray) -> None:
+        skipped = _SKIPPED.match(message)
+        if skipped and outcome is not None and len(outcome.skipped) < MAX_ENTRIES:
+            outcome.skipped.append(skipped[1])
+            if skipped[2] == b"Gitignore":
+                outcome.ignored.append(skipped[1])
+
     def errors() -> None:
         assert stderr is not None
-        debug = False
+        # A message starts with "rg: "; lines without it continue the previous one,
+        # such as the regex error inside a debug message about engine fallback, or
+        # the rest of a skipped path that holds a line break. So a debug message is
+        # matched once the next message starts, or at the end.
+        debug: bytearray | None = None
         while line := stderr.readline(65536):
-            # A message starts with "rg: "; lines without it continue the previous one,
-            # such as the regex error inside a debug message about engine fallback.
             if line.startswith(b"rg: "):
-                debug = line.startswith(b"rg: DEBUG|")
-            if debug:
-                skipped = _SKIPPED.match(line)
-                if skipped and outcome is not None and len(outcome.skipped) < MAX_ENTRIES:
-                    outcome.skipped.append(skipped[1])
-                    if skipped[2] == b"Gitignore":
-                        outcome.ignored.append(skipped[1])
+                if debug is not None:
+                    note_skip(debug)
+                debug = bytearray() if line.startswith(b"rg: DEBUG|") else None
+            if debug is not None:
+                debug += line[: _DEBUG_MESSAGE_BYTES - len(debug)]
                 continue
             if len(diagnostics) < 8192:
                 diagnostics.extend(line[: 8192 - len(diagnostics)])
+        if debug is not None:
+            note_skip(debug)
 
     threads = [
         threading.Thread(target=output, daemon=True),
@@ -194,10 +226,8 @@ def native_lines(
             if monitored is not None and time.monotonic() >= next_memory_poll:
                 next_memory_poll = time.monotonic() + MEMORY_POLL_SECONDS
                 with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
-                    if monitored.memory_info().rss > 512 * 1024 * 1024:
-                        raise RuntimeError(
-                            "Search exceeded its memory bound; narrow files or patterns."
-                        )
+                    if monitored.memory_info().rss > MAX_CHILD_MEMORY:
+                        raise SearchBoundError("memory")
             try:
                 kind, records = messages.get(timeout=0.05)
             except queue.Empty:
@@ -206,10 +236,7 @@ def native_lines(
                 output_finished = True
                 break
             if kind == "too_long":
-                raise RuntimeError(
-                    "A source record exceeds the 8 MiB processing bound; narrow the search or "
-                    "use a file/count output mode."
-                )
+                raise SearchBoundError("record")
             yield from records
         # EOF can precede process exit. Keep checking cancellation here as well
         # instead of waiting for the entire remaining search budget at once.
@@ -304,7 +331,8 @@ class ScanResult:
     entries: list[tuple[bytes, int]] = field(default_factory=list)
     files_searched: int | None = None
     warnings: list[str] = field(default_factory=list)
-    truncated: bool = False
+    # The bound that cut the pass short: MAX_ENTRIES ("entries") or MAX_SCAN_BYTES ("output").
+    stopped_by: Literal["entries", "output"] | None = None
     interrupted: bool = False
     skipped: list[Path] = field(default_factory=list)
     ignored: list[Path] = field(default_factory=list)
@@ -358,22 +386,36 @@ def _collect(
     context: ToolContext,
     budget: SearchBudget,
     terminator: bytes,
-) -> tuple[bytes, NativeOutcome, bool]:
+) -> tuple[bytes, NativeOutcome, Literal["entries", "output"] | None]:
+    """Read one counting or listing pass, up to the first bound it reaches.
+
+    Each pass prints its entries with --null, so a record holding NUL is one
+    entry; the statistics after the counts hold none. Reading stops at the entry
+    after ``MAX_ENTRIES``, which shows that more follow and is left out, or at the
+    record that takes the output over ``MAX_SCAN_BYTES``. Stopping closes the
+    records, which ends the child. The third value names the bound that stopped it.
+    """
     outcome = NativeOutcome()
     chunks: list[bytes] = []
     size = 0
-    truncated = False
+    entries = 0
+    stopped_by: Literal["entries", "output"] | None = None
     records = native_lines(
         binary, arguments, context, budget, cwd=scope.cwd, outcome=outcome, terminator=terminator
     )
     with contextlib.closing(records):
         for record in records:
+            if b"\0" in record:
+                entries += 1
+                if entries > MAX_ENTRIES:
+                    stopped_by = "entries"
+                    break
             chunks.append(record)
             size += len(record)
             if size > MAX_SCAN_BYTES:
-                truncated = True
+                stopped_by = "output"
                 break
-    return b"".join(chunks), outcome, truncated
+    return b"".join(chunks), outcome, stopped_by
 
 
 def count_scan(
@@ -408,15 +450,14 @@ def count_scan(
         "--",
         *scope.paths,
     ]
-    data, outcome, truncated = _collect(binary, arguments, scope, context, budget, terminator)
+    data, outcome, stopped_by = _collect(binary, arguments, scope, context, budget, terminator)
     result = _judge(outcome, scope, cwd)
-    result.truncated = truncated
+    result.stopped_by = stopped_by
     result.ignored = _walk_paths(outcome.ignored, scope)
     if query.mode == "files_without_match":
         result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
     else:
         result.entries, result.files_searched = _parse_counts(data)
-    _bound(result)
     return result
 
 
@@ -441,13 +482,12 @@ def list_scan(
     else:
         selection = _base_arguments(query, scope)
     arguments = [*selection, "--debug", "--files", "--null", "--", *scope.paths]
-    data, outcome, truncated = _collect(binary, arguments, scope, context, budget, b"\0")
+    data, outcome, stopped_by = _collect(binary, arguments, scope, context, budget, b"\0")
     result = _judge(outcome, scope, cwd)
-    result.truncated = truncated
+    result.stopped_by = stopped_by
     result.entries = [(path, 0) for path in data.split(b"\0")[:-1] if path]
     result.skipped = _walk_paths(outcome.skipped, scope)
     result.ignored = _walk_paths(outcome.ignored, scope)
-    _bound(result)
     return result
 
 
@@ -502,12 +542,6 @@ def match_names(
     return {os.fsdecode(name) for name in data.split(b"\0") if name}
 
 
-def _bound(result: ScanResult) -> None:
-    if len(result.entries) > MAX_ENTRIES:
-        del result.entries[MAX_ENTRIES:]
-        result.truncated = True
-
-
 def _parse_counts(data: bytes) -> tuple[list[tuple[bytes, int]], int | None]:
     entries: list[tuple[bytes, int]] = []
     position = 0
@@ -560,19 +594,28 @@ def line_events(
     def execute() -> None:
         outcome = NativeOutcome()
         current: list[dict[str, Any]] | None = None
+        current_path: bytes | None = None
         lines = native_lines(
             binary, [*base, *batch], context, budget, cwd=scope.cwd, outcome=outcome
         )
-        with contextlib.closing(lines):
-            for line in lines:
-                event = json.loads(line)
-                kind = event["type"]
-                if kind == "begin":
-                    current = events.setdefault(_event_path(event["data"]["path"]), [])
-                elif kind in {"match", "context"} and current is not None:
-                    current.append(event)
-                elif kind == "end":
-                    current = None
+        try:
+            with contextlib.closing(lines):
+                for line in lines:
+                    event = json.loads(line)
+                    kind = event["type"]
+                    if kind == "begin":
+                        current_path = _event_path(event["data"]["path"])
+                        current = events.setdefault(current_path, [])
+                    elif kind in {"match", "context"} and current is not None:
+                        current.append(event)
+                    elif kind == "end":
+                        current, current_path = None, None
+        except SearchBoundError as error:
+            # Only a match or context event can be that large; its file began before it.
+            if error.bound != "record" or current_path is None:
+                raise
+            path = Path(os.path.normpath(scope.cwd / os.fsdecode(current_path)))
+            raise SearchBoundError("record", path) from None
         judged = _judge(outcome, scope, cwd)
         warnings.extend(judged.warnings)
 

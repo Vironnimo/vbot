@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, cast
 
@@ -44,38 +45,39 @@ def _write(root: Path, files: dict[str, str]) -> None:
 
 @pytest.mark.asyncio
 async def test_index_lists_what_the_search_tools_search(tmp_path: Path) -> None:
-    _write(
-        tmp_path,
-        {
-            ".git/HEAD": "ref: refs/heads/main\n",
-            ".git/info/exclude": "excluded.txt\n",
-            ".gitignore": "ignored/\n*.log\n",
-            ".env": "x",
-            "README.md": "x",
-            "debug.log": "x",
-            "excluded.txt": "x",
-            "ignored/secret.txt": "x",
-            "src/.gitignore": "generated.py\n",
-            "src/app.py": "x",
-            "src/generated.py": "x",
-            "src/deep/mod.py": "x",
-        },
-    )
+    files = {
+        ".git/HEAD": "ref: refs/heads/main\n",
+        ".git/info/exclude": "excluded.txt\n",
+        ".gitignore": "ignored/\n*.log\n",
+        ".env": "x",
+        "README.md": "x",
+        "debug.log": "x",
+        "excluded.txt": "x",
+        "ignored/secret.txt": "x",
+        "src/.gitignore": "generated.py\n",
+        "src/app.py": "x",
+        "src/generated.py": "x",
+        "src/deep/mod.py": "x",
+    }
+    expected = [
+        ".env",
+        ".gitignore",
+        "README.md",
+        "src/.gitignore",
+        "src/app.py",
+        "src/deep/mod.py",
+    ]
+    if os.name != "nt":
+        # Outside Windows a name can hold a line break; the index keeps it whole.
+        files["src/line\nbreak.py"] = "x"
+        expected.append("src/line\nbreak.py")
+    _write(tmp_path, files)
     (tmp_path / "empty").mkdir()
 
     index = await list_mention_files(tmp_path)
 
     assert index == MentionIndex(
-        files=(
-            ".env",
-            ".gitignore",
-            "README.md",
-            "src/.gitignore",
-            "src/app.py",
-            "src/deep/mod.py",
-        ),
-        directories=("src", "src/deep"),
-        truncated=False,
+        files=tuple(expected), directories=("src", "src/deep"), truncated=False
     )
     assert await list_mention_files(tmp_path / "does-not-exist") == MentionIndex((), (), False)
 

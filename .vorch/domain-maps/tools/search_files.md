@@ -14,8 +14,9 @@ services:
 
 - `core/tools/search_files.py`: registration, the owner normalizer
   (`normalize_search_arguments`), `interpret_search_call` (the provider probes use
-  it too), root resolution, scopes, orchestration (`_search`), the handler, the
-  display, the help text and the definition.
+  it too), root resolution, scopes, orchestration (`_search`), the handler and its
+  bound failure texts (`_bound_failure`), the display, the help text and the
+  definition.
 - `core/tools/_search_query.py`: `interpret` turns the named fields and `args`
   into one `SearchQuery`, with mode, patterns, roots, globs, the rg arguments,
   context, page and notes.
@@ -29,8 +30,9 @@ services:
 Two shared modules help. `core/tools/search.py` provides `SearchBudget`,
 `MAX_OUTPUT_BYTES` and path display, plus the listings the Chat `@` file picker
 runs outside a Tool call: `list_selected_files` (the files a `files` listing
-without arguments returns) and `unselected_names` (which entries of one directory
-that selection leaves out, from ripgrep's `--debug` skip reports). They call
+without arguments returns, read NUL-separated so a name with a line break stays
+whole) and `unselected_names` (which entries of one directory that selection
+leaves out, from ripgrep's `--debug` skip reports). They call
 `native_lines` without a `ToolContext`, so only their budget stops the child, and
 keep the picker on the same selection as the Tool. `core/tools/_path_suggestions.py`
 (shared with `read`) suggests similar paths. The async handler runs the whole
@@ -205,6 +207,14 @@ directories holding a selected file are listed. The `--debug` line format is
 ripgrep 15.1.0's; `test_directory_lists_include_empty_directories_ripgrep_enters`
 fails if an upgrade changes it.
 
+ripgrep prints a skipped path unescaped, so a name with a line break continues
+its report on a line without the `rg: ` prefix. `native_lines` matches each
+debug message once the next `rg: ` line or the end of stderr arrives, so the
+path stays whole for every reader of these reports: the `--dirs` skip set, the
+picker's `ignored` mark and the `skipped` summary
+(`test_skip_reports_keep_a_name_with_a_line_break_whole`, a captured ripgrep
+14.1.0 sample that runs on every platform).
+
 Result units:
 
 - Without `-U`, one result is one matching line, which is consistent with `-c`.
@@ -307,16 +317,38 @@ notice about the next page and each warning
 - **Budget:** the shared 30-second `SearchBudget` covers all phases. A timeout or
   a Run cancellation returns partial results with a warning. A user cancellation
   kills the child and returns `cancelled_by_user`.
-- **Child process:** each child's RSS is bounded at 512 MiB, polled every 50 ms.
-  One output record is bounded at 8 MiB, the output queue and stderr are
-  bounded, and one counting or listing pass is bounded at 256 MiB of output.
-  A record is a line, or one path or name where ripgrep ends them with NUL
-  (`--files --null`, `--files-without-match --null`, `--null-data`); those
-  callers pass `native_lines` the NUL `terminator`. Read as lines, a file list
-  over 8 MiB was one record and failed the call (probe, 2026-10: 66,000 files;
-  `--dirs` failed alike, since it reads a file list first).
-- **Entries:** at most 500,000 entries are collected; more makes the result
-  incomplete, with a warning.
+- **Child process:** each child's RSS is bounded at 512 MiB (`MAX_CHILD_MEMORY`),
+  polled every 50 ms. One output record is bounded at 8 MiB, the output queue and
+  stderr are bounded, and one counting or listing pass is bounded at 256 MiB of
+  output. A record is a line, or one path or name where ripgrep ends them with
+  NUL (`--files --null`, `--files-without-match --null`, `--null-data`, and the
+  picker's `list_selected_files`); those callers pass `native_lines` the NUL
+  `terminator`. Read as lines, a file list over 8 MiB was one record and failed
+  the call (probe, 2026-10: 66,000 files; `--dirs` failed alike, since it reads a
+  file list first).
+- **Bound failures:** a record over 8 MiB or a child over 512 MiB raises
+  `SearchBoundError` (`bound` `record` or `memory`), and the handler returns
+  `search_error` from `_bound_failure`, worded for what the call did, never the
+  generic `tool_execution_error` (which claimed unknown effects and advised a
+  file/count mode for listings). Only the line pass prints records that large, a
+  match or context event of a very long line (or of a long match with `-U`), so
+  `line_events` attaches the file from its `begin` event; the error names it,
+  suggests the excluding glob (cwd-relative path, or the bare name outside the
+  cwd) and `output` `files` or `count`. The memory error advises narrowing
+  `path`/`glob` and `--max-filesize` for content searches, also leaving out `-U`
+  when set, and narrowing alone for listings
+  (`test_a_result_over_the_record_bound_fails_naming_the_file_to_leave_out`,
+  `test_a_search_over_the_memory_bound_fails_with_advice_for_its_mode`).
+- **Entries:** at most 500,000 entries are collected per pass; more makes the
+  result incomplete, with a warning naming the count. `_collect` counts the
+  records holding NUL as entries (every pass prints its entries with `--null`;
+  the `--stats` lines hold none) and stops reading at the entry after the bound,
+  which closes `native_lines` and so ends the child instead of reading on to
+  256 MiB. When the 256 MiB output bound stops a pass first (paths averaging over
+  about 537 bytes), the warning names the files kept and that reason
+  (`ScanResult.stopped_by`;
+  `test_a_pass_a_bound_cut_short_names_its_reason_and_the_files_kept` also checks
+  that at most one record past the kept ones is read).
 - **Process ownership:** native subprocess creation, termination and release stay
   in the worker thread. The cancel callback keeps only an event, never the
   `Popen`: dropping it on the Event Loop must not run a blocking Windows handle
@@ -386,7 +418,8 @@ Tests live in `tests/core/tools/test_search_files*.py`:
   - a git differential (`git ls-files --others --exclude-standard`) checks ignore
     selection;
   - other tests cover totals, ordering, context at page edges, the byte limit,
-    the output record bound per listed path and name, multiline paging, outside
+    the output record bound per listed path and name, the bound failures and
+    stop warnings, multiline paging, outside
     roots, `.git`, excerpts, encodings, link loops,
     junctions, unusual names, timeout and cancel, English OS errors, the missing
     engine, and the display.

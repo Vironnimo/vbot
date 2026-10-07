@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import errno
 import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from core.tools import _search_execution as execution
+from core.tools._search_execution import MAX_CHILD_MEMORY
 from core.utils.search_binary import require_binary
 from tests.core.tools.search_files_test_support import context, dispatch, search, search_registry
 
@@ -264,6 +269,108 @@ def test_the_record_bound_applies_to_each_listed_path_and_name(
     # Each path or name ripgrep prints is shorter than the bound; all of them are longer.
     monkeypatch.setattr("core.tools._search_execution.MAX_PROTOCOL_LINE", 32)
     assert set(_all_pages(tmp_path, arguments, limit=10000)) == expected
+
+
+def test_a_result_over_the_record_bound_fails_naming_the_file_to_leave_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write(tmp_path, {"data/big.min.js": "needle " + "x" * 5000 + "\n", "src/a.py": "needle\n"})
+    # The long line's match event exceeds the bound; every other record stays below it.
+    monkeypatch.setattr("core.tools._search_execution.MAX_PROTOCOL_LINE", 4096)
+
+    result = asyncio.run(dispatch(tmp_path, {"pattern": "needle"}))
+
+    assert result["error"] == {
+        "code": "search_error",
+        "message": "The search stopped without results: a line in data/big.min.js exceeds the "
+        '8 MiB limit for one result. Exclude that file with glob "!data/big.min.js" to see the '
+        'other results, or set output to "files" or "count", which show no lines.',
+    }
+    # The calls the error names succeed.
+    excluded = search(tmp_path, pattern="needle", glob="!data/big.min.js")
+    assert excluded["content"] == "src/a.py:1:needle"
+    listed = search(tmp_path, pattern="needle", output="files")
+    assert listed["content"] == "data/big.min.js\nsrc/a.py"
+
+
+@pytest.mark.parametrize(
+    ("arguments", "advice"),
+    [
+        ({"pattern": "needle"}, 'add "--max-filesize", "50M" to args'),
+        ({"pattern": "needle", "args": ["-U"]}, "Leave out -U unless matches need to span lines."),
+        ({}, "Narrow path or glob to list fewer files."),
+        ({"args": ["--dirs"]}, "Narrow path or glob to list fewer directories."),
+    ],
+)
+def test_a_search_over_the_memory_bound_fails_with_advice_for_its_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arguments: dict[str, Any], advice: str
+) -> None:
+    _write(tmp_path, {"src/a.py": "needle\n"})
+
+    class Oversized:
+        def __init__(self, _pid: int) -> None:
+            pass
+
+        def memory_info(self) -> SimpleNamespace:
+            return SimpleNamespace(rss=MAX_CHILD_MEMORY + 1)
+
+    monkeypatch.setattr("core.tools._search_execution.psutil.Process", Oversized)
+
+    result = asyncio.run(dispatch(tmp_path, arguments))
+
+    assert result["error"]["code"] == "search_error"
+    message = result["error"]["message"]
+    assert "stopped without results: it exceeded its 512 MiB memory limit." in message
+    assert advice in message
+
+
+_OUTPUT_BOUND = ", when their paths reached the 256 MiB output limit"
+
+
+@pytest.mark.parametrize(
+    ("bound", "value", "arguments", "reason"),
+    [
+        # Either bound keeps fewer than the 40 files: 5 entries, or about 100 bytes of output.
+        # A listing pass prints paths; a counting pass prints counts and then statistics.
+        ("MAX_ENTRIES", 5, {}, ""),
+        ("MAX_ENTRIES", 5, {"pattern": "x", "output": "files"}, ""),
+        ("MAX_SCAN_BYTES", 100, {}, _OUTPUT_BOUND),
+        ("MAX_SCAN_BYTES", 100, {"pattern": "x", "output": "files"}, _OUTPUT_BOUND),
+    ],
+)
+def test_a_pass_a_bound_cut_short_names_its_reason_and_the_files_kept(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    bound: str,
+    value: int,
+    arguments: dict[str, Any],
+    reason: str,
+) -> None:
+    _write(tmp_path, dict.fromkeys(_FILES, "x\n"))
+    monkeypatch.setattr(f"core.tools._search_execution.{bound}", value)
+    native_lines = execution.native_lines
+    read = 0
+
+    def counted(*args: Any, **kwargs: Any) -> Iterator[bytes]:
+        nonlocal read
+        records = native_lines(*args, **kwargs)
+        with contextlib.closing(records):
+            for record in records:
+                read += 1
+                yield record
+
+    monkeypatch.setattr(execution, "native_lines", counted)
+
+    data = search(tmp_path, **arguments, limit=10000)
+
+    kept = data["content"].splitlines()
+    assert 0 < len(kept) < len(_FILES)
+    # The pass stops reading, and so its child, at the first record past the bound.
+    assert read <= len(kept) + 1
+    assert data["warnings"] == [
+        f"The search stopped after {len(kept)} files{reason}; narrow path or glob to see the rest."
+    ]
+    assert data["summary"].endswith("The search is incomplete; see warnings.")
 
 
 @pytest.mark.parametrize(
