@@ -230,8 +230,15 @@ describe('PathField', () => {
       'vBot C:\\work\\vBot',
     ]);
 
-    dialog.querySelectorAll('.path-browser__row')[3].click();
+    // Rows and crumbs a click replaces hand keyboard focus to the list.
+    const list = dialog.querySelector('[role="listbox"]');
+    const clickWithFocus = (element) => {
+      element.focus();
+      element.click();
+    };
+    clickWithFocus(dialog.querySelectorAll('.path-browser__row')[3]);
     await settle();
+    expect(document.activeElement).toBe(list);
     expect(listDirectory).toHaveBeenLastCalledWith({
       path: 'C:/work/vBot',
       include_files: false,
@@ -248,6 +255,7 @@ describe('PathField', () => {
 
     // A filter highlights its first match, and Enter opens it.
     const filter = dialog.querySelector('.path-browser__filter');
+    filter.focus();
     type(filter, 'WE');
     expect(
       dialog.querySelector('.path-browser__row.active').textContent.trim(),
@@ -257,6 +265,20 @@ describe('PathField', () => {
     expect(dialog.querySelector('.path-browser__state').textContent).toContain(
       'This folder has no subfolders.',
     );
+    expect(document.activeElement).toBe(filter);
+
+    clickWithFocus(
+      [...dialog.querySelectorAll('button.path-browser__crumb')].find(
+        (crumb) => crumb.textContent.trim() === 'vBot',
+      ),
+    );
+    await settle();
+    expect(document.activeElement).toBe(list);
+    const webui = dialog.querySelectorAll('.path-browser__row')[1];
+    webui.focus();
+    webui.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    await settle();
+    expect(document.activeElement).toBe(list);
     expect(dialog.querySelector('.path-browser__choice').textContent).toBe(
       'C:\\work\\vBot\\webui',
     );

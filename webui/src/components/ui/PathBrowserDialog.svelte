@@ -168,6 +168,15 @@
     };
   }
 
+  // Navigation replaces the row or crumb that was clicked, which would drop
+  // keyboard focus to the page: the list takes it, so arrow keys and
+  // Backspace keep working. The filter keeps it while the user types there.
+  function focusList() {
+    const focused = listElement?.ownerDocument.activeElement;
+    if (focused?.classList.contains('path-browser__filter')) return;
+    listElement?.focus();
+  }
+
   // Opens a folder. A quiet attempt (the start candidates) changes nothing
   // when it fails and reports whether it worked.
   async function openFolder(
@@ -181,6 +190,7 @@
       target = path;
       filter = '';
       activeKey = '';
+      focusList();
     }
     try {
       const result = await listings.list(listingParams(path), { refresh });
@@ -214,6 +224,7 @@
     target = '';
     filter = '';
     activeKey = '';
+    focusList();
     try {
       const [result, found] = await Promise.all([
         listings.list({ path: null }, { refresh }),
