@@ -359,7 +359,9 @@
                     </StatusChip>
                   {/if}
                 </span>
-                <span class="project-item-cwd">{project.cwd}</span>
+                <span class="project-item-cwd secondary-list__meta"
+                  >{project.cwd}</span
+                >
               </span>
             </button>
           {/each}

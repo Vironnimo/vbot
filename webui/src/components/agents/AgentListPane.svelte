@@ -176,7 +176,7 @@
           >
             <div class="agent-item-inner">
               <div class="agent-item-name">{agent.name || agent.id}</div>
-              <div class="agent-item-sub">
+              <div class="agent-item-sub secondary-list__meta">
                 {modelShortName(agent.model) || agent.id || t('common.unknown')}
               </div>
             </div>

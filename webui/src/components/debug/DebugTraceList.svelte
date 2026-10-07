@@ -223,15 +223,16 @@
     margin-bottom: 3px;
     border-radius: var(--r-md);
     border: 1px solid transparent;
-    border-left: 2px solid transparent;
   }
   .debug-trace:hover {
     background: var(--surface-2);
   }
   .debug-trace--selected,
   .debug-trace--selected:hover {
-    background: var(--surface-3);
-    border-left-color: var(--accent);
+    background: var(--selected-surface);
+  }
+  .debug-trace--selected .trace-middle {
+    color: var(--accent);
   }
   .debug-trace__row {
     display: grid;

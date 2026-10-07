@@ -181,7 +181,7 @@
 .app-shell__nav-item--active,
 .nav-item.active {
   color: var(--text-hi);
-  background: var(--surface-3);
+  background: var(--selected-surface);
 }
 
 .app-shell__nav-item--active .app-shell__nav-icon,

@@ -58,6 +58,9 @@
   --composer-surface: var(--surface);
   --prompt-header-surface: var(--surface-2);
   --prompt-content-surface: var(--surface);
+  /* The current item of the Main menu and of lists: one raised step above
+     the hover surface; its icon or secondary line carries the accent. */
+  --selected-surface: var(--surface-3);
   --preview-surface: var(--surface);
   --terminal-surface: #0e0d0b;
   /* Text levels. Every level meets WCAG AA (4.5:1) on bg and every surface
@@ -89,7 +92,6 @@
   --accent-40: color-mix(in srgb, var(--accent) 40%, transparent);
   --accent-60: color-mix(in srgb, var(--accent) 60%, transparent);
   --accent-pale: var(--accent-12);
-  --accent-dim: var(--accent-08);
   /* Keyboard focus for controls: a solid accent ring (>= 5:1 on every
      surface) separated from the control by a background-colored gap. Text
      entry fields also match focus on click, so they signal focus with an

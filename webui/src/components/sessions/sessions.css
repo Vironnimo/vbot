@@ -214,7 +214,7 @@
 
 /* Flat master-list rows in the shared Agents/Projects list language: no
      per-row card chrome, a quiet hover/focus tint, and the selected row
-     marked only by the 2px accent rail with an accent-dim fill.
+     on the shared selection surface.
 
    The title takes the whole row. Its end fades out instead of an ellipsis;
    one kind marker sits at the end of the title line and gives way to the
@@ -230,12 +230,10 @@
 
   position: relative;
   flex: 0 0 auto;
-  border-left: 2px solid transparent;
-  border-radius: 0 var(--r-md) var(--r-md) 0;
+  border-radius: var(--r-md);
   background: transparent;
   transition:
     background 120ms ease,
-    border-color 120ms ease,
     box-shadow 120ms ease;
 }
 
@@ -253,15 +251,18 @@
 }
 
 .session-row:has(.session-row__select--active) {
-  border-left-color: var(--accent);
-  background: var(--accent-dim);
+  background: var(--selected-surface);
+}
+
+.session-row__select--active .session-row__agent {
+  color: var(--accent);
 }
 
 .session-row__select {
   width: 100%;
   border: 0;
   border-radius: inherit;
-  padding: 5px 8px 5px 16px;
+  padding: 5px 8px 5px 18px;
   text-align: left;
   background: transparent;
   color: var(--text-hi);
@@ -425,7 +426,7 @@
 .session-row__status {
   position: absolute;
   top: 50%;
-  left: -11px;
+  left: -12px;
   display: inline-flex;
   align-items: center;
   transform: translateY(-50%);

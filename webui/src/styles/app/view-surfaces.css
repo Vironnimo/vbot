@@ -88,9 +88,11 @@
   scrollbar-gutter: stable;
 }
 
-/* Inset master-list rows follow the Settings index geometry: the selection
-   surface stays clear of the pane edges, with a flush accent rail and a soft
-   radius only on the free right edge. Feature styles own the row contents. */
+/* Inset master-list rows follow the Settings index geometry: the hover and
+   selection surfaces stay clear of the pane edges. As in the Main menu, the
+   current row is raised and its secondary line (`.secondary-list__meta`: a
+   Model, a path, a count) takes the accent, the counterpart of the menu's
+   accent icon. Feature styles own the row contents. */
 .secondary-list {
   padding: 12px;
   scrollbar-gutter: auto;
@@ -99,12 +101,9 @@
 .secondary-list__item {
   width: 100%;
   border: 0;
-  border-left: 2px solid transparent;
-  border-radius: 0 var(--r-md) var(--r-md) 0;
+  border-radius: var(--r-md);
   background: transparent;
-  transition:
-    background 120ms ease,
-    border-color 120ms ease;
+  transition: background 120ms ease;
 }
 
 .secondary-list__item:hover,
@@ -118,8 +117,11 @@
 }
 
 .secondary-list__item.active {
-  border-left-color: var(--accent);
-  background: var(--surface-3);
+  background: var(--selected-surface);
+}
+
+.secondary-list__item.active .secondary-list__meta {
+  color: var(--accent);
 }
 
 /* A small heading over a group of rows in a pane, set apart by a trailing
