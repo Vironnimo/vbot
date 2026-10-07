@@ -719,7 +719,7 @@ def live_agent_tool_access(tool_access: ToolAccess) -> ToolAccess:
     nothing activates beside the Tools the policy names.
     """
     granted = tuple(dict.fromkeys((*tool_access.granted, *LIVE_TOOL_NAMES)))
-    return replace(tool_access, granted=granted, fixed=True)
+    return replace(tool_access, granted=granted, fixed=True, live_call=True)
 
 
 def _agent_document(agent: Agent, *, workspace: str) -> JsonObject:

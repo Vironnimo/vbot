@@ -220,13 +220,18 @@ def test_ensure_builtin_agents_creates_them_outside_the_roster(store: AgentStore
     backend = store.builtin_agent("live_backend")
     assert voice is not None and backend is not None
     assert voice.tool_access == ToolAccess(
-        mode="selected", allowed=LIVE_TOOL_NAMES, granted=LIVE_TOOL_NAMES, fixed=True
+        mode="selected",
+        allowed=LIVE_TOOL_NAMES,
+        granted=LIVE_TOOL_NAMES,
+        fixed=True,
+        live_call=True,
     )
     assert backend.tool_access == ToolAccess(
         mode="selected",
         allowed=(*LIVE_TOOL_NAMES, "web_search", "web_fetch"),
         granted=LIVE_TOOL_NAMES,
         fixed=True,
+        live_call=True,
     )
     # Later starts find them; offline edits never widen what they can do.
     for agent_id in ("librarian", LIVE_VOICE_AGENT_ID):
@@ -246,7 +251,9 @@ def test_ensure_builtin_agents_creates_them_outside_the_roster(store: AgentStore
         mode="selected", allowed=("skill", "skill_manage"), fixed=True
     )
     voice_again = store.get(LIVE_VOICE_AGENT_ID)
-    assert voice_again.tool_access == ToolAccess(mode="all", granted=LIVE_TOOL_NAMES, fixed=True)
+    assert voice_again.tool_access == ToolAccess(
+        mode="all", granted=LIVE_TOOL_NAMES, fixed=True, live_call=True
+    )
     for agent in (again, voice_again):
         assert (
             agent.memory_prompt_mode,
@@ -326,7 +333,11 @@ def test_the_librarian_keeps_its_id_and_existence_and_changes_only_model_setting
         LIVE_BACKEND_AGENT_ID, tool_access={"mode": "selected", "allowed": ["overview"]}
     )
     assert backend.tool_access == ToolAccess(
-        mode="selected", allowed=("overview",), granted=LIVE_TOOL_NAMES, fixed=True
+        mode="selected",
+        allowed=("overview",),
+        granted=LIVE_TOOL_NAMES,
+        fixed=True,
+        live_call=True,
     )
     assert store.get(LIVE_BACKEND_AGENT_ID).tool_access == backend.tool_access
     with pytest.raises(BuiltinAgentError):
