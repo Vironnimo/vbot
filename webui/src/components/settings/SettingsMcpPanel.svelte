@@ -12,6 +12,7 @@
   import Modal from '../ui/Modal.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
+  import PathField from '../ui/PathField.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import McpCatalogDialog from './McpCatalogDialog.svelte';
   import McpConnectionDiagnostics from './McpConnectionDiagnostics.svelte';
@@ -730,8 +731,9 @@
             required
             help={t('mcp.programHelp')}
           >
-            {#snippet children(field)}<TextField
+            {#snippet children(field)}<PathField
                 id={field.controlId}
+                mode="file"
                 aria-describedby={field.describedBy}
                 value={draft.command}
                 disabled={state.busy}
@@ -877,8 +879,10 @@
                 controlId={`${componentId}-cwd`}
                 label={t('mcp.directory')}
               >
-                {#snippet children(field)}<TextField
+                {#snippet children(field)}<PathField
                     id={field.controlId}
+                    mode="directory"
+                    projectShortcuts
                     value={draft.cwd}
                     disabled={state.busy}
                     onInput={(value) => set('cwd', value)}

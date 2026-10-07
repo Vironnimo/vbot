@@ -266,7 +266,8 @@
   gap: 8px;
 }
 
-.agents-view .agents-view__field-with-action > .s-input {
+.agents-view .agents-view__field-with-action > .s-input,
+.agents-view .agents-view__field-with-action > .path-field {
   min-width: 0;
   flex: 1;
 }

@@ -6,7 +6,7 @@
 
   import Button from '../ui/Button.svelte';
   import SaveStatus from '../ui/SaveStatus.svelte';
-  import TextField from '../ui/TextField.svelte';
+  import PathField from '../ui/PathField.svelte';
   import {
     createDebouncedAutosave,
     useAutosaveContext,
@@ -166,8 +166,9 @@
       {/if}
 
       <div class="s-group__block skills-directory-add" bind:this={addElement}>
-        <TextField
-          code
+        <PathField
+          mode="directory"
+          projectShortcuts
           value={newSkillDirectory}
           onInput={(next) => (newSkillDirectory = next)}
           placeholder={t('settings.skills.pathPlaceholder')}
@@ -212,7 +213,7 @@
     gap: var(--space-sm);
   }
 
-  .skills-directory-add :global(input) {
+  .skills-directory-add :global(.path-field) {
     flex: 1;
     min-width: 180px;
   }

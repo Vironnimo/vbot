@@ -1,3 +1,10 @@
+<script module>
+  // Open modals, oldest first. A dialog opened from inside another one (a
+  // path picker's Browse dialog in a form dialog) is the only one that
+  // answers Escape and keeps Tab inside itself until it closes.
+  const openModals = [];
+</script>
+
 <script>
   // Shared modal shell. It owns the dialog semantics every modal needs — the
   // dimmed overlay, overlay-click-to-close, Escape-to-close, `role="dialog"` /
@@ -36,6 +43,7 @@
   } = $props();
 
   const navigation = useNavigation();
+  const stackEntry = {};
   let releaseLayer = noop;
   let modalElement = $state();
   let overlayElement = $state();
@@ -54,6 +62,10 @@
   }
 
   function handleDocumentKeydown(event) {
+    if (openModals.at(-1) !== stackEntry) {
+      return;
+    }
+
     if (event.key === 'Escape') {
       // A nested picker consumes Escape when dismissing its own popup.
       if (!event.defaultPrevented) requestClose();
@@ -130,6 +142,7 @@
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : undefined;
+    openModals.push(stackEntry);
     isolateBackground();
     releaseLayer = navigation?.registerLayer({ close: requestClose }) ?? noop;
     // Programmatic focus on the tabindex=-1 box does not trigger :focus-visible,
@@ -138,6 +151,8 @@
   });
 
   onDestroy(() => {
+    const stackIndex = openModals.indexOf(stackEntry);
+    if (stackIndex >= 0) openModals.splice(stackIndex, 1);
     releaseLayer();
     restoreBackground();
     if (

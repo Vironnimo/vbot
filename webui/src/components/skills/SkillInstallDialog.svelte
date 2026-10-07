@@ -6,6 +6,7 @@
   import Button from '../ui/Button.svelte';
   import Banner from '../ui/Banner.svelte';
   import TextField from '../ui/TextField.svelte';
+  import PathField from '../ui/PathField.svelte';
   import TabList from '../ui/TabList.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import Dropdown from '../Dropdown.svelte';
@@ -160,8 +161,10 @@
             <label class="skills-field-label" for="skill-install-source"
               >{t('skills.install.source')}</label
             >
-            <TextField
+            <!-- Completes only typed absolute paths, never links. -->
+            <PathField
               id="skill-install-source"
+              mode="any"
               value={source}
               disabled={Boolean(busy)}
               placeholder="https://…"

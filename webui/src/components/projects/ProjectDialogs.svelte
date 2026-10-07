@@ -3,6 +3,7 @@
   import { t } from '$lib/i18n.js';
   import FormField from '../ui/FormField.svelte';
   import TextField from '../ui/TextField.svelte';
+  import PathField from '../ui/PathField.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
@@ -64,10 +65,10 @@
             label={t('projects.add.cwd')}
             help={t('projects.add.cwdHelp')}
           >
-            <TextField
+            <PathField
               id="projects-add-cwd"
               variant="modal"
-              code
+              mode="directory"
               value={projectsState.addForm.cwd}
               placeholder={t('projects.add.cwdPlaceholder')}
               disabled={projectsState.addingProject}
@@ -140,9 +141,10 @@
             controlId="projects-repoint-cwd"
             label={t('projects.rePoint.cwd')}
           >
-            <TextField
+            <PathField
               id="projects-repoint-cwd"
               variant="modal"
+              mode="directory"
               value={projectsState.rePointCwd}
               placeholder={t('projects.rePoint.cwdPlaceholder')}
               disabled={projectsState.rePointing}

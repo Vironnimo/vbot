@@ -1,11 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
+  createMentionIndex,
   extractMentionTokens,
+  findOpenQuotedMention,
   formatMentionToken,
-  fuzzyFilterFiles,
   isMentionTokenChar,
-  matchMentionCandidates,
+  mentionCandidates,
+  resolveMentionFiles,
 } from '../fileMentions.js';
 
 describe('extractMentionTokens', () => {
@@ -36,7 +38,22 @@ describe('extractMentionTokens', () => {
   });
 });
 
-describe('matchMentionCandidates', () => {
+describe('findOpenQuotedMention', () => {
+  it.each([
+    ['see @"meeting notes/ag', { start: 4, query: 'meeting notes/ag' }],
+    ['@"', { start: 0, query: '' }],
+    [String.raw`@"a \"b`, { start: 0, query: 'a "b' }],
+    // Closed, interrupted by a line break, or glued to a word: not open.
+    ['@"done.md" and more', null],
+    ['@"two\nlines', null],
+    ['mail x@"quoted', null],
+    ['no mention', null],
+  ])('reads %j', (text, expected) => {
+    expect(findOpenQuotedMention(text, text.length)).toEqual(expected);
+  });
+});
+
+describe('resolveMentionFiles', () => {
   const files = ['src/app.py', 'README.md', 'docs/guide.md'];
 
   it.each([
@@ -61,8 +78,33 @@ describe('matchMentionCandidates', () => {
       [String.raw`a\b.txt`],
     ],
     ['deduplicates matches', ['README.md', 'README.md.'], files, ['README.md']],
-  ])('%s', (_label, tokens, listed, matches) => {
-    expect(matchMentionCandidates(tokens, listed)).toEqual(matches);
+  ])('%s', async (_label, tokens, listed, matches) => {
+    await expect(
+      resolveMentionFiles(tokens, { files: listed }),
+    ).resolves.toEqual(matches);
+  });
+
+  it('confirms files outside the index by listing their folder', async () => {
+    const listEntries = vi.fn(async (directory) => {
+      if (directory === 'missing') throw new Error('not_found');
+      return directory === 'build'
+        ? [
+            { name: 'out.log', kind: 'file', ignored: true },
+            { name: 'cache', kind: 'directory', ignored: true },
+          ]
+        : [{ name: '.env', kind: 'file', ignored: true }];
+    });
+
+    await expect(
+      resolveMentionFiles(
+        ['src/app.py', 'build/out.log.', '.env', 'build/cache', 'missing/x'],
+        { files, listEntries },
+      ),
+    ).resolves.toEqual(['src/app.py', 'build/out.log', '.env']);
+    // Indexed tokens list nothing; each other folder is listed once.
+    expect(
+      listEntries.mock.calls.map(([directory]) => directory).sort(),
+    ).toEqual(['', 'build', 'missing']);
   });
 });
 
@@ -73,9 +115,12 @@ describe('formatMentionToken', () => {
       '@"notes/meeting notes.md"',
     );
     expect(formatMentionToken('a "b".txt')).toBe('@"a \\"b\\".txt"');
+    // A chosen folder stays open for the rest of the path.
+    expect(formatMentionToken('my notes/', { open: true })).toBe('@"my notes/');
+    expect(formatMentionToken('docs/', { open: true })).toBe('@docs/');
   });
 
-  it('round-trips every listed path into a mention', () => {
+  it('round-trips every listed path into a mention', async () => {
     const files = [
       'README.md',
       'docs/Übersicht.md',
@@ -90,14 +135,14 @@ describe('formatMentionToken', () => {
     ];
     for (const file of files) {
       const text = `please read ${formatMentionToken(file)} now, thanks.`;
-      expect(matchMentionCandidates(extractMentionTokens(text), files)).toEqual(
-        [file],
-      );
+      await expect(
+        resolveMentionFiles(extractMentionTokens(text), { files }),
+      ).resolves.toEqual([file]);
     }
   });
 });
 
-describe('fuzzyFilterFiles', () => {
+describe('createMentionIndex', () => {
   const files = [
     'core/chat/chat.py',
     '.vorch/domain-maps/tools/session_search.md',
@@ -105,9 +150,12 @@ describe('fuzzyFilterFiles', () => {
     'webui/src/lib/api.js',
     'core/recall/vector.py',
   ];
+  const paths = (matches) => matches.map((match) => match.path);
 
   it('returns the capped raw list when the query is empty', () => {
-    expect(fuzzyFilterFiles(files, '', 3)).toEqual(files.slice(0, 3));
+    expect(paths(createMentionIndex({ files }).search('', 3))).toEqual(
+      files.slice(0, 3),
+    );
   });
 
   it.each([
@@ -126,7 +174,7 @@ describe('fuzzyFilterFiles', () => {
     ['case-insensitively', 'SEARCH', ['core/tools/search.py'], []],
     ['nothing without the query as a subsequence', 'zzz', [], files],
   ])('matches %s', (_label, query, included, excluded) => {
-    const results = fuzzyFilterFiles(files, query);
+    const results = paths(createMentionIndex({ files }).search(query));
 
     expect(results).toEqual(expect.arrayContaining(included));
     for (const file of excluded) {
@@ -134,16 +182,78 @@ describe('fuzzyFilterFiles', () => {
     }
   });
 
-  it('ranks filename hits above path-only hits', () => {
-    expect(
-      fuzzyFilterFiles(['tools/other.py', 'src/tools.py'], 'tools')[0],
-    ).toBe('src/tools.py');
+  it('ranks filename hits above path-only hits, folders like files', () => {
+    const index = createMentionIndex({
+      files: ['tools/other.py', 'src/tools.py'],
+      directories: ['tools/', 'core/toolsets'],
+    });
+    expect(index.search('tools')).toEqual([
+      { path: 'tools', kind: 'directory' },
+      { path: 'src/tools.py', kind: 'file' },
+      { path: 'core/toolsets', kind: 'directory' },
+      { path: 'tools/other.py', kind: 'file' },
+    ]);
   });
 
-  it('applies the result limit', () => {
+  it('applies the result limit, substring hits before subsequence hits', () => {
     const many = Array.from({ length: 20 }, (_, i) => `file-${i}.txt`);
+    const index = createMentionIndex({
+      files: ['f/i/l/e.md', ...many],
+    });
 
-    expect(fuzzyFilterFiles(many, 'file', 5)).toHaveLength(5);
+    expect(paths(index.search('file', 5))).toEqual([
+      'file-0.txt',
+      'file-1.txt',
+      'file-2.txt',
+      'file-3.txt',
+      'file-4.txt',
+    ]);
+    expect(paths(index.search('file', 50))).toHaveLength(21);
+  });
+
+  it('answers a growing or changed query as a fresh index would', () => {
+    const corpus = Array.from(
+      { length: 400 },
+      (_, i) => `pkg${i % 7}/mod${i % 13}/file_${i}.${i % 2 ? 'py' : 'md'}`,
+    );
+    const index = createMentionIndex({ files: corpus });
+    for (const query of ['p', 'pk', 'pkg3', 'pkg3/m', 'f1', 'f1.p', 'x', '']) {
+      expect(index.search(query, 20)).toEqual(
+        createMentionIndex({ files: corpus }).search(query, 20),
+      );
+    }
+  });
+});
+
+describe('mentionCandidates', () => {
+  const index = createMentionIndex({
+    files: ['src/app.py', 'src/api.js', 'docs/api.md'],
+    directories: ['src', 'docs'],
+  });
+
+  it('lists the typed folder first, folders first, then the index', () => {
+    const entries = [
+      { name: 'app.py', kind: 'file', ignored: false },
+      { name: 'Api-cache', kind: 'directory', ignored: true },
+      { name: 'README.md', kind: 'file', ignored: false },
+    ];
+
+    expect(
+      mentionCandidates({ index, directory: 'src', entries, query: 'src/a' }),
+    ).toEqual([
+      { path: 'src/Api-cache', kind: 'directory', ignored: true },
+      { path: 'src/app.py', kind: 'file', ignored: false },
+      { path: 'src/api.js', kind: 'file', ignored: false },
+    ]);
+  });
+
+  it('caps the merged rows', () => {
+    const entries = Array.from({ length: 60 }, (_, i) => ({
+      name: `n${i}.md`,
+      kind: 'file',
+      ignored: false,
+    }));
+    expect(mentionCandidates({ index, entries, query: '' })).toHaveLength(50);
   });
 });
 

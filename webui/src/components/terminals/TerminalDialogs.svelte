@@ -19,6 +19,7 @@
   import Modal from '../ui/Modal.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import TextField from '../ui/TextField.svelte';
+  import PathField from '../ui/PathField.svelte';
   import Dropdown from '../Dropdown.svelte';
   let { viewState, controller, serverUnavailable, onToast, onStarted } =
     $props();
@@ -347,12 +348,13 @@
             {/snippet}
 
             {#snippet children(field)}
-              <TextField
+              <PathField
                 id={field.controlId}
                 variant="modal"
+                mode="directory"
+                projectShortcuts
                 aria-describedby={field.describedBy}
                 ariaLabel={t('terminals.workdirLabel')}
-                code
                 value={startWorkdir}
                 disabled={viewState.startingTerminal}
                 placeholder={t('terminals.workdirPlaceholder')}

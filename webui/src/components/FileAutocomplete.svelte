@@ -1,16 +1,12 @@
 <script>
-  import { fuzzyFilterFiles } from '$lib/fileMentions.js';
   import { t } from '$lib/i18n.js';
 
   const noop = () => {};
 
-  // Rendered matches are capped: with local fuzzy ranking, everything relevant
-  // sits at the top and a longer tail only costs scrolling.
-  const MAX_RENDERED_MATCHES = 50;
-
+  // `candidates` are the rows to show, each `{ path, kind, ignored }`, already
+  // ranked and capped by the composer's picker.
   let {
-    files = [],
-    query = '',
+    candidates = [],
     truncated = false,
     loading = false,
     activeIndex = 0,
@@ -18,9 +14,6 @@
     onHover = noop,
   } = $props();
 
-  let matchingFiles = $derived(
-    fuzzyFilterFiles(files, query, MAX_RENDERED_MATCHES),
-  );
   let containerElement = $state(null);
 
   // Keep the active option visible inside the scrollable popup when keyboard
@@ -28,7 +21,7 @@
   // container is scrolled — the page and timeline stay put.
   $effect(() => {
     activeIndex;
-    matchingFiles.length;
+    candidates.length;
 
     const container = containerElement;
     if (!container) {
@@ -52,18 +45,18 @@
   });
 
   export function matchCount() {
-    return matchingFiles.length;
+    return candidates.length;
   }
 
   export function hasMatches() {
-    return matchingFiles.length > 0;
+    return candidates.length > 0;
   }
 
   export function selectActive() {
-    const file = matchingFiles[activeIndex];
+    const candidate = candidates[activeIndex];
 
-    if (file) {
-      onSelect(file);
+    if (candidate) {
+      onSelect(candidate);
       return true;
     }
 
@@ -82,7 +75,7 @@
   }
 </script>
 
-{#if matchingFiles.length > 0 || loading}
+{#if candidates.length > 0 || loading}
   <div
     bind:this={containerElement}
     class="file-autocomplete"
@@ -97,27 +90,34 @@
         </span>
       {/if}
     </div>
-    {#if loading && matchingFiles.length === 0}
+    {#if loading && candidates.length === 0}
       <div class="file-autocomplete__loading">
         {t('common.loading')}
       </div>
     {/if}
-    {#each matchingFiles as file, index (file)}
-      {@const parts = splitPath(file)}
+    {#each candidates as candidate, index (candidate.path)}
+      {@const parts = splitPath(candidate.path)}
       <button
         type="button"
         class="file-autocomplete__option"
         class:active={index === activeIndex}
+        class:ignored={candidate.ignored}
         role="option"
         aria-selected={index === activeIndex}
         onmouseenter={() => onHover(index)}
         onmousedown={(event) => event.preventDefault()}
-        onclick={() => onSelect(file)}
+        onclick={() => onSelect(candidate)}
       >
-        {#if parts.directory}
-          <span class="file-autocomplete__directory">{parts.directory}</span>
+        <!-- Adjacent spans: no space between the folder and the name. -->
+        <span class="file-autocomplete__directory">{parts.directory}</span><span
+          class="file-autocomplete__filename"
+          >{parts.filename}{candidate.kind === 'directory' ? '/' : ''}</span
+        >
+        {#if candidate.ignored}
+          <span class="file-autocomplete__ignored">
+            {t('fileAutocomplete.ignored')}
+          </span>
         {/if}
-        <span class="file-autocomplete__filename">{parts.filename}</span>
       </button>
     {/each}
   </div>
@@ -214,6 +214,19 @@
 
   .file-autocomplete__option.active {
     box-shadow: inset 2px 0 0 var(--accent);
+  }
+
+  /* Ignored entries (reached by browsing a folder) stay choosable but recede. */
+  .file-autocomplete__option.ignored .file-autocomplete__filename {
+    color: var(--text-lo);
+  }
+
+  .file-autocomplete__ignored {
+    margin-left: 8px;
+    color: var(--text-lo);
+    font-family: var(--font-ui);
+    font-size: var(--fs-label-sm);
+    font-style: italic;
   }
 
   @media (max-width: 640px) {

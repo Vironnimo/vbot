@@ -491,8 +491,10 @@
       return null;
     }
     // A Session lists the Project it works in; a draft the Project it chose.
+    // `request.directory` asks for one directory's entries instead of the index.
     const scope = sessionSettings.readScope();
-    return async () => await chatController.listFiles(agentId, scope);
+    return async (request = {}) =>
+      await chatController.listFiles(agentId, { ...scope, ...request });
   });
   // The model catalog is global (not agent/session-scoped). The composer
   // fetches it when `/model ` is typed, the footer when it first shows and

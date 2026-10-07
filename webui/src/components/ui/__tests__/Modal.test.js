@@ -117,6 +117,44 @@ describe('Modal', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('lets only the newest of stacked dialogs answer Escape and Tab', async () => {
+    const outerClose = vi.fn();
+    const onInnerClose = vi.fn();
+    render({ onClose: outerClose });
+    const inner = mount(Modal, {
+      target: document.body,
+      props: {
+        title: 'Choose folder',
+        body: snippet(
+          '<div class="modal-body"><button class="inner-action">Pick</button></div>',
+        ),
+        onClose: onInnerClose,
+      },
+    });
+    flushSync();
+    const innerClose = document.body
+      .querySelectorAll('.modal')[1]
+      .querySelector('.modal-close');
+    innerClose.focus();
+
+    // Tab between the inner dialog's own controls stays the browser's move.
+    const tab = new KeyboardEvent('keydown', {
+      key: 'Tab',
+      bubbles: true,
+      cancelable: true,
+    });
+    innerClose.dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(innerClose);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(onInnerClose).toHaveBeenCalledTimes(1);
+    expect(outerClose).not.toHaveBeenCalled();
+
+    await unmount(inner);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(outerClose).toHaveBeenCalledTimes(1);
+  });
+
   it('blocks every close path while closeDisabled', () => {
     const onClose = vi.fn();
     render({ onClose, closeDisabled: true });

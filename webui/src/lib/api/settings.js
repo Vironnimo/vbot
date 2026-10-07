@@ -250,9 +250,11 @@ export function listProviderRoutingOptions(params = {}, options = {}) {
 // Files of the directory an existing Session works in (`sessionId`), or the
 // one a new Session of the Agent would work in: in `workingProjectId` when
 // given (`null` names the Workspace), else in the Agent's default Project.
+// `directory` (relative, '' = that root) also asks for its direct `entries`,
+// ignored ones included; the recursive index may then come back empty.
 export function listFiles(
   agentId,
-  { sessionId = '', workingProjectId } = {},
+  { sessionId = '', workingProjectId, directory } = {},
   options = {},
 ) {
   requireNonEmptyString(
@@ -265,6 +267,9 @@ export function listFiles(
     params.session_id = sessionId;
   } else if (workingProjectId !== undefined) {
     params.working_project_id = workingProjectId;
+  }
+  if (typeof directory === 'string') {
+    params.directory = directory;
   }
   return rpc('files.list', params, options);
 }

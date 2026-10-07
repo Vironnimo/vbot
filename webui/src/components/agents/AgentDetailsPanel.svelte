@@ -1,6 +1,7 @@
 <script>
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import TextField from '../ui/TextField.svelte';
+  import PathField from '../ui/PathField.svelte';
   import {
     AGENT_FORM_MODE_EDIT,
     AGENT_FORM_MODE_CREATE,
@@ -127,9 +128,10 @@
           {/if}
         </div>
         <div class="agents-view__field-with-action">
-          <TextField
+          <PathField
             id="agent-workspace"
-            code
+            mode="directory"
+            projectShortcuts
             invalid={Boolean(formErrors.workspace)}
             value={formValues.workspace}
             onInput={(next) => (formValues.workspace = next)}

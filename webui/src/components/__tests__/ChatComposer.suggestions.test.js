@@ -254,13 +254,81 @@ describe('ChatComposer suggestions', () => {
 
       typeInComposer('look at @search');
       await settle();
-      expect(onListFiles).toHaveBeenCalledTimes(1);
+      // One open asks for the index and for the entries of the typed folder.
+      expect(onListFiles.mock.calls).toEqual([[{ directory: '' }], []]);
       expect(
         suggestionOptions('file').map((option) => option.textContent),
       ).toEqual([expect.stringContaining('session_search.py')]);
 
       await chooseSuggestion('file');
       expect(composerInput().value).toBe('look at @src/session_search.py ');
+    });
+
+    it('browses into folders and sends files reached there, ignored ones too', async () => {
+      const onSendMessage = vi.fn().mockResolvedValue(true);
+      const folders = {
+        '': [
+          { name: 'build', kind: 'directory', ignored: true },
+          { name: 'src', kind: 'directory', ignored: false },
+        ],
+        build: [{ name: 'out.log', kind: 'file', ignored: true }],
+      };
+      const onListFiles = vi.fn(async ({ directory } = {}) =>
+        directory === undefined
+          ? { files: ['src/app.py'], directories: ['src'], truncated: false }
+          : { files: [], directories: [], entries: folders[directory] ?? [] },
+      );
+      composer.mount({ onSendMessage, onListFiles });
+      const rows = () =>
+        suggestionOptions('file').map((option) => ({
+          text: option.textContent.replace(/\s+/g, ' ').trim(),
+          ignored: option.classList.contains('ignored'),
+        }));
+
+      typeInComposer('see @bu');
+      await settle();
+      expect(rows()).toEqual([{ text: 'build/ ignored', ignored: true }]);
+
+      // A chosen folder continues the mention with the picker still open.
+      await chooseSuggestion('file');
+      await settle();
+      expect(composerInput().value).toBe('see @build/');
+      expect(onListFiles).toHaveBeenLastCalledWith({ directory: 'build' });
+      expect(rows()).toEqual([
+        { text: 'build/out.log ignored', ignored: true },
+      ]);
+
+      await chooseSuggestion('file');
+      expect(composerInput().value).toBe('see @build/out.log ');
+      submitComposer();
+      await vi.waitFor(() =>
+        expect(onSendMessage).toHaveBeenCalledWith('see @build/out.log ', {
+          fileMentions: ['build/out.log'],
+        }),
+      );
+      // The send reused the picker's listing of that folder.
+      expect(onListFiles).toHaveBeenCalledTimes(3);
+    });
+
+    it('lists a typed folder once typing pauses, quoted paths included', async () => {
+      const onListFiles = vi.fn(async ({ directory } = {}) => ({
+        files: directory === undefined ? ['readme.md'] : [],
+        entries:
+          directory === 'my notes'
+            ? [{ name: 'plan.md', kind: 'file', ignored: false }]
+            : [],
+        truncated: false,
+      }));
+      composer.mount({ onListFiles });
+
+      typeInComposer('@"my');
+      await settle();
+      typeInComposer('@"my notes/pl');
+      await vi.waitFor(() => expect(suggestionOptions('file')).toHaveLength(1));
+      expect(onListFiles).toHaveBeenCalledWith({ directory: 'my notes' });
+
+      await chooseSuggestion('file');
+      expect(composerInput().value).toBe('@"my notes/plan.md" ');
     });
 
     it('sends picked paths with spaces or symbols as file mentions', async () => {
@@ -304,12 +372,12 @@ describe('ChatComposer suggestions', () => {
       props.onListFiles = listing(['docs.md']);
       typeInComposer('see @docs.md now');
       submitComposer();
-      await settle(2);
-
+      await vi.waitFor(() =>
+        expect(onSendMessage).toHaveBeenCalledWith('see @docs.md now', {
+          fileMentions: ['docs.md'],
+        }),
+      );
       expect(props.onListFiles).toHaveBeenCalledTimes(1);
-      expect(onSendMessage).toHaveBeenCalledWith('see @docs.md now', {
-        fileMentions: ['docs.md'],
-      });
     });
 
     it('does not open the file picker inside an email address', async () => {
@@ -340,9 +408,10 @@ describe('ChatComposer suggestions', () => {
 
       typeInComposer(typed);
       submitComposer();
-      await settle(2);
 
-      expect(onSendMessage).toHaveBeenCalledWith(typed, ...options);
+      await vi.waitFor(() =>
+        expect(onSendMessage).toHaveBeenCalledWith(typed, ...options),
+      );
       await vi.waitFor(() => expect(composerInput().value).toBe(''));
     });
 
