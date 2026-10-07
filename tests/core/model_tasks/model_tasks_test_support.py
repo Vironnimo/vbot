@@ -155,7 +155,8 @@ LIVE_VOICE_TASK_OPTIONS = {
     "live_voice": {
         "parameters": {
             "voice": {"type": "enum", "values": ["cove", "juniper", "maple"], "default": "juniper"},
-            "backend_model": {"type": "model", "default": "terra"},
+            "backend": {"type": "enum", "values": ["vbot", "openai"], "default": "vbot"},
+            "openai_backend_model": {"type": "enum", "values": ["luna", "sol"], "default": "luna"},
         }
     }
 }
@@ -194,17 +195,8 @@ def _registry_model(
 
 
 def _live_voice_registry() -> ModelRegistry:
-    """Two live voice Models plus backend candidates spread over two Connections.
+    """Two live voice Models: ``live-sub`` on ``subscription``, ``live-key`` on ``api-key``."""
 
-    ``live-sub`` only runs on ``subscription``; ``live-key`` only on
-    ``api-key``. ``terra`` runs on both, ``astra`` only on ``subscription``
-    and ``platform`` only on ``api-key``. ``quiet`` is chat-only without Tools,
-    ``painter`` is tool-capable but not a chat Model, and ``foreign`` belongs to
-    another Provider. ``terra`` and ``platform`` publish reasoning ladders;
-    ``astra`` publishes none.
-    """
-
-    chat = ("chat", "text_output")
     entries = {
         ("openai", "live-sub"): _registry_model(
             "live-sub",
@@ -219,32 +211,6 @@ def _live_voice_registry() -> ModelRegistry:
             task_types=("live_voice",),
             connections=("api-key",),
             task_options=LIVE_VOICE_TASK_OPTIONS,
-        ),
-        ("openai", "terra"): _registry_model(
-            "terra",
-            "Terra",
-            task_types=chat,
-            tools=True,
-            connections=("api-key", "subscription"),
-            reasoning_levels=("high", "low", "medium"),
-        ),
-        ("openai", "astra"): _registry_model(
-            "astra", "Astra", task_types=chat, tools=True, connections=("subscription",)
-        ),
-        ("openai", "platform"): _registry_model(
-            "platform",
-            "Platform",
-            task_types=chat,
-            tools=True,
-            connections=("api-key",),
-            reasoning_levels=("low", "max"),
-        ),
-        ("openai", "quiet"): _registry_model("quiet", "Quiet", task_types=chat),
-        ("openai", "painter"): _registry_model(
-            "painter", "Painter", task_types=("image_generation",), tools=True
-        ),
-        ("openrouter", "foreign"): _registry_model(
-            "foreign", "Foreign", task_types=chat, tools=True
         ),
     }
     return ModelRegistry(entries)

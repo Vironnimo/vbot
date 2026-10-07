@@ -29,11 +29,11 @@ from core.model_tasks._image_options import (
     _image_generation_fields,
 )
 from core.model_tasks._live_options import (
-    BACKEND_THINKING_EFFORT_DEFAULT,
-    ModelCatalog,
+    LIVE_BACKEND_NONE,
+    LIVE_BACKEND_OPENAI,
+    LIVE_BACKEND_VBOT,
     _live_voice_fields,
-    backend_thinking_efforts,
-    live_backend_candidates,
+    live_backend_choices,
 )
 from core.model_tasks._media_options import (
     _music_generation_fields,
@@ -87,7 +87,9 @@ from core.models import Model
 
 __all__ = [
     "ALLOWED_OPTION_TYPES",
-    "BACKEND_THINKING_EFFORT_DEFAULT",
+    "LIVE_BACKEND_NONE",
+    "LIVE_BACKEND_OPENAI",
+    "LIVE_BACKEND_VBOT",
     "DALL_E_STYLE_CHOICES",
     "EMBEDDING_RESERVED_PAYLOAD_FIELDS",
     "FALLBACK_ASPECT_RATIOS",
@@ -105,7 +107,6 @@ __all__ = [
     "IMAGE_PARAMETER_SKIP",
     "IMAGE_SIZE_SHORTHAND_CONFLICTS",
     "JsonObject",
-    "ModelCatalog",
     "OPENAI_IMAGE_RESPONSE_FORMAT_CHOICES",
     "OPENAI_TTS_FORMAT_CHOICES",
     "OPENAI_TTS_VOICES",
@@ -117,8 +118,7 @@ __all__ = [
     "TaskModelOptionSchema",
     "TaskModelOptionValidationError",
     "TaskModelOptionsBy",
-    "backend_thinking_efforts",
-    "live_backend_candidates",
+    "live_backend_choices",
     "option_schema_for",
     "validate_task_model_options",
     "validate_text_embedding_options",
@@ -225,8 +225,6 @@ def option_schema_for(
     target: str,
     *,
     model: Model | None = None,
-    models: ModelCatalog | None = None,
-    connection_id: str = "",
     wire: ImageWire | None = None,
 ) -> TaskModelOptionSchema:
     """Return a model-aware option schema for *task_type* and *provider_id*.
@@ -237,9 +235,7 @@ def option_schema_for(
     types additionally carry the ``extra_options`` escape hatch (provider
     targets only — local targets never reach this builder).
 
-    *models* is the Model registry and *connection_id* the target's local
-    Connection id; live voice needs both to offer backend Model choices and
-    offers none without the registry. *wire* is the image wire serving the
+    *wire* is the image wire serving the
     target's Connection; without it, the Provider's default wire applies.
     """
 
@@ -247,9 +243,7 @@ def option_schema_for(
         return TaskModelOptionSchema(
             task_type=task_type,
             target=target,
-            fields=_live_voice_fields(
-                provider_id, model, models=models, connection_id=connection_id
-            ),
+            fields=_live_voice_fields(model),
         )
     if task_type == TASK_SPEECH_TO_TEXT:
         fields = _speech_to_text_fields(provider_id, model)

@@ -1,9 +1,11 @@
-"""Live voice service and call lifecycle, offline with a fake wire and fake brain."""
+"""Live voice service and call lifecycle, offline with a fake wire, voice Run, and backend."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -11,9 +13,10 @@ import pytest
 
 import core.model_tasks._live_call as live_call_module
 import core.model_tasks.live as live_module
-from core.model_tasks._live_brain import DelegationInput
+from core.model_tasks._live_backend import BackendRequest
+from core.model_tasks._live_brief import backend_instructions, voice_instructions
 from core.model_tasks._live_call import LiveCallSession
-from core.model_tasks._live_openai import ControlJoinError
+from core.model_tasks._live_openai import ControlJoinError, OpenAIBackend
 from core.model_tasks._live_wire import (
     WireAudio,
     WireCaption,
@@ -27,10 +30,8 @@ from core.model_tasks._live_wire import (
     relay_media,
 )
 from core.model_tasks.live import (
-    LiveBrief,
     LiveRunNotice,
     LiveStartRejected,
-    LiveToolRun,
     LiveVoiceService,
     live_success,
 )
@@ -42,14 +43,20 @@ from core.providers.errors import (
     ProviderOutcomeUnknownError,
     ProviderRateLimitError,
 )
+from core.tools.live import LiveToolHosts
 from core.usage import UsageRecorder
-from core.utils.errors import ConfigError
+from core.utils.errors import ConfigError, VBotError
 from tests.core.usage.usage_test_support import read_ledger
 
 OFFER = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+OPENAI_TARGET = "openai/gpt-live-1-codex::subscription"
 XAI_TARGET = "xai/grok-voice-think-fast-2.0::subscription"
-REQUEST_TOOL = {"name": "vbot_request"}
-TOOLS = ({"name": "overview"}, {"name": "open"})
+VOICE_TOOLS = (
+    {"name": "overview", "description": "What vBot shows.", "parameters": {"type": "object"}},
+    {"name": "end_call", "description": "Hang up.", "parameters": {"type": "object"}},
+)
+BACKEND_TOOLS = ("overview", "start_agent_session", "web_search")
+WAKE_PHRASES = ("hey vbot",)
 
 
 class FakeWire:
@@ -105,20 +112,73 @@ class FakeWire:
         self.closed = True
         self.push(None)
 
+    def results(self) -> dict[str, str]:
+        return {sent[1]: sent[2] for sent in self.sent if sent[0] == "result"}
 
-class FakeBrain:
+
+class FakeVoice:
+    """The voice Agent's Run: Tool calls reach the call the way the registry routes them."""
+
+    agent_id = "live-voice"
+
+    def __init__(self, hosts: LiveToolHosts, *, tools: Any = VOICE_TOOLS) -> None:
+        self.hosts = hosts
+        self.session_id = "voice-1"
+        self.tool_definitions = [dict(tool) for tool in tools]
+        self.records: list[tuple[str, str]] = []
+        self.calls: list[tuple[str, str, Any]] = []
+        self.finished: list[str | None] = []
+        self.discarded = False
+        self.on_cancel: Callable[[], None] | None = None
+
+    async def record_user(self, text: str) -> None:
+        self.records.append(("user", text))
+
+    async def record_assistant(self, text: str) -> None:
+        self.records.append(("assistant", text))
+
+    async def record_note(self, text: str) -> None:
+        self.records.append(("note", text))
+
+    async def run_tool(self, call_id: str, name: str, arguments: Any) -> dict[str, Any]:
+        self.calls.append((call_id, name, arguments))
+        host = self.hosts.get(self.session_id)
+        assert host is not None
+        if name == "vbot_request":
+            request = arguments.get("request") if isinstance(arguments, dict) else None
+            return await host.vbot_request(request or None)
+        return await host.run_live_tool(name, arguments)
+
+    async def finish(self, *, failure: str | None = None) -> None:
+        self.finished.append(failure)
+
+    async def discard(self) -> None:
+        self.discarded = True
+
+
+class FakeBackend:
+    """Answers requests one at a time, like the backend Agent's Session."""
+
     def __init__(self) -> None:
-        self.inputs: list[DelegationInput] = []
+        self.requests: list[BackendRequest] = []
         self.release = asyncio.Event()
         self.release.set()
         self.started = asyncio.Event()
         self.closed = False
+        self.session_id: str | None = None
+        self.on_session: Callable[[], None] | None = None
+        self._turn = asyncio.Lock()
 
-    async def answer(self, delegation: DelegationInput) -> str:
-        self.inputs.append(delegation)
-        self.started.set()
-        await self.release.wait()
-        return f"answer {len(self.inputs)}"
+    async def answer(self, prepare: Callable[[], Awaitable[BackendRequest]]) -> str:
+        async with self._turn:
+            self.requests.append(await prepare())
+            if self.session_id is None:
+                self.session_id = "backend-1"
+                assert self.on_session is not None
+                self.on_session()
+            self.started.set()
+            await self.release.wait()
+            return f"answer {len(self.requests)}"
 
     async def aclose(self) -> None:
         self.closed = True
@@ -129,29 +189,22 @@ class FakeHost:
         self.updates: list[dict[str, Any]] = []
         self.audio: list[bytes] = []
         self.executed: list[tuple[Any, Any]] = []
-        self.records: list[dict[str, Any]] = []
         self.tool_result: Any = {"ok": True}
         self.tool_release = asyncio.Event()
         self.tool_release.set()
         self.refs: str | Exception = ""
         self.state = ""
 
-    def brief(self, *, direct_tools: bool) -> LiveBrief:
-        return LiveBrief(
-            voice_instructions=f"voice direct={direct_tools}",
-            request_tool=REQUEST_TOOL,
-            delegation_instructions="delegate",
-            tools=TOOLS,
-        )
+    @property
+    def wake_phrases(self) -> tuple[str, ...]:
+        return WAKE_PHRASES
 
-    async def run_tool(
-        self, name: Any, arguments: Any, *, rejection: dict[str, Any] | None = None
-    ) -> LiveToolRun:
+    async def run_live_tool(self, name: str, arguments: Any) -> dict[str, Any]:
         self.executed.append((name, arguments))
         await self.tool_release.wait()
         if isinstance(self.tool_result, Exception):
             raise self.tool_result
-        return LiveToolRun(dict(self.tool_result))
+        return dict(self.tool_result)
 
     def known_refs(self) -> str:
         if isinstance(self.refs, Exception):
@@ -167,19 +220,32 @@ class FakeHost:
     def publish_audio(self, pcm: bytes) -> None:
         self.audio.append(pcm)
 
-    def record(self, event: dict[str, Any]) -> None:
-        self.records.append(event)
-
     def of_type(self, kind: str) -> list[dict[str, Any]]:
         return [update for update in self.updates if update["type"] == kind]
 
 
 def _call(
-    wire: FakeWire, brain: FakeBrain | None, host: FakeHost, **options: Any
-) -> LiveCallSession:
-    call = LiveCallSession(wire=wire, brain=brain, host=host, target="openai/gpt-live-1", **options)  # type: ignore[arg-type]
+    wire: FakeWire, host: FakeHost, backend: FakeBackend | None = None, **options: Any
+) -> tuple[LiveCallSession, FakeVoice]:
+    hosts = LiveToolHosts()
+    voice = FakeVoice(hosts)
+
+    def backend_factory(session_host: Any, on_session: Callable[[], None]) -> FakeBackend:
+        assert backend is not None
+        backend.on_session = on_session
+        return backend
+
+    call = LiveCallSession(
+        wire=wire,  # type: ignore[arg-type]
+        voice=voice,  # type: ignore[arg-type]
+        backend_factory=backend_factory if backend is not None else None,  # type: ignore[arg-type]
+        host=host,
+        hosts=hosts,
+        target="openai/gpt-live-1",
+        **options,
+    )
     call.start()
-    return call
+    return call, voice
 
 
 async def _until(predicate: Any, timeout: float = 2.0) -> None:
@@ -200,12 +266,18 @@ def _notice(run_id: str = "run-1") -> LiveRunNotice:
     )
 
 
+NOTICE_TEXT = (
+    'vBot update: {"run": "completed", "agent": "coder@web", "session": "s3", '
+    '"result_excerpt": "All tests pass.", "excerpt_truncated": false}'
+)
+
+
 @pytest.mark.asyncio
 async def test_call_goes_live_relays_captions_and_answers_delegations():
-    wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
+    wire, host, backend = FakeWire(), FakeHost(), FakeBackend()
     host.refs = "- s1: Session at Coder"
     host.state = "Terminals: none"
-    call = _call(wire, brain, host)
+    call, voice = _call(wire, host, backend)
 
     wire.push(
         WireStarted(expires_at=None),
@@ -214,7 +286,7 @@ async def test_call_goes_live_relays_captions_and_answers_delegations():
         WireDelegation("item_1", "Start one Codex terminal"),
         WireUsage({"audio_duration_ms": 400}),
     )
-    await _until(lambda: ("result", "item_1", "answer 1") in wire.sent)
+    await _until(lambda: wire.results().get("item_1") == "answer 1")
     await call.close()
 
     assert call.media == {"type": "webrtc", "sdp": "v=0\r\nanswer"}
@@ -228,15 +300,17 @@ async def test_call_goes_live_relays_captions_and_answers_delegations():
         {"type": "caption", "role": "user", "text": "Start a terminal", "final": True},
         {"type": "caption", "role": "assistant", "text": "On it", "final": False},
     ]
-    assert brain.inputs == [
-        DelegationInput(
+    assert backend.requests == [
+        BackendRequest(
             request="Start one Codex terminal",
             conversation="User: Start a terminal\nAssistant (still speaking): On it",
             updates="",
-            refs="- s1: Session at Coder",
             state="Terminals: none",
+            refs="- s1: Session at Coder",
         )
     ]
+    # The delegation is stored in the voice Session as a vbot_request call.
+    assert voice.calls == [("item_1", "vbot_request", {"request": "Start one Codex terminal"})]
     assert host.of_type("activity") == [
         {"type": "activity", "busy": True, "label": "working"},
         {"type": "activity", "busy": False, "label": None},
@@ -245,7 +319,49 @@ async def test_call_goes_live_relays_captions_and_answers_delegations():
     assert host.of_type("closed") == [
         {"type": "closed", "reason": "client_request", "usage": {"audio_duration_ms": 900}}
     ]
-    assert brain.closed
+    assert backend.closed
+    assert voice.finished == [None]
+
+
+@pytest.mark.asyncio
+async def test_the_voice_session_records_the_call_in_order_and_releases_its_tools():
+    wire, host = FakeWire(), FakeHost()
+    call, voice = _call(wire, host)
+    assert voice.hosts.get(voice.session_id) is call
+
+    wire.push(
+        WireStarted(None),
+        WireCaption("user", "Hi", final=False),
+        WireCaption("user", "Hi there", final=True),
+        WireCaption("assistant", "Hello", final=True),
+    )
+    await _until(lambda: len(host.of_type("caption")) == 3)
+    call.announce_run(_notice())
+    await call.close()
+
+    # Partial captions are not stored; what was said and the updates keep their order.
+    assert voice.records == [("user", "Hi there"), ("assistant", "Hello"), ("note", NOTICE_TEXT)]
+    assert voice.finished == [None]
+    assert voice.hosts.get(voice.session_id) is None
+
+
+@pytest.mark.asyncio
+async def test_the_accessor_learns_the_sessions_once_each_exists():
+    wire, host, backend = FakeWire(), FakeHost(), FakeBackend()
+    call, _voice = _call(wire, host, backend)
+    wire.push(WireStarted(None), WireDelegation("d1", "One"), WireDelegation("d2", "Two"))
+    await _until(lambda: len(wire.results()) == 2)
+    await call.close()
+
+    voice_session = {"agent_id": "live-voice", "session_id": "voice-1"}
+    assert host.of_type("sessions") == [
+        {"type": "sessions", "voice": voice_session, "backend": None},
+        {
+            "type": "sessions",
+            "voice": voice_session,
+            "backend": {"agent_id": "live-backend", "session_id": "backend-1"},
+        },
+    ]
 
 
 @pytest.mark.asyncio
@@ -255,7 +371,7 @@ async def test_live_cumulative_usage_is_saved_once_and_survives_lost_control(
     wire, host = FakeWire(), FakeHost()
     accounting = TaskUsage(recorder, "live_voice", parse_task_model_target_id(XAI_TARGET))
     call_id = await accounting.start()
-    call = _call(wire, None, host, usage_accounting=accounting, usage_call_id=call_id)
+    call, voice = _call(wire, host, usage_accounting=accounting, usage_call_id=call_id)
     wire.push(
         WireStarted(None),
         WireUsage({"input_tokens": 4, "output_tokens": 2}),
@@ -269,6 +385,8 @@ async def test_live_cumulative_usage_is_saved_once_and_survives_lost_control(
     assert records[0].usage["input_tokens"] == 7
     assert records[0].usage["output_tokens"] == 5
     assert len(host.of_type("closed")) == 1
+    # A lost connection fails the voice Run with the reason.
+    assert voice.finished == ["The connection to the voice model was lost."]
 
 
 @pytest.mark.asyncio
@@ -277,25 +395,26 @@ async def test_live_usage_failure_still_publishes_closed(caplog: Any) -> None:
 
     wire, host = FakeWire(), FakeHost()
     accounting = SimpleNamespace(finish=AsyncMock(side_effect=RuntimeError("test disk failure")))
-    call = _call(wire, None, host, usage_accounting=accounting, usage_call_id="test-call")
+    call, voice = _call(wire, host, usage_accounting=accounting, usage_call_id="test-call")
     wire.push(WireClosed(reason="client_request", usage=None, confirmed=True))
     await call.wait_closed()
     assert host.of_type("state")[-1]["phase"] == "closed"
     assert len(host.of_type("closed")) == 1
     assert any(record.exc_info for record in caplog.records)
+    assert voice.finished == [None]
 
 
 @pytest.mark.asyncio
 async def test_a_failed_usage_update_keeps_the_call_live(caplog: Any) -> None:
     from unittest.mock import AsyncMock
 
-    wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
+    wire, host, backend = FakeWire(), FakeHost(), FakeBackend()
     accounting = SimpleNamespace(
         update=AsyncMock(side_effect=RuntimeError("test disk failure")), finish=AsyncMock()
     )
-    call = _call(wire, brain, host, usage_accounting=accounting, usage_call_id="test-call")
+    call, _voice = _call(wire, host, backend, usage_accounting=accounting, usage_call_id="c")
     wire.push(WireStarted(None), WireUsage({"input_tokens": 4}), WireDelegation("i", "x"))
-    await _until(lambda: any(s[0] == "result" for s in wire.sent))
+    await _until(lambda: bool(wire.results()))
     assert host.of_type("closed") == []
     # A confirmed close that names no reason is an ordinary close.
     wire.push(WireClosed(reason=None, usage=None, confirmed=True))
@@ -319,7 +438,7 @@ async def test_a_cancelled_close_still_ends_the_call_and_stays_cancelled(
 
     monkeypatch.setattr(wire, "aclose", close_transport)
     monkeypatch.setattr(live_call_module, "_TEARDOWN_TIMEOUT_SECONDS", 5)
-    call = _call(wire, None, host, close_timeout=0.01)
+    call, _voice = _call(wire, host, close_timeout=0.01)
     wire.push(WireStarted(None))
     closing = asyncio.create_task(call.close())
     await asyncio.wait_for(cleanup_started.wait(), 1)
@@ -345,7 +464,7 @@ async def test_transport_cleanup_cannot_prevent_call_completion(
 
     monkeypatch.setattr(wire, "aclose", close_transport)
     monkeypatch.setattr(live_call_module, "_TEARDOWN_TIMEOUT_SECONDS", 0.01)
-    call = _call(wire, None, host)
+    call, _voice = _call(wire, host)
     wire.push(WireClosed(reason="client_request", usage=None, confirmed=True))
 
     await asyncio.wait_for(call.wait_closed(), 1)
@@ -367,7 +486,7 @@ async def test_abort_during_transport_cleanup_keeps_abort_reason_priority(
         wire.closed = True
 
     monkeypatch.setattr(wire, "aclose", close_transport)
-    call = _call(wire, None, host)
+    call, _voice = _call(wire, host)
     wire.push(WireClosed(reason="client_request", usage=None, confirmed=True))
     await asyncio.wait_for(cleanup_started.wait(), 1)
     abort = asyncio.create_task(call.abort())
@@ -394,7 +513,7 @@ async def test_cancellation_during_transport_cleanup_preserves_terminal_usage(
     monkeypatch.setattr(wire, "aclose", close_transport)
     accounting = TaskUsage(recorder, "live_voice", parse_task_model_target_id(XAI_TARGET))
     call_id = await accounting.start()
-    call = _call(wire, None, host, usage_accounting=accounting, usage_call_id=call_id)
+    call, _voice = _call(wire, host, usage_accounting=accounting, usage_call_id=call_id)
     wire.push(
         WireClosed(
             reason="client_request", usage={"input_tokens": 7, "output_tokens": 5}, confirmed=True
@@ -415,37 +534,45 @@ async def test_cancellation_during_transport_cleanup_preserves_terminal_usage(
 
 
 @pytest.mark.asyncio
-async def test_delegations_run_one_after_another_while_the_conversation_continues():
-    wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
-    brain.release.clear()
-    call = _call(wire, brain, host)
+async def test_requests_run_one_after_another_while_the_conversation_continues():
+    wire, host, backend = FakeWire(), FakeHost(), FakeBackend()
+    backend.release.clear()
+    call, _voice = _call(wire, host, backend)
 
-    wire.push(WireStarted(None), WireDelegation("item_1", "Read the chat"))
-    await _until(lambda: len(brain.inputs) == 1)
+    wire.push(
+        WireStarted(None),
+        WireCaption("user", "Read the chat", final=True),
+        WireDelegation("item_1", "Read the chat"),
+    )
+    await _until(lambda: len(backend.requests) == 1)
     host.state = "Terminals: t1"
     wire.push(
-        WireCaption("user", "Also, what time is it?", final=True),
+        WireCaption("user", "Also, start Codex", final=True),
         WireDelegation("item_2", "Start Codex"),
     )
-    await _until(lambda: host.of_type("caption")[-1:] != [])
+    await _until(lambda: host.of_type("caption")[-1]["text"] == "Also, start Codex")
     await asyncio.sleep(0.02)
 
     # The second request waits for the first and then starts from the state it left.
-    assert len(brain.inputs) == 1
-    assert host.of_type("caption")[-1]["text"] == "Also, what time is it?"
+    assert len(backend.requests) == 1
     assert host.of_type("activity") == [{"type": "activity", "busy": True, "label": "working"}]
-    brain.release.set()
-    await _until(lambda: len([s for s in wire.sent if s[0] == "result"]) == 2)
-    assert [d.request for d in brain.inputs] == ["Read the chat", "Start Codex"]
-    assert brain.inputs[1].state == "Terminals: t1"
+    backend.release.set()
+    await _until(lambda: len(wire.results()) == 2)
+    assert [request.request for request in backend.requests] == ["Read the chat", "Start Codex"]
+    # Each request carries only what was said since the previous one.
+    assert [request.conversation for request in backend.requests] == [
+        "User: Read the chat",
+        "User: Also, start Codex",
+    ]
+    assert backend.requests[1].state == "Terminals: t1"
     assert host.of_type("activity")[-1] == {"type": "activity", "busy": False, "label": None}
     await call.close()
 
 
 @pytest.mark.asyncio
-async def test_delegation_without_request_text_waits_for_user_speech_to_settle():
-    wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
-    call = _call(wire, brain, host, user_quiet=0.5, user_quiet_max_wait=0.5)
+async def test_a_request_without_text_waits_for_user_speech_to_settle():
+    wire, host, backend = FakeWire(), FakeHost(), FakeBackend()
+    call, _voice = _call(wire, host, backend, user_quiet=0.5, user_quiet_max_wait=0.5)
 
     wire.push(
         WireStarted(None),
@@ -454,29 +581,29 @@ async def test_delegation_without_request_text_waits_for_user_speech_to_settle()
     )
     await asyncio.sleep(0.05)
     wire.push(WireCaption("user", "Start two terminals", final=True))
-    await _until(lambda: len(brain.inputs) == 1)
+    await _until(lambda: len(backend.requests) == 1)
 
-    assert brain.inputs[0].request is None
-    assert brain.inputs[0].conversation == "User: Start two terminals"
+    assert backend.requests[0].request is None
+    assert backend.requests[0].conversation == "User: Start two terminals"
     await call.close()
 
 
 @pytest.mark.asyncio
-async def test_delegation_with_request_text_starts_immediately():
-    wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
-    call = _call(wire, brain, host, user_quiet=30, user_quiet_max_wait=30)
+async def test_a_request_with_text_starts_immediately():
+    wire, host, backend = FakeWire(), FakeHost(), FakeBackend()
+    call, _voice = _call(wire, host, backend, user_quiet=30, user_quiet_max_wait=30)
 
     wire.push(
         WireStarted(None), WireCaption("user", "Stop", final=False), WireDelegation("i", "Stop it")
     )
-    await asyncio.wait_for(brain.started.wait(), 1)
+    await asyncio.wait_for(backend.started.wait(), 1)
     await call.close()
 
 
 @pytest.mark.asyncio
-async def test_run_notices_are_spoken_once_live_and_reach_later_delegations():
-    wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
-    call = _call(wire, brain, host)
+async def test_run_notices_are_spoken_once_live_and_reach_later_requests():
+    wire, host, backend = FakeWire(), FakeHost(), FakeBackend()
+    call, _voice = _call(wire, host, backend)
 
     call.announce_run(_notice("early"))
     wire.push(WireStarted(None))
@@ -485,45 +612,37 @@ async def test_run_notices_are_spoken_once_live_and_reach_later_delegations():
     call.announce_run(_notice("run-1"))
     await _until(lambda: sum(s[0] == "announce" for s in wire.sent) == 2)
     wire.push(WireDelegation("i", "What did coder say?"))
-    await _until(lambda: len(brain.inputs) == 1)
+    await _until(lambda: len(backend.requests) == 1)
     await call.close()
 
     # The notice from before the call was live is spoken once it is.
-    announcements = [s[1] for s in wire.sent if s[0] == "announce"]
-    assert (
-        announcements
-        == [
-            'vBot update: {"run": "completed", "agent": "coder@web", "session": "s3", '
-            '"result_excerpt": "All tests pass.", "excerpt_truncated": false}'
-        ]
-        * 2
-    )
-    assert brain.inputs[0].updates.count("vBot update") == 2
+    assert [s[1] for s in wire.sent if s[0] == "announce"] == [NOTICE_TEXT] * 2
+    assert backend.requests[0].updates == f"{NOTICE_TEXT}\n{NOTICE_TEXT}"
 
 
 @pytest.mark.asyncio
 async def test_run_notices_omit_the_excerpt_where_announcements_count_as_user_input():
-    wire, brain, host = FakeWire(announces_as_user_input=True), FakeBrain(), FakeHost()
-    call = _call(wire, brain, host)
+    wire, host, backend = FakeWire(announces_as_user_input=True), FakeHost(), FakeBackend()
+    call, _voice = _call(wire, host, backend)
     wire.push(WireStarted(None))
     await _until(lambda: any(u.get("phase") == "live" for u in host.updates))
 
     call.announce_run(_notice("run-1"))
     await _until(lambda: any(s[0] == "announce" for s in wire.sent))
     wire.push(WireDelegation("i", "What did coder say?"))
-    await _until(lambda: len(brain.inputs) == 1)
+    await _until(lambda: len(backend.requests) == 1)
     await call.close()
 
     assert [s[1] for s in wire.sent if s[0] == "announce"] == [
         'vBot update: {"run": "completed", "agent": "coder@web", "session": "s3"}'
     ]
-    assert '"result_excerpt": "All tests pass."' in brain.inputs[0].updates
+    assert '"result_excerpt": "All tests pass."' in backend.requests[0].updates
 
 
 @pytest.mark.asyncio
 async def test_long_run_excerpts_are_shortened_for_speech():
-    wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
-    call = _call(wire, brain, host)
+    wire, host = FakeWire(), FakeHost()
+    call, _voice = _call(wire, host)
     wire.push(WireStarted(None))
     await _until(lambda: any(u.get("phase") == "live" for u in host.updates))
 
@@ -538,8 +657,8 @@ async def test_long_run_excerpts_are_shortened_for_speech():
 
 @pytest.mark.asyncio
 async def test_abort_asks_provider_to_close_and_reports_aborted_once():
-    wire, brain, host = FakeWire(confirm_close=False), FakeBrain(), FakeHost()
-    call = _call(wire, brain, host)
+    wire, host, backend = FakeWire(confirm_close=False), FakeHost(), FakeBackend()
+    call, voice = _call(wire, host, backend)
     wire.push(WireStarted(None))
 
     await call.abort()
@@ -548,15 +667,29 @@ async def test_abort_asks_provider_to_close_and_reports_aborted_once():
     assert ("close",) in wire.sent
     assert wire.closed
     assert host.of_type("closed") == [{"type": "closed", "reason": "aborted", "usage": None}]
+    assert backend.closed
+    assert voice.finished == [None]
+
+
+@pytest.mark.asyncio
+async def test_abort_soon_ends_the_call_for_a_caller_that_cannot_wait():
+    wire, host = FakeWire(confirm_close=False), FakeHost()
+    call, _voice = _call(wire, host)
+    wire.push(WireStarted(None))
+
+    call.abort_soon()
+    await asyncio.wait_for(call.wait_closed(), 2)
+
+    assert host.of_type("closed") == [{"type": "closed", "reason": "aborted", "usage": None}]
 
 
 @pytest.mark.asyncio
 async def test_lost_control_channel_fails_the_call_and_drops_pending_work():
-    wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
-    brain.release.clear()
-    call = _call(wire, brain, host)
+    wire, host, backend = FakeWire(), FakeHost(), FakeBackend()
+    backend.release.clear()
+    call, voice = _call(wire, host, backend)
     wire.push(WireStarted(None), WireUsage({"audio_duration_ms": 10}), WireDelegation("i", "x"))
-    await _until(lambda: len(brain.inputs) == 1)
+    await _until(lambda: len(backend.requests) == 1)
 
     wire.push(None)
     await call.wait_closed()
@@ -565,7 +698,9 @@ async def test_lost_control_channel_fails_the_call_and_drops_pending_work():
     assert host.of_type("closed") == [
         {"type": "closed", "reason": "connection_lost", "usage": {"audio_duration_ms": 10}}
     ]
-    assert not any(s[0] == "result" for s in wire.sent)
+    assert not wire.results()
+    assert backend.closed
+    assert voice.finished == ["The connection to the voice model was lost."]
 
 
 @pytest.mark.asyncio
@@ -584,7 +719,7 @@ async def test_a_provider_close_at_the_session_limit_is_reported_as_expired(
 ) -> None:
     now = [0.0]
     wire, host = FakeWire(), FakeHost()
-    call = _call(wire, None, host, clock=lambda: now[0], wall_clock=lambda: 1000.0)
+    call, _voice = _call(wire, host, clock=lambda: now[0], wall_clock=lambda: 1000.0)
     wire.push(WireStarted(expires_at=4600.0))
     await _until(lambda: host.of_type("expiry"))
     # The accessor learns how long the provider keeps the session.
@@ -598,8 +733,8 @@ async def test_a_provider_close_at_the_session_limit_is_reported_as_expired(
 
 @pytest.mark.asyncio
 async def test_media_that_never_connects_ends_the_call():
-    wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
-    call = _call(wire, brain, host, start_timeout=0.05)
+    wire, host = FakeWire(), FakeHost()
+    call, voice = _call(wire, host, start_timeout=0.05)
 
     await asyncio.wait_for(call.wait_closed(), 2)
 
@@ -608,12 +743,13 @@ async def test_media_that_never_connects_ends_the_call():
         {"type": "closed", "reason": "start_timeout", "usage": {"audio_duration_ms": 900}}
     ]
     assert host.of_type("state")[-1] == {"type": "state", "phase": "failed"}
+    assert voice.finished == ["The voice model's audio did not connect in time."]
 
 
 @pytest.mark.asyncio
 async def test_unconfirmed_close_tears_down_after_timeout():
-    wire, brain, host = FakeWire(confirm_close=False), FakeBrain(), FakeHost()
-    call = _call(wire, brain, host, close_timeout=0.05)
+    wire, host = FakeWire(confirm_close=False), FakeHost()
+    call, _voice = _call(wire, host, close_timeout=0.05)
     wire.push(WireStarted(None))
 
     await call.close()
@@ -623,253 +759,60 @@ async def test_unconfirmed_close_tears_down_after_timeout():
 
 
 @pytest.mark.asyncio
-async def test_a_delegation_that_fails_inside_vbot_is_still_answered():
-    wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
+async def test_a_request_that_fails_inside_vbot_is_still_answered():
+    wire, host, backend = FakeWire(), FakeHost(), FakeBackend()
     host.refs = RuntimeError("test failure")
-    call = _call(wire, brain, host)
+    call, _voice = _call(wire, host, backend)
     wire.push(WireStarted(None), WireDelegation("i", "Open the terminals"))
-    await _until(lambda: any(s[0] == "result" for s in wire.sent))
+    await _until(lambda: bool(wire.results()))
     await call.close()
-    assert brain.inputs == []
-    assert next(s for s in wire.sent if s[0] == "result")[1] == "i"
+    assert backend.requests == []
+    assert wire.results()["i"].startswith("vBot could not process this request")
 
 
 @pytest.mark.asyncio
-async def test_slow_delegation_returns_a_timeout_note():
-    wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
-    brain.release.clear()
-    call = _call(wire, brain, host, delegation_timeout=0.05)
+async def test_a_slow_request_returns_a_timeout_note(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(live_call_module, "_REQUEST_EXTRA_SECONDS", 0)
+    wire, host, backend = FakeWire(relay=True), FakeHost(), FakeBackend()
+    backend.release.clear()
+    call, _voice = _call(wire, host, backend, delegation_timeout=0.05)
 
-    wire.push(WireStarted(None), WireDelegation("i", "Do something slow"))
-    await _until(lambda: any(s[0] == "result" for s in wire.sent))
-    await call.close()
-
-    result = next(s for s in wire.sent if s[0] == "result")
-    assert result[2].startswith("The request took too long and was stopped.")
-
-
-class FakeModelTasks:
-    def __init__(
-        self,
-        target: str = "openai/gpt-live-1-codex::subscription",
-        options: dict[str, Any] | None = None,
-        configured: bool = True,
-    ) -> None:
-        self.target = target
-        self.options = options or {"voice": "cove", "backend_model": "gpt-5.6-terra"}
-        self.configured = configured
-
-    def binding_for(self, task_type: str) -> SimpleNamespace:
-        if not self.configured:
-            raise TaskModelError("live_voice is not configured")
-        return SimpleNamespace(target=self.target)
-
-    def binding_is_usable(self, task_type: str) -> bool:
-        return True
-
-    def validate_execution_target(self, binding: Any) -> None:
-        return None
-
-    def options_with_defaults(self, binding: Any) -> dict[str, Any]:
-        return dict(self.options)
-
-
-@pytest.fixture
-def candidates(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, ...]]:
-    calls: list[tuple[Any, ...]] = []
-
-    def fake_candidates(models: Any, provider_id: str, connection_id: str) -> tuple[Any, ...]:
-        calls.append((provider_id, connection_id))
-        return (SimpleNamespace(model_id="gpt-5.6-terra"), SimpleNamespace(model_id="gpt-5.6-luna"))
-
-    monkeypatch.setattr(live_module, "live_backend_candidates", fake_candidates)
-    return calls
-
-
-def _service(model_tasks: FakeModelTasks | None = None) -> LiveVoiceService:
-    return LiveVoiceService(model_tasks or FakeModelTasks(), SimpleNamespace(models=object()))  # type: ignore[arg-type]
-
-
-def test_status_reports_binding_and_media_without_starting_anything():
-    assert _service(FakeModelTasks(configured=False)).status() == {
-        "configured": False,
-        "usable": False,
-        "target": None,
-        "media": None,
-    }
-    assert _service().status() == {
-        "configured": True,
-        "usable": True,
-        "target": "openai/gpt-live-1-codex::subscription",
-        "media": "webrtc",
-    }
-    assert _service(FakeModelTasks(target=XAI_TARGET)).status()["media"] == "relay"
-    assert _service(FakeModelTasks(target="mistral/voxtral::api-key")).status()["media"] is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "offer",
-    ["", "not-sdp", "v=0\r\nm=video", "v=0 m=audio" + "x" * 65536],
-    ids=["empty", "not-sdp", "no-audio", "oversized"],
-)
-async def test_invalid_offers_are_rejected_before_resolution(offer: str):
-    with pytest.raises(LiveStartRejected) as caught:
-        await _service(FakeModelTasks(configured=False)).start_call(
-            media="webrtc", offer_sdp=offer, host=FakeHost()
-        )
-    assert caught.value.code == "invalid_offer"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("model_tasks", "code"),
-    [
-        (FakeModelTasks(configured=False), "not_configured"),
-        (FakeModelTasks(target="mistral/voxtral::api-key"), "not_configured"),
-        (FakeModelTasks(options={"voice": "cove", "backend_model": ""}), "backend_unavailable"),
-        (
-            FakeModelTasks(options={"voice": "cove", "backend_model": "gpt-image-2"}),
-            "backend_unavailable",
-        ),
-        (
-            FakeModelTasks(
-                options={
-                    "voice": "cove",
-                    "backend_model": "gpt-5.6-terra",
-                    "backend_thinking_effort": "turbo",
-                }
-            ),
-            "backend_unavailable",
-        ),
-        (
-            FakeModelTasks(
-                options={
-                    "voice": "cove",
-                    "backend_model": "gpt-5.6-terra",
-                    "backend_thinking_effort": 3,
-                }
-            ),
-            "backend_unavailable",
-        ),
-    ],
-    ids=[
-        "unbound",
-        "unsupported-provider",
-        "no-backend-without-direct-tools",
-        "backend-not-candidate",
-        "unknown-effort",
-        "non-string-effort",
-    ],
-)
-async def test_an_unusable_configuration_names_what_is_missing(model_tasks, code, candidates):
-    with pytest.raises(LiveStartRejected) as caught:
-        await _service(model_tasks).start_call(media="webrtc", offer_sdp=OFFER, host=FakeHost())
-    assert caught.value.code == code
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("error", "code"),
-    [
-        (ProviderAuthError("denied"), "access_denied"),
-        (ProviderRateLimitError("slow"), "rate_limited"),
-        (ProviderOutcomeUnknownError("unknown", operation_key="k"), "outcome_unknown"),
-        (NetworkError("down"), "provider_error"),
-        (ConfigError("no credential"), "provider_unavailable"),
-        (ControlJoinError("rtc_1", "OSError"), "control_failed"),
-    ],
-)
-async def test_creation_failures_map_to_stable_codes(error, code, candidates, monkeypatch, caplog):
-    async def failing_wire(*args: Any, **kwargs: Any) -> None:
-        raise error
-
-    monkeypatch.setattr(live_module, "open_openai_live_wire", failing_wire)
-    caplog.set_level(logging.DEBUG)
-    with pytest.raises(LiveStartRejected) as caught:
-        await _service().start_call(media="webrtc", offer_sdp=OFFER, host=FakeHost())
-    assert caught.value.code == code
-    # A call the Provider created but vBot could not join keeps its id out of the log.
-    assert "rtc_1" not in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_start_call_opens_the_bound_target_and_returns_a_running_call(
-    candidates: list[tuple[Any, ...]],
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    opened: list[dict[str, Any]] = []
-    wire = FakeWire()
-
-    async def open_wire(runtime: Any, target_ref: Any, **kwargs: Any) -> FakeWire:
-        opened.append({"target": target_ref.target, **kwargs})
-        return wire
-
-    monkeypatch.setattr(live_module, "open_openai_live_wire", open_wire)
-    host = FakeHost()
-    caplog.set_level(logging.DEBUG)
-
-    call = await _service().start_call(media="webrtc", offer_sdp=OFFER, host=host)
-
-    assert candidates == [("openai", "subscription")]
-    assert opened[0]["target"] == "openai/gpt-live-1-codex::subscription"
-    assert opened[0]["voice"] == "cove"
-    assert opened[0]["offer_sdp"] == OFFER
-    assert opened[0]["instructions"] == "voice direct=False"
-    assert call.id == "rtc_1"
-    assert host.updates == [{"type": "state", "phase": "connecting"}]
-    await call.close()
-    # Logs name the call by its vBot-owned id; the Provider's call id never enters them.
-    assert call.log_id.startswith("live_")
-    assert call.log_id in caplog.text
-    assert "rtc_1" not in caplog.text
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("stored", "sent"),
-    [
-        ({}, "low"),
-        ({"backend_thinking_effort": None}, "low"),
-        ({"backend_thinking_effort": ""}, None),
-        ({"backend_thinking_effort": "high"}, "high"),
-    ],
-    ids=["saved-before-the-option", "unset", "model-default", "configured"],
-)
-async def test_the_backend_uses_the_configured_reasoning_effort(
-    stored: dict[str, Any],
-    sent: str | None,
-    candidates: list[tuple[Any, ...]],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    brains: list[Any] = []
-
-    async def open_wire(runtime: Any, target_ref: Any, **kwargs: Any) -> FakeWire:
-        return FakeWire()
-
-    def record_brain(runtime: Any, target: Any, **kwargs: Any) -> FakeBrain:
-        brains.append(target)
-        return FakeBrain()
-
-    monkeypatch.setattr(live_module, "open_openai_live_wire", open_wire)
-    monkeypatch.setattr(live_module, "LiveBrain", record_brain)
-    model_tasks = FakeModelTasks(
-        options={"voice": "cove", "backend_model": "gpt-5.6-luna", **stored}
+    wire.push(
+        WireStarted(None),
+        WireDelegation("d", "Do something slow"),
+        WireToolCall("c", "vbot_request", {"request": "Do something else"}),
     )
-
-    call = await _service(model_tasks).start_call(media="webrtc", offer_sdp=OFFER, host=FakeHost())
-
-    assert [(target.model_id, target.thinking_effort) for target in brains] == [
-        ("gpt-5.6-luna", sent)
-    ]
+    await _until(lambda: len(wire.results()) == 2)
     await call.close()
+
+    results = wire.results()
+    assert results["d"].startswith("The request took too long and was stopped.")
+    assert results["c"].startswith("Error (timeout): The request took too long")
+
+
+@pytest.mark.asyncio
+async def test_a_request_without_a_backend_is_answered_without_running():
+    wire, host = FakeWire(relay=True), FakeHost()
+    call, _voice = _call(wire, host)
+
+    wire.push(
+        WireStarted(None),
+        WireDelegation("d", "Open the terminals"),
+        WireToolCall("c", "vbot_request", {"request": "Open the terminals"}),
+    )
+    await _until(lambda: len(wire.results()) == 2)
+    await call.close()
+
+    results = wire.results()
+    assert results["d"] == "Nothing answers requests in this call, so nothing was done."
+    assert results["c"].startswith("Error (no_backend): Nothing answers requests")
+    assert host.executed == []
 
 
 @pytest.mark.asyncio
 async def test_relay_audio_flows_only_while_live():
-    wire, brain, host = FakeWire(relay=True), FakeBrain(), FakeHost()
-    call = _call(wire, brain, host)
+    wire, host = FakeWire(relay=True), FakeHost()
+    call, _voice = _call(wire, host)
 
     call.push_audio(b"\x01\x00")
     wire.push(WireStarted(None))
@@ -893,8 +836,8 @@ async def test_relay_audio_flows_only_while_live():
 
 @pytest.mark.asyncio
 async def test_webrtc_calls_ignore_pushed_audio():
-    wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
-    call = _call(wire, brain, host)
+    wire, host = FakeWire(), FakeHost()
+    call, _voice = _call(wire, host)
     wire.push(WireStarted(None))
     await _until(lambda: any(u.get("phase") == "live" for u in host.updates))
 
@@ -907,8 +850,8 @@ async def test_webrtc_calls_ignore_pushed_audio():
 
 @pytest.mark.asyncio
 async def test_relay_audio_backlog_drops_the_oldest_audio():
-    wire, brain, host = FakeWire(relay=True), FakeBrain(), FakeHost()
-    call = _call(wire, brain, host)
+    wire, host = FakeWire(relay=True), FakeHost()
+    call, _voice = _call(wire, host)
     wire.push(WireStarted(None))
     await _until(lambda: any(u.get("phase") == "live" for u in host.updates))
 
@@ -923,9 +866,9 @@ async def test_relay_audio_backlog_drops_the_oldest_audio():
 
 @pytest.mark.asyncio
 async def test_relay_audio_stops_when_the_socket_is_gone():
-    wire, brain, host = FakeWire(relay=True), FakeBrain(), FakeHost()
+    wire, host = FakeWire(relay=True), FakeHost()
     wire.audio_error = WireSendError("closed")
-    call = _call(wire, brain, host)
+    call, _voice = _call(wire, host)
     wire.push(WireStarted(None))
     await _until(lambda: any(u.get("phase") == "live" for u in host.updates))
 
@@ -940,65 +883,388 @@ async def test_relay_audio_stops_when_the_socket_is_gone():
 
 
 @pytest.mark.asyncio
-async def test_direct_tool_calls_run_on_the_host_as_written_and_return_plain_text_results():
+async def test_tool_calls_run_in_the_voice_session_and_return_plain_text_results():
     wire, host = FakeWire(relay=True), FakeHost()
     host.tool_release.clear()
     host.tool_result = live_success("Sent to s1 (Coder).")
-    call = _call(wire, None, host)
+    call, voice = _call(wire, host)
 
     wire.push(
         WireStarted(None),
-        WireToolCall("call_1", "functions.send_message", '{"target": "s1", "text": "yes"}'),
+        WireToolCall("call_1", "send_message", '{"target": "s1", "text": "yes"}'),
     )
     await _until(lambda: len(host.executed) == 1)
     assert host.of_type("activity") == [{"type": "activity", "busy": True, "label": "working"}]
     host.tool_release.set()
-    await _until(lambda: any(s[0] == "result" for s in wire.sent))
+    await _until(lambda: bool(wire.results()))
     await call.close()
 
-    # Preparing the call is the host's job: it gets the name and arguments unchanged.
-    assert host.executed == [("functions.send_message", '{"target": "s1", "text": "yes"}')]
-    assert next(s for s in wire.sent if s[0] == "result") == (
-        "result",
-        "call_1",
-        "Sent to s1 (Coder).",
-    )
+    # The voice Session runs the call; the host gets the name and arguments unchanged.
+    assert voice.calls == [("call_1", "send_message", '{"target": "s1", "text": "yes"}')]
+    assert host.executed == [("send_message", '{"target": "s1", "text": "yes"}')]
+    assert wire.results() == {"call_1": "Sent to s1 (Coder)."}
     assert host.of_type("activity")[-1] == {"type": "activity", "busy": False, "label": None}
 
 
 @pytest.mark.asyncio
-async def test_failing_or_slow_direct_tool_calls_answer_with_an_error_and_never_retry():
+async def test_failing_or_slow_tool_calls_answer_with_an_error_and_never_retry():
     wire, host = FakeWire(relay=True), FakeHost()
     host.tool_result = RuntimeError("boom")
-    call = _call(wire, None, host, delegation_timeout=0.05)
+    call, _voice = _call(wire, host, delegation_timeout=0.05)
 
     wire.push(
         WireStarted(None), WireToolCall("fail", "start_coding_terminal", {"program": "codex"})
     )
-    await _until(lambda: any(s[1] == "fail" for s in wire.sent if s[0] == "result"))
+    await _until(lambda: "fail" in wire.results())
     host.tool_result = live_success("Nothing runs.")
     host.tool_release.clear()
     wire.push(WireToolCall("slow", "overview", {}))
-    await _until(lambda: any(s[1] == "slow" for s in wire.sent if s[0] == "result"))
+    await _until(lambda: "slow" in wire.results())
     await call.close()
 
-    results = {s[1]: s[2] for s in wire.sent if s[0] == "result"}
+    results = wire.results()
     assert results["fail"].startswith("Error (tool_failed):")
     assert results["slow"].startswith("Error (timeout): The Tool call took too long")
     assert [name for name, _arguments in host.executed] == ["start_coding_terminal", "overview"]
 
 
+class FakeChat:
+    """The Chat Loop seams a call start uses: the voice Run and the backend's Tools."""
+
+    def __init__(self, hosts: LiveToolHosts) -> None:
+        self.hosts = hosts
+        self.started: list[dict[str, Any]] = []
+        self.voices: list[FakeVoice] = []
+        self.asked: list[str] = []
+        self.error: Exception | None = None
+
+    async def start_external_run(
+        self,
+        agent_id: str,
+        *,
+        model: str,
+        title: str,
+        extra_tools: list[str],
+        on_cancel: Callable[[], None],
+    ) -> FakeVoice:
+        if self.error is not None:
+            raise self.error
+        self.started.append(
+            {"agent_id": agent_id, "model": model, "title": title, "extra_tools": extra_tools}
+        )
+        voice = FakeVoice(self.hosts, tools=[*VOICE_TOOLS, *({"name": n} for n in extra_tools)])
+        voice.on_cancel = on_cancel
+        self.voices.append(voice)
+        return voice
+
+    async def agent_tool_names(self, agent_id: str) -> tuple[str, ...]:
+        self.asked.append(agent_id)
+        return BACKEND_TOOLS
+
+
+class FakeModelTasks:
+    def __init__(
+        self,
+        target: str = OPENAI_TARGET,
+        options: dict[str, Any] | None = None,
+        configured: bool = True,
+    ) -> None:
+        self.target = target
+        self.options = options if options is not None else {"voice": "cove"}
+        self.configured = configured
+
+    def binding_for(self, task_type: str) -> SimpleNamespace:
+        if not self.configured:
+            raise TaskModelError("live_voice is not configured")
+        return SimpleNamespace(target=self.target)
+
+    def binding_is_usable(self, task_type: str) -> bool:
+        return True
+
+    def validate_execution_target(self, binding: Any) -> None:
+        return None
+
+    def options_with_defaults(self, binding: Any) -> dict[str, Any]:
+        return dict(self.options)
+
+    def model_for_target(self, target_ref: Any) -> None:
+        return None
+
+
+def _service(model_tasks: FakeModelTasks | None = None) -> tuple[LiveVoiceService, FakeChat]:
+    hosts = LiveToolHosts()
+    chat = FakeChat(hosts)
+    runtime = SimpleNamespace(models=object(), chat_loop=chat, chat_sessions=object())
+    service = LiveVoiceService(
+        model_tasks or FakeModelTasks(),
+        runtime,  # type: ignore[arg-type]
+        hosts=hosts,
+        clock=lambda: datetime(2026, 10, 7, 12, 30),
+    )
+    return service, chat
+
+
+def _opening(monkeypatch: pytest.MonkeyPatch, name: str, wire: FakeWire) -> list[dict[str, Any]]:
+    opened: list[dict[str, Any]] = []
+
+    async def open_wire(runtime: Any, target_ref: Any, **kwargs: Any) -> FakeWire:
+        opened.append({"target": target_ref.target, **kwargs})
+        return wire
+
+    monkeypatch.setattr(live_module, name, open_wire)
+    return opened
+
+
+def test_status_reports_binding_and_media_without_starting_anything():
+    assert _service(FakeModelTasks(configured=False))[0].status() == {
+        "configured": False,
+        "usable": False,
+        "target": None,
+        "media": None,
+    }
+    assert _service()[0].status() == {
+        "configured": True,
+        "usable": True,
+        "target": OPENAI_TARGET,
+        "media": "webrtc",
+    }
+    assert _service(FakeModelTasks(target=XAI_TARGET))[0].status()["media"] == "relay"
+    assert _service(FakeModelTasks(target="mistral/voxtral::api-key"))[0].status()["media"] is None
+
+
 @pytest.mark.asyncio
-async def test_a_delegation_without_a_backend_model_is_answered_without_running():
-    wire, host = FakeWire(relay=True), FakeHost()
-    call = _call(wire, None, host)
+@pytest.mark.parametrize(
+    "offer",
+    ["", "not-sdp", "v=0\r\nm=video", "v=0 m=audio" + "x" * 65536],
+    ids=["empty", "not-sdp", "no-audio", "oversized"],
+)
+async def test_invalid_offers_are_rejected_before_resolution(offer: str):
+    service, chat = _service(FakeModelTasks(configured=False))
+    with pytest.raises(LiveStartRejected) as caught:
+        await service.start_call(media="webrtc", offer_sdp=offer, host=FakeHost())
+    assert caught.value.code == "invalid_offer"
+    assert chat.started == []
 
-    wire.push(WireStarted(None), WireDelegation("d", "Open the terminals"))
-    await _until(lambda: any(s[0] == "result" for s in wire.sent))
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_tasks", "offered", "code"),
+    [
+        (FakeModelTasks(configured=False), (), "not_configured"),
+        (FakeModelTasks(target="mistral/voxtral::api-key"), (), "not_configured"),
+        (FakeModelTasks(options={"backend": "openai"}), (), "backend_unavailable"),
+        (FakeModelTasks(options={"backend": "none"}), (), "backend_unavailable"),
+        (
+            FakeModelTasks(target=XAI_TARGET, options={"backend": "openai"}),
+            (),
+            "backend_unavailable",
+        ),
+        (
+            FakeModelTasks(options={"backend": "openai", "openai_backend_model": "gpt-5.6-terra"}),
+            ("vbot",),
+            "backend_unavailable",
+        ),
+    ],
+    ids=[
+        "unbound",
+        "unsupported-provider",
+        "openai-backend-without-model",
+        "openai-without-backend",
+        "xai-with-openai-backend",
+        "backend-the-model-does-not-offer",
+    ],
+)
+async def test_an_unusable_configuration_names_what_is_missing(
+    model_tasks: FakeModelTasks,
+    offered: tuple[str, ...],
+    code: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(live_module, "live_backend_choices", lambda model: offered)
+    service, chat = _service(model_tasks)
+    media = "relay" if model_tasks.target == XAI_TARGET else "webrtc"
+    with pytest.raises(LiveStartRejected) as caught:
+        await service.start_call(media=media, offer_sdp=OFFER, host=FakeHost())
+    assert caught.value.code == code
+    assert chat.started == []
+
+
+@pytest.mark.asyncio
+async def test_a_voice_session_that_cannot_start_rejects_the_call(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    opened = _opening(monkeypatch, "open_openai_live_wire", FakeWire())
+    service, chat = _service()
+    chat.error = VBotError("the voice Agent has no Model")
+
+    with pytest.raises(LiveStartRejected) as caught:
+        await service.start_call(media="webrtc", offer_sdp=OFFER, host=FakeHost())
+
+    assert caught.value.code == "not_configured"
+    assert opened == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (ProviderAuthError("denied"), "access_denied"),
+        (ProviderRateLimitError("slow"), "rate_limited"),
+        (ProviderOutcomeUnknownError("unknown", operation_key="k"), "outcome_unknown"),
+        (NetworkError("down"), "provider_error"),
+        (ConfigError("no credential"), "provider_unavailable"),
+        (ControlJoinError("rtc_1", "OSError"), "control_failed"),
+    ],
+)
+async def test_creation_failures_map_to_stable_codes_and_drop_the_voice_session(
+    error: Exception, code: str, monkeypatch: pytest.MonkeyPatch, caplog: Any
+):
+    async def failing_wire(*args: Any, **kwargs: Any) -> None:
+        raise error
+
+    monkeypatch.setattr(live_module, "open_openai_live_wire", failing_wire)
+    caplog.set_level(logging.DEBUG)
+    service, chat = _service()
+    with pytest.raises(LiveStartRejected) as caught:
+        await service.start_call(media="webrtc", offer_sdp=OFFER, host=FakeHost())
+    assert caught.value.code == code
+    # A call that never started leaves no Session behind.
+    assert [voice.discarded for voice in chat.voices] == [True]
+    # A call the Provider created but vBot could not join keeps its id out of the log.
+    assert "rtc_1" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_start_call_opens_the_bound_target_and_returns_a_running_call(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    opened = _opening(monkeypatch, "open_openai_live_wire", FakeWire())
+    host = FakeHost()
+    caplog.set_level(logging.DEBUG)
+    service, chat = _service()
+
+    call = await service.start_call(media="webrtc", offer_sdp=OFFER, host=host)
+
+    assert chat.started == [
+        {
+            "agent_id": "live-voice",
+            "model": OPENAI_TARGET,
+            "title": "Live call · 2026-10-07 12:30",
+            "extra_tools": ["vbot_request"],
+        }
+    ]
+    assert opened[0]["target"] == OPENAI_TARGET
+    assert opened[0]["voice"] == "cove"
+    assert opened[0]["offer_sdp"] == OFFER
+    assert call.id == "rtc_1"
+    assert host.updates == [
+        {"type": "state", "phase": "connecting"},
+        {
+            "type": "sessions",
+            "voice": {"agent_id": "live-voice", "session_id": "voice-1"},
+            "backend": None,
+        },
+    ]
+    # Stopping the voice Run in the app ends the call.
+    voice = chat.voices[0]
+    assert voice.on_cancel is not None
+    voice.on_cancel()
+    await asyncio.wait_for(call.wait_closed(), 2)
+    assert host.of_type("closed")[-1]["reason"] == "aborted"
+    assert voice.finished == [None]
+    # Logs name the call by its vBot-owned id; the Provider's call id never enters them.
+    assert call.log_id.startswith("live_")
+    assert call.log_id in caplog.text
+    assert "rtc_1" not in caplog.text
+
+
+_VOICE_NAMES = ["overview", "end_call"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target", "options", "extra_tools", "expected"),
+    [
+        (
+            OPENAI_TARGET,
+            {"backend": "vbot"},
+            ["vbot_request"],
+            {
+                "backend": None,
+                "instructions": voice_instructions(
+                    tools=[],
+                    delegation="vbot",
+                    backend_tools=BACKEND_TOOLS,
+                    wake_phrases=WAKE_PHRASES,
+                ),
+            },
+        ),
+        (
+            OPENAI_TARGET,
+            {"backend": "openai", "openai_backend_model": "gpt-5.6-terra"},
+            [],
+            {
+                "backend": OpenAIBackend(
+                    model="gpt-5.6-terra",
+                    instructions=backend_instructions(
+                        set(_VOICE_NAMES).__contains__, context_note=False
+                    ),
+                    tools=VOICE_TOOLS,
+                ),
+                "instructions": voice_instructions(
+                    tools=[],
+                    delegation="openai",
+                    backend_tools=_VOICE_NAMES,
+                    wake_phrases=WAKE_PHRASES,
+                ),
+            },
+        ),
+        (
+            XAI_TARGET,
+            {},
+            [],
+            {
+                "tools": list(VOICE_TOOLS),
+                "instructions": voice_instructions(tools=_VOICE_NAMES, wake_phrases=WAKE_PHRASES),
+            },
+        ),
+        (
+            XAI_TARGET,
+            {"backend": "vbot"},
+            ["vbot_request"],
+            {
+                "tools": [*VOICE_TOOLS, {"name": "vbot_request"}],
+                "instructions": voice_instructions(
+                    tools=[*_VOICE_NAMES, "vbot_request"],
+                    backend_tools=BACKEND_TOOLS,
+                    wake_phrases=WAKE_PHRASES,
+                ),
+            },
+        ),
+    ],
+    ids=["openai-vbot", "openai-hosted", "xai-own-tools", "xai-vbot"],
+)
+async def test_the_backend_choice_decides_what_the_voice_model_gets(
+    target: str,
+    options: dict[str, Any],
+    extra_tools: list[str],
+    expected: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    xai = target == XAI_TARGET
+    wire = FakeWire(relay=xai)
+    opened = _opening(monkeypatch, "open_xai_live_wire" if xai else "open_openai_live_wire", wire)
+    service, chat = _service(FakeModelTasks(target=target, options=options))
+
+    call = await service.start_call(
+        media="relay" if xai else "webrtc", offer_sdp=None if xai else OFFER, host=FakeHost()
+    )
+
+    assert [started["extra_tools"] for started in chat.started] == [extra_tools]
+    # The backend Agent's Tools are asked for only when it answers requests.
+    assert chat.asked == (["live-backend"] if extra_tools else [])
+    assert {key: opened[0][key] for key in expected} == expected
     await call.close()
-
-    assert next(s for s in wire.sent if s[0] == "result")[2].startswith("No backend model")
-    assert host.executed == []
 
 
 @pytest.mark.asyncio
@@ -1006,93 +1272,14 @@ async def test_a_delegation_without_a_backend_model_is_answered_without_running(
     ("model_tasks", "media"),
     [
         (FakeModelTasks(), "relay"),
-        (
-            FakeModelTasks(target=XAI_TARGET, options={"voice": "eve", "backend_model": ""}),
-            "webrtc",
-        ),
+        (FakeModelTasks(target=XAI_TARGET, options={"voice": "eve"}), "webrtc"),
     ],
     ids=["openai-needs-webrtc", "xai-needs-relay"],
 )
 async def test_a_start_with_the_other_media_kind_is_a_media_mismatch(
-    model_tasks: FakeModelTasks, media: str, candidates: list[tuple[Any, ...]]
+    model_tasks: FakeModelTasks, media: str
 ) -> None:
+    service, _chat = _service(model_tasks)
     with pytest.raises(LiveStartRejected) as caught:
-        await _service(model_tasks).start_call(media=media, offer_sdp=OFFER, host=FakeHost())
+        await service.start_call(media=media, offer_sdp=OFFER, host=FakeHost())
     assert caught.value.code == "media_mismatch"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "stored",
-    [
-        {"backend_model": ""},
-        {},
-        {"backend_model": "", "backend_thinking_effort": "turbo"},
-    ],
-    ids=["no-backend", "backend-unset", "stale-effort-is-ignored"],
-)
-async def test_xai_without_a_backend_model_runs_in_direct_tools_mode(
-    stored: dict[str, Any], candidates: list[tuple[Any, ...]], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    opened: list[dict[str, Any]] = []
-    brains: list[Any] = []
-
-    async def open_wire(runtime: Any, target_ref: Any, **kwargs: Any) -> FakeWire:
-        opened.append({"target": target_ref.target, **kwargs})
-        return FakeWire(relay=True)
-
-    monkeypatch.setattr(live_module, "open_xai_live_wire", open_wire)
-    monkeypatch.setattr(live_module, "LiveBrain", lambda *args, **kwargs: brains.append(args))
-    model_tasks = FakeModelTasks(target=XAI_TARGET, options={"voice": "eve", **stored})
-
-    call = await _service(model_tasks).start_call(media="relay", host=FakeHost())
-
-    assert opened == [
-        {
-            "target": XAI_TARGET,
-            "instructions": "voice direct=True",
-            "voice": "eve",
-            "tools": list(TOOLS),
-            "direct_tools": True,
-        }
-    ]
-    assert brains == []
-    assert candidates == []
-    assert call.media == relay_media()
-    await call.close()
-
-
-@pytest.mark.asyncio
-async def test_xai_with_a_backend_model_delegates_to_it(
-    candidates: list[tuple[Any, ...]], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    opened: list[dict[str, Any]] = []
-    brains: list[Any] = []
-    host = FakeHost()
-
-    async def open_wire(runtime: Any, target_ref: Any, **kwargs: Any) -> FakeWire:
-        opened.append(kwargs)
-        return FakeWire(relay=True)
-
-    def record_brain(runtime: Any, target: Any, **kwargs: Any) -> FakeBrain:
-        brains.append((target, kwargs))
-        return FakeBrain()
-
-    monkeypatch.setattr(live_module, "open_xai_live_wire", open_wire)
-    monkeypatch.setattr(live_module, "LiveBrain", record_brain)
-    model_tasks = FakeModelTasks(
-        target=XAI_TARGET, options={"voice": "eve", "backend_model": "gpt-5.6-terra"}
-    )
-
-    call = await _service(model_tasks).start_call(media="relay", host=host)
-
-    # The voice model gets only the request Tool; the backend gets the Live Tools.
-    assert opened[0]["direct_tools"] is False
-    assert opened[0]["instructions"] == "voice direct=False"
-    assert opened[0]["tools"] == [REQUEST_TOOL]
-    assert candidates == [("xai", "subscription")]
-    [(target, kwargs)] = brains
-    assert (target.provider_id, target.model_id) == ("xai", "gpt-5.6-terra")
-    assert (kwargs["instructions"], kwargs["tools"]) == ("delegate", TOOLS)
-    assert kwargs["run_tool"] == host.run_tool
-    await call.close()

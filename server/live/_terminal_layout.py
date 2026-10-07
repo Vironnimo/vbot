@@ -11,7 +11,7 @@ import logging
 from typing import Any
 
 from core.model_tasks.live import live_failure, live_success
-from server.live._brief import MAX_LIVE_NAME_CHARS
+from core.tools.live import MAX_LIVE_NAME_CHARS
 from server.live._context import (
     VOICE_STOPPED,
     JsonObject,
@@ -49,7 +49,7 @@ async def action_target(
     if not target_text:
         raise LiveToolError(
             "missing_target",
-            f"{action} needs a target. Call terminal again with "
+            f"{action} needs a target. Call manage_terminals again with "
             f'{{"action": "{action}", "target": '
             f'"{"<group name>" if action.endswith("_group") else "t1"}"}}.',
         )
@@ -91,7 +91,7 @@ class LiveTerminalLayout:
                         f'The group "{label}" has Terminals that are still working: '
                         f"{join_words(working)}. Deleting the group stops them and breaks off "
                         "that work, for example a task or an update. Ask the user whether to "
-                        "delete it anyway; only if they agree, call terminal again with "
+                        "delete it anyway; only if they agree, call manage_terminals again with "
                         f'{{"action": "delete_group", "target": "{label}", "confirm": true}}.',
                     )
             return await self._group_change(action, group, text_field(arguments, "name"))
@@ -107,7 +107,7 @@ class LiveTerminalLayout:
                 "terminal_working",
                 f"{ref} is still working. Closing it stops it and breaks off that work, for "
                 "example a task or an update. Ask the user whether to close it anyway; only if "
-                "they agree, call terminal again with "
+                "they agree, call manage_terminals again with "
                 f'{{"action": "close", "target": "{ref}", "confirm": true}}.',
             )
         return await self._close(terminal, ref)
@@ -117,7 +117,7 @@ class LiveTerminalLayout:
             raise LiveToolError(
                 "invalid_name",
                 f"create_group needs a name of at most {MAX_LIVE_NAME_CHARS} characters. Call "
-                'terminal again with {"action": "create_group", "name": "<group name>"}.',
+                'manage_terminals again with {"action": "create_group", "name": "<group name>"}.',
             )
         created = await self._ctx.call("terminal.group.create", {"name": name})
         text = f'Created the Terminal group "{name}".'
@@ -137,7 +137,8 @@ class LiveTerminalLayout:
                 raise LiveToolError(
                     "invalid_name",
                     f"rename_group needs a new name of at most {MAX_LIVE_NAME_CHARS} characters. "
-                    f'Call terminal again with {{"action": "rename_group", "target": "{label}", '
+                    f'Call manage_terminals again with {{"action": "rename_group", "target": '
+                    f'"{label}", '
                     '"name": "<new name>"}.',
                 )
             await self._ctx.call(
@@ -165,7 +166,7 @@ class LiveTerminalLayout:
             raise LiveToolError(
                 "missing_order",
                 "reorder needs order: every Terminal ref of the group in the new order. Call "
-                'terminal again with {"action": "reorder", "order": ["t2", "t1"]}.',
+                'manage_terminals again with {"action": "reorder", "order": ["t2", "t1"]}.',
             )
         terminals: list[JsonObject] = []
         for item in order:
@@ -195,7 +196,8 @@ class LiveTerminalLayout:
         if group is None:
             raise LiveToolError(
                 "missing_group",
-                "The Terminals are in different groups. Call terminal again with the group name "
+                "The Terminals are in different groups. Call manage_terminals again with the "
+                "group name "
                 'as target, for example {"action": "reorder", "target": "Codex", "order": '
                 '["t2", "t1"]}.',
             )
@@ -218,7 +220,8 @@ class LiveTerminalLayout:
             raise LiveToolError(
                 "invalid_order",
                 f'order must name every Terminal of the group "{label}" exactly once: '
-                f"{', '.join(refs)}. Call terminal again with all of them in the new order.",
+                f"{', '.join(refs)}. Call manage_terminals again with all of them in the new "
+                "order.",
             )
         await self._ctx.call("terminal.group.order", {"group_id": group["group_id"], "order": ids})
         new_order = ", ".join(

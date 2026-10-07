@@ -4,9 +4,9 @@ xAI offers no WebRTC endpoint, so the server joins
 ``wss://api.x.ai/v1/realtime?model=<id>`` itself and relays audio: microphone
 PCM from the accessor is appended to the input buffer, and assistant audio
 returns as :class:`WireAudio` (PCM16 mono 24 kHz both ways). The voice model
-gets one function Tool: ``vbot_request`` (delegation to the backend model), or
-the Live Tools themselves in direct Tools mode, where every function call goes
-to the call, which prepares it (other names and argument spellings included).
+gets the voice Agent's Tools as function Tools; every function call goes to the
+call, which runs it in the voice Agent's Session (other names and argument
+spellings included).
 
 :class:`XaiLiveWire` drives the sans-IO :class:`XaiSession`
 (``_live_xai_session.py``) with socket frames, commands, and timer ticks,
@@ -58,16 +58,14 @@ async def open_xai_live_wire(
     instructions: str,
     voice: str | None,
     tools: list[JsonObject],
-    direct_tools: bool,
     connect: WebSocketConnector | None = None,
     clock: Clock = time.monotonic,
     wall_clock: Clock = time.time,
 ) -> XaiLiveWire:
     """Join the realtime socket and configure the session.
 
-    *tools* are the function Tools the voice model gets. With *direct_tools*
-    every call of them is handed on as a Tool call; otherwise *tools* is the
-    one delegation Tool, whose calls become delegations.
+    *tools* are the function Tools the voice model gets; every call of them
+    is handed on as a :class:`WireToolCall`.
     Handshake failures raise Provider errors (HTTP 401/403 as
     :class:`~core.providers.errors.ProviderAuthError`, 429 as a rate limit);
     transport failures raise :class:`~core.providers.errors.NetworkError`.
@@ -75,7 +73,7 @@ async def open_xai_live_wire(
 
     client = _XaiLiveClient.from_runtime(runtime, target_ref)
     socket = await client.connect(connect or websocket_connect)
-    session = XaiSession(tools=tools, direct_tools=direct_tools, clock=clock, wall_clock=wall_clock)
+    session = XaiSession(tools=tools, clock=clock, wall_clock=wall_clock)
     try:
         await socket.send(json.dumps(session.configure(instructions, voice), ensure_ascii=False))
     except ConnectionClosed as exc:

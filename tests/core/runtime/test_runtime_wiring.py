@@ -24,6 +24,7 @@ from core.statistics import StatisticsIndex
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
+from core.tools.live import LIVE_TOOL_NAMES
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolNotFoundError, ToolRegistry
 from core.tools.update_handoff import UpdateHandoffs
@@ -64,10 +65,11 @@ HOME_ASSISTANT_TOOLS = ["ha_call_service", "ha_get_state", "ha_list_entities", "
 
 COMPUTER_USE_TOOLS = ["computer", "computer_apps", "computer_batch"]
 
-# Built-in Tools that only a Session grant offers; they stay out of the catalog.
-SESSION_GRANTED_BUILTIN_TOOLS = ["message_parent"]
+# Built-in Tools that only a Session grant or a Live call offers; they stay out of the catalog.
+SESSION_GRANTED_BUILTIN_TOOLS = ["message_parent", "vbot_request"]
 CANONICAL_REGISTERED_TOOLS = sorted(
     CANONICAL_BUILTIN_TOOLS
+    + list(LIVE_TOOL_NAMES)
     + SESSION_GRANTED_BUILTIN_TOOLS
     + HOME_ASSISTANT_TOOLS
     + COMPUTER_USE_TOOLS

@@ -371,7 +371,7 @@ async def test_reads_a_session_as_quoted_text_within_the_budget(fx: Fixture) -> 
         ],
         "active_run": None,
     }
-    text = await fx.ok("read", target="ses_1")
+    text = await fx.ok("read_output", target="ses_1")
     assert text.startswith(
         "s1 at Coder, not working. Latest messages, quoted:\nUser (earlier part cut):\n> old old"
     )
@@ -382,7 +382,7 @@ async def test_reads_a_session_as_quoted_text_within_the_budget(fx: Fixture) -> 
 @pytest.mark.asyncio
 async def test_reads_the_latest_session_of_an_agent_without_a_recent_one(fx: Fixture) -> None:
     fx.app.sessions = [session_row("ses_1", "writer")]
-    text = await fx.ok("read", target="Writer")
+    text = await fx.ok("read_output", target="Writer")
     assert text == "s1 at Writer (not working) has no messages yet."
 
 
@@ -497,15 +497,15 @@ async def test_end_call_asks_the_call_to_end_after_a_goodbye(fx: Fixture) -> Non
 @pytest.mark.asyncio
 async def test_reports_an_unexpected_failure_as_uncertain(fx: Fixture) -> None:
     fx.app.fail("terminal.list", RuntimeError("boom"))
-    code, message = await fx.failed("terminal", action="close", target="t9x")
+    code, message = await fx.failed("manage_terminals", action="close", target="t9x")
     assert code == "operation_failed"
     assert "It may or may not have been delivered; do not send it again." in message
     fx.app.fail("terminal.list", RuntimeError("boom"))
-    code, message = await fx.failed("read", target="term_x")
+    code, message = await fx.failed("read_output", target="term_x")
     assert (code, message) == (
         "operation_failed",
-        "read failed unexpectedly; nothing was changed. Call it again once, and tell the user if "
-        "it fails again.",
+        "read_output failed unexpectedly; nothing was changed. Call it again once, and tell the "
+        "user if it fails again.",
     )
 
 
@@ -527,7 +527,7 @@ async def test_known_refs_say_what_each_ref_names_most_recent_last(fx: Fixture) 
     ]
     # A name set in the app stays on its own short line.
     fx.app.add_terminal("term_long", name="Line one\nline two " + "x" * 80)
-    await fx.ok("read", target="term_long")
+    await fx.ok("read_output", target="term_long")
     last = fx.executor.known_refs().splitlines()[-1]
     assert last.startswith('- t3: Codex Terminal "Line one line two xx')
     assert last.endswith('..."')

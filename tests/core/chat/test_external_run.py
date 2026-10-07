@@ -132,7 +132,7 @@ async def test_cancelling_an_external_run_ends_the_conversation(tmp_path: Path) 
     assert cancelled == [True]
     session = runtime.chat_sessions.get(session_address("coder", external.session_id))
     results = [json.loads(m.content) for m in session.load() if m.role == "tool"]
-    assert [result["error"]["code"] for result in results] == ["run_ended"]
+    assert [result["error"]["code"] for result in results] == ["tool_stopped"]
 
 
 @pytest.mark.asyncio
@@ -176,4 +176,5 @@ async def test_live_agent_sessions_take_only_live_runs(tmp_path: Path) -> None:
     await asyncio.wait_for(run.wait(), WAIT_SECONDS)
     roles = _stored(runtime, "backend")
     note_index = roles.index(("note", "Said since the last request: none."))
-    assert roles[note_index + 1] == ("user", "Check the build.")
+    assert [role for role, _ in roles[note_index:]][:3] == ["note", "note", "user"]
+    assert roles[note_index + 2] == ("user", "Check the build.")

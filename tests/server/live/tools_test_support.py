@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 from server.live._context import LiveUiError
-from server.live._memory import LiveMemory
 from server.live._terminals import TerminalTimings
 from server.live._tools import LiveToolExecutor
 from server.rpc.errors import RpcError
@@ -299,7 +298,7 @@ class FakeClock:
 
 
 class Fixture:
-    def __init__(self, memory: LiveMemory | None = None) -> None:
+    def __init__(self) -> None:
         self.app = FakeApp()
         self.ui = FakeUi()
         self.clock = FakeClock()
@@ -319,7 +318,6 @@ class Fixture:
             is_active=lambda: self.active,
             started_at=CALL_START,
             end_call=self._end_call,
-            memory=memory,
             timings=TerminalTimings(),
             sleep=self.clock.sleep,
             clock=self.clock,

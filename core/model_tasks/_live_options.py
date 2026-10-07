@@ -1,20 +1,18 @@
-"""Live voice options: spoken voice, the delegating backend Model, and its reasoning.
+"""Live voice options: the spoken voice and who answers the voice model's requests.
 
 The fields render from the ``live_voice`` facts in
-``capabilities.task_options``. A ``model``-typed ``backend_model`` parameter
-offers the tool-capable chat Models of the same Provider that the target's
-Connection allows; the Live runtime re-checks the configured backend with
-:func:`live_backend_candidates` when a call starts. A spec with
-``"allow_none": true`` also offers ``""`` (no backend model: the voice Model
-calls the Live app Tools itself) and makes the field optional. The backend's
-reasoning effort accompanies that field, narrows its visible choices to each
-candidate's published reasoning ladder, and is hidden without a backend.
+``capabilities.task_options``. An enum ``voice`` parameter offers the Provider's
+voices. An enum ``backend`` parameter says who answers what the voice model
+hands on: ``vbot`` (the built-in Live backend Agent), ``openai`` (OpenAI's
+hosted backend model operates vBot with the voice Agent's Tools), or ``none``
+(the voice model uses its own Tools only). An enum ``openai_backend_model``
+parameter picks OpenAI's backend model; it shows only with ``backend`` ``openai``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
-from typing import Any, Protocol
+from collections.abc import Mapping
+from typing import Any
 
 from core.model_tasks._option_types import (
     TaskModelOptionChoice,
@@ -24,65 +22,31 @@ from core.model_tasks._option_types import (
     _task_options,
 )
 from core.model_tasks.constants import TASK_LIVE_VOICE
-from core.models import Model, ModelQuery
+from core.models import Model
 
-_BACKEND_MODEL_QUERY_TASKS = ("chat",)
-_BACKEND_MODEL_QUERY_CAPABILITIES = ("tools",)
-
-BACKEND_THINKING_EFFORT_DEFAULT = "low"
-"""Default backend reasoning effort: spoken answers need low latency."""
-
-# "" requests no explicit effort, so the Provider default of the Model applies.
-_MODEL_DEFAULT_EFFORT = ""
-_MODEL_DEFAULT_EFFORT_LABEL = "Model default"
-# Efforts that stay available for every published ladder: the Model default
-# and reasoning off. The Agent editor offers the same set.
-_ALWAYS_ALLOWED_EFFORTS = (_MODEL_DEFAULT_EFFORT, "none")
-
-# ``backend_model`` value for "no backend model" on targets that allow it.
-NO_BACKEND_MODEL = ""
-_NO_BACKEND_MODEL_LABEL = "None (the voice model uses vBot directly)"
+LIVE_BACKEND_VBOT = "vbot"
+LIVE_BACKEND_OPENAI = "openai"
+LIVE_BACKEND_NONE = "none"
+LIVE_BACKENDS = (LIVE_BACKEND_VBOT, LIVE_BACKEND_OPENAI, LIVE_BACKEND_NONE)
+_BACKEND_LABELS = {
+    LIVE_BACKEND_VBOT: "vBot (the Live backend Agent)",
+    LIVE_BACKEND_OPENAI: "OpenAI (its backend model uses the voice Agent's Tools)",
+    LIVE_BACKEND_NONE: "None (the voice model uses only its own Tools)",
+}
 
 
-class ModelCatalog(Protocol):
-    """The Model registry read surface option building needs."""
-
-    def query(self, model_query: ModelQuery) -> Iterable[tuple[str, Model]]: ...
-
-
-def live_backend_candidates(
-    models: ModelCatalog,
-    provider_id: str,
-    connection_id: str,
-) -> tuple[Model, ...]:
-    """Return the Models a live voice target may delegate to, sorted by name.
-
-    Candidates are tool-capable chat Models of *provider_id* whose Connection
-    allowlist permits the local *connection_id* (for example
-    ``"subscription"``), so a delegation runs on the Connection the live call
-    already uses.
-    """
-
-    model_query = ModelQuery(
-        provider_id=provider_id,
-        tasks=_BACKEND_MODEL_QUERY_TASKS,
-        capabilities=_BACKEND_MODEL_QUERY_CAPABILITIES,
-    )
-    candidates = [
-        model
-        for matched_provider_id, model in models.query(model_query)
-        if matched_provider_id == provider_id and model.allows_connection(connection_id)
-    ]
-    return tuple(sorted(candidates, key=lambda model: (model.name.casefold(), model.model_id)))
+def live_backend_choices(model: Model | None) -> tuple[str, ...]:
+    """The ``backend`` values *model* offers, its default first; empty without the option."""
+    parameters = _task_options(model, TASK_LIVE_VOICE).get("parameters")
+    spec = parameters.get("backend") if isinstance(parameters, Mapping) else None
+    values = tuple(value for value in _string_values(spec) if value in LIVE_BACKENDS)
+    if not values or not isinstance(spec, Mapping):
+        return ()
+    default = _declared_default(spec, values)
+    return (default, *(value for value in values if value != default)) if default else values
 
 
-def _live_voice_fields(
-    provider_id: str,
-    model: Model | None,
-    *,
-    models: ModelCatalog | None,
-    connection_id: str,
-) -> tuple[TaskModelOptionField, ...]:
+def _live_voice_fields(model: Model | None) -> tuple[TaskModelOptionField, ...]:
     parameters = _task_options(model, TASK_LIVE_VOICE).get("parameters")
     if not isinstance(parameters, Mapping):
         return ()
@@ -91,16 +55,14 @@ def _live_voice_fields(
     voice_field = _voice_field(parameters.get("voice"))
     if voice_field is not None:
         fields.append(voice_field)
-    backend_spec = parameters.get("backend_model")
-    if isinstance(backend_spec, Mapping) and backend_spec.get("type") == "model":
-        candidates = (
-            live_backend_candidates(models, provider_id, connection_id)
-            if models is not None
-            else ()
+    backends = live_backend_choices(model)
+    if backends:
+        fields.append(_backend_field(backends))
+        backend_model = _openai_backend_model_field(
+            parameters.get("openai_backend_model"), backends
         )
-        allow_none = backend_spec.get("allow_none") is True
-        fields.append(_backend_model_field(backend_spec, candidates, allow_none=allow_none))
-        fields.append(_backend_thinking_effort_field(candidates, allow_none=allow_none))
+        if backend_model is not None:
+            fields.append(backend_model)
     return tuple(fields)
 
 
@@ -123,85 +85,42 @@ def _voice_field(spec: Any) -> TaskModelOptionField | None:
     )
 
 
-def _backend_model_field(
-    spec: Mapping[str, Any],
-    candidates: tuple[Model, ...],
-    *,
-    allow_none: bool,
-) -> TaskModelOptionField:
-    choices = tuple(
-        TaskModelOptionChoice(value=candidate.model_id, label=candidate.name)
-        for candidate in candidates
-    )
-    if allow_none:
-        choices = (
-            TaskModelOptionChoice(value=NO_BACKEND_MODEL, label=_NO_BACKEND_MODEL_LABEL),
-            *choices,
-        )
+def _backend_field(backends: tuple[str, ...]) -> TaskModelOptionField:
     return TaskModelOptionField(
-        name="backend_model",
+        name="backend",
         type="select",
-        label="Backend model",
-        default=_declared_default(spec, tuple(choice.value for choice in choices)),
-        required=not allow_none,
+        label="Backend",
+        default=backends[0],
+        required=True,
         description=(
-            "Model that answers requests and operates vBot during a live call. "
-            "Only tool-capable Models of the same Provider on this Connection are offered."
-        ),
-        options=choices,
-    )
-
-
-def backend_thinking_efforts() -> tuple[str, ...]:
-    """Return every backend reasoning effort in canonical order, ``""`` first."""
-
-    # Deferred: ``core.settings.settings`` imports this module (through
-    # ``core.model_tasks.options``) while it loads. A module-level import of
-    # ``core.providers`` would load every Provider Adapter at that point, and
-    # the OpenRouter Adapter imports the half-initialized settings module.
-    from core.providers.reasoning import THINKING_EFFORT_ORDER
-
-    return (_MODEL_DEFAULT_EFFORT, *THINKING_EFFORT_ORDER)
-
-
-def _backend_thinking_effort_field(
-    candidates: tuple[Model, ...], *, allow_none: bool
-) -> TaskModelOptionField:
-    efforts = backend_thinking_efforts()
-    allowed_by_backend: dict[str, tuple[str, ...]] = {}
-    if allow_none:
-        # Without a backend model there is nothing to reason; hide the field.
-        allowed_by_backend[NO_BACKEND_MODEL] = ()
-    for candidate in candidates:
-        # Without a published ladder the Adapter applies a Provider-specific
-        # floor that the UI cannot see, so every effort stays visible.
-        levels = candidate.capabilities.reasoning.levels
-        if levels:
-            allowed = {*_ALWAYS_ALLOWED_EFFORTS, *levels}
-            allowed_by_backend[candidate.model_id] = tuple(
-                effort for effort in efforts if effort in allowed
-            )
-    return TaskModelOptionField(
-        name="backend_thinking_effort",
-        type="select",
-        label="Backend reasoning",
-        default=BACKEND_THINKING_EFFORT_DEFAULT,
-        description=(
-            "Reasoning effort of the backend model for each request. "
-            "Higher effort can make spoken answers slower."
+            "Who answers the requests the voice model hands on and operates vBot during a call."
         ),
         options=tuple(
-            TaskModelOptionChoice(
-                value=effort,
-                label=_MODEL_DEFAULT_EFFORT_LABEL if effort == _MODEL_DEFAULT_EFFORT else effort,
-            )
-            for effort in efforts
+            TaskModelOptionChoice(value=value, label=_BACKEND_LABELS[value])
+            for value in sorted(backends, key=LIVE_BACKENDS.index)
         ),
-        options_by=(
-            TaskModelOptionsBy(field="backend_model", values=allowed_by_backend)
-            if allowed_by_backend
-            else None
-        ),
+    )
+
+
+def _openai_backend_model_field(
+    spec: Any, backends: tuple[str, ...]
+) -> TaskModelOptionField | None:
+    if LIVE_BACKEND_OPENAI not in backends or not isinstance(spec, Mapping):
+        return None
+    values = tuple(dict.fromkeys(_string_values(spec)))
+    if not values:
+        return None
+    hidden: dict[str, tuple[str, ...]] = {
+        backend: () for backend in backends if backend != LIVE_BACKEND_OPENAI
+    }
+    return TaskModelOptionField(
+        name="openai_backend_model",
+        type="select",
+        label="OpenAI backend model",
+        default=_declared_default(spec, values),
+        description="OpenAI's Model that answers the voice model's requests.",
+        options=tuple(TaskModelOptionChoice(value=value, label=value) for value in values),
+        options_by=TaskModelOptionsBy(field="backend", values=hidden),
     )
 
 

@@ -1,7 +1,7 @@
 """The server side of one Live call: the host the call runs on.
 
 A :class:`LiveCallEntry` is the call's :class:`core.model_tasks.live.LiveCallHost`:
-it briefs the call, runs its Live Tools, feeds it finished Runs, keeps the
+it runs the call's Live Tools, feeds it finished Runs, keeps the
 owner socket's updates, answers UI requests through the owner, and ends the
 call when its owner does not attach or return, when the voice model hangs up,
 or when nobody uses it.
@@ -20,14 +20,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from core.model_tasks.live import LiveBrief, LiveCall, LiveToolRun
+from core.model_tasks.live import LiveCall
 from core.utils.ids import new_id
 from server.events import ServerEventBus
-from server.live._brief import live_brief
 from server.live._context import UI_TIMEOUT, UI_UNAVAILABLE, LiveUiError, RpcInvoker
 from server.live._feed import LiveRunFeed
-from server.live._memory import LiveMemory
-from server.live._record import LiveCallRecorder
 from server.live._tools import LiveToolExecutor
 from server.live.owner import (
     LIVE_AUDIO_FRAME_MAX_BYTES,
@@ -94,14 +91,9 @@ class LiveCallEntry:
         on_finalized: Callable[[LiveCallEntry], None],
         started_at: datetime,
         after_sequence: int,
-        memory: LiveMemory,
-        recap: str = "",
         wake_phrases: tuple[str, ...] = (),
-        recorder: LiveCallRecorder | None = None,
     ) -> None:
         self._limits = limits
-        self._recorder = recorder
-        self._recap = recap
         self._wake_phrases = wake_phrases
         self._rpc = rpc
         self._events = events
@@ -128,9 +120,7 @@ class LiveCallEntry:
             is_active=self._is_active,
             started_at=started_at,
             end_call=self.end_soon,
-            memory=memory,
             report=self.publish,
-            record=self.record if recorder is not None else None,
         )
         self._ending = False
         # Why vBot ended the call, when it did (hung up, idle).
@@ -162,20 +152,16 @@ class LiveCallEntry:
 
     # -- LiveCallHost -----------------------------------------------------
 
-    def brief(self, *, direct_tools: bool) -> LiveBrief:
-        """The call's instructions and Live Tools."""
-        self._executor.mode = "direct" if direct_tools else "delegated"
-        return live_brief(
-            direct_tools=direct_tools, wake_phrases=self._wake_phrases, recap=self._recap
-        )
+    @property
+    def wake_phrases(self) -> tuple[str, ...]:
+        """The phrases that address other vBot Agents during the call."""
+        return self._wake_phrases
 
-    async def run_tool(
-        self, name: Any, arguments: Any, *, rejection: JsonObject | None = None
-    ) -> LiveToolRun:
-        """Run one Tool call as a Model made it; the executor runs them in turn."""
+    async def run_live_tool(self, name: str, arguments: Any) -> JsonObject:
+        """Run one Live Tool call as a Model wrote it; the executor runs them in turn."""
         self._mark_active()
         try:
-            return await self._executor.run(name, arguments, rejection=rejection)
+            return await self._executor.run(name, arguments)
         finally:
             self._mark_active()
 
@@ -209,11 +195,6 @@ class LiveCallEntry:
         self._deliver(update)
         if self._closed_published and self._owner is not None:
             self._owner.end(LIVE_SOCKET_CLOSE_ENDED)
-
-    def record(self, event: JsonObject) -> None:
-        """Keep one Tool call or delegation record locally; only in Debug Mode."""
-        if self._recorder is not None:
-            self._recorder.record(self.call_id, event)
 
     def publish_audio(self, pcm: bytes) -> None:
         """Send assistant audio to the attached owner; dropped while none is attached."""

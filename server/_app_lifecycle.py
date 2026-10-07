@@ -9,7 +9,6 @@ from contextlib import suppress
 from typing import TYPE_CHECKING, Any, cast
 
 from core.runs import ChatRunManager
-from core.storage.layout import DataDirectoryLayout
 from core.utils.log_viewer import LogViewer
 from server._bind import ServerBindState
 from server._http_dependencies import FastAPIType
@@ -27,7 +26,6 @@ from server.events import (
     ServerEventBus,
 )
 from server.file_delivery import FileDelivery
-from server.live._record import LiveCallRecorder
 from server.live.registry import LiveCallRegistry
 from server.rpc.dispatcher import dispatch_method
 from server.rpc.event_bridge import (
@@ -100,24 +98,16 @@ def _initialize_app_state(
     # Tools and commands that select Sessions for automations.
     app.state.agent_delete_lock = runtime.automation_references.lock
     app.state.server_bind = dict(server_bind)
-    app.state.live_calls = _build_live_call_registry(
-        app.state, LiveCallRecorder(DataDirectoryLayout(runtime.storage.data_dir).live_calls)
-    )
+    app.state.live_calls = _build_live_call_registry(app.state)
 
 
-def _build_live_call_registry(state: Any, recorder: LiveCallRecorder) -> LiveCallRegistry:
+def _build_live_call_registry(state: Any) -> LiveCallRegistry:
     """Live calls run their Tools through the canonical RPC handlers."""
 
     async def dispatch(method: str, params: JsonObject) -> JsonObject:
         return await dispatch_method(state, method, params, METHODS)
 
-    def recording() -> bool:
-        # Records hold what the Models sent and read; only Debug Mode keeps them.
-        return bool(state.runtime.storage.load_debug_settings()["enabled"])
-
-    return LiveCallRegistry(
-        events=state.event_bus, rpc=dispatch, recorder=recorder, recording=recording
-    )
+    return LiveCallRegistry(events=state.event_bus, rpc=dispatch)
 
 
 async def _shutdown_live_calls(state: Any, logger: logging.Logger) -> None:

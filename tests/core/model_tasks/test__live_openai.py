@@ -7,6 +7,7 @@ import base64
 import json
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -17,6 +18,7 @@ from core.model_tasks._live_call import LiveCallSession
 from core.model_tasks._live_openai import (
     CODEX_LIVE_HEADERS,
     ControlJoinError,
+    OpenAIBackend,
     OpenAILiveWire,
     chunk_text,
     open_openai_live_wire,
@@ -28,6 +30,7 @@ from core.model_tasks._live_wire import (
     WireProblem,
     WireSendError,
     WireStarted,
+    WireToolCall,
     WireUsage,
 )
 from core.model_tasks.model_tasks import parse_task_model_target_id
@@ -35,6 +38,7 @@ from core.providers.errors import ProviderAuthError, ProviderOutcomeUnknownError
 from core.providers.openai_subscription_auth import OPENAI_AUTH_CLAIM
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.token_getter import StaticTokenGetter
+from core.tools.live import LiveToolHosts
 
 CODEX_CALLS_URL = (
     "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas"
@@ -216,6 +220,111 @@ async def test_public_session_locks_the_page_data_channel_and_attaches_sideband(
 
 
 @pytest.mark.asyncio
+@respx.mock
+async def test_a_hosted_backend_answers_delegations_with_vbot_function_tools():
+    route = respx.post(PUBLIC_SESSIONS_URL).respond(
+        201, json={"session": {"id": "live_1"}, "transport": {"sdp": ANSWER}}
+    )
+    overview = {
+        "name": "overview",
+        "description": "What runs.",
+        "parameters": {"type": "object", "properties": {"agent": {"type": "string"}}},
+    }
+
+    await open_openai_live_wire(
+        _runtime("sk-test"),
+        parse_task_model_target_id("openai/gpt-live-1::api-key"),
+        offer_sdp=OFFER,
+        instructions="be brief",
+        voice=None,
+        backend=OpenAIBackend(
+            model="gpt-6-luna", instructions="operate vBot", tools=[overview, {"name": "end_call"}]
+        ),
+        connect=FakeConnect(),
+    )
+
+    assert json.loads(route.calls[0].request.content)["session"]["delegation"] == {
+        "type": "responses",
+        "responses": {
+            "model": "gpt-6-luna",
+            "instructions": "operate vBot",
+            "tools": [
+                {"type": "function", **overview},
+                {
+                    "type": "function",
+                    "name": "end_call",
+                    "description": "",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            ],
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_hosted_backend_function_calls_run_once_and_continue_after_every_output():
+    call_item = {
+        "type": "function_call",
+        "call_id": "fc_1",
+        "name": "overview",
+        "arguments": "{}",
+    }
+    socket = FakeSocket(
+        [
+            {"type": "response.output_item.done", "item": call_item},
+            # The same call again, flat and wrapped, is not run twice.
+            {"type": "response.function_call_arguments.done", **call_item},
+            {
+                "type": "delegation.event",
+                "event": {"type": "delegation.function_call", **call_item},
+            },
+            {
+                "type": "delegation.event",
+                "event": {
+                    "type": "delegation.function_call",
+                    "call_id": "fc_2",
+                    "name": "end_call",
+                    "arguments": None,
+                },
+            },
+            {"type": "response.output_item.done", "item": {"type": "message", "id": "m1"}},
+        ]
+    )
+    wire = OpenAILiveWire(call_id="rtc_1", answer_sdp=ANSWER, socket=socket, dialect="public")
+    events: list[Any] = []
+
+    async def read() -> None:
+        async for event in wire.events():
+            events.append(event)
+
+    reader = asyncio.create_task(read())
+    async with asyncio.timeout(2):
+        while len(events) < 2:
+            await asyncio.sleep(0.005)
+    await wire.deliver_result("fc_1", "Nothing runs.")
+    sent_after_first = list(socket.sent)
+    await wire.deliver_result("fc_2", "Hanging up.")
+    await socket.close()
+    async with asyncio.timeout(2):
+        await reader
+
+    assert [event for event in events if isinstance(event, WireToolCall)] == [
+        WireToolCall(call_id="fc_1", name="overview", arguments="{}"),
+        WireToolCall(call_id="fc_2", name="end_call", arguments=None),
+    ]
+    output = {"type": "function_call_output", "call_id": "fc_1", "output": "Nothing runs."}
+    # The hosted backend continues once every call it made has an output.
+    assert sent_after_first == [{"type": "response.item.create", "item": output}]
+    assert socket.sent[1:] == [
+        {
+            "type": "response.item.create",
+            "item": {"type": "function_call_output", "call_id": "fc_2", "output": "Hanging up."},
+        },
+        {"type": "response.create"},
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("response", "error"),
     [
@@ -380,7 +489,15 @@ async def test_confirmed_live_call_closure_retires_its_control_socket(dialect: s
     wire = OpenAILiveWire(call_id="rtc_1", answer_sdp=ANSWER, socket=socket, dialect=dialect)
     updates: list[dict[str, Any]] = []
     host: Any = SimpleNamespace(publish=updates.append)
-    call = LiveCallSession(wire=wire, brain=None, host=host, target="openai/test-live")
+    voice: Any = SimpleNamespace(agent_id="live-voice", session_id="voice-1", finish=AsyncMock())
+    call = LiveCallSession(
+        wire=wire,
+        voice=voice,
+        backend_factory=None,
+        host=host,
+        hosts=LiveToolHosts(),
+        target="openai/test-live",
+    )
     call.start()
 
     await asyncio.wait_for(call.wait_closed(), 1)

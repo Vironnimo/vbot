@@ -1,21 +1,29 @@
 """Live voice: provider-neutral realtime voice calls owned by the server.
 
 The ``live_voice`` Task Model binding selects the voice Model and Connection.
-A Live call keeps the provider control channel, delegated reasoning, and
-announcements here. The :class:`LiveCallHost` the server supplies owns what the
-Models are told and the Tools they may call (:class:`LiveBrief`), runs those
-Tools, and attaches the accessor's media and display.
+Every call is recorded as one Run of the built-in Live voice Agent in a fresh
+Session: what the user and the voice model said, the updates vBot gave it, and
+every Tool call the voice model made, with the Agent's Tools. The binding's
+``backend`` option says who answers what the voice model hands on:
 
-The bound Provider decides the media kind: ``webrtc`` (OpenAI; the accessor
-connects audio to the provider) or ``relay`` (xAI; audio passes through the
-server as PCM16 mono 24 kHz). A backend model answers delegated requests with
-the host's Tools; a voice model that calls function Tools itself may run
-without one and call the host's Tools directly (direct Tools mode, backend
-``""``).
+* ``vbot``: the built-in Live backend Agent, one Chat Run per request in a
+  second Session of the call (``_live_backend.py``). The voice model reaches it
+  through ``vbot_request`` or its Provider's native delegation.
+* ``openai``: OpenAI's hosted backend model, which calls the voice Agent's
+  Tools (GPT-Live only).
+* ``none``: the voice model uses only the voice Agent's Tools (xAI only).
+
+The :class:`LiveCallHost` the server supplies runs the Live Tools, says what
+vBot shows, and attaches the accessor's media and display. The bound Provider
+decides the media kind: ``webrtc`` (OpenAI; the accessor connects audio to the
+provider) or ``relay`` (xAI; audio passes through the server as PCM16 mono
+24 kHz).
 
 Accessor updates published through :meth:`LiveCallHost.publish`:
 
 * ``{"type": "state", "phase": "connecting" | "live" | "closing" | "closed" | "failed"}``
+* ``{"type": "sessions", "voice": {"agent_id", "session_id"}, "backend": {...} | None}``
+  (the call's Sessions; again when the backend Session is created)
 * ``{"type": "expiry", "seconds": float}`` (after ``live`` when the provider
   limits the session: seconds until it ends the call)
 * ``{"type": "caption", "role": "user" | "assistant", "text": str, "final": bool}``
@@ -31,13 +39,26 @@ Relay audio for the accessor goes through :meth:`LiveCallHost.publish_audio`.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Literal, Protocol
 
-from core.model_tasks._live_brain import BrainTarget, LiveBrain
+from core.agents import LIVE_BACKEND_AGENT_ID, LIVE_VOICE_AGENT_ID
+from core.model_tasks._live_backend import LiveBackend
+from core.model_tasks._live_brief import backend_instructions, voice_instructions
 from core.model_tasks._live_call import LiveCallSession
-from core.model_tasks._live_openai import ControlJoinError, open_openai_live_wire
+from core.model_tasks._live_openai import (
+    ControlJoinError,
+    OpenAIBackend,
+    open_openai_live_wire,
+)
+from core.model_tasks._live_options import (
+    LIVE_BACKEND_NONE,
+    LIVE_BACKEND_OPENAI,
+    LIVE_BACKEND_VBOT,
+    live_backend_choices,
+)
 from core.model_tasks._live_results import (
     LIVE_UPDATE_PREFIX,
     live_failure,
@@ -53,17 +74,13 @@ from core.model_tasks.model_tasks import (
     parse_task_model_target_id,
     public_provider_target_id,
 )
-from core.model_tasks.options import (
-    BACKEND_THINKING_EFFORT_DEFAULT,
-    backend_thinking_efforts,
-    live_backend_candidates,
-)
 from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage
 from core.providers.errors import (
     ProviderAuthError,
     ProviderOutcomeUnknownError,
     ProviderRateLimitError,
 )
+from core.tools.live import TOOL_VBOT_REQUEST, LiveToolHosts
 from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, TaskError, VBotError
 from core.utils.ids import new_id
@@ -75,15 +92,14 @@ __all__ = [
     "LIVE_MEDIA_KINDS",
     "LIVE_START_REJECTION_CODES",
     "LIVE_UPDATE_PREFIX",
-    "LiveBrief",
     "LiveCall",
     "LiveCallHost",
     "LiveRunNotice",
     "LiveRuntime",
     "LiveStartRejected",
-    "LiveToolRun",
     "LiveVoiceError",
     "LiveVoiceService",
+    "backend_instructions",
     "live_failure",
     "live_result_text",
     "live_success",
@@ -125,65 +141,25 @@ class LiveStartRejected(LiveVoiceError):  # noqa: N818 - names the outcome
         self.code = code
 
 
-@dataclass(frozen=True)
-class LiveBrief:
-    """What the Models of one call are told, and the Tools they may call.
-
-    ``voice_instructions`` configure the voice model. ``request_tool`` is the
-    function Tool through which a voice model without native delegation hands
-    the user's request on (one required text parameter, ``request``); it is
-    offered only when a backend model answers. ``delegation_instructions`` are
-    the backend model's system prompt. ``tools`` are the host's Tool
-    definitions (``name``, ``description``, JSON Schema ``parameters``),
-    offered to the backend model, or in direct Tools mode to the voice model.
-    """
-
-    voice_instructions: str
-    request_tool: JsonObject
-    delegation_instructions: str
-    tools: tuple[JsonObject, ...]
-
-
-@dataclass(frozen=True)
-class LiveToolRun:
-    """The outcome of one Tool call a Model made.
-
-    ``result`` is a Tool result envelope (:func:`live_success`,
-    :func:`live_failure`). ``changed`` names the Tool when it ran and may have
-    changed something in the app; it stays empty for lookups and for calls
-    rejected before they ran.
-    """
-
-    result: JsonObject
-    changed: str = ""
-
-
 class LiveCallHost(Protocol):
-    """Server-side owner of one Live call's Tools, accessor, and records.
+    """Server-side owner of one Live call's Live Tools and accessor.
 
-    ``brief`` supplies the call's instructions and Tools once the call knows
-    whether the voice model calls the Tools itself (*direct_tools*).
-    ``run_tool`` runs one Tool call as the Model made it (any name, raw
-    arguments) and never raises for operation failures: they come back as a
-    failure result naming the next valid call. *rejection* is the failure a
-    Provider Adapter already reported for unusable arguments; the host returns
-    it as the result without running anything. Delegations run one at a time;
-    direct Tool calls may call ``run_tool`` concurrently. ``known_refs`` lists
-    the refs earlier Tool results named (one ``- s1: Session at Coder`` line
-    each, empty when none), so a later delegation can target them without
-    reading them again. ``current_state`` returns what the app and vBot show
-    right now as text (the full overview), given to each delegation so it need
-    not look first; empty when unknown.
-    ``publish`` delivers an accessor update, ``publish_audio`` relayed
-    assistant audio (PCM16 mono 24 kHz), and ``record`` one delegation record
-    for local measurement, all without blocking.
+    ``wake_phrases`` address other vBot Agents during the call (validated,
+    printable). ``run_live_tool`` runs one Live Tool by name with the
+    arguments as the Model wrote them and never raises for operation failures:
+    they come back as a failure envelope naming the next valid call; calls can
+    arrive concurrently. ``known_refs`` lists the refs earlier Tool results
+    named (one ``- s1: Session at Coder`` line each, empty when none).
+    ``current_state`` returns what the app and vBot show right now as text
+    (the full overview); empty when unknown. ``publish`` delivers an accessor
+    update and ``publish_audio`` relayed assistant audio (PCM16 mono 24 kHz),
+    both without blocking.
     """
 
-    def brief(self, *, direct_tools: bool) -> LiveBrief: ...
+    @property
+    def wake_phrases(self) -> tuple[str, ...]: ...
 
-    async def run_tool(
-        self, name: Any, arguments: Any, *, rejection: JsonObject | None = None
-    ) -> LiveToolRun: ...
+    async def run_live_tool(self, name: str, arguments: Any) -> JsonObject: ...
 
     def known_refs(self) -> str: ...
 
@@ -192,8 +168,6 @@ class LiveCallHost(Protocol):
     def publish(self, update: JsonObject) -> None: ...
 
     def publish_audio(self, pcm: bytes) -> None: ...
-
-    def record(self, event: JsonObject) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -261,13 +235,19 @@ class LiveCall(Protocol):
 
 
 class LiveRuntime(Protocol):
-    """Runtime seams a Live call needs: task credentials, adapters, and Models."""
+    """Runtime seams a Live call needs: credentials, adapters, Models, and Chat."""
 
     @property
     def providers(self) -> Any: ...
 
     @property
     def models(self) -> Any: ...
+
+    @property
+    def chat_loop(self) -> Any: ...
+
+    @property
+    def chat_sessions(self) -> Any: ...
 
     def get_connection_token_getter(self, connection: Any) -> Any: ...
 
@@ -280,8 +260,9 @@ class _WireSetup:
 
     offer_sdp: str | None
     voice: str | None
-    direct_tools: bool
-    brief: LiveBrief
+    instructions: str
+    tools: tuple[JsonObject, ...]
+    openai_backend: OpenAIBackend | None
 
 
 async def _open_openai(runtime: Any, target_ref: TaskModelTargetRef, setup: _WireSetup) -> LiveWire:
@@ -289,20 +270,19 @@ async def _open_openai(runtime: Any, target_ref: TaskModelTargetRef, setup: _Wir
         runtime,
         target_ref,
         offer_sdp=setup.offer_sdp or "",
-        instructions=setup.brief.voice_instructions,
+        instructions=setup.instructions,
         voice=setup.voice,
+        backend=setup.openai_backend,
     )
 
 
 async def _open_xai(runtime: Any, target_ref: TaskModelTargetRef, setup: _WireSetup) -> LiveWire:
-    brief = setup.brief
     return await open_xai_live_wire(
         runtime,
         target_ref,
-        instructions=brief.voice_instructions,
+        instructions=setup.instructions,
         voice=setup.voice,
-        tools=list(brief.tools) if setup.direct_tools else [brief.request_tool],
-        direct_tools=setup.direct_tools,
+        tools=list(setup.tools),
     )
 
 
@@ -310,18 +290,30 @@ async def _open_xai(runtime: Any, target_ref: TaskModelTargetRef, setup: _WireSe
 class _ProviderWire:
     """How a Provider's Live calls connect.
 
-    ``direct_tools`` means the voice model can call the host's Tools itself,
-    so the backend model is optional.
+    ``tools`` means the voice model calls function Tools itself; otherwise
+    it hands every request on through native delegation. ``backends`` are
+    the ``backend`` values the wire can serve, the fallback first.
     """
 
     media: str
-    direct_tools: bool
+    tools: bool
+    backends: tuple[str, ...]
     open: Callable[[Any, TaskModelTargetRef, _WireSetup], Awaitable[LiveWire]]
 
 
 _PROVIDER_WIRES: dict[str, _ProviderWire] = {
-    "openai": _ProviderWire(media=MEDIA_WEBRTC, direct_tools=False, open=_open_openai),
-    "xai": _ProviderWire(media=MEDIA_RELAY, direct_tools=True, open=_open_xai),
+    "openai": _ProviderWire(
+        media=MEDIA_WEBRTC,
+        tools=False,
+        backends=(LIVE_BACKEND_VBOT, LIVE_BACKEND_OPENAI),
+        open=_open_openai,
+    ),
+    "xai": _ProviderWire(
+        media=MEDIA_RELAY,
+        tools=True,
+        backends=(LIVE_BACKEND_NONE, LIVE_BACKEND_VBOT),
+        open=_open_xai,
+    ),
 }
 
 
@@ -330,19 +322,39 @@ class _CallPlan:
     target_ref: TaskModelTargetRef
     wire: _ProviderWire
     voice: str | None
-    # ``None`` runs the call in direct Tools mode.
-    brain_target: BrainTarget | None
+    backend: str
+    openai_backend_model: str | None
+
+
+@dataclass(frozen=True)
+class _VoiceSetup:
+    """What the voice model is told and offered, and who answers its requests."""
+
+    instructions: str
+    tools: tuple[JsonObject, ...]
+    openai_backend: OpenAIBackend | None
 
 
 class LiveVoiceService:
-    """Start Live calls for the configured ``live_voice`` Task Model binding."""
+    """Start Live calls for the configured ``live_voice`` Task Model binding.
+
+    *hosts* routes the Live Tool calls of a call's Sessions to the call.
+    """
 
     def __init__(
-        self, model_tasks: Any, runtime: LiveRuntime, *, usage_recorder: UsageRecorder | None = None
+        self,
+        model_tasks: Any,
+        runtime: LiveRuntime,
+        *,
+        hosts: LiveToolHosts,
+        usage_recorder: UsageRecorder | None = None,
+        clock: Callable[[], datetime] = lambda: datetime.now().astimezone(),
     ) -> None:
         self._model_tasks = model_tasks
         self._runtime = runtime
+        self._hosts = hosts
         self._usage_recorder = usage_recorder
+        self._clock = clock
 
     def status(self) -> JsonObject:
         """Return ``{"configured", "usable", "target", "media"}``.
@@ -388,17 +400,125 @@ class LiveVoiceService:
         label = public_provider_target_id(
             target_ref.provider_id, target_ref.model_id, target_ref.local_connection_id
         )
-        direct_tools = plan.brain_target is None
-        brief = host.brief(direct_tools=direct_tools)
-        setup = _WireSetup(
-            offer_sdp=offer_sdp, voice=plan.voice, direct_tools=direct_tools, brief=brief
+        chat = self._runtime.chat_loop
+        title = f"Live call · {self._clock():%Y-%m-%d %H:%M}"
+        call: LiveCallSession | None = None
+
+        def end_call() -> None:
+            # The user stopped the voice Run in the app.
+            if call is not None:
+                call.abort_soon()
+
+        try:
+            voice = await chat.start_external_run(
+                LIVE_VOICE_AGENT_ID,
+                model=label,
+                title=title,
+                extra_tools=[TOOL_VBOT_REQUEST] if plan.backend == LIVE_BACKEND_VBOT else [],
+                on_cancel=end_call,
+            )
+        except VBotError as exc:
+            _LOGGER.warning(
+                "Live call Session could not start (target=%s error_type=%s)",
+                label,
+                type(exc).__name__,
+            )
+            raise LiveStartRejected("not_configured", str(exc)) from exc
+        try:
+            setup = await self._voice_setup(plan, voice.tool_definitions, host.wake_phrases)
+            wire = await self._open_wire(plan, label, offer_sdp, setup)
+        except BaseException:
+            await asyncio.shield(voice.discard())
+            raise
+        log_id = new_id("live")
+        call = LiveCallSession(
+            wire=wire.wire,
+            voice=voice,
+            backend_factory=(
+                (
+                    lambda session_host, on_session: LiveBackend(
+                        chat=chat,
+                        sessions=self._runtime.chat_sessions,
+                        hosts=self._hosts,
+                        host=session_host,
+                        title=title,
+                        voice_session_id=voice.session_id,
+                        on_session=on_session,
+                    )
+                )
+                if plan.backend == LIVE_BACKEND_VBOT
+                else None
+            ),
+            host=host,
+            hosts=self._hosts,
+            target=label,
+            log_id=log_id,
+            usage_accounting=wire.accounting,
+            usage_call_id=wire.usage_call_id,
         )
+        call.start()
+        _LOGGER.info(
+            "Live call started (call=%s target=%s media=%s backend=%s)",
+            call.log_id,
+            label,
+            plan.wire.media,
+            plan.backend,
+        )
+        return call
+
+    async def _voice_setup(
+        self, plan: _CallPlan, voice_tools: Sequence[JsonObject], wake_phrases: Sequence[str]
+    ) -> _VoiceSetup:
+        tools = tuple(voice_tools)
+        backend_tools: tuple[str, ...] = ()
+        openai_backend: OpenAIBackend | None = None
+        delegation = ""
+        if plan.backend == LIVE_BACKEND_VBOT:
+            backend_tools = await self._runtime.chat_loop.agent_tool_names(LIVE_BACKEND_AGENT_ID)
+            if not plan.wire.tools:
+                delegation = LIVE_BACKEND_VBOT
+        elif plan.backend == LIVE_BACKEND_OPENAI:
+            delegation = LIVE_BACKEND_OPENAI
+            offered = tuple(tool for tool in tools if tool.get("name") != TOOL_VBOT_REQUEST)
+            backend_tools = tuple(str(tool.get("name")) for tool in offered)
+            openai_backend = OpenAIBackend(
+                model=plan.openai_backend_model or "",
+                instructions=backend_instructions(
+                    set(backend_tools).__contains__, context_note=False
+                ),
+                tools=offered,
+            )
+        wire_tools = tools if plan.wire.tools else ()
+        instructions = voice_instructions(
+            tools=[str(tool.get("name")) for tool in wire_tools],
+            delegation=delegation,
+            backend_tools=backend_tools,
+            wake_phrases=wake_phrases,
+        )
+        return _VoiceSetup(
+            instructions=instructions, tools=wire_tools, openai_backend=openai_backend
+        )
+
+    async def _open_wire(
+        self, plan: _CallPlan, label: str, offer_sdp: str | None, setup: _VoiceSetup
+    ) -> _OpenedWire:
+        target_ref = plan.target_ref
         accounting = TaskUsage(self._usage_recorder, TASK_LIVE_VOICE, target_ref)
         usage_call_id = await accounting.start()
         wire: LiveWire | None = None
         status: Literal["failed", "cancelled"] = "failed"
         try:
-            wire = await plan.wire.open(self._runtime, target_ref, setup)
+            wire = await plan.wire.open(
+                self._runtime,
+                target_ref,
+                _WireSetup(
+                    offer_sdp=offer_sdp,
+                    voice=plan.voice,
+                    instructions=setup.instructions,
+                    tools=setup.tools,
+                    openai_backend=setup.openai_backend,
+                ),
+            )
         except asyncio.CancelledError:
             status = "cancelled"
             raise
@@ -426,43 +546,7 @@ class LiveVoiceService:
         finally:
             if wire is None:
                 await accounting.finish(usage_call_id, status=status)
-        # OpenAI assigns the call id; logs and derived ids use this one instead.
-        log_id = new_id("live")
-        brain_target = plan.brain_target
-        brain = (
-            LiveBrain(
-                self._runtime,
-                brain_target,
-                instructions=brief.delegation_instructions,
-                tools=brief.tools,
-                run_tool=host.run_tool,
-                conversation_id=f"live:{log_id}",
-                record=host.record,
-                usage_recorder=self._usage_recorder,
-            )
-            if brain_target is not None
-            else None
-        )
-        call = LiveCallSession(
-            wire=wire,
-            brain=brain,
-            host=host,
-            target=label,
-            log_id=log_id,
-            usage_accounting=accounting,
-            usage_call_id=usage_call_id,
-        )
-        call.start()
-        _LOGGER.info(
-            "Live call started (call=%s target=%s media=%s backend_model=%s backend_effort=%s)",
-            call.log_id,
-            label,
-            plan.wire.media,
-            brain_target.model_id if brain_target is not None else "none",
-            (brain_target.thinking_effort if brain_target is not None else None) or "default",
-        )
-
-        return call
+        return _OpenedWire(wire=wire, accounting=accounting, usage_call_id=usage_call_id)
 
     def _resolve_target(self) -> _CallPlan:
         resolver = TaskBindingResolver(self._model_tasks, configuration_error=LiveVoiceError)
@@ -476,35 +560,42 @@ class LiveVoiceService:
                 "not_configured", f"Live voice does not support Provider {target_ref.provider_id}"
             )
         voice = options.get("voice")
+        backend = self._backend(target_ref, options, provider_wire)
+        backend_model = options.get("openai_backend_model")
+        if backend == LIVE_BACKEND_OPENAI and not (
+            isinstance(backend_model, str) and backend_model
+        ):
+            raise LiveStartRejected(
+                "backend_unavailable", "The OpenAI backend model of Live voice is not set"
+            )
         return _CallPlan(
             target_ref=target_ref,
             wire=provider_wire,
             voice=voice if isinstance(voice, str) and voice else None,
-            brain_target=self._brain_target(target_ref, options, provider_wire),
+            backend=backend,
+            openai_backend_model=backend_model if isinstance(backend_model, str) else None,
         )
 
-    def _brain_target(
+    def _backend(
         self, target_ref: TaskModelTargetRef, options: JsonObject, provider_wire: _ProviderWire
-    ) -> BrainTarget | None:
-        """Return the backend model, or ``None`` for direct Tools mode."""
-
-        backend_model = options.get("backend_model")
-        if backend_model in (None, "") and provider_wire.direct_tools:
-            # Direct Tools mode ignores the backend reasoning effort entirely.
-            return None
-        candidates = live_backend_candidates(
-            self._runtime.models, target_ref.provider_id, target_ref.local_connection_id
-        )
-        if backend_model not in {model.model_id for model in candidates}:
+    ) -> str:
+        """Return who answers the voice model's requests; the wire must serve it."""
+        offered = live_backend_choices(self._model_tasks.model_for_target(target_ref))
+        backend = options.get("backend")
+        if backend in (None, ""):
+            backend = offered[0] if offered else provider_wire.backends[0]
+        if backend not in provider_wire.backends or (offered and backend not in offered):
             raise LiveStartRejected(
-                "backend_unavailable", "The Live voice backend model is not available"
+                "backend_unavailable", f"Live voice cannot use the backend {backend}"
             )
-        return BrainTarget(
-            provider_id=target_ref.provider_id,
-            connection_id=target_ref.connection_id,
-            model_id=str(backend_model),
-            thinking_effort=_backend_thinking_effort(options),
-        )
+        return str(backend)
+
+
+@dataclass(frozen=True)
+class _OpenedWire:
+    wire: LiveWire
+    accounting: TaskUsage
+    usage_call_id: str
 
 
 def _target_media(target: str) -> str | None:
@@ -514,23 +605,6 @@ def _target_media(target: str) -> str | None:
         return None
     provider_wire = _PROVIDER_WIRES.get(provider_id)
     return provider_wire.media if provider_wire is not None else None
-
-
-def _backend_thinking_effort(options: JsonObject) -> str | None:
-    """Return the configured backend effort; ``None`` leaves it to the Model.
-
-    A missing or null option is unset, like save validation treats it, and
-    uses the default; ``""`` explicitly selects the Model default.
-    """
-
-    effort = options.get("backend_thinking_effort")
-    if effort is None:
-        effort = BACKEND_THINKING_EFFORT_DEFAULT
-    if not isinstance(effort, str) or effort not in backend_thinking_efforts():
-        raise LiveStartRejected(
-            "backend_unavailable", "The Live voice backend reasoning effort is not valid"
-        )
-    return effort or None
 
 
 def _valid_offer(offer_sdp: object) -> bool:

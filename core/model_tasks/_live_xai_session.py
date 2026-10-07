@@ -35,7 +35,6 @@ from core.model_tasks._live_wire import (
     WireAudio,
     WireCaption,
     WireClosed,
-    WireDelegation,
     WireEvent,
     WirePlaybackClear,
     WireProblem,
@@ -44,7 +43,6 @@ from core.model_tasks._live_wire import (
     WireUsage,
 )
 from core.providers.tool_schema import render_tool_definitions
-from core.tools import called_tool_name
 
 SESSION_LIFETIME_SECONDS = 120 * 60
 TURN_DETECTION: JsonObject = {
@@ -91,8 +89,6 @@ _USER_TRANSCRIPTS = frozenset(
         "conversation.item.input_audio_transcription.completed",
     }
 )
-_KIND_DELEGATION = "delegation"
-_KIND_TOOL = "tool"
 
 Clock = Callable[[], float]
 
@@ -167,15 +163,10 @@ class XaiSession:
         self,
         *,
         tools: list[JsonObject],
-        direct_tools: bool,
         clock: Clock = time.monotonic,
         wall_clock: Clock = time.time,
     ) -> None:
-        if not direct_tools and len(tools) != 1:
-            raise ValueError("a delegating session offers exactly one delegation Tool")
         self._tools = [dict(tool) for tool in tools]
-        self._request_tool = "" if direct_tools else str(tools[0]["name"])
-        self._direct_tools = direct_tools
         self._clock = clock
         self._wall_clock = wall_clock
         self._started = False
@@ -240,15 +231,11 @@ class XaiSession:
         return {"type": "session.update", "session": session}
 
     def deliver(self, call_id: str, text: str) -> list[JsonObject]:
-        """Answer one delegation or Tool call; unknown or answered calls are ignored."""
+        """Answer one Tool call; unknown or answered calls are ignored."""
 
-        kind = self._awaiting.pop(call_id, None)
-        if kind is None:
+        if self._awaiting.pop(call_id, None) is None:
             return []
-        output = (
-            json.dumps({"result": text}, ensure_ascii=False) if kind == _KIND_DELEGATION else text
-        )
-        commands = [_call_output(call_id, output)]
+        commands = [_call_output(call_id, text)]
         self._added += 1
         commands.extend(self._flush())
         return commands
@@ -611,36 +598,13 @@ class XaiSession:
         if call.call_id in self._handled_calls:
             return
         self._handled_calls.put(call.call_id)
-        arguments = _decoded_arguments(call.arguments)
-        if self._direct_tools:
-            # The call prepares every name and argument spelling itself.
-            self._awaiting[call.call_id] = _KIND_TOOL
-            step.events.append(
-                WireToolCall(call_id=call.call_id, name=call.name, arguments=arguments)
+        # The call prepares every name and argument spelling itself.
+        self._awaiting[call.call_id] = call.name
+        step.events.append(
+            WireToolCall(
+                call_id=call.call_id, name=call.name, arguments=_decoded_arguments(call.arguments)
             )
-            return
-        request_tool = self._request_tool
-        if called_tool_name(call.name, {request_tool}) == request_tool:
-            request = arguments.get("request") if isinstance(arguments, dict) else None
-            if isinstance(request, str) and request.strip():
-                self._awaiting[call.call_id] = _KIND_DELEGATION
-                step.events.append(
-                    WireDelegation(delegation_id=call.call_id, request=request.strip())
-                )
-                return
-            error = live_failure(
-                "invalid_arguments",
-                f"request must be the user's request as text. Call {request_tool} again "
-                'with {"request": "<the user\'s request>"}.',
-            )
-        else:
-            error = live_failure(
-                "unknown_tool",
-                f'There is no Tool called "{call.name}". Call {request_tool} with the '
-                "user's request.",
-            )
-        step.commands.append(_call_output(call.call_id, live_result_text(error)))
-        self._added += 1
+        )
 
     # -- helpers ----------------------------------------------------------
 

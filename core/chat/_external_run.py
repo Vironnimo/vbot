@@ -28,6 +28,7 @@ from core.chat.messages import (
     _new_message_id,
 )
 from core.chat.tool_dispatch import ToolDispatchContext, ToolRound
+from core.providers.adapter import normalize_tool_call_candidate
 from core.runs import (
     ASSISTANT_OUTPUT_EVENT,
     USER_MESSAGE_EVENT,
@@ -48,9 +49,11 @@ _LOGGER = get_logger("chat")
 
 # How long the end of a Run waits for Tool calls still running to store results.
 _SETTLE_SECONDS = 5.0
-# Agent-facing: the result of a Tool call that was still running when the Run ended.
-_ENDED_WHILE_RUNNING = (
-    "The call ended while this Tool ran; it may or may not have completed. Nothing was retried."
+# Agent-facing: the result of a Tool call stopped before it finished, because it
+# took too long or the conversation ended.
+_STOPPED = (
+    "This Tool call was stopped before it finished; it may or may not have completed. "
+    "Nothing was retried."
 )
 
 
@@ -141,16 +144,18 @@ class ExternalRun:
     async def run_tool(self, call_id: str, name: str, arguments: Any) -> JsonObject:
         """Run one Tool call of the Model and store it; return its Tool result envelope.
 
+        *arguments* are as the Model sent them: an object or its JSON text.
         The call and its result are stored together once it finished, after
-        what was said while it ran. Calls can run concurrently.
+        what was said while it ran. Calls can run concurrently; cancelling one
+        stores a result saying it was stopped.
         """
         run = self._require_run()
         if self.ended:
-            return tool_failure("run_ended", _ENDED_WHILE_RUNNING)
-        call = ToolCall(
-            id=call_id or new_id("call"),
-            name=name,
-            arguments=arguments if isinstance(arguments, dict) else {},
+            return tool_failure("tool_stopped", _STOPPED)
+        call = ToolCall.from_dict(
+            normalize_tool_call_candidate(
+                tool_call_id=call_id, name=name, arguments=arguments, fallback_id=new_id("call")
+            )
         )
         self._iteration += 1
         assistant_id = _new_message_id()
@@ -389,7 +394,7 @@ def _ended_result(call: ToolCall) -> ChatMessage:
         tool_call_id=call.id,
         name=call.name,
         content=json.dumps(
-            tool_failure("run_ended", _ENDED_WHILE_RUNNING),
+            tool_failure("tool_stopped", _STOPPED),
             ensure_ascii=False,
             separators=(",", ":"),
         ),

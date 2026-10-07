@@ -523,7 +523,12 @@
                 ],
                 "default": "marin"
               },
-              "backend_model": { "type": "model", "default": "gpt-5.6-terra" }
+              "backend": { "type": "enum", "values": ["vbot", "openai"], "default": "vbot" },
+              "openai_backend_model": {
+                "type": "enum",
+                "values": ["gpt-6-luna", "gpt-6-sol"],
+                "default": "gpt-6-luna"
+              }
             }
           }
         }
@@ -559,7 +564,12 @@
                 ],
                 "default": "cove"
               },
-              "backend_model": { "type": "model", "default": "gpt-5.6-terra" }
+              "backend": { "type": "enum", "values": ["vbot", "openai"], "default": "vbot" },
+              "openai_backend_model": {
+                "type": "enum",
+                "values": ["gpt-6-luna", "gpt-6-sol"],
+                "default": "gpt-6-luna"
+              }
             }
           }
         }

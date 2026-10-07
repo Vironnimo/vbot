@@ -216,7 +216,7 @@ async def test_does_not_type_into_a_shell_a_menu_or_with_control_characters(fx: 
 async def test_reads_a_coding_terminal_screen_as_quoted_text(fx: Fixture) -> None:
     fx.app.add_terminal("term_a", state="working")
     fx.app.screens["term_a"] = ["x" * 9000 + "\nlast line\n\n"]
-    text = await fx.ok("read", target="term_a")
+    text = await fx.ok("read_output", target="term_a")
     assert text.startswith("t1 (Codex), working. Screen, last part, quoted:\n> ")
     assert text.endswith("> last line")
 
@@ -243,7 +243,7 @@ async def test_other_calls_run_while_a_start_waits_but_never_write_into_it(fx: F
     await fx.ok("send_message", target="term_other", text="hello")
     code, message = await fx.failed("send_message", target="t1", text="other text")
     assert code == "terminal_busy"
-    code, _message = await fx.failed("terminal", action="key", target="t1", key="enter")
+    code, _message = await fx.failed("manage_terminals", action="key", target="t1", key="enter")
     assert code == "terminal_busy"
     assert not start.done()
     assert [terminal for terminal, _data, _revision in fx.app.inputs] == ["term_other"] * 2
@@ -265,16 +265,16 @@ async def test_other_calls_run_while_a_start_waits_but_never_write_into_it(fx: F
 @pytest.mark.asyncio
 async def test_arranges_terminals_and_presses_keys(fx: Fixture) -> None:
     fx.app.add_terminal("term_a")
-    assert await fx.ok("terminal", action="maximize", target="term_a") == (
+    assert await fx.ok("manage_terminals", action="maximize", target="term_a") == (
         "Maximized t1 in the Terminals view."
     )
-    assert await fx.ok("terminal", action="restore") == (
+    assert await fx.ok("manage_terminals", action="restore") == (
         "Restored the Terminals view to its group layout."
     )
-    text = await fx.ok("terminal", action="key", target="t1", key="enter")
-    assert text == "Pressed Enter in t1. Call read with t1 to see the result."
+    text = await fx.ok("manage_terminals", action="key", target="t1", key="enter")
+    assert text == "Pressed Enter in t1. Call read_output with t1 to see the result."
     assert fx.app.inputs == [("term_a", "\r", 5)]
-    code, message = await fx.failed("terminal", action="key", target="t1")
+    code, message = await fx.failed("manage_terminals", action="key", target="t1")
     assert code == "missing_key"
     assert '{"action": "key", "target": "t1", "key": "enter"}' in message
 
@@ -282,7 +282,7 @@ async def test_arranges_terminals_and_presses_keys(fx: Fixture) -> None:
 @pytest.mark.asyncio
 async def test_closes_a_terminal_by_stopping_then_removing_it(fx: Fixture) -> None:
     fx.app.add_terminal("term_a")
-    assert await fx.ok("terminal", action="close", target="term_a") == (
+    assert await fx.ok("manage_terminals", action="close", target="term_a") == (
         "Closed t1: stopped and removed."
     )
     assert fx.app.effects() == ["terminal.kill", "terminal.forget"]
@@ -292,15 +292,15 @@ async def test_closes_a_terminal_by_stopping_then_removing_it(fx: Fixture) -> No
 @pytest.mark.asyncio
 async def test_closes_working_terminals_only_after_the_user_agreed(fx: Fixture) -> None:
     fx.app.add_terminal("term_a", state="working")
-    code, message = await fx.failed("terminal", action="close", target="term_a")
+    code, message = await fx.failed("manage_terminals", action="close", target="term_a")
     assert code == "terminal_working"
     assert message.endswith('{"action": "close", "target": "t1", "confirm": true}.')
-    code, message = await fx.failed("terminal", action="delete_group", target="Mine")
+    code, message = await fx.failed("manage_terminals", action="delete_group", target="Mine")
     assert code == "terminal_working"
     assert '{"action": "delete_group", "target": "Mine", "confirm": true}' in message
     assert fx.app.effects() == []
 
-    await fx.ok("terminal", action="close", target="t1", confirm=True)
+    await fx.ok("manage_terminals", action="close", target="t1", confirm=True)
     assert fx.app.effects() == ["terminal.kill", "terminal.forget"]
 
 
@@ -308,7 +308,7 @@ async def test_closes_working_terminals_only_after_the_user_agreed(fx: Fixture) 
 async def test_close_reports_a_confirmed_stop_when_removal_fails(fx: Fixture) -> None:
     fx.app.add_terminal("term_a")
     fx.app.fail("terminal.forget", RpcError("invalid_request", "Busy."))
-    code, message = await fx.failed("terminal", action="close", target="term_a")
+    code, message = await fx.failed("manage_terminals", action="close", target="term_a")
     assert code == "partial"
     assert message == (
         "t1 was stopped but may not have been removed. Busy. Call overview to check before "
@@ -318,13 +318,13 @@ async def test_close_reports_a_confirmed_stop_when_removal_fails(fx: Fixture) ->
 
 @pytest.mark.asyncio
 async def test_manages_editable_groups_only(fx: Fixture) -> None:
-    text = await fx.ok("terminal", action="create_group", name="Review")
+    text = await fx.ok("manage_terminals", action="create_group", name="Review")
     assert text == 'Created the Terminal group "Review".'
-    text = await fx.ok("terminal", action="rename_group", target="mine", name="Ours")
+    text = await fx.ok("manage_terminals", action="rename_group", target="mine", name="Ours")
     assert text == 'Renamed the group "Mine" to "Ours".'
-    text = await fx.ok("terminal", action="delete_group", target="Mine")
+    text = await fx.ok("manage_terminals", action="delete_group", target="Mine")
     assert text == 'Deleted the group "Mine" and stopped 2 Terminals.'
-    code, message = await fx.failed("terminal", action="delete_group", target="Finished")
+    code, message = await fx.failed("manage_terminals", action="delete_group", target="Finished")
     assert code == "group_not_editable"
     assert fx.app.count("terminal.group.delete") == 1
 
@@ -334,12 +334,12 @@ async def test_reorders_a_group_by_refs_and_infers_the_group(fx: Fixture) -> Non
     fx.app.add_terminal("term_a")
     fx.app.add_terminal("term_b")
     await fx.ok("overview")
-    text = await fx.ok("terminal", action="reorder", order=["t2", "t1"])
+    text = await fx.ok("manage_terminals", action="reorder", order=["t2", "t1"])
     assert text == 'Reordered the group "Mine": t2, t1.'
     assert fx.app.params("terminal.group.order") == [
         {"group_id": "grp_mine", "order": ["term_b", "term_a"]}
     ]
-    code, message = await fx.failed("terminal", action="reorder", order=["t2"])
+    code, message = await fx.failed("manage_terminals", action="reorder", order=["t2"])
     assert code == "invalid_order"
     assert 'every Terminal of the group "Mine" exactly once: t1, t2.' in message
 
@@ -348,7 +348,7 @@ async def test_reorders_a_group_by_refs_and_infers_the_group(fx: Fixture) -> Non
 async def test_keeps_a_completed_change_when_the_layout_refresh_fails(fx: Fixture) -> None:
     fx.app.add_terminal("term_a")
     fx.ui.error = LiveUiError("ui_unavailable")
-    text = await fx.ok("terminal", action="close", target="term_a")
+    text = await fx.ok("manage_terminals", action="close", target="term_a")
     assert text == (
         "Closed t1: stopped and removed. The app window did not update its Terminals view."
     )
@@ -775,8 +775,8 @@ async def test_after_the_program_exited_nothing_reaches_the_shell(
     assert code == "not_sent"
     assert message.startswith(refusal)
     for tool, arguments in (
-        ("terminal", {"action": "key", "target": "t1", "key": "enter"}),
-        ("terminal", {"action": "key", "target": "t1", "key": "ctrl-c"}),
+        ("manage_terminals", {"action": "key", "target": "t1", "key": "enter"}),
+        ("manage_terminals", {"action": "key", "target": "t1", "key": "ctrl-c"}),
         ("stop", {"target": "t1"}),
     ):
         code, message = await call.failed(tool, **arguments)
@@ -840,7 +840,7 @@ async def test_a_trust_question_is_left_to_the_user_and_confirmed_only_on_its_an
     assert "Started Claude Code in a Terminal" in text
     assert (
         "Claude Code in t1 asks whether to trust the folder, so the task was not typed. Ask the "
-        'user; if they agree, call terminal with {"action": "key", "target": "t1", "key": '
+        'user; if they agree, call manage_terminals with {"action": "key", "target": "t1", "key": '
         '"down"} then {"action": "key", "target": "t1", "key": "enter"}.'
     ) in text
     assert text.endswith(
@@ -849,14 +849,14 @@ async def test_a_trust_question_is_left_to_the_user_and_confirmed_only_on_its_an
     terminal = call.terminals.all[0]
     assert _started(terminal) == []
 
-    code, message = await call.failed("terminal", action="key", target="t1", key="enter")
+    code, message = await call.failed("manage_terminals", action="key", target="t1", key="enter")
     assert code == "answer_not_selected"
     assert '"No, exit" selected, not "Yes, I trust this folder"' in message
     assert _started(terminal) == []
 
-    await call.ok("terminal", action="key", target="t1", key="down")
+    await call.ok("manage_terminals", action="key", target="t1", key="down")
     await call.settled(terminal)
-    await call.ok("terminal", action="key", target="t1", key="enter")
+    await call.ok("manage_terminals", action="key", target="t1", key="enter")
     assert terminal.submitted == ["answer: Yes, I trust this folder"]
     await call.settled(terminal)
     await call.ok("send_message", target="t1", text="Fix it")
@@ -874,9 +874,9 @@ async def test_an_update_is_skipped_but_never_installed_by_position(call: Call) 
     assert "Codex in t1 offers an update and waits. Ask the user;" in message
     terminal = call.terminals.all[-1]
     await call.settled(terminal)
-    code, _message = await call.failed("terminal", action="key", target="t1", key="enter")
+    code, _message = await call.failed("manage_terminals", action="key", target="t1", key="enter")
     assert code == "answer_not_selected"
-    await call.ok("terminal", action="key", target="t1", key="down")
+    await call.ok("manage_terminals", action="key", target="t1", key="down")
     await call.settled(terminal)
-    await call.ok("terminal", action="key", target="t1", key="enter")
+    await call.ok("manage_terminals", action="key", target="t1", key="enter")
     assert terminal.submitted == ["answer: Skip"]
