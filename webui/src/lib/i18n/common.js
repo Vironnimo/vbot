@@ -355,5 +355,7 @@ export default Object.freeze({
   'pathPicker.failure.unreadable': 'vBot is not allowed to read this folder.',
   'pathPicker.failure.timeout': 'The folder did not answer in time.',
   'pathPicker.failure.invalid': 'This path cannot be listed here.',
+  'pathPicker.failure.outsideRoot':
+    'This folder lies outside {root}, so it cannot be opened here.',
   'pathPicker.failure.failed': 'The folder could not be listed.',
 });

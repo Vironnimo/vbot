@@ -28,6 +28,11 @@ const listingFailure = (reason) =>
     code: 'domain_error',
     details: { code: 'domain_error', data: { reason } },
   });
+const refusal = () =>
+  Object.assign(new Error('leads outside the listing root'), {
+    code: 'invalid_request',
+    details: { code: 'invalid_request' },
+  });
 
 // A fake server: listings by path; a listed Error is thrown.
 function fakeServer(listings, separator = '\\') {
@@ -293,9 +298,10 @@ describe('PathField', () => {
       {
         'docs/a.md': listingFailure('not_a_directory'),
         docs: {
-          entries: [dir('locked'), file('a.md'), file('b.md')],
+          entries: [dir('locked'), dir('out'), file('a.md'), file('b.md')],
         },
         'docs/locked': listingFailure('unreadable'),
+        'docs/out': refusal(),
       },
       '/',
     );
@@ -323,18 +329,30 @@ describe('PathField', () => {
       dialog.querySelector('.path-browser__row.active').textContent.trim(),
     ).toBe('a.md');
 
+    // A link out of the root fails for good; an unreadable folder may not.
     const list = dialog.querySelector('[role="listbox"]');
+    const alert = () => dialog.querySelector('[role="alert"]');
     press(list, 'ArrowUp');
     press(list, 'Enter');
     await settle();
-    expect(dialog.querySelector('[role="alert"]').textContent).toContain(
+    expect(alert().textContent).toContain(
+      'This folder lies outside C:/work/vBot, so it cannot be opened here.',
+    );
+    expect(alert().querySelector('button')).toBeNull();
+    press(list, 'Backspace');
+    await settle();
+    press(list, 'ArrowUp');
+    press(list, 'Enter');
+    await settle();
+    expect(alert().textContent).toContain(
       'vBot is not allowed to read this folder.',
     );
+    expect(alert().querySelector('button').textContent.trim()).toBe('Retry');
     press(list, 'Backspace');
     await settle();
     expect(crumbs()).toEqual(['vBot', 'docs']);
 
-    dialog.querySelectorAll('.path-browser__row')[2].click();
+    dialog.querySelectorAll('.path-browser__row')[3].click();
     flushSync();
     dialog.querySelector('.modal-footer .btn-primary').click();
     flushSync();

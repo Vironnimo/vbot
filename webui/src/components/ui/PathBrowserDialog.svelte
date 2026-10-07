@@ -27,6 +27,7 @@
     joinPath,
     listingErrorReason,
     listingFailureText,
+    normalizeServerPath,
     parentPath,
     toNativePath,
   } from '$lib/pathPicker.js';
@@ -58,6 +59,8 @@
   let view = $state('');
   let status = $state('loading');
   let failure = $state('');
+  // A refused request (a folder outside the root) fails the same way again.
+  let retryable = $state(true);
   // The folder shown or being opened, in listing form.
   let target = $state('');
   let listing = $state.raw(null);
@@ -211,8 +214,7 @@
       return true;
     } catch (error) {
       if (token !== loadToken || quiet) return false;
-      status = 'error';
-      failure = listingFailureText(listingErrorReason(error));
+      showFailure(error);
       return false;
     }
   }
@@ -237,9 +239,17 @@
       status = 'ready';
     } catch (error) {
       if (token !== loadToken) return;
-      status = 'error';
-      failure = listingFailureText(listingErrorReason(error));
+      showFailure(error);
     }
+  }
+
+  function showFailure(error) {
+    const reason = listingErrorReason(error);
+    status = 'error';
+    retryable = reason !== 'invalid';
+    failure = listingFailureText(reason, {
+      root: root && toNativePath(normalizeServerPath(root), separator),
+    });
   }
 
   let shortcutRequest = null;
@@ -503,9 +513,11 @@
             {:else if status === 'error'}
               <div class="path-browser__state" role="alert">
                 <p>{failure}</p>
-                <Button variant="secondary" onClick={retry}
-                  >{t('common.retry')}</Button
-                >
+                {#if retryable}
+                  <Button variant="secondary" onClick={retry}
+                    >{t('common.retry')}</Button
+                  >
+                {/if}
               </div>
             {:else if emptyText}
               <p class="path-browser__state">{emptyText}</p>

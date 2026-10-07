@@ -311,8 +311,11 @@ export function listingErrorReason(error) {
   return 'failed';
 }
 
-/** The sentence for a `listingErrorReason`. */
-export function listingFailureText(reason) {
+/**
+ * The sentence for a `listingErrorReason`. With the `root` a picker keeps
+ * to, a refused folder is one that lies outside it, such as a link.
+ */
+export function listingFailureText(reason, { root = '' } = {}) {
   switch (reason) {
     case 'not_found':
       return t('pathPicker.failure.notFound');
@@ -323,7 +326,9 @@ export function listingFailureText(reason) {
     case 'timeout':
       return t('pathPicker.failure.timeout');
     case 'invalid':
-      return t('pathPicker.failure.invalid');
+      return root
+        ? t('pathPicker.failure.outsideRoot', { root })
+        : t('pathPicker.failure.invalid');
     default:
       return t('pathPicker.failure.failed');
   }
