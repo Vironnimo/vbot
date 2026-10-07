@@ -702,8 +702,8 @@ async def command_terminal_result(
     Returns the ``data`` of a Tool result, not wrapped in ``tool_success``:
     ``status`` (``running``, ``exited`` or ``stopped``) and, as they apply,
     ``terminal_id``, ``exit_code``, ``stopped_because``, ``output``,
-    ``log_file`` (while it runs, or when the output was cut), ``failed_programs``,
-    ``still_running``, ``hint`` and ``next``, plus ``wait_ended`` when given.
+    ``failed_programs``, ``still_running``, ``hint`` and ``next``, plus
+    ``wait_ended`` when given.
     A running command's ``next`` follows from how the wait ended
     (``matched``, ``timeout``, or no wait), unless the command is idle: then
     it is the idle text with the seconds it has been idle.
@@ -755,9 +755,6 @@ def _result_data(
             "terminal_id": report.terminal_id,
             "output": output,
         }
-        if report.transcript.log_path is not None:
-            # The command keeps writing after this result; the file has all of it.
-            running["log_file"] = model_path(report.transcript.log_path)
         running["next"] = _running_text(context, report, reason=reason, idle_seconds=idle_seconds)
         return running
     data: JsonObject = {"status": "stopped" if report.stop_reason else "exited"}
@@ -767,10 +764,8 @@ def _result_data(
         data["exit_code"] = report.exit_code
     if report.stop_reason is not None:
         data["stopped_because"] = _stop_text(report, with_duration=True)
-    output, truncated = command_output_text(report, screen=screen)
+    output = command_output_text(report, screen=screen)
     data["output"] = output
-    if truncated and report.transcript.log_path is not None:
-        data["log_file"] = model_path(report.transcript.log_path)
     failed = _failed_programs(report)
     if failed:
         data["failed_programs"] = list(failed)
@@ -895,6 +890,16 @@ _RESULT_ARRIVES = "Its result arrives as a new message when it exits."
 _NO_REPEAT = "do not start it again, and do not sleep or poll for its result."
 
 
+def _log_text(report: CommandReport) -> str:
+    """Where a running command's complete output is, as a sentence after a space."""
+    path = report.transcript.log_path
+    if path is None:
+        return ""
+    # The result shows only the newest output; Agents did not know what a bare
+    # log_file field held.
+    return f" The command's complete output is written live to {model_path(path)}."
+
+
 def _limit_text(report: CommandReport) -> str:
     """The time limit of a running command, as a clause."""
     remaining = report.timeout_remaining_seconds
@@ -921,19 +926,20 @@ def _running_text(
     """
     terminal_id = report.terminal_id
     limit = _limit_text(report)
+    log = _log_text(report)
     follow_up = context.offers(_TERMINAL_TOOL)
     if reason == "idle" and follow_up:
         silent = COMMAND_IDLE_SECONDS if idle_seconds is None else idle_seconds
         return (
             f"The command in terminal {terminal_id} has printed nothing for "
-            f"{_duration(silent)} and uses no CPU; {limit}. If its output ends in "
+            f"{_duration(silent)} and uses no CPU; {limit}.{log} If its output ends in "
             f'a question or prompt, answer it with terminal action "input", terminal_id '
             f'"{terminal_id}", your answer as text, and key "enter". Otherwise it waits for '
             f"something else, such as the network. {_RESULT_ARRIVES} If it hangs, stop it with "
             f"{_terminal_call('kill', terminal_id)}."
         )
     if reason in {"matched", "waited", "following"} and follow_up:
-        return _followed_text(report, limit, matched=reason == "matched")
+        return _followed_text(report, f"{limit}.{log}", matched=reason == "matched")
     where = f"in terminal {terminal_id}" if follow_up else "in the background"
     if reason == "requested":
         place = f"in the background in terminal {terminal_id}" if follow_up else "in the background"
@@ -950,6 +956,7 @@ def _running_text(
         )
     else:
         opening = f"The command keeps running {where}; {limit}."
+    opening += log
     continuation = (
         f"Continue other work, or end your turn if your next step needs the result; {_NO_REPEAT}"
     )
@@ -968,37 +975,35 @@ def _running_text(
 def _followed_text(report: CommandReport, limit: str, *, matched: bool) -> str:
     """What to do about a running command a terminal wait, status or input returned.
 
+    *limit* ends the first sentence: the time limit and where the output is.
     After a match the Agent continues with its next step; otherwise with other
     work, until the result arrives.
     """
     if matched:
         return (
-            f"The command keeps running; {limit}. {_RESULT_ARRIVES} Continue with your next "
+            f"The command keeps running; {limit} {_RESULT_ARRIVES} Continue with your next "
             "step; do not start it again."
         )
     return (
         f"The command has run for {_duration(report.elapsed_seconds)} and keeps running; "
-        f"{limit}. {_RESULT_ARRIVES} Continue other work, or end your turn if your next step "
+        f"{limit} {_RESULT_ARRIVES} Continue other work, or end your turn if your next step "
         "needs the result; do not sleep or poll for its result. Stop it with "
         f"{_terminal_call('kill', report.terminal_id)} when it is no longer needed."
     )
 
 
-def command_output_text(report: CommandReport, *, screen: str = "") -> tuple[str, bool]:
+def command_output_text(report: CommandReport, *, screen: str = "") -> str:
     """The output for a result: head and tail within the character budget.
 
     *screen* is the screen of a running command, which follows its transcript.
-    Returns the text and whether anything was left out of it.
+    A marker names the file with the complete output where anything is left out.
     """
     transcript = report.transcript
-    head = [_shortened(line) for line in transcript.head]
-    tail = [_shortened(line) for line in transcript.tail]
+    where = _full_output(report)
+    head = [_shortened(line, where) for line in transcript.head]
+    tail = [_shortened(line, where) for line in transcript.tail]
     screen_lines = screen.splitlines()
-    tail.extend(_shortened(line) for line in screen_lines)
-    shortened = any(
-        len(line) > SHELL_OUTPUT_LINE_CHARS
-        for line in (*transcript.head, *transcript.tail, *screen_lines)
-    )
+    tail.extend(_shortened(line, where) for line in screen_lines)
     omitted = transcript.omitted_lines
     head, dropped_head = _within(head, SHELL_OUTPUT_HEAD_CHARS, keep="start")
     tail, dropped_tail = _within(tail, SHELL_OUTPUT_TAIL_CHARS, keep="end")
@@ -1006,9 +1011,9 @@ def command_output_text(report: CommandReport, *, screen: str = "") -> tuple[str
     lines = list(head)
     if omitted:
         noun = "line" if omitted == 1 else "lines"
-        lines.append(f"[... {omitted:,} {noun} omitted{_full_output(report)} ...]")
+        lines.append(f"[... {omitted:,} {noun} omitted{where} ...]")
     lines.extend(tail)
-    return "\n".join(lines), bool(omitted) or shortened
+    return "\n".join(lines)
 
 
 def _running_output_text(report: CommandReport, screen: str) -> str:
@@ -1016,26 +1021,29 @@ def _running_output_text(report: CommandReport, screen: str) -> str:
     transcript = report.transcript
     screen_lines = screen.splitlines()
     lines = [*transcript.head, *transcript.tail, *screen_lines]
-    newest = [_shortened(line) for line in lines[-SHELL_RUNNING_OUTPUT_LINES:]]
+    where = _full_output(report)
+    newest = [_shortened(line, where) for line in lines[-SHELL_RUNNING_OUTPUT_LINES:]]
     kept, _ = _within(newest, SHELL_RUNNING_OUTPUT_CHARS, keep="end")
     omitted = transcript.total_lines + len(screen_lines) - len(kept)
     if not omitted:
         return "\n".join(kept)
     noun = "line" if omitted == 1 else "lines"
-    marker = f"[... {omitted:,} earlier {noun} omitted{_full_output(report)} ...]"
+    marker = f"[... {omitted:,} earlier {noun} omitted{where} ...]"
     return "\n".join([marker, *kept])
 
 
 def _full_output(report: CommandReport) -> str:
     """Where the omitted output is, as a clause of a marker."""
-    return "; the log file has the full output" if report.transcript.log_path else ""
+    path = report.transcript.log_path
+    return f"; the complete output is in {model_path(path)}" if path is not None else ""
 
 
-def _shortened(line: str) -> str:
+def _shortened(line: str, where: str) -> str:
+    """*line* cut to the line budget; *where* names the complete output."""
     if len(line) <= SHELL_OUTPUT_LINE_CHARS:
         return line
     rest = len(line) - SHELL_OUTPUT_LINE_CHARS
-    return f"{line[:SHELL_OUTPUT_LINE_CHARS]}[... {rest:,} more characters in the log file]"
+    return f"{line[:SHELL_OUTPUT_LINE_CHARS]}[... {rest:,} more characters{where}]"
 
 
 def _within(lines: list[str], budget: int, *, keep: str) -> tuple[list[str], int]:
@@ -1075,7 +1083,7 @@ def format_command_delivery(
     if report.description:
         # The subject names the purpose; the Agent needs the exact command too.
         lines.append(f"Command: {_capped(report.command, _DELIVERY_COMMAND_CHARS)}")
-    output, truncated = command_output_text(report)
+    output = command_output_text(report)
     hint = _failure_hint(report, output, offers)
     if hint is not None:
         lines.append(f"Hint: {hint}")
@@ -1094,8 +1102,6 @@ def format_command_delivery(
         limit = _leftover_limit_text(report)
         until = f"; {limit}" if limit else ""
         lines.append(f"Processes it started still run: {names}{until}.{stop}")
-    if truncated and report.transcript.log_path is not None:
-        lines.append(f"Log file: {model_path(report.transcript.log_path)}")
     lines.append("Output:" if output else "Output: (none)")
     if output:
         lines.append(output)

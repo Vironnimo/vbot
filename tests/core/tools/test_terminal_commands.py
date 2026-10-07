@@ -442,7 +442,7 @@ async def test_terminal_reads_answers_and_waits_for_a_command_in_the_shell_resul
         "output": "Server LISTENING on :8080\nContinue?",
         "next": keeps_running("0 seconds"),
         "note": "lines and start_line page an interactive terminal's screen; a command's result "
-        "shows its output, and log_file, when present, holds all of it.",
+        "shows its output and names the file with its complete output when it shows only part.",
     }
 
     # Output printed before the wait counts for its pattern, matched line by line.

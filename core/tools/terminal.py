@@ -613,7 +613,8 @@ async def _handle_status(
         if start_line is not None or "lines" in arguments:
             data["note"] = (
                 "lines and start_line page an interactive terminal's screen; a command's result "
-                "shows its output, and log_file, when present, holds all of it."
+                "shows its output and names the file with its complete output when it shows "
+                "only part."
             )
         return tool_success(data)
     snapshot = await terminal_manager.read(terminal_id, lines=lines, start_line=start_line)

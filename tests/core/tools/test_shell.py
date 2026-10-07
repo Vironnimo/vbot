@@ -217,6 +217,17 @@ def terminal_calls(text: str) -> list[JsonObject]:
     return [json.loads(call) for call in _TERMINAL_CALL.findall(text)]
 
 
+_LOG_SENTENCE = re.compile(r" The command's complete output is written live to (\S+)\.(?=\s|$)")
+
+
+def log_sentence(text: str) -> str:
+    """The sentence of a running command's text that names its existing log file."""
+    match = _LOG_SENTENCE.search(text)
+    assert match is not None, text
+    assert Path(match[1]).is_file()
+    return match[0]
+
+
 @pytest.mark.parametrize(
     ("exits", "exit_code", "failed_programs"),
     [
@@ -285,8 +296,14 @@ async def test_long_output_keeps_head_and_tail_and_points_to_the_log_file(shell:
     result = data(await call)
     lines = result["output"].splitlines()
     assert (lines[0], lines[-1]) == ("line 0", "line 499")
-    assert "[... 380 lines omitted; the log file has the full output ...]" in lines
-    log = Path(result["log_file"]).read_text(encoding="utf-8").splitlines()
+    # The marker names the file with the complete output.
+    omitted = next(line for line in lines if line.startswith("[... "))
+    marker = re.fullmatch(
+        r"\[\.\.\. 380 lines omitted; the complete output is in (\S+) \.\.\.\]", omitted
+    )
+    assert marker is not None, omitted
+    assert "log_file" not in result
+    log = Path(marker[1]).read_text(encoding="utf-8").splitlines()
     assert len(log) == 500
 
 
@@ -309,12 +326,15 @@ async def test_running_output_is_the_newest_rows_and_its_log_file_has_every_row(
     result = data(await call)
     rows = [f"row {number}" for number in range(1, 151)]
     assert result["status"] == "running"
-    # The result shows the newest rows, the log file every row once.
+    # The result shows the newest rows, the log file every row once, and both
+    # the marker and the next text name that file.
+    log = log_sentence(result["next"])
+    path = _LOG_SENTENCE.search(log)[1]  # type: ignore[index]
     assert result["output"].splitlines() == [
-        "[... 130 earlier lines omitted; the log file has the full output ...]",
+        f"[... 130 earlier lines omitted; the complete output is in {path} ...]",
         *rows[-20:],
     ]
-    assert Path(result["log_file"]).read_text(encoding="utf-8").splitlines() == rows
+    assert Path(path).read_text(encoding="utf-8").splitlines() == rows
 
 
 @pytest.mark.asyncio
@@ -369,7 +389,8 @@ async def test_long_command_is_handed_off_and_its_result_delivered(
     assert shell.clock.now >= SHELL_HANDOFF_SECONDS
     assert result["next"] == (
         "The command was still running after 90 seconds and keeps running in the background; "
-        f"{limit}. Its result arrives as a new message when it exits. Continue other work, or "
+        f"{limit}.{log_sentence(result['next'])} Its result arrives as a new message when it "
+        "exits. Continue other work, or "
         "end your turn if your next step needs the result; do not start it again, and do not "
         "sleep or poll for its result."
     )
@@ -430,7 +451,8 @@ async def test_user_can_stop_the_command_or_move_it_to_the_background(
         assert result["next"].startswith(
             "The user moved the command to the background after 12 seconds. It keeps running "
             f"in terminal {result['terminal_id']}; its 600-second timeout stops it in "
-            "9 minutes 48 seconds. Its result arrives as a new message when it exits."
+            f"9 minutes 48 seconds.{log_sentence(result['next'])} Its result arrives as a new "
+            "message when it exits."
         )
         tree.shell_exits(0)
         await eventually(lambda: bool(shell.bodies()))
@@ -456,8 +478,9 @@ async def test_background_mode_returns_at_once(
     assert running["status"] == "running"
     wait = json.dumps({"action": "wait", "terminal_id": terminal_id})
     assert running["next"] == (
-        f"The command runs in the background in terminal {terminal_id}; {limit}. Its result "
-        "arrives as a new message when it exits. If it runs until stopped, such as a server, "
+        f"The command runs in the background in terminal {terminal_id}; "
+        f"{limit}.{log_sentence(running['next'])} Its result arrives as a new message when it "
+        "exits. If it runs until stopped, such as a server, "
         f"and your next step needs it ready, call terminal {wait} with pattern set to a line "
         "it prints when ready. Otherwise continue other work, or end your turn if your next "
         "step needs the result; do not start it again, and do not sleep or poll for its result."
@@ -554,7 +577,6 @@ async def test_working_processes_left_running_hold_the_command_until_their_outpu
     [
         (True, None, "."),
         (False, 60, "; the command's 60-second timeout stops them in 5"),
-        # Without a log file, no marker points to one.
     ],
 )
 async def test_delivery_names_processes_left_running_and_how_to_stop_them(
@@ -632,8 +654,9 @@ async def test_terminal_results_for_a_command_have_the_shell_result_shape(shell:
     following = await command_terminal_result(shell.manager, shell.context(), terminal_id)
     assert (following["status"], following["output"]) == ("running", "Continue?")
     assert following["next"] == (
-        "The command has run for 0 seconds and keeps running; it has no timeout. Its result "
-        "arrives as a new message when it exits. Continue other work, or end your turn if your "
+        "The command has run for 0 seconds and keeps running; it has no "
+        f"timeout.{log_sentence(following['next'])} Its result arrives as a new message when it "
+        "exits. Continue other work, or end your turn if your "
         "next step needs the result; do not sleep or poll for its result. Stop it with "
         f"{call('kill')} when it is no longer needed."
     )
@@ -647,7 +670,8 @@ async def test_terminal_results_for_a_command_have_the_shell_result_shape(shell:
     assert (idle["status"], idle["wait_ended"]) == ("running", "timeout")
     assert idle["next"].startswith(
         f"The command in terminal {terminal_id} has printed nothing for 17 seconds and uses no "
-        "CPU; it has no timeout. If its output ends in a question or prompt, answer it"
+        f"CPU; it has no timeout.{log_sentence(idle['next'])} If its output ends in a question "
+        "or prompt, answer it"
     )
 
     adapter.emit(_MISSING_MAKE)
