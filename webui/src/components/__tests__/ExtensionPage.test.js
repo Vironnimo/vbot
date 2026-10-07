@@ -15,9 +15,11 @@ vi.mock('$lib/api.js', () => ({
   openExtensionPageRun: vi.fn(),
   cancelExtensionPageToolCall: vi.fn().mockResolvedValue({ ok: true }),
   readExtensionPageHistory: (...args) => history(...args),
+  listServerDirectory: vi.fn(),
   subscribeRunEvents: vi.fn(),
 }));
 const api = await import('$lib/api.js');
+const { ApiClientError } = await import('$lib/api/transport.js');
 const { createStandaloneNavigation } =
   await import('$lib/navigation.svelte.js');
 const { default: ExtensionPageHost } =
@@ -42,6 +44,7 @@ afterEach(async () => {
   api.openExtensionPageRun.mockReset();
   api.subscribeRunEvents.mockReset();
   api.cancelExtensionPageToolCall.mockClear();
+  api.listServerDirectory.mockReset();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -248,10 +251,11 @@ describe('ExtensionPage frame bridge', () => {
       },
     ],
   ])(
-    'ignores pending operation and Run-open replies after frame %s',
+    'ignores pending operation, Run-open and listing replies after frame %s',
     async (_transition, leave) => {
       let resolveOperation;
       let resolveRun;
+      let resolveListing;
       operation.mockReturnValue(
         new Promise((resolve) => {
           resolveOperation = resolve;
@@ -260,6 +264,11 @@ describe('ExtensionPage frame bridge', () => {
       api.openExtensionPageRun.mockReturnValue(
         new Promise((resolve) => {
           resolveRun = resolve;
+        }),
+      );
+      api.listServerDirectory.mockReturnValue(
+        new Promise((resolve) => {
+          resolveListing = resolve;
         }),
       );
       const page = openPage();
@@ -271,12 +280,15 @@ describe('ExtensionPage frame bridge', () => {
         group_id: 'group',
         run_id: 'run',
       });
+      page.call('pending-listing', 'directory.list', { path: null });
       expect(operation).toHaveBeenCalledOnce();
       expect(api.openExtensionPageRun).toHaveBeenCalledOnce();
+      expect(api.listServerDirectory).toHaveBeenCalledOnce();
       await leave();
       const sentBefore = page.sent.mock.calls.length;
       resolveOperation({ stale: true });
       resolveRun({ stream: { url: '/api/extension-runs/stale' } });
+      resolveListing({ path: '/', entries: [] });
       await flushReplies();
       expect(page.sent.mock.calls).toHaveLength(sentBefore);
       expect(api.subscribeRunEvents).not.toHaveBeenCalled();
@@ -468,6 +480,62 @@ describe('ExtensionPage frame bridge', () => {
       'call-a',
     );
     expect(page.reply('cancel-a').result).toEqual({ ok: true });
+  });
+
+  it('lists server folders for the current page frame and keeps the reason of a failed listing', async () => {
+    const page = openPage();
+    const listing = {
+      path: 'C:/work',
+      parent: 'C:/',
+      entries: [{ name: 'src', kind: 'directory', link: false, hidden: false }],
+      truncated: false,
+      separator: '\\',
+    };
+    api.listServerDirectory.mockResolvedValueOnce(listing);
+    const request = {
+      ...page.init,
+      type: 'vbot.extension.call',
+      id: 'list',
+      method: 'directory.list',
+      params: { path: 'C:/work', include_files: true },
+    };
+    message(window, request);
+    page.message({ ...request, nonce: 'stale' });
+    expect(api.listServerDirectory).not.toHaveBeenCalled();
+    page.message(request);
+    await page.replied('list');
+    expect(api.listServerDirectory).toHaveBeenCalledWith({
+      path: 'C:/work',
+      include_files: true,
+    });
+    expect(page.reply('list').result).toEqual(listing);
+
+    api.listServerDirectory.mockRejectedValueOnce(
+      new ApiClientError('domain_error', 'Folder not found', {
+        details: {
+          code: 'domain_error',
+          message: 'Folder not found',
+          data: { reason: 'not_found' },
+        },
+      }),
+    );
+    page.call('missing', 'directory.list', { path: 'src', root: 'C:/work' });
+    page.call('invalid', 'directory.list', { path: 7 });
+    await page.replied('missing');
+    await page.replied('invalid');
+    expect(api.listServerDirectory).toHaveBeenLastCalledWith({
+      path: 'src',
+      root: 'C:/work',
+      include_files: false,
+    });
+    expect(page.reply('missing')).toMatchObject({
+      type: 'vbot.extension.error',
+      error: 'Folder not found',
+      code: 'domain_error',
+      reason: 'not_found',
+    });
+    expect(page.errors().sort()).toEqual(['invalid', 'missing']);
+    expect(api.listServerDirectory).toHaveBeenCalledTimes(2);
   });
 });
 

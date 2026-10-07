@@ -128,6 +128,20 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
     pending.clear();
   }
 
+  // An error reply may carry the API error's `code` and, for a directory
+  // listing, its `reason`; the rejected error keeps the shape of the app's
+  // API errors (`code`, `details.data.reason`), so shared components such
+  // as PathField read the failure the same way in a page.
+  function replyError(data) {
+    const error = new Error(
+      typeof data.error === 'string' ? data.error : 'Extension request failed',
+    );
+    if (typeof data.code === 'string' && data.code) error.code = data.code;
+    if (typeof data.reason === 'string' && data.reason)
+      error.details = { data: { reason: data.reason } };
+    return error;
+  }
+
   // `change` names the records the page's own Extension changed; without it
   // the page refreshes everything it shows (reload, reconnect, recovery).
   function invalidation(data) {
@@ -268,13 +282,7 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
     pending.delete(data.id);
     data.type === 'vbot.extension.result'
       ? request.resolve(data.result)
-      : request.reject(
-          new Error(
-            typeof data.error === 'string'
-              ? data.error
-              : 'Extension request failed',
-          ),
-        );
+      : request.reject(replyError(data));
   };
   window.addEventListener('message', onMessage);
 
@@ -371,6 +379,16 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
         group_id: groupId,
         run_id: runId,
         tool_call_id: toolCallId,
+      }),
+    // One directory of the vBot server's filesystem, with the params and
+    // result of the app's `listServerDirectory`, so a page passes it to the
+    // shared PathField as `listDirectory`. `path` null lists the places to
+    // start from; a failure carries the listing `reason` (see replyError).
+    listDirectory: ({ path = null, root, include_files: includeFiles } = {}) =>
+      call('directory.list', {
+        path,
+        ...(root !== undefined ? { root } : {}),
+        ...(includeFiles ? { include_files: true } : {}),
       }),
     onContext(listener) {
       contextListeners.add(listener);
