@@ -680,7 +680,7 @@ describe('ChatWorkspace', () => {
         .querySelector('.session-row__menu-trigger')
         .click();
       flushSync();
-      document.querySelector('.session-row__menu-item--danger').click();
+      document.querySelector('.context-menu__item--danger').click();
       flushSync();
       Array.from(document.querySelectorAll('.modal-footer button'))
         .find((element) => element.textContent.trim() === 'Delete')

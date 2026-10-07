@@ -745,7 +745,7 @@ describe('ChatView Projects', () => {
         .querySelector('.session-row__menu-trigger')
         .click();
       flushSync();
-      document.querySelector('.session-row__menu-item--danger').click();
+      document.querySelector('.context-menu__item--danger').click();
       flushSync();
       // The dialog's permanent-delete option also names "Delete"; confirm
       // with the footer button.
