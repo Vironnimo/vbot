@@ -6,11 +6,13 @@ wire protocol."""
 
 from __future__ import annotations
 
+import ipaddress
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
+from urllib.parse import urlparse
 
 from core.models.models import Model
 from core.providers._tool_calls import (
@@ -176,6 +178,28 @@ def estimate_wire_request_input_tokens(
     return estimated
 
 
+def is_local_provider_base_url(base_url: str | None) -> bool:
+    """Whether a provider base URL points at a loopback or private-network host.
+
+    Local inference servers (Ollama, llama.cpp, vLLM) answer from such hosts.
+    Matches ``localhost`` and ``*.localhost`` / ``*.local`` names plus loopback,
+    RFC1918 private, and link-local IP literals.
+    """
+    if not base_url:
+        return False
+    host = urlparse(base_url).hostname
+    if not host:
+        return False
+    host = host.lower()
+    if host == "localhost" or host.endswith((".localhost", ".local")):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_private or address.is_link_local
+
+
 class ProviderAdapter(ABC):
     """Abstract base class for provider adapters.
 
@@ -230,6 +254,14 @@ class ProviderAdapter(ABC):
     """Wire protocols this Adapter implements; the first is its default."""
 
     _wire_binding: WireBinding | None = None
+
+    local_endpoint: bool = False
+    """Whether this Adapter's Connection reaches a local inference server.
+
+    Set by the Provider runtime from the Connection's effective base URL
+    (:func:`is_local_provider_base_url`); streaming callers turn their stall
+    guards off for such endpoints, whose prefill can be silent for minutes.
+    """
 
     def __init__(
         self,

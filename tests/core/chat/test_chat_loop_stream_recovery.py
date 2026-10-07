@@ -435,9 +435,11 @@ async def test_interrupted_turn_partial_text_replays_into_the_next_request(tmp_p
 async def test_local_provider_stream_is_not_aborted_by_a_chunk_stall(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("core.chat.request_runner.STREAM_CHUNK_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr("core.chat.streaming.STREAM_CHUNK_TIMEOUT_SECONDS", 0.01)
     adapter = SlowStreamingStubAdapter(delay=0.05)
-    runtime = stream_runtime(tmp_path, adapter, provider_base_url="http://localhost:11434/v1")
+    # The Provider runtime marks Adapters of loopback and private-network Connections.
+    adapter.local_endpoint = True
+    runtime = stream_runtime(tmp_path, adapter)
 
     assistant = await send_streaming(runtime)
 
@@ -451,9 +453,9 @@ async def test_local_provider_stream_is_not_aborted_by_a_chunk_stall(
 async def test_remote_provider_chunk_stalls_end_in_a_bounded_interruption(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    monkeypatch.setattr("core.chat.request_runner.STREAM_CHUNK_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr("core.chat.streaming.STREAM_CHUNK_TIMEOUT_SECONDS", 0.01)
     adapter = SlowStreamingStubAdapter(delay=0.05)
-    runtime = stream_runtime(tmp_path, adapter, provider_base_url="https://api.openai.com/v1")
+    runtime = stream_runtime(tmp_path, adapter)
 
     with pytest.raises(RunInterruptedError, match="timeout") as exc_info:
         await send_streaming(runtime)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import json
 import time
 from collections import OrderedDict
@@ -11,7 +10,6 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
-from urllib.parse import urlparse
 
 from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
@@ -239,28 +237,19 @@ def should_advance_model_fallback_chain(error: ProviderError | RunInterruptedErr
     return any(marker in message for marker in _MODEL_SCOPED_FATAL_MARKERS)
 
 
-def is_local_provider_base_url(base_url: str | None) -> bool:
-    """Whether a provider base URL points at a loopback or private-network host.
+def stream_stall_timeout(adapter: Any) -> float | None:
+    """Return the per-chunk stall timeout for requests through ``adapter``.
 
     Local inference servers (Ollama, llama.cpp, vLLM) can stay silent for
-    minutes during prompt prefill, so the per-chunk stall timeout must not abort
-    them; remote providers keep the timeout. Centralized here so the chunk-stall
-    policy has one source of truth. Matches ``localhost`` and ``*.localhost`` /
-    ``*.local`` names plus loopback, RFC1918 private, and link-local IP literals.
+    minutes during prompt prefill, so the stall guards are off when the
+    Adapter's endpoint is local (``ProviderAdapter.local_endpoint``); every
+    remote Provider keeps the default timeout. Pass the result as
+    ``timeout_seconds`` to :func:`iter_with_chunk_timeout`; ``None`` also turns
+    off its Model-progress window.
     """
-    if not base_url:
-        return False
-    host = urlparse(base_url).hostname
-    if not host:
-        return False
-    host = host.lower()
-    if host == "localhost" or host.endswith((".localhost", ".local")):
-        return True
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        return False
-    return address.is_loopback or address.is_private or address.is_link_local
+    if getattr(adapter, "local_endpoint", False) is True:
+        return None
+    return STREAM_CHUNK_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -761,7 +750,6 @@ async def stream_model_response(
     *,
     model_id: str,
     on_tool_calls: Callable[[list[JsonObject]], None] | None = None,
-    chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
     **request_options: Any,
 ) -> JsonObject:
     """Stream one Model request and return its completed, normalized response.
@@ -773,13 +761,15 @@ async def stream_model_response(
     still answers. ``on_tool_calls`` receives each Tool Call once the stream
     has moved past it, while the Model is still writing. A stream that breaks
     after that raises :class:`StreamBrokenAfterToolCallsError` with the output
-    so far instead of a replayable error.
+    so far instead of a replayable error. Stall guards follow
+    :func:`stream_stall_timeout`, so a local Provider's long prefill is not cut off.
 
     Only a Provider that declares this request cannot stream
     (``ProviderStreamingUnsupportedError``, before any output) is asked for a
     completed response instead.
     """
     accumulator = StreamingAccumulator()
+    chunk_timeout_seconds = stream_stall_timeout(adapter)
     try:
         async for delta in iter_with_chunk_timeout(
             adapter.stream(messages, model_id=model_id, **request_options),
@@ -829,12 +819,12 @@ async def iter_with_chunk_timeout(
 ) -> AsyncIterator[JsonObject]:
     """Yield stream chunks with separate transport and Model-progress timeouts.
 
-    Chat disables both stall windows for local/loopback providers whose prefill
-    can be silent for minutes (see
-    :func:`is_local_provider_base_url`). Provider heartbeats reset the transport
-    window but not ``progress_timeout_seconds``: OpenAI-compatible gateways may
-    buffer a complete Tool Call while sending SSE comments, so those comments
-    prove the request is alive without pretending the Model produced a delta.
+    Model requests disable both stall windows for local Providers whose prefill
+    can be silent for minutes (:func:`stream_stall_timeout`). Provider
+    heartbeats reset the transport window but not ``progress_timeout_seconds``:
+    OpenAI-compatible gateways may buffer a complete Tool Call while sending SSE
+    comments, so those comments prove the request is alive without pretending
+    the Model produced a delta.
     An optional monotonic deadline bounds recovery regardless of fresh deltas.
     """
     if timeout_seconds is None and progress_timeout_seconds is None and deadline is None:

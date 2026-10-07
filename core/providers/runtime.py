@@ -14,7 +14,7 @@ from core.models.database import ModelDatabaseRefresh, begin_runtime_model_datab
 from core.models.models import Model, ModelRegistry
 from core.providers._wire_profile_files import WireProfileFile
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, ConnectionRef, split_connection_id
-from core.providers.adapter import ModelLookup, ProviderAdapter
+from core.providers.adapter import ModelLookup, ProviderAdapter, is_local_provider_base_url
 from core.providers.adapter_types import ADAPTER_TYPES
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
@@ -219,6 +219,7 @@ class ProviderRuntime:
             **extra_kwargs,
         )
         adapter.bind_wire_profiles(self._wire_profiles.bind(provider_id, connection_config.id))
+        adapter.local_endpoint = is_local_provider_base_url(base_url or provider_config.base_url)
         return cast(ProviderAdapter, adapter)
 
     def get_connection_token_getter(self, connection: ConnectionRef) -> TokenGetter:

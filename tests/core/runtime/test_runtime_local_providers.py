@@ -13,6 +13,7 @@ import pytest
 
 import core.models.discovery as discovery_module
 import core.providers.runtime as provider_runtime_module
+from core.chat.streaming import stream_stall_timeout
 from core.models.database import read_model_database_manifest
 from core.models.discovery import ModelDiscoveryError
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
@@ -66,7 +67,11 @@ async def test_keyless_local_connection_is_usable_only_after_opt_in(runtime: Run
 
     runtime.storage.set_provider_connection_enabled("ollama:local", True)
 
-    assert isinstance(runtime.get_adapter(LOCAL), OllamaAdapter)
+    adapter = runtime.get_adapter(LOCAL)
+    assert isinstance(adapter, OllamaAdapter)
+    # A local server's prefill can be silent for minutes: no stall guard.
+    assert adapter.local_endpoint is True
+    assert stream_stall_timeout(adapter) is None
 
 
 @pytest.mark.parametrize(
