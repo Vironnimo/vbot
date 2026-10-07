@@ -94,13 +94,17 @@
     return Boolean(input) && input.ownerDocument.activeElement === input;
   }
 
+  // The server lists only the names the typed prefix can complete to, so a
+  // huge folder still offers them; the cache answers longer prefixes.
   function listingParams(text) {
-    const path = listingPathFor(splitTypedPath(text).parent, { root });
+    const { parent, prefix } = splitTypedPath(text);
+    const path = listingPathFor(parent, { root });
     if (path === null) return null;
     return {
       path,
       ...(root ? { root } : {}),
       include_files: mode !== 'directory',
+      ...(prefix ? { prefix } : {}),
     };
   }
 

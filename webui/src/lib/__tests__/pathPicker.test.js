@@ -274,6 +274,9 @@ describe('createListingCache', () => {
 
     await expect(cache.list(params)).rejects.toThrow('slow share');
     await expect(cache.list({ ...params })).rejects.toThrow('slow share');
+    await expect(cache.list({ ...params, prefix: 'x' })).rejects.toThrow(
+      'slow share',
+    );
     expect(listDirectory).toHaveBeenCalledTimes(1);
 
     await expect(cache.list(params, { refresh: true })).resolves.toEqual({
@@ -281,5 +284,23 @@ describe('createListingCache', () => {
     });
     await cache.list({ ...params, include_files: true });
     expect(listDirectory).toHaveBeenCalledTimes(3);
+  });
+
+  it('answers a longer name prefix from a complete listing, not a cut one', async () => {
+    const listDirectory = vi.fn(async ({ prefix }) => ({
+      entries: [],
+      truncated: prefix === 'p',
+    }));
+    const cache = createListingCache(listDirectory);
+    const folder = { path: 'C:/', include_files: false };
+
+    for (const prefix of ['p', 'pr', 'PRO', 'pro', 'q']) {
+      await cache.list({ ...folder, prefix });
+    }
+    expect(listDirectory.mock.calls.map(([params]) => params.prefix)).toEqual([
+      'p',
+      'pr',
+      'q',
+    ]);
   });
 });

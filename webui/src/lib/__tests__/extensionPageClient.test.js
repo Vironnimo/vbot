@@ -226,7 +226,7 @@ describe('extension page client', () => {
     for (const [fields, params] of [
       [
         { code: 'domain_error', reason: 'unreadable' },
-        { path: 'C:/locked', include_files: true },
+        { path: 'C:/locked', include_files: true, prefix: 'Re' },
       ],
       [{ code: 'invalid_request' }, { path: '../out', root: 'C:/work' }],
     ]) {

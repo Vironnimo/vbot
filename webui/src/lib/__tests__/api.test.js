@@ -224,10 +224,10 @@ describe('RPC wrappers', () => {
       'filesystem.list for files inside a root',
       (o) =>
         api.listServerDirectory(
-          { path: 'docs', root: 'C:/repo', include_files: true },
+          { path: 'docs', root: 'C:/repo', include_files: true, prefix: 'Re' },
           o,
         ),
-      { path: 'docs', root: 'C:/repo', include_files: true },
+      { path: 'docs', root: 'C:/repo', include_files: true, prefix: 'Re' },
     ],
     [
       'session.set_agent_overrides',

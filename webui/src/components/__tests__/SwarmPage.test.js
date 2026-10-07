@@ -416,6 +416,7 @@ describe('Swarm Run start', () => {
     expect(bridge.listDirectory).toHaveBeenCalledWith({
       path: 'D:/',
       include_files: false,
+      prefix: 'r',
     });
     fill('swarm-goal', 'goal-sentinel');
     await tick();

@@ -497,7 +497,7 @@ describe('ExtensionPage frame bridge', () => {
       type: 'vbot.extension.call',
       id: 'list',
       method: 'directory.list',
-      params: { path: 'C:/work', include_files: true },
+      params: { path: 'C:/work', include_files: true, prefix: 'sr' },
     };
     message(window, request);
     page.message({ ...request, nonce: 'stale' });
@@ -507,6 +507,7 @@ describe('ExtensionPage frame bridge', () => {
     expect(api.listServerDirectory).toHaveBeenCalledWith({
       path: 'C:/work',
       include_files: true,
+      prefix: 'sr',
     });
     expect(page.reply('list').result).toEqual(listing);
 
@@ -521,12 +522,15 @@ describe('ExtensionPage frame bridge', () => {
     );
     page.call('missing', 'directory.list', { path: 'src', root: 'C:/work' });
     page.call('invalid', 'directory.list', { path: 7 });
+    page.call('bad-prefix', 'directory.list', { path: 'C:/', prefix: 7 });
     await page.replied('missing');
     await page.replied('invalid');
+    await page.replied('bad-prefix');
     expect(api.listServerDirectory).toHaveBeenLastCalledWith({
       path: 'src',
       root: 'C:/work',
       include_files: false,
+      prefix: null,
     });
     expect(page.reply('missing')).toMatchObject({
       type: 'vbot.extension.error',
@@ -534,7 +538,7 @@ describe('ExtensionPage frame bridge', () => {
       code: 'domain_error',
       reason: 'not_found',
     });
-    expect(page.errors().sort()).toEqual(['invalid', 'missing']);
+    expect(page.errors().sort()).toEqual(['bad-prefix', 'invalid', 'missing']);
     expect(api.listServerDirectory).toHaveBeenCalledTimes(2);
   });
 });

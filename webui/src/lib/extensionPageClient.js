@@ -384,11 +384,17 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
     // result of the app's `listServerDirectory`, so a page passes it to the
     // shared PathField as `listDirectory`. `path` null lists the places to
     // start from; a failure carries the listing `reason` (see replyError).
-    listDirectory: ({ path = null, root, include_files: includeFiles } = {}) =>
+    listDirectory: ({
+      path = null,
+      root,
+      include_files: includeFiles,
+      prefix,
+    } = {}) =>
       call('directory.list', {
         path,
         ...(root !== undefined ? { root } : {}),
         ...(includeFiles ? { include_files: true } : {}),
+        ...(prefix ? { prefix } : {}),
       }),
     onContext(listener) {
       contextListeners.add(listener);

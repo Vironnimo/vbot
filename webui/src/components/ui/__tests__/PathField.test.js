@@ -130,6 +130,7 @@ describe('PathField', () => {
     expect(listDirectory).toHaveBeenCalledWith({
       path: 'C:/',
       include_files: false,
+      prefix: 'us',
     });
     expect(suggestions()).toEqual(['Users/']);
     expect(input.getAttribute('aria-expanded')).toBe('true');
@@ -152,8 +153,11 @@ describe('PathField', () => {
     expect(props.value).toBe('C:\\Users\\me\\');
     expect(callerKeydown).toHaveBeenCalledTimes(1);
 
+    // The complete listing of the folder answers every typed prefix.
     type(input, 'C:\\Users\\P');
     await settle();
+    expect(suggestions()).toEqual(['Public/']);
+    expect(listDirectory).toHaveBeenCalledTimes(3);
     expect(press(input, 'Escape').defaultPrevented).toBe(true);
     expect(suggestions()).toEqual([]);
     expect(press(input, 'Escape').defaultPrevented).toBe(false);

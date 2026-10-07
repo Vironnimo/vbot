@@ -335,12 +335,14 @@ export function listingFailureText(reason, { root = '' } = {}) {
 }
 
 /**
- * Per-picker memory of listings, keyed by path, root and file inclusion. A
- * listing is requested once, its failure is remembered too, and `refresh`
- * asks again.
+ * Per-picker memory of listings: per folder (path, root and file inclusion)
+ * and name `prefix`, a listing is requested once. A folder that failed fails
+ * for every prefix, and a complete (not truncated) listing answers every
+ * longer prefix of its own, since it holds all their entries; callers match
+ * names themselves. `refresh` forgets the folder and asks again.
  */
 export function createListingCache(listDirectory) {
-  const listings = new Map();
+  const folders = new Map();
   return {
     list(params, { refresh = false } = {}) {
       const key = JSON.stringify([
@@ -348,15 +350,33 @@ export function createListingCache(listDirectory) {
         params.root ?? '',
         Boolean(params.include_files),
       ]);
-      if (!refresh && listings.has(key)) return listings.get(key);
+      let folder = folders.get(key);
+      if (!folder || refresh) {
+        folder = { requests: new Map(), complete: [], failed: null };
+        folders.set(key, folder);
+      }
+      const needle = String(params.prefix ?? '').toLowerCase();
+      if (folder.failed) return folder.failed;
+      if (folder.requests.has(needle)) return folder.requests.get(needle);
+      const covering = folder.complete.find((known) =>
+        needle.startsWith(known.needle),
+      );
+      if (covering) return Promise.resolve(covering.listing);
       const pending = Promise.resolve().then(() => listDirectory(params));
+      folder.requests.set(needle, pending);
       // Callers handle the failure; the cached copy must not report it again.
-      pending.catch(() => {});
-      listings.set(key, pending);
+      pending.then(
+        (listing) => {
+          if (!listing?.truncated) folder.complete.push({ needle, listing });
+        },
+        () => {
+          folder.failed ??= pending;
+        },
+      );
       return pending;
     },
     clear() {
-      listings.clear();
+      folders.clear();
     },
   };
 }

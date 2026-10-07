@@ -202,6 +202,7 @@ describe('Swarm profile settings', () => {
     expect(bridge.listDirectory).toHaveBeenCalledWith({
       path: 'C:/',
       include_files: false,
+      prefix: 'w',
     });
     button(SAVE_SWARM).click();
     await settle(20);

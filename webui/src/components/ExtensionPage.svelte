@@ -312,7 +312,8 @@
       (params.path == null || typeof params.path === 'string') &&
       (params.root === undefined || typeof params.root === 'string') &&
       (params.include_files === undefined ||
-        typeof params.include_files === 'boolean')
+        typeof params.include_files === 'boolean') &&
+      (params.prefix == null || typeof params.prefix === 'string')
     );
   }
 
@@ -539,6 +540,7 @@
           path: data.params.path ?? null,
           root: data.params.root,
           include_files: data.params.include_files === true,
+          prefix: data.params.prefix ?? null,
         });
       } else if (
         data.method === 'run.unsubscribe' &&
