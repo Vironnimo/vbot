@@ -301,15 +301,32 @@ def _linked_file(tmp_path: Path) -> tuple[Path, Path]:
     [
         ("*** Delete File: link.txt", "Deleted link.txt.", None),
         ("*** Move File: link.txt -> moved.txt", "Moved link.txt to moved.txt.", "moved.txt"),
+        # A later Add at the name creates a file there, never writing through the old link.
+        (
+            "*** Delete File: link.txt\n*** Add File: link.txt\n+fresh",
+            "Replaced the content of link.txt (1 line).",
+            None,
+        ),
+        (
+            "*** Move File: link.txt -> moved.txt\n*** Add File: link.txt\n+fresh",
+            "Moved link.txt to moved.txt.\nCreated link.txt (1 line).",
+            "moved.txt",
+        ),
     ],
 )
 def test_delete_and_move_act_on_the_link_and_keep_its_target(tmp_path, operation, content, moved):
     link, target = _linked_file(tmp_path)
+    state = FileReadState()
+    # The Session knows the target, so no read guard stands between the Add and it.
+    state.record_read("session-test", target.resolve())
 
-    result = apply(tmp_path, operation)
+    result = apply(tmp_path, operation, state=state)
 
     assert text(result) == content
-    assert not os.path.lexists(link)
+    if "Add File" in operation:
+        assert not link.is_symlink() and link.read_bytes() == b"fresh\n"
+    else:
+        assert not os.path.lexists(link)
     assert target.read_bytes() == b"precious\n"
     if moved:
         assert (tmp_path / moved).is_symlink()
@@ -328,6 +345,32 @@ def test_update_through_a_link_edits_the_target_and_move_to_renames_the_link(tmp
     assert target.read_bytes() == b"edited\n"
     assert (tmp_path / "renamed.txt").is_symlink()
     assert not os.path.lexists(link)
+
+
+def test_a_link_retargeted_while_the_patch_runs_is_not_written_through(tmp_path, monkeypatch):
+    link, target = _linked_file(tmp_path)
+    elsewhere = tmp_path / "elsewhere.txt"
+    elsewhere.write_bytes(b"keep\n")
+    original = file_changes_module._run_step
+
+    def retarget_after_first_step(*args, **kwargs):
+        original(*args, **kwargs)
+        if os.readlink(link) != str(elsewhere):
+            link.unlink()
+            os.symlink(elsewhere, link)
+
+    monkeypatch.setattr(file_changes_module, "_run_step", retarget_after_first_step)
+
+    result = apply(tmp_path, "*** Add File: first.txt\n+x\n*** Add File: link.txt\n+fresh")
+
+    assert result["data"]["status"] == "partial"
+    assert text(result).endswith(
+        "Created first.txt (1 line).\nFailed: link.txt now leads to another file than when this "
+        "patch started, because a link on its way changed. Send this change again in a separate "
+        "call."
+    )
+    assert elsewhere.read_bytes() == b"keep\n"
+    assert target.read_bytes() == b"precious\n"
 
 
 def test_dangling_links_are_entries_for_delete_and_move_destinations(tmp_path):

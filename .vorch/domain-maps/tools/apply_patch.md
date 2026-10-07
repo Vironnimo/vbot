@@ -74,6 +74,13 @@ Shared failure messages are worded per Tool through `ChangeBatch.templates`
   one `os.rename` instead of copy-then-delete; relative link targets are not
   rewritten. They read as `Moved A to B.`; an Update through a link reports the
   link target's path (`test_apply_patch_files.py`).
+  Each step resolves its paths when it runs, so a Delete or Move of a link
+  earlier in the patch is observed: a later Add at the link's name creates a
+  file there and never writes through the old link, and a later Update of a
+  moved link's new name edits its target. A path that resolves outside the
+  paths locked at the start (a link changed by someone else meanwhile) fails
+  that step with `path_redirected`. A completed move whose source name gets a
+  new file reads as `Moved A to B.` plus `Created A`.
 - The complete patch structure is parsed before mutation; unparseable framing or
   operation syntax rejects the call without writes. Once parsed, each Update
   hunk and each Add/Delete/Move is attempted in order against actual current

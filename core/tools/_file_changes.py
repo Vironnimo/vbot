@@ -591,6 +591,8 @@ def run_operations(
                         )
                     except _PatchError as error:
                         resolution_errors[name] = _error_data(error, batch)
+    # Every path a step can reach once earlier steps deleted, moved or replaced a link:
+    # the named entry itself, or a moved link's target under its new name.
     all_paths = set(resolved.values()) | set(entries.values())
     overlaps = {
         p for p in all_paths if any(p in q.parents or q in p.parents for q in all_paths if p != q)
@@ -612,14 +614,20 @@ def run_operations(
                     )
                 )
                 paths: dict[str, Path] = {}
+                step_error: JsonObject | None = None
                 for name in names:
-                    target = (
-                        entries.get((name, name == first.destination))
-                        if first.action in {"delete", "move"}
-                        else resolved.get(name)
-                    )
-                    if target is not None:
-                        paths[name] = target
+                    if name in resolution_errors:
+                        continue
+                    try:
+                        paths[name] = _current_path(
+                            context,
+                            name,
+                            entry=first.action in {"delete", "move"},
+                            destination=name == first.destination,
+                            locked=all_paths,
+                        )
+                    except _PatchError as error:
+                        step_error = step_error or _error_data(error, batch)
                 label = batch.shown(paths[first.path]) if first.path in paths else first.path
                 hunk_label = first.hunks[0].label if not atomic and first.action == "update" else ""
                 outcome: JsonObject = {
@@ -630,7 +638,7 @@ def run_operations(
                 }
                 batch.results.append(outcome)
                 entry_error = next(
-                    (resolution_errors[n] for n in names if n in resolution_errors), None
+                    (resolution_errors[n] for n in names if n in resolution_errors), step_error
                 )
                 overlap = next((p for p in paths.values() if p in overlaps), None)
                 if overlap is not None:
@@ -652,6 +660,22 @@ def run_operations(
                 else:
                     _run_step(context, state, batch, step, paths, outcome)
                 operation_failed |= outcome["status"] in {"failed", "skipped", "partial"}
+
+
+def _current_path(
+    context: ToolContext, name: str, *, entry: bool, destination: bool, locked: set[Path]
+) -> Path:
+    """Resolve ``name`` as the filesystem stands now, after the patch's earlier steps.
+
+    A Delete or Move earlier in the patch can remove or rename a link, so a later
+    Add at that name creates a file there instead of writing to the old target.
+    """
+    path = _resolve(context, name)
+    if entry:
+        path = _entry_path(context, name, path, destination=destination)
+    if path not in locked:
+        raise _PatchError("path_redirected", path=name)
+    return path
 
 
 def _file_effects(batch: ChangeBatch) -> list[tuple[Path, _Snapshot, _Snapshot]]:
@@ -684,31 +708,39 @@ def file_reports(context: ToolContext, batch: ChangeBatch) -> list[_FileReport]:
     effects = [effect for effect in _file_effects(batch) if effect[1] != effect[2]]
     by_label = {batch.shown(path): (path, before, after) for path, before, after in effects}
     # A completed move reads as one entry: its source deletion plus destination addition.
-    moved = {
+    pairs = {
         source: destination
         for source, destination in _move_pairs(batch.moves).items()
-        if source in by_label
+        if source != destination
+        and source in by_label
         and destination in by_label
-        and not by_label[source][2].exists
         and by_label[destination][2].exists
     }
+    destinations = set(pairs.values())
+    # A file the patch later creates at a moved source name reads as created after the move.
+    moved = {
+        source: destination
+        for source, destination in pairs.items()
+        if not by_label[source][2].exists or source not in destinations
+    }
     sources = {destination: source for source, destination in moved.items()}
-    reports: list[_FileReport] = []
-    added = removed = 0
+    entries: list[tuple[Path, str, str, _Snapshot, _Snapshot, str | None]] = []
     reported: set[str] = set()
     for path, before, after in effects:
         label = batch.shown(path)
         if label in reported:
             continue
-        destination = None
         source = label if label in moved else sources.get(label)
         if source is not None:
-            destination = moved[source]
-            before = by_label[source][1]
-            path, _, after = by_label[destination]
-            reported.add(destination)
-            label, kind = source, "moved"
-        elif not before.exists:
+            moved_to = moved[source]
+            source_path, source_before, source_after = by_label[source]
+            path, _, after = by_label[moved_to]
+            entries.append((path, source, "moved", source_before, after, moved_to))
+            if source_after.exists:
+                entries.append((source_path, source, "created", _ABSENT, source_after, None))
+            reported.update((source, moved_to))
+            continue
+        if not before.exists:
             kind = "created"
         elif not after.exists:
             kind = "deleted"
@@ -717,6 +749,10 @@ def file_reports(context: ToolContext, batch: ChangeBatch) -> list[_FileReport]:
         else:
             kind = "updated"
         reported.add(label)
+        entries.append((path, label, kind, before, after, None))
+    reports: list[_FileReport] = []
+    added = removed = 0
+    for path, label, kind, before, after, destination in entries:
         before_text, after_text = _text(before), _text(after)
         report = file_report(path, label, kind, before_text, after_text, destination=destination)
         change = context.add_display_file_change(

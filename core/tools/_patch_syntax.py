@@ -76,6 +76,10 @@ _MESSAGES = {
         "Cannot move to {path}: it already exists. Delete it earlier in the same patch or "
         "choose another destination."
     ),
+    "path_redirected": (
+        "{path} now leads to another file than when this patch started, because a link on "
+        "its way changed. Send this change again in a separate call."
+    ),
     "overlapping_paths": (
         "{path} is used both as a file and as a folder of another path in this patch. "
         "Send these changes in separate calls."
