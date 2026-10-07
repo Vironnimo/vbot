@@ -39,6 +39,9 @@ COMMAND_STOP_GRACE_SECONDS = 3.0
 COMMAND_IDLE_SECONDS = 15.0
 # CPU time the whole tree may use within the idle window and still count as idle.
 COMMAND_IDLE_CPU_SECONDS = 0.15
+# After the shell exited, processes it left running that print nothing, start
+# nothing and use no CPU this long end the command: they wait, like a server.
+COMMAND_LEFTOVER_QUIET_SECONDS = 2.0
 # How often a session whose output ended - a command's after its shell exited -
 # checks whether its processes ended.
 COMMAND_TREE_POLL_SECONDS = 1.0
@@ -59,20 +62,21 @@ class CommandTranscript:
 
 @dataclass(frozen=True, slots=True)
 class CommandReport:
-    """What a command did, as of its shell's exit or the moment it was taken."""
+    """What a command did, as of its end or the moment it was taken."""
 
     terminal_id: str
     command: str
     description: str | None
     workdir: Path
-    # The shell has exited, on its own or after vBot stopped the command.
+    # The command ended: its shell exited, on its own or after vBot stopped the
+    # command, and every process it left running ended or went quiet.
     exited: bool
     exit_code: int | None
     stop_reason: StopReason | None
     transcript: CommandTranscript
     # Direct child programs of the shell that exited with a non-zero code.
     nonzero_exits: tuple[str, ...]
-    # Processes the command started that still run after its shell exited.
+    # Processes the command started that still run after it ended; empty before.
     still_running: tuple[RunningProcess, ...]
     timeout_seconds: float | None
     # The result is delivered automatically when the command ends.
@@ -115,7 +119,10 @@ class CommandState:
         # Visible in the catalog and Terminal list; set when the command is handed off.
         self.hidden = True
         self.delivers_result = False
+        # The shell exited; ``ended`` follows once its leftover processes ended
+        # or went quiet.
         self.exited = asyncio.Event()
+        self.ended = asyncio.Event()
         self._facts: ProcessTreeFacts | None = None
         self._head: list[str] = []
         self._tail: deque[str] = deque(maxlen=COMMAND_TAIL_LINES)
@@ -133,6 +140,10 @@ class CommandState:
     @property
     def shell_exited(self) -> bool:
         return self.exited.is_set()
+
+    @property
+    def has_ended(self) -> bool:
+        return self.ended.is_set()
 
     @property
     def log_path(self) -> Path | None:
@@ -164,6 +175,15 @@ class CommandState:
         self._facts = facts
         self.exited.set()
 
+    def record_end(self, facts: ProcessTreeFacts | None) -> None:
+        """The shell exited and what it left running ended or went quiet: the
+        outcome is final, *facts* (when known) show what still runs."""
+        if self.has_ended:
+            return
+        if facts is not None:
+            self._facts = facts
+        self.ended.set()
+
     def tree_ended(self) -> None:
         """No process of the command runs any longer."""
         if self._facts is not None and self._facts.running:
@@ -171,7 +191,7 @@ class CommandState:
 
     def request_stop(self, reason: StopReason) -> None:
         """Remember why vBot stops the command; the first reason wins."""
-        if self.stop_reason is None and not self.shell_exited:
+        if self.stop_reason is None and not self.has_ended:
             self.stop_reason = reason
             if self.tree is not None:
                 self._exits_before_stop = self.tree.exit_count()
@@ -193,12 +213,12 @@ class CommandState:
             command=self.command,
             description=self.description,
             workdir=self.workdir,
-            exited=self.shell_exited,
+            exited=self.has_ended,
             exit_code=self.exit_code,
             stop_reason=self.stop_reason,
             transcript=self.transcript(),
             nonzero_exits=tuple(exit.describe() for exit in self._failed_exits(facts)),
-            still_running=facts.running if facts else (),
+            still_running=facts.running if facts and self.has_ended else (),
             timeout_seconds=self.timeout_seconds,
             delivers_result=self.delivers_result,
             timeout_remaining_seconds=(
@@ -244,6 +264,7 @@ class CommandState:
 
 __all__ = [
     "COMMAND_IDLE_SECONDS",
+    "COMMAND_LEFTOVER_QUIET_SECONDS",
     "COMMAND_STOP_GRACE_SECONDS",
     "COMMAND_TEMPORARY_CATEGORY",
     "CommandReport",

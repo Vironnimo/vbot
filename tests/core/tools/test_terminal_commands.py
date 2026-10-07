@@ -40,6 +40,7 @@ from tests.core.tools.terminal_manager_helpers import (
 class Harness:
     def __init__(self) -> None:
         self.clock = FakeClock()
+        self.executor = TrackedExecutor()
         self.trigger = PendingTriggerService()
         self.factory = AdapterFactory()
         self.trees: list[FakeTree] = []
@@ -81,6 +82,19 @@ class Harness:
     def bodies(self) -> list[str]:
         return [kwargs["body"] for _args, kwargs in self.trigger.submissions]
 
+    async def run_clock(
+        self, until_done: asyncio.Future[Any] | Callable[[], bool], *, until: float
+    ) -> None:
+        """Advance fake time in half seconds until *until_done* is done or true."""
+
+        def done() -> bool:
+            return until_done() if callable(until_done) else until_done.done()
+
+        task = None if callable(until_done) else until_done
+        while self.clock.now < until and not done():
+            await settle(self.clock, self.executor, task)
+            await self.clock.advance(0.5)
+
 
 def format_report(report: CommandReport) -> str:
     return (
@@ -92,6 +106,7 @@ def format_report(report: CommandReport) -> str:
 @pytest_asyncio.fixture
 async def harness() -> AsyncIterator[Harness]:
     harness = Harness()
+    asyncio.get_running_loop().set_default_executor(harness.executor)
     harness.manager.start()
     try:
         yield harness
@@ -213,16 +228,6 @@ async def test_timeout_interrupts_the_command_and_reports_why_it_stopped(
     assert tree.running == ()
 
 
-async def run_clock(harness: Harness, task: asyncio.Task[object], *, until: float) -> None:
-    """Advance the fake clock in half seconds while *task* waits on it."""
-    while harness.clock.now < until and not task.done():
-        for _ in range(200):
-            if harness.clock.sleeping or task.done():
-                break
-            await asyncio.sleep(0.005)
-        await harness.clock.advance(0.5)
-
-
 @pytest.mark.asyncio
 async def test_command_is_idle_after_quiet_output_and_cpu_but_not_while_working(
     harness: Harness,
@@ -232,13 +237,13 @@ async def test_command_is_idle_after_quiet_output_and_cpu_but_not_while_working(
         harness.manager.wait_command(terminal_id, seconds=None, idle_seconds=15)
     )
     adapter.emit("Name: ")
-    await run_clock(harness, waiting, until=3)
+    await harness.run_clock(waiting, until=3)
     # CPU time without output is work: the quiet period starts again.
     tree.cpu_seconds += 5
-    await run_clock(harness, waiting, until=25)
+    await harness.run_clock(waiting, until=25)
     assert not waiting.done()
 
-    await run_clock(harness, waiting, until=40)
+    await harness.run_clock(waiting, until=40)
     assert waiting.result() == "idle"
     assert 30 <= harness.clock.now <= 34
     assert "Name:" in await harness.manager.command_screen(terminal_id, 5)
@@ -253,10 +258,15 @@ async def test_survivors_keep_a_finished_command_live_until_they_are_killed(
     survivor = RunningProcess(42, "server.exe")
     tree.shell_exits(0, survivors=(survivor,))
 
-    await harness.manager.wait_command(terminal_id, seconds=None, idle_seconds=None)
+    # Survivors that stay quiet end the wait, not the session.
+    waiting: asyncio.Task[object] = asyncio.create_task(
+        harness.manager.wait_command(terminal_id, seconds=None, idle_seconds=None)
+    )
+    await harness.run_clock(waiting, until=10)
+    assert waiting.result() == "exited"
     report = harness.manager.command_report(terminal_id)
     assert (report.exit_code, report.still_running) == (0, (survivor,))
-    assert report.timeout_remaining_seconds == 600
+    assert report.timeout_remaining_seconds == 600 - harness.clock.now
     session = harness.manager._get(terminal_id)
     assert not session.finished
 
@@ -326,13 +336,6 @@ class Tools(Harness):
         register_terminal_tool(self.registry, self.manager, ProjectStore(tmp_path))
         # Callbacks the calls registered to run once their results are kept.
         self.persisted: list[Callable[[], None]] = []
-        self.executor = TrackedExecutor()
-
-    async def run_clock(self, task: asyncio.Future[Any], *, until: float) -> None:
-        """Advance fake time in half seconds while *task* waits on it."""
-        while self.clock.now < until and not task.done():
-            await settle(self.clock, self.executor, task)
-            await self.clock.advance(0.5)
 
     async def call(
         self, tool: str, arguments: JsonObject, *, session: str = "session-a"
@@ -421,9 +424,9 @@ async def test_terminal_reads_answers_and_waits_for_a_command_in_the_shell_resul
 
     status = await tools.terminal({"action": "status", "terminal_id": terminal_id, "lines": 50})
     keeps_running = (
-        f"The command keeps running; it has no timeout. Wait for it with "
-        f"{terminal_call('wait', terminal_id)}, or stop it with "
-        f"{terminal_call('kill', terminal_id)}; its result arrives as a new message when it exits."
+        "The command keeps running; it has no timeout. Its result arrives as a new message when "
+        "it exits. Continue other work, or end your turn if your next step needs the result. "
+        f"Stop it with {terminal_call('kill', terminal_id)} when it is no longer needed."
     )
     assert status == {
         "status": "running",
@@ -477,10 +480,7 @@ async def test_terminal_reads_answers_and_waits_for_a_command_in_the_shell_resul
     )
     await tools.run_clock(waiting, until=tools.clock.now + 5)
     waited = waiting.result()
-    assert (waited["wait_ended"], waited["next"]) == (
-        "timeout",
-        keeps_running.replace("Wait for it with", "Wait again with"),
-    )
+    assert (waited["wait_ended"], waited["next"]) == ("timeout", keeps_running)
 
     # A command stays attached to the Session that ran it, so its result arrives there.
     attached = await tools.terminal({"action": "attach", "terminal_id": terminal_id})
@@ -545,7 +545,9 @@ async def test_kill_stops_a_command_and_says_what_it_stopped(tools: Tools, befor
     await eventually(lambda: shows(tools, terminal_id, "watching"))
     if before == "survivors":
         tree.shell_exits(0, survivors=(RunningProcess(42, "server.exe"),))
-        await eventually(lambda: tools.manager.command_report(terminal_id).exited)
+        await tools.run_clock(
+            lambda: tools.manager.command_report(terminal_id).exited, until=tools.clock.now + 10
+        )
     elif before == "ended":
         tree.shell_exits(0)
         await tools.manager.wait_finished(terminal_id)
@@ -596,7 +598,7 @@ async def test_command_wait_ends_only_at_exit_match_or_timeout(tools: Tools, wor
     assert tools.clock.now >= 75
     if working:
         assert result["next"].startswith(
-            "The command keeps running; it has no timeout. Wait again with "
+            "The command keeps running; it has no timeout. Its result arrives "
         )
     else:
         # The idle text says how long the command has printed nothing.
@@ -604,6 +606,34 @@ async def test_command_wait_ends_only_at_exit_match_or_timeout(tools: Tools, wor
             f"The command in terminal {terminal_id} has printed nothing for 75 seconds and uses "
             "no CPU; it has no timeout."
         )
+
+
+@pytest.mark.asyncio
+async def test_a_command_runs_while_processes_its_shell_left_running_work(tools: Tools) -> None:
+    terminal_id, adapter, tree = await tools.background("report")
+    adapter.emit("starting\r\n")
+    await eventually(lambda: shows(tools, terminal_id, "starting"))
+    tree.shell_exits(0, survivors=(RunningProcess(42, "report.exe"),), survivors_print=True)
+
+    # A status shows what they printed so far, after the shell's own output.
+    adapter.emit("partial\r\n")
+    status: JsonObject = {}
+    while "partial" not in str(status.get("output")):
+        await asyncio.sleep(0.01)
+        status = await tools.terminal({"action": "status", "terminal_id": terminal_id})
+    assert status["status"] == "running"
+    assert status["output"].splitlines() == ["starting", "partial"]
+    assert "still_running" not in status
+
+    # Their end ends the command, with everything they printed.
+    adapter.emit("done\r\n")
+    await eventually(lambda: shows(tools, terminal_id, "done"))
+    tree.running = ()
+    await tools.manager.wait_finished(terminal_id)
+    final = await tools.terminal({"action": "status", "terminal_id": terminal_id})
+    assert final["status"] == "exited"
+    assert final["output"].splitlines() == ["starting", "partial", "done"]
+    assert "still_running" not in final
 
 
 async def shows(tools: Tools, terminal_id: str, text: str) -> bool:

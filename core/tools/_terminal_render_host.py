@@ -85,6 +85,10 @@ class TerminalScreen:
         lines: tuple[str, ...] = await self._backend.call("commit_transcript", ())
         return lines
 
+    async def pending_transcript(self) -> tuple[str, ...]:
+        lines: tuple[str, ...] = await self._backend.call("pending_transcript", ())
+        return lines
+
     def close(self) -> None:
         """Release the screen; later calls fail."""
         self._backend.close()

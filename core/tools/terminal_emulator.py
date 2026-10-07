@@ -475,11 +475,7 @@ class TerminalEmulator:
         screen = self._screen
         if screen.alternate_active:
             return ()
-        last = -1
-        for y in range(screen.lines - 1, screen.committed_rows - 1, -1):
-            if _render_buffer_line(screen.buffer[y], screen.columns):
-                last = y
-                break
+        last = self._last_uncommitted_row()
         for y in range(screen.committed_rows, last + 1):
             self._transcribe_row(screen.buffer[y])
         if self._transcript_partial:
@@ -489,6 +485,34 @@ class TerminalEmulator:
         lines = tuple(self._transcript_lines)
         self._transcript_lines.clear()
         return lines
+
+    def pending_transcript(self) -> tuple[str, ...]:
+        """The lines ``commit_transcript`` would emit now, without emitting them.
+
+        A program can still extend the rows on screen, so they stay pending.
+        """
+        if not self._transcript or self._screen.alternate_active:
+            return ()
+        screen = self._screen
+        lines: list[str] = []
+        partial = list(self._transcript_partial)
+        for y in range(screen.committed_rows, self._last_uncommitted_row() + 1):
+            line = screen.buffer[y]
+            partial.append("".join(line[column].data for column in range(screen.columns)))
+            if not getattr(line, "wrapped", False):
+                lines.append("".join(partial).rstrip())
+                partial = []
+        if partial:
+            lines.append("".join(partial).rstrip())
+        return tuple(lines)
+
+    def _last_uncommitted_row(self) -> int:
+        """The last non-blank row of the screen not yet emitted, or -1."""
+        screen = self._screen
+        for y in range(screen.lines - 1, screen.committed_rows - 1, -1):
+            if _render_buffer_line(screen.buffer[y], screen.columns):
+                return y
+        return -1
 
     def resize(self, columns: int, rows: int) -> None:
         self._screen.resize(lines=rows, columns=columns)

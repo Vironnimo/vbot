@@ -17,7 +17,6 @@ terminal come from ``command_terminal_result`` in the same shape.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import re
 import shutil
@@ -675,22 +674,12 @@ async def command_terminal_result(
 async def _report_with_screen(
     terminals: TerminalManager, terminal_id: str
 ) -> tuple[CommandReport, str]:
-    """The command's report and, while it runs, its whole screen, without gap or overlap.
+    """The command's report and the output that follows its transcript.
 
-    The transcript holds the lines that scrolled off the screen, and output is
-    rendered and the screen read under the same session lock. The report is taken
-    right after the screen, with no await in between, so the transcript ends
-    exactly where the screen starts. Once the shell exited, the transcript holds
-    the screen as well.
+    While the shell runs, that is its whole screen; afterwards, what processes
+    it left running printed that the transcript does not hold yet.
     """
-    if terminals.command_report(terminal_id).exited:
-        return terminals.command_report(terminal_id), ""
-    screen = ""
-    # A session that closed meanwhile has a final report that holds every line.
-    with contextlib.suppress(TerminalManagerError):
-        screen = await terminals.command_screen(terminal_id, _SCREEN_ROWS)
-    report = terminals.command_report(terminal_id)
-    return report, "" if report.exited else screen
+    return await terminals.command_view(terminal_id, _SCREEN_ROWS)
 
 
 def _result_data(
@@ -721,7 +710,7 @@ def _result_data(
         data["exit_code"] = report.exit_code
     if report.stop_reason is not None:
         data["stopped_because"] = _stop_text(report)
-    output, truncated = command_output_text(report)
+    output, truncated = command_output_text(report, screen=screen)
     data["output"] = output
     if truncated and report.transcript.log_path is not None:
         data["log_file"] = model_path(report.transcript.log_path)
@@ -850,7 +839,8 @@ def _running_text(
     (for *idle_seconds*), ``moved`` when the user moved it to the background;
     for a terminal call, ``matched`` when a wait matched its pattern,
     ``waited`` when a wait timed out and ``following`` for a status or an
-    input; otherwise the shell call handed the command off.
+    input; ``requested`` for a command started in the background; otherwise
+    the shell call handed the command off.
     """
     terminal_id = report.terminal_id
     limit = _limit_text(report)
@@ -861,42 +851,49 @@ def _running_text(
             f"The command in terminal {terminal_id} has printed nothing for "
             f"{silent:.0f} seconds and uses no CPU; {limit}. If its output ends in "
             f'a question or prompt, answer it with terminal action "input", terminal_id '
-            f'"{terminal_id}", your answer as text, and key "enter". Otherwise it is waiting '
-            f"for something else: wait for it with {_terminal_call('wait', terminal_id)}, or "
-            f"stop it with {_terminal_call('kill', terminal_id)} if it hangs. {_RESULT_ARRIVES}"
+            f'"{terminal_id}", your answer as text, and key "enter". Otherwise it waits for '
+            f"something else, such as the network. {_RESULT_ARRIVES} If it hangs, stop it with "
+            f"{_terminal_call('kill', terminal_id)}."
         )
     if reason in {"matched", "waited", "following"} and follow_up:
-        return _followed_text(report, limit, matched=reason == "matched", waited=reason == "waited")
+        return _followed_text(report, limit, matched=reason == "matched")
     moved = "The user moved the command to the background. " if reason == "moved" else ""
     if not follow_up:
         return (
             f"{moved}The command keeps running in the background; {limit}. {_RESULT_ARRIVES} "
             "Continue other work or end your turn; do not start it again."
         )
+    running = f"{moved}The command keeps running in terminal {terminal_id}; {limit}. "
+    if reason == "requested":
+        # Started in the background: often a server, whose result arrives only
+        # once it is stopped.
+        return (
+            f"{running}{_RESULT_ARRIVES} If it runs until stopped, such as a server, and your "
+            f"next step needs it ready, call {_terminal_call('wait', terminal_id)} with pattern "
+            "set to a line it prints when ready. Otherwise continue other work or end your "
+            "turn; do not start it again."
+        )
     return (
-        f"{moved}The command keeps running in terminal {terminal_id}; {limit}. {_RESULT_ARRIVES} "
-        f"To wait for it now, call {_terminal_call('wait', terminal_id)}; add pattern to wait "
-        "for a line it prints, such as a server's ready line. Otherwise continue other work or "
-        "end your turn; do not start it again."
+        f"{running}{_RESULT_ARRIVES} Continue other work, or end your turn if your next step "
+        "needs the result; do not start it again."
     )
 
 
-def _followed_text(report: CommandReport, limit: str, *, matched: bool, waited: bool) -> str:
+def _followed_text(report: CommandReport, limit: str, *, matched: bool) -> str:
     """What to do about a running command a terminal wait, status or input returned.
 
-    After a match the Agent continues; otherwise it waits again or stops it.
+    After a match the Agent continues with its next step; otherwise with other
+    work, until the result arrives.
     """
     if matched:
         return (
             f"The command keeps running; {limit}. {_RESULT_ARRIVES} Continue with your next "
             "step; do not start it again."
         )
-    again = "Wait again" if waited else "Wait for it"
     return (
-        f"The command keeps running; {limit}. {again} with "
-        f"{_terminal_call('wait', report.terminal_id)}, or stop it with "
-        f"{_terminal_call('kill', report.terminal_id)}; its result arrives as a new message "
-        "when it exits."
+        f"The command keeps running; {limit}. {_RESULT_ARRIVES} Continue other work, or end "
+        "your turn if your next step needs the result. Stop it with "
+        f"{_terminal_call('kill', report.terminal_id)} when it is no longer needed."
     )
 
 

@@ -164,6 +164,13 @@ class Shell:
             await settle(self.clock, self.executor, task)
             await self.clock.advance(0.5)
 
+    async def run_clock_until_delivered(self, *, until: float) -> None:
+        """Advance fake time in half seconds until a result is delivered."""
+        while self.clock.now < until and not self.bodies():
+            await settle(self.clock, self.executor)
+            await self.clock.advance(0.5)
+        await eventually(lambda: bool(self.bodies()))
+
     def bodies(self) -> list[str]:
         return [kwargs["body"] for _args, kwargs in self.trigger.submissions]
 
@@ -314,11 +321,8 @@ async def test_idle_command_continues_as_terminal_and_its_result_is_delivered(
     # Answering comes first, without an answer for the Agent to copy; then exact calls.
     assert f'answer it with terminal action "input", terminal_id "{terminal_id}"' in next_text
     assert '"text"' not in next_text
-    assert terminal_calls(next_text) == [
-        {"action": "wait", "terminal_id": terminal_id},
-        {"action": "kill", "terminal_id": terminal_id},
-    ]
-    assert next_text.endswith("Its result arrives as a new message when it exits.")
+    assert terminal_calls(next_text) == [{"action": "kill", "terminal_id": terminal_id}]
+    assert "Its result arrives as a new message when it exits." in next_text
     assert terminal_id in [info.terminal_id for info in shell.manager.list_terminals()]
 
     tree.shell_exits(0)
@@ -430,7 +434,7 @@ async def test_background_mode_returns_at_once(
         "as a new message when it exits."
     )
     assert terminal_calls(running["next"]) == [{"action": "wait", "terminal_id": terminal_id}]
-    assert "add pattern to wait for a line it prints" in running["next"]
+    assert "with pattern set to a line it prints when ready" in running["next"]
     assert len(shell.manager.list_terminals()) == 1
 
     _adapter, tree = await shell.started()
@@ -440,22 +444,78 @@ async def test_background_mode_returns_at_once(
 
 
 @pytest.mark.asyncio
-async def test_processes_left_running_are_reported_and_listed(shell: Shell) -> None:
+async def test_quiet_processes_left_running_are_reported_and_listed(shell: Shell) -> None:
     call = shell.call({"command": "start-server"})
     _adapter, tree = await shell.started()
     tree.shell_exits(0, survivors=(RunningProcess(42, "server.exe"),))
 
+    # A server the command started and that waits quietly holds the call
+    # only briefly: one second for the quiet baseline, two quiet seconds.
+    await shell.run_clock(call, until=10)
+    assert 3 <= shell.clock.now <= 4
     result = data(await call)
     assert result["still_running"] == ["server.exe (pid 42)"]
     # The foreground's default timeout still stops them.
-    assert result["next"].startswith(
-        "The shell exited, but processes the command started still run: server.exe (pid 42); "
-        "the command's 600-second timeout stops them in 600 seconds. Stop them with "
+    assert re.match(
+        r"The shell exited, but processes the command started still run: server\.exe "
+        r"\(pid 42\); the command's 600-second timeout stops them in 59[67] seconds\. "
+        r"Stop them with ",
+        result["next"],
     )
-    assert terminal_calls(result["next"]) == [
-        {"action": "kill", "terminal_id": result["terminal_id"]}
-    ]
-    assert result["terminal_id"] in [info.terminal_id for info in shell.manager.list_terminals()]
+    terminal_id = result["terminal_id"]
+    assert terminal_calls(result["next"]) == [{"action": "kill", "terminal_id": terminal_id}]
+    assert terminal_id in [info.terminal_id for info in shell.manager.list_terminals()]
+
+
+@pytest.mark.parametrize("mode", ["foreground", "background"])
+@pytest.mark.asyncio
+async def test_working_processes_left_running_hold_the_command_until_their_output_is_complete(
+    shell: Shell, mode: str
+) -> None:
+    # A GUI-subsystem program run from PowerShell: the shell exits at once, and
+    # the program prints its answer to the shell's terminal afterwards.
+    call = shell.call({"command": "watchtower due", "mode": mode})
+    adapter, tree = await shell.started()
+    if mode == "background":
+        running = data(await call)
+        assert running["status"] == "running"
+        terminal_id = running["terminal_id"]
+    else:
+        await eventually(lambda: bool(shell.live_output))
+        terminal_id = shell.live_output[0]["terminal_id"]
+    tree.shell_exits(0, survivors=(RunningProcess(42, "watchtower.exe"),), survivors_print=True)
+    for _second in range(10):
+        tree.cpu_seconds += 1
+        await shell.run_clock(call, until=shell.clock.now + 1)
+    assert not shell.bodies()
+    if mode == "foreground":
+        assert not call.done()
+        # The call reports the command running, without the processes' output yet.
+        status = await command_terminal_result(shell.manager, shell.context(), terminal_id)
+        assert status["status"] == "running"
+
+    # More lines than the screen holds: the last ones never scroll off it.
+    adapter.emit("".join(f"line {number}\r\n" for number in range(70)))
+
+    async def rendered() -> bool:
+        return "line 69" in await shell.manager.command_screen(terminal_id, 1)
+
+    await eventually(rendered)
+    tree.running = ()
+    lines = [f"line {number}" for number in range(70)]
+    if mode == "foreground":
+        await shell.run_clock(call, until=shell.clock.now + 10)
+        result = data(await call)
+        assert result["status"] == "exited"
+        assert result["output"].splitlines() == lines
+        assert "still_running" not in result
+        assert "terminal_id" not in result
+    else:
+        await shell.run_clock_until_delivered(until=shell.clock.now + 10)
+        body = shell.bodies()[0]
+        assert body.startswith(f"The command in terminal {terminal_id} (watchtower due)")
+        assert "\n".join(lines) in body
+        assert "Processes it started still run" not in body
 
 
 @pytest.mark.asyncio
@@ -463,7 +523,7 @@ async def test_processes_left_running_are_reported_and_listed(shell: Shell) -> N
     ("terminal", "timeout", "until"),
     [
         (True, None, "."),
-        (False, 60, "; the command's 60-second timeout stops them in 60 seconds."),
+        (False, 60, "; the command's 60-second timeout stops them in 5"),
     ],
 )
 async def test_delivery_names_processes_left_running_and_how_to_stop_them(
@@ -475,7 +535,10 @@ async def test_delivery_names_processes_left_running_and_how_to_stop_them(
     running = data(await shell.call(arguments, terminal=terminal))
     _adapter, tree = await shell.started()
     tree.shell_exits(0, survivors=(RunningProcess(42, "server.exe"),))
-    await eventually(lambda: bool(shell.bodies()))
+    # Delivered once they went quiet: one second for the baseline, two quiet seconds,
+    # checked each second.
+    await shell.run_clock_until_delivered(until=10)
+    assert 3 <= shell.clock.now <= 5
 
     line = next(
         line for line in shell.bodies()[0].splitlines() if line.startswith("Processes it started")
@@ -534,8 +597,9 @@ async def test_terminal_results_for_a_command_have_the_shell_result_shape(shell:
     following = await command_terminal_result(shell.manager, shell.context(), terminal_id)
     assert (following["status"], following["output"]) == ("running", "Continue?")
     assert following["next"] == (
-        f"The command keeps running; it has no timeout. Wait for it with {call('wait')}, or stop "
-        f"it with {call('kill')}; its result arrives as a new message when it exits."
+        "The command keeps running; it has no timeout. Its result arrives as a new message when "
+        "it exits. Continue other work, or end your turn if your next step needs the result. "
+        f"Stop it with {call('kill')} when it is no longer needed."
     )
     # Printed nothing and used no CPU for the idle period: the text says how long.
     await shell.clock.advance(2)
