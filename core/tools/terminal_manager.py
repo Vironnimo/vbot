@@ -8,6 +8,7 @@ import re
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, TextIO
@@ -1114,6 +1115,25 @@ class TerminalManager:
     def transfer_scope(self, source: TerminalOwner, target: TerminalOwner) -> int:
         """Transfer lifecycle and attachment scopes after a successful Session move."""
         return sum(session.transfer(source, target) for session in self._sessions.values())
+
+    def transfer_agent_scope(self, agent_id: str, new_agent_id: str) -> int:
+        """Move every lifecycle and attachment scope of a renamed Identity Agent to its new id.
+
+        Each scope keeps its Session id, and a pending delivery follows the
+        attachment; immutable provenance keeps the old id. Returns how many
+        Terminal Sessions changed.
+        """
+        moved = 0
+        for session in list(self._sessions.values()):
+            scopes = {
+                scope
+                for scope in (session.lifecycle_owner, session.attachment)
+                if scope is not None and scope.project_id is None and scope.agent_id == agent_id
+            }
+            for scope in scopes:
+                session.transfer(scope, replace(scope, agent_id=new_agent_id))
+            moved += bool(scopes)
+        return moved
 
     async def _close_matching(self, matches: Callable[[TerminalOwner], bool]) -> None:
         """Stop terminals whose lifecycle owner matches; detach the others' attachments."""

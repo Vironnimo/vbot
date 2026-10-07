@@ -331,6 +331,9 @@ class StubTerminalManager:
     def transfer_scope(self, _source: Any, _target: Any) -> int:
         return 0
 
+    def transfer_agent_scope(self, _agent_id: str, _new_agent_id: str) -> int:
+        return 0
+
     def add_changed_callback(self, _callback: Callable[[str], None]) -> Callable[[], None]:
         return _unsubscribe
 
@@ -583,6 +586,7 @@ class StubRuntime:
             bootstrap=cast(Any, self.bootstrap_service),
             calendar=cast(Any, self.calendar_service),
             snapshot_barrier=self.snapshot_barrier,
+            terminals=cast(Any, self.terminal_manager),
         )
 
     def skills_for(self, _project_id: str | None = None, _agent_id: str | None = None) -> Any:

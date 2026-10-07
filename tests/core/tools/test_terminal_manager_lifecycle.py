@@ -88,6 +88,43 @@ async def test_session_move_transfers_attachment_and_only_an_agent_terminals_lif
 
 
 @pytest.mark.asyncio
+async def test_identity_agent_rename_moves_only_that_agents_scopes_and_keeps_provenance(
+    terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
+) -> None:
+    manager, _factory = terminal_manager
+    started_by = TerminalOwner(None, "coder", "session-a")
+    agent_started = await manager.spawn(
+        started_by, ["fake-tui"], cwd=tmp_path, env=None, origin_run_id="run-a"
+    )
+    manual = await manager.spawn_for_operator(command=None, arguments=[], cwd=tmp_path)
+    manager.attach(
+        manual["terminal_id"], TerminalOwner(None, "coder", "session-b"), origin_run_id="run-b"
+    )
+    # A Project Team Agent of the same id and another Identity Agent keep theirs.
+    unrelated = [
+        await manager.spawn(scope, ["fake-tui"], cwd=tmp_path, env=None, origin_run_id="run-c")
+        for scope in (TerminalOwner("project-a", "coder", "session-a"), owner())
+    ]
+
+    assert manager.transfer_agent_scope("coder", "researcher") == 2
+
+    renamed = TerminalOwner(None, "researcher", "session-a")
+    moved = terminal_info(manager, agent_started.terminal_id)
+    assert (moved.owner, moved.lifecycle_owner, moved.attachment) == (started_by, renamed, renamed)
+    moved_manual = terminal_info(manager, manual["terminal_id"])
+    assert (moved_manual.lifecycle_owner, moved_manual.attachment) == (
+        None,
+        TerminalOwner(None, "researcher", "session-b"),
+    )
+    for info in unrelated:
+        current = terminal_info(manager, info.terminal_id)
+        assert (current.lifecycle_owner, current.attachment) == (info.owner, info.owner)
+    # A reverted rename moves the same scopes back.
+    assert manager.transfer_agent_scope("researcher", "coder") == 2
+    assert terminal_info(manager, agent_started.terminal_id).attachment == started_by
+
+
+@pytest.mark.asyncio
 async def test_attach_rejects_another_session_and_detached_agent_origin_still_owns_lifecycle(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:
