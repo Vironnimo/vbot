@@ -11,16 +11,16 @@ When the user asks for an Agent for a purpose, follow "Create an Agent for a pur
 Build the Agent from the request alone. The new Agent keeps its files in its own Workspace, which `vbot agent create` creates. Leave the user's files and folders untouched: when the role needs the user's documents or a folder elsewhere, name that in your report, and the user points the Agent to it.
 
 1. State the new Agent's role in one sentence from the request: its purpose, the user it serves and the result it owes. Done when the sentence exists. If the request leaves the purpose itself open, ask the user for it; decide id, name, tone and configuration yourself.
-2. Create the Agent with `vbot agent create <agent-id> <display-name>` and set its Model, Tool access and Skills with the flags below. Give the Agent only the Tools its role needs. Done when `vbot agent show <agent-id>` reports the Agent with its Workspace path.
+2. Create the Agent with `vbot agent create <agent-id> <display-name>`. Without further flags it gets the default Model, every Tool and every Skill; add a flag below only for a setting the request names. If the result warns that no effective Model is configured, pass `--model` with an id from `vbot model list --task chat`. Done when `vbot agent show <agent-id>` reports the Agent with its Workspace path.
 3. Write its SOUL.md: read `references/soul.md` with the `skill` Tool (`name` `vbot-docs`, `file_path` `references/soul.md`) and follow its section "Write a new SOUL.md". Done when those steps are done.
-4. When the role includes a recurring kind of task with a known method, create a private Skill for the new Agent by the `skill-writing` Skill. Done when each such method is in a Skill, or the role has none.
-5. Report the Agent's id and name, its role sentence, the Skills you created, and each configuration choice with its alternative.
+4. If the request describes the method for a recurring kind of task, create a private Skill for the new Agent with it by the `skill-writing` Skill. Write no Skill whose steps the request does not give. Done when each described method is in a Skill, or the request describes none.
+5. Report the Agent's id and name, its role sentence, the Skills you created, and each configuration choice with its alternative. Start a test conversation with the new Agent only when the user asks for one.
 
 ### Names
 
 An Agent's display name is how the user and other Agents refer to it; its id addresses it in commands and stays fixed when the name changes. An Identity Agent finds its own name and id in its System Prompt. The name is not part of SOUL.md.
 
-- When the user asks to rename an Agent, yourself included, change its display name: `vbot agent update <agent-id> --name "<new name>"`. The name is one line of at most 80 characters. Done when `vbot agent show <agent-id>` reports the new name.
+- When the user asks to rename an Agent, yourself included, change its display name: `vbot agent update <agent-id> --name "<new name>"`. The name is one line of at most 80 characters. vBot gives the new name to every later Session, so leave SOUL.md and Memory unchanged. Done when `vbot agent show <agent-id>` reports the new name.
 - Change the id with `vbot agent rename <current-agent-id> <new-agent-id>` only when the user asks for a new id. vBot refuses it while the Agent has an active Run, so you cannot change your own id: give the user that command to run outside your Runs, for example in a terminal.
 
 ### Commands
