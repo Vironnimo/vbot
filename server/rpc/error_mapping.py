@@ -45,6 +45,7 @@ from core.tools.terminal_manager import (
     TerminalProgramNotRunningError,
     TerminalStaleScreenError,
 )
+from core.utils.directory_listing import DirectoryListingError, ListingPathError
 from core.utils.errors import ConfigError, VBotError
 from server.rpc.errors import (
     RPC_ERROR_ACTIVE_RUN,
@@ -196,6 +197,13 @@ def _map_expected_error(error: Exception) -> RpcError:
         return RpcError(RPC_ERROR_PERFORMANCE_RECORDING_ACTIVE, str(error))
     if isinstance(error, RecordingInactiveError):
         return RpcError(RPC_ERROR_PERFORMANCE_RECORDING_INACTIVE, str(error))
+    # A directory listing's failure reason (not_found, not_a_directory, unreadable,
+    # timeout) is what clients present; a path the request may not name is its fault.
+    # Pickers list folders as the user types, so a miss is routine, not a refusal.
+    if isinstance(error, DirectoryListingError):
+        return RpcError(RPC_ERROR_DOMAIN, str(error), data={"reason": error.reason}, routine=True)
+    if isinstance(error, ListingPathError):
+        return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
     if isinstance(error, ProjectError):
         return RpcError(RPC_ERROR_DOMAIN, str(error))
     if isinstance(

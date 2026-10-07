@@ -38,7 +38,11 @@ async def dispatch_rpc(
         method, params = parse_rpc_request(request)
         result = await dispatch_method(state, method, params, handlers)
     except RpcError as exc:
-        if exc.code not in _OWNER_LOGGED_ERROR_CODES:
+        if exc.routine:
+            _LOGGER.debug(
+                "RPC request answered with an error (method=%s code=%s)", method_name, exc.code
+            )
+        elif exc.code not in _OWNER_LOGGED_ERROR_CODES:
             _LOGGER.warning(
                 "RPC request rejected (method=%s code=%s)",
                 method_name,

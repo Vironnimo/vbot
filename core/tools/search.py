@@ -1,24 +1,36 @@
-"""Shared internal helpers for file-search tools."""
+"""Shared internal helpers for file-search tools.
+
+Besides the budget and path display ``search_files`` uses, this module lists files
+for callers outside a Tool call, such as the ``@`` file picker of Chat, with the
+same selection ``search_files`` makes when it lists files.
+"""
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pathspec import PathSpec
-from pathspec.pattern import Pattern
-
+from core.tools._search_execution import (
+    ALWAYS_EXCLUDED,
+    DEFAULT_ARGUMENTS,
+    NativeOutcome,
+    native_lines,
+)
 from core.utils.paths import model_path
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterable
 
     from core.tools.tools import ToolContext
 
 SEARCH_TIMEOUT_SECONDS = 30.0
 MAX_OUTPUT_BYTES = 50 * 1024
+
+# The selection of a search_files listing without arguments.
+_SELECTION = (*DEFAULT_ARGUMENTS, f"--glob={ALWAYS_EXCLUDED}")
 
 
 class SearchBudget:
@@ -30,9 +42,9 @@ class SearchBudget:
     check and records which one fired, so the handler can decide between a
     cancel failure envelope and partial results with a timeout marker.
 
-    ``context=None`` builds a timeout-only budget for walks that run outside a
+    ``context=None`` builds a timeout-only budget for listings that run outside a
     tool call (e.g. the ``files.list`` RPC listing) — no cancel signals exist
-    there, so only the wall clock stops the walk.
+    there, so only the wall clock stops the listing.
     """
 
     def __init__(self, context: ToolContext | None, timeout_seconds: float | None = None) -> None:
@@ -70,130 +82,65 @@ class SearchBudget:
         return self.timed_out or self.cancelled_by_user or self.run_cancelled
 
 
-def _find_repository_top(search_root: Path) -> Path:
-    """Return the closest ancestor holding a ``.git`` entry, else the root itself."""
-    for directory in (search_root, *search_root.parents):
-        if (directory / ".git").exists():
-            return directory
-    return search_root
+def list_selected_files(
+    binary: Path, root: Path, budget: SearchBudget, *, limit: int
+) -> tuple[list[str], bool]:
+    """Return up to ``limit`` files that ``search_files`` lists under ``root``.
 
-
-class GitIgnoreFilter:
-    """Evaluates ``.gitignore`` rules for paths under a search root, git-style.
-
-    Patterns are read lazily per directory from the repository top down to the
-    path's parent; across levels the deepest matching pattern wins, matching
-    git's precedence. Re-inclusion below an excluded directory is impossible
-    because the walker prunes excluded directories before descending — also
-    git's behavior. Only ``.gitignore`` files are honored (not
-    ``.git/info/exclude`` or the user's global excludes file).
+    The selection is the search engine's own: hidden files are included;
+    ``.gitignore``, ``.ignore``, ``.rgignore``, ``.git/info/exclude`` and the
+    global Git excludes apply; ``.git`` and directory links are never entered.
+    Paths are relative to ``root`` with ``/`` separators, in no particular order.
+    The second value says whether the list may be incomplete: ``limit`` cut it or
+    ``budget`` stopped it. A name with a line break, possible outside Windows,
+    comes out split at it.
     """
-
-    def __init__(self, search_root: Path) -> None:
-        self._top = _find_repository_top(search_root)
-        self._patterns_by_directory: dict[Path, list[Pattern] | None] = {}
-
-    def _patterns_for(self, directory: Path) -> list[Pattern] | None:
-        if directory in self._patterns_by_directory:
-            return self._patterns_by_directory[directory]
-
-        patterns: list[Pattern] | None = None
-        gitignore_path = directory / ".gitignore"
-        try:
-            if gitignore_path.is_file():
-                lines = gitignore_path.read_text(encoding="utf-8", errors="replace").splitlines()
-                parsed = PathSpec.from_lines("gitignore", lines).patterns
-                patterns = [pattern for pattern in parsed if pattern.include is not None] or None
-        except OSError:
-            patterns = None
-
-        self._patterns_by_directory[directory] = patterns
-        return patterns
-
-    def is_ignored(self, path: Path, *, is_directory: bool) -> bool:
-        """Return whether git would ignore ``path`` (evaluated as file or directory)."""
-        try:
-            relative_parts = path.relative_to(self._top).parts
-        except ValueError:
-            return False
-
-        ignored = False
-        for depth in range(len(relative_parts)):
-            level_directory = self._top.joinpath(*relative_parts[:depth])
-            patterns = self._patterns_for(level_directory)
-            if not patterns:
-                continue
-            candidate = "/".join(relative_parts[depth:])
-            if is_directory:
-                candidate = f"{candidate}/"
-            for pattern in patterns:
-                if pattern.match_file(candidate):
-                    ignored = bool(pattern.include)
-        return ignored
+    files: list[str] = []
+    truncated = False
+    # Unreadable directories are left out, as search_files leaves them out of a listing.
+    outcome = NativeOutcome()
+    lines = native_lines(binary, [*_SELECTION, "--files"], None, budget, cwd=root, outcome=outcome)
+    with contextlib.closing(lines):
+        for line in lines:
+            if len(files) >= limit:
+                truncated = True
+                break
+            name = os.fsdecode(line.removesuffix(b"\n"))
+            # Only Windows prints another separator; there it cannot occur in a name.
+            files.append(name.replace(os.sep, "/") if os.sep != "/" else name)
+    return files, truncated or budget.stopped
 
 
-def ignore_rules_apply(search_root: Path, *, include_ignored: bool) -> bool:
-    """Decide whether ignore rules filter a search rooted at ``search_root``.
+def unselected_names(
+    binary: Path, root: Path, directory: str, names: Iterable[str], budget: SearchBudget
+) -> set[str]:
+    """Return the ``names`` in ``directory`` that :func:`list_selected_files` leaves out.
 
-    Rules are off when the caller opted out — or when the root itself is
-    ignored: explicitly targeting an ignored directory is intent to search it,
-    and filtering would otherwise return a misleading empty result.
+    ``directory`` is relative to ``root`` with ``/`` separators (``""`` is ``root``).
+    An entry is left out when an ignore rule or the ``.git`` exclusion skips it, and
+    every entry is when ``directory`` lies in a skipped directory. A stopped
+    ``budget`` leaves the answer incomplete; check it afterwards.
     """
-    if include_ignored:
-        return False
-    return not GitIgnoreFilter(search_root).is_ignored(search_root, is_directory=True)
+    parts = [part for part in directory.split("/") if part]
+    # One level of each directory from the root down: the skips at each level show
+    # whether the next directory down, and finally each entry, is left out.
+    walked = [os.path.join(*parts[:depth]) if depth else "." for depth in range(len(parts) + 1)]
+    outcome = NativeOutcome()
+    arguments = [*_SELECTION, "--files", "--debug", "--max-depth=1", "--", *walked]
+    lines = native_lines(binary, arguments, None, budget, cwd=root, outcome=outcome)
+    with contextlib.closing(lines):
+        for _line in lines:
+            pass
+    skipped = {_comparable(root / os.fsdecode(path)) for path in outcome.skipped}
+    levels = (root.joinpath(*parts[:depth]) for depth in range(1, len(parts) + 1))
+    if any(_comparable(level) in skipped for level in levels):
+        return set(names)
+    base = root.joinpath(*parts)
+    return {name for name in names if _comparable(base / name) in skipped}
 
 
-def iter_search_entries(
-    search_root: Path,
-    *,
-    budget: SearchBudget,
-    apply_ignore_rules: bool,
-    include_directories: bool,
-) -> Iterator[tuple[Path, bool]]:
-    """Yield ``(path, is_directory)`` under a directory root, deterministically sorted.
-
-    Prunes ignored directories before descending and skips ignored files when
-    ``apply_ignore_rules`` is set. ``.git`` internals are always pruned — never
-    useful for content search — unless the root itself lies inside a ``.git``
-    tree (an explicit reach-in). Directory links are listed but never entered,
-    Windows junctions included, which ``os.walk`` alone would follow out of the
-    tree and around link cycles. Polls the budget per directory and per file.
-    """
-    ignore_filter = GitIgnoreFilter(search_root) if apply_ignore_rules else None
-    skip_git_directories = ".git" not in search_root.parts
-
-    for directory_path, directory_names, file_names in os.walk(search_root):
-        if not budget.keep_going():
-            return
-        current = Path(directory_path)
-
-        kept_directories = []
-        for name in sorted(directory_names):
-            if skip_git_directories and name == ".git":
-                continue
-            child = current / name
-            if ignore_filter is not None and ignore_filter.is_ignored(child, is_directory=True):
-                continue
-            kept_directories.append(name)
-        directory_names[:] = [
-            name for name in kept_directories if not (current / name).is_junction()
-        ]
-
-        if include_directories:
-            for name in kept_directories:
-                yield current / name, True
-
-        for name in sorted(file_names):
-            if not budget.keep_going():
-                return
-            # A worktree's .git is a pointer *file*, not a directory.
-            if skip_git_directories and name == ".git":
-                continue
-            child = current / name
-            if ignore_filter is not None and ignore_filter.is_ignored(child, is_directory=False):
-                continue
-            yield child, False
+def _comparable(path: Path) -> str:
+    return os.path.normcase(os.path.normpath(path))
 
 
 def display_search_path(path: Path, *, cwd: Path) -> str:

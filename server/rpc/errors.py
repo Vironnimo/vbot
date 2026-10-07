@@ -48,14 +48,24 @@ class RpcError(Exception):
 
     ``data`` optionally carries structured facts about the refusal, such as the
     references that block a deletion, so clients can present them in their own
-    words instead of parsing ``message``.
+    words instead of parsing ``message``. ``routine`` marks an answer that is part
+    of normal interactive use rather than a refused request, such as a path picker
+    probing a folder that does not exist; the dispatcher logs it at DEBUG.
     """
 
-    def __init__(self, code: str, message: str, *, data: JsonObject | None = None) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        data: JsonObject | None = None,
+        routine: bool = False,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.data = data
+        self.routine = routine
 
     def to_dict(self) -> JsonObject:
         """Return the provider-agnostic error envelope payload."""

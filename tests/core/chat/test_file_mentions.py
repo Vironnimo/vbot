@@ -17,8 +17,11 @@ from core.chat.errors import ChatError
 from core.chat.file_mentions import (
     MENTION_FILE_LIST_LIMIT,
     MENTION_INLINE_MAX_BYTES,
+    MentionDirectory,
+    MentionIndex,
     expand_file_mentions,
     file_mention_request_text,
+    list_mention_directory,
     list_mention_files,
     resolve_mention_root,
 )
@@ -28,55 +31,131 @@ from core.tools.file_state import FileReadState
 from tests.directory_links import link_directory
 
 # ---------------------------------------------------------------------------
-# list_mention_files
+# list_mention_files / list_mention_directory
 # ---------------------------------------------------------------------------
 
 
-def test_lists_relative_forward_slash_paths_and_honors_gitignore(tmp_path: Path) -> None:
-    (tmp_path / ".git").mkdir()
-    (tmp_path / ".gitignore").write_text("ignored/\n*.log\n", encoding="utf-8")
-    (tmp_path / "ignored").mkdir()
-    (tmp_path / "ignored" / "secret.txt").write_text("x", encoding="utf-8")
-    (tmp_path / "debug.log").write_text("x", encoding="utf-8")
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "app.py").write_text("print()", encoding="utf-8")
-    (tmp_path / "README.md").write_text("hi", encoding="utf-8")
-
-    files, truncated = list_mention_files(tmp_path)
-
-    assert truncated is False
-    assert set(files) == {".gitignore", "README.md", "src/app.py"}
-    assert list_mention_files(tmp_path / "does-not-exist") == ([], False)
+def _write(root: Path, files: dict[str, str]) -> None:
+    for name, text in files.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
 
 
-def test_listing_never_enters_directory_links(tmp_path: Path) -> None:
-    # A junction on Windows: os.walk enters those, unlike symbolic links.
+@pytest.mark.asyncio
+async def test_index_lists_what_the_search_tools_search(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            ".git/HEAD": "ref: refs/heads/main\n",
+            ".git/info/exclude": "excluded.txt\n",
+            ".gitignore": "ignored/\n*.log\n",
+            ".env": "x",
+            "README.md": "x",
+            "debug.log": "x",
+            "excluded.txt": "x",
+            "ignored/secret.txt": "x",
+            "src/.gitignore": "generated.py\n",
+            "src/app.py": "x",
+            "src/generated.py": "x",
+            "src/deep/mod.py": "x",
+        },
+    )
+    (tmp_path / "empty").mkdir()
+
+    index = await list_mention_files(tmp_path)
+
+    assert index == MentionIndex(
+        files=(
+            ".env",
+            ".gitignore",
+            "README.md",
+            "src/.gitignore",
+            "src/app.py",
+            "src/deep/mod.py",
+        ),
+        directories=("src", "src/deep"),
+        truncated=False,
+    )
+    assert await list_mention_files(tmp_path / "does-not-exist") == MentionIndex((), (), False)
+
+
+@pytest.mark.asyncio
+async def test_index_never_enters_directory_links(tmp_path: Path) -> None:
     root = tmp_path / "project"
     outside = tmp_path / "outside"
-    (root / "src").mkdir(parents=True)
-    (root / "src" / "app.py").write_text("print()", encoding="utf-8")
-    outside.mkdir()
-    (outside / "secret.txt").write_text("x", encoding="utf-8")
+    _write(root, {"src/app.py": "print()"})
+    _write(outside, {"secret.txt": "x"})
     link_directory(root / "linked", outside)
 
-    files, truncated = list_mention_files(root)
+    index = await list_mention_files(root)
 
-    assert (files, truncated) == (["src/app.py"], False)
+    assert (index.files, index.truncated) == (("src/app.py",), False)
 
 
-def test_listing_marks_truncation_at_the_file_cap(
+@pytest.mark.asyncio
+async def test_index_marks_truncation_at_the_file_cap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The real cap must hold real repositories; the test lowers it to observe truncation.
     assert MENTION_FILE_LIST_LIMIT >= 1000
     monkeypatch.setattr("core.chat.file_mentions.MENTION_FILE_LIST_LIMIT", 3)
-    for index in range(5):
-        (tmp_path / f"file-{index}.txt").write_text("x", encoding="utf-8")
+    _write(tmp_path, {f"file-{index}.txt": "x" for index in range(5)})
 
-    files, truncated = list_mention_files(tmp_path)
+    index = await list_mention_files(tmp_path)
 
-    assert len(files) == 3
-    assert truncated is True
+    assert len(index.files) == 3
+    assert index.truncated is True
+
+
+@pytest.mark.parametrize(
+    ("directory", "expected"),
+    [
+        pytest.param(
+            "",
+            [
+                (".git", "directory", True),
+                ("build", "directory", True),
+                ("src", "directory", False),
+                (".gitignore", "file", False),
+                ("debug.log", "file", True),
+            ],
+            id="root",
+        ),
+        pytest.param(
+            "src",
+            [("gen", "directory", True), (".gitignore", "file", False), ("app.py", "file", False)],
+            id="nested-ignore-file",
+        ),
+        pytest.param("build/out", [("bundle.js", "file", True)], id="inside-an-ignored-directory"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_directory_lists_ignored_entries_and_marks_them(
+    tmp_path: Path, directory: str, expected: list[tuple[str, str, bool]]
+) -> None:
+    _write(
+        tmp_path,
+        {
+            ".git/HEAD": "ref: refs/heads/main\n",
+            ".gitignore": "build/\n*.log\n",
+            "build/out/bundle.js": "x",
+            "debug.log": "x",
+            "src/.gitignore": "gen/\n",
+            "src/app.py": "x",
+            "src/gen/types.py": "x",
+        },
+    )
+
+    listed = await list_mention_directory(tmp_path, directory)
+
+    assert [(entry.name, entry.kind, entry.ignored) for entry in listed.entries] == expected
+    assert listed.truncated is False
+
+
+@pytest.mark.asyncio
+async def test_directory_of_a_missing_root_lists_as_empty(tmp_path: Path) -> None:
+    assert await list_mention_directory(tmp_path / "missing", "") == MentionDirectory((), False)
 
 
 # ---------------------------------------------------------------------------

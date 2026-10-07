@@ -1,16 +1,22 @@
-"""``@``-mention file support: cwd file listing and send-time snapshots.
+"""``@``-mention file support: the picker's listings and send-time snapshots.
 
-The composer's ``@`` picker lists files under the session cwd (``files.list``
-RPC). On send, every mentioned file is snapshotted once into a ``file_mention``
-content block — content inline for reasonably sized text files — and stamped as
-read in the session's read-before-write guard, so the agent can edit a mentioned
-file without a separate read tool call. The snapshot is durable in canonical
-Session history: the model always sees the file as it was when the user sent the message,
-and the stale-guard catches a later edit when the file changed afterwards.
+The composer's ``@`` picker (``files.list`` RPC) lists the mention root, the
+directory relative tool paths resolve against: an index of the files and
+directories the search Tools would search there, and on request the direct
+entries of one directory, ignored ones included and marked, so the picker
+reaches them by navigating. On send, every mentioned file is snapshotted once
+into a ``file_mention`` content block — content inline for reasonably sized text
+files — and stamped as read in the session's read-before-write guard, so the
+agent can edit a mentioned file without a separate read tool call. The snapshot
+is durable in canonical Session history: the model always sees the file as it was
+when the user sent the message, and the stale-guard catches a later edit when the
+file changed afterwards.
 """
 
 from __future__ import annotations
 
+import stat
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -20,8 +26,12 @@ from core.chat.content_blocks import ContentBlock, FileMentionBlock, TextBlock
 from core.chat.errors import ChatError
 from core.prompts import INLINE_FILE_MAX_BYTES
 from core.sessions import AGENT_DEFAULT_PROJECT
-from core.tools.search import SearchBudget, ignore_rules_apply, iter_search_entries
+from core.tools.search import SearchBudget, list_selected_files, unselected_names
+from core.utils.directory_listing import DirectoryListingError, EntryKind, list_directory
+from core.utils.file_status import stat_or_none
 from core.utils.logging import get_logger
+from core.utils.search_binary import require_binary
+from core.utils.workers import BoundedWorkerPool
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -29,6 +39,7 @@ if TYPE_CHECKING:
     from core.runtime.interfaces import RuntimeServices
     from core.sessions import WorkingProjectChoice
     from core.tools.file_state import FileReadState
+    from core.utils.directory_listing import DirectoryListing
 
 _LOGGER = get_logger("chat.file_mentions")
 
@@ -37,12 +48,53 @@ _LOGGER = get_logger("chat.file_mentions")
 # @-mention cannot flood the context window.
 MENTION_INLINE_MAX_BYTES = INLINE_FILE_MAX_BYTES
 
-# Hard ceiling for the picker file list; the files.list response marks truncation.
-MENTION_FILE_LIST_LIMIT = 5000
+# Hard ceiling for the picker's file index; the files.list response marks truncation.
+# It holds most repositories whole: 20,000 files index in about 0.3 s and make a
+# response of about 1.5 MB. The picker reaches files beyond it by navigating.
+MENTION_FILE_LIST_LIMIT = 20_000
 
-# Wall-clock budget for one listing walk. A tree that cannot be enumerated within
-# this is too big for an interactive picker; the truncated prefix is returned.
+# Wall-clock budget for one index, and for marking the ignored entries of one
+# directory. A tree that cannot be indexed within this is too big for an
+# interactive picker; the truncated prefix is returned.
 MENTION_FILE_LIST_TIMEOUT_SECONDS = 5.0
+
+# Listings read the filesystem and run the search engine, never on the Event Loop.
+_LISTING_WORKERS = BoundedWorkerPool(name="mention-listing", max_workers=2)
+
+
+@dataclass(frozen=True)
+class MentionIndex:
+    """The files and directories the ``@`` picker offers under a mention root.
+
+    Paths are relative to the root with ``/`` separators, sorted by name. They are
+    what the search Tools search there: ignore rules apply, hidden files count and
+    ``.git`` is left out. ``directories`` are the directories of the listed files.
+    ``truncated`` says the index is incomplete: the file cap or the time budget
+    cut it.
+    """
+
+    files: tuple[str, ...]
+    directories: tuple[str, ...]
+    truncated: bool
+
+
+@dataclass(frozen=True)
+class MentionEntry:
+    """One direct entry of a directory under a mention root."""
+
+    name: str
+    kind: EntryKind
+    # The index leaves the entry out: an ignore rule or the .git exclusion applies
+    # to it or to a directory above it.
+    ignored: bool
+
+
+@dataclass(frozen=True)
+class MentionDirectory:
+    """The direct entries of one directory under a mention root, ignored ones included."""
+
+    entries: tuple[MentionEntry, ...]
+    truncated: bool
 
 
 def resolve_mention_root(
@@ -78,34 +130,101 @@ def resolve_mention_root(
     return default_workspace_dir(runtime.storage.data_dir, agent_id)
 
 
-def list_mention_files(root: Path) -> tuple[list[str], bool]:
-    """List candidate files under ``root`` for the ``@`` picker.
+async def list_mention_files(root: Path) -> MentionIndex:
+    """Index the files and directories under ``root`` for the ``@`` picker.
 
-    Returns ``(relative posix paths, truncated)``. The walk honors .gitignore
-    (same walker and semantics as the glob/grep tools) and stops at the count
-    cap or the wall-clock budget, marking either as truncation. A missing root
-    lists as empty — a fresh workspace is a valid, empty picker source.
+    The index stops at ``MENTION_FILE_LIST_LIMIT`` files or after
+    ``MENTION_FILE_LIST_TIMEOUT_SECONDS`` and is then marked truncated. A missing
+    root lists as empty: a fresh Workspace is a valid, empty picker source.
     """
-    resolved_root = root.expanduser().resolve()
-    if not resolved_root.is_dir():
-        return [], False
+    return await _LISTING_WORKERS.run(_index, root)
 
+
+async def list_mention_directory(root: Path, directory: str) -> MentionDirectory:
+    """List the direct entries of ``directory`` under ``root`` for the ``@`` picker.
+
+    ``directory`` is relative to ``root`` (``""`` is the root) and must stay inside
+    it. Entries the index leaves out are listed too and marked ``ignored``. A
+    missing root lists as empty, like the index.
+
+    Raises :class:`~core.utils.directory_listing.ListingPathError` for a directory
+    outside ``root`` and :class:`~core.utils.directory_listing.DirectoryListingError`
+    when the directory cannot be listed or its entries cannot be marked in time.
+    """
+    base = root.expanduser().absolute()
+    try:
+        listing = await list_directory(directory, root=str(base), include_files=True)
+    except DirectoryListingError as error:
+        if error.reason == "not_found" and await _LISTING_WORKERS.run(_listable, base) is None:
+            return MentionDirectory(entries=(), truncated=False)
+        raise
+    ignored = await _LISTING_WORKERS.run(_ignored_names, base, listing)
+    return MentionDirectory(
+        entries=tuple(
+            MentionEntry(name=entry.name, kind=entry.kind, ignored=entry.name in ignored)
+            for entry in listing.entries
+        ),
+        truncated=listing.truncated,
+    )
+
+
+def _index(root: Path) -> MentionIndex:
+    resolved_root = _listable(root)
+    if resolved_root is None:
+        return MentionIndex(files=(), directories=(), truncated=False)
     budget = SearchBudget(None, timeout_seconds=MENTION_FILE_LIST_TIMEOUT_SECONDS)
-    files: list[str] = []
-    truncated = False
-    for path, _is_directory in iter_search_entries(
-        resolved_root,
-        budget=budget,
-        apply_ignore_rules=ignore_rules_apply(resolved_root, include_ignored=False),
-        include_directories=False,
-    ):
-        if len(files) >= MENTION_FILE_LIST_LIMIT:
-            truncated = True
-            break
-        files.append(path.relative_to(resolved_root).as_posix())
+    files, truncated = list_selected_files(
+        _search_engine(), resolved_root, budget, limit=MENTION_FILE_LIST_LIMIT
+    )
+    directories: set[str] = set()
+    for file in files:
+        end = file.rfind("/")
+        # Each file adds its directories up to the first one already known.
+        while end > 0 and file[:end] not in directories:
+            directories.add(file[:end])
+            end = file.rfind("/", 0, end)
+    return MentionIndex(
+        files=tuple(sorted(files, key=_name_order)),
+        directories=tuple(sorted(directories, key=_name_order)),
+        truncated=truncated,
+    )
+
+
+def _ignored_names(base: Path, listing: DirectoryListing) -> set[str]:
+    budget = SearchBudget(None, timeout_seconds=MENTION_FILE_LIST_TIMEOUT_SECONDS)
+    names = [entry.name for entry in listing.entries]
+    ignored = unselected_names(_search_engine(), base.resolve(), listing.path, names, budget)
     if budget.timed_out:
-        truncated = True
-    return files, truncated
+        shown = listing.path or "The mention root"
+        raise DirectoryListingError("timeout", f"{shown} did not answer in time; try again later.")
+    return ignored
+
+
+def _listable(root: Path) -> Path | None:
+    """Return ``root`` resolved, or ``None`` when no directory is there.
+
+    A root that cannot be checked counts as listable; its listing reports why it
+    cannot be read.
+    """
+    resolved = root.expanduser().resolve()
+    try:
+        status = stat_or_none(resolved)
+    except OSError:
+        return resolved
+    if status is None or not stat.S_ISDIR(status.st_mode):
+        return None
+    return resolved
+
+
+def _search_engine() -> Path:
+    try:
+        return require_binary()
+    except ValueError as error:
+        raise ChatError(f"The file picker cannot list files: {error}") from error
+
+
+def _name_order(path: str) -> tuple[str, str]:
+    return path.casefold(), path
 
 
 def expand_file_mentions(
@@ -214,8 +333,12 @@ __all__ = [
     "MENTION_FILE_LIST_LIMIT",
     "MENTION_FILE_LIST_TIMEOUT_SECONDS",
     "MENTION_INLINE_MAX_BYTES",
+    "MentionDirectory",
+    "MentionEntry",
+    "MentionIndex",
     "expand_file_mentions",
     "file_mention_request_text",
+    "list_mention_directory",
     "list_mention_files",
     "resolve_mention_root",
 ]
