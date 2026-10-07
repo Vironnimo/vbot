@@ -403,8 +403,7 @@ def live_tool_definitions() -> list[JsonObject]:
             "name": TOOL_END_CALL,
             "description": (
                 "End this voice call when the user says goodbye, asks to hang up, or tells you "
-                "to go to sleep or be quiet. Say a short goodbye before you call it; the call "
-                "ends at once. It closes and stops nothing; running work goes on."
+                "to go to sleep or be quiet. It closes and stops nothing; running work goes on."
             ),
             "parameters": _object({}),
         },
