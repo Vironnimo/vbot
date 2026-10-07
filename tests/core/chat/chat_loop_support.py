@@ -24,6 +24,7 @@ from core.projects import AgentOverrides, AgentResolutionError, AgentResolver, C
 from core.providers.accounts import ConnectionRef
 from core.runs import PROVIDER_REQUEST_STATUS_EVENT, ChatRunManager, Run
 from core.sessions import ChatSession, SessionAddress, SessionNotFoundError
+from core.skills.requirements import SkillRequirements
 from core.tools import (
     ToolRegistry,
 )
@@ -589,11 +590,18 @@ class StubSkill:
     name: str
     description: str
     path: Path
+    requirements: SkillRequirements = field(default_factory=SkillRequirements)
 
 
 class StubSkills:
     def __init__(self, skills: list[StubSkill]) -> None:
         self._skills = {skill.name: skill for skill in skills}
+
+    def get(self, name: str) -> StubSkill:
+        try:
+            return self._skills[name]
+        except KeyError:
+            raise KeyError(f"Skill not found: {name}") from None
 
     def list_all(self) -> list[StubSkill]:
         return sorted(self._skills.values(), key=lambda skill: skill.name)

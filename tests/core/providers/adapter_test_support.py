@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+import json
+from collections.abc import AsyncIterator, Callable, Mapping
 from typing import Any
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
@@ -38,6 +39,51 @@ class AdapterHookDefaults:
     def list_announced_tools(self, model_id: str) -> bool:
         del model_id
         return False
+
+    async def stream(
+        self, messages: list[Any], *, model_id: str, **kwargs: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Stream the response ``send`` returns, as the deltas an Adapter emits for it.
+
+        Chat always streams, so a double scripted through ``send`` serves it too.
+        """
+        send = getattr(self, "send")  # noqa: B009 - the double defines it
+        response = await send(messages, model_id=model_id, **kwargs)
+        normalize = getattr(self, "normalize_response", None)
+        if normalize is not None:
+            response = normalize(response, model_id=model_id)
+        for delta in response_deltas(response):
+            yield delta
+
+
+def response_deltas(response: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The normalized stream deltas that deliver one normalized ``response``."""
+    deltas: list[dict[str, Any]] = []
+    if response.get("reasoning_meta") is not None:
+        deltas.append({"type": "reasoning_meta", "reasoning_meta": response["reasoning_meta"]})
+    if isinstance(response.get("reasoning"), str) and response["reasoning"]:
+        deltas.append({"type": "reasoning_delta", "text": response["reasoning"]})
+    if isinstance(response.get("content"), str) and response["content"]:
+        deltas.append({"type": "content_delta", "text": response["content"]})
+    tool_calls = response.get("tool_calls") or []
+    for index, call in enumerate(tool_calls):
+        arguments = call.get("arguments", "")
+        deltas.append(
+            {
+                "type": "tool_call_delta",
+                "slot": index,
+                **({"id": call["id"]} if call.get("id") else {}),
+                "name_delta": str(call.get("name") or ""),
+                "arguments_delta": (
+                    arguments if isinstance(arguments, str) else json.dumps(arguments)
+                ),
+            }
+        )
+    if response.get("usage"):
+        deltas.append({"type": "usage", **response["usage"]})
+    reason = response.get("terminal_outcome") or ("tool_calls" if tool_calls else "stop")
+    deltas.append({"type": "finish", "reason": reason})
+    return deltas
 
 
 def bind_connection[A: ProviderAdapter](

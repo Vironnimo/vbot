@@ -104,7 +104,7 @@ class _Harness:
             ),
             agent_resolver=SimpleNamespace(resolve_agent_async=resolve_agent_async),
             chat_sessions=SimpleNamespace(create_async=self._create_session, delete=self._delete),
-            streaming_chat_loop=SimpleNamespace(start_run=self._start_run),
+            chat_loop=SimpleNamespace(start_run=self._start_run),
             chat_run_manager=SimpleNamespace(
                 has_activity_for_agent=lambda agent_id, *, project_id: agent_id in self.busy,
             ),

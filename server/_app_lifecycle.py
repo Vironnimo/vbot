@@ -94,7 +94,6 @@ def _initialize_app_state(
         app.state
     )
     app.state.chat_loop = runtime.chat_loop
-    app.state.streaming_chat_loop = runtime.streaming_chat_loop
     app.state.command_dispatcher = runtime.command_dispatcher
     app.state.log_viewer = LogViewer(runtime.storage.data_dir)
     # One lock for every reference check and reference edit, shared with the

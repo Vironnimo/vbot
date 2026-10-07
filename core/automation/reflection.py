@@ -462,7 +462,7 @@ class ReflectionService:
             on_fork_created(fork.id)
         # The fork is fresh and never busy — start directly, no queueing needed.
         # Streaming loop so an accessor watching the fork sees the live timeline.
-        review_run = await self._runtime.streaming_chat_loop.start_run(
+        review_run = await self._runtime.chat_loop.start_run(
             agent_id,
             instruction,
             session_id=fork.id,

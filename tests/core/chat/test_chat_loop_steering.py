@@ -263,7 +263,7 @@ async def test_withdrawn_steering_input_keeps_the_final_answer(tmp_path: Path) -
         # Wait on the Session lock while the final answer is persisted, so the
         # removal lands between the pending-steering check and its delivery.
         lock = runtime.chat_sessions.write_lock(address)
-        while not lock._lock.locked():
+        while not lock.locked():
             await asyncio.sleep(0)
         async with lock:
             assert manager.remove_queued("coder", "one", item_id, project_id=None)

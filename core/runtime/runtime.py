@@ -32,6 +32,7 @@ from core.channels import ChannelService
 from core.chat import ChatLoop, CommandDispatcher
 from core.chat.errors import ChatError
 from core.chat.status_report import StatusWireProfile
+from core.chat.streaming import stream_model_response
 from core.database import Database, SnapshotBarrier, UnregisteredDatabase
 from core.debug import ProviderDebugRecorder
 from core.extensions import (
@@ -240,7 +241,6 @@ class Runtime:
         self._session_title_service: SessionTitleService | None = None
         self._subagent_coordinator: SubAgentCoordinator | None = None
         self._chat_loop: ChatLoop | None = None
-        self._streaming_chat_loop: ChatLoop | None = None
         self._command_dispatcher: CommandDispatcher | None = None
         self._chat_run_manager: ChatRunManager | None = None
         self.chat_runs: ChatRunManager | None = None
@@ -284,7 +284,7 @@ class Runtime:
                 ),
                 ensure_started=self._ensure_started,
                 agent_resolver=self.agent_resolver,
-                chat_loop=self.streaming_chat_loop,
+                chat_loop=self.chat_loop,
                 chat_run_manager=self.chat_run_manager,
                 temporary_agents=self._temporary_agents,
                 projects=self.projects,
@@ -413,7 +413,8 @@ class Runtime:
                 owner_name=owner.extension if owner else None,
                 group_id=owner.group_id if owner else None,
             )
-            response = await adapter.send(
+            normalized = await stream_model_response(
+                adapter,
                 request["messages"],
                 model_id=model_id,
                 tools=request.get("tools"),
@@ -428,7 +429,6 @@ class Runtime:
                     project_id=context.project_id,
                 ),
             )
-            normalized = adapter.normalize_response(response, model_id=model_id)
             usage = normalized.get("usage")
             outcome = "completed"
         except asyncio.CancelledError:
@@ -1279,10 +1279,6 @@ class Runtime:
 
     librarian: _StartedService[LibrarianService] = _StartedService(
         lambda runtime: runtime._librarian_service, "Librarian service not available"
-    )
-
-    streaming_chat_loop: _StartedService[ChatLoop] = _StartedService(
-        lambda runtime: runtime._streaming_chat_loop, "Streaming chat loop is not available"
     )
 
     channel_service: _StartedService[ChannelService] = _StartedService(

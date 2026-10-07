@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -9,11 +11,13 @@ import pytest
 
 from core.chat import streaming as streaming_module
 from core.chat.streaming import (
+    StreamBrokenAfterToolCallsError,
     StreamingAccumulator,
     StreamingDeltaBatcher,
     StreamingDeltaError,
     StreamingVisibleDelta,
 )
+from core.providers.errors import NetworkError, ProviderStreamingUnsupportedError
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     REASONING_DELTA_EVENT,
@@ -269,6 +273,32 @@ def test_partial_fields_drop_an_in_flight_tool_call_without_raising() -> None:
     assert fields.reasoning_timing is not None
 
 
+def test_tool_calls_are_taken_in_order_once_the_stream_moves_past_them() -> None:
+    read = {"id": "tool_call_0", "name": "read", "arguments": {"path": "a.md"}}
+    write = {"id": "tool_call_1", "name": "write", "arguments": {"path": "b.md"}}
+    search = {"id": "tool_call_2", "name": "search", "arguments": {"q": "x"}}
+    accumulator = _accumulate(_tool_delta('{"path":"a.md"}', name="read", slot=0))
+    # The last call may still grow.
+    assert accumulator.take_completed_tool_calls() == []
+
+    accumulator.add_delta(_tool_delta('{"path":', name="write", slot=1))
+    assert accumulator.take_completed_tool_calls() == [read]
+    # Moving on does not complete a call whose arguments are still open.
+    accumulator.add_delta({"type": "content_delta", "text": "and"})
+    assert accumulator.take_completed_tool_calls() == []
+    accumulator.add_delta(_tool_delta('"b.md"}', slot=1))
+    accumulator.add_delta(_tool_delta('{"q":"x"}', name="search", slot=2))
+    assert accumulator.take_completed_tool_calls() == [write]
+    # A taken call is final: a late fragment for it is ignored.
+    accumulator.add_delta(_tool_delta('{"path":"other.md"}', slot=0))
+    assert accumulator.finalize_partial_fields().tool_calls == [read, write]
+
+    accumulator.add_delta({"type": "finish", "reason": "tool_calls"})
+    assert accumulator.take_completed_tool_calls() == [search]
+    assert accumulator.take_completed_tool_calls() == []
+    assert accumulator.finalize_assistant_fields().tool_calls == [read, write, search]
+
+
 def test_reasoning_meta_merges_without_a_public_delta() -> None:
     accumulator = StreamingAccumulator()
 
@@ -411,3 +441,88 @@ def test_response_without_usage_delta_carries_no_usage() -> None:
 
     assert fields.usage is None
     assert "usage" not in fields.to_response_dict()
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+# A completed (non-streaming) Model response is the emergency path: no live
+# output, no early Tool Calls, no stall detection. Each use names why it is
+# unavoidable; Provider Adapters implement ``send`` and are not callers.
+_COMPLETED_RESPONSE_REQUESTS = {
+    "core/chat/streaming.py": "stream_model_response: the Provider refused to stream",
+    "core/chat/request_runner.py": "Chat fallback: the Provider refused to stream",
+}
+
+
+def test_model_requests_stream_outside_the_documented_fallbacks() -> None:
+    callers: set[str] = set()
+    for package in ("core", "server", "cli"):
+        for source_path in (_REPO_ROOT / package).rglob("*.py"):
+            relative = source_path.relative_to(_REPO_ROOT).as_posix()
+            if relative.startswith("core/providers/"):
+                continue
+            source = source_path.read_text(encoding="utf-8")
+            if ".send(" not in source:
+                continue
+            for node in ast.walk(ast.parse(source, filename=str(source_path))):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "send"
+                    and any(keyword.arg == "model_id" for keyword in node.keywords)
+                ):
+                    callers.add(relative)
+
+    assert callers == set(_COMPLETED_RESPONSE_REQUESTS)
+
+
+class _BreakingStreamAdapter:
+    """Streams the given deltas, then raises; ``send`` answers with one text."""
+
+    def __init__(self, deltas: list[JsonObject], error: Exception) -> None:
+        self.deltas = deltas
+        self.error = error
+        self.sent = 0
+
+    async def stream(self, messages: list[JsonObject], *, model_id: str, **_: Any) -> Any:
+        for delta in self.deltas:
+            yield delta
+        raise self.error
+
+    async def send(self, messages: list[JsonObject], *, model_id: str, **_: Any) -> JsonObject:
+        self.sent += 1
+        return {"content": "completed"}
+
+    def normalize_response(self, response: JsonObject, *, model_id: str) -> JsonObject:
+        return {**response, "tool_calls": None}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [NetworkError("connection reset"), ProviderStreamingUnsupportedError("no stream")],
+)
+async def test_stream_model_response_falls_back_only_before_any_output(error: Exception) -> None:
+    refused = _BreakingStreamAdapter([], ProviderStreamingUnsupportedError("no stream"))
+    response = await streaming_module.stream_model_response(refused, [], model_id="m")
+    assert (response["content"], refused.sent) == ("completed", 1)
+
+    # Once a Tool Call was handed out, a break never replays or falls back:
+    # the caller gets the output so far with exactly the handed-out call.
+    handed_out: list[str] = []
+    started = _BreakingStreamAdapter(
+        [
+            _tool_delta('{"a":1}', name="first", id="call_1"),
+            _tool_delta("{", name="second", id="call_2"),
+        ],
+        error,
+    )
+    with pytest.raises(StreamBrokenAfterToolCallsError) as broken:
+        await streaming_module.stream_model_response(
+            started,
+            [],
+            model_id="m",
+            on_tool_calls=lambda calls: handed_out.extend(call["id"] for call in calls),
+        )
+    assert handed_out == ["call_1"]
+    assert [call["id"] for call in broken.value.response["tool_calls"]] == ["call_1"]
+    assert (broken.value.cause, started.sent) == (error, 0)

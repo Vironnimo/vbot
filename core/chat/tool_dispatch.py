@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import time
 from collections.abc import Callable, Collection, Mapping, Sequence
@@ -230,7 +231,10 @@ class _EmittingToolRegistry(ToolRegistry):
         self._note_hook = note_hook
         self._denial_resolver = denial_resolver
         self._tool_restriction = tool_restriction
-        self._rejections = dict(rejections or {})
+        # Read at dispatch time: a Tool round adds rejections as calls arrive.
+        self._rejections: Mapping[int, ToolCallRejection] = (
+            rejections if rejections is not None else {}
+        )
         self._tool_timings: dict[str, JsonObject] = {}
         self._tool_displays: dict[str, JsonObject] = {}
         self._tool_media: dict[str, list[JsonObject]] = {}
@@ -703,49 +707,55 @@ def _tool_context_schema_fingerprint(registry: Any, context: ToolContext) -> str
     return _safe_schema_fingerprint(registry, context.tool_name)
 
 
-async def _dispatch_tool_calls(
-    context: ToolDispatchContext,
-    tool_calls: list[ToolCall],
-) -> tuple[list[ChatMessage], list[JsonObject]]:
-    run = context.run
-    session = context.session
-    agent = context.agent
-    run.raise_if_cancelled()
-    emitting_registry = _EmittingToolRegistry(
-        context.registry,
-        run,
-        context.extension_registry,
-        note_hook=session.add_note,
-        assistant_message_id=session.assistant_message_id,
-        denial_resolver=context.tool_denial_resolver,
-        tool_restriction=context.tool_restriction,
-        removed_tool_names=context.removed_tool_names,
-        rejections={
-            index: tool_call.rejection
-            for index, tool_call in enumerate(tool_calls)
-            if tool_call.rejection is not None
-        },
-        result_payloads=context,
-    )
-    executor = ToolExecutor(emitting_registry)
-    workspace = _agent_workspace(agent, context.data_root)
-    results = await executor.execute_many(
-        [
-            ScheduledToolCall(
-                id=tool_call.id,
-                name=tool_call.name,
-                arguments=tool_call.arguments,
-            )
-            for tool_call in tool_calls
-        ],
-        ToolExecutionConfig(
+class ToolRound:
+    """Run one Assistant turn's Tool Calls, each as soon as it is known.
+
+    Chat opens a round before the Model request, so a Tool Call the stream has
+    completed starts while the Model still writes the rest of its turn
+    (:meth:`start`). :meth:`finish` adds the calls that arrived only with the
+    end of the response, waits for every call and returns the Tool Results in
+    call order. Calls keep the positions they have in the Assistant turn.
+
+    Notes the Tools add are held until :meth:`finish` and then added to the
+    Session, so they land after the Assistant turn they belong to even when a
+    call finished before that turn was persisted.
+    """
+
+    def __init__(
+        self,
+        context: ToolDispatchContext,
+        *,
+        assistant_message_id: str | None,
+        iteration_number: int,
+    ) -> None:
+        run = context.run
+        session = context.session
+        agent = context.agent
+        self._context = context
+        self._calls: list[ToolCall] = []
+        self._rejections: dict[int, ToolCallRejection] = {}
+        self._notes: list[str] = []
+        self._registry = _EmittingToolRegistry(
+            context.registry,
+            run,
+            context.extension_registry,
+            note_hook=self._notes.append,
+            assistant_message_id=assistant_message_id,
+            denial_resolver=context.tool_denial_resolver,
+            tool_restriction=context.tool_restriction,
+            removed_tool_names=context.removed_tool_names,
+            rejections=self._rejections,
+            result_payloads=context,
+        )
+        workspace = _agent_workspace(agent, context.data_root)
+        config = ToolExecutionConfig(
             agent_id=run.agent_id,
             session_id=run.session_id,
             run_id=run.id,
             workspace=workspace,
             vbot_root=context.vbot_root,
             data_root=context.data_root,
-            iteration_number=run.iteration_count,
+            iteration_number=iteration_number,
             execution_owner=run.execution_owner,
             cwd=_resolve_tool_cwd(context.project_cwd, workspace),
             # The owning run's project rides onto every ToolContext so the
@@ -779,7 +789,7 @@ async def _dispatch_tool_calls(
                 tool_call_id, callback
             ),
             tool_call_cancel_check=lambda tool_call_id: run.tool_call_cancelled(tool_call_id),
-            note_hook=session.add_note,
+            note_hook=self._notes.append,
             skill_activation_hook=session.register_skill_activation,
             tool_call_result_persisted_registrar=context.register_result_persisted,
             tool_delivery_receipt_registrar=(
@@ -791,26 +801,69 @@ async def _dispatch_tool_calls(
             tool_result_payload_registrar=context.stage_result_payload,
             input_contracts=context.tool_contracts,
             change_tracker=context.change_tracker,
-        ),
-    )
-    tool_messages: list[ChatMessage] = []
-    media_outputs: list[JsonObject] = []
-    for tool_call, result in zip(tool_calls, results, strict=True):
-        tool_message = ChatMessage.tool(
-            tool_call_id=tool_call.id,
-            name=tool_call.name,
-            content=json.dumps(result, ensure_ascii=False, separators=(",", ":")),
-            timing=emitting_registry.timing_for_call(tool_call.id),
-            tool_display=emitting_registry.display_for_completed_call(tool_call.id),
         )
-        tool_messages.append(tool_message)
-        media_outputs.extend(
-            _read_media_outputs(result, tool_call_id=tool_call.id, tool_message_id=tool_message.id)
+        # Calls run in the context the round was opened in, never in the
+        # Model request's scope (its retry ownership belongs to that request).
+        self._batch = ToolExecutor(self._registry).start_batch(
+            config, context=contextvars.copy_context()
         )
-        media_outputs.extend(
-            emitting_registry.take_media_for_call(tool_call.id, tool_message_id=tool_message.id)
-        )
-    return tool_messages, media_outputs
+
+    @property
+    def calls(self) -> list[ToolCall]:
+        """The calls started so far, in Assistant-turn order."""
+        return list(self._calls)
+
+    def start(self, tool_calls: Sequence[ToolCall]) -> None:
+        """Start calls at the next positions of the Assistant turn."""
+        self._context.run.raise_if_cancelled()
+        for tool_call in tool_calls:
+            index = len(self._calls)
+            if tool_call.rejection is not None:
+                self._rejections[index] = tool_call.rejection
+            self._calls.append(tool_call)
+            self._batch.add(
+                ScheduledToolCall(
+                    id=tool_call.id,
+                    name=tool_call.name,
+                    arguments=tool_call.arguments,
+                )
+            )
+
+    async def finish(
+        self, remaining: Sequence[ToolCall] = ()
+    ) -> tuple[list[ChatMessage], list[JsonObject]]:
+        """Start ``remaining``, wait for every call and return ordered Tool Results."""
+        self.start(remaining)
+        results = await self._batch.results()
+        session = self._context.session
+        for note in self._notes:
+            session.add_note(note)
+        self._notes.clear()
+        tool_messages: list[ChatMessage] = []
+        media_outputs: list[JsonObject] = []
+        registry = self._registry
+        for tool_call, result in zip(self._calls, results, strict=True):
+            tool_message = ChatMessage.tool(
+                tool_call_id=tool_call.id,
+                name=tool_call.name,
+                content=json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+                timing=registry.timing_for_call(tool_call.id),
+                tool_display=registry.display_for_completed_call(tool_call.id),
+            )
+            tool_messages.append(tool_message)
+            media_outputs.extend(
+                _read_media_outputs(
+                    result, tool_call_id=tool_call.id, tool_message_id=tool_message.id
+                )
+            )
+            media_outputs.extend(
+                registry.take_media_for_call(tool_call.id, tool_message_id=tool_message.id)
+            )
+        return tool_messages, media_outputs
+
+    async def aclose(self) -> None:
+        """Cancel every call that has not finished and wait until all settled."""
+        await self._batch.aclose()
 
 
 def _fail_tool_calls_without_dispatch(
@@ -820,6 +873,7 @@ def _fail_tool_calls_without_dispatch(
     code: str,
     message: str,
     retryable: bool | None = None,
+    start_index: int = 0,
 ) -> list[ChatMessage]:
     """Produce normal correlated failure Results without invoking any handler.
 
@@ -831,7 +885,7 @@ def _fail_tool_calls_without_dispatch(
     """
 
     tool_messages: list[ChatMessage] = []
-    for index, tool_call in enumerate(tool_calls):
+    for index, tool_call in enumerate(tool_calls, start=start_index):
         context.run.tool_call_count += 1
         started_at = datetime.now(UTC)
         started_perf = time.perf_counter()

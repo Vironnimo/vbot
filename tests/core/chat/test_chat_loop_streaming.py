@@ -88,7 +88,7 @@ async def test_streaming_mode_emits_deltas_then_final_authoritative_message(
     )
     runtime = stream_runtime(tmp_path, adapter)
 
-    assistant = await build_chat_loop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime).send(
         "coder",
         "Hi",
         session_id="session-one",
@@ -156,7 +156,7 @@ async def test_streaming_mode_emits_provider_heartbeat_without_model_output(
     )
     runtime = stream_runtime(tmp_path, adapter)
 
-    await build_chat_loop(runtime, streaming=True).send(
+    await build_chat_loop(runtime).send(
         "coder",
         "Hi",
         session_id="session-one",
@@ -213,7 +213,7 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    assistant = await build_chat_loop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime).send(
         "coder",
         "Weather?",
         session_id="session-one",
@@ -311,7 +311,7 @@ async def test_streaming_mode_malformed_tool_arguments_return_tool_failure_and_c
     )
     runtime = stream_runtime(tmp_path, adapter)
 
-    loop = build_chat_loop(runtime, streaming=True)
+    loop = build_chat_loop(runtime)
     result = await loop.send("coder", "Build it", session_id="session-one")
 
     run = last_run(runtime)
@@ -367,9 +367,7 @@ async def test_transport_error_after_a_finish_delta_keeps_the_completed_step(
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["get_weather"])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    assistant = await build_chat_loop(runtime, streaming=True).send(
-        "coder", "Weather?", session_id="session-one"
-    )
+    assistant = await build_chat_loop(runtime).send("coder", "Weather?", session_id="session-one")
 
     messages = history(runtime)
     assert (assistant.content, assistant.interrupted) == ("Sunny", False)

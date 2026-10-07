@@ -18,6 +18,7 @@ from core.providers.adapter import (
 )
 from core.runtime import Runtime
 from core.utils.config import Config
+from tests.core.providers.adapter_test_support import response_deltas
 
 JsonObject = dict[str, Any]
 StartRuntime = Callable[..., AbstractContextManager[Runtime]]
@@ -31,7 +32,10 @@ class CapturedRequest:
 
 
 class FakeAdapter(ProviderAdapter):
-    """Provider adapter test double that records canonical chat requests."""
+    """Provider adapter test double that records canonical chat requests.
+
+    ``stream`` delivers the response ``send`` returns, as its normalized deltas.
+    """
 
     def __init__(self, response: JsonObject | list[JsonObject]) -> None:
         self.response = response
@@ -58,8 +62,9 @@ class FakeAdapter(ProviderAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> AsyncIterator[dict]:
-        raise NotImplementedError("streaming not implemented in this stub")
-        yield {}
+        response = await self.send(messages, model_id=model_id, **kwargs)
+        for delta in response_deltas(self.normalize_response(response, model_id=model_id)):
+            yield delta
 
     @override
     def normalize_response(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import copy
 import inspect
 import json
@@ -868,52 +869,23 @@ class ToolExecutor:
         config: ToolExecutionConfig,
     ) -> list[JsonObject]:
         """Execute parallel-by-default calls and return results in request order."""
-        per_run_semaphore = asyncio.Semaphore(self._per_run_limit)
-        results: list[JsonObject | None] = [None] * len(tool_calls)
-        parallel_group: list[tuple[int, ToolCall]] = []
+        batch = self.start_batch(config)
+        for tool_call in tool_calls:
+            batch.add(tool_call)
+        return await batch.results()
 
-        async def flush_parallel_group() -> None:
-            if not parallel_group:
-                return
-            tasks = [
-                asyncio.create_task(
-                    self._execute_one(tool_call, index, config, per_run_semaphore),
-                    name=f"tool:{tool_call.name}:{tool_call.id}",
-                )
-                for index, tool_call in parallel_group
-            ]
-            try:
-                group_results = await asyncio.gather(*tasks)
-            except BaseException:
-                # A child failure does not make gather cancel its siblings.
-                # Keep ownership until their cancellation cleanup has settled,
-                # then preserve the original abort for the Run boundary.
-                for task in tasks:
-                    if not task.done() and not task.cancelling():
-                        task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
-                raise
-            for (index, _tool_call), result in zip(
-                parallel_group,
-                group_results,
-                strict=True,
-            ):
-                results[index] = result
-            parallel_group.clear()
+    def start_batch(
+        self,
+        config: ToolExecutionConfig,
+        *,
+        context: contextvars.Context | None = None,
+    ) -> ToolBatch:
+        """Open a batch that starts each call as soon as it is added.
 
-        for index, tool_call in enumerate(tool_calls):
-            if self._registry.is_parallel_safe(tool_call.name):
-                parallel_group.append((index, tool_call))
-                continue
-            await flush_parallel_group()
-            results[index] = await self._execute_one(
-                tool_call,
-                index,
-                config,
-                per_run_semaphore,
-            )
-        await flush_parallel_group()
-        return [result for result in results if result is not None]
+        ``context`` is the ``contextvars`` state the calls run in (a copy per
+        call); by default each call copies the context of the caller of ``add``.
+        """
+        return ToolBatch(self, config, context=context)
 
     async def _execute_one(
         self,
@@ -997,6 +969,87 @@ class ToolExecutor:
             return tool_failure_for_exception(context.tool_name, error)
 
 
+class ToolBatch:
+    """One turn's Tool Calls, each started as soon as it is added.
+
+    Calls run concurrently by default. A call whose Tool is not parallel-safe is
+    an ordering barrier: it starts after every earlier call finished, and later
+    calls start after it finished. Results keep the order the calls were added,
+    so a caller can add calls while the Model still writes the rest of its turn.
+    """
+
+    def __init__(
+        self,
+        executor: ToolExecutor,
+        config: ToolExecutionConfig,
+        *,
+        context: contextvars.Context | None,
+    ) -> None:
+        self._executor = executor
+        self._config = config
+        self._context = context
+        self._per_run_semaphore = asyncio.Semaphore(executor._per_run_limit)
+        self._tasks: list[asyncio.Task[JsonObject]] = []
+        # The latest barrier call and the parallel calls added after it.
+        self._barrier: asyncio.Task[JsonObject] | None = None
+        self._group: list[asyncio.Task[JsonObject]] = []
+
+    def __len__(self) -> int:
+        return len(self._tasks)
+
+    def add(self, tool_call: ToolCall) -> None:
+        """Start one call at the next position, after the calls it must follow."""
+        index = len(self._tasks)
+        parallel = self._executor._registry.is_parallel_safe(tool_call.name)
+        waits = [self._barrier] if self._barrier is not None else []
+        if not parallel:
+            waits.extend(self._group)
+        task = asyncio.create_task(
+            self._run(tool_call, index, waits),
+            name=f"tool:{tool_call.name}:{tool_call.id}",
+            context=self._context.copy() if self._context is not None else None,
+        )
+        self._tasks.append(task)
+        if parallel:
+            self._group.append(task)
+        else:
+            self._barrier = task
+            self._group = []
+
+    async def results(self) -> list[JsonObject]:
+        """Wait for every added call and return the results in call order."""
+        try:
+            return list(await asyncio.gather(*self._tasks))
+        except BaseException:
+            # A child failure does not make gather cancel its siblings. Keep
+            # ownership until their cancellation cleanup has settled, then
+            # preserve the original abort for the Run boundary.
+            await self.aclose()
+            raise
+
+    async def aclose(self) -> None:
+        """Cancel every call that has not finished and wait until all settled."""
+        for task in self._tasks:
+            if not task.done() and not task.cancelling():
+                task.cancel()
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+
+    async def _run(
+        self,
+        tool_call: ToolCall,
+        index: int,
+        waits: list[asyncio.Task[JsonObject]],
+    ) -> JsonObject:
+        if waits:
+            await asyncio.wait(waits)
+            if any(task.cancelled() or task.exception() is not None for task in waits):
+                # An earlier call was aborted; the batch is being torn down.
+                raise asyncio.CancelledError
+        return await self._executor._execute_one(
+            tool_call, index, self._config, self._per_run_semaphore
+        )
+
+
 def _build_per_call_cancel_hooks(
     config: ToolExecutionConfig, tool_call_id: str
 ) -> tuple[ToolCancelRegistrationHook | None, ToolCancelCheckHook | None]:
@@ -1046,6 +1099,7 @@ __all__ = [
     "ToolContext",
     "ToolEmitHook",
     "ToolError",
+    "ToolBatch",
     "ToolExecutionConfig",
     "ToolExecutor",
     "ToolHandler",

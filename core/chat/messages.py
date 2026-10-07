@@ -491,8 +491,12 @@ class ChatMessage:
         interruption_cause: str | None = None,
         output_files: list[AssistantFileReference] | None = None,
         timestamp: datetime | None = None,
+        message_id: str | None = None,
     ) -> ChatMessage:
         """Create an assistant message.
+
+        ``message_id`` is a pre-allocated id: Chat names the Assistant turn before
+        its Tool Calls start, so their events and the turn share one id.
 
         ``interrupted`` marks a turn whose provider stream broke after visible
         output was emitted: the accumulated answer is preserved, but the turn did
@@ -503,7 +507,7 @@ class ChatMessage:
         span of a streamed turn; it is presentation metadata like Tool timing.
         """
         return cls(
-            id=_new_message_id(),
+            id=message_id or _new_message_id(),
             timestamp=_format_timestamp(timestamp),
             role="assistant",
             model=model,

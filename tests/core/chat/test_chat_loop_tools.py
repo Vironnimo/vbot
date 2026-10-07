@@ -212,9 +212,7 @@ async def test_starting_a_tool_writes_nothing_after_the_assistant_append(
 
     monkeypatch.setattr(store, "_execute_write", counting_write)
 
-    await build_chat_loop(runtime, streaming=False).send(
-        "coder", "probe once", session_id="session-one"
-    )
+    await build_chat_loop(runtime).send("coder", "probe once", session_id="session-one")
 
     # Only the Assistant append separates the Model response from the Tool
     # handler: starting a Tool writes nothing.

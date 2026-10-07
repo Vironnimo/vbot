@@ -241,7 +241,7 @@ class SubAgentHarness:
             chat_sessions=self.sessions,
             chat_run_manager=self.manager,
             storage=self.storage,
-            streaming_chat_loop=self.loop,
+            chat_loop=self.loop,
             terminal_manager=None,
         )
         self.triggers = RecordingTriggerService()

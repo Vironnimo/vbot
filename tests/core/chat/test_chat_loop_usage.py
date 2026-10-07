@@ -37,7 +37,6 @@ MEASURED = {
     "cache_write_tokens": 200,
     "reasoning_tokens": 25,
 }
-FUTURE_FIELD = {"measurement": "preserve-me"}
 SESSION = session_address("coder", "session-one")
 
 
@@ -47,18 +46,11 @@ def _runtime(tmp_path: Path, adapter: StubAdapter, **runtime_options: Any) -> An
 
 
 def _adapter(text: str = "Hello", usage: JsonObject | None = None) -> StubAdapter:
-    """One answer, served to a plain request and to a streaming one.
-
-    A stream reports only token counters; a plain response may carry further fields.
-    """
+    """One streamed answer; ``usage`` holds the token counters its stream reports."""
     response: JsonObject = {"content": text, "tool_calls": None}
-    stream: list[JsonObject] = [{"type": "content_delta", "text": text}]
     if usage is not None:
         response["usage"] = usage
-        counters = {key: value for key, value in usage.items() if key.endswith("_tokens")}
-        stream.append({"type": "usage", **counters})
-    stream.append({"type": "finish", "reason": "stop"})
-    return StubAdapter([response], stream_responses=[stream])
+    return StubAdapter([response])
 
 
 def _weather_adapter(
@@ -108,16 +100,13 @@ def _hello_tokens() -> int:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("streaming", [False, True], ids=["plain", "streaming"])
 async def test_measured_usage_reaches_the_answer_the_run_end_and_the_usage_record(
-    tmp_path: Path, streaming: bool
+    tmp_path: Path,
 ) -> None:
-    runtime = _runtime(tmp_path, _adapter(usage={**MEASURED, "future_usage_field": FUTURE_FIELD}))
+    runtime = _runtime(tmp_path, _adapter(usage=MEASURED))
     recorder = runtime.usage_recorder = UsageRecorder(tmp_path / "model-usage.db")
     try:
-        answer = await build_chat_loop(runtime, streaming=streaming).send(
-            "coder", "Hi", session_id="session-one"
-        )
+        answer = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
         assert answer.usage is not None
         saved = _saved_answer(runtime)
@@ -126,8 +115,6 @@ async def test_measured_usage_reaches_the_answer_the_run_end_and_the_usage_recor
         for usage in (answer.usage, saved.usage, completed["usage"]):
             assert _counters(usage) == MEASURED
         assert saved.usage["context_usage"] == answer.usage["context_usage"]
-        if not streaming:
-            assert saved.usage["future_usage_field"] == FUTURE_FIELD
         assert completed["status"] == "completed"
         assert completed["timing"]["duration_ms"] >= 0
         assert completed["session_usage"] == {
@@ -150,7 +137,7 @@ async def test_measured_usage_reaches_the_answer_the_run_end_and_the_usage_recor
         _, records = read_ledger(recorder)
         assert [record.id for record in records] == [answer.usage["usage_call_id"]]
         assert _counters(records[0].usage) == MEASURED
-        assert not {"estimated", "context_usage", "future_usage_field"} & set(records[0].usage)
+        assert not {"estimated", "context_usage"} & set(records[0].usage)
     finally:
         recorder.close()
 
@@ -175,13 +162,9 @@ async def test_completed_answer_saves_a_price_snapshot_with_its_usage(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("streaming", "with_tool"),
-    [(False, False), (True, False), (False, True)],
-    ids=["plain", "streaming", "after-tool-results"],
-)
+@pytest.mark.parametrize("with_tool", [False, True], ids=["answer", "after-tool-results"])
 async def test_missing_usage_is_estimated_from_the_sent_request_and_answer(
-    tmp_path: Path, streaming: bool, with_tool: bool
+    tmp_path: Path, with_tool: bool
 ) -> None:
     if with_tool:
         adapter = _weather_adapter()
@@ -190,12 +173,10 @@ async def test_missing_usage_is_estimated_from_the_sent_request_and_answer(
         adapter = _adapter()
         runtime = _runtime(tmp_path, adapter)
 
-    answer = await build_chat_loop(runtime, streaming=streaming).send(
-        "coder", "Hi", session_id="session-one"
-    )
+    answer = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     # The last request includes the previous Tool Call and its result.
-    request = (adapter.stream_requests if streaming else adapter.requests)[-1]
+    request = adapter.requests[-1]
     expected = {
         "input_tokens": estimate_request_input_tokens(
             request["messages"], request["kwargs"]["tools"]
@@ -222,9 +203,7 @@ async def test_unusable_provider_input_is_estimated_and_measured_output_kept(
 ) -> None:
     runtime = _runtime(tmp_path, _adapter(usage=reported))
 
-    answer = await build_chat_loop(runtime, streaming=True).send(
-        "coder", "Hi", session_id="session-one"
-    )
+    answer = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert answer.usage is not None
     estimated_input = answer.usage["input_tokens"]
@@ -305,23 +284,18 @@ async def test_measured_context_decides_whether_the_next_request_fits_the_window
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("streaming", [False, True], ids=["plain", "streaming"])
+@pytest.mark.parametrize("restarted", [False, True], ids=["empty", "restarted"])
 async def test_empty_or_restarted_attempt_keeps_reported_usage_and_links_saved_step(
-    tmp_path: Path, recovery_waits: list[float], streaming: bool
+    tmp_path: Path, recovery_waits: list[float], restarted: bool
 ) -> None:
     adapter = StubAdapter(
-        [
-            {
-                "content": "",
-                "terminal_outcome": "stop",
-                "usage": {"input_tokens": 20, "output_tokens": 4},
-            },
-            {"content": "Recovered", "usage": {"input_tokens": 30}},
-        ],
+        [],
         stream_responses=[
             [
                 {"type": "usage", "input_tokens": 20, "output_tokens": 4},
-                NetworkError("retry this attempt"),
+                NetworkError("retry this attempt")
+                if restarted
+                else {"type": "finish", "reason": "stop"},
             ],
             [
                 {"type": "content_delta", "text": "Recovered"},
@@ -333,9 +307,7 @@ async def test_empty_or_restarted_attempt_keeps_reported_usage_and_links_saved_s
     runtime = _runtime(tmp_path, adapter)
     recorder = runtime.usage_recorder = RecordingUsageRecorder()
 
-    answer = await build_chat_loop(runtime, streaming=streaming).send(
-        "coder", "Work", session_id="session-one"
-    )
+    answer = await build_chat_loop(runtime).send("coder", "Work", session_id="session-one")
 
     failed, completed = recorder.calls
     assert failed["status"] == "failed"
@@ -375,9 +347,7 @@ async def test_cancel_before_visible_output_keeps_reported_counters(tmp_path: Pa
     runtime = _runtime(tmp_path, UsageThenWaitAdapter([]))
     runtime.chat_sessions.create("coder", session_id="session-one")
     recorder = runtime.usage_recorder = RecordingUsageRecorder()
-    run = await build_chat_loop(runtime, streaming=True).start_run(
-        "coder", "Work", session_id="session-one"
-    )
+    run = await build_chat_loop(runtime).start_run("coder", "Work", session_id="session-one")
     await waiting.wait()
     run.request_cancel()
     with pytest.raises(RunCancelledError):
@@ -419,9 +389,7 @@ async def test_cancel_during_usage_persistence_keeps_visible_answer(tmp_path: Pa
     )
     runtime.chat_sessions.create("coder", session_id="session-one")
     recorder = runtime.usage_recorder = WaitingUsageRecorder()
-    run = await build_chat_loop(runtime, streaming=True).start_run(
-        "coder", "Work", session_id="session-one"
-    )
+    run = await build_chat_loop(runtime).start_run("coder", "Work", session_id="session-one")
     await saving.wait()
     run.request_cancel()
     release.set()

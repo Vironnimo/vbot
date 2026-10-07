@@ -72,7 +72,7 @@ async def test_input_append_is_the_only_write_between_admission_and_the_first_re
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.skills = StubSkills([])
-    loop = build_chat_loop(runtime, streaming=False)
+    loop = build_chat_loop(runtime)
     await loop.send("coder", "warm up", session_id="session-one")
     runtime.skills = StubSkills([StubSkill("deploy", "Ship the app.", tmp_path / "deploy")])
     store = runtime.chat_sessions._store
@@ -121,7 +121,7 @@ async def test_user_stop_keeps_completed_tool_results_and_tells_the_next_run(
     tools.register("get_weather", "Get weather.", {"type": "object"}, get_weather)
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=first_adapter, tools=tools)
     runtime.chat_sessions.create("coder", session_id="session-one")
-    loop = build_chat_loop(runtime, streaming=True)
+    loop = build_chat_loop(runtime)
 
     first_run = await loop.start_run("coder", "Inspect ten cities", session_id="session-one")
     await first_adapter.second_step_started.wait()
@@ -172,7 +172,7 @@ async def test_an_interrupted_run_leaves_its_partial_answer_and_one_stable_notic
     runtime: Any = StubRuntime(
         data_dir=tmp_path, agent=StubAgent(id="coder", model="openai/test"), adapter=adapter
     )
-    loop = build_chat_loop(runtime, streaming=True)
+    loop = build_chat_loop(runtime)
     with pytest.raises(RunInterruptedError, match="network"):
         await loop.send("coder", "Work", session_id="s")
 
@@ -231,7 +231,7 @@ async def test_streamed_output_is_drafted_until_its_assistant_entry_persists(
         assert {row[0] for row in rows} <= {"openai/test"}
         return "".join(row[1] for row in rows), "".join(row[2] for row in rows)
 
-    run = await build_chat_loop(runtime, streaming=True).start_run("coder", "Work", session_id="s")
+    run = await build_chat_loop(runtime).start_run("coder", "Work", session_id="s")
     await adapter.paused.wait()
     async with asyncio.timeout(5):
         while drafted() != ("Plan", "Half"):

@@ -39,6 +39,4 @@ def stream_runtime(
 
 
 async def send_streaming(runtime: Any, message: str = "Hi") -> ChatMessage:
-    return await build_chat_loop(runtime, streaming=True).send(
-        "coder", message, session_id=SESSION_ID
-    )
+    return await build_chat_loop(runtime).send("coder", message, session_id=SESSION_ID)

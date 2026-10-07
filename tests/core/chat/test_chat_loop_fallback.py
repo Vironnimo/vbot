@@ -20,7 +20,12 @@ from core.chat.messages import ModelFallback
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.errors import ProviderAuthError, ProviderRateLimitError
-from core.runs import ERROR_MESSAGE_PERSISTED_EVENT, MODEL_FALLBACK_ACTIVATED_EVENT, RunStatus
+from core.runs import (
+    ERROR_MESSAGE_PERSISTED_EVENT,
+    MODEL_FALLBACK_ACTIVATED_EVENT,
+    STREAM_ATTEMPT_RESTARTED_EVENT,
+    RunStatus,
+)
 from core.tools import (
     ANALYZE_IMAGE_TOOL_NAME,
     ToolRegistry,
@@ -101,36 +106,27 @@ def _probe_tools(handler: Any) -> ToolRegistry:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("failure", "streaming"),
+    "failure",
     [
-        (ProviderRateLimitError("primary rate limited"), False),
-        (_model_not_found(), False),
         # A rate limit skips the remaining same-Model restarts on a dead quota.
-        (ProviderRateLimitError("quota exhausted"), True),
+        ProviderRateLimitError("primary rate limited"),
+        _model_not_found(),
     ],
-    ids=["rate-limit", "model-not-found", "streaming-rate-limit"],
+    ids=["rate-limit", "model-not-found"],
 )
 async def test_route_scoped_failure_switches_to_the_fallback_for_this_run(
-    tmp_path: Path, failure: ProviderError, streaming: bool
+    tmp_path: Path, failure: ProviderError
 ) -> None:
-    recovered = [
-        {"type": "content_delta", "text": "Recovered"},
-        {"type": "finish", "reason": "stop"},
-    ]
-    primary = StubAdapter([failure], stream_responses=[failure])
-    fallback = StubAdapter(
-        [{"content": "Recovered", "tool_calls": None}], stream_responses=[recovered]
-    )
+    primary = StubAdapter([failure])
+    fallback = StubAdapter([{"content": "Recovered", "tool_calls": None}])
     runtime = _fallback_runtime(tmp_path, primary, fallback)
 
-    assistant = await build_chat_loop(runtime, streaming=streaming).send(
-        "coder", "Hi", session_id="session-one"
-    )
+    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     run = last_run(runtime)
     messages = history(runtime)
-    primary_requests = primary.stream_requests if streaming else primary.requests
-    fallback_requests = fallback.stream_requests if streaming else fallback.requests
+    primary_requests = primary.requests
+    fallback_requests = fallback.requests
     assert assistant.content == "Recovered"
     assert persisted_roles(messages) == ["user", "note", "assistant"]
     assert (
@@ -170,6 +166,7 @@ async def test_rate_limit_without_a_fallback_fails_the_run_after_same_model_reco
     assert await event_types(runtime, run) == [
         "run_started",
         "user_message_persisted",
+        *[STREAM_ATTEMPT_RESTARTED_EVENT] * 8,
         ERROR_MESSAGE_PERSISTED_EVENT,
         "run_failed",
     ]

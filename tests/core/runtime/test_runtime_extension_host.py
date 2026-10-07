@@ -321,9 +321,6 @@ async def test_owner_groups_run_observably_and_reject_completions_after_close(
         _accept_every_model(runtime, monkeypatch)
         groups = _owner_host(runtime, "swarm").temporary_agents
         assert groups is not None
-        # The two public loops differ in whether a pending Provider response
-        # exposes live Model deltas; Extension pages subscribe to those Runs.
-        assert groups._chat is runtime.streaming_chat_loop  # noqa: SLF001
 
         binding = await groups.create("group", "peer", _participant(tmp_path))
         handle = await groups.open_group("group")

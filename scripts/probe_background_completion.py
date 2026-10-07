@@ -9,7 +9,7 @@ Tool arguments, or raw Provider responses.
 
 Examples:
     python scripts/probe_background_completion.py
-    python scripts/probe_background_completion.py --target openai --mode stream
+    python scripts/probe_background_completion.py --target openai
     python scripts/probe_background_completion.py --repeat 3
 """
 
@@ -264,12 +264,6 @@ def _parser() -> argparse.ArgumentParser:
         default="all",
         help="Configured live target to probe; default probes both required Models.",
     )
-    parser.add_argument(
-        "--mode",
-        choices=("both", "stream", "nonstream"),
-        default="both",
-        help="ChatLoop request mode; both exercises both progression paths.",
-    )
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--data-dir", type=Path)
@@ -313,12 +307,6 @@ def _selected_targets(name: str) -> list[ProbeTarget]:
     if name == "all":
         return list(TARGETS.values())
     return [TARGETS[name]]
-
-
-def _selected_modes(name: str) -> list[bool]:
-    if name == "both":
-        return [False, True]
-    return [name == "stream"]
 
 
 def _message_roles(messages: list[JsonObject]) -> list[str]:
@@ -384,7 +372,6 @@ async def _run_case(
     source_runtime: Runtime,
     target: ProbeTarget,
     *,
-    streaming: bool,
     case_root: Path,
     timeout_seconds: float,
 ) -> JsonObject:
@@ -445,12 +432,11 @@ async def _run_case(
         deliver_background_completions=deliver_background_completions,
         get_terminal_manager=lambda: None,
     )
-    chat_loop = ChatLoop(dependencies, streaming=streaming)
+    chat_loop = ChatLoop(dependencies)
     trigger_service = TriggerService(
         chat_loop,
         run_manager,
         source_runtime,
-        trigger_chat_loop=chat_loop,
         sessions=sessions,
     )
 
@@ -495,7 +481,6 @@ async def _run_case(
             "provider": target.provider,
             "connection": target.connection,
             "model": target.model,
-            "mode": "stream" if streaming else "nonstream",
             "status": "error",
             "error_type": type(error).__name__,
             "elapsed_seconds": round(time.monotonic() - started, 3),
@@ -530,7 +515,6 @@ async def _run_case(
         "provider": target.provider,
         "connection": target.connection,
         "model": target.model,
-        "mode": "stream" if streaming else "nonstream",
         "status": primary_run.status.value if primary_run is not None else "missing_run",
         "error_type": None,
         "elapsed_seconds": round(time.monotonic() - started, 3),
@@ -580,19 +564,17 @@ async def _run(args: argparse.Namespace) -> int:
                         }
                     )
                     continue
-                for streaming in _selected_modes(str(args.mode)):
-                    with tempfile.TemporaryDirectory(
-                        prefix="vbot-background-completion-probe-"
-                    ) as temporary_dir:
-                        result = await _run_case(
-                            source_runtime,
-                            target,
-                            streaming=streaming,
-                            case_root=Path(temporary_dir),
-                            timeout_seconds=float(args.timeout),
-                        )
-                    result["repetition"] = repetition
-                    results.append(result)
+                with tempfile.TemporaryDirectory(
+                    prefix="vbot-background-completion-probe-"
+                ) as temporary_dir:
+                    result = await _run_case(
+                        source_runtime,
+                        target,
+                        case_root=Path(temporary_dir),
+                        timeout_seconds=float(args.timeout),
+                    )
+                result["repetition"] = repetition
+                results.append(result)
     finally:
         await source_runtime.aclose()
 

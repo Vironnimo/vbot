@@ -90,7 +90,6 @@ class ChatLoop:
         dependencies: ChatLoopDependencies,
         *,
         max_tool_iterations: int = MAX_TOOL_ITERATIONS,
-        streaming: bool = False,
         attachment_resolver: ContentBlockResolver | None = None,
         compaction_service: CompactionService | None = None,
         reflection_service: ReflectionNotifier | None = None,
@@ -100,12 +99,11 @@ class ChatLoop:
             raise ChatError("max tool iterations must not be negative")
         self._dependencies = dependencies
         self._max_tool_iterations = max_tool_iterations
-        self._streaming = streaming
         self._attachment_resolver = attachment_resolver
         self._compaction_service = compaction_service
         self._reflection_service = reflection_service
         self._session_title_service = session_title_service
-        wire_requests = WireRequestRunner(dependencies=dependencies, streaming=streaming)
+        wire_requests = WireRequestRunner(dependencies=dependencies)
         self._requests = RequestBuilder(dependencies, wire_requests, attachment_resolver)
         self._compaction_runs = CompactionRunCoordinator(
             host=ChatCompactionHost(dependencies, self._requests, compaction_service)
@@ -117,7 +115,6 @@ class ChatLoop:
             self._compaction_runs,
             compaction_service,
             max_tool_iterations=max_tool_iterations,
-            streaming=streaming,
         )
         self._execution = RunExecution(
             dependencies,
@@ -170,7 +167,7 @@ class ChatLoop:
         input_origin: InputOrigin | None = None,
         project_id: str | None = None,
     ) -> ChatMessage:
-        """Run one persisted non-streaming chat turn and return the final assistant message.
+        """Run one persisted chat turn and return the final assistant message.
 
         ``project_id=None`` is the global identity session (today's behavior,
         exactly unchanged); a set ``project_id`` opens the session under the

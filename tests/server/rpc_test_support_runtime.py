@@ -10,7 +10,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, cast, override
 
 from core.archive import ArchiveService, ArchiveServices
 from core.automation import (
@@ -248,11 +248,12 @@ class StubAdapter(AdapterHookDefaults):
         """Answer ``send`` from ``responses`` and ``stream`` from ``stream_deltas``.
 
         ``stream_deltas`` is one delta list replayed for every stream, or one delta
-        list per stream request.
+        list per stream request. Without ``stream_deltas``, ``stream`` streams the
+        ``send`` responses (recorded in ``requests``).
         """
 
         self._responses = responses or []
-        self._stream_deltas: list[Any] = stream_deltas or []
+        self._stream_deltas: list[Any] | None = stream_deltas
         self._block = block
         self.request_started = asyncio.Event()
         self.release = asyncio.Event()
@@ -281,7 +282,12 @@ class StubAdapter(AdapterHookDefaults):
     def wire_media_support(self, _model_id: str) -> frozenset[str]:
         return frozenset()
 
+    @override
     async def stream(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> Any:
+        if self._stream_deltas is None:
+            async for delta in super().stream(messages, model_id=model_id, **kwargs):
+                yield delta
+            return
         self.stream_requests.append(
             {"messages": deepcopy(messages), "model_id": model_id, "kwargs": deepcopy(kwargs)}
         )
@@ -293,6 +299,7 @@ class StubAdapter(AdapterHookDefaults):
             yield deepcopy(delta)
 
     def _next_stream_deltas(self) -> list[JsonObject]:
+        assert self._stream_deltas is not None
         if self._stream_deltas and isinstance(self._stream_deltas[0], list):
             return cast(list[JsonObject], self._stream_deltas.pop(0))
         return cast(list[JsonObject], self._stream_deltas)
@@ -516,7 +523,6 @@ class StubRuntime:
         self.model_catalog_changed_callbacks: list[Callable[[], None]] = []
         self.extension_disabled_changes: list[set[str]] = []
         self.chat_loop = build_chat_loop(cast(Any, self))
-        self.streaming_chat_loop = build_chat_loop(cast(Any, self), streaming=True)
         self.command_dispatcher = CommandDispatcher(
             self.chat_run_manager,
             agent_resolver=cast(Any, self.agent_resolver),
@@ -832,17 +838,13 @@ def make_state(
     chat_runs = ChatRunManager(persistence=runtime.chat_sessions)
     runtime.chat_runs = chat_runs
     chat_loop = build_chat_loop(runtime, compaction_service=compaction_service)
-    streaming_chat_loop = build_chat_loop(
-        runtime, streaming=True, compaction_service=compaction_service
-    )
-    runtime.streaming_chat_loop = streaming_chat_loop
+    runtime.chat_loop = chat_loop
     runtime.trigger_service = TriggerService(chat_loop, chat_runs, cast(Any, runtime))
     runtime.reflection = ReflectionService(cast(Any, runtime))
     return SimpleNamespace(
         runtime=runtime,
         chat_runs=chat_runs,
         chat_loop=chat_loop,
-        streaming_chat_loop=streaming_chat_loop,
         command_dispatcher=CommandDispatcher(
             chat_runs,
             agent_resolver=cast(Any, runtime.agent_resolver),

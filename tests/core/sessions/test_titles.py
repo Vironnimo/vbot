@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any, cast, override
 
@@ -25,7 +26,7 @@ from core.sessions.titles import (
     _generated_title,
 )
 from tests.core.chat.usage_recorder_support import RecordingUsageRecorder
-from tests.core.providers.adapter_test_support import AdapterHookDefaults
+from tests.core.providers.adapter_test_support import AdapterHookDefaults, response_deltas
 
 
 def _address(agent_id: str, session_id: str, project_id: str | None = None) -> SessionAddress:
@@ -58,17 +59,14 @@ class StubAdapter(AdapterHookDefaults):
     def set_debug_context(self, context: Any) -> None:
         self.debug_context = context
 
-    async def send(self, messages: list[dict], **kwargs: Any) -> dict[str, Any]:
+    @override
+    async def stream(self, messages: list[Any], **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
         self.requests.append({"messages": messages, **kwargs})
         if self.error is not None:
             raise self.error
-        return {"content": self.title, **({"usage": self.usage} if self.usage else {})}
-
-    def normalize_response(
-        self, response: dict[str, Any], *, model_id: str | None = None
-    ) -> dict[str, Any]:
-        assert model_id is not None
-        return response
+        response = {"content": self.title, **({"usage": self.usage} if self.usage else {})}
+        for delta in response_deltas(response):
+            yield delta
 
     async def aclose(self) -> None:
         self.closed = True
@@ -144,11 +142,11 @@ async def test_aclose_cancels_and_drains_generated_title_tasks(manager) -> None:
 
     class BlockingAdapter(StubAdapter):
         @override
-        async def send(self, messages: list[dict], **kwargs: Any) -> dict[str, Any]:
-            self.requests.append({"messages": messages, **kwargs})
+        async def stream(self, messages: list[Any], **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
             started.set()
             await asyncio.Event().wait()
-            return {"content": "unreachable"}
+            async for delta in super().stream(messages, **kwargs):
+                yield delta
 
     adapter = BlockingAdapter()
     runtime = StubRuntime(
@@ -176,10 +174,11 @@ async def test_a_late_title_never_lands_on_a_new_session_at_the_same_address(man
 
     class SlowAdapter(StubAdapter):
         @override
-        async def send(self, messages: list[dict], **kwargs: Any) -> dict[str, Any]:
+        async def stream(self, messages: list[Any], **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
             started.set()
             await release.wait()
-            return await super().send(messages, **kwargs)
+            async for delta in super().stream(messages, **kwargs):
+                yield delta
 
     runtime = StubRuntime(
         manager, enabled=True, configured_model="openai/title::cheap", adapters=[SlowAdapter()]
@@ -296,13 +295,16 @@ async def test_reasoning_mandatory_endpoint_retries_with_default_effort(manager)
             return {"routing_sentinel": "title-session"}
 
         @override
-        async def send(self, messages: list[dict], **kwargs: Any) -> dict[str, Any]:
-            self.requests.append({"messages": messages, **kwargs})
+        async def stream(self, messages: list[Any], **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
             if kwargs.get("thinking_effort") == "none":
+                self.requests.append({"messages": messages, **kwargs})
                 raise ProviderError("Reasoning is mandatory for this endpoint.")
-            return {"content": self.title, "usage": {"input_tokens": 50, "output_tokens": 5}}
+            async for delta in super().stream(messages, **kwargs):
+                yield delta
 
-    adapter = RejectingAdapter('Title: "Mandatory reasoning"')
+    adapter = RejectingAdapter(
+        'Title: "Mandatory reasoning"', usage={"input_tokens": 50, "output_tokens": 5}
+    )
     runtime = StubRuntime(
         manager,
         enabled=True,

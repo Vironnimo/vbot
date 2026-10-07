@@ -267,11 +267,11 @@ async def test_run_excluded_from_agent_activity_still_persists_its_session_histo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("failure", "error_kind", "streaming"),
+    ("failure", "error_kind"),
     [
-        (ProviderTimeoutError("private-provider-detail"), "timeout", False),
-        (NetworkError("private-provider-detail"), "network_error", False),
-        (StreamingChunkTimeoutError("private-provider-detail"), "timeout", True),
+        (ProviderTimeoutError("private-provider-detail"), "timeout"),
+        (NetworkError("private-provider-detail"), "network_error"),
+        (StreamingChunkTimeoutError("private-provider-detail"), "timeout"),
     ],
     ids=["provider-timeout", "network", "chunk-stall"],
 )
@@ -280,19 +280,14 @@ async def test_provider_retry_is_visible_before_answer_without_leaking_error(
     recovery_waits: list[float],
     failure: VBotError,
     error_kind: str,
-    streaming: bool,
 ) -> None:
     streamed_answer = [
         {"type": "content_delta", "text": "done"},
         {"type": "finish", "reason": "stop"},
     ]
-    runtime = _runtime(
-        tmp_path, [failure, {"content": "done"}], stream_responses=[[failure], streamed_answer]
-    )
+    runtime = _runtime(tmp_path, [], stream_responses=[[failure], streamed_answer])
 
-    run = await build_chat_loop(runtime, streaming=streaming).start_run(
-        "coder", "Hi", session_id="session-one"
-    )
+    run = await build_chat_loop(runtime).start_run("coder", "Hi", session_id="session-one")
     await run.wait()
     events = await runtime.timelines.events(run)
 

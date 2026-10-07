@@ -9,6 +9,7 @@ import os
 import re
 import threading
 import time
+from collections.abc import AsyncIterator
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -991,17 +992,15 @@ async def test_extension_sampling_records_usage_before_returning(
     shutdown = SimpleNamespace(begins_mid_call=False)
     try:
 
-        async def send(*_args: object, **_kwargs: object) -> dict[str, object]:
+        async def stream(*_args: object, **_kwargs: object) -> AsyncIterator[dict[str, object]]:
             if shutdown.begins_mid_call:
                 runtime._started = False  # noqa: SLF001 - shutdown begins mid-call.
-            return {}
+            yield {"type": "content_delta", "text": "sample"}
+            yield {"type": "usage", "input_tokens": 10, "output_tokens": 2}
+            yield {"type": "finish", "reason": "stop"}
 
         adapter = SimpleNamespace(
-            send=AsyncMock(side_effect=send),
-            normalize_response=lambda *args, **kwargs: {
-                "content": "sample",
-                "usage": {"input_tokens": 10, "output_tokens": 2},
-            },
+            stream=stream,
             request_context_kwargs=lambda **kwargs: {},
             aclose=AsyncMock(),
         )

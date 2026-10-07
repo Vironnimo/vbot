@@ -353,7 +353,7 @@ async def test_temporary_self_delegation_uses_parent_configuration_without_priva
     runtime_any.storage.temporary_files = TemporaryFileManager(tmp_path)
     runtime_any.storage.load_subagent_settings = lambda: {}
     loop = build_chat_loop(runtime)
-    runtime_any.streaming_chat_loop = loop
+    runtime_any.chat_loop = loop
     owner = RunExecutionOwner("swarm", "group", "participant", binding.generation_id, "epoch")
 
     class TriggerService:

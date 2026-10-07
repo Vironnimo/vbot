@@ -229,8 +229,8 @@ class RuntimeServices(Protocol):
         ...
 
     @property
-    def streaming_chat_loop(self) -> ChatLoop:
-        """Canonical resolver-wired streaming chat loop."""
+    def chat_loop(self) -> ChatLoop:
+        """The Runtime's Chat loop; every Model request streams."""
         ...
 
     def get_adapter(self, connection: ConnectionRef) -> ProviderAdapter:

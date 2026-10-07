@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Iterable
-from typing import Any
+from typing import Any, override
 
 from core.chat import ChatMessage
 from core.compaction import CompactionService, CompactionSettings
@@ -42,6 +42,7 @@ class StubAdapter(AdapterHookDefaults):
         self.text = text
         self.requests: list[dict[str, Any]] = []
 
+    @override
     async def stream(self, messages: list[dict], **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
         self.requests.append({"messages": messages, **kwargs})
         yield {"type": "content_delta", "text": self.text}

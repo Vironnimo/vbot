@@ -172,7 +172,7 @@ def _make_service(
         ),
         agent_resolver=SimpleNamespace(resolve_agent_async=resolve_agent_async),
         chat_sessions=sessions if chat_sessions is None else chat_sessions,
-        streaming_chat_loop=loop,
+        chat_loop=loop,
         tools=SimpleNamespace(list_tools=lambda: list(_TOOLS)),
     )
     curated = librarian_running if librarian_running is not None else set()

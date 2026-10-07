@@ -9,13 +9,27 @@ from pathlib import Path
 from typing import Any, cast
 
 from core.chat.messages import ChatMessage, JsonObject, ToolCall
-from core.chat.tool_dispatch import ToolDispatchContext
-from core.chat.tool_dispatch import _dispatch_tool_calls as _dispatch_resolved_tool_calls
+from core.chat.tool_dispatch import ToolDispatchContext, ToolRound
 from core.runs import Run
 from core.sessions import ChatSessionManager
 from core.skills import SkillRegistry
 from core.tools import ToolContract, ToolRegistry
 from core.tools.availability import ToolAccess
+
+
+async def _dispatch_resolved_tool_calls(
+    context: ToolDispatchContext, tool_calls: list[ToolCall]
+) -> tuple[list[ChatMessage], list[JsonObject]]:
+    """Run one Tool round whose calls are all known, as Chat does after a response."""
+    tool_round = ToolRound(
+        context,
+        assistant_message_id=context.session.assistant_message_id,
+        iteration_number=context.run.iteration_count,
+    )
+    try:
+        return await tool_round.finish(tool_calls)
+    finally:
+        await tool_round.aclose()
 
 
 @dataclass(frozen=True)

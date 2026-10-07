@@ -4,8 +4,12 @@ When the voice model delegates, the call's backend model answers through the
 ordinary Provider Adapter of the same Connection, using the host's Tools. Each
 delegation is one bounded Tool loop; the final text returns to the voice model.
 The call keeps one Adapter, so its connections stay warm across delegations.
-Model requests are replay safe and retried briefly; Tool calls never are. Every
-delegation is handed to the call's recorder with its step timings.
+Every Model request streams, and each Tool call starts as soon as the stream
+completed it, while the Model still writes; a step's calls run one at a time in
+order. A request that fails before any Tool call started is retried briefly; one
+that breaks after a call started is continued from its partial output, never
+replayed, so a Tool call never runs twice. Every delegation is handed to the
+call's recorder with its step timings.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from core.chat.streaming import StreamBrokenAfterToolCallsError, stream_model_response
 from core.model_tasks.model_tasks import TaskModelTargetRef
 from core.model_tasks.task_execution import TaskUsage
 from core.providers.accounts import ConnectionRef
@@ -87,6 +92,57 @@ class _Progress:
     effects: list[str] = field(default_factory=list)
     model_ms: list[int] = field(default_factory=list)
     tool_ms: list[int] = field(default_factory=list)
+
+
+class _StepCalls:
+    """Runs one step's Tool calls one at a time, in order, as the stream hands them out.
+
+    The first call starts while the Model still writes the next one. An error of
+    a call ends the step once the stream is done (:meth:`results`); calls after
+    it do not run.
+    """
+
+    def __init__(self, execute: Callable[[JsonObject], Awaitable[JsonObject]]) -> None:
+        self._execute = execute
+        self._calls: list[JsonObject] = []
+        self._results: list[JsonObject] = []
+        self._pending: asyncio.Queue[JsonObject | None] = asyncio.Queue()
+        self._error: Exception | None = None
+        self._worker: asyncio.Task[None] | None = None
+
+    def submit(self, calls: list[JsonObject]) -> None:
+        """Queue completed calls behind the ones already handed out."""
+        for call in calls:
+            self._calls.append(call)
+            self._pending.put_nowait(call)
+        if self._worker is None and self._calls:
+            self._worker = asyncio.get_running_loop().create_task(
+                self._work(), name="live-delegation-tools"
+            )
+
+    async def results(self) -> list[tuple[JsonObject, JsonObject]]:
+        """Wait until every handed-out call ran; return each with its result, in order."""
+        if self._worker is not None:
+            self._pending.put_nowait(None)
+            await self._worker
+        if self._error is not None:
+            raise self._error
+        return list(zip(self._calls, self._results, strict=True))
+
+    async def aclose(self) -> None:
+        """Stop a call still running, so none outlives its delegation."""
+        worker = self._worker
+        if worker is not None and not worker.done():
+            worker.cancel()
+            await asyncio.wait({worker})
+
+    async def _work(self) -> None:
+        while (call := await self._pending.get()) is not None:
+            try:
+                self._results.append(await self._execute(call))
+            except Exception as exc:
+                self._error = exc
+                return
 
 
 class LiveBrain:
@@ -181,12 +237,30 @@ class LiveBrain:
         adapter = self._get_adapter()
         request_context = _request_context(adapter, self._conversation_id)
         for _step in range(self._max_steps):
-            started = self._clock()
-            normalized = await self._send(adapter, messages, request_context)
-            progress.model_ms.append(_milliseconds(self._clock() - started))
-            tool_calls = normalized.get("tool_calls") or []
+            calls = _StepCalls(lambda call: self._execute(call, progress))
+            try:
+                started = self._clock()
+                try:
+                    normalized = await self._stream(
+                        adapter, messages, request_context, calls.submit
+                    )
+                except StreamBrokenAfterToolCallsError as broken:
+                    # The started calls finish, and the Model continues after
+                    # their results; a replay would run them twice.
+                    _LOGGER.warning(
+                        "Live delegation stream broke after Tool calls started; continuing "
+                        "(model=%s/%s error_type=%s)",
+                        self._target.provider_id,
+                        self._target.model_id,
+                        type(broken.cause).__name__,
+                    )
+                    normalized = broken.response
+                progress.model_ms.append(_milliseconds(self._clock() - started))
+                ran = await calls.results()
+            finally:
+                await calls.aclose()
             content = normalized.get("content")
-            if not tool_calls:
+            if not ran:
                 text = content.strip() if isinstance(content, str) else ""
                 # After a change (such as ending the call) the effects line says
                 # everything; without one, silence is a failure.
@@ -194,13 +268,12 @@ class LiveBrain:
                     raise ValueError("the backend model returned no answer")
                 return text, None
             assistant: JsonObject = {"role": "assistant", "content": content}
-            assistant["tool_calls"] = tool_calls
+            assistant["tool_calls"] = [tool_call for tool_call, _result in ran]
             for key in ("reasoning", "reasoning_meta"):
                 if normalized.get(key) is not None:
                     assistant[key] = normalized[key]
             messages.append(assistant)
-            for tool_call in tool_calls:
-                result = await self._execute(tool_call, progress)
+            for tool_call, result in ran:
                 messages.append(
                     {
                         "role": "tool",
@@ -211,9 +284,14 @@ class LiveBrain:
         reason = f"the request needed more than {self._max_steps} steps and was stopped"
         return _failure_note(reason), reason
 
-    async def _send(
-        self, adapter: Any, messages: list[JsonObject], request_context: JsonObject
+    async def _stream(
+        self,
+        adapter: Any,
+        messages: list[JsonObject],
+        request_context: JsonObject,
+        on_tool_calls: Callable[[list[JsonObject]], None],
     ) -> JsonObject:
+        """Stream one Model step; retry it only while none of its Tool calls started."""
         delays = iter(_MODEL_RETRY_DELAYS_SECONDS)
         target = self._target
         usage = TaskUsage(
@@ -230,13 +308,18 @@ class LiveBrain:
         while True:
             call_id = await usage.start()
             try:
-                response: JsonObject = await adapter.send(
+                normalized = await stream_model_response(
+                    adapter,
                     messages,
-                    model_id=self._target.model_id,
-                    thinking_effort=self._target.thinking_effort,
+                    on_tool_calls=on_tool_calls,
+                    model_id=target.model_id,
+                    thinking_effort=target.thinking_effort,
                     tools=[dict(tool) for tool in self._tools],
                     **request_context,
                 )
+            except StreamBrokenAfterToolCallsError as exc:
+                await usage.finish(call_id, result=exc.response, status="failed")
+                raise
             except BaseException as exc:
                 await usage.finish(
                     call_id,
@@ -246,13 +329,6 @@ class LiveBrain:
                 if delay is not None and getattr(exc, "retryable", False):
                     await self._sleep(delay)
                     continue
-                raise
-            try:
-                normalized: JsonObject = adapter.normalize_response(
-                    response, model_id=target.model_id
-                )
-            except BaseException:
-                await usage.finish(call_id, status="failed")
                 raise
             await usage.finish(call_id, result=normalized)
             return normalized

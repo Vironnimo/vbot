@@ -42,7 +42,7 @@ def test_probe_reports_targets_without_usable_credentials_as_unavailable(
     monkeypatch.setattr(PROBE, "Config", lambda **_: None)
     monkeypatch.setattr(PROBE, "_start_probe_runtime", lambda _runtime: None)
 
-    code = asyncio.run(PROBE._run(PROBE._parser().parse_args(["--mode", "nonstream"])))
+    code = asyncio.run(PROBE._run(PROBE._parser().parse_args([])))
 
     report = json.loads(capsys.readouterr().out)
     assert (code, report["passed"]) == (1, False)

@@ -649,6 +649,32 @@ async def test_serial_tool_is_a_barrier_between_parallel_safe_groups() -> None:
 
 
 @pytest.mark.asyncio
+async def test_batch_starts_each_call_before_later_calls_are_known() -> None:
+    registry = ToolRegistry()
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        if context.tool_call_id == "call-1":
+            first_started.set()
+            await release_first.wait()
+        return tool_success({"id": context.tool_call_id})
+
+    registry.register("slow", "Slow tool for testing.", {"type": "object"}, handler)
+    batch = ToolExecutor(registry).start_batch(make_execution_config(allowed_tools=["*"]))
+
+    batch.add(ToolCall(id="call-1", name="slow", arguments={}))
+    await asyncio.wait_for(first_started.wait(), 1)
+    batch.add(ToolCall(id="call-2", name="slow", arguments={}))
+    release_first.set()
+
+    assert await batch.results() == [
+        tool_success({"id": "call-1"}),
+        tool_success({"id": "call-2"}),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_unknown_tool_does_not_split_parallel_safe_siblings() -> None:
     registry = ToolRegistry()
     active_count = 0

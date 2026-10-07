@@ -27,7 +27,7 @@ Split oversized source files into focused internal units behind the owning modul
 
 **Transport:** Commands use `POST /api/rpc`, never WebSockets, with one exception: a Terminal's live operator input and resize travel over its own terminal socket, ordered with its output (`tools/terminal.md`). `/ws` carries persistent app-wide server-push events; SSE streams each Run; logs and terminals use dedicated sockets. Binary transfers use dedicated HTTP endpoints. No auth (single-user-local). See `server.md`.
 
-**Flow:** Accessors -> HTTP/WS/SSE -> server RPC handlers -> core (Providers, Models, Tools, Agents) -> external APIs. Agentic-only; no separate non-agentic streaming path.
+**Flow:** Accessors -> HTTP/WS/SSE -> server RPC handlers -> core (Providers, Models, Tools, Agents) -> external APIs. Agentic-only; one Chat loop, and every Model request streams (Chat, Live voice, Compaction, Session titles, image analysis, Extension sampling). A completed `ProviderAdapter.send()` response is the emergency path, allowed only after the Provider refuses to stream (`providers.md` -> Interfaces).
 
 Live voice (`live_voice` Task Model) keeps the provider call, delegated reasoning and app operations on the server; an accessor holds at most the call media and answers UI requests (`model_tasks/live.md`).
 
