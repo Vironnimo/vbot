@@ -286,6 +286,9 @@ Paging:
   never inside a result.
 - A page's first result always appears, if necessary without its context or
   trimmed.
+  The summary says when context was left out. For a trimmed result it gives the
+  result's line span and the line to read on from, since paging cannot reach the
+  rest of one result.
 - Context never shows a match that the page leaves out.
 - Continuation repeats a live query, so file edits between pages or between the
   two phases can shift page boundaries.

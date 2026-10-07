@@ -382,6 +382,16 @@ def test_a_page_stops_at_the_output_limit_and_the_next_page_continues(tmp_path: 
         assert "stopped at the 50 KB output limit" in data["summary"]
         offset = data["next_offset"]
     assert seen == [str(number) for number in range(1, 151)] + ["61"]
+    # A result left without its context, or itself trimmed, says so: paging cannot show the rest.
+    alone = search(tmp_path, pattern="needle in b", context=60)
+    assert alone["content"] == "b:61:needle in b"
+    assert "context lines were left out" in alone["summary"]
+    _write(tmp_path, {"c": "begin\n" + ("z" * 900 + "\n") * 100 + "end\n"})
+    cut = search(tmp_path, pattern="begin[\\s\\S]*?end", path="c", args=["-U"])
+    shown = cut["content"].splitlines()
+    assert 1 < len(shown) < 102 and "next_offset" not in cut
+    assert "spans lines 1-102" in cut["summary"]
+    assert f"from line {len(shown) + 1} " in cut["summary"]
 
 
 def test_multiline_matches_count_and_page_as_whole_matches(tmp_path: Path) -> None:

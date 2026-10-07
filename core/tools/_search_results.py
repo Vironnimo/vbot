@@ -76,6 +76,17 @@ def _stat_times(entries: list[Entry]) -> None:
 
 
 @dataclass
+class Cut:
+    """A page's first result, trimmed at the byte budget: shown from ``first`` to
+    ``shown`` of its lines ``first`` to ``last``."""
+
+    label: str
+    first: int
+    shown: int
+    last: int
+
+
+@dataclass
 class Page:
     """The results of one page and what the Agent needs to continue."""
 
@@ -85,6 +96,7 @@ class Page:
     returned: int = 0
     size: int = 0
     byte_limited: bool = False
+    cut: Cut | None = None
 
     @property
     def room(self) -> int:
@@ -308,6 +320,12 @@ class _Block:
             rendered = self._rendered(lines)
             while len(rendered) > 1 and not self.page.fits(rendered):
                 rendered.pop()
+            shown = sum(1 for line in rendered if line != "--")
+            if shown < len(lines):
+                self.page.cut = Cut(
+                    self.entry.label, lines[0].number, lines[shown - 1].number, lines[-1].number
+                )
+                lines = lines[:shown]
         self.page.add(rendered, units)
         if lines:
             self.previous = lines[-1].number
@@ -374,16 +392,27 @@ def summary(
         whole = _count(total, "directory", "directories") + newest
         shown = "directories"
     end = page.offset + page.returned
-    if page.offset == 0 and end >= total:
+    whole_page = page.offset == 0 and end >= total
+    if whole_page:
         text = f"Found {whole}."
     elif page.returned == 0:
         text = f"No results at offset {page.offset}; the search found {whole}."
     else:
         text = f"Showing {shown} {page.offset + 1}-{end} of {whole}."
-        if page.byte_limited:
-            text += " This page stopped at the 50 KB output limit."
-        if end < total:
-            text += f" Continue with offset {end}."
+    cut = page.cut
+    if cut is not None:
+        # Paging cannot show the rest of one result, so name where it continues.
+        text += (
+            f" The {matched[0]} at {cut.label}:{cut.first} spans lines {cut.first}-{cut.last};"
+            f" the 50 KB output limit cut it after line {cut.shown}."
+            f" Read {cut.label} from line {cut.shown + 1} to see the rest."
+        )
+    elif page.byte_limited and whole_page:
+        text += " Some context lines were left out at the 50 KB output limit."
+    elif page.byte_limited and page.returned:
+        text += " This page stopped at the 50 KB output limit."
+    if page.returned and end < total:
+        text += f" Continue with offset {end}."
     if not complete:
         text += " The search is incomplete; see warnings."
     return text
