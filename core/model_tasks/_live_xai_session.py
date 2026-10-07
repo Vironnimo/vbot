@@ -583,7 +583,9 @@ class XaiSession:
         if record is None:
             return
         self._finish_user_items(step, only=record.open_user_items)
-        if response.get("status") == "completed":
+        # A fenced response stays interrupted even when the provider reports
+        # it completed afterwards.
+        if response.get("status") == "completed" and response_id not in self._fenced:
             self._spoken = max(self._spoken, record.covers)
             self._last_completed_calls = frozenset(record.calls)
             for call in record.calls.values():

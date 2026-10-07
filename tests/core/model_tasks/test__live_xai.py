@@ -65,6 +65,7 @@ TOOLS = [
     },
 ]
 ONE_SECOND = 48_000  # bytes of PCM16 mono 24 kHz
+_SPEECH_STARTED = {"type": "input_audio_buffer.speech_started", "item_id": "u1"}
 
 
 class Clock:
@@ -367,11 +368,22 @@ def test_completed_calls_delegate_once_and_results_return_as_tool_output():
     assert session.deliver("c1", "again") == []
 
 
-def test_calls_of_an_interrupted_response_never_run_and_get_an_output():
+@pytest.mark.parametrize(
+    ("events", "status"),
+    [
+        ([_call("r1", "c1")], "cancelled"),
+        # The user talked over the response; a late completion keeps it interrupted.
+        ([_audio("a1", "r1", 100), _call("r1", "c1"), _SPEECH_STARTED], "completed"),
+        ([_audio("a1", "r1", 100), _SPEECH_STARTED, _call("r1", "c1")], "completed"),
+    ],
+    ids=["cancelled", "call_before_barge_in", "call_after_barge_in"],
+)
+def test_calls_of_an_interrupted_response_never_run_and_get_an_output(events, status):
     session = _session()
     session.receive(_created("r1"))
-    session.receive(_call("r1", "c1"))
-    done = session.receive(_done("r1", status="cancelled"))
+    for event in events:
+        session.receive(event)
+    done = session.receive(_done("r1", status=status))
 
     assert done.events == []
     assert _outputs(done.commands)["c1"] == (
