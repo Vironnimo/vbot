@@ -965,6 +965,7 @@ class SystemPromptManager:
           Parent Agent (a Sub-Agent Session).
         - ``extension:<name>`` → the extension is in the loaded-extension set the
           runtime rebuilds and injects on every extension (re)load.
+        - ``builtin:<kind>`` → the Agent is the built-in Agent of that kind.
         """
         if owner == "always":
             return True
@@ -989,6 +990,9 @@ class SystemPromptManager:
         extension_prefix = "extension:"
         if owner.startswith(extension_prefix):
             return owner[len(extension_prefix) :] in self._loaded_extensions
+        builtin_prefix = "builtin:"
+        if owner.startswith(builtin_prefix):
+            return getattr(agent, "builtin", None) == owner[len(builtin_prefix) :]
         return False
 
     def _agent_tool_allowed(

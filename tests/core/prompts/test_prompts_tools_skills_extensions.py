@@ -224,6 +224,23 @@ def test_extension_blocks_render_only_for_loaded_extensions_and_isolate_failures
     assert "Hello from the greeter extension." not in prompt(["good", "bad"])
 
 
+def test_builtin_blocks_render_only_for_that_built_in_agent(
+    workspace: Path, tmp_path: Path
+) -> None:
+    blocks = [
+        BlockDefinition(
+            id="extension:live", owner="builtin:live_backend", default_text="Live call guidance."
+        )
+    ]
+    manager = _manager(tmp_path, block_definitions=blocks)
+    backend = replace(_agent(workspace, agent_id="live-backend"), builtin="live_backend")
+    voice = replace(_agent(workspace, agent_id="live-voice"), builtin="live_voice")
+
+    assert "Live call guidance." in manager.build_system_prompt(backend)
+    assert "Live call guidance." not in manager.build_system_prompt(voice)
+    assert "Live call guidance." not in manager.build_system_prompt(_agent(workspace))
+
+
 def test_tool_block_gated_on_tool_allowlist(workspace: Path, tmp_path: Path) -> None:
     # A tool-owned block (id/owner tool:<name>) renders only when the tool is on the
     # agent's effective allowlist (gate 2 reuses the prompt tool list); a trailing *
