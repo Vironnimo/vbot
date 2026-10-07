@@ -215,9 +215,7 @@ class LiveToolExecutor:
 
     async def _end(self, arguments: JsonObject, catalog: LiveCatalog) -> JsonObject:
         self._end_call()
-        return live_success(
-            "The call ends in a few seconds. Say a short goodbye now; running work goes on."
-        )
+        return live_success("The call is ending now; running work goes on.")
 
     # -- overview -------------------------------------------------------------
 

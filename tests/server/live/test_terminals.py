@@ -624,7 +624,7 @@ class Call:
                 poll_seconds=0.01,
                 ready_timeout_seconds=5.0,
                 stable_seconds=0.05,
-                enter_delay_seconds=0.02,
+                echo_timeout_seconds=0.06,
             ),
         )
 

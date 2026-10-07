@@ -57,10 +57,6 @@ _CREATE_PENDING_SECONDS = 5.0
 _CREATE_ATTEMPTS = 2
 # A response without events for this long no longer blocks the gate.
 _RESPONSE_STALL_SECONDS = 30.0
-# Backoff after the provider reported another active response.
-_ACTIVE_RESPONSE_RETRY_SECONDS = 1.0
-# Played audio is estimated; wait a little longer before speaking again.
-_PLAYBACK_DRAIN_MARGIN_SECONDS = 0.2
 _REMEMBERED_IDS = 256
 _REMEMBERED_RESPONSES = 32
 _AUDIO_ITEMS = 8
@@ -182,7 +178,9 @@ class XaiSession:
         self._create_covers = 0
         self._create_attempts = 0
         self._creates = 0
-        self._retry_after = 0.0
+        # Set when the provider reported a response vBot has not seen yet; its
+        # next response event, or the stall bound, opens the gate again.
+        self._unseen_response_at: float | None = None
         self._user_speaking = False
         self._added = 0
         self._spoken = 0
@@ -286,6 +284,11 @@ class XaiSession:
                 # The provider ignores the request; the additions stay in context.
                 self._spoken = max(self._spoken, self._create_covers)
                 self._create_attempts = 0
+        if (
+            self._unseen_response_at is not None
+            and now >= self._unseen_response_at + _RESPONSE_STALL_SECONDS
+        ):
+            self._unseen_response_at = None
         active = self._responses.get(self._active) if self._active is not None else None
         if active is not None and now >= active.touched + _RESPONSE_STALL_SECONDS:
             self._fenced.put(self._active or "")
@@ -302,8 +305,9 @@ class XaiSession:
         active = self._responses.get(self._active) if self._active is not None else None
         if active is not None:
             deadlines.append(active.touched + _RESPONSE_STALL_SECONDS)
+        if self._unseen_response_at is not None:
+            deadlines.append(self._unseen_response_at + _RESPONSE_STALL_SECONDS)
         if self._added > self._spoken:
-            deadlines.append(self._retry_after)
             deadlines.append(self._quiet_at)
         future = [deadline for deadline in deadlines if deadline > now]
         return min(future) if future else None
@@ -354,6 +358,7 @@ class XaiSession:
             if _is_user_speech(item):
                 self._finish_user_items(step, keep=_text(item.get("id")))
         elif kind == "response.created":
+            self._unseen_response_at = None
             self._on_response_created(event)
         elif kind in _AUDIO_DELTAS:
             self._on_audio(step, event, kind)
@@ -372,6 +377,7 @@ class XaiSession:
             if isinstance(item, dict) and item.get("type") == "function_call":
                 self._collect_call(response_id, item)
         elif kind == "response.done":
+            self._unseen_response_at = None
             self._on_response_done(step, event)
         step.commands.extend(self._flush())
         return step
@@ -392,9 +398,10 @@ class XaiSession:
         if code == "response_cancel_not_active" or "truncat" in lowered:
             return
         if "already has an active response" in lowered:
-            # A response vBot did not see yet is running; ask again shortly.
+            # A response vBot did not see yet is running; its events open the
+            # gate again.
             self._clear_create()
-            self._retry_after = self._clock() + _ACTIVE_RESPONSE_RETRY_SECONDS
+            self._unseen_response_at = self._clock()
             return
         step.events.append(WireProblem(code=code or error_type or "unknown", message=message))
         if not self._started:
@@ -491,7 +498,7 @@ class XaiSession:
         now = self._clock()
         start = max(now, self._playback_end)
         self._playback_end = start + len(pcm) / RELAY_BYTES_PER_MS / 1000
-        self._quiet_at = self._playback_end + _PLAYBACK_DRAIN_MARGIN_SECONDS
+        self._quiet_at = self._playback_end
         item = self._audio_items.get(item_id)
         if item is None:
             item = _AudioItem(
@@ -618,7 +625,7 @@ class XaiSession:
             or self._active is not None
             or self._user_speaking
             or self._last_completed_calls & self._awaiting.keys()
-            or now < self._retry_after
+            or self._unseen_response_at is not None
             or now < self._quiet_at
         ):
             return []

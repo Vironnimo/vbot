@@ -112,10 +112,12 @@ _MAX_SCREEN_CHARS = 8_000
 class TerminalTimings:
     """How Live waits for a coding program before typing into it."""
 
-    poll_seconds: float = 0.5
+    # How often the screen is read while waiting for the program.
+    poll_seconds: float = 0.05
     ready_timeout_seconds: float = 25.0
     stable_seconds: float = 0.8
-    enter_delay_seconds: float = 0.5
+    # How long typed text may take to show before Enter is given up.
+    echo_timeout_seconds: float = 1.5
 
 
 @dataclass(frozen=True)
@@ -536,9 +538,11 @@ class LiveTerminals:
             break
         else:
             return _Outcome("busy")
-        # Text and Enter in one burst only fill the input line.
-        for _ in range(_INPUT_ATTEMPTS):
-            await self._sleep(self._timings.enter_delay_seconds)
+        # Text and Enter in one burst only fill the input line: Enter follows
+        # as soon as the program shows the text.
+        deadline = self._clock() + self._timings.echo_timeout_seconds
+        while self._clock() < deadline:
+            await self._sleep(self._timings.poll_seconds)
             self._ctx.ensure_active()
             snapshot = await self._read(terminal_id)
             if snapshot.finished:

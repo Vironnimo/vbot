@@ -84,7 +84,7 @@ from core.providers.errors import (
     ProviderOutcomeUnknownError,
     ProviderRateLimitError,
 )
-from core.tools.live import TOOL_END_CALL, TOOL_VBOT_REQUEST, LiveToolHosts
+from core.tools.live import TOOL_VBOT_REQUEST, LiveToolHosts
 from core.usage import UsageRecorder
 from core.utils.errors import ConfigError, TaskError, VBotError
 from core.utils.ids import new_id
@@ -214,21 +214,20 @@ class LiveCall(Protocol):
     @property
     def media(self) -> JsonObject: ...
 
-    @property
-    def says_goodbye_first(self) -> bool:
-        """Whether the voice model says goodbye before the end reaches vBot.
-
-        True when it hands the end of the call on instead of calling
-        ``end_call`` itself, so its goodbye runs while the request does.
-        """
-        ...
-
     async def close(self) -> None:
         """Ask the provider to finish the call and wait briefly for final usage."""
         ...
 
     async def abort(self) -> None:
         """Tear the call down immediately without waiting for the provider."""
+        ...
+
+    async def speech_finished(self) -> None:
+        """Return once the voice model is not speaking and its relayed audio has played.
+
+        It returns at once when nothing is being spoken; a turn that never
+        finishes stops holding it after a bound.
+        """
         ...
 
     def announce_run(self, notice: LiveRunNotice) -> None:
@@ -464,7 +463,6 @@ class LiveVoiceService:
             ),
             host=host,
             hosts=self._hosts,
-            says_goodbye_first=all(tool.get("name") != TOOL_END_CALL for tool in setup.tools),
             target=label,
             log_id=log_id,
             usage_accounting=wire.accounting,
