@@ -30,6 +30,7 @@ import {
 } from './SystemPromptView.support.js';
 
 import { createStandaloneNavigation } from '../../lib/navigation.svelte.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 const DEFAULT_SCOPE = () => t('systemPrompt.scope.default');
 const AGENT_SCOPE = { type: 'agent', agent_id: 'agent-1' };
@@ -386,6 +387,36 @@ describe('SystemPromptView scope and preview', () => {
       () => documentText().includes('Project agent preview'),
       100,
     );
+  });
+
+  it('names the Agents anew after an Agent change and keeps the shown scope and blocks', async () => {
+    const agents = [
+      { id: 'agent-1', name: 'Alpha', custom_system_prompt_enabled: true },
+      { id: 'agent-2', name: 'Beta', custom_system_prompt_enabled: false },
+    ];
+    rpcMock.mockImplementation(createRpcMock({ agents }));
+    const props = reactiveProps({ agentsRefreshToken: 0 });
+    mountView(props);
+    await waitForDefaultScope();
+    await waitForCondition(
+      () => agentTrigger()?.textContent.includes('Alpha'),
+      100,
+    );
+    const promptLists = () =>
+      rpcMock.mock.calls.filter(([method]) => method === 'prompt.list').length;
+    const listedBefore = promptLists();
+
+    agents[0] = { ...agents[0], name: 'Alpha Prime' };
+    props.agentsRefreshToken += 1;
+    flushSync();
+    await waitForCondition(
+      () => agentTrigger().textContent.includes('Alpha Prime'),
+      100,
+    );
+
+    expect(scopeOptionLabels()).toEqual([DEFAULT_SCOPE(), 'Alpha Prime']);
+    expect(scopeTrigger().textContent).toContain(DEFAULT_SCOPE());
+    expect(promptLists()).toBe(listedBefore);
   });
 
   it('reloads the preview for a newly selected Agent and ignores the older one that finishes late', async () => {

@@ -31,10 +31,20 @@
     executions = [],
     timeZone = 'UTC',
     serverUnavailable = false,
+    // Bumped when the Agents change, such as a new name.
+    agentsRefreshToken = 0,
     onChanged = () => {},
     onOpenSession = null,
   } = $props();
   let options = $state([]);
+  // The target catalog the options show. An Agent change rereads only the
+  // Agents; reads are numbered, and a response older than the shown Agents is
+  // dropped, also when a newer read failed.
+  let targetAgents = [];
+  let targetTeams = [];
+  let agentsRequested = 0;
+  let agentsShown = 0;
+  let lastAgentsRefreshToken = null;
   let sessions = $state([]);
   let sessionCursor = $state(null);
   let sessionsLoading = $state(false);
@@ -89,9 +99,11 @@
   });
   onMount(() => {
     async function loadTargets() {
+      const agentsRequest = ++agentsRequested;
       const catalog = await targetCatalog.load();
       if (!catalog) return;
-      options = buildAgentTargetOptions(catalog.agents, catalog.projectTeams);
+      targetTeams = catalog.projectTeams;
+      showTargets(agentsRequest, catalog.agents);
       const failure = catalog.agentError ?? catalog.projectError;
       error = failure
         ? (failure.message ?? String(failure))
@@ -105,6 +117,36 @@
       sessionRequest += 1;
     };
   });
+
+  $effect(() => {
+    const token = agentsRefreshToken;
+    if (lastAgentsRefreshToken === null) {
+      lastAgentsRefreshToken = token;
+      return;
+    }
+    if (token === lastAgentsRefreshToken) return;
+    lastAgentsRefreshToken = token;
+    void reloadAgents();
+  });
+
+  async function reloadAgents() {
+    const request = ++agentsRequested;
+    try {
+      const result = await listAgents();
+      showTargets(request, result?.agents);
+    } catch {
+      // The shown names stay until the next change.
+    }
+  }
+
+  // Shows the target options with `agents` unless newer Agents are shown.
+  function showTargets(request, agents) {
+    if (request >= agentsShown) {
+      agentsShown = request;
+      targetAgents = agents;
+    }
+    options = buildAgentTargetOptions(targetAgents, targetTeams);
+  }
 
   function begin(action = null) {
     const match = /^(start|end)(?:\s*([+-])\s*(\d+)([mhd]))?$/.exec(

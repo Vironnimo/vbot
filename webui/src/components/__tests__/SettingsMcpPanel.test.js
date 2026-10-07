@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import { init } from '../../lib/i18n.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 it('limits MCP typography to its panel and portaled dialogs', () => {
   const style = document.createElement('style');
@@ -668,12 +669,13 @@ describe('MCP management surface', () => {
     };
     const redirect = 'http://127.0.0.1:8420/api/oauth/callback?code=c&state=s';
     let status = null;
+    let aliceName = 'Alice';
     const handler = rpc.getMockImplementation();
     rpc.mockImplementation(async (method, params) => {
       if (method === 'agent.list')
         return {
           agents: [
-            { id: 'alice', name: 'Alice', tool_access: { mode: 'all' } },
+            { id: 'alice', name: aliceName, tool_access: { mode: 'all' } },
             {
               id: 'bob',
               name: 'Bob',
@@ -722,10 +724,11 @@ describe('MCP management surface', () => {
       return handler(method, params);
     });
     const dialog = () => document.querySelector('[role="dialog"]');
-    component = mount(Panel, {
-      target: document.body,
-      props: { subscribeInvalidations },
+    const props = reactiveProps({
+      subscribeInvalidations,
+      agentsRefreshToken: 0,
     });
+    component = mount(Panel, { target: document.body, props });
     await settle();
     button('Browse the catalog').click();
     await settle();
@@ -796,6 +799,16 @@ describe('MCP management surface', () => {
     expect(agents[1].disabled).toBe(true);
     agents[0].click();
     flushSync();
+    // An Agent renamed meanwhile shows its new name and stays chosen.
+    aliceName = 'Alice Cooper';
+    props.agentsRefreshToken += 1;
+    await settle();
+    const renamed = [...dialog().querySelectorAll('[role="checkbox"]')];
+    expect(renamed.map((agent) => agent.textContent.trim())).toEqual([
+      'Alice Cooper',
+      'Bob',
+    ]);
+    expect(renamed[0].getAttribute('aria-checked')).toBe('true');
     button('Allow access').click();
     await settle();
     expect(

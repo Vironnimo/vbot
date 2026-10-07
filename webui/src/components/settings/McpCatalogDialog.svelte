@@ -47,6 +47,8 @@
     onClose = noop,
     // Receives the id of a connection the dialog finished setting up.
     onConnected = noop,
+    // Bumped when the Agents change; the grant step lists them.
+    agentsRefreshToken = 0,
   } = $props();
 
   const componentId = $props.id();
@@ -78,6 +80,9 @@
   // more after it.
   let reading = false;
   let readQueued = false;
+  // The newest Agent list read; an older one never replaces its result.
+  let agentsRead = 0;
+  let lastAgentsRefreshToken = null;
 
   let categoryOptions = $derived([
     { value: '', label: t('mcp.catalogAllCategories') },
@@ -130,6 +135,18 @@
     };
   });
   $effect(() => subscribeInvalidations?.(onInvalidation));
+  // The listed Agents follow their changes, such as a new name; the Agents
+  // chosen for access stay chosen.
+  $effect(() => {
+    const token = agentsRefreshToken;
+    if (lastAgentsRefreshToken === null) {
+      lastAgentsRefreshToken = token;
+      return;
+    }
+    if (token === lastAgentsRefreshToken) return;
+    lastAgentsRefreshToken = token;
+    if (untrack(() => access) !== null) void rereadAgents();
+  });
   // A waiting sign-in turns into a timed-out one at its expiry, even when no
   // change arrives then.
   $effect(() => {
@@ -300,12 +317,13 @@
     void showStep('grant');
     error = '';
     access = null;
+    const current = ++agentsRead;
     try {
       const [agentsResult, toolsResult] = await Promise.all([
         listAgents(),
         listTools(),
       ]);
-      if (stopped) return;
+      if (stopped || current !== agentsRead) return;
       tools = toolsResult.tools;
       access = mcpAgentAccess(
         agentsResult.agents,
@@ -314,7 +332,18 @@
         target.siblings,
       );
     } catch (failure) {
-      if (!stopped) error = failure.message;
+      if (!stopped && current === agentsRead) error = failure.message;
+    }
+  }
+
+  async function rereadAgents() {
+    const current = ++agentsRead;
+    try {
+      const result = await listAgents();
+      if (stopped || current !== agentsRead) return;
+      access = mcpAgentAccess(result.agents, tools, target.id, target.siblings);
+    } catch {
+      // The listed Agents stay until their next change.
     }
   }
 

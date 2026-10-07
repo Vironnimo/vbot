@@ -6,6 +6,7 @@ import { flushSync, mount } from 'svelte';
 import { t } from '../../lib/i18n.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 import {
+  agentsPayload,
   buttonByAriaLabel,
   buttonByText,
   channelConfig,
@@ -215,6 +216,37 @@ describe('SettingsView Channels', () => {
       () => callsTo('channel.list').length === initialListCalls + 2,
     );
     expect(disclosure.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('names the Agents anew after an Agent change and keeps a new channel form', async () => {
+    const agents = agentsPayload();
+    const props = reactiveProps({ agentsRefreshToken: 0 });
+    await openChannels(
+      { channels: [channelConfig('tg-assistant')], agents },
+      props,
+    );
+    buttonByText('Add channel').click();
+    flushSync();
+    setInputValue('#channel-id-input', 'tg-new');
+    openSimpleDropdown('channel-agent-select');
+    selectSimpleOption('channel-agent-select', 'Assistant');
+
+    agents[0] = { ...agents[0], name: 'Front Desk' };
+    props.agentsRefreshToken += 1;
+    flushSync();
+    await waitForCondition(() =>
+      document
+        .querySelector('.s-channel-card .s-row-desc')
+        .textContent.includes('Front Desk'),
+    );
+
+    expect(
+      document
+        .getElementById('channel-agent-select')
+        .querySelector('.dropdown-primitive__trigger-label')
+        .textContent.trim(),
+    ).toBe('Front Desk');
+    expect(document.querySelector('#channel-id-input').value).toBe('tg-new');
   });
 
   it('lists denied chats and allows one from the channel card', async () => {

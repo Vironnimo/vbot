@@ -41,6 +41,12 @@ export function createPromptScope(context) {
 
   let scopeLoadRequestId = 0;
 
+  // Agent list reads are numbered; a response older than the shown Agents is
+  // dropped, also when a newer read failed.
+  let agentsRequested = 0;
+
+  let agentsShown = 0;
+
   // The scope the shown blocks were listed for. Block edits and saves belong
   // to it, also while another scope's blocks are still loading.
   let blocksScopeKey = 'default';
@@ -86,6 +92,7 @@ export function createPromptScope(context) {
 
   async function loadData() {
     isLoadingData = true;
+    const agentsRequest = ++agentsRequested;
 
     try {
       const [agentsResult, promptsResult] = await Promise.all([
@@ -93,9 +100,11 @@ export function createPromptScope(context) {
         listPrompts(),
       ]);
 
-      agents = Array.isArray(agentsResult?.agents) ? agentsResult.agents : [];
+      showAgents(agentsRequest, agentsResult);
       selectedAgentId = resolvePreviewAgentId(selectedAgentId);
-      promptScopes = normalizePromptScopes(promptsResult?.scopes, agents);
+      promptScopes = withAgentNames(
+        normalizePromptScopes(promptsResult?.scopes, agents),
+      );
       selectedScopeKey = resolveScopeKey(selectedScopeKey);
       applyBlocks(promptsResult?.blocks, 'default');
     } catch {
@@ -103,6 +112,39 @@ export function createPromptScope(context) {
     } finally {
       isLoadingData = false;
     }
+  }
+
+  // Reread the Agents after they changed, so the preview picker and the Agent
+  // scopes show their current names. The shown scope, the preview Agent and
+  // the block drafts stay.
+  async function reloadAgents() {
+    const request = ++agentsRequested;
+    try {
+      if (showAgents(request, await listAgents())) {
+        promptScopes = withAgentNames(promptScopes);
+      }
+    } catch {
+      // The shown names stay until the next change or view load.
+    }
+  }
+
+  // Adopts an `agent.list` response unless newer Agents are shown already.
+  function showAgents(request, result) {
+    if (request < agentsShown) return false;
+    agentsShown = request;
+    agents = Array.isArray(result?.agents) ? result.agents : [];
+    return true;
+  }
+
+  // An Agent scope is named like its Agent, as the server names it.
+  function withAgentNames(scopes) {
+    return scopes.map((scope) => {
+      const agent =
+        scope.type === 'agent'
+          ? agents.find((item) => item.id === scope.agent_id)
+          : null;
+      return agent ? { ...scope, label: agent.name || agent.id } : scope;
+    });
   }
 
   // Lazily scan project teams so the preview picker can offer project agents as
@@ -508,6 +550,9 @@ export function createPromptScope(context) {
     },
     get loadData() {
       return loadData;
+    },
+    get reloadAgents() {
+      return reloadAgents;
     },
     get loadProjectTeams() {
       return loadProjectTeams;
