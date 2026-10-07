@@ -1,8 +1,8 @@
 import { t } from './i18n.js';
 import { asOptionalText, isPlainObject } from './values.js';
 
-// A Librarian Session is not among them: the server lists it only in the
-// Librarian's own scope, where it is an ordinary conversation.
+// Librarian and Live Sessions are not among them: the server lists them only in
+// the scope of their built-in Agent, where they are ordinary conversations.
 const BACKGROUND_ONLY_RUN_KINDS = new Set([
   'cron',
   'reflection',

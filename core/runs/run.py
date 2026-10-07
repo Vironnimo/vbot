@@ -108,6 +108,9 @@ class RunKind(StrEnum):
     MEMORY_REFLECTION = "memory_reflection"
     SKILL_REFLECTION = "skill_reflection"
     LIBRARIAN = "librarian"
+    # A Live voice call: the voice Agent's recorded call and the backend Agent's
+    # answers to the requests the voice Model hands on.
+    LIVE = "live"
     SUBAGENT = "subagent"
     SYSTEM = "system"
 

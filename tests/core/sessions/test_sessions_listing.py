@@ -325,6 +325,7 @@ def test_session_list_filters_execution_categories_in_sql(manager) -> None:
         },
         "unknown-kind": {"run_kinds": ["future_kind"]},
         "librarian-user": {"run_kinds": ["user", "librarian"]},
+        "live-user": {"run_kinds": ["user", "live"]},
     }
     for index, (session_id, metadata) in enumerate(metadata_by_session.items()):
         address = _address("coder", session_id)
@@ -384,9 +385,10 @@ def test_session_list_filters_execution_categories_in_sql(manager) -> None:
         "channel-cron",
         "unknown-kind",
     }
-    # Sessions with a Librarian Run are never listed in another Agent's scope.
+    # Sessions with a Librarian or Live Run are never listed in another Agent's scope.
     assert listed(SessionListFilters(True, True, True, True)) == set(metadata_by_session) - {
-        "librarian-user"
+        "librarian-user",
+        "live-user",
     }
     # The Librarian's own Sessions are listed like any conversation.
     librarian_sessions = manager.list_summaries_page(
@@ -396,6 +398,13 @@ def test_session_list_filters_execution_categories_in_sql(manager) -> None:
         ("pass", title)
     ]
     assert manager.metadata_value(bound.address, "skill_agent_id") == "coder"
+    # The Sessions of a Live call are listed in the scope of its built-in Agents.
+    manager.create("live-voice", "call", run_kind=RunKind.LIVE)
+    manager.create("live-backend", "answers", run_kind=RunKind.LIVE)
+    live_sessions = manager.list_summaries_page(
+        [(None, "live-voice"), (None, "live-backend")], limit=100, filters=hidden
+    ).sessions
+    assert {summary["id"] for summary in live_sessions} == {"call", "answers"}
 
 
 RECALL_VISIBILITY_CASES = {
@@ -411,6 +420,7 @@ RECALL_VISIBILITY_CASES = {
     "memory": ({"run_kinds": ["memory_reflection"]}, "hidden"),
     "user-skill": ({"run_kinds": ["user", "skill_reflection"]}, "hidden"),
     "user-librarian": ({"run_kinds": ["user", "librarian"]}, "hidden"),
+    "user-live": ({"run_kinds": ["user", "live"]}, "hidden"),
     "subagent-kind": ({"run_kinds": ["subagent"]}, "subagent"),
     "subagent-flag": ({"is_subagent_session": True}, "subagent"),
     "subagent-user": ({"is_subagent_session": True, "run_kinds": ["user"]}, "subagent"),
