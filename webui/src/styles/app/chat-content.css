@@ -255,7 +255,7 @@
 .message-block.assistant {
   padding: 2px 0;
   color: var(--md-text, var(--text-hi));
-  font-size: var(--fs-body-lg);
+  font-size: var(--md-font-size, var(--fs-body-lg));
   line-height: var(--md-line-height, 1.65);
 }
 

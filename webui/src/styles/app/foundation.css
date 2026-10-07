@@ -160,9 +160,11 @@
      `--chat-measure` is the live chat column; it defaults to the comfortable
      tier and is overridden per `[data-chat-width]` on `.chat-view`. Reading
      prose (Chat and Markdown documents) never grows past `--prose-measure`
-     (about 88 characters, the comfortable column's text width), so wider
-     areas give room to code, tables, images and Tool rows without
-     lengthening lines.
+     (the comfortable column's text width), so wider areas give room to
+     code, tables, images and Tool rows without lengthening lines. It is a
+     fixed length, not an em measure, so a reading context can change its
+     type size without changing its column width; narrower areas still
+     shrink it, since it is only a maximum.
      Every other page is one of three types (user decision 2026-10-06):
      configuration pages - every view with a Secondary pane, plus System
      Prompt - center their content at `--content-max-narrow`; overview
@@ -173,7 +175,7 @@
   --chat-measure-comfortable: 780px;
   --chat-measure-wide: 1100px;
   --chat-measure: var(--chat-measure-comfortable);
-  --prose-measure: 46em;
+  --prose-measure: 690px;
   /* A Chat message's side gutter and the indent of its content past the
      avatar. The composer stack lines up with the text these leave. */
   --chat-msg-gutter: 28px;

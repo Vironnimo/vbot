@@ -3,29 +3,34 @@
    with plain fallbacks; each reading context picks one variant:
 
    - Chat (`.chat-view`, and `.md-chat` for chat-like messages elsewhere, such
-     as Swarm posts): structures an answer. Headings stay at prose size and
-     bind to the text they introduce; spacing has three steps (close lines, a
-     0.6em block gap, the largest gap above a heading); prose is dimmed one
-     step so headings and bold stand out.
+     as Swarm posts): structures an answer in compact 14px prose. Headings
+     stay barely above prose size (1.07em from h3 down) and bind to the text
+     they introduce; bold text keeps a lighter weight (500) than headings
+     (600), so a bold lead-in never reads as one. Spacing has three steps
+     (close 1.35 lines, a 0.75em block gap, the largest gap above a heading);
+     prose is dimmed one step so headings and bold stand out.
    - Document (`.md-document`, for Skill instructions, the System Prompt and
      Wiki pages): ordinary Markdown documents. Headings get distinct but
      moderate sizes (h1 20px, h2 18px, h3 16px at 15px prose), with more room
      around blocks.
 
-   Both keep prose (paragraphs, lists, headings, quotes) at a reading measure
-   of about 88 characters, while code blocks, tables and images may use the
-   whole width. */
+   Both cap prose (paragraphs, lists, headings, quotes) at the reading measure
+   `--prose-measure`, while code blocks, tables and images may use the whole
+   width. */
 .chat-view,
 .md-chat {
   --md-measure: var(--prose-measure);
   --md-text: var(--text-body);
   --md-emphasis: var(--text-hi);
-  --md-line-height: 1.5;
-  --md-paragraph-margin: 0 0 0.6em;
+  --md-font-size: var(--fs-body-md);
+  --md-line-height: 1.35;
+  --md-strong-weight: 500;
+  --md-paragraph-margin: 0 0 0.75em;
   --md-heading-margin: 1.4em 0 0.15em;
-  --md-list-margin: 0 0 0.6em 1.4em;
+  --md-heading-size: 1.07em;
+  --md-list-margin: 0 0 0.75em 1.4em;
   --md-nested-list-margin: 0.2em 0 0 1.4em;
-  --md-block-margin: 0.6em 0;
+  --md-block-margin: 0.75em 0;
 }
 
 .md-document {
@@ -46,7 +51,7 @@
 .msg-markdown {
   padding: 2px 0;
   color: var(--md-text, var(--text-hi));
-  font-size: var(--fs-body-lg);
+  font-size: var(--md-font-size, var(--fs-body-lg));
   line-height: var(--md-line-height, 1.65);
 }
 
@@ -74,7 +79,7 @@
 .msg-markdown h6 {
   margin: var(--md-heading-margin, 1.1em 0 0.35em);
   color: var(--md-emphasis, inherit);
-  font-size: 1em;
+  font-size: var(--md-heading-size, 1em);
   font-weight: 600;
   line-height: 1.35;
 }
@@ -88,7 +93,7 @@
 }
 
 .msg-markdown h3 {
-  font-size: var(--md-h3-size, 1em);
+  font-size: var(--md-h3-size, var(--md-heading-size, 1em));
 }
 
 .msg-markdown ul,
@@ -206,13 +211,16 @@
   white-space: pre;
 }
 
+/* Inline code is a tinted chip without a border or vertical padding, sized
+   relative to the prose: Geist Mono's own content area already frames the
+   glyphs, and the chip stays clearly shorter than a 1.35 line, so chips on
+   adjacent lines never touch. */
 .msg-markdown code {
-  border: 1px solid var(--border-2);
   border-radius: var(--r-sm);
-  padding: 1px 5px;
-  background: var(--surface-2);
+  padding: 0 0.35em;
+  background: var(--surface-3);
   font-family: var(--font-mono);
-  font-size: var(--fs-mono-body);
+  font-size: 0.86em;
 }
 
 .msg-markdown a,
@@ -246,7 +254,7 @@
 
 .msg-markdown strong {
   color: var(--md-emphasis, inherit);
-  font-weight: 600;
+  font-weight: var(--md-strong-weight, 600);
 }
 
 .msg-markdown hr {
