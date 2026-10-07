@@ -502,7 +502,7 @@
                         {job.name}
                       </span>
                     </span>
-                    <span class="cron-item-detail secondary-list__meta">
+                    <span class="cron-item-detail">
                       {listRowDetail(job, viewState.systemTimezone)}
                     </span>
                   </span>

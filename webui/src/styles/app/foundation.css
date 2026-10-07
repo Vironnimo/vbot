@@ -59,7 +59,8 @@
   --prompt-header-surface: var(--surface-2);
   --prompt-content-surface: var(--surface);
   /* The current item of the Main menu and of lists: one raised step above
-     the hover surface; its icon or secondary line carries the accent. */
+     the hover surface. Only an item with an icon adds the accent (the Main
+     menu); text stays neutral. */
   --selected-surface: var(--surface-3);
   --preview-surface: var(--surface);
   --terminal-surface: #0e0d0b;

@@ -89,10 +89,9 @@
 }
 
 /* Inset master-list rows follow the Settings index geometry: the hover and
-   selection surfaces stay clear of the pane edges. As in the Main menu, the
-   current row is raised and its secondary line (`.secondary-list__meta`: a
-   Model, a path, a count) takes the accent, the counterpart of the menu's
-   accent icon. Feature styles own the row contents. */
+   selection surfaces stay clear of the pane edges, and the current row is
+   marked by the raised selection surface alone. Feature styles own the row
+   contents. */
 .secondary-list {
   padding: 12px;
   scrollbar-gutter: auto;
@@ -118,10 +117,6 @@
 
 .secondary-list__item.active {
   background: var(--selected-surface);
-}
-
-.secondary-list__item.active .secondary-list__meta {
-  color: var(--accent);
 }
 
 /* A small heading over a group of rows in a pane, set apart by a trailing

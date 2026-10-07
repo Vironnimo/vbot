@@ -231,9 +231,6 @@
   .debug-trace--selected:hover {
     background: var(--selected-surface);
   }
-  .debug-trace--selected .trace-middle {
-    color: var(--accent);
-  }
   .debug-trace__row {
     display: grid;
     width: 100%;

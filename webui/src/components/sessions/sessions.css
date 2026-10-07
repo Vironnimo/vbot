@@ -254,10 +254,6 @@
   background: var(--selected-surface);
 }
 
-.session-row__select--active .session-row__agent {
-  color: var(--accent);
-}
-
 .session-row__select {
   width: 100%;
   border: 0;

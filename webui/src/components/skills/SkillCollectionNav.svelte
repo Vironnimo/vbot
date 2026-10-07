@@ -64,7 +64,7 @@
           onclick={() => onSelect(item.key)}
         >
           <span class="skills-collection-name">{item.label}</span>
-          <span class="skills-count secondary-list__meta">{item.count}</span>
+          <span class="skills-count">{item.count}</span>
         </button>
       {/each}
     {/each}
