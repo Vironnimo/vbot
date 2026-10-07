@@ -44,6 +44,8 @@ class FakeTerminalAdapter:
         self.closed = False
         # Reads time out instead of blocking, as a real terminal's reads do.
         self._read_timeouts = False
+        # A read reported the end of output: the reader moved on to polling.
+        self.output_ended = False
 
     @property
     def pid(self) -> int:
@@ -58,6 +60,7 @@ class FakeTerminalAdapter:
         else:
             value = self._output.get()
         if value is None:
+            self.output_ended = True
             raise EOFError
         return value
 

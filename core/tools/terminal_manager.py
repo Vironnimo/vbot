@@ -967,6 +967,7 @@ class TerminalManager:
         seconds: float,
         pattern: re.Pattern[str] | None = None,
         after_revision: int | None = None,
+        on_match: Callable[[str], None] | None = None,
     ) -> WaitEnded:
         """Wait up to *seconds* until the program exits, prints a match, or its output settles.
 
@@ -976,7 +977,8 @@ class TerminalManager:
         *after_revision* (default: the last one a durable result
         acknowledged); with *pattern* that does not end its wait. Output
         printed before the call counts for *pattern*, except output before the
-        Agent's last input and that input's echo.
+        Agent's last input and that input's echo. *on_match* receives the
+        line where a match starts.
         """
         session = self._attached(terminal_id, owner)
         if after_revision is None:
@@ -985,6 +987,7 @@ class TerminalManager:
             deadline=self._services.monotonic() + seconds,
             pattern=pattern,
             after_revision=after_revision,
+            on_match=on_match,
         )
 
     async def wait_for_reply(

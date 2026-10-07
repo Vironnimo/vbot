@@ -26,6 +26,7 @@ from ._terminal_command import (
     COMMAND_IDLE_CPU_SECONDS,
     COMMAND_IDLE_SECONDS,
     COMMAND_LEFTOVER_QUIET_SECONDS,
+    COMMAND_LOG_REFRESH_SECONDS,
     COMMAND_STOP_GRACE_SECONDS,
     COMMAND_TREE_POLL_SECONDS,
     CommandReport,
@@ -233,6 +234,9 @@ class TerminalSession:
         self._cleanup = cleanup
         self._timeout_task: asyncio.Task[None] | None = None
         self._last_output_at = services.monotonic()
+        # A command's log file lacks output rendered after it last showed the pending rows.
+        self._log_stale = False
+        self._log_shown_at = -COMMAND_LOG_REFRESH_SECONDS
         # Output and input: a command is idle only while neither happens.
         self._activity_count = 0
         self._last_activity_at = self._last_output_at
@@ -353,8 +357,8 @@ class TerminalSession:
                 await asyncio.to_thread(self._kill_tree)
             except OSError as error:
                 raise TerminalManagerError(
-                    f"Could not terminate terminal {self.terminal_id}; "
-                    "its process tree may still be running. Retry the kill operation."
+                    f"Could not stop terminal {self.terminal_id}: the operating system did not "
+                    "end its processes, so they can still be running"
                 ) from error
             self._termination_pending = False
             self._tree_killed.set()
@@ -579,7 +583,12 @@ class TerminalSession:
         await self._finished_event.wait()
 
     async def wait_for_program(
-        self, *, deadline: float, pattern: re.Pattern[str] | None, after_revision: int
+        self,
+        *,
+        deadline: float,
+        pattern: re.Pattern[str] | None,
+        after_revision: int,
+        on_match: Callable[[str], None] | None = None,
     ) -> WaitEnded:
         """Wait until the program exits, its output matches *pattern*, its new output
         settles, or *deadline* (a ``monotonic`` time) passes.
@@ -591,7 +600,8 @@ class TerminalSession:
         *pattern*, except output before the Agent's last input and that
         input's echo. An interactive program's new output settled when an
         ``output_settled`` attention above *after_revision* exists; with
-        *pattern* that does not end the wait.
+        *pattern* that does not end the wait. *on_match* receives the line
+        where the match starts.
         """
         command = self._command
         services = self._services
@@ -602,7 +612,9 @@ class TerminalSession:
                 return "exited"
             if pattern is not None:
                 matched, match_from = await self._output_matches(pattern, match_from)
-                if matched:
+                if matched is not None:
+                    if on_match is not None:
+                        on_match(matched)
                     if command is None:
                         return "matched"
                     return await self._linger_for_exit(command, deadline)
@@ -695,8 +707,9 @@ class TerminalSession:
 
     async def _output_matches(
         self, pattern: re.Pattern[str], from_line: int | None
-    ) -> tuple[bool, int]:
-        """Whether output from *from_line* on matches; also the line to check from next.
+    ) -> tuple[str | None, int]:
+        """The line where a match in the output from *from_line* on starts, or None;
+        also the line to check from next.
 
         Without *from_line*, output printed before the wait counts, except
         output before the Agent's last input and its echo. Lines above the
@@ -705,7 +718,13 @@ class TerminalSession:
         """
         async with self._lock:
             found = await self._screen.pattern_text(start_line=from_line)
-        return pattern.search(found["text"]) is not None, int(found["next_line"])
+        text = found["text"]
+        match = pattern.search(text)
+        if match is None:
+            return None, int(found["next_line"])
+        start = text.rfind("\n", 0, match.start()) + 1
+        end = text.find("\n", match.start())
+        return text[start : len(text) if end < 0 else end], int(found["next_line"])
 
     def command_report(self) -> CommandReport:
         command = self._require_command()
@@ -864,6 +883,8 @@ class TerminalSession:
         command = self._require_command()
         try:
             command.add_lines(await self._screen.commit_transcript())
+            # Every rendered row is final now; none is pending.
+            command.show_pending(())
         except Exception:
             _LOGGER.warning(
                 "Could not render the final output of command terminal=%s",
@@ -900,7 +921,7 @@ class TerminalSession:
         await self._commit_output()
         if command.has_ended:
             return
-        command.record_end(facts)
+        command.record_end(facts, now=self._services.monotonic())
         report = command.report(self.terminal_id, self._services.monotonic())
         exit_code = command.exit_code
         reason = command.stop_reason
@@ -1287,6 +1308,9 @@ class TerminalSession:
                     if command:
                         if not await self._command_alive(read_timed_out=True):
                             return
+                        if self._log_stale:
+                            async with self._lock:
+                                await self._refresh_log()
                         await self._keep_idle_baseline()
                     elif not await asyncio.to_thread(self._adapter.is_alive):
                         return
@@ -1294,6 +1318,7 @@ class TerminalSession:
                 if text:
                     async with self._lock:
                         await self._render_output(text)
+                        await self._refresh_log()
                 if command and not await self._command_alive(read_timed_out=False):
                     return
         except EOFError, OSError:
@@ -1320,6 +1345,7 @@ class TerminalSession:
         self._publish_output(text)
         update = await self._render(text)
         self._last_output_at = self._services.monotonic()
+        self._log_stale = self._command is not None
         self._note_activity()
         facts_changed = False
         if update is not None:
@@ -1355,6 +1381,28 @@ class TerminalSession:
             self._log_handle = None
             with contextlib.suppress(OSError):
                 handle.close()
+
+    async def _refresh_log(self) -> None:
+        """Show the command's rendered rows that are not final yet in its log file,
+        at most every ``COMMAND_LOG_REFRESH_SECONDS``; the lock is held."""
+        command = self._command
+        now = self._services.monotonic()
+        if (
+            command is None
+            or not self._log_stale
+            or now - self._log_shown_at < COMMAND_LOG_REFRESH_SECONDS
+        ):
+            return
+        self._log_stale = False
+        self._log_shown_at = now
+        try:
+            command.show_pending(await self._screen.pending_transcript())
+        except Exception:
+            _LOGGER.warning(
+                "Could not render the pending output of command terminal=%s",
+                self.terminal_id,
+                exc_info=True,
+            )
 
     async def _render(self, text: str) -> EmulatorUpdate | None:
         """Feed *text* to the screen; None when that failed, which leaves the screen behind."""

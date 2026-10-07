@@ -12,8 +12,9 @@ Design rules (keep them when adding a pattern):
 * Only non-zero exit codes get a hint; success is never annotated.
 * At most one hint per result; the first match wins, and patterns are ordered
   by how often their failure shape wastes a turn.
-* Only the first ``_SCAN_CHARS`` characters of output are scanned: hints key on
-  error headers, not deep context.
+* Only the first and the last ``_SCAN_CHARS`` characters of output are
+  scanned: hints key on error headers, which open the output or, after long
+  progress output, end it.
 * The command is not shortened, so a pattern over it runs in linear time: one
   whose failed attempts each scan on to the end of the command is quadratic and
   can stall the Event Loop.
@@ -32,7 +33,8 @@ from pathlib import Path
 
 # The shell Tool runs commands in PowerShell on Windows and in bash elsewhere.
 _POWERSHELL = sys.platform == "win32"
-# Bounded scan window: error headers appear early; deep output is noise.
+# Bounded scan windows at both ends: error headers open short output and end
+# long output; the middle is noise.
 _SCAN_CHARS = 4000
 
 # Registry names of the Tools hints can point to.
@@ -57,13 +59,21 @@ class _Failure:
         return next((name for name in _EDIT_TOOLS if self.offers(name)), None)
 
 
-# Exit-code-only hints for codes whose meaning is stable on POSIX.
+# Exit-code-only hints for codes POSIX shells give a fixed meaning; on Windows
+# they arrive through bash, wsl, docker or ssh.
 _EXIT_CODE_HINTS: dict[int, str] = {
     126: "Exit code 126: the file was found but is not executable. Make it executable with "
     "`chmod +x`, or run it through its interpreter, such as `bash script.sh`.",
     137: "Exit code 137: the process was killed with SIGKILL, for example by the kernel when "
-    "memory ran out. Check `dmesg | tail` for an out-of-memory entry before running it again.",
+    "memory ran out. Check `dmesg | tail` on the machine that ran it for an out-of-memory "
+    "entry before running it again.",
 }
+# The `timeout` program exits with 124 when its time limit stops the command.
+_TIMEOUT_PROGRAM = re.compile(r"(?:^|[\s;|&(])timeout\s", re.M)
+_TIMEOUT_PROGRAM_HINT = (
+    "Exit code 124: the `timeout` program in the command stopped it at its time limit. "
+    "If the command needs more time, give `timeout` a larger limit."
+)
 
 
 # POSIX: bash/sh report "<name>: command not found", after a prefix such as
@@ -248,7 +258,9 @@ _ALIAS_ADVICE: dict[str, tuple[tuple[str, ...], str]] = {
 def _hint_powershell_alias_flags(failure: _Failure) -> str | None:
     """A bash flag on a PowerShell alias, such as ``ls -la``, fails parameter binding."""
     for cmdlet, (aliases, advice) in _ALIAS_ADVICE.items():
-        if not re.search(rf"^{cmdlet}: ", failure.output, re.M):
+        # A terminal drops the space after the cmdlet in PowerShell's
+        # multi-line error header.
+        if not re.search(rf"^{cmdlet}:(?: |$)", failure.output, re.M):
             continue
         for alias in aliases:
             match = re.search(rf"(?:^|[\s;|&(]){alias}\s+-([A-Za-z]+)", failure.command, re.M)
@@ -470,18 +482,18 @@ def _hint_merge_conflict(failure: _Failure) -> str | None:
     )
     if operation == "stash":
         return (
-            "Git applied the stash with conflicts in the files listed above. Resolve them "
+            "Git applied the stash with conflicts in the files the output lists. Resolve them "
             "and `git add` them; the stash stays in the stash list until `git stash drop` "
             "removes it."
         )
     if operation is None:
         return (
-            "Git stopped at a conflict in the files listed above. Resolve them and `git add` "
+            "Git stopped at a conflict in the files the output lists. Resolve them and `git add` "
             "them, then run the stopped git command with --continue, or with --abort to "
             "undo it."
         )
     return (
-        f"Git stopped the {operation} at a conflict in the files listed above. Resolve them "
+        f"Git stopped the {operation} at a conflict in the files the output lists. Resolve them "
         f"and `git add` them, then run `git {operation} --continue`; "
         f"`git {operation} --abort` undoes the {operation} instead."
     )
@@ -501,7 +513,8 @@ _PORT_IN_USE = re.compile(
     r"(?:address already in use|"
     r"port (\d+) (?:is )?already in use|"
     r"bind\(\) to .*? port (\d+)|"
-    r"bind on address \([^)]*,\s*(\d+))",
+    r"bind on address \([^)]*,\s*(\d+)|"
+    r"Only one usage of each socket address)",
     re.I,
 )
 
@@ -519,9 +532,17 @@ def _hint_port_in_use(failure: _Failure) -> str | None:
     )
 
 
+# PowerShell's and Windows' own wording of a refused access.
+_ACCESS_DENIED = re.compile(r"Access (?:to the path .*? )?is denied")
+
+
 def _hint_permission_denied(failure: _Failure) -> str | None:
     output = failure.output
-    if "Permission denied" not in output and "EACCES" not in output:
+    if (
+        "Permission denied" not in output
+        and "EACCES" not in output
+        and not (_POWERSHELL and _ACCESS_DENIED.search(output))
+    ):
         return None
     if _POWERSHELL:
         return (
@@ -551,7 +572,7 @@ def _hint_gh_unknown_json_field(failure: _Failure) -> str | None:
         return None
     return (
         f"The installed gh has no JSON field '{match.group(1)}'. Use only fields from the "
-        "list of valid fields in the output above."
+        "list of valid fields in the output."
     )
 
 
@@ -585,15 +606,18 @@ def annotate_failure(
 ) -> str | None:
     """Return one short next action for a failed command, or None.
 
-    *output* is the command's output as the Agent reads it; only its first
-    ``_SCAN_CHARS`` characters are examined. *workdir* is the directory the
+    *output* is the command's output as the Agent reads it; only its first and
+    last ``_SCAN_CHARS`` characters are examined. *workdir* is the directory the
     command started in, when known. *offers* tells whether the Agent is offered
     the Tool of a registry name; a hint names only offered Tools. Returns None
     for exit code 0 or None, so successful and undetermined runs stay unannotated.
     """
     if not exit_code:
         return None
-    window = (output or "")[:_SCAN_CHARS]
+    output = output or ""
+    window = output
+    if len(output) > 2 * _SCAN_CHARS:
+        window = f"{output[:_SCAN_CHARS]}\n{output[-_SCAN_CHARS:]}"
     if window:
         failure = _Failure(command or "", window, workdir, offers)
         for hint_for in _OUTPUT_HINTS:
@@ -603,7 +627,9 @@ def annotate_failure(
                 continue
             if hint:
                 return hint
-    return None if _POWERSHELL else _EXIT_CODE_HINTS.get(exit_code)
+    if exit_code == 124 and _TIMEOUT_PROGRAM.search(command or ""):
+        return _TIMEOUT_PROGRAM_HINT
+    return _EXIT_CODE_HINTS.get(exit_code)
 
 
 __all__ = ["HINT_TOOL_NAMES", "annotate_failure"]

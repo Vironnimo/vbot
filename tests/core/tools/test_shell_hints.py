@@ -83,9 +83,9 @@ _BASH_SYNTAX = (
         pytest.param(
             "python",
             127,
-            "ok\n" * 5000 + "bash: python: command not found",
+            "ok\n" * 2000 + "bash: python: command not found\n" + "ok\n" * 2000,
             None,
-            id="scan_window_is_bounded",
+            id="scan_window_skips_the_middle",
         ),
         (
             "Select-String -Pattern todo -Recurse",
@@ -108,6 +108,33 @@ _BASH_SYNTAX = (
             ["`python3` is the Microsoft Store placeholder on this machine: run `python` instead."],
         ),
         pytest.param("python app.py", 9009, _STORE_PYTHON, None, id="store_python_named_python"),
+        pytest.param(
+            "pip install -r requirements.txt",
+            1,
+            "Collecting package "
+            + "x" * 90
+            + "\n"
+            + ("Downloading " + "y" * 100 + "\n") * 120
+            + "ModuleNotFoundError: No module named 'setuptools'",
+            ["Python cannot import 'setuptools'"],
+            id="error_after_long_output",
+        ),
+        pytest.param(
+            "python -m http.server 8000",
+            1,
+            "OSError: [WinError 10048] Only one usage of each socket address "
+            "(protocol/network address/port) is normally permitted",
+            ["The requested port is already in use"],
+            id="windows_port_in_use",
+        ),
+        pytest.param(
+            "timeout 30 make test",
+            124,
+            "",
+            ["the `timeout` program in the command stopped it at its time limit"],
+            id="timeout_program",
+        ),
+        pytest.param("make test", 124, "", None, id="exit_124_without_timeout_program"),
     ],
 )
 def test_failure_output_gets_the_matching_hint(
@@ -157,6 +184,7 @@ def test_merge_conflict_names_the_stopped_git_operation(command: str, expected: 
         (137, "", "SIGKILL"),
         pytest.param(137, "bash: python: command not found", "python3", id="output_beats_code"),
         (1, "bash: ./deploy.sh: Permission denied", "Check its owner and permissions"),
+        (1, "Remove-Item: Access to the path 'C:\\data\\app.log' is denied.", ""),
     ],
 )
 def test_platform_specific_hints_follow_the_host_shell(
@@ -170,16 +198,18 @@ def test_platform_specific_hints_follow_the_host_shell(
 
     hint = annotate_failure("run", exit_code, output)
 
-    if "Permission denied" in output:
+    if "Access to the path" in output:
+        # PowerShell's wording; bash never prints it.
+        assert (hint is not None and "holds the file open" in hint) is powershell
+        assert powershell or hint is None
+    elif "Permission denied" in output:
         # Neither variant suggests sudo; elevation is the user's decision.
         assert hint is not None and "ask the user to run the command" in hint
         assert "sudo" not in hint
         assert ("holds the file open" in hint) is powershell
         assert (posix_expected in hint) is not powershell
-    elif powershell and not output:
-        # PowerShell reports its own exit codes, so their POSIX meanings do not apply.
-        assert hint is None
     else:
+        # PowerShell passes these codes on from bash, wsl, docker or ssh.
         assert hint is not None and posix_expected in hint
 
 
@@ -197,6 +227,14 @@ def test_platform_specific_hints_follow_the_host_shell(
             "Get-ChildItem: A parameter cannot be found that matches parameter name 'la'.",
             "`ls -la` uses bash flags, but in PowerShell `ls` is Get-ChildItem: use "
             "`Get-ChildItem -Force` to include hidden files and `-Recurse` for subdirectories.",
+        ),
+        # A failure past the command's first line: the terminal drops the
+        # space after the cmdlet in PowerShell's multi-line error header.
+        (
+            "echo start\nrm -rf build",
+            "start\nRemove-Item:\nLine |\n   2 |  rm -rf build\n     |     ~~~\n"
+            "     | A parameter cannot be found that matches parameter name 'rf'.",
+            "`rm -rf` uses bash flags, but in PowerShell `rm` is Remove-Item",
         ),
         (
             "ls -la src",

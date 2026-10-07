@@ -53,6 +53,8 @@ from core.tools.shell_environment import RunIdentity, command_environment, inher
 from core.tools.shell_hints import HINT_TOOL_NAMES, annotate_failure
 from core.tools.terminal_manager import (
     TERMINAL_MAX_ROWS,
+    TerminalCapacityError,
+    TerminalClosedError,
     TerminalManager,
     TerminalManagerError,
     TerminalOwner,
@@ -63,6 +65,7 @@ from core.tools.tools import (
     ToolDisplay,
     ToolPromptBlockRegistry,
     ToolRegistry,
+    tool_failure,
     tool_success,
 )
 from core.tools.update_handoff import UpdateHandoffGrant, UpdateHandoffs
@@ -82,6 +85,9 @@ SHELL_DEFAULT_TIMEOUT_SECONDS = 600.0
 SHELL_OUTPUT_HEAD_CHARS = 4_000
 SHELL_OUTPUT_TAIL_CHARS = 8_000
 SHELL_OUTPUT_LINE_CHARS = 2_000
+# A running command's result shows only its newest output; its log file has all of it.
+SHELL_RUNNING_OUTPUT_LINES = 20
+SHELL_RUNNING_OUTPUT_CHARS = 4_000
 # A running command's output is its transcript and then its whole screen; a
 # screen has at most this many rows.
 _SCREEN_ROWS = TERMINAL_MAX_ROWS
@@ -158,7 +164,8 @@ def _shell_description(offered: frozenset[str] | None) -> str:
     if terminal:
         continuation = (
             f" A command still running after {SHELL_HANDOFF_SECONDS:g} seconds, or waiting for "
-            "input, keeps running in a terminal, and the result says how to follow it up."
+            "input, keeps running in a terminal, and its result arrives as a new message when "
+            "it exits."
         )
     else:
         continuation = (
@@ -223,8 +230,9 @@ _MODE_PARAMETER: JsonObject = {
     "type": "string",
     "enum": ["foreground", "background"],
     "description": (
-        f"foreground waits up to {SHELL_HANDOFF_SECONDS:g} seconds for the command to exit. "
-        "background returns at once; use it for servers, watchers and other commands whose "
+        "foreground returns when the command exits, or after "
+        f"{SHELL_HANDOFF_SECONDS:g} seconds if it still runs then. background returns at "
+        "once; use it for servers, watchers and other commands whose "
         f"result your next step does not need, instead of {_DETACHED_START}. A background "
         "command's result arrives as a new message when it exits. Omit for foreground."
     ),
@@ -310,6 +318,45 @@ class _ShellCall:
 
 def _not_run(problem: str) -> ToolContractError:
     return ToolContractError(f"{SHELL_MODEL_NAME} was not run: {problem}")
+
+
+class _NotStartedError(Exception):
+    """The shell could not be started for a reason other than the call; nothing ran."""
+
+    def __init__(self, result: JsonObject) -> None:
+        super().__init__(result["error"]["message"])
+        self.result = result
+
+
+def _start_failure(error: Exception, follow_up: bool) -> JsonObject:
+    """The failure for a shell that could not be started; *follow_up* when terminal is offered."""
+    if isinstance(error, TerminalCapacityError):
+        message = (
+            f"{SHELL_MODEL_NAME} was not run: vBot already runs {error.limit} commands, the "
+            "most it runs at once."
+        )
+        if follow_up:
+            message += (
+                f" Find your running commands with {_TERMINAL_TOOL} "
+                f"{json.dumps({'action': 'list'})}, stop the ones you no longer need with "
+                'action "kill", then run the command again.'
+            )
+        else:
+            message += " Run the command again once one of your running commands has exited."
+        return tool_failure("command_limit", message, retryable=True)
+    if isinstance(error, TerminalClosedError):
+        return tool_failure(
+            "command_not_started",
+            f"{SHELL_MODEL_NAME} was not run: this turn was cancelled, or vBot is shutting down.",
+            retryable=False,
+        )
+    cause = error.__cause__ if error.__cause__ is not None else error
+    return tool_failure(
+        "command_not_started",
+        f"{SHELL_MODEL_NAME} was not run: the shell could not be started ({cause}). Run the "
+        "command again; if it fails the same way, tell the user.",
+        retryable=True,
+    )
 
 
 def _parse_call(
@@ -398,6 +445,11 @@ def _missing_workdir(workdir: Path, *, given: bool) -> str:
             f"the working directory {model_path(workdir)} is not an existing directory. Pass an "
             "existing directory as workdir."
         )
+    if workdir.exists():
+        return (
+            f"workdir {model_path(workdir)} is a file, not a directory. Pass the directory it "
+            "is in, or omit workdir to use the working directory."
+        )
     message = f"workdir {model_path(workdir)} is not an existing directory."
     nearby = similar_entries(workdir, kind="dirs")
     if nearby:
@@ -482,6 +534,10 @@ class ShellTool:
         handoff = _issue_update_handoff(self._update_handoffs, context)
         try:
             terminal_id = await self._start(context, call, handoff)
+        except _NotStartedError as failure:
+            if handoff is not None:
+                handoff.release()
+            return failure.result
         except BaseException:
             if handoff is not None:
                 handoff.release()
@@ -527,7 +583,7 @@ class ShellTool:
                 execution_owner=context.execution_owner,
             )
         except (OSError, TerminalManagerError) as error:
-            raise _not_run(f"the shell could not be started: {error}") from error
+            raise _NotStartedError(_start_failure(error, context.offers(_TERMINAL_TOOL))) from error
 
     async def _wait(self, context: ToolContext, call: _ShellCall, terminal_id: str) -> JsonObject:
         interrupt = asyncio.Event()
@@ -646,7 +702,7 @@ async def command_terminal_result(
     Returns the ``data`` of a Tool result, not wrapped in ``tool_success``:
     ``status`` (``running``, ``exited`` or ``stopped``) and, as they apply,
     ``terminal_id``, ``exit_code``, ``stopped_because``, ``output``,
-    ``log_file`` (only when the output was cut), ``failed_programs``,
+    ``log_file`` (while it runs, or when the output was cut), ``failed_programs``,
     ``still_running``, ``hint`` and ``next``, plus ``wait_ended`` when given.
     A running command's ``next`` follows from how the wait ended
     (``matched``, ``timeout``, or no wait), unless the command is idle: then
@@ -693,13 +749,14 @@ def _result_data(
     """The result data of one command; *reason* says why a running command was returned,
     and *idle_seconds* how long an idle one has been idle."""
     if not report.exited:
-        output, truncated = command_output_text(report, screen=screen)
+        output = _running_output_text(report, screen)
         running: JsonObject = {
             "status": "running",
             "terminal_id": report.terminal_id,
             "output": output,
         }
-        if truncated and report.transcript.log_path is not None:
+        if report.transcript.log_path is not None:
+            # The command keeps writing after this result; the file has all of it.
             running["log_file"] = model_path(report.transcript.log_path)
         running["next"] = _running_text(context, report, reason=reason, idle_seconds=idle_seconds)
         return running
@@ -709,7 +766,7 @@ def _result_data(
     if report.exit_code is not None:
         data["exit_code"] = report.exit_code
     if report.stop_reason is not None:
-        data["stopped_because"] = _stop_text(report)
+        data["stopped_because"] = _stop_text(report, with_duration=True)
     output, truncated = command_output_text(report, screen=screen)
     data["output"] = output
     if truncated and report.transcript.log_path is not None:
@@ -751,23 +808,26 @@ def _failure_hint(report: CommandReport, output: str, offers: Callable[[str], bo
     )
 
 
-def _stop_text(report: CommandReport) -> str:
-    """Why vBot stopped the command."""
+def _stop_text(report: CommandReport, *, with_duration: bool = False) -> str:
+    """Why vBot stopped the command; *with_duration* adds when the user stopped it."""
     reason = report.stop_reason
     if reason == "timeout":
         limit = (
-            f"the {report.timeout_seconds:g}-second timeout"
+            f"its {report.timeout_seconds:g}-second timeout"
             if report.timeout_seconds
             else "its timeout"
         )
         return (
-            f"it was still running at {limit}. To let it finish, run it again with a larger "
-            "timeout, or 0 for no limit; run servers and watchers with mode background."
+            f"it was still running at {limit}. Check the output before you run it again. If "
+            "it needs more time, run it again with a larger timeout, or 0 for no limit; run "
+            "servers and watchers with mode background."
         )
     if reason == "user":
+        if with_duration:
+            return f"the user stopped it after {_duration(report.elapsed_seconds)}."
         return "the user stopped it."
     if reason == "run_cancelled":
-        return "the Run that started it was cancelled."
+        return "the turn that started it was cancelled."
     if reason == "shutdown":
         return "vBot shut down."
     return "you stopped it."
@@ -810,12 +870,29 @@ def _leftover_limit_text(report: CommandReport) -> str:
         return ""
     return (
         f"the command's {report.timeout_seconds:g}-second timeout stops them in "
-        f"{remaining:.0f} seconds"
+        f"{_duration(remaining)}"
     )
+
+
+def _duration(seconds: float) -> str:
+    """A duration in words: ``45 seconds``, ``14 minutes 5 seconds``, ``1 hour 2 minutes``."""
+    total = max(0, round(seconds))
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    parts = [
+        f"{count} {unit}{'' if count == 1 else 's'}"
+        for count, unit in ((hours, "hour"), (minutes, "minute"))
+        if count
+    ]
+    if secs or not parts:
+        parts.append(f"{secs} second{'' if secs == 1 else 's'}")
+    return " ".join(parts)
 
 
 # Every command handed off while its shell runs delivers its result when it ends.
 _RESULT_ARRIVES = "Its result arrives as a new message when it exits."
+# Agents restarted handed-off commands, or slept and polled until they ended.
+_NO_REPEAT = "do not start it again, and do not sleep or poll for its result."
 
 
 def _limit_text(report: CommandReport) -> str:
@@ -823,7 +900,7 @@ def _limit_text(report: CommandReport) -> str:
     remaining = report.timeout_remaining_seconds
     if remaining is None:
         return "it has no timeout"
-    return f"its {report.timeout_seconds:g}-second timeout stops it in {remaining:.0f} seconds"
+    return f"its {report.timeout_seconds:g}-second timeout stops it in {_duration(remaining)}"
 
 
 def _running_text(
@@ -849,7 +926,7 @@ def _running_text(
         silent = COMMAND_IDLE_SECONDS if idle_seconds is None else idle_seconds
         return (
             f"The command in terminal {terminal_id} has printed nothing for "
-            f"{silent:.0f} seconds and uses no CPU; {limit}. If its output ends in "
+            f"{_duration(silent)} and uses no CPU; {limit}. If its output ends in "
             f'a question or prompt, answer it with terminal action "input", terminal_id '
             f'"{terminal_id}", your answer as text, and key "enter". Otherwise it waits for '
             f"something else, such as the network. {_RESULT_ARRIVES} If it hangs, stop it with "
@@ -857,26 +934,35 @@ def _running_text(
         )
     if reason in {"matched", "waited", "following"} and follow_up:
         return _followed_text(report, limit, matched=reason == "matched")
-    moved = "The user moved the command to the background. " if reason == "moved" else ""
-    if not follow_up:
-        return (
-            f"{moved}The command keeps running in the background; {limit}. {_RESULT_ARRIVES} "
-            "Continue other work or end your turn; do not start it again."
-        )
-    running = f"{moved}The command keeps running in terminal {terminal_id}; {limit}. "
+    where = f"in terminal {terminal_id}" if follow_up else "in the background"
     if reason == "requested":
+        place = f"in the background in terminal {terminal_id}" if follow_up else "in the background"
+        opening = f"The command runs {place}; {limit}."
+    elif reason == "moved":
+        opening = (
+            "The user moved the command to the background after "
+            f"{_duration(report.elapsed_seconds)}. It keeps running {where}; {limit}."
+        )
+    elif reason == "deadline":
+        opening = (
+            f"The command was still running after {SHELL_HANDOFF_SECONDS:g} seconds and keeps "
+            f"running {where}; {limit}."
+        )
+    else:
+        opening = f"The command keeps running {where}; {limit}."
+    continuation = (
+        f"Continue other work, or end your turn if your next step needs the result; {_NO_REPEAT}"
+    )
+    if reason == "requested" and follow_up:
         # Started in the background: often a server, whose result arrives only
         # once it is stopped.
         return (
-            f"{running}{_RESULT_ARRIVES} If it runs until stopped, such as a server, and your "
+            f"{opening} {_RESULT_ARRIVES} If it runs until stopped, such as a server, and your "
             f"next step needs it ready, call {_terminal_call('wait', terminal_id)} with pattern "
-            "set to a line it prints when ready. Otherwise continue other work or end your "
-            "turn; do not start it again."
+            f"set to a line it prints when ready. Otherwise {continuation[0].lower()}"
+            f"{continuation[1:]}"
         )
-    return (
-        f"{running}{_RESULT_ARRIVES} Continue other work, or end your turn if your next step "
-        "needs the result; do not start it again."
-    )
+    return f"{opening} {_RESULT_ARRIVES} {continuation}"
 
 
 def _followed_text(report: CommandReport, limit: str, *, matched: bool) -> str:
@@ -891,8 +977,9 @@ def _followed_text(report: CommandReport, limit: str, *, matched: bool) -> str:
             "step; do not start it again."
         )
     return (
-        f"The command keeps running; {limit}. {_RESULT_ARRIVES} Continue other work, or end "
-        "your turn if your next step needs the result. Stop it with "
+        f"The command has run for {_duration(report.elapsed_seconds)} and keeps running; "
+        f"{limit}. {_RESULT_ARRIVES} Continue other work, or end your turn if your next step "
+        "needs the result; do not sleep or poll for its result. Stop it with "
         f"{_terminal_call('kill', report.terminal_id)} when it is no longer needed."
     )
 
@@ -919,16 +1006,36 @@ def command_output_text(report: CommandReport, *, screen: str = "") -> tuple[str
     lines = list(head)
     if omitted:
         noun = "line" if omitted == 1 else "lines"
-        lines.append(f"[... {omitted:,} {noun} omitted; log_file has the full output ...]")
+        lines.append(f"[... {omitted:,} {noun} omitted{_full_output(report)} ...]")
     lines.extend(tail)
     return "\n".join(lines), bool(omitted) or shortened
+
+
+def _running_output_text(report: CommandReport, screen: str) -> str:
+    """The newest output of a running command: whole lines within the running limits."""
+    transcript = report.transcript
+    screen_lines = screen.splitlines()
+    lines = [*transcript.head, *transcript.tail, *screen_lines]
+    newest = [_shortened(line) for line in lines[-SHELL_RUNNING_OUTPUT_LINES:]]
+    kept, _ = _within(newest, SHELL_RUNNING_OUTPUT_CHARS, keep="end")
+    omitted = transcript.total_lines + len(screen_lines) - len(kept)
+    if not omitted:
+        return "\n".join(kept)
+    noun = "line" if omitted == 1 else "lines"
+    marker = f"[... {omitted:,} earlier {noun} omitted{_full_output(report)} ...]"
+    return "\n".join([marker, *kept])
+
+
+def _full_output(report: CommandReport) -> str:
+    """Where the omitted output is, as a clause of a marker."""
+    return "; the log file has the full output" if report.transcript.log_path else ""
 
 
 def _shortened(line: str) -> str:
     if len(line) <= SHELL_OUTPUT_LINE_CHARS:
         return line
     rest = len(line) - SHELL_OUTPUT_LINE_CHARS
-    return f"{line[:SHELL_OUTPUT_LINE_CHARS]}[... {rest:,} more characters in log_file]"
+    return f"{line[:SHELL_OUTPUT_LINE_CHARS]}[... {rest:,} more characters in the log file]"
 
 
 def _within(lines: list[str], budget: int, *, keep: str) -> tuple[list[str], int]:
@@ -957,11 +1064,17 @@ def format_command_delivery(
     *offers* tells which Tools the message can name.
     """
     subject = report.description or _first_line(report.command)
+    ran = _duration(report.elapsed_seconds)
     if report.stop_reason is not None:
-        status = f"was stopped: {_stop_text(report)}"
+        status = f"was stopped after {ran}: {_stop_text(report)}"
+    elif report.exit_code is None:
+        status = f"exited after {ran}; its exit code is unknown."
     else:
-        status = f"exited with code {report.exit_code}."
+        status = f"exited with code {report.exit_code} after {ran}."
     lines = [f"The command in terminal {report.terminal_id} ({subject}) {status}"]
+    if report.description:
+        # The subject names the purpose; the Agent needs the exact command too.
+        lines.append(f"Command: {_capped(report.command, _DELIVERY_COMMAND_CHARS)}")
     output, truncated = command_output_text(report)
     hint = _failure_hint(report, output, offers)
     if hint is not None:
@@ -982,11 +1095,19 @@ def format_command_delivery(
         until = f"; {limit}" if limit else ""
         lines.append(f"Processes it started still run: {names}{until}.{stop}")
     if truncated and report.transcript.log_path is not None:
-        lines.append(f"Full output: {model_path(report.transcript.log_path)}")
+        lines.append(f"Log file: {model_path(report.transcript.log_path)}")
     lines.append("Output:" if output else "Output: (none)")
     if output:
         lines.append(output)
     return "\n".join(lines)
+
+
+# A delivery shows the command up to this many characters.
+_DELIVERY_COMMAND_CHARS = 1_000
+
+
+def _capped(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
 def _first_line(command: str) -> str:
@@ -1002,7 +1123,8 @@ COMMAND_STATUS_TOOL_NAMES = (SHELL_TOOL_NAME,)
 COMMAND_STATUS_NOTE_MARKER = "The command in terminal "
 _DELIVERY_STATUS = re.compile(
     r"The command in terminal (?P<terminal>term_[A-Za-z0-9]+) \(.*?\) "
-    r"(?:exited with code (?P<code>-?\d+|None)\.|(?P<stopped>was stopped):)"
+    r"(?:exited(?: with code (?P<code>-?\d+|None))?(?: after [^.;]*)?[.;]"
+    r"|(?P<stopped>was stopped)(?: after [^:]*)?:)"
 )
 
 

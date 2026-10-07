@@ -49,6 +49,7 @@ def test_command_layers_apply_in_order_and_the_run_identity_wins(
     # Unattended defaults replace the login's, and the Agent's variables replace those.
     assert environment["GIT_TERMINAL_PROMPT"] == "0"
     assert environment["GIT_PAGER"] == "cat"
+    assert environment["PYTHONIOENCODING"] == "utf-8"
     assert environment["PAGER"] == "more"
     assert (environment["MODE"], environment["API_TOKEN"]) == ("ci", "secret")
     assert environment["VBOT_RUN_AGENT_ID"] == "agent-1"

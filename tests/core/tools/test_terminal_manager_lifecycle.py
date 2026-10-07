@@ -450,7 +450,7 @@ async def test_failed_tree_kill_retains_orphan_after_root_eof_for_retry(
         assert not adapter.is_alive()
 
     monkeypatch.setattr(terminal_backend, "kill_process_tree", kill_tree)
-    with pytest.raises(TerminalManagerError, match="Retry the kill operation"):
+    with pytest.raises(TerminalManagerError, match="so they can still be running"):
         await manager.kill(started.terminal_id, owner())
     # The root's EOF reaches the reader; only its end shows it was handled.
     reader = manager._sessions[started.terminal_id]._reader_task

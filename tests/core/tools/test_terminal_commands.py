@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any, cast
@@ -336,6 +337,8 @@ class Tools(Harness):
         register_terminal_tool(self.registry, self.manager, ProjectStore(tmp_path))
         # Callbacks the calls registered to run once their results are kept.
         self.persisted: list[Callable[[], None]] = []
+        # Callbacks the calls registered for the user's move to the background.
+        self.background_callbacks: list[Callable[[], bool]] = []
 
     async def call(
         self, tool: str, arguments: JsonObject, *, session: str = "session-a"
@@ -353,6 +356,7 @@ class Tools(Harness):
             cwd=self.tmp_path,
             project_id="project-a",
             result_persisted_hook=self.persisted.append,
+            background_registration_hook=self.background_callbacks.append,
         )
         try:
             return await self.registry.dispatch(
@@ -423,16 +427,20 @@ async def test_terminal_reads_answers_and_waits_for_a_command_in_the_shell_resul
     assert hidden["error"]["code"] == "terminal_not_found"
 
     status = await tools.terminal({"action": "status", "terminal_id": terminal_id, "lines": 50})
-    keeps_running = (
-        "The command keeps running; it has no timeout. Its result arrives as a new message when "
-        "it exits. Continue other work, or end your turn if your next step needs the result. "
-        f"Stop it with {terminal_call('kill', terminal_id)} when it is no longer needed."
-    )
+
+    def keeps_running(ran: str) -> str:
+        return (
+            f"The command has run for {ran} and keeps running; it has no timeout. "
+            "Its result arrives as a new message when it exits. Continue other work, or end your "
+            "turn if your next step needs the result; do not sleep or poll for its result. Stop "
+            f"it with {terminal_call('kill', terminal_id)} when it is no longer needed."
+        )
+
     assert status == {
         "status": "running",
         "terminal_id": terminal_id,
         "output": "Server LISTENING on :8080\nContinue?",
-        "next": keeps_running,
+        "next": keeps_running("0 seconds"),
         "note": "lines and start_line page an interactive terminal's screen; a command's result "
         "shows its output, and log_file, when present, holds all of it.",
     }
@@ -451,6 +459,8 @@ async def test_terminal_reads_answers_and_waits_for_a_command_in_the_shell_resul
         "The command keeps running; it has no timeout. Its result arrives as a new message when "
         "it exits. Continue with your next step; do not start it again.",
     )
+    # The result names the line that matched.
+    assert matched["matched"] == "Server LISTENING on :8080"
 
     # input returns the output once it settles after the input.
     typing = asyncio.ensure_future(
@@ -460,12 +470,15 @@ async def test_terminal_reads_answers_and_waits_for_a_command_in_the_shell_resul
     adapter.emit("y\r\nSaved.\r\n")
     await eventually(lambda: shows(tools, terminal_id, "Saved."))
     await tools.run_clock(typing, until=tools.clock.now + 5)
-    assert typing.result() == {
+    typed = typing.result()
+    # The runtime counts on while the input settles.
+    # The runtime counts on; its exact seconds depend on when the output settled.
+    assert re.sub(r"for \d seconds", "for N", typed.pop("next")) == keeps_running("N")
+    assert typed == {
         "status": "running",
         "terminal_id": terminal_id,
         "output": "Server LISTENING on :8080\nContinue? y\nSaved.",
         "key": "enter",
-        "next": keeps_running,
     }
     # Output before the input and the input's echo no longer match a pattern.
     waiting = asyncio.ensure_future(
@@ -480,7 +493,8 @@ async def test_terminal_reads_answers_and_waits_for_a_command_in_the_shell_resul
     )
     await tools.run_clock(waiting, until=tools.clock.now + 5)
     waited = waiting.result()
-    assert (waited["wait_ended"], waited["next"]) == ("timeout", keeps_running)
+    waited["next"] = re.sub(r"for \d seconds", "for N", waited["next"])
+    assert (waited["wait_ended"], waited["next"]) == ("timeout", keeps_running("N"))
 
     # A command stays attached to the Session that ran it, so its result arrives there.
     attached = await tools.terminal({"action": "attach", "terminal_id": terminal_id})
@@ -525,6 +539,7 @@ async def test_a_command_exit_a_kept_result_showed_is_not_delivered_again(
         "exit_code": 0,
         "output": "compiled",
         "wait_ended": "exited",
+        **({"matched": "compiled"} if pattern is not None else {}),
     }
     if kept:
         tools.keep_results()
@@ -575,6 +590,27 @@ async def test_kill_stops_a_command_and_says_what_it_stopped(tools: Tools, befor
     assert tree.terminated == (0 if before == "ended" else 1)
 
 
+@pytest.mark.asyncio
+async def test_user_can_end_a_wait_on_a_command(tools: Tools) -> None:
+    terminal_id, adapter, _tree = await tools.background("deploy")
+    adapter.emit("Starting\r\n")
+    await eventually(lambda: shows(tools, terminal_id, "Starting"))
+    waiting = asyncio.ensure_future(
+        tools.terminal({"action": "wait", "terminal_id": terminal_id, "timeout": 300})
+    )
+    await eventually(lambda: bool(tools.background_callbacks))
+
+    assert tools.background_callbacks[-1]() is True
+
+    result = await waiting
+    assert (result["status"], result["wait_ended"], result["note"]) == (
+        "running",
+        "user",
+        "The user ended this wait; the program keeps running.",
+    )
+    assert tools.clock.now < 300
+
+
 @pytest.mark.parametrize("working", [False, True], ids=["idle", "working"])
 @pytest.mark.asyncio
 async def test_command_wait_ends_only_at_exit_match_or_timeout(tools: Tools, working: bool) -> None:
@@ -595,16 +631,18 @@ async def test_command_wait_ends_only_at_exit_match_or_timeout(tools: Tools, wor
 
     result = cast(JsonObject, waiting.result())
     assert (result["status"], result["wait_ended"]) == ("running", "timeout")
+    assert result["note"] == "The command did not exit within 75 seconds."
     assert tools.clock.now >= 75
     if working:
         assert result["next"].startswith(
-            "The command keeps running; it has no timeout. Its result arrives "
+            "The command has run for 1 minute 15 seconds and keeps running; it has no timeout. "
+            "Its result arrives "
         )
     else:
         # The idle text says how long the command has printed nothing.
         assert result["next"].startswith(
-            f"The command in terminal {terminal_id} has printed nothing for 75 seconds and uses "
-            "no CPU; it has no timeout."
+            f"The command in terminal {terminal_id} has printed nothing for 1 minute 15 seconds "
+            "and uses no CPU; it has no timeout."
         )
 
 
@@ -629,7 +667,11 @@ async def test_a_command_runs_while_processes_its_shell_left_running_work(tools:
     adapter.emit("done\r\n")
     await eventually(lambda: shows(tools, terminal_id, "done"))
     tree.running = ()
-    await tools.manager.wait_finished(terminal_id)
+    finished = asyncio.ensure_future(tools.manager.wait_finished(terminal_id))
+    # The command checks its processes each second of its clock.
+    while not finished.done():
+        await tools.clock.advance(1)
+        await asyncio.wait({finished}, timeout=0.05)
     final = await tools.terminal({"action": "status", "terminal_id": terminal_id})
     assert final["status"] == "exited"
     assert final["output"].splitlines() == ["starting", "partial", "done"]
