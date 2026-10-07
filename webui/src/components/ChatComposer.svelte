@@ -494,9 +494,7 @@
       clearDraft(fromKey);
     }
     const fromScope = media.attachmentScopeForDraftKey(fromKey);
-    const movedAttachments = media
-      .attachmentsForScope(fromScope)
-      .filter((attachment) => !attachment.uploading);
+    const movedAttachments = media.attachmentsForScope(fromScope);
     if (
       movedAttachments.length > 0 &&
       media.attachmentsForScope(media.attachmentScopeForDraftKey(toKey))
