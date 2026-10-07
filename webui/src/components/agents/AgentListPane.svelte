@@ -27,6 +27,7 @@
     onReorderInteractionChange = () => {},
     // Row context menu actions.
     onOpenChat = () => {},
+    onOpenInSplit = () => {},
     onCopyId = () => {},
     onDelete = () => {},
   } = $props();
@@ -34,7 +35,8 @@
   // The open row context menu (../ui/ContextMenu.svelte), or null.
   let menu = $state(null);
 
-  // Open chat, Copy ID | Delete... (the last Agent cannot be deleted).
+  // Open chat, Open in split view, Copy ID | Delete... (the last Agent
+  // cannot be deleted).
   function agentMenu(agent) {
     const lastAgent = agents.length < 2;
     return {
@@ -45,6 +47,12 @@
           label: t('agents.menu.openChat'),
           group: 'agent',
           onSelect: () => onOpenChat(agent.id),
+        },
+        {
+          id: 'open-in-split',
+          label: t('split.openInSplit'),
+          group: 'agent',
+          onSelect: () => onOpenInSplit(agent.id),
         },
         {
           id: 'copy-id',

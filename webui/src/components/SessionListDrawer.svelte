@@ -72,6 +72,10 @@
     // picked — the address routes cross-agent selections, the flag drives the
     // sub-agent footer banner in ChatView.
     onSessionSelected = () => {},
+    // Open in split view for a row (`{ label, open(target) }` with target
+    // `{ agentAddress, sessionId, subAgent }`); null leaves it out of the
+    // row menu.
+    otherArea = null,
     // Called after a successful delete with { deletedSessionId, nextSessionId,
     // agentAddress } so ChatView can navigate if it was viewing the removed
     // session (#2).
@@ -476,10 +480,26 @@
     event.preventDefault();
     menus.closeFilterMenu();
     rowMenuKey = sessionRowKey(session);
+    const openElsewhere = otherArea
+      ? [
+          {
+            id: 'open-in-other-area',
+            label: otherArea.label,
+            group: 'open',
+            onSelect: () =>
+              otherArea.open({
+                agentAddress: session.agent_address || asText(agentId),
+                sessionId: session.id,
+                subAgent: session.is_subagent_session === true,
+              }),
+          },
+        ]
+      : [];
     rowMenu = {
       ...contextMenuAnchor(event),
       label: t('sessions.actions'),
       items: [
+        ...openElsewhere,
         {
           id: 'rename',
           label: t('sessions.rename'),

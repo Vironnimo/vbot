@@ -17,6 +17,8 @@
   import { tooltip } from '$lib/tooltip.js';
 
   import Button from '../ui/Button.svelte';
+  import ContextMenu from '../ui/ContextMenu.svelte';
+  import { contextMenuAnchor, isContextMenuKey } from '../ui/contextMenu.js';
   import ChangeStats from './ChangeStats.svelte';
   import CopyableValueCard from './CopyableValueCard.svelte';
 
@@ -36,6 +38,9 @@
     onSessionStatsWanted = () => {},
     parentSession = null,
     onNavigateToSubAgent = () => {},
+    // Open in split view for a Sub-Agent row (`{ label, open(target) }`, with
+    // the row's `{ agentId, sessionId }` target); null offers no row menu.
+    otherArea = null,
     onNavigateToParentSession = () => {},
     onOpenReflection = () => {},
     onLoadReflectionChanges = () => {},
@@ -88,6 +93,25 @@
     if (focusInside) {
       rail.focus();
     }
+  };
+
+  // The open Sub-Agent row menu (../ui/ContextMenu.svelte), or null.
+  let taskMenu = $state(null);
+
+  const openTaskMenu = (task, event) => {
+    if (!otherArea || !task.target || event.defaultPrevented) return;
+    event.preventDefault();
+    taskMenu = {
+      ...contextMenuAnchor(event),
+      label: taskLabel(task),
+      items: [
+        {
+          id: 'open-in-other-area',
+          label: otherArea.label,
+          onSelect: () => otherArea.open(task.target),
+        },
+      ],
+    };
   };
 
   const handleKeydown = (event) => {
@@ -398,6 +422,10 @@
           : undefined}
         disabled={!task.target}
         onClick={() => task.target && onNavigateToSubAgent(task.target)}
+        oncontextmenu={(event) => openTaskMenu(task, event)}
+        onkeydown={(event) => {
+          if (isContextMenuKey(event)) openTaskMenu(task, event);
+        }}
       >
         <span class="chat-activity__task-copy">
           {#if task.description}
@@ -740,6 +768,8 @@
     </aside>
   {/if}
 </div>
+
+<ContextMenu menu={taskMenu} onClose={() => (taskMenu = null)} />
 
 <style>
   .chat-activity {

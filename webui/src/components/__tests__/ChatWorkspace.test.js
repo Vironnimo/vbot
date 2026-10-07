@@ -6,6 +6,7 @@ import {
   createChatRpcMock,
   createAgent,
   listSessionsMock,
+  message,
   selectAgentFromPicker,
   setInputValue,
   flushSync,
@@ -873,6 +874,109 @@ describe('ChatWorkspace', () => {
       );
       expect(pane(0).textContent).toContain('Second conversation sentinel');
     });
+  });
+
+  it('opens a Session row or an Agent tab in the other area through its context menu', async () => {
+    const agents = [
+      createAgent(),
+      createAgent({
+        id: 'beta',
+        name: 'Beta',
+        current_session_id: 'session-beta',
+      }),
+    ];
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        agents,
+        sessionMessages: {
+          'session-2': [
+            message('second-answer', 'Second conversation sentinel'),
+          ],
+          'session-beta': [message('beta-answer', 'Beta sentinel')],
+        },
+      }),
+    );
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'session-2',
+          title: 'Second topic',
+          created_at: '2026-05-10T00:00:00+00:00',
+          last_active_at: '2026-05-10T01:00:00+00:00',
+        },
+      ],
+    });
+    const onSessionNavigation = vi.fn(() => true);
+    harness.mount(
+      {
+        target: document.body,
+        props: {
+          sharedAgents: agents,
+          sharedSelectedAgentId: 'alpha',
+          onSessionNavigation,
+        },
+      },
+      ChatWorkspace,
+    );
+    await waitForCondition(() => pane(0)?.textContent.includes('Hello'));
+    const openFromMenu = async (element, label) => {
+      element.dispatchEvent(
+        new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: 40,
+          clientY: 40,
+        }),
+      );
+      flushSync();
+      const item = [...document.querySelectorAll('[role="menuitem"]')].find(
+        (entry) => entry.textContent.trim() === label,
+      );
+      expect(item).toBeTruthy();
+      item.click();
+      flushSync();
+    };
+    const sessionRow = (index) =>
+      pane(index)
+        .querySelector('.session-row__select')
+        ?.closest('.session-row');
+    const agentTab = (index, name) =>
+      [...pane(index).querySelectorAll('button.agent-pill')].find(
+        (pill) => pill.textContent.trim() === name,
+      );
+
+    // A row of the only area opens the split view and shows its Session
+    // there; the first area keeps its own Session.
+    action(0, 'Session list');
+    await waitForCondition(() => sessionRow(0));
+    await openFromMenu(sessionRow(0), 'Open in split view');
+    await waitForCondition(() =>
+      pane(1)?.textContent.includes('Second conversation sentinel'),
+    );
+    expect(pane(1).hidden).toBe(false);
+    expect(pane(0).textContent).toContain('Hello');
+    expect(pane(0).textContent).not.toContain('Second conversation sentinel');
+
+    // Once split, a tab offers the other area and shows its Agent there.
+    await waitForCondition(() => agentTab(0, 'Beta')?.disabled === false);
+    await openFromMenu(agentTab(0, 'Beta'), 'Open in other area');
+    await waitForCondition(() => pane(1).textContent.includes('Beta sentinel'));
+    expect(pane(0).textContent).toContain('Hello');
+
+    // The second area sends a Session to the first, as a history step of
+    // the first area's place.
+    onSessionNavigation.mockClear();
+    action(1, 'Session list');
+    await waitForCondition(() => sessionRow(1));
+    await openFromMenu(sessionRow(1), 'Open in other area');
+    await waitForCondition(() =>
+      pane(0).textContent.includes('Second conversation sentinel'),
+    );
+    expect(pane(1).textContent).toContain('Beta sentinel');
+    expect(onSessionNavigation).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: 'beta', sessionId: 'session-2' }),
+      { replace: false },
+    );
   });
 
   it('resizes with keyboard, clamps widths and restores equal sizes', async () => {

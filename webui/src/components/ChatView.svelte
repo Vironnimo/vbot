@@ -47,6 +47,13 @@
   let {
     active = true,
     workspaceActions,
+    // Open in split view: `{ label, open(target) }` shows a Session or Agent
+    // (`{ agentAddress, sessionId?, subAgent? }`) in the workspace's other
+    // area; null offers no such action.
+    otherArea = null,
+    // The workspace's request to show a target chosen in the other area here
+    // (`{ target, requestId }`).
+    openRequest = null,
     interactive = true,
     composerAvailable = true,
     preserveSessionSelection = false,
@@ -414,6 +421,43 @@
       ? target.handleSelectProjectAgent(agentId, projectId)
       : navigation.handleSelectAgent(agentId);
   }
+
+  // A target chosen for this area in the other one applies like a choice in
+  // this area's own Session list or Agent bar, once the area shows and knows
+  // its Agents.
+  let handledOpenRequestId = 0;
+  $effect(() => {
+    const request = openRequest;
+    if (!request || request.requestId === handledOpenRequestId) return;
+    if (!active || chatState.agents.length === 0) return;
+    handledOpenRequestId = request.requestId;
+    untrack(() => {
+      const { agentAddress, sessionId, subAgent } = request.target;
+      if (sessionId) {
+        void navigation.handleSessionSelected(
+          sessionId,
+          agentAddress,
+          subAgent === true,
+        );
+      } else {
+        void handleSelectPickerAgent(agentAddress);
+      }
+    });
+  });
+
+  // Sub-Agent links carry the child's bare id, qualified like a click on
+  // the link.
+  let subAgentOtherArea = $derived(
+    otherArea && {
+      label: otherArea.label,
+      open: (link) =>
+        otherArea.open({
+          agentAddress: target.qualifiedChildAgentAddress(link.agentId),
+          sessionId: link.sessionId,
+          subAgent: true,
+        }),
+    },
+  );
 
   let sessionDrawerActivity = $derived.by(() =>
     Object.values(chatState.sessions).map((sessionState) => ({
@@ -841,6 +885,7 @@
     onToggleSessionList={() => (showSessionDrawer = !showSessionDrawer)}
     newSessionDisabled={!target.activeAgent || chatState.loadingHistory}
     onNewSession={navigation.handleNewSession}
+    {otherArea}
     actions={workspaceActions}
   />
 
@@ -882,6 +927,7 @@
             onSessionFiltersChange(next);
           }}
           onSessionSelected={navigation.handleSessionSelected}
+          {otherArea}
           onSessionDeleted={navigation.handleSessionDeleted}
           onCompactionPolicyChange={chatController.applySessionCompactionPolicy}
         />
@@ -915,6 +961,7 @@
             commandStatuses={chatState.commandStatuses}
             onLoadOlder={actions.loadOlderHistory}
             onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
+            otherArea={subAgentOtherArea}
             onCancelToolCall={actions.handleCancelToolCall}
             onBackgroundToolCall={({ runId, toolCallId }) =>
               chatController.controlRun(
@@ -1120,6 +1167,7 @@
         onSessionStatsWanted={sessionChanges.setWanted}
         parentSession={navigation.sessionParentLink}
         onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
+        otherArea={subAgentOtherArea}
         onNavigateToParentSession={navigation.navigateToParentSession}
         onOpenReflection={navigation.handleOpenReflection}
         onLoadReflectionChanges={(row) =>

@@ -3,6 +3,7 @@
   import AudioPlayer from '../ui/AudioPlayer.svelte';
   import Button from '../ui/Button.svelte';
   import CopyButton from '../ui/CopyButton.svelte';
+  import { isContextMenuKey } from '../ui/contextMenu.js';
   import { t } from '$lib/i18n.js';
   import { formatMoment } from '$lib/timeText.js';
   import { INTENTIONAL_HOVER_SHOW_DELAY_MS, tooltip } from '$lib/tooltip.js';
@@ -62,6 +63,9 @@
     isReasoningOpen = () => false,
     onReasoningOpenChange = () => {},
     onNavigateToSubAgent = () => {},
+    // Called with (event, target) for a right click or the context menu key
+    // on a Sub-Agent link; null keeps the native menu.
+    onSubAgentContextMenu = null,
     onCancelToolCall = () => {},
     onBackgroundToolCall = () => {},
     backgroundToolCallIds = [],
@@ -97,6 +101,13 @@
     if (target) {
       await onNavigateToSubAgent(target);
     }
+  }
+
+  function handleSubAgentContextMenu(event, tool) {
+    if (!onSubAgentContextMenu || event.defaultPrevented) return;
+    if (event.type === 'keydown' && !isContextMenuKey(event)) return;
+    const target = subAgentNavigationTarget(tool);
+    if (target) onSubAgentContextMenu(event, target);
   }
 
   function actionKey(kind, id) {
@@ -355,6 +366,9 @@
                   tooltip={t('chat.subagent.openSession')}
                   ariaLabel={t('chat.subagent.openSession')}
                   onClick={(event) => handleSubAgentNavigate(event, child)}
+                  oncontextmenu={(event) =>
+                    handleSubAgentContextMenu(event, child)}
+                  onkeydown={(event) => handleSubAgentContextMenu(event, child)}
                 >
                   <svg
                     viewBox="0 0 16 16"
@@ -469,6 +483,9 @@
                   tooltip={t('chat.subagent.openSession')}
                   ariaLabel={t('chat.subagent.openSession')}
                   onClick={(event) => handleSubAgentNavigate(event, child)}
+                  oncontextmenu={(event) =>
+                    handleSubAgentContextMenu(event, child)}
+                  onkeydown={(event) => handleSubAgentContextMenu(event, child)}
                 >
                   <svg
                     viewBox="0 0 16 16"

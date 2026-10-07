@@ -5,6 +5,8 @@
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import Button from '../ui/Button.svelte';
+  import ContextMenu from '../ui/ContextMenu.svelte';
+  import { contextMenuAnchor, isContextMenuKey } from '../ui/contextMenu.js';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import {
     agentActivityState,
@@ -50,7 +52,31 @@
     onNewSession = () => {},
     // Actions for this Chat area at the bar's end, such as Split.
     actions = undefined,
+    // Open in split view for an Agent tab (`{ label, open(target) }`); null
+    // leaves the tabs without a context menu.
+    otherArea = null,
   } = $props();
+
+  // The open Agent tab menu (../ui/ContextMenu.svelte), or null.
+  let agentMenu = $state(null);
+
+  // A right click or the context menu key on an Agent tab offers to show the
+  // Agent in the other Chat area.
+  function openAgentMenu(entry, event) {
+    if (!otherArea || event.defaultPrevented) return;
+    event.preventDefault();
+    agentMenu = {
+      ...contextMenuAnchor(event),
+      label: t('chat.agentMenu.label', { name: entry.fullName }),
+      items: [
+        {
+          id: 'open-in-other-area',
+          label: otherArea.label,
+          onSelect: () => otherArea.open({ agentAddress: entry.address }),
+        },
+      ],
+    };
+  }
 
   let storedExpansion = $state(readStoredExpansion());
   // Groups toggled since the panel opened; the selected Agent's Project opens
@@ -389,6 +415,10 @@
     use:tooltip={entry.tooltip}
     disabled={loadingAgents}
     onclick={() => onSelectAgent(entry.address)}
+    oncontextmenu={(event) => openAgentMenu(entry, event)}
+    onkeydown={(event) => {
+      if (isContextMenuKey(event)) openAgentMenu(entry, event);
+    }}
   >
     {#if entry.status !== 'idle'}
       <span
@@ -499,6 +529,8 @@
     </div>
   {/if}
 </header>
+
+<ContextMenu menu={agentMenu} onClose={() => (agentMenu = null)} />
 
 <style>
   .chat-header {
