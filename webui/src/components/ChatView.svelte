@@ -927,6 +927,7 @@
           onSessionSelected={navigation.handleSessionSelected}
           {otherArea}
           onSessionDeleted={navigation.handleSessionDeleted}
+          onSessionDeleteStarted={navigation.beginSessionDeletion}
           onCompactionPolicyChange={chatController.applySessionCompactionPolicy}
         />
       {/if}

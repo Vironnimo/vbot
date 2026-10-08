@@ -414,8 +414,8 @@
       }
       if (row) {
         event.preventDefault();
-        selectOption(row.option);
         triggerElement?.focus();
+        selectOption(row.option);
       }
       return;
     }

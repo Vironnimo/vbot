@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { t } from '../../lib/i18n.js';
 import {
+  allAgentsTrigger,
   createAgent,
   createChatRpcMock,
   createHistoryMessages,
@@ -394,6 +395,84 @@ describe('ChatView Sessions', () => {
       },
     );
 
+    it.each([
+      'uninterrupted',
+      'programmatic focus',
+      'pointer interaction',
+      'keyboard interaction',
+      'area hidden and reopened',
+      'area disabled and reenabled',
+      'browser navigation away and back',
+    ])('honors pending Session focus ownership after %s', async (scenario) => {
+      const history = Promise.withResolvers();
+      let pending = true;
+      const base = createChatRpcMock({
+        sessionMessages: {
+          'session-2': [message('assistant-two', 'Second session reply')],
+        },
+      });
+      rpcMock.mockImplementation(async (method, params) => {
+        if (
+          pending &&
+          method === 'chat.history' &&
+          params.session_id === 'session-2'
+        ) {
+          pending = false;
+          await history.promise;
+        }
+        return base(method, params);
+      });
+      listedSessions({ id: 'session-2', title: 'Second topic' });
+      const props = reactiveProps({ active: true, interactive: true });
+      await chat.mountChat(props);
+      await openFromDrawer('Second topic');
+      await waitForCondition(() => historyReads('session-2') === 1);
+
+      if (scenario === 'programmatic focus') {
+        // A dialog may focus its control without a preceding pointer event.
+        const control = document.createElement('button');
+        document.body.append(control);
+        control.focus();
+      } else if (scenario === 'pointer interaction') {
+        document.body.dispatchEvent(
+          new Event('pointerdown', { bubbles: true }),
+        );
+      } else if (scenario === 'keyboard interaction') {
+        document.body.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }),
+        );
+      } else if (scenario.startsWith('area')) {
+        const prop = scenario.includes('hidden') ? 'active' : 'interactive';
+        props[prop] = false;
+        flushSync();
+        props[prop] = true;
+        flushSync();
+      } else if (scenario === 'browser navigation away and back') {
+        // The final displayed key matches the still pending navigation, but
+        // these two passive navigations have retired its deliberate focus.
+        for (const sessionId of ['session-1', 'session-2']) {
+          props.pendingSessionNavigation = {
+            agentId: 'alpha',
+            sessionId,
+            subAgent: false,
+            requestId: `restore-${sessionId}`,
+          };
+          flushSync();
+          await waitForText(
+            sessionId === 'session-1' ? 'Hello' : 'Second session reply',
+          );
+        }
+      }
+      const previousFocus = document.activeElement;
+      history.resolve();
+      await waitForText('Second session reply');
+      await settle(2);
+
+      expect(document.activeElement).toBe(
+        scenario === 'uninterrupted' ? composerInput() : previousFocus,
+      );
+    });
+
     it('does not steal focus when browser history changes the displayed Session', async () => {
       rpcMock.mockImplementation(
         createChatRpcMock({
@@ -422,42 +501,67 @@ describe('ChatView Sessions', () => {
       expect(document.activeElement).toBe(passiveFocusTarget);
     });
 
-    it('focuses after a user Agent switch but not after a passive Agent update', async () => {
-      const agents = [
-        createAgent(),
-        createAgent({
-          id: 'beta',
-          name: 'Beta',
-          current_session_id: 'session-2',
-        }),
-      ];
-      rpcMock.mockImplementation(
-        createChatRpcMock({
-          agents,
-          sessionMessages: {
-            'session-2': [message('beta-assistant', 'Beta session reply')],
-          },
-        }),
-      );
-      const parent = createChatViewParentHarness();
-      await chat.mountChat(parent.props(['agent'], { sharedAgents: agents }));
+    it.each(['click', 'keyboard'])(
+      'focuses after a user Agent switch by %s but not after a passive Agent update',
+      async (selection) => {
+        const agents = [
+          createAgent(),
+          ...Array.from({ length: 4 }, (_, index) =>
+            createAgent({ id: `other-${index}`, name: `Other ${index}` }),
+          ),
+          createAgent({
+            id: 'beta',
+            name: 'Beta',
+            current_session_id: 'session-2',
+          }),
+        ];
+        rpcMock.mockImplementation(
+          createChatRpcMock({
+            agents,
+            sessionMessages: {
+              'session-2': [message('beta-assistant', 'Beta session reply')],
+            },
+          }),
+        );
+        const parent = createChatViewParentHarness();
+        await chat.mountChat(parent.props(['agent'], { sharedAgents: agents }));
 
-      await selectAgentFromPicker('Beta');
-      await waitForText('Beta session reply');
-      await waitForCondition(() => document.activeElement === composerInput());
+        if (selection === 'keyboard') {
+          allAgentsTrigger().click();
+          await waitForCondition(() =>
+            Boolean(document.querySelector('.s-dropdown-search input')),
+          );
+          const search = document.querySelector('.s-dropdown-search input');
+          setInputValue(search, 'Beta');
+          flushSync();
+          search.dispatchEvent(
+            new KeyboardEvent('keydown', {
+              key: 'Enter',
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        } else {
+          await selectAgentFromPicker('Beta');
+        }
+        await waitForText('Beta session reply');
+        await waitForCondition(
+          () => document.activeElement === composerInput(),
+        );
 
-      const passiveFocusTarget = document.createElement('button');
-      document.body.append(passiveFocusTarget);
-      passiveFocusTarget.focus();
-      parent.setSelectedAgentId('alpha');
-      flushSync();
-      await waitForCondition(
-        () =>
-          document.body.textContent.includes('Hello') &&
-          !document.body.textContent.includes('Beta session reply'),
-      );
-      expect(document.activeElement).toBe(passiveFocusTarget);
-    });
+        const passiveFocusTarget = document.createElement('button');
+        document.body.append(passiveFocusTarget);
+        passiveFocusTarget.focus();
+        parent.setSelectedAgentId('alpha');
+        flushSync();
+        await waitForCondition(
+          () =>
+            document.body.textContent.includes('Hello') &&
+            !document.body.textContent.includes('Beta session reply'),
+        );
+        expect(document.activeElement).toBe(passiveFocusTarget);
+      },
+    );
 
     it('does not switch the viewed conversation on a Sessions refresh', async () => {
       rpcMock.mockImplementation(createChatRpcMock());

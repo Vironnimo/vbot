@@ -27,6 +27,7 @@ export function createChatViewNavigation(context) {
   let subAgentLinkFollowRequestId = 0;
 
   let handledSessionNavigationKey = '';
+  let sessionNavigationVersion = 0;
 
   let subAgentSessionActive = $derived(
     Boolean(viewingSessionId) && viewingSubAgentSession,
@@ -253,11 +254,13 @@ export function createChatViewNavigation(context) {
     agentId,
     { focusComposer = true, step = true } = {},
   ) => {
+    if (!step) sessionNavigationVersion += 1;
     const select = () => selectAgentSession(agentId, { focusComposer });
     return step ? asStep(select) : select();
   };
 
   const selectAgentSession = async (agentId, { focusComposer }) => {
+    const focusAfterLoad = context.layout.captureComposerFocus();
     // Choosing an identity agent leaves any Project Agent and its Project.
     context.target.selectedProjectAgentId = '';
     context.onProjectAgentSelected?.('');
@@ -280,7 +283,7 @@ export function createChatViewNavigation(context) {
       viewingSubAgentSession = false;
       await context.loadHistoryForSession(agentId, unreadSession.sessionId);
       if (focusComposer) {
-        context.layout.requestComposerFocus();
+        focusAfterLoad();
       }
       return;
     }
@@ -289,7 +292,7 @@ export function createChatViewNavigation(context) {
         clearSessionOverride();
         await context.loadCurrentHistory();
         if (focusComposer) {
-          context.layout.requestComposerFocus();
+          focusAfterLoad();
         }
       }
       return;
@@ -299,7 +302,7 @@ export function createChatViewNavigation(context) {
     context.onAgentSelected?.(agentId);
     await context.loadCurrentHistory();
     if (focusComposer) {
-      context.layout.requestComposerFocus();
+      focusAfterLoad();
     }
   };
 
@@ -318,11 +321,29 @@ export function createChatViewNavigation(context) {
   // browser-history restore. Restores re-enter past overrides, a draft, or
   // return to the current session without creating new history entries.
   const applySessionNavigation = async (navigation) => {
+    context.layout.cancelComposerFocus();
     stepMarked = false;
-    const isCurrent = () => context.pendingSessionNavigation === navigation;
+    const version = ++sessionNavigationVersion;
+    const isCurrent = () =>
+      context.pendingSessionNavigation === navigation &&
+      sessionNavigationVersion === version;
+    const selection =
+      navigation.selection ??
+      (navigation.subAgent === true
+        ? null
+        : linkedAgentSelection(navigation.agentId));
+    const fallbackSelection =
+      !navigation.selection && selection?.projectId
+        ? {
+            agentId: context.chatState.selectedAgentId,
+            projectId: context.selectedProjectId,
+            projectAgentId: context.target.selectedProjectAgentId,
+          }
+        : null;
     const selectionChanged = await applyNavigationSelection(
-      navigation.selection,
+      selection,
       isCurrent,
+      fallbackSelection,
     );
     if (!isCurrent()) return;
 
@@ -368,6 +389,24 @@ export function createChatViewNavigation(context) {
     );
   };
 
+  // Copied URLs have no history-state selection. A selectable linked Agent
+  // becomes the normal Chat target; hidden Session owners remain overrides
+  // of the user's existing selection, as they do for in-app links.
+  const linkedAgentSelection = (address) => {
+    const { agentId, projectId } = parseAgentAddress(address);
+    if (projectId) {
+      const group = context.target.projectGroups.find(
+        (candidate) => candidate.projectId === projectId,
+      );
+      return group?.members.some((member) => member.agent_id === agentId)
+        ? { projectId, projectAgentId: agentId }
+        : null;
+    }
+    return context.target.agentById(agentId)
+      ? { agentId, projectId: '', projectAgentId: '' }
+      : null;
+  };
+
   // Restore the selection half of a history entry: the selected identity
   // agent, the chosen project, and the active project agent. Applied here
   // (not in App) so the restore never routes through the user-action handlers
@@ -376,7 +415,11 @@ export function createChatViewNavigation(context) {
   // (`lastSharedSelectedAgentId`/`lastLoadedProjectId`) so the round-trip
   // cannot re-run the restore as a fresh user action. Returns whether the
   // active chat target changed (the caller then reloads the current view).
-  const applyNavigationSelection = async (selection, isCurrent) => {
+  const applyNavigationSelection = async (
+    selection,
+    isCurrent,
+    fallbackSelection = null,
+  ) => {
     if (!selection) {
       return false;
     }
@@ -402,7 +445,7 @@ export function createChatViewNavigation(context) {
       typeof selection.projectAgentId === 'string'
         ? selection.projectAgentId
         : '';
-    if (projectId !== context.target.lastLoadedProjectId) {
+    if (projectId !== context.target.lastLoadedProjectId || fallbackSelection) {
       // Same imperative ownership as the /agent move: the target pre-syncs
       // its guard, so its effect does not jump to the project default.
       changed = true;
@@ -414,6 +457,17 @@ export function createChatViewNavigation(context) {
       }
     }
     if (!isCurrent()) return false;
+    // The cached catalog can still name a member removed by the live scan.
+    // Such a copied Session remains an override of the original selection.
+    if (
+      fallbackSelection &&
+      !context.target.projectTeam.some(
+        (member) => member.agent_id === projectAgentId,
+      )
+    ) {
+      await applyNavigationSelection(fallbackSelection, isCurrent);
+      return true;
+    }
     if (projectId && projectAgentId !== context.target.selectedProjectAgentId) {
       context.target.selectedProjectAgentId = projectAgentId;
       context.onProjectAgentSelected?.(projectAgentId);
@@ -446,9 +500,10 @@ export function createChatViewNavigation(context) {
       return;
     }
 
+    const focusAfterLoad = context.layout.captureComposerFocus();
     setViewedSession(agentAddress, normalizedSessionId, isSubAgentSession);
     await context.loadHistoryForSession(agentAddress, normalizedSessionId);
-    context.layout.requestComposerFocus();
+    focusAfterLoad();
   };
 
   // The drawer lists the displayed agent's sessions. Picking one of the
@@ -487,9 +542,20 @@ export function createChatViewNavigation(context) {
   // (composer focus) instead of finding nothing to do. Either way the deleted
   // Session's history entry is corrected to its landing, never a new step.
   let passiveDeletionFollow = null;
+  let localDeletionFocus = null;
+  const beginSessionDeletion = ({ sessionId, agentAddress }) => {
+    const intent = { sessionId, agentAddress };
+    localDeletionFocus = intent;
+    return {
+      focusAfterLoad: context.layout.captureComposerFocus(),
+      release() {
+        if (localDeletionFocus === intent) localDeletionFocus = null;
+      },
+    };
+  };
   const handleSessionDeleted = async (
     { deletedSessionId, nextSessionId, agentAddress } = {},
-    { passive = false } = {},
+    { passive = false, focusAfterLoad } = {},
   ) => {
     const removedId = String(deletedSessionId ?? '').trim();
     const landingId = String(nextSessionId ?? '').trim();
@@ -501,6 +567,19 @@ export function createChatViewNavigation(context) {
     }
     const viewedSessionId =
       viewingSessionId || context.target.activeAgent?.current_session_id || '';
+    if (passive) {
+      // The server echo is part of this area's confirmed deletion. It may
+      // land first without retiring the focus captured at confirmation.
+      if (
+        viewedSessionId === removedId &&
+        (localDeletionFocus?.sessionId !== removedId ||
+          localDeletionFocus.agentAddress !== ownerAddress)
+      ) {
+        context.layout.cancelComposerFocus();
+      }
+    } else {
+      focusAfterLoad ??= context.layout.captureComposerFocus();
+    }
     releaseDeletedSession(ownerAddress, removedId, landingId);
     if (!passive) {
       context.onSessionDeleted?.({
@@ -517,7 +596,7 @@ export function createChatViewNavigation(context) {
     ) {
       passiveDeletionFollow = null;
       await followed.loaded;
-      context.layout.requestComposerFocus();
+      focusAfterLoad?.();
       return;
     }
     if (viewedSessionId !== removedId) {
@@ -534,7 +613,7 @@ export function createChatViewNavigation(context) {
     passiveDeletionFollow = null;
     // The deleted Session's entry now names its landing.
     await followDeletionLanding(ownerAddress, landingId);
-    context.layout.requestComposerFocus();
+    focusAfterLoad?.();
   };
 
   // Without a landing the owner has no Session left and shows a draft; a
@@ -670,6 +749,8 @@ export function createChatViewNavigation(context) {
   });
 
   const asStep = async (action) => {
+    sessionNavigationVersion += 1;
+    context.layout.cancelComposerFocus();
     stepMarked = true;
     try {
       return await action();
@@ -702,6 +783,7 @@ export function createChatViewNavigation(context) {
     if (!subAgentSessionActive || context.chatState.loadingHistory) {
       return;
     }
+    const focusAfterLoad = context.layout.captureComposerFocus();
 
     // A sub-agent session returns to its PARENT session (from the child's
     // `subagent_parent` metadata). Without resolvable parent metadata (old
@@ -709,13 +791,13 @@ export function createChatViewNavigation(context) {
     // return-to-current behavior below.
     if (subAgentSessionActive && subAgentParentTarget) {
       await showParentSession(subAgentParentTarget);
-      context.layout.requestComposerFocus();
+      focusAfterLoad();
       return;
     }
 
     clearSessionOverride();
     await loadActiveOwnHistory();
-    context.layout.requestComposerFocus();
+    focusAfterLoad();
   };
 
   // User-initiated navigation from a child session to its parent session: a
@@ -945,6 +1027,7 @@ export function createChatViewNavigation(context) {
     );
   };
   return {
+    beginSessionDeletion,
     get viewingSessionId() {
       return viewingSessionId;
     },

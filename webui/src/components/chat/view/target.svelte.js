@@ -450,18 +450,18 @@ export function createChatViewTarget(context) {
     // The initial (reload) restore must not clear a session override that a
     // mount-adopted history entry has just applied — the override stays the
     // displayed session, the member session loads invisibly behind it.
-    void switchProject(() =>
-      loadProjectTeam(projectId, {
+    void switchProject(async () => {
+      const focusAfterLoad = context.layout.captureComposerFocus();
+      await loadProjectTeam(projectId, {
         restoreAgentId,
         keepOverride: isInitialRestore,
-      }),
-    ).then(() => {
+      });
       if (
         !isInitialRestore &&
         context.selectedProjectId === projectId &&
         selectedProjectAgentId
       ) {
-        context.layout.requestComposerFocus();
+        focusAfterLoad();
       }
     });
   });
@@ -670,8 +670,10 @@ export function createChatViewTarget(context) {
       return;
     }
     await context.navigation.asStep(async () => {
+      const focusAfterLoad = context.layout.captureComposerFocus();
       if (!projectChanges) {
         await openProjectAgent(agentId, { preferUnread: true });
+        focusAfterLoad();
         return;
       }
       context.navigation.clearSessionOverride();
@@ -682,8 +684,8 @@ export function createChatViewTarget(context) {
         projectId,
       });
       await reading;
+      focusAfterLoad();
     });
-    context.layout.requestComposerFocus();
   };
 
   // Re-read the open Project's team in place, e.g. after `/model` changed a

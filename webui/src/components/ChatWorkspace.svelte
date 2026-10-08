@@ -462,11 +462,12 @@
     });
   });
 
-  function navigateSecond(agentId, sessionId) {
+  function navigateSecond({ agentId, sessionId }) {
     secondNavigation = {
       agentId,
       sessionId,
       subAgent: true,
+      followSession: true,
       requestId: ++navigationSequence,
     };
   }
