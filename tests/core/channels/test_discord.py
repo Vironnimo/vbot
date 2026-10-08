@@ -6,7 +6,7 @@ import asyncio
 import logging
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
@@ -32,8 +32,8 @@ from .discord_test_support import (
 )
 from .engine_test_support import (
     assert_member_trigger,
-    channel_state,
     command_outcome,
+    make_channel_engine,
     make_command_dispatcher,
 )
 
@@ -42,13 +42,11 @@ pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
 def test_constructor_requires_token(tmp_path: Path) -> None:
     with pytest.raises(ChannelConfigError):
+        config = make_config(allowed_chat_ids=[100])
         DiscordChannelAdapter(
-            make_config(allowed_chat_ids=[100]),
-            cast(Any, SimpleNamespace()),
-            cast(Any, ChatSessionManager(tmp_path)),
+            config,
+            make_channel_engine(tmp_path, config, SimpleNamespace(), ChatSessionManager(tmp_path)),
             lambda _key: "",
-            command_dispatcher=cast(Any, make_command_dispatcher()),
-            conversation_pointers=channel_state(tmp_path, CHANNEL_ID),
         )
 
 
@@ -92,13 +90,11 @@ async def test_start_enables_message_content_intent(
         "_load_discord",
         lambda: SimpleNamespace(Intents=FakeIntents, Client=FakeGatewayClient),
     )
+    config = make_config(allowed_chat_ids=[100])
     adapter = DiscordChannelAdapter(
-        make_config(allowed_chat_ids=[100]),
-        cast(Any, SimpleNamespace()),
-        cast(Any, ChatSessionManager(tmp_path)),
+        config,
+        make_channel_engine(tmp_path, config, SimpleNamespace(), ChatSessionManager(tmp_path)),
         lambda _key: "test-token",
-        command_dispatcher=cast(Any, make_command_dispatcher()),
-        conversation_pointers=channel_state(tmp_path, CHANNEL_ID),
     )
 
     await adapter.start()

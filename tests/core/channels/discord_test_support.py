@@ -17,9 +17,10 @@ from core.sessions import ChatSessionManager, SessionAddress
 
 from .engine_test_support import (
     MemoryChannelAccessRegistry,
-    channel_state,
+    connect,
     drain,
-    make_command_dispatcher,
+    ending_engine_on_stop,
+    make_channel_engine,
     make_trigger_service,
 )
 
@@ -247,24 +248,27 @@ def make_adapter(
     )
     trigger_service = make_trigger_service(trigger, waiting_work_manager=waiting_work_manager)
     access = MemoryChannelAccessRegistry([str(user_id) for user_id in admin_user_ids or []])
-    adapter = DiscordChannelAdapter(
-        make_config(
-            allowed_chat_ids=allowed_chat_ids,
-            response_mode=response_mode,
-            observe_unaddressed=observe_unaddressed,
-        ),
-        cast(Any, trigger_service),
-        cast(Any, chat_sessions),
-        lambda _key: "test-token",
-        attachment_store=attachment_store,
-        command_dispatcher=cast(Any, command_dispatcher or make_command_dispatcher()),
-        conversation_pointers=channel_state(tmp_path, CHANNEL_ID),
+    config = make_config(
+        allowed_chat_ids=allowed_chat_ids,
+        response_mode=response_mode,
+        observe_unaddressed=observe_unaddressed,
+    )
+    engine = make_channel_engine(
+        tmp_path,
+        config,
+        trigger_service,
+        chat_sessions,
+        command_dispatcher=command_dispatcher,
         access_registry=access,
+    )
+    adapter = ending_engine_on_stop(DiscordChannelAdapter)(
+        config, engine, lambda _key: "test-token", attachment_store=attachment_store
     )
     client = FakeClient([target])
     # Connected state that start() establishes once the Gateway reports ready.
     adapter._client = client
     adapter._bot_id = "999"
+    connect(engine, adapter)
     return DiscordHarness(
         adapter=adapter,
         sessions=chat_sessions,

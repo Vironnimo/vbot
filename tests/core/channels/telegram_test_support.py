@@ -7,7 +7,7 @@ import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast, override
+from typing import Any, override
 from unittest.mock import AsyncMock
 
 import pytest
@@ -28,9 +28,10 @@ from core.sessions import ChatSessionManager
 from .engine_test_support import (
     QUEUE_DRAIN_TIMEOUT_SECONDS,
     MemoryChannelAccessRegistry,
-    channel_state,
+    connect,
     drain,
-    make_command_dispatcher,
+    ending_engine_on_stop,
+    make_channel_engine,
     make_config,
     make_trigger_service,
 )
@@ -358,20 +359,26 @@ def make_adapter(
     )
     config.validate()
 
-    adapter = TelegramChannelAdapter(
+    engine = make_channel_engine(
+        tmp_path,
         config,
-        cast(Any, make_trigger_service(trigger_mock)),
-        cast(Any, chat_sessions),
-        credential_resolver or (lambda key: os.environ.get(key, "")),
-        attachment_store=attachment_store,
-        command_dispatcher=cast(Any, command_dispatcher or make_command_dispatcher()),
-        conversation_pointers=channel_state(tmp_path),
-        chat_migration_persister=chat_migration_persister,
-        interaction_dispatcher=interaction_dispatcher,
+        make_trigger_service(trigger_mock),
+        chat_sessions,
+        command_dispatcher=command_dispatcher,
         run_button_binding_registry=run_button_binding_registry,
         access_registry=access_registry or MemoryChannelAccessRegistry(admin_user_ids),
+    )
+    adapter = ending_engine_on_stop(TelegramChannelAdapter)(
+        config,
+        engine,
+        credential_resolver or (lambda key: os.environ.get(key, "")),
+        attachment_store=attachment_store,
+        chat_migration_persister=chat_migration_persister,
+        interaction_dispatcher=interaction_dispatcher,
         update_offset_store=update_offset_store,
     )
+    # The Channel service connects the engine once the adapter reports its connection.
+    adapter.observe_connection(lambda: engine.set_connected(True))
     if bot_username is not None or bot_display_name is not None or bot_id is not None:
         adapter._set_bot_identity(
             SimpleNamespace(id=bot_id, username=bot_username, full_name=bot_display_name)
@@ -385,6 +392,7 @@ def make_adapter(
             stop=AsyncMock(),
             shutdown=AsyncMock(),
         )
+        connect(engine, adapter._transport)
     return adapter, chat_sessions, trigger_mock, bot
 
 

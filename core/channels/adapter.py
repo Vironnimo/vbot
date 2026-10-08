@@ -15,7 +15,6 @@ from core.extensions import InteractionButton
 
 if TYPE_CHECKING:
     from core.attachments import AttachmentRecord
-    from core.runs import Run
 
 # Denied inbound chats are kept for operator visibility only; the bound keeps the
 # in-memory log small under spam while still covering every realistic setup flow.
@@ -161,6 +160,51 @@ class ConversationPointerStore(Protocol):
     ) -> Result:
         """Run blocking pointer work on the worker pool of the store's database."""
         ...
+
+
+@dataclass(frozen=True)
+class PendingReply:
+    """One reply a Channel owes a conversation until it was sent.
+
+    Without ``run_id`` it answers an admitted inbound item that no Run took over
+    yet; ``binding_id`` names the Run-button binding a tap claimed for it. With
+    ``run_id`` it carries that Run's answer; ``route`` locates the Run's history.
+    ``owner`` is the conversation engine that recorded it.
+    """
+
+    id: str
+    reply_plan: ReplyPlanFacts
+    owner: str
+    created_at: str
+    route: RouteFacts | None = None
+    run_id: str | None = None
+    binding_id: str | None = None
+
+
+class PendingReplyStore(Protocol):
+    """Durable replies a Channel owes its conversations, sent at most once.
+
+    A reply is recorded before its answer exists, claimed while one send is in
+    flight and removed once that send ended. A claimed reply that an ended engine
+    left behind may have reached the chat and is dropped, never sent again. The
+    methods block; async callers run them through :meth:`run_async`.
+    """
+
+    def owe_reply(self, channel_id: str, reply: PendingReply) -> None: ...
+
+    def claim_reply(self, channel_id: str, reply_id: str) -> bool: ...
+
+    def release_reply(self, channel_id: str, reply_id: str) -> None: ...
+
+    def settle_reply(self, channel_id: str, reply_id: str) -> None: ...
+
+    def take_pending_replies(
+        self, channel_id: str, owner: str
+    ) -> tuple[list[PendingReply], int]: ...
+
+    async def run_async[Result](
+        self, function: Callable[..., Result], *arguments: Any, **keyword_arguments: Any
+    ) -> Result: ...
 
 
 class ReceivedMessageStore(Protocol):
@@ -455,14 +499,6 @@ class ChannelAdapter(ABC):
         nothing of the message can be visible: once a part was acknowledged
         (``DeliveryProgress``), or when a write's outcome is unknown.
         """
-
-    async def relay_run(
-        self,
-        run: Run,
-        reply_plan: ReplyPlanFacts,
-    ) -> None:
-        """Relay one already-admitted background Run through this adapter."""
-        raise NotImplementedError
 
     @abstractmethod
     async def ensure_outbound_session(

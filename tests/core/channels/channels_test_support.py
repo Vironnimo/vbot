@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -20,11 +21,9 @@ from core.channels import (
 )
 from core.channels.adapter import (
     FileData,
-    ReplyPlanFacts,
     RouteFacts,
 )
 from core.extensions import InteractionButton
-from core.runs import Run
 from core.sessions import ChatSessionManager
 
 
@@ -84,14 +83,18 @@ def make_config(
 
 
 class BlockingAdapter(ChannelAdapter):
+    """Runs until stopped; also the transport its Channel's engine replies over."""
+
     platform = "telegram"
+    platform_display_name = "Telegram"
 
     def __init__(self) -> None:
         self.started = asyncio.Event()
         self.stopped = asyncio.Event()
         self.sent_messages: list[tuple[str | None, str]] = []
         self.sent_buttons: list[list[list[InteractionButton]] | None] = []
-        self.relayed_runs: list[tuple[Run, ReplyPlanFacts]] = []
+        # (platform_target, thread_id, text) of each engine reply.
+        self.replies: list[tuple[str, str | None, str]] = []
 
     @override
     async def start(self) -> None:
@@ -116,9 +119,22 @@ class BlockingAdapter(ChannelAdapter):
         self.sent_messages.append((message, platform_target))
         self.sent_buttons.append(buttons)
 
-    @override
-    async def relay_run(self, run: Run, reply_plan: ReplyPlanFacts) -> None:
-        self.relayed_runs.append((run, reply_plan))
+    async def send_text(
+        self,
+        platform_target: str,
+        text: str,
+        *,
+        reply_to_message_id: str | None = None,
+        thread_id: str | None = None,
+    ) -> None:
+        del reply_to_message_id
+        self.replies.append((platform_target, thread_id, text))
+
+    def activity_indicator(
+        self, platform_target: str, thread_id: str | None = None
+    ) -> contextlib.AbstractAsyncContextManager[None]:
+        del platform_target, thread_id
+        return contextlib.nullcontext()
 
     @override
     async def ensure_outbound_session(

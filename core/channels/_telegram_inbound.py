@@ -226,15 +226,54 @@ class TelegramInboundBuffer:
         )
 
     async def stop(self) -> None:
+        """End the delays and hand every still buffered album and comment to the conversation.
+
+        The conversation outlives this adapter, so buffered turns are dispatched
+        now instead of dropped. A dispatch already under way ends with the adapter,
+        like any inbound handling it cancels.
+        """
         background_tasks = list(self._tasks)
         self._album_tasks.clear()
+        self._forward_comment_tasks.clear()
+        for task in background_tasks:
+            task.cancel()
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
+
+        comments = list(self._pending_forward_comments.values())
+        self._pending_forward_comments.clear()
+        albums = [
+            (
+                self._album_conversations.pop(album_id, None),
+                messages,
+                self._album_companion_texts.pop(album_id, None),
+            )
+            for album_id, messages in self._album_buffers.items()
+        ]
         self._album_buffers.clear()
         self._album_conversations.clear()
         self._album_companion_texts.clear()
-        self._forward_comment_tasks.clear()
-        self._pending_forward_comments.clear()
-        for task in background_tasks:
-            task.cancel()
+        for pending in comments:
+            await self._dispatch(
+                self._text_handler(
+                    pending.conversation, pending.text, raw_message=pending.raw_message
+                )
+            )
+        for conversation, messages, companion_text in albums:
+            if conversation is not None and messages:
+                await self._dispatch(
+                    self._media_handler(
+                        conversation, tuple(messages), companion_text=companion_text
+                    )
+                )
 
-        if background_tasks:
-            await asyncio.gather(*background_tasks, return_exceptions=True)
+    async def _dispatch(self, handling: Awaitable[object]) -> None:
+        try:
+            await handling
+        except Exception as error:
+            _LOGGER.warning(
+                "Telegram buffered message dispatch failed (channel=%s): %s",
+                self._channel_id,
+                error,
+                exc_info=(type(error), error, error.__traceback__),
+            )

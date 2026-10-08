@@ -4,7 +4,8 @@
 configuration: the registry of known Channels with their own platform
 identity, per-group admins and seen participants, the conversation routing
 pointers, Run-button origin bindings, the inbound receipt window of the
-socket platforms and the Telegram polling watermark.
+socket platforms, the replies a Channel still owes its conversations and the
+Telegram polling watermark.
 
 Every state row belongs to a registered Channel. Writes for an unregistered
 Channel are refused, so a late save cannot recreate state after the Channel was
@@ -34,6 +35,9 @@ from typing import Any
 from core.channels._state_schema import DATABASE_NAME, channel_database_spec
 from core.channels.adapter import (
     TELEGRAM_UPDATE_OFFSET_TTL_SECONDS,
+    PendingReply,
+    ReplyPlanFacts,
+    RouteFacts,
     RunButtonBinding,
     RunButtonClaim,
     main_conversation_id,
@@ -52,6 +56,10 @@ from core.utils.timestamps import format_canonical_timestamp, utc_now_timestamp
 # Socket platforms may redeliver recent events after a reconnect; remembering the
 # newest receipts per Channel bounds both the dedupe window and the table.
 RECEIVED_MESSAGE_WINDOW = 4096
+
+# A reply still owed after this long, for example while its Channel was disabled,
+# no longer fits the conversation and is dropped instead of sent.
+PENDING_REPLY_RETENTION_SECONDS = 7 * 24 * 3600
 
 _CONVERSATION_KINDS = frozenset({"direct", "group"})
 
@@ -579,6 +587,111 @@ class ChannelStateStore:
 
         await self._database.write_async(record)
 
+    # -- Pending replies ---------------------------------------------------------------
+
+    def owe_reply(self, channel_id: str, reply: PendingReply) -> None:
+        """Record a reply the Channel owes, or replace the one recorded under its id."""
+        normalized_id = _normalize_channel_id(channel_id)
+        plan = reply.reply_plan
+        route = reply.route
+
+        def owe(connection: sqlite3.Connection) -> None:
+            _registered_self_user_id(connection, normalized_id)
+            connection.execute(
+                "INSERT INTO channel_pending_replies (channel_id, reply_id, platform_target, "
+                "thread_id, reply_to_message_id, agent_id, session_id, run_id, binding_id, "
+                "owner, created_at, sending_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL) "
+                "ON CONFLICT (channel_id, reply_id) DO UPDATE SET "
+                "platform_target = excluded.platform_target, thread_id = excluded.thread_id, "
+                "reply_to_message_id = excluded.reply_to_message_id, "
+                "agent_id = excluded.agent_id, session_id = excluded.session_id, "
+                "run_id = excluded.run_id, binding_id = excluded.binding_id, "
+                "owner = excluded.owner",
+                (
+                    normalized_id,
+                    reply.id,
+                    plan.platform_target,
+                    plan.thread_id,
+                    plan.reply_to_message_id,
+                    None if route is None else route.agent_id,
+                    None if route is None else route.session_id,
+                    reply.run_id,
+                    reply.binding_id,
+                    reply.owner,
+                    reply.created_at,
+                ),
+            )
+
+        self._database.write(owe)
+
+    def claim_reply(self, channel_id: str, reply_id: str) -> bool:
+        """Mark a recorded reply as being sent; False when it is gone or already claimed."""
+        normalized_id = _normalize_channel_id(channel_id)
+        sending_at = utc_now_timestamp()
+
+        def claim(connection: sqlite3.Connection) -> bool:
+            claimed = connection.execute(
+                "UPDATE channel_pending_replies SET sending_at = ? "
+                "WHERE channel_id = ? AND reply_id = ? AND sending_at IS NULL",
+                (sending_at, normalized_id, reply_id),
+            ).rowcount
+            return claimed == 1
+
+        return self._database.write(claim)
+
+    def release_reply(self, channel_id: str, reply_id: str) -> None:
+        """Make a claimed reply sendable again after a send that provably did not reach the chat."""
+        normalized_id = _normalize_channel_id(channel_id)
+
+        def release(connection: sqlite3.Connection) -> None:
+            connection.execute(
+                "UPDATE channel_pending_replies SET sending_at = NULL "
+                "WHERE channel_id = ? AND reply_id = ?",
+                (normalized_id, reply_id),
+            )
+
+        self._database.write(release)
+
+    def settle_reply(self, channel_id: str, reply_id: str) -> None:
+        """Forget a reply that was sent or no longer needs sending."""
+        normalized_id = _normalize_channel_id(channel_id)
+
+        def settle(connection: sqlite3.Connection) -> None:
+            connection.execute(
+                "DELETE FROM channel_pending_replies WHERE channel_id = ? AND reply_id = ?",
+                (normalized_id, reply_id),
+            )
+
+        self._database.write(settle)
+
+    def take_pending_replies(self, channel_id: str, owner: str) -> tuple[list[PendingReply], int]:
+        """Return the replies other engines left owed, oldest first, for ``owner`` to send.
+
+        Replies those engines left mid-send may have reached the chat, and replies
+        older than ``PENDING_REPLY_RETENTION_SECONDS`` no longer fit it: both are
+        deleted, never sent, and counted in the second result.
+        """
+        normalized_id = _normalize_channel_id(channel_id)
+        cutoff = format_canonical_timestamp(
+            datetime.now(UTC) - timedelta(seconds=PENDING_REPLY_RETENTION_SECONDS)
+        )
+
+        def take(connection: sqlite3.Connection) -> tuple[list[PendingReply], int]:
+            dropped = connection.execute(
+                "DELETE FROM channel_pending_replies WHERE channel_id = ? AND owner != ? "
+                "AND (sending_at IS NOT NULL OR created_at < ?)",
+                (normalized_id, owner, cutoff),
+            ).rowcount
+            rows = connection.execute(
+                "SELECT reply_id, platform_target, thread_id, reply_to_message_id, agent_id, "
+                "session_id, run_id, binding_id, owner, created_at FROM channel_pending_replies "
+                "WHERE channel_id = ? AND owner != ? ORDER BY created_at, reply_id",
+                (normalized_id, owner),
+            ).fetchall()
+            return [_pending_reply(normalized_id, tuple(row)) for row in rows], dropped
+
+        return self._database.write(take)
+
     # -- Telegram polling watermark ---------------------------------------------------
 
     def load_update_offset(self, channel_id: str, bot_id: int) -> int:
@@ -618,6 +731,39 @@ class ChannelStateStore:
             )
 
         self._database.write(save)
+
+
+def _pending_reply(channel_id: str, row: tuple[Any, ...]) -> PendingReply:
+    (
+        reply_id,
+        platform_target,
+        thread_id,
+        reply_to_message_id,
+        agent_id,
+        session_id,
+        run_id,
+        binding_id,
+        owner,
+        created_at,
+    ) = row
+    return PendingReply(
+        id=str(reply_id),
+        reply_plan=ReplyPlanFacts(
+            channel_id=channel_id,
+            platform_target=str(platform_target),
+            reply_to_message_id=reply_to_message_id,
+            thread_id=thread_id,
+        ),
+        owner=str(owner),
+        created_at=str(created_at),
+        route=(
+            RouteFacts(agent_id=str(agent_id), session_id=str(session_id))
+            if agent_id is not None and session_id is not None
+            else None
+        ),
+        run_id=run_id,
+        binding_id=binding_id,
+    )
 
 
 def _polling_expiry_cutoff() -> str:

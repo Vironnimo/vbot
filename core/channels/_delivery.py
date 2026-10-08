@@ -234,7 +234,11 @@ async def _discard_unsent_binding(
 async def relay_completion_run(
     service: ChannelService, run: Run, reply_surface: ReplySurface
 ) -> None:
-    """Relay a background completion Run to its Session's latest Channel target."""
+    """Relay a background completion Run to its Session's latest Channel target.
+
+    Returns once the Run ended; its answer is owed durably and reaches the chat
+    once the Channel is connected.
+    """
     if reply_surface.kind != "channel" or reply_surface.channel_id is None:
         return
     address = SessionAddress(
@@ -261,8 +265,8 @@ async def relay_completion_run(
     config = service._storage.get(channel_id)
     if config.agent_id != run.agent_id or config.platform != reply_surface.platform:
         raise ChannelConfigError(f"Session reply surface no longer matches Channel {channel_id}")
-    adapter = service._active_adapter(channel_id)
-    await adapter.relay_run(
+    engine = service._active_engine(channel_id)
+    await engine.relay_run(
         run,
         ReplyPlanFacts(
             channel_id=channel_id,

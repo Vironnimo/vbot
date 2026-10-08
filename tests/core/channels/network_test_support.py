@@ -21,10 +21,11 @@ from core.runs import ASSISTANT_OUTPUT_EVENT, Run
 from core.sessions import ChatSessionManager
 
 from .engine_test_support import (
-    MemoryChannelAccessRegistry,
     channel_state,
+    connect,
     drain,
-    make_command_dispatcher,
+    ending_engine_on_stop,
+    make_channel_engine,
     make_trigger_service,
 )
 
@@ -118,18 +119,17 @@ def make_adapter(
 
     trigger = AsyncMock(side_effect=complete)
     trigger_service = make_trigger_service(trigger)
-    adapter = _ADAPTER_CLASSES[platform](
+    engine = make_channel_engine(tmp_path, config, trigger_service, ChatSessionManager(tmp_path))
+    adapter = ending_engine_on_stop(_ADAPTER_CLASSES[platform])(
         config,
-        trigger_service,
-        ChatSessionManager(tmp_path),
+        engine,
         lambda key: f"secret-{key}",
         attachment_store or AttachmentStore(tmp_path),
-        command_dispatcher=make_command_dispatcher(),
-        conversation_pointers=channel_state(tmp_path, config.id),
         received_messages=channel_state(tmp_path, config.id),
-        access_registry=MemoryChannelAccessRegistry([]),
         state_dir=tmp_path / "channels" / config.id,
     )
+    # The Channel service connects the engine once the adapter reports its connection.
+    adapter.observe_connection(lambda: engine.set_connected(True))
     requests: list[httpx.Request] = []
 
     def route(request: httpx.Request) -> httpx.Response:
@@ -143,6 +143,7 @@ def make_adapter(
     if connected:
         adapter._bot_id = "BOT"
         adapter._connected = True
+        connect(engine, adapter)
     return NetworkHarness(
         adapter=adapter,
         trigger=trigger,

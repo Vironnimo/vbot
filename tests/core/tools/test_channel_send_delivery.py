@@ -257,14 +257,7 @@ async def test_file_deliveries_keep_the_actual_topic_for_followup_sends(
     sessions = ChatSessionManager(tmp_path)
     service = make_channel_service(tmp_path, chat_sessions=sessions)
     config = make_real_channel_config(allowed_chat_ids=[-10001])
-    adapter = TelegramChannelAdapter(
-        config,
-        service._trigger_service,
-        sessions,
-        lambda _key: "test-token",
-        command_dispatcher=service._command_dispatcher,
-        conversation_pointers=service._state,
-    )
+    adapter = TelegramChannelAdapter(config, service._new_engine(config), lambda _key: "test-token")
     bot = SimpleNamespace(send_document=AsyncMock())
     adapter._application = SimpleNamespace(
         bot=bot, updater=None, stop=AsyncMock(), shutdown=AsyncMock()

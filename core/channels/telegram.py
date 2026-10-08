@@ -8,21 +8,17 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, override
+from typing import Any, override
 
 from core.attachments import AttachmentStore
 from core.channels.adapter import (
     TELEGRAM_UPDATE_OFFSET_TTL_SECONDS,
-    ChannelAccessRegistry,
     ChannelAdapter,
     ConversationFacts,
-    ConversationPointerStore,
     DeniedChatFacts,
     DeniedChatLog,
     FileData,
-    ReplyPlanFacts,
     RouteFacts,
-    RunButtonBindingRegistry,
     UpdateOffsetStore,
 )
 from core.channels.config import ChannelConfig, ChannelConfigError, ChannelError
@@ -60,12 +56,6 @@ from ._telegram_messages import (
 )
 from ._telegram_transport import TELEGRAM_CAPTION_LIMIT, TelegramTransport
 
-if TYPE_CHECKING:
-    from core.automation.automation import TriggerService
-    from core.chat.commands import CommandDispatcher
-    from core.runs import Run
-    from core.sessions import ChatSessionManager
-
 _LOGGER = get_logger("channels.telegram")
 # Durable polling watermark and chat-migration writes; never on the Event Loop.
 _STATE_IO_POOL = BoundedWorkerPool(name="telegram-state-io", max_workers=2)
@@ -98,19 +88,14 @@ class TelegramChannelAdapter(ChannelAdapter):
     def __init__(
         self,
         config: ChannelConfig,
-        trigger_service: TriggerService,
-        chat_sessions: ChatSessionManager,
+        engine: ChannelConversationEngine,
         credential_resolver: Callable[[str], str],
         attachment_store: AttachmentStore | None = None,
         *,
-        command_dispatcher: CommandDispatcher,
-        conversation_pointers: ConversationPointerStore,
         chat_migration_persister: Callable[[str, str], None] | None = None,
         interaction_dispatcher: (
             Callable[[InteractionEvent, InteractionResponder], Awaitable[bool]] | None
         ) = None,
-        run_button_binding_registry: RunButtonBindingRegistry | None = None,
-        access_registry: ChannelAccessRegistry | None = None,
         update_offset_store: UpdateOffsetStore | None = None,
     ) -> None:
         self._config = config
@@ -131,16 +116,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         self._last_update_id = -1
         self._last_update_claimed_at = time.monotonic()
         self._offset_save_tasks: set[asyncio.Task[None]] = set()
-        self._engine = ChannelConversationEngine(
-            config,
-            trigger_service,
-            chat_sessions,
-            self._transport,
-            command_dispatcher=command_dispatcher,
-            conversation_pointers=conversation_pointers,
-            run_button_binding_registry=run_button_binding_registry,
-            access_registry=access_registry,
-        )
+        self._engine = engine
 
         token = credential_resolver(config.token_env_var)
         if not isinstance(token, str) or not token.strip():
@@ -164,6 +140,7 @@ class TelegramChannelAdapter(ChannelAdapter):
     @override
     async def start(self) -> None:
         """Start Telegram long-polling and wait until stop is requested."""
+        self._engine.attach(self._transport)
         if self._application is not None:
             await self._stop_event.wait()
             return
@@ -289,7 +266,7 @@ class TelegramChannelAdapter(ChannelAdapter):
 
     @override
     async def stop(self) -> None:
-        """Stop polling, cancel engine workers and album tasks, and release resources."""
+        """Stop polling, hand buffered albums to the engine, and release resources."""
         self._stop_event.set()
         if self._polling_health is not None:
             self._polling_health.close()
@@ -324,11 +301,6 @@ class TelegramChannelAdapter(ChannelAdapter):
         await self._transport.send(
             message, platform_target, files=files, thread_id=thread_id, buttons=buttons
         )
-
-    @override
-    async def relay_run(self, run: Run, reply_plan: ReplyPlanFacts) -> None:
-        """Relay one background Run through the composed conversation engine."""
-        await self._engine.relay_run(run, reply_plan)
 
     # -- Inbound handlers -----------------------------------------------------------------
 
@@ -902,7 +874,6 @@ class TelegramChannelAdapter(ChannelAdapter):
 
     async def _stop_workers(self) -> None:
         await self._inbound.stop()
-        await self._engine.stop()
 
     async def _run_lifecycle_step(self, operation: Any, label: str) -> None:
         try:

@@ -16,12 +16,13 @@ from core.channels.state import ChannelStateStore
 from core.chat import ReplySurface
 from core.database import DatabaseUnavailableError
 from core.extensions import InteractionButton
-from core.runs import Run
+from core.runs import ASSISTANT_OUTPUT_EVENT, Run
 from core.sessions import ChatSessionManager, SessionAddress
 from tests.core.channels.channels_test_support import (
     BlockingAdapter,
     start_with_adapter,
 )
+from tests.core.channels.engine_test_support import connect, settle_replies
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
@@ -100,7 +101,11 @@ async def test_completion_run_relays_to_persisted_channel_target(
     )
     adapter = BlockingAdapter()
     service = await start_with_adapter(tmp_path, monkeypatch, adapter, chat_sessions=sessions)
+    engine = service._active_engine("tg-assistant")
+    connect(engine, adapter)
     run = Run(run_id="completion-run", agent_id="assistant", session_id=session_id)
+    run.emit(ASSISTANT_OUTPUT_EVENT, {"message": {"content": "Done."}})
+    run.mark_completed("Done.")
     surface = ReplySurface.channel(
         platform="telegram",
         platform_display_name="Telegram",
@@ -108,18 +113,12 @@ async def test_completion_run_relays_to_persisted_channel_target(
     )
     try:
         await service.relay_completion_run(run, surface)
+        await settle_replies(engine)
     finally:
         await service.aclose()
         service.close()
 
-    assert len(adapter.relayed_runs) == 1
-    relayed_run, reply_plan = adapter.relayed_runs[0]
-    assert relayed_run is run
-    assert (reply_plan.channel_id, reply_plan.platform_target, reply_plan.thread_id) == (
-        "tg-assistant",
-        "12345",
-        "77",
-    )
+    assert adapter.replies == [("12345", "77", "Done.")]
 
 
 @pytest.mark.asyncio
