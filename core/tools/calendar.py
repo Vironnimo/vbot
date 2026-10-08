@@ -73,12 +73,8 @@ if TYPE_CHECKING:
 
 CALENDAR_TOOL_NAME = "calendar"
 CALENDAR_TOOL_DESCRIPTION = (
-    "The user's calendar: list events, find free time, create, change and delete events, and "
-    "attach actions, instructions an Agent carries out before, at or after an event. Times are "
-    "local to the server time zone, shown by list and by Runtime Environment when present. An "
-    "action starts a Run of its target Agent with prompt plus the event's title, time and "
-    "notes; it moves with its event and is deleted with it. For schedules that should not "
-    "appear in the calendar, use cron if available."
+    "The user's calendar: events, free time, and actions, instructions an Agent carries out "
+    "before, at or after an event."
 )
 
 CALENDAR_ACTIONS = frozenset(

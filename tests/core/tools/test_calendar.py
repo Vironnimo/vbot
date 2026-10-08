@@ -14,7 +14,6 @@ import pytest
 
 from core.projects import AgentResolutionError
 from core.tools.calendar import (
-    CALENDAR_TOOL_DESCRIPTION,
     CALENDAR_TOOL_NAME,
     CALENDAR_TOOL_PARAMETERS,
 )
@@ -23,12 +22,7 @@ from tests.core.tools.scheduling_tool_support import WEEKLY_MONDAY, calendar_too
 BERLIN = ZoneInfo("Europe/Berlin")
 
 
-def test_definition_names_actions_time_zone_and_the_cron_alternative() -> None:
-    # The zone reaches Agents whose prompt shows no Runtime Environment: list names it.
-    assert "server time zone, shown by list and by Runtime Environment when present" in (
-        CALENDAR_TOOL_DESCRIPTION
-    )
-    assert "use cron if available" in CALENDAR_TOOL_DESCRIPTION
+def test_definition_advertises_the_calendar_parameters() -> None:
     assert set(CALENDAR_TOOL_PARAMETERS["properties"]) == {
         "action",
         "when",
