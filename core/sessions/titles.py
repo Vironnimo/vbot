@@ -483,6 +483,7 @@ class SessionTitleService:
     ) -> dict[str, Any]:
         recorder = self._usage_recorder
         call_id = await recorder.start(**usage_context) if recorder is not None else None
+        reported: dict[str, Any] = {}
         try:
             normalized = await stream_model_response(
                 adapter,
@@ -492,12 +493,14 @@ class SessionTitleService:
                 ],
                 model_id=model_id,
                 thinking_effort=thinking_effort,
+                on_usage=reported.update,
                 **request_context,
             )
         except BaseException as exc:
             if recorder is not None and call_id is not None:
                 await recorder.finish(
                     call_id,
+                    reported or None,
                     status="cancelled" if isinstance(exc, asyncio.CancelledError) else "failed",
                 )
             raise

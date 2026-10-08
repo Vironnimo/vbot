@@ -162,6 +162,13 @@ class _BlockingUnderstandingAdapter(_UnderstandingAdapter):
             self.active_requests -= 1
 
 
+class _BrokenAfterUsageAdapter(_UnderstandingAdapter):
+    @override
+    async def _deltas(self) -> AsyncIterator[dict[str, Any]]:
+        yield {"type": "usage", "input_tokens": 9, "output_tokens": 1}
+        raise ProviderError("stream dropped", retryable=True)
+
+
 class _UnderstandingRuntime:
     def __init__(
         self,
@@ -185,12 +192,16 @@ def _png(path: Path, suffix: bytes = b"pixels") -> Path:
 
 
 @pytest.mark.asyncio
-async def test_empty_analysis_preserves_billed_usage_and_caller_scope(
+@pytest.mark.parametrize("failure", ["empty-analysis", "stream-breaks"])
+async def test_failed_analysis_preserves_billed_usage_and_caller_scope(
     recorder: UsageRecorder,
     tmp_path: Path,
+    failure: str,
 ) -> None:
-    adapter = _UnderstandingAdapter(
-        {"content": "", "usage": {"input_tokens": 9, "output_tokens": 1}}
+    adapter = (
+        _UnderstandingAdapter({"content": "", "usage": {"input_tokens": 9, "output_tokens": 1}})
+        if failure == "empty-analysis"
+        else _BrokenAfterUsageAdapter()
     )
     service = ImageService(
         _UnderstandingModelTasks(),

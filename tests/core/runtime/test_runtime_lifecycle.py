@@ -30,6 +30,7 @@ from core.model_tasks import SpeechService
 from core.performance import PerformanceService
 from core.performance.performance import reset_for_tests
 from core.providers.accounts import ConnectionRef
+from core.providers.errors import ProviderError
 from core.providers.providers import ProviderRegistry
 from core.providers.usage import ProviderUsageService
 from core.runs import Run, RunStatus
@@ -987,7 +988,7 @@ async def test_extension_sampling_records_usage_before_returning(
     runtime = Runtime(config, safe_startup_mode="test")
     runtime.start()
     recorder = runtime.usage_recorder
-    shutdown = SimpleNamespace(begins_mid_call=False)
+    shutdown = SimpleNamespace(begins_mid_call=False, fails_after_usage=False)
     try:
 
         async def stream(*_args: object, **_kwargs: object) -> AsyncIterator[dict[str, object]]:
@@ -995,6 +996,8 @@ async def test_extension_sampling_records_usage_before_returning(
                 runtime._started = False  # noqa: SLF001 - shutdown begins mid-call.
             yield {"type": "content_delta", "text": "sample"}
             yield {"type": "usage", "input_tokens": 10, "output_tokens": 2}
+            if shutdown.fails_after_usage:
+                raise ProviderError("stream dropped", retryable=True)
             yield {"type": "finish", "reason": "stop"}
 
         adapter = SimpleNamespace(
@@ -1017,6 +1020,15 @@ async def test_extension_sampling_records_usage_before_returning(
             run_id="run",
             execution_owner=SimpleNamespace(extension="fixture", group_id="group"),
         )
+        # A request that fails keeps the Usage reported before it failed.
+        shutdown.fails_after_usage = True
+        with pytest.raises(ProviderError):
+            await runtime._sample_extension(  # noqa: SLF001 - Extension sampling seam.
+                context, {"messages": [], "max_tokens": 100}
+            )
+        record = read_ledger(recorder)[1][-1]
+        assert (record.status, record.usage["input_tokens"]) == ("failed", 10)
+        shutdown.fails_after_usage = False
         # The second call withdraws readiness mid-call, as a beginning shutdown does.
         for begins_mid_call in (False, True):
             shutdown.begins_mid_call = begins_mid_call
@@ -1029,7 +1041,7 @@ async def test_extension_sampling_records_usage_before_returning(
             assert record.usage["input_tokens"] == 10
             assert record.run_id == "run"
             assert record.owner_name == "fixture"
-        assert len(read_ledger(recorder)[1]) == 2
-        assert adapter.aclose.await_count == 2
+        assert len(read_ledger(recorder)[1]) == 3
+        assert adapter.aclose.await_count == 3
     finally:
         await runtime.aclose()

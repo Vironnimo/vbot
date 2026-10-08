@@ -94,7 +94,12 @@ Request producers must finish in cleanup even on validation errors and
 cancellation. Response persistence settles before repeated cancellation
 propagates, and so does `start`: a cancel cannot stop an insert the worker
 already admitted, so `start` waits for it, settles that call as `cancelled`
-and then raises the cancellation. After a restart, a request still marked `started` becomes
+and then raises the cancellation. A Model request that fails or is cancelled
+mid-stream keeps the Usage its stream reported before: Chat and Compaction read
+it from their accumulator, and Session titles, image understanding
+(`TaskUsage.attempt(reported)`) and Extension sampling collect it through
+`stream_model_response(..., on_usage=)`. Only a request that reported nothing
+stays without counters. After a restart, a request still marked `started` becomes
 `interrupted`; its counters remain unknown unless previously reported. This
 records dispatch intent, not proof that the Provider received or billed it.
 Inner Adapter transport retries that return no separate Usage are not separate
