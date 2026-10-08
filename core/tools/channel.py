@@ -365,7 +365,7 @@ async def _handle_channel_send_tool(
     except ChannelConfigError as error:
         return tool_failure("invalid_arguments", str(error))
     except ChannelError as error:
-        return tool_failure("channel_error", str(error))
+        return _send_failure(error)
 
     await _record_outbound_message_note(
         channel_service,
@@ -384,6 +384,18 @@ async def _handle_channel_send_tool(
     if thread_id is not None:
         result["thread_id"] = thread_id
     return tool_success(result)
+
+
+def _send_failure(error: ChannelError) -> JsonObject:
+    """Say whether a failed send left part of the message in the chat."""
+    cause = str(error).strip().rstrip(".") or "the Channel reported no reason"
+    if error.possibly_delivered:
+        return tool_failure(
+            "delivery_unconfirmed",
+            f"It is unknown how much of the message reached the chat: {cause}. "
+            "Sending the same message again can show it twice.",
+        )
+    return tool_failure("channel_error", f"Nothing was sent: {cause}.")
 
 
 def _prepare_channel_send(

@@ -234,12 +234,18 @@ class ChatSession:
         )
 
     async def append_stream_draft_async(
-        self, *, model: str, reasoning_delta: str, content_delta: str
+        self,
+        *,
+        model: str,
+        reasoning_delta: str,
+        content_delta: str,
+        tool_calls: Sequence[JsonObject] = (),
     ) -> None:
         """Append streamed output of the bound running Run's current Model step to its draft.
 
-        Restart recovery turns the draft into the Run's interrupted Assistant
-        entry; appending the Run's next Assistant entry deletes it.
+        *tool_calls* are the canonical Tool Calls that started since the last
+        chunk. Restart recovery turns the draft into the Run's interrupted
+        Assistant entry; appending the Run's next Assistant entry deletes it.
         """
         run_id = self._require_run_id("A stream draft")
         await self._store.run_async(
@@ -249,6 +255,7 @@ class ChatSession:
                 model=model,
                 reasoning_delta=reasoning_delta,
                 content_delta=content_delta,
+                tool_calls=tool_calls,
             )
         )
 

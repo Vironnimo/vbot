@@ -88,7 +88,14 @@ def test_buttons_reach_the_channel(
         (
             ChannelError("Telegram rejected the message"),
             "channel_error",
-            "Telegram rejected the message",
+            "Nothing was sent: Telegram rejected the message.",
+        ),
+        # A visible part or an unanswered write: repeating the call can duplicate it.
+        (
+            ChannelError("Channel request could not be confirmed", possibly_delivered=True),
+            "delivery_unconfirmed",
+            "It is unknown how much of the message reached the chat: Channel request could "
+            "not be confirmed. Sending the same message again can show it twice.",
         ),
         # Raised while sending, so the message may be out; not a refused argument.
         (
@@ -98,7 +105,7 @@ def test_buttons_reach_the_channel(
             "call took effect. Check the current state before you call channel_send again.",
         ),
     ],
-    ids=["inactive-channel", "platform-rejection", "failure-while-sending"],
+    ids=["inactive-channel", "platform-rejection", "possibly-delivered", "failure-while-sending"],
 )
 def test_a_failed_delivery_is_a_failure_result(
     tmp_path: Path, error: Exception, code: str, message: str

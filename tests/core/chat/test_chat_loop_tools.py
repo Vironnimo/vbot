@@ -426,6 +426,48 @@ async def test_real_run_cancel_during_parallel_tools_keeps_finished_results(
 
 
 @pytest.mark.asyncio
+async def test_real_run_cancel_while_tool_results_are_saved_keeps_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    saving = asyncio.Event()
+    release = asyncio.Event()
+    persisted_callbacks: list[str] = []
+    append_many_async = ChatSession.append_many_async
+
+    async def slow_append(self: ChatSession, messages: list[ChatMessage], **kwargs: Any) -> Any:
+        if any(message.role == "tool" for message in messages):
+            saving.set()
+            await release.wait()
+        return await append_many_async(self, messages, **kwargs)
+
+    monkeypatch.setattr(ChatSession, "append_many_async", slow_append)
+
+    async def probe(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        context.after_result_persisted(lambda: persisted_callbacks.append(context.tool_call_id))
+        return tool_success({"probe": context.tool_call_id})
+
+    tools = ToolRegistry()
+    tools.register("probe", "Complete at once.", {"type": "object"}, probe, parallel_safe=True)
+    runtime = tool_runtime(tmp_path, tools, [tool_turn(("call_a", "probe"), ("call_b", "probe"))])
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    run = await build_chat_loop(runtime).start_run("coder", "Probe", session_id="session-one")
+
+    await asyncio.wait_for(saving.wait(), timeout=WAIT_SECONDS)
+    run.request_cancel(reason="user")
+    release.set()
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+
+    persisted = history(runtime)
+    assert tool_results([m for m in persisted if m.role == "tool"]) == [
+        tool_success({"probe": "call_a"}),
+        tool_success({"probe": "call_b"}),
+    ]
+    # Work that waits for the persisted Result still learns of it.
+    assert persisted_callbacks == ["call_a", "call_b"]
+
+
+@pytest.mark.asyncio
 async def test_cooperative_stop_after_a_tool_batch_persists_every_sibling_first(
     tmp_path: Path,
 ) -> None:

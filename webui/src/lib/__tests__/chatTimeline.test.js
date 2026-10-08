@@ -243,23 +243,32 @@ describe('History and live Run projection', () => {
     expect(output.interrupted).toBe(interrupted);
   });
 
-  it('drops an unfinished Tool preview when the Run is interrupted', () => {
+  it('drops an unfinished Tool preview and settles a dispatched call when the Run is interrupted', () => {
     const state = session();
     start(state, 'run-tool-preview');
     append(state, 'run-tool-preview', 1, 'run_started', { status: 'running' });
-    append(state, 'run-tool-preview', 2, 'tool_call_delta', {
+    append(state, 'run-tool-preview', 2, 'tool_call_started', {
+      tool_call: {
+        id: 'call-bash',
+        name: 'bash',
+        arguments: { command: 'ls' },
+      },
+    });
+    append(state, 'run-tool-preview', 3, 'tool_call_delta', {
       tool_call_id: 'call-partial',
       name_delta: 'subagent',
       arguments_delta: '{"action":"run","agent_id":"work',
     });
-    append(state, 'run-tool-preview', 3, 'run_interrupted', {
+    append(state, 'run-tool-preview', 4, 'run_interrupted', {
       status: 'interrupted',
       cause: 'network',
     });
 
     const run = assistantRun(state);
     expect(run.status).toBe('interrupted');
-    expect(run.tools).toEqual([]);
+    expect(run.tools.map((tool) => [tool.name, tool.status])).toEqual([
+      ['bash', 'interrupted'],
+    ]);
   });
 
   it('projects an Agent takeover as a divider that closes the previous Run', () => {
@@ -826,55 +835,64 @@ describe('Run status projection', () => {
     },
   );
 
-  it('settles only pending Tool rows when a cancelled Run reloads from History', () => {
-    const state = session();
-    loadHistory(state, [
-      { id: 'user-1', role: 'user', content: 'Run both' },
-      {
-        id: 'assistant-tools',
-        role: 'assistant',
-        content: null,
-        tool_calls: [
-          { id: 'call-read', name: 'read', arguments: { path: 'README.md' } },
-          {
-            id: 'call-subagent',
-            name: 'subagent',
-            arguments: {
-              agent_id: 'researcher',
-              background: false,
-              content: 'Research the API',
+  it.each([
+    ['cancelled', 'cancelled'],
+    // A server restart ends the Run interrupted; its Tool calls never get a
+    // Result and must not read as running (with a cancel control) forever.
+    ['interrupted', 'interrupted'],
+    ['failed', 'interrupted'],
+  ])(
+    'settles only pending Tool rows of a Run reloaded as %s from History',
+    (runStatus, toolStatus) => {
+      const state = session();
+      loadHistory(state, [
+        { id: 'user-1', role: 'user', content: 'Run both' },
+        {
+          id: 'assistant-tools',
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            { id: 'call-read', name: 'read', arguments: { path: 'README.md' } },
+            {
+              id: 'call-subagent',
+              name: 'subagent',
+              arguments: {
+                agent_id: 'researcher',
+                background: false,
+                content: 'Research the API',
+              },
             },
-          },
-        ],
-      },
-      {
-        id: 'tool-read',
-        role: 'tool',
-        tool_call_id: 'call-read',
-        name: 'read',
-        content: JSON.stringify({
-          ok: true,
-          error: null,
-          data: { content: 'done' },
-          artifacts: [],
-        }),
-      },
-      {
-        id: 'summary-1',
-        role: 'run_summary',
-        run_id: 'run-1',
-        status: 'cancelled',
-        timestamp: '2026-07-27T09:14:23Z',
-      },
-    ]);
+          ],
+        },
+        {
+          id: 'tool-read',
+          role: 'tool',
+          tool_call_id: 'call-read',
+          name: 'read',
+          content: JSON.stringify({
+            ok: true,
+            error: null,
+            data: { content: 'done' },
+            artifacts: [],
+          }),
+        },
+        {
+          id: 'summary-1',
+          role: 'run_summary',
+          run_id: 'run-1',
+          status: runStatus,
+          timestamp: '2026-07-27T09:14:23Z',
+        },
+      ]);
 
-    const run = assistantRun(state);
-    const statuses = Object.fromEntries(
-      run.tools.map((tool) => [tool.name, tool.status]),
-    );
-    expect(run.status).toBe('cancelled');
-    expect(statuses).toEqual({ read: 'success', subagent: 'cancelled' });
-  });
+      const run = assistantRun(state);
+      const statuses = Object.fromEntries(
+        run.tools.map((tool) => [tool.name, tool.status]),
+      );
+      expect(run.status).toBe(runStatus);
+      expect(statuses).toEqual({ read: 'success', subagent: toolStatus });
+    },
+  );
 });
 
 describe('Compaction projection', () => {

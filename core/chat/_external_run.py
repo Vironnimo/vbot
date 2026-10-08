@@ -40,6 +40,7 @@ from core.sessions import AGENT_DEFAULT_PROJECT, ChatSession, SessionAddress
 from core.tools import called_tool_name, tool_failure
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
+from core.utils.workers import finish_despite_cancel
 
 if TYPE_CHECKING:
     from core.chat._request_builder import RequestBuilder
@@ -94,6 +95,8 @@ class ExternalRun:
         self._write_lock = asyncio.Lock()
         self._iteration = 0
         self._running_calls = 0
+        # Calls whose turn is not stored yet, by the id of their Assistant turn.
+        self._unstored_calls: dict[str, ToolCall] = {}
         self._calls_settled = asyncio.Event()
         self._calls_settled.set()
         self._done = asyncio.Event()
@@ -149,7 +152,10 @@ class ExternalRun:
         Tool. *arguments* are as the Model sent them: an object or its JSON text.
         The call and its result are stored together once it finished, after
         what was said while it ran. Calls can run concurrently; cancelling one
-        stores a result saying it was stopped.
+        stores a result saying it was stopped. A cancel that arrives once the
+        call finished, while it is being stored, no longer stops it: the call is
+        stored with its result, which is returned. A call still running when the
+        Run ends is stored as stopped then.
         """
         run = self._require_run()
         if self.ended:
@@ -174,6 +180,7 @@ class ExternalRun:
             iteration_number=self._iteration,
         )
         self._running_calls += 1
+        self._unstored_calls[assistant_id] = call
         self._calls_settled.clear()
         try:
             try:
@@ -182,9 +189,9 @@ class ExternalRun:
             except asyncio.CancelledError:
                 await tool_round.aclose()
                 ended = _ended_result(call)
-                await asyncio.shield(self._store_call(assistant_id, call, [ended]))
+                await asyncio.shield(self._store_call(assistant_id, [ended]))
                 raise
-            await self._store_call(assistant_id, call, tool_messages)
+            await finish_despite_cancel(self._store_call(assistant_id, tool_messages))
         finally:
             self._running_calls -= 1
             if self._running_calls == 0:
@@ -244,6 +251,7 @@ class ExternalRun:
         return self._run
 
     async def _settle_calls(self) -> None:
+        """Wait for running calls to store their results; store the late ones as stopped."""
         try:
             async with asyncio.timeout(_SETTLE_SECONDS):
                 await self._calls_settled.wait()
@@ -253,10 +261,14 @@ class ExternalRun:
                 self.run.id,
                 self._running_calls,
             )
+            for assistant_id, call in list(self._unstored_calls.items()):
+                await self._store_call(assistant_id, [_ended_result(call)])
 
-    async def _store_call(
-        self, assistant_id: str, call: ToolCall, tool_messages: list[ChatMessage]
-    ) -> None:
+    async def _store_call(self, assistant_id: str, tool_messages: list[ChatMessage]) -> None:
+        """Store a call's turn with *tool_messages*, unless that turn is already stored."""
+        call = self._unstored_calls.pop(assistant_id, None)
+        if call is None:
+            return
         turn = ChatMessage.assistant(
             model=self._model, content=None, tool_calls=[call], message_id=assistant_id
         )

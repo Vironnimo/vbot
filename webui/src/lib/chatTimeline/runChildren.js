@@ -435,7 +435,21 @@ function upsertToolRow(assistantRun, key, event, toolCall = {}) {
   return tool;
 }
 
-export function markPendingToolsCancelled(assistantRun, event) {
+// The status an ended Run leaves its Tool calls without a Result in: a
+// cancelled Run cancelled them; an interrupted or failed Run ended before they
+// returned one (after a server restart no Result ever arrives). A completed
+// Run leaves none open.
+const UNFINISHED_TOOL_STATUS = {
+  [CHAT_STATUS_CANCELLED]: CHAT_STATUS_CANCELLED,
+  [CHAT_STATUS_INTERRUPTED]: CHAT_STATUS_INTERRUPTED,
+  [CHAT_STATUS_FAILED]: CHAT_STATUS_INTERRUPTED,
+};
+
+export function settleUnfinishedTools(assistantRun, runStatus, event) {
+  const status = UNFINISHED_TOOL_STATUS[runStatus];
+  if (!status) {
+    return;
+  }
   let changed = false;
   for (const item of assistantRun.items) {
     if (
@@ -450,9 +464,8 @@ export function markPendingToolsCancelled(assistantRun, event) {
       continue;
     }
 
-    item.status = CHAT_STATUS_CANCELLED;
+    item.status = status;
     item.endTimestamp = event.timestamp ?? item.endTimestamp;
-    item.cancelledEvent = event;
     item.events = [...(item.events ?? []), event];
     changed = true;
   }

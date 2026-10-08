@@ -64,6 +64,7 @@ if TYPE_CHECKING:
 from ._conversation_access import ChannelAccessPolicy
 from ._conversation_content import (
     _assistant_output_interrupted,
+    _assistant_output_is_answer,
     _combined_interrupted_output,
     _extract_assistant_output,
     _format_interaction_note,
@@ -763,6 +764,9 @@ class ChannelConversationEngine:
 
     async def _relay_run_events(self, run: Run, reply_plan: ReplyPlanFacts) -> None:
         assistant_text: str | None = None
+        # The latest output, while it is a complete answer: a Run stopped after it
+        # (for example during post-answer Compaction) still delivers it.
+        final_answer: str | None = None
         interrupted_segments: list[str] = []
         compaction_completed = False
         reply: str | None = None
@@ -782,6 +786,11 @@ class ChannelConversationEngine:
                             interrupted_segments.append(extracted)
                         else:
                             assistant_text = extracted
+                    final_answer = (
+                        extracted
+                        if not interrupted_segments and _assistant_output_is_answer(event)
+                        else None
+                    )
                     continue
 
                 if event.type == COMPACTION_COMPLETED_EVENT:
@@ -802,7 +811,7 @@ class ChannelConversationEngine:
                     break
 
                 if event.type == RUN_CANCELLED_EVENT:
-                    reply = _CANCELLED_REPLY
+                    reply = final_answer or _CANCELLED_REPLY
                     break
 
                 if event.type == RUN_INTERRUPTED_EVENT:

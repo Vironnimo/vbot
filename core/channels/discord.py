@@ -19,6 +19,7 @@ from core.channels.adapter import (
     ChannelAdapter,
     ConversationFacts,
     ConversationPointerStore,
+    DeliveryProgress,
     DeniedChatFacts,
     DeniedChatLog,
     FileData,
@@ -599,19 +600,21 @@ class DiscordChannelAdapter(ChannelAdapter):
         )
         file_batches = list(batched(files, _DISCORD_FILE_BATCH_LIMIT, strict=False))
         send_count = max(len(chunks), len(file_batches))
-        for index in range(send_count):
-            try:
-                await retry_async(
-                    self._send_payload,
-                    target,
-                    chunks[index] if index < len(chunks) else None,
-                    file_batches[index] if index < len(file_batches) else (),
-                    reference=reference if index == 0 else None,
-                )
-            except ChannelError as error:
-                # Retrying the whole message would resend earlier acknowledged chunks.
-                error.retryable = False
-                raise
+        with DeliveryProgress() as progress:
+            for index in range(send_count):
+                try:
+                    await retry_async(
+                        self._send_payload,
+                        target,
+                        chunks[index] if index < len(chunks) else None,
+                        file_batches[index] if index < len(file_batches) else (),
+                        reference=reference if index == 0 else None,
+                    )
+                except ChannelError as error:
+                    # Retrying the whole message would resend earlier acknowledged chunks.
+                    error.retryable = False
+                    raise
+                progress.delivered()
 
     async def _send_payload(
         self,
@@ -641,7 +644,7 @@ class DiscordChannelAdapter(ChannelAdapter):
                 payload["files"] = discord_files
             await target.send(**payload)
         except Exception as error:
-            raise _classify_discord_send_error(error) from error
+            raise _classify_discord_send_error(error, write=True) from error
         finally:
             for discord_file in discord_files:
                 discord_file.close()
@@ -847,39 +850,46 @@ def _load_discord() -> Any:
         ) from error
 
 
-def _classify_discord_send_error(error: Exception) -> ChannelError:
-    """Translate one raw discord.py send failure into a retry-classified error.
+def _classify_discord_send_error(error: Exception, *, write: bool = False) -> ChannelError:
+    """Translate one raw discord.py failure into a retry-classified error.
 
-    Discord send calls previously surfaced as raw library exceptions; the
-    engine only handles the ChannelError family. Transient transport faults
-    (connection errors, gateway/server faults, rate limits, 5xx) are marked
-    retryable so reply delivery can retry them.
+    Discord calls previously surfaced as raw library exceptions; the engine only
+    handles the ChannelError family. A read retries transient faults (connection
+    errors, server faults, rate limits). A write retries only a rate-limit
+    refusal: after a connection error or server fault the message may already be
+    posted, and discord.py has already repeated those itself. Only a write that
+    Discord answered with a 4xx status certainly posted nothing.
     """
     channel_error = ChannelError(f"Discord send failed: {error}")
     if isinstance(error, ChannelError):
         return error
     if isinstance(error, OSError):
-        channel_error.retryable = True
+        channel_error.retryable = not write
+        channel_error.possibly_delivered = write
         return channel_error
 
     discord = _load_discord()
     server_error = getattr(discord, "DiscordServerError", None)
     if server_error is not None and isinstance(error, server_error):
-        channel_error.retryable = True
+        channel_error.retryable = not write
+        channel_error.possibly_delivered = write
         return channel_error
 
     http_error = getattr(discord, "HTTPException", None)
-    if http_error is not None and isinstance(error, http_error):
-        status = getattr(error, "status", None)
-        if (
-            isinstance(status, int)
-            and not isinstance(status, bool)
-            and (status == 429 or status >= 500)
-        ):
-            channel_error.retryable = True
-            retry_after = getattr(error, "retry_after", None)
-            if isinstance(retry_after, (int, float)) and not isinstance(retry_after, bool):
-                channel_error.retry_after = float(retry_after)
+    status = (
+        getattr(error, "status", None)
+        if http_error is not None and isinstance(error, http_error)
+        else None
+    )
+    if not isinstance(status, int) or isinstance(status, bool):
+        channel_error.possibly_delivered = write
+        return channel_error
+    channel_error.possibly_delivered = write and status >= 500
+    if status == 429 or (status >= 500 and not write):
+        channel_error.retryable = True
+        retry_after = getattr(error, "retry_after", None)
+        if isinstance(retry_after, (int, float)) and not isinstance(retry_after, bool):
+            channel_error.retry_after = float(retry_after)
     return channel_error
 
 

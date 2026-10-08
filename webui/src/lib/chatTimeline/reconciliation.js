@@ -11,10 +11,7 @@ import {
   appendHistoryToolResult,
 } from './history.js';
 import { appendLiveRunEvent } from './live.js';
-import {
-  markPendingToolsCancelled,
-  appendSteeringMessage,
-} from './runChildren.js';
+import { settleUnfinishedTools, appendSteeringMessage } from './runChildren.js';
 
 // Completeness is an explicit database read fact from the same History snapshot.
 export function runProjectionPersistedInHistory(runs, runId) {
@@ -211,8 +208,8 @@ function mergeRun(messages, liveRun) {
     timestamp: messages[0]?.timestamp ?? liveRun.timestamp,
     items: items.map((item, sequence) => ({ ...item, sequence })),
   };
-  if (liveRun.terminalEvent?.type === 'run_cancelled') {
-    markPendingToolsCancelled(result, liveRun.terminalEvent);
+  if (liveRun.terminalEvent) {
+    settleUnfinishedTools(result, liveRun.status, liveRun.terminalEvent);
   }
   syncAssistantRunCollections(result);
   return result;

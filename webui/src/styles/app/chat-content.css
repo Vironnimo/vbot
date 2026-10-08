@@ -356,8 +356,12 @@
   color: var(--red);
 }
 
+/* Partly done, or cut off when its Run was interrupted or failed: amber like
+   the Run's own interruption notice, without the running blink. */
 .te-dot.partial,
-.te-time.partial {
+.te-time.partial,
+.te-dot.interrupted,
+.te-time.interrupted {
   color: var(--amber);
 }
 

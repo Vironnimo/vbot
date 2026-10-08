@@ -143,6 +143,16 @@ def _assistant_output_interrupted(event: RunEvent) -> bool:
     return isinstance(message, dict) and message.get("interrupted") is True
 
 
+def _assistant_output_is_answer(event: RunEvent) -> bool:
+    """Whether this Assistant output is a complete answer: neither interrupted nor calling Tools."""
+    message = event.payload.get("message")
+    return (
+        isinstance(message, dict)
+        and message.get("interrupted") is not True
+        and not message.get("tool_calls")
+    )
+
+
 def _combined_interrupted_output(segments: list[str]) -> str | None:
     # These are consecutive fragments of one visible answer across internal
     # Model boundaries. Preserve their bytes instead of inventing separators;

@@ -15,8 +15,9 @@ from typing import Any
 import pytest
 
 import core.subagents.subagents as subagents_module
+from core.chat import ChatMessage
 from core.projects import AgentResolutionError, ResolutionProjectNotFoundError
-from core.runs import RunKind, RunStatus
+from core.runs import Run, RunAdmission, RunAdmissionBlockedError, RunKind, RunStatus
 from core.sessions import (
     SESSION_WORKING_PROJECT_META_KEY,
     SUBAGENT_PARENT_META_KEY,
@@ -270,6 +271,42 @@ async def test_every_answer_reaches_the_parent_with_what_is_still_running(
     bodies = [notice.body for notice in harness.triggers.to(harness.parent)]
     assert len(bodies) == 2
     assert "answer to background result arrived" in bodies[1]
+
+
+@pytest.mark.parametrize(
+    ("interrupted", "outcome"),
+    [(False, "Its turn completed."), (True, "Its turn was cancelled.")],
+    ids=["after-the-answer", "during-the-answer"],
+)
+async def test_a_turn_stopped_after_its_final_answer_reaches_the_parent_as_completed(
+    harness: SubAgentHarness, interrupted: bool, outcome: str
+) -> None:
+    data = await harness.spawn("review")
+    await harness.settle()
+    child = harness.subagent_session(data["id"])
+    answered = asyncio.Event()
+
+    async def execute(run: Run) -> ChatMessage:
+        session = (await harness.sessions.get_async(child)).for_run(run.id)
+        answer = ChatMessage.assistant(
+            model="fixture", content="All fixed.", interrupted=interrupted
+        )
+        await session.append_many_async([answer])
+        answered.set()
+        # Compaction after the answer, for example, until Stop arrives.
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    run = await harness.manager.start(
+        child, execute, admission=RunAdmission(run_kind=RunKind.SYSTEM)
+    )
+    await answered.wait()
+    run.request_cancel()
+    await harness.settle()
+
+    body = harness.triggers.to(harness.parent)[-1].body
+    assert outcome in body
+    assert "All fixed." in body
 
 
 async def test_answer_names_working_subagents_of_the_subagent(harness: SubAgentHarness) -> None:
@@ -532,6 +569,58 @@ async def test_stop_all_includes_a_child_whose_admission_is_in_flight(
     [(_event_type, started)] = harness.events
     assert harness.manager.get(started["data"]["run_id"]).status is RunStatus.CANCELLED
     assert harness.triggers.to(harness.parent) == []
+
+
+@pytest.mark.parametrize("action", ["run", "send"])
+async def test_a_call_cancelled_once_its_work_began_still_returns_its_result(
+    harness: SubAgentHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+) -> None:
+    harness.loop.hold("review")
+    working = await harness.spawn("review")
+    activities = harness.coordinator._activities  # noqa: SLF001
+    ensure_activity = activities.ensure
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def held_activity(address):
+        entered.set()
+        await release.wait()
+        return await ensure_activity(address)
+
+    monkeypatch.setattr(activities, "ensure", held_activity)
+    arguments: dict[str, Any] = (
+        {"description": "Do fix", "content": "fix"}
+        if action == "run"
+        else {"action": "send", "id": working["id"], "content": "fix"}
+    )
+    call = asyncio.create_task(harness.call(arguments))
+    await entered.wait()
+    # The calling Run's cancel lands after the Sub-Agent's turn began.
+    call.cancel()
+    await asyncio.sleep(0)
+    release.set()
+    result = await call
+
+    # The Parent gets the result, so it never starts the same work again.
+    assert result["ok"], result
+    assert harness.loop.turns[-1].content == "fix"
+    harness.subagent_session(result["data"]["id"])
+
+
+async def test_a_subagent_whose_run_cannot_start_leaves_no_session(
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def refuse(*_arguments: Any, **_options: Any) -> Run:
+        raise RunAdmissionBlockedError("run manager is shutting down")
+
+    monkeypatch.setattr(harness.manager, "start", refuse)
+
+    result = await harness.call({"description": "Do review", "content": "review"})
+
+    assert result["ok"] is False
+    assert harness.sessions.subagent_children(harness.parent) == []
+    assert harness.sessions.list_addresses(agent_id="parent") == [harness.parent]
 
 
 @pytest.mark.parametrize(

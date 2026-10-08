@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
 from core.channels.config import (
     ChannelConfigError,
+    ChannelError,
     _normalize_channel_id,
 )
 
@@ -157,6 +158,7 @@ async def send(
         raise ChannelConfigError("at least one of message or files must be provided")
 
     saved: list[RunButtonBinding] = []
+    sending = False
     try:
         adapter = service._active_adapter(normalized_id)
         outbound_buttons = normalized_buttons
@@ -182,6 +184,7 @@ async def send(
                 run_origin=run_origin,
                 saved=saved,
             )
+        sending = True
         await adapter.send(
             normalized_message,
             platform_target,
@@ -189,8 +192,11 @@ async def send(
             thread_id=thread_id,
             buttons=outbound_buttons,
         )
-    except BaseException:
-        if saved:
+    except BaseException as error:
+        # Once the adapter started sending, only a failure that shows nothing was
+        # delivered frees the binding: a tap on a delivered button must still work.
+        unsent = not sending or (isinstance(error, ChannelError) and not error.possibly_delivered)
+        if saved and unsent:
             await _discard_unsent_binding(service, normalized_id, saved[0])
         raise
 

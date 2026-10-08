@@ -8,11 +8,13 @@ from typing import Any, cast
 import pytest
 
 from core.chat._stream_draft import StreamDraft
+from core.chat.messages import ToolCall
 
 
 class FakeSession:
     def __init__(self, *, failures: int = 0) -> None:
         self.chunks: list[tuple[str, str]] = []
+        self.tool_calls: list[dict[str, Any]] = []
         self.discards = 0
         self.failures = failures
         self.gate = asyncio.Event()
@@ -20,7 +22,12 @@ class FakeSession:
         self.writing = asyncio.Event()
 
     async def append_stream_draft_async(
-        self, *, model: str, reasoning_delta: str, content_delta: str
+        self,
+        *,
+        model: str,
+        reasoning_delta: str,
+        content_delta: str,
+        tool_calls: list[dict[str, Any]],
     ) -> None:
         self.writing.set()
         await self.gate.wait()
@@ -28,6 +35,7 @@ class FakeSession:
             self.failures -= 1
             raise OSError("disk busy")
         self.chunks.append((reasoning_delta, content_delta))
+        self.tool_calls.extend(tool_calls)
 
     async def discard_stream_draft_async(self) -> None:
         self.discards += 1
@@ -79,3 +87,29 @@ async def test_settle_waits_for_a_running_write_and_drops_unwritten_text() -> No
     # The caller's Assistant entry deleted the stored draft; nothing remains to discard.
     await draft.discard()
     assert session.discards == 0
+
+
+@pytest.mark.asyncio
+async def test_started_tool_calls_are_written_without_waiting_for_the_interval() -> None:
+    session = FakeSession()
+
+    async def never(_seconds: float) -> None:
+        await asyncio.Event().wait()
+
+    draft = StreamDraft(cast(Any, session), flush_interval=60.0, sleep=never)
+    draft.record(model="openai/test", reasoning="", content="Checking.")
+    await _idle()
+    assert session.chunks == []
+
+    draft.record_tool_calls(
+        model="openai/test",
+        tool_calls=[ToolCall(id="call_berlin", name="get_weather", arguments={"city": "Berlin"})],
+    )
+    await _idle()
+
+    # The pending text goes with the calls, in one chunk.
+    assert session.chunks == [("", "Checking.")]
+    assert session.tool_calls == [
+        {"id": "call_berlin", "name": "get_weather", "arguments": {"city": "Berlin"}}
+    ]
+    await draft.settle()

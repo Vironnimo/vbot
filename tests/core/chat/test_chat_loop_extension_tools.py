@@ -17,7 +17,7 @@ from core.extensions import (
 )
 from core.extensions.extensions import ExtensionDeclarations
 from core.extensions.operations import ExtensionOperations
-from core.runs import TOOL_CALL_RESULT_EVENT
+from core.runs import TOOL_CALL_RESULT_EVENT, RunCancelledError
 from core.sessions import SessionAddress
 from core.tools import ToolRegistry, tool_success
 from core.tools.availability import ToolAccess
@@ -136,6 +136,38 @@ async def test_running_tool_result_survives_live_catalog_change(
         {"dynamic-call": expected},
     )
     assert run.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_run_cancel_lets_result_hooks_of_a_finished_call_complete(tmp_path):
+    hook_running = asyncio.Event()
+    release = asyncio.Event()
+
+    async def result_hook(_context, **payload):
+        hook_running.set()
+        await release.wait()
+        return tool_success({"value": "completed and observed"})
+
+    tools = ToolRegistry()
+    tools.register(
+        "probe", "Complete at once.", {"type": "object"}, lambda _c, _a: tool_success({})
+    )
+    runtime = _observed_runtime(
+        tmp_path,
+        tools,
+        [{"content": None, "tool_calls": [{"id": "probe-call", "name": "probe", "arguments": {}}]}],
+        result_hook,
+    )
+    run = await build_chat_loop(runtime).start_run("coder", "Probe", session_id="session-one")
+    await asyncio.wait_for(hook_running.wait(), timeout=WAIT_SECONDS)
+
+    run.request_cancel(reason="user")
+    release.set()
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+
+    persisted, _streamed = await _tool_results(runtime, run)
+    assert persisted == {"probe-call": tool_success({"value": "completed and observed"})}
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,9 @@ export const toolStatus = (tool) => {
   if (tool.status === 'cancelled') {
     return 'cancelled';
   }
+  if (tool.status === 'interrupted') {
+    return 'interrupted';
+  }
   if (tool.status === 'partial') {
     return 'partial';
   }
@@ -24,6 +27,7 @@ const EXECUTION_STATE_TITLES = {
   partial: () => t('chat.toolState.partial'),
   failed: () => t('chat.toolState.failed'),
   cancelled: () => t('chat.toolState.cancelled'),
+  interrupted: () => t('chat.toolState.interrupted'),
 };
 
 // The state of a Tool call, Sub-Agent Run or background process in words,

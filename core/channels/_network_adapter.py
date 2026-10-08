@@ -251,28 +251,36 @@ class NetworkChannelAdapter(ChannelAdapter):
             raise ChannelError("Attachment download failed", retryable=True) from None
 
     @staticmethod
-    def check_response(response: httpx.Response, *, retry_server_error: bool = True) -> None:
+    def check_response(response: httpx.Response, *, write: bool = False) -> None:
+        """Raise for a failed response; a write's server error may still have taken effect."""
         if response.is_success:
             return
         status = response.status_code
         raise ChannelError(
             f"Channel request failed (HTTP {status})",
-            retryable=status == 429 or (status >= 500 and retry_server_error),
+            retryable=status == 429 or (status >= 500 and not write),
             retry_after=parse_retry_after(response.headers),
+            possibly_delivered=write and status >= 500,
         )
 
     async def request(self, method: str, url: str, **kwargs: Any) -> Any:
+        write = method != "GET"
         try:
             response = await self._http.request(method, url, **kwargs)
-            self.check_response(response, retry_server_error=method == "GET")
+            self.check_response(response, write=write)
             return response.json()
         except httpx.RequestError:
             # A failed write response does not establish whether delivery happened.
             raise ChannelError(
-                "Channel request could not be confirmed", retryable=method == "GET"
+                "Channel request could not be confirmed",
+                retryable=not write,
+                possibly_delivered=write,
             ) from None
         except ValueError:
-            raise ChannelError("Channel returned an invalid response") from None
+            # The platform accepted a write whose answer cannot be read.
+            raise ChannelError(
+                "Channel returned an invalid response", possibly_delivered=write
+            ) from None
 
     def check_send(self, message: str | None, files: list[FileData] | None, buttons: Any) -> None:
         if buttons is not None:
