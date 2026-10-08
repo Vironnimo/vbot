@@ -231,6 +231,12 @@ export const subAgentToolStatusLabel = (
     );
     return [t('chat.toolCancelled'), duration].filter(Boolean).join(' · ');
   }
+  if (dotStatus === 'interrupted') {
+    const duration = formatDurationMs(
+      subAgentRunDurationMs(tool, subAgentStatuses),
+    );
+    return [t('chat.toolInterrupted'), duration].filter(Boolean).join(' · ');
+  }
   if (dotStatus === 'running') {
     return formatDurationMs(
       elapsedSinceTimestamp(
@@ -385,7 +391,7 @@ export const subAgentDotStatus = (tool, subAgentStatuses = {}) => {
   const parentStatus = toolStatus(tool);
   if (
     !isSubAgentSpawnTool(tool) ||
-    ['failed', 'cancelled'].includes(parentStatus)
+    ['failed', 'cancelled', 'interrupted'].includes(parentStatus)
   ) {
     return parentStatus;
   }
@@ -494,8 +500,8 @@ function subAgentStatusToDotStatus(status) {
   if (['failed', 'error'].includes(status)) {
     return 'failed';
   }
-  if (status === 'cancelled') {
-    return 'cancelled';
+  if (['cancelled', 'interrupted'].includes(status)) {
+    return status;
   }
   if (['completed', 'success'].includes(status)) {
     return 'success';
