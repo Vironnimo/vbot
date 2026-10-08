@@ -202,6 +202,8 @@ class CompactionRunHost(Protocol):
 
     def resolve_context_window(self, agent: Any, target: Any) -> int | None: ...
 
+    def input_estimate_factor(self, target: Any) -> float: ...
+
 
 class CompactionRunCoordinator:
     """Runs manual and automatic Compaction against its host loop's seam.
@@ -445,6 +447,7 @@ class CompactionRunCoordinator:
             tools=tools,
             scope=context.prompt_cache_affinity_id,
             context_window=context_window,
+            estimate_factor=self._host.input_estimate_factor(target),
         )
         input_tokens = int(effective_context_usage["tokens"])
         run.terminal_payload_extras["context_usage"] = effective_context_usage

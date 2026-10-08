@@ -2,6 +2,8 @@
 
 `core/usage/` owns durable per-request accounting in `<data-dir>/model-usage.db`.
 Statistics consumes it as a source; the Statistics index remains disposable.
+The same owner keeps the input estimate calibration, which Chat learns from
+measured requests (Interfaces).
 
 ## Ownership and lifetime
 
@@ -29,6 +31,20 @@ attribution snapshots without foreign keys to removable domain records.
   Cumulative Live Voice reports replace counters instead of adding repeated
   snapshots. Chat enriches its record with final estimates before appending the
   Assistant Message. Completion without new Usage retains earlier measurements.
+- `input_estimate_factor(model)` and `record_input_estimate(model, *, measured,
+  estimated)` are the input estimate calibration (`_calibration.py`). vBot counts
+  every Model with one local encoding (`providers/request-policy.md`), while
+  Providers tokenize privately, so local estimates miss by a stable per-Model
+  ratio. Chat records each step whose Provider measured its input together with
+  the uncorrected local estimate of exactly that request (`chat/usage.md`); the
+  factor is the ratio of their exponentially decayed sums (decay 0.98 per
+  sample) with a 20,000-token prior at 1.0, clamped to 0.5-2.0. Samples below
+  1,000 estimated tokens or with a ratio beyond 4x either way are ignored. The
+  key is `provider/model`; a `::` Connection scope is ignored. One row per
+  Model in `input_estimate_calibration`, loaded once when the recorder opens;
+  reading the factor touches no database. It is an average over recent
+  requests: it also absorbs Provider framing and fixed estimator reserves, and
+  varies with the content mix (code, prose, languages).
 - `read_since(revision, *, page_size=1000)` streams the current versions of
   changed calls as `UsagePage(revision, records)` pages in revision order, each
   from its own short read transaction (never one read held open while the
@@ -85,6 +101,9 @@ Historical Task Model requests and deleted history with no retained Usage cannot
 be reconstructed. The import never fabricates them. Current request kinds cover
 Chat, Compaction, Session/group titles, Extension sampling, all Task Model types
 and the delegated Live Voice backend; producer details remain in their maps.
+
+The calibration rows are derived state: losing or restoring them only changes
+how quickly estimates correct themselves, and no call record refers to them.
 
 Evidence: `tests/core/usage/test_usage.py`, producer accounting tests in Chat,
 Compaction and Model Tasks, and `tests/core/statistics/test_statistics_accounting.py`.

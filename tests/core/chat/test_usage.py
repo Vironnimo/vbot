@@ -202,6 +202,27 @@ def test_request_measurement_cancels_existing_estimation_bias_and_counts_changes
     assert "provider_input_tokens" not in accounting.project(base, **{**args, "scope": "new-epoch"})
 
 
+def test_estimate_factor_scales_only_the_estimated_part_of_a_projection():
+    accounting = RequestContextUsage()
+    adapter = _BiasedInputAdapter()
+    base = [{"role": "system", "content": "rules"}, {"role": "user", "content": "task"}]
+    args = {"adapter": adapter, "model_id": "model", "tools": [], "scope": "epoch"}
+    raw = adapter.estimate_request_input_tokens(base, model_id="model")
+    assert accounting.project(base, **args, estimate_factor=1.5)["tokens"] == round(raw * 1.5)
+    # Observing returns the calibration sample: measured input, uncorrected estimate.
+    assert accounting.observe({"input_tokens": 150_000}, base, **args) == (150_000, raw)
+    assert accounting.project(base, **args, estimate_factor=1.5)["tokens"] == 150_000
+    assistant = {"role": "assistant", "content": "done " * 200}
+    delta = estimate_request_input_tokens([assistant])[0]
+    projection = accounting.project([*base, assistant], **args, estimate_factor=1.5)
+    assert projection["estimated_delta_tokens"] == round(delta * 1.5)
+    assert projection["tokens"] == 150_000 + round(delta * 1.5)
+    assert (
+        accounting.observe({"input_tokens": 9, "input_tokens_estimated": True}, base, **args)
+        is None
+    )
+
+
 @pytest.mark.parametrize("change", ["model", "adapter", "tools", "system", "reset"])
 def test_request_measurement_does_not_cross_rebuilt_context(change):
     accounting = RequestContextUsage()

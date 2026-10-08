@@ -31,7 +31,9 @@ class RequestContextUsage:
     route, prompt epoch, System Prompt or Tool catalog starts a new estimate.
     Signed deltas also account for image retirement and request-only hooks.
     Wire estimates are memoized by the request's digests, so an identical
-    request is estimated once.
+    request is estimated once. The anchor keeps uncorrected estimates; a
+    projection scales only its estimated part by the caller's per-Model
+    ``estimate_factor`` (``UsageRecorder.input_estimate_factor``).
     """
 
     _key: str | None = None
@@ -54,10 +56,16 @@ class RequestContextUsage:
         model_id: str,
         tools: Sequence[Mapping[str, Any]],
         scope: str,
-    ) -> None:
+    ) -> tuple[int, int] | None:
+        """Anchor on a measured request; return ``(measured, local estimate)``.
+
+        The pair is the input estimate calibration sample: the Provider's input
+        and the uncorrected local estimate of exactly that request. ``None``
+        when the Provider measured no input.
+        """
         tokens = _optional_non_negative_int(usage.get("input_tokens"))
         if tokens is None or usage_token_is_estimated(usage, "input_tokens"):
-            return
+            return None
         self._key = self._context_key(messages, adapter, model_id, tools, scope)
         self._request_hash = _context_digest(messages)
         self._input_tokens = tokens
@@ -69,6 +77,7 @@ class RequestContextUsage:
             if not usage_token_is_estimated(usage, "output_tokens")
             else None
         )
+        return tokens, self._request_estimate
 
     def project(
         self,
@@ -79,15 +88,18 @@ class RequestContextUsage:
         tools: Sequence[Mapping[str, Any]],
         scope: str,
         context_window: int | None = None,
+        estimate_factor: float = 1.0,
     ) -> JsonObject:
         """Project the request's Context in tokens.
 
         ``context_window`` is the effective window of the Model the request goes
         to; the projection carries it, so the Session's Context usage names the
-        window it fills.
+        window it fills. ``estimate_factor`` corrects local estimates for that
+        Model; measured input is never scaled.
         """
         return with_context_window(
-            self._project(messages, adapter, model_id, tools, scope), context_window
+            self._project(messages, adapter, model_id, tools, scope, estimate_factor),
+            context_window,
         )
 
     def _project(
@@ -97,15 +109,17 @@ class RequestContextUsage:
         model_id: str,
         tools: Sequence[Mapping[str, Any]],
         scope: str,
+        estimate_factor: float,
     ) -> JsonObject:
         key = self._context_key(messages, adapter, model_id, tools, scope)
         request_hash = _context_digest(messages)
         estimated = self._estimate(key, request_hash, adapter, messages, model_id, tools)
+        full_estimate = round(estimated * estimate_factor)
         if self._input_tokens is None or key != self._key:
-            return {"tokens": estimated, "estimated": True}
-        delta = estimated - self._request_estimate
+            return {"tokens": full_estimate, "estimated": True}
+        delta = round((estimated - self._request_estimate) * estimate_factor)
         if self._input_tokens + delta <= 0 and estimated > 0:
-            return {"tokens": estimated, "estimated": True}
+            return {"tokens": full_estimate, "estimated": True}
         changed = request_hash != self._request_hash
         result: JsonObject = {
             "tokens": max(0, self._input_tokens + delta),

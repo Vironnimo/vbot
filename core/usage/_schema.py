@@ -48,6 +48,16 @@ CREATE TABLE usage_imports (
     cursor INTEGER NOT NULL,
     source_restore_id TEXT
 ) STRICT;
+
+-- Input estimate calibration (_calibration.py): per provider/model, decayed
+-- sums of Provider-measured and locally estimated Chat request input.
+CREATE TABLE input_estimate_calibration (
+    model TEXT PRIMARY KEY,
+    measured_tokens REAL NOT NULL,
+    estimated_tokens REAL NOT NULL,
+    samples INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+) STRICT;
 """
 
 

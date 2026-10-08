@@ -140,7 +140,7 @@ def estimate_responses_input_tokens(
     total_tokens, _ = estimate_structured_tokens(input_items, model_id=model_id)
     instructions = _system_instructions(wire_messages)
     if instructions:
-        instruction_tokens, _ = estimate_tokens(instructions, model_id=model_id)
+        instruction_tokens, _ = estimate_tokens(instructions)
         total_tokens += instruction_tokens
     if tools:
         tool_tokens, _ = estimate_structured_tokens(

@@ -1,7 +1,7 @@
 """Token estimation utilities.
 
-Estimates selected-wire requests with shared tiktoken encodings and local image
-headers. Counts remain approximate: private tokenizers, wire framing, opaque
+Estimates selected-wire requests with one shared tiktoken encoding and local
+image headers. Counts remain approximate: private tokenizers, wire framing, opaque
 reasoning, and non-image media cannot be reproduced locally.
 
 Usage::
@@ -54,7 +54,7 @@ NATIVE_MEDIA_TOKEN_RESERVE = 4096
 _COUNT_CACHE_SIZE = 4096
 _IMAGE_CACHE_SIZE = 256
 _IMAGE_HEADER_BYTES = 256 * 1024
-_COUNT_CACHE: OrderedDict[tuple[str, bytes], int] = OrderedDict()
+_COUNT_CACHE: OrderedDict[bytes, int] = OrderedDict()
 _IMAGE_CACHE: OrderedDict[bytes, tuple[int, int] | None] = OrderedDict()
 _CACHE_LOCK = RLock()
 
@@ -103,17 +103,22 @@ _NORMALIZATION_MARKERS = re.compile(
 )
 
 
-def estimate_tokens(text: str, *, model_id: str | None = None) -> tuple[int, bool]:
-    """Count text with an available Model encoding; always mark it estimated."""
+def estimate_tokens(text: str) -> tuple[int, bool]:
+    """Count text with the shared encoding; always mark it estimated.
+
+    Every Model shares ``o200k_base``: older OpenAI encodings count nearly the
+    same, and private tokenizers cannot be reproduced locally at all. Chat
+    corrects the remaining per-Model difference with measured Provider input
+    (``core/usage`` input estimate calibration).
+    """
     if not text:
         return 0, True
-    encoding_name = _estimation_encoding_name(model_id)
-    key = (encoding_name, _content_digest(text))
+    key = _content_digest(text)
     with _CACHE_LOCK:
         if key in _COUNT_CACHE:
             _COUNT_CACHE.move_to_end(key)
             return _COUNT_CACHE[key], True
-    encoding = _load_estimation_encoding(encoding_name)
+    encoding = _load_estimation_encoding()
     count = (
         len(encoding.encode_ordinary(text))
         if encoding is not None
@@ -141,31 +146,20 @@ def _model_name(model_id: str | None) -> str:
     return (model_id or "").lower().rsplit("/", 1)[-1].split(":", 1)[0]
 
 
-@lru_cache(maxsize=256)
-def _estimation_encoding_name(model_id: str | None) -> str:
-    try:
-        name = tiktoken.model.encoding_name_for_model(_model_name(model_id))
-    except KeyError:
-        return TOKEN_ESTIMATE_ENCODING
-    # This estimator supports modern chat encodings only. Unknown/private and
-    # legacy vocabularies use the shared default instead of loading more tables.
-    return name if name in {"o200k_base", "cl100k_base"} else TOKEN_ESTIMATE_ENCODING
-
-
-@lru_cache(maxsize=2)
-def _load_estimation_encoding(name: str = TOKEN_ESTIMATE_ENCODING) -> tiktoken.Encoding | None:
-    """One instance per encoding and process, shared across Agents and Sessions.
+@lru_cache(maxsize=1)
+def _load_estimation_encoding() -> tiktoken.Encoding | None:
+    """One instance per process, shared across Agents and Sessions.
 
     tiktoken's registry serializes first construction, including concurrent
     misses in this wrapper's LRU cache.
     """
 
     try:
-        return tiktoken.get_encoding(name)
+        return tiktoken.get_encoding(TOKEN_ESTIMATE_ENCODING)
     except (OSError, ValueError) as exc:
         _LOGGER.warning(
             "Token estimation encoding unavailable; using character fallback (encoding=%s): %s",
-            name,
+            TOKEN_ESTIMATE_ENCODING,
             exc,
         )
         return None
@@ -196,7 +190,7 @@ def estimate_message_tokens(
         rendered = _render_token_estimate_value(normalized_value)
         if rendered:
             chunks.append(rendered)
-    estimated_tokens, _ = estimate_tokens("\n".join(chunks), model_id=model_id)
+    estimated_tokens, _ = estimate_tokens("\n".join(chunks))
     return estimated_tokens + blob_count * OPAQUE_REASONING_BLOB_TOKEN_RESERVE, True
 
 
@@ -208,7 +202,7 @@ def estimate_json_tokens(value: Any, *, model_id: str | None = None) -> tuple[in
     Providers render such payloads into model context in provider-specific
     formats, so the compact JSON size is the provider-neutral approximation.
     """
-    return estimate_tokens(_render_token_estimate_value(value), model_id=model_id)
+    return estimate_tokens(_render_token_estimate_value(value))
 
 
 def estimate_structured_tokens(value: Any, *, model_id: str | None = None) -> tuple[int, bool]:
@@ -230,7 +224,7 @@ def estimate_structured_tokens(value: Any, *, model_id: str | None = None) -> tu
         )
     rendered = _render_without_normalization(value)
     if rendered is not None:
-        return estimate_tokens(rendered, model_id=model_id)[0], True
+        return estimate_tokens(rendered)[0], True
     return _estimate_normalized(value, model_id=model_id), True
 
 

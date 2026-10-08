@@ -430,3 +430,27 @@ def test_legacy_import_counts_compaction_and_distinct_entries_with_same_message_
         assert records[2].usage["output_tokens"] == 1
     finally:
         sessions.close()
+
+
+@pytest.mark.asyncio
+async def test_input_estimate_calibration_learns_per_model_and_survives_restart(recorder):
+    model = "anthropic/claude::anthropic:api"
+    assert recorder.input_estimate_factor(model) == 1.0
+    # Tiny requests and implausible ratios are not evidence.
+    await recorder.record_input_estimate(model, measured=900, estimated=600)
+    await recorder.record_input_estimate(model, measured=500_000, estimated=100_000)
+    assert recorder.input_estimate_factor(model) == 1.0
+    for _ in range(40):
+        await recorder.record_input_estimate(model, measured=125_000, estimated=100_000)
+    learned = recorder.input_estimate_factor(model)
+    assert 1.2 < learned < 1.25
+    # The Connection scope is not part of the calibrated identity; other Models are unaffected.
+    assert recorder.input_estimate_factor("anthropic/claude::anthropic:other") == learned
+    assert recorder.input_estimate_factor("openai/gpt") == 1.0
+    path = recorder.database.path
+    recorder.close()
+    reopened = UsageRecorder(path)
+    try:
+        assert reopened.input_estimate_factor(model) == learned
+    finally:
+        reopened.close()

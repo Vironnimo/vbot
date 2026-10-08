@@ -325,6 +325,10 @@ async def test_empty_or_restarted_attempt_keeps_reported_usage_and_links_saved_s
         "session-one",
         last_run(runtime).id,
     )
+    # Only the saved step's measured input teaches the input estimate calibration.
+    assert [
+        (model.split("::")[0], measured) for model, measured, _ in recorder.input_estimates
+    ] == [("openai/gpt-4.1", 30)]
     # Only the saved step links to its usage record.
     assert answer.usage is not None
     assert answer.usage["usage_call_id"] == completed["id"]

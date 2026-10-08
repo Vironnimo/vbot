@@ -476,6 +476,7 @@ class AgenticProgression:
                     tools=tools,
                     scope=context.prompt_cache_affinity_id,
                     context_window=self._requests.resolve_context_window(agent, target),
+                    estimate_factor=self._requests.input_estimate_factor(target),
                 )
                 self._requests._raise_if_measured_context_exhausted(
                     context.session_snapshot.active_messages,
@@ -633,7 +634,7 @@ class AgenticProgression:
                     else []
                 )
                 assert isinstance(assistant_message.usage, dict)
-                await _CHAT_TRANSFORM_WORKERS.run(
+                calibration_sample = await _CHAT_TRANSFORM_WORKERS.run(
                     context.context_usage.observe,
                     assistant_message.usage,
                     messages_for_request,
@@ -642,6 +643,13 @@ class AgenticProgression:
                     tools=request_tools,
                     scope=context.prompt_cache_affinity_id,
                 )
+                if recorder is not None and calibration_sample is not None:
+                    measured_input, estimated_input = calibration_sample
+                    await recorder.record_input_estimate(
+                        target.model_reference,
+                        measured=measured_input,
+                        estimated=estimated_input,
+                    )
                 assistant_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
                     context.context_usage.project,
                     [*messages_for_request, *assistant_request_messages],
@@ -650,6 +658,7 @@ class AgenticProgression:
                     tools=request_tools,
                     scope=context.prompt_cache_affinity_id,
                     context_window=self._requests.resolve_context_window(agent, target),
+                    estimate_factor=self._requests.input_estimate_factor(target),
                 )
                 assistant_message = replace(
                     assistant_message,
@@ -1075,6 +1084,7 @@ class AgenticProgression:
                 tools=tools,
                 scope=context.prompt_cache_affinity_id,
                 context_window=self._requests.resolve_context_window(context.agent, target),
+                estimate_factor=self._requests.input_estimate_factor(target),
             )
             run.terminal_payload_extras["context_usage"] = tool_context_usage
 

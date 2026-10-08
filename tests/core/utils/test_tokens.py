@@ -402,48 +402,6 @@ def test_estimate_message_tokens_compacts_legacy_delta_fragments():
     assert count < 2_000
 
 
-@pytest.mark.parametrize(
-    ("model_id", "expected"),
-    [
-        ("gpt-4", "cl100k_base"),
-        ("openai/gpt-4-0613", "cl100k_base"),
-        ("gpt-4o", "o200k_base"),
-        ("openai/gpt-4.1", "o200k_base"),
-        ("gpt-5.6-sol", "o200k_base"),
-        # Legacy vocabularies use the shared default instead of loading more tables.
-        ("text-davinci-003", "o200k_base"),
-        ("anthropic/claude-opus-4-7", "o200k_base"),
-        ("my-custom-model", "o200k_base"),
-        (None, "o200k_base"),
-    ],
-)
-def test_estimation_encoding_selection(model_id, expected):
-    assert token_utils._estimation_encoding_name(model_id) == expected
-
-
-def test_encodings_shared_across_models_and_count_cache_is_encoding_specific(monkeypatch):
-    loaded = []
-    encoded = []
-
-    class Encoding:
-        def __init__(self, name):
-            self.name = name
-
-        def encode_ordinary(self, text):
-            encoded.append((self.name, text))
-            return [0] * (3 if self.name == "cl100k_base" else 7)
-
-    def load(name):
-        loaded.append(name)
-        return Encoding(name)
-
-    monkeypatch.setattr(token_utils.tiktoken, "get_encoding", load)
-    for model, expected in [("gpt-4", 3), ("gpt-4o", 7), ("gpt-3.5-turbo", 3), ("gpt-4.1", 7)]:
-        assert estimate_tokens("same text", model_id=model) == (expected, True)
-    assert loaded == ["cl100k_base", "o200k_base"]
-    assert len(encoded) == 2
-
-
 def test_growing_wire_reuses_unchanged_message_counts(monkeypatch):
     encoded = []
 
@@ -542,7 +500,7 @@ def test_count_cache_is_bounded_and_does_not_retain_text(monkeypatch):
     assert len(token_utils._COUNT_CACHE) == 3
     assert all(
         len(digest) == 32 and isinstance(count, int)
-        for (_, digest), count in token_utils._COUNT_CACHE.items()
+        for digest, count in token_utils._COUNT_CACHE.items()
     )
 
 
