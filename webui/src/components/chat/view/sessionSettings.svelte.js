@@ -418,9 +418,9 @@ export function createSessionSettings(context) {
         },
       };
     },
-    // The draft's first message created `sessionState`: the Session starts
-    // from the draft's choices until its own row answers, and the next draft
-    // starts from the defaults.
+    // The created Session starts from the submitted choices until its own
+    // row answers. Only consume those choices; later draft edits still belong
+    // to the next draft, not to the Session this older submission created.
     draftSent(draft, sessionState) {
       const settings = drafts[draft.key] ?? {};
       const { projectId: teamProjectId } = parseAgentAddress(
@@ -431,21 +431,28 @@ export function createSessionSettings(context) {
         [sessionState.key]: {
           workingProjectId:
             teamProjectId ||
-            (settings.workingProjectId !== undefined
-              ? settings.workingProjectId
+            (draft.workingProjectId !== undefined
+              ? draft.workingProjectId
               : agentDefaults(draft.agentAddress).rootProjectId),
           projectKnown: true,
           overrides: Object.fromEntries(
             [
-              ['model', settings.model],
-              ['thinking_effort', settings.thinking_effort],
+              ['model', draft.agentOverrides?.model],
+              ['thinking_effort', draft.agentOverrides?.thinking_effort],
             ].filter(([, value]) => value),
           ),
         },
       };
-      const next = { ...drafts };
-      delete next[draft.key];
-      drafts = next;
+      if (
+        settings.workingProjectId === draft.workingProjectId &&
+        (settings.model || undefined) === draft.agentOverrides?.model &&
+        (settings.thinking_effort || undefined) ===
+          draft.agentOverrides?.thinking_effort
+      ) {
+        const next = { ...drafts };
+        delete next[draft.key];
+        drafts = next;
+      }
     },
     // `/model <value|reset>` wrote the Agent's Model and cleared the
     // Session's own: a draft drops the Model it held, a Session reads its

@@ -503,9 +503,9 @@
     const separator = composerDraftKey.indexOf('::');
     return separator >= 0 ? composerDraftKey.slice(0, separator) : '';
   });
-  // Each callback closes over the displayed address at the moment Svelte hands
-  // it to the Composer. The Composer snapshots that function before any async
-  // @-mention lookup, so navigation cannot redirect an older submit.
+  // Each callback closes over the displayed address and draft settings when
+  // Svelte hands it to the Composer. The Composer snapshots that function
+  // before any async @-mention lookup, so later choices cannot redirect it.
   let composerSendMessage = $derived.by(() => {
     const agent = target.activeAgent;
     if (!agent) {
@@ -513,14 +513,9 @@
     }
     const draft = target.activeDraft();
     if (draft) {
-      // The draft's Project and overrides as they are when it is sent.
+      const submissionDraft = sessionSettings.draftWithSettings(draft);
       return async (content, options = {}) =>
-        await actions.sendDraft(
-          agent,
-          sessionSettings.draftWithSettings(draft),
-          content,
-          options,
-        );
+        await actions.sendDraft(agent, submissionDraft, content, options);
     }
     const sessionState = target.activeSessionState;
     if (!sessionState) {

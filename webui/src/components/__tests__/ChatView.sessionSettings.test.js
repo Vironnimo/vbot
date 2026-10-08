@@ -2,8 +2,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  agentPill,
   createAgent,
   createChatRpcMock,
+  findNewSessionButton,
   flushSync,
   getSessionMock,
   handledCommand,
@@ -131,19 +133,26 @@ describe('ChatView Session settings', () => {
       });
 
     it.each([
-      ['a chosen Project', 'Docs', 'docs'],
-      ['the Workspace', 'Workspace', null],
+      ['a chosen Project', 'Docs', 'docs', false],
+      ['the Workspace', 'Workspace', null, false],
+      ['a Project changed during submission', 'Docs', 'docs', true],
+      ['the Workspace changed during submission', 'Workspace', null, true],
     ])(
-      'starts in the root Project and creates its Session in %s with the chosen Model and effort',
-      async (_case, projectLabel, projectId) => {
-        rpcMock.mockImplementation(
-          settingsRpcMock({
-            agents: [draftAgent()],
-            streamHandler: () => ({
-              ...runningRun('run-first'),
-              session_id: 'created-alpha',
-            }),
+      'creates its Session from the submitted choices for %s',
+      async (_case, projectLabel, projectId, editWhilePending) => {
+        const listing = Promise.withResolvers();
+        const base = settingsRpcMock({
+          agents: [draftAgent(), draftAgent({ id: 'beta', name: 'Beta' })],
+          streamHandler: ({ content }) => ({
+            ...runningRun('run-first'),
+            session_id:
+              content === 'Next message' ? 'created-next' : 'created-alpha',
           }),
+        });
+        rpcMock.mockImplementation((method, params) =>
+          editWhilePending && method === 'files.list'
+            ? listing.promise
+            : base(method, params),
         );
         await chat.mountChat({ projects: PROJECTS }, { ready: null });
         await waitForCondition(() => pickerText('Project') === 'vBot');
@@ -164,6 +173,22 @@ describe('ChatView Session settings', () => {
         await choose('Model', R1);
         await choose('Thinking effort', 'max');
         sendComposerMessage('Read @notes.md');
+
+        if (editWhilePending) {
+          await waitForCondition(() => rpcCalls('files.list').length > 0);
+          expect(rpcCalls('chat.stream')).toEqual([]);
+          await choose('Project', 'vBot');
+          await choose('Model', SONNET);
+          await choose('Thinking effort', 'high');
+          // Leaving and returning while the original lookup is pending must
+          // not replace either its settings or the newer draft choices.
+          agentPill('Beta').click();
+          flushSync();
+          agentPill('Alpha').click();
+          flushSync();
+          expect(pickerText('Project')).toBe('vBot');
+          listing.resolve({ files: ['notes.md'] });
+        }
 
         await waitForCondition(() => readOnlyProject() !== null);
         // The file mention is looked up in the chosen Project.
@@ -191,6 +216,23 @@ describe('ChatView Session settings', () => {
         expect(pickerText('Model')).toBe(R1);
         expect(pickerText('Thinking effort')).toBe('max');
         expect(rpcCalls('session.set_agent_overrides')).toEqual([]);
+
+        findNewSessionButton().click();
+        flushSync();
+        await waitForCondition(() => picker('Project') !== null);
+        expect(pickerText('Project')).toBe('vBot');
+        expect(pickerText('Model')).toBe(SONNET_NAME);
+        expect(pickerText('Thinking effort')).toBe(
+          editWhilePending ? 'high' : 'medium',
+        );
+        if (editWhilePending) {
+          sendComposerMessage('Next message');
+          await waitForCondition(() => rpcCalls('chat.stream').length === 2);
+          expect(rpcCalls('chat.stream')[1].new_session).toEqual({
+            working_project_id: 'vbot',
+            agent_overrides: { thinking_effort: 'high' },
+          });
+        }
       },
     );
 

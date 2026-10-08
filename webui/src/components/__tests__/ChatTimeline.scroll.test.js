@@ -69,6 +69,137 @@ function jumpButton() {
   return document.querySelector(`[aria-label="${t('chat.jumpToLatest')}"]`);
 }
 
+const READING_PARAGRAPH =
+  'This paragraph contains the passage being read. ' +
+  'A long answer keeps its words visible while the layout changes. '.repeat(30);
+const READING_MARKDOWN = `![Earlier image](/api/files/reading.png)\n\n${READING_PARAGRAPH}`;
+
+// jsdom supplies the actual Markdown DOM but no text layout or caret hit
+// testing. Give this one Run fixed-width text lines: changing the image's
+// height moves the paragraph; changing the line width rewraps its text.
+// Geometry resolves from the current DOM so replaced nodes cannot keep a
+// detached Range artificially alive.
+function mockReadingLayout(view) {
+  let imageHeight = 100;
+  let charactersPerLine = 50;
+  const viewportTop = 60;
+  const lineHeight = 20;
+  const paragraph = () =>
+    Array.from(view.container.querySelectorAll('.msg-markdown p')).find(
+      (element) => element.textContent.startsWith('This paragraph'),
+    );
+  const paragraphTop = () => 300 + imageHeight;
+  const rect = (top, height) => ({
+    top: viewportTop + top - view.geometry.currentScrollTop(),
+    bottom: viewportTop + top + height - view.geometry.currentScrollTop(),
+    left: 80,
+    right: 580,
+    width: 500,
+    height,
+  });
+  const originalRect = Element.prototype.getBoundingClientRect;
+  const elementRects = vi
+    .spyOn(Element.prototype, 'getBoundingClientRect')
+    .mockImplementation(function () {
+      if (this === view.container) {
+        return { ...rect(0, 500), top: viewportTop, bottom: viewportTop + 500 };
+      }
+      if (this.matches('[data-timeline-item-id]')) {
+        return this.querySelector('.assistant-run')
+          ? rect(100, 1800 + imageHeight)
+          : rect(0, 100);
+      }
+      if (this === paragraph()) {
+        return rect(
+          paragraphTop(),
+          Math.ceil(this.textContent.length / charactersPerLine) * lineHeight,
+        );
+      }
+      if (this.matches('.msg-markdown img, .msg-markdown p:has(img)')) {
+        return rect(200, imageHeight);
+      }
+      return originalRect.call(this);
+    });
+
+  function textPoint(offset) {
+    const walker = document.createTreeWalker(paragraph(), 4 /* SHOW_TEXT */);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (offset < node.length) return { node, offset };
+      offset -= node.length;
+    }
+    throw new Error('The requested reading point is outside the paragraph.');
+  }
+
+  const previousCaret = Object.getOwnPropertyDescriptor(
+    document,
+    'caretPositionFromPoint',
+  );
+  Object.defineProperty(document, 'caretPositionFromPoint', {
+    configurable: true,
+    value: (_x, y) => {
+      const line = Math.max(
+        0,
+        Math.floor(
+          (y -
+            viewportTop +
+            view.geometry.currentScrollTop() -
+            paragraphTop()) /
+            lineHeight,
+        ),
+      );
+      const point = textPoint(
+        Math.min(line * charactersPerLine, paragraph().textContent.length - 1),
+      );
+      return { offsetNode: point.node, offset: point.offset };
+    },
+  });
+  const previousRangeRect = Object.getOwnPropertyDescriptor(
+    Range.prototype,
+    'getBoundingClientRect',
+  );
+  Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+    configurable: true,
+    value() {
+      const block = paragraph();
+      if (!block?.contains(this.startContainer)) return rect(0, 0);
+      const prefix = document.createRange();
+      prefix.selectNodeContents(block);
+      prefix.setEnd(this.startContainer, this.startOffset);
+      const line = Math.floor(prefix.toString().length / charactersPerLine);
+      return rect(paragraphTop() + line * lineHeight, lineHeight);
+    },
+  });
+
+  return {
+    paragraph,
+    textTop(offset) {
+      const point = textPoint(offset);
+      const range = document.createRange();
+      range.setStart(point.node, point.offset);
+      range.setEnd(point.node, point.offset + 1);
+      return range.getBoundingClientRect().top;
+    },
+    growImage() {
+      imageHeight += 300;
+      view.geometry.setScrollHeight(2300);
+    },
+    narrowParagraph() {
+      charactersPerLine = 25;
+      view.geometry.setScrollHeight(3200);
+    },
+    restore() {
+      elementRects.mockRestore();
+      for (const [target, key, descriptor] of [
+        [document, 'caretPositionFromPoint', previousCaret],
+        [Range.prototype, 'getBoundingClientRect', previousRangeRect],
+      ]) {
+        if (descriptor) Object.defineProperty(target, key, descriptor);
+        else delete target[key];
+      }
+    },
+  };
+}
+
 describe('ChatTimeline scrolling', () => {
   const timeline = setupChatTimelineSuite({ observeResize: true });
 
@@ -216,6 +347,94 @@ describe('ChatTimeline scrolling', () => {
     await waitForCondition(() => view.geometry.currentScrollTop() === 700);
   });
 
+  it.each([
+    ['an earlier image grows inside the same Run', 'image', 900],
+    ['the same long paragraph wraps onto more lines', 'wrapping', 800],
+    ['Markdown rebuilds the paragraph with new inline nodes', 'markdown', 900],
+    [
+      'a Session switch remounts the Run after its layout changes',
+      'session',
+      900,
+    ],
+  ])(
+    'keeps the visible text line when %s',
+    async (_name, change, expectedTop) => {
+      const sessions = scrollMemorySessions();
+      appendEvents(sessions.parentSession, 'run-reading', [
+        userPersisted('reading-user', 'Give a long answer.'),
+        {
+          type: 'assistant_output_delta',
+          payload: { content_delta: READING_MARKDOWN },
+        },
+      ]);
+      // Only the long Run supplies layout; the older History is irrelevant to
+      // this position within the Run and does not need synthetic geometry.
+      sessions.parentSession.messages = [];
+      const view = await mountSessions({}, sessions);
+      const layout = mockReadingLayout(view);
+      try {
+        scrollAsUser(
+          view.container,
+          view.geometry,
+          600,
+          new WheelEvent('wheel', { deltaY: -120 }),
+        );
+        const before = layout.textTop(500);
+        const originalParagraph = layout.paragraph();
+        expect(before).toBe(60);
+
+        if (change === 'session') {
+          await switchTo(view, view.childSession, 2000);
+          expect(originalParagraph.isConnected).toBe(false);
+          layout.growImage();
+          await switchTo(view, view.parentSession, expectedTop);
+        } else {
+          if (change === 'wrapping') layout.narrowParagraph();
+          else layout.growImage();
+          if (change === 'markdown') {
+            appendEvents(
+              view.props.sessionState,
+              'run-reading',
+              [
+                {
+                  type: 'assistant_output',
+                  payload: {
+                    message: {
+                      role: 'assistant',
+                      content: READING_MARKDOWN.replace(
+                        'This paragraph',
+                        '**This paragraph**',
+                      ),
+                    },
+                  },
+                },
+              ],
+              3,
+            );
+            flushSync();
+            expect(originalParagraph.isConnected).toBe(false);
+            expect(layout.paragraph().querySelector('strong')).not.toBeNull();
+          }
+          timeline.notifyContentResize();
+          await waitForCondition(
+            () => view.geometry.currentScrollTop() === expectedTop,
+          );
+        }
+
+        expect(layout.textTop(500)).toBe(before);
+        // Further content notifications cannot apply the same correction twice.
+        timeline.notifyContentResize();
+        await tick();
+        if (typeof requestAnimationFrame === 'function') {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+        expect(view.geometry.currentScrollTop()).toBe(expectedTop);
+      } finally {
+        layout.restore();
+      }
+    },
+  );
+
   it('hands scroll ownership back to stick-to-bottom once the user scrolls', async () => {
     const view = await mountSessions();
     await returnToParentAt700(view);
@@ -288,11 +507,12 @@ describe('ChatTimeline scrolling', () => {
     await waitForCondition(() => view.geometry.currentScrollTop() === 600);
   });
 
-  it('keeps following while upward input scrolls a nested output box', async () => {
+  it('keeps nested output scrolling independent of timeline following and reading', async () => {
     const view = await mountSessions();
     const box = document.createElement('div');
     box.style.overflowY = 'auto';
-    Object.defineProperty(box, 'scrollHeight', { get: () => 900 });
+    let nestedHeight = 900;
+    Object.defineProperty(box, 'scrollHeight', { get: () => nestedHeight });
     Object.defineProperty(box, 'clientHeight', { get: () => 300 });
     box.scrollTop = 200;
     view.container.querySelector('.msg').append(box);
@@ -308,6 +528,50 @@ describe('ChatTimeline scrolling', () => {
     view.geometry.setScrollHeight(2600);
     timeline.notifyContentResize();
     await waitForCondition(() => view.geometry.currentScrollTop() === 2400);
+
+    // Search matches contain real paragraphs inside their own scroll box.
+    // While reading, an inner scroll must not become an outer correction
+    // when unrelated streaming content next changes the timeline's layout.
+    const list = document.createElement('ol');
+    const match = document.createElement('li');
+    const excerpt = document.createElement('p');
+    excerpt.textContent = 'A long search match inside the Tool results.';
+    match.append(excerpt);
+    list.append(match);
+    box.append(list);
+    const row = box.closest('[data-timeline-item-id]');
+    const rect = (top, height) => ({
+      top: top - view.geometry.currentScrollTop(),
+      bottom: top + height - view.geometry.currentScrollTop(),
+      left: 0,
+      right: 500,
+      width: 500,
+      height,
+    });
+    row.getBoundingClientRect = () => rect(0, 1600);
+    box.getBoundingClientRect = () => rect(600, 300);
+    for (const element of [match, excerpt]) {
+      element.getBoundingClientRect = () => rect(700 - box.scrollTop, 400);
+    }
+    for (const alreadyOverflowing of [false, true]) {
+      // Output may become scrollable only after the reading anchor was taken.
+      nestedHeight = alreadyOverflowing ? 900 : 300;
+      box.scrollTop = alreadyOverflowing ? 200 : 0;
+      scrollAsUser(view.container, view.geometry, 590);
+      scrollAsUser(view.container, view.geometry, 600);
+      nestedHeight = 900;
+      box.dispatchEvent(new WheelEvent('wheel', { deltaY: 80, bubbles: true }));
+      box.scrollTop = 280;
+      box.dispatchEvent(new Event('scroll'));
+      view.geometry.setScrollHeight(2800);
+      timeline.notifyContentResize();
+      await tick();
+      if (typeof requestAnimationFrame === 'function') {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+      expect(view.geometry.currentScrollTop()).toBe(600);
+      expect(box.scrollTop).toBe(280);
+    }
   });
 
   it('resumes following when the user returns to the bottom', async () => {

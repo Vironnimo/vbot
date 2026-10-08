@@ -28,6 +28,21 @@ function createFakeContainer() {
   return container;
 }
 
+function createClampedContainer() {
+  const container = createFakeContainer();
+  let top = 0;
+  Object.defineProperty(container, 'scrollTop', {
+    get: () => top,
+    set(value) {
+      top = Math.max(
+        0,
+        Math.min(value, container.scrollHeight - container.offsetHeight),
+      );
+    },
+  });
+  return container;
+}
+
 function createElement(id, offsetTop, container) {
   return {
     dataset: { timelineItemId: id },
@@ -101,6 +116,33 @@ describe('createChatScrollController', () => {
 
     // No snap to the new bottom: the gesture owns the viewport.
     expect(container.scrollTop).toBe(2000);
+
+    // Once the gesture moves, later growth preserves the reading position.
+    container.scrollTop = 600;
+    container.dispatchScroll();
+    container.scrollHeight = 2600;
+    controller.contentChanged();
+    expect(container.scrollTop).toBe(600);
+    controller.destroy();
+  });
+
+  it('keeps following after upward input that cannot move a short timeline', () => {
+    const container = createClampedContainer();
+    container.scrollHeight = 500;
+    const controller = createController(container);
+    controller.sessionChanged('session-a');
+    controller.contentChanged();
+
+    // The browser sends no scroll event: the gesture cannot move above zero.
+    controller.noteUserInput({ upward: true });
+    container.scrollHeight = 800;
+    controller.contentChanged();
+    expect(container.scrollTop).toBe(300);
+    expect(controller.isNearBottom()).toBe(true);
+
+    container.scrollHeight = 1100;
+    controller.contentChanged();
+    expect(container.scrollTop).toBe(600);
     controller.destroy();
   });
 
@@ -168,6 +210,99 @@ describe('createChatScrollController', () => {
     controller.contentChanged();
     expect(container.scrollTop).toBe(610);
     controller.destroy();
+  });
+
+  it.each(['other-session', 'returned-session', 'destroyed'])(
+    'keeps older page requests independent with %s completion',
+    async (completion) => {
+      const container = createClampedContainer();
+      const pending = [];
+      const onViewChanged = vi.fn();
+      const requestLoadOlder = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            pending.push(resolve);
+          }),
+      );
+      const controller = createController(container, {
+        onViewChanged,
+        shouldLoadOlder: () => true,
+        requestLoadOlder,
+      });
+      const reachTop = () => {
+        container.scrollTop = 0;
+        container.dispatchScroll();
+      };
+      const settlePage = async (index) => {
+        pending[index](true);
+        await Promise.resolve();
+        await Promise.resolve();
+      };
+
+      controller.sessionChanged('session-a');
+      controller.contentChanged();
+      reachTop();
+      controller.noteUserInput({ upward: true });
+      expect(requestLoadOlder).toHaveBeenCalledTimes(1);
+
+      controller.sessionChanged('session-b');
+      controller.contentChanged();
+      reachTop();
+      expect(requestLoadOlder).toHaveBeenCalledTimes(2);
+
+      if (completion === 'returned-session') {
+        controller.sessionChanged('session-a');
+        controller.contentChanged();
+        controller.noteUserInput({ upward: true });
+        expect(requestLoadOlder).toHaveBeenCalledTimes(2);
+      } else if (completion === 'destroyed') {
+        controller.destroy();
+      }
+
+      onViewChanged.mockClear();
+      container.scrollHeight += 400;
+      await settlePage(0);
+      expect(container.scrollTop).toBe(
+        completion === 'returned-session' ? 400 : 0,
+      );
+      expect(onViewChanged).not.toHaveBeenCalled();
+
+      // B owns its own request until it settles, even after A completes.
+      if (completion === 'other-session') {
+        controller.noteUserInput({ upward: true });
+        expect(requestLoadOlder).toHaveBeenCalledTimes(2);
+        onViewChanged.mockClear();
+      }
+      const topBeforeSecondCompletion = container.scrollTop;
+      await settlePage(1);
+      expect(container.scrollTop).toBe(
+        completion === 'other-session' ? 400 : topBeforeSecondCompletion,
+      );
+      expect(onViewChanged).not.toHaveBeenCalled();
+      controller.destroy();
+    },
+  );
+
+  it('retries older History on upward input without leaving the top', async () => {
+    const container = createClampedContainer();
+    const requestLoadOlder = vi.fn().mockRejectedValue(new Error('offline'));
+    const controller = createController(container, {
+      shouldLoadOlder: () => true,
+      requestLoadOlder,
+    });
+    controller.sessionChanged('session-a');
+    controller.contentChanged();
+    container.scrollTop = 0;
+    container.dispatchScroll();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Still at zero, so the browser has no new scroll event to dispatch.
+    controller.noteUserInput({ upward: true });
+    expect(requestLoadOlder).toHaveBeenCalledTimes(2);
+    controller.destroy();
+    await Promise.resolve();
+    await Promise.resolve();
   });
 
   it('restores a saved reading pixel position when returning to a session', () => {

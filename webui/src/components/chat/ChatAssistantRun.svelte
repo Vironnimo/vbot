@@ -663,6 +663,7 @@
       {:else if child.type === 'assistant_output'}
         {@const working = isRunChildWorking(item, child)}
         <MarkdownContent
+          contentId={child.id}
           source={child.content ?? ''}
           streaming={working}
           caret={working}
