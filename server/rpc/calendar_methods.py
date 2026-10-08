@@ -6,6 +6,7 @@ from typing import Any
 
 from core.calendar import CalendarService, parse_occurrence_id
 from server.events import RESOURCE_KIND_CALENDAR
+from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
@@ -77,15 +78,18 @@ async def _calendar_update(state: Any, params: JsonObject) -> JsonObject:
             "params.rrule changes a whole event; send the event id, not an occurrence id",
         )
     try:
-        if occurrence:
-            changed = await service.update_occurrence(item_id, actor="rpc", **fields)
-            result: JsonObject = {
-                "occurrence": _occurrence_payload(changed),
-                "event": _event_payload(service.get_event(changed.event_id)),
-            }
-        else:
-            event = await service.update_event(item_id, actor="rpc", **fields)
-            result = {"event": _event_payload(event)}
+        # A moved event can let a Cron job that no longer fires run again; its target
+        # check and the change must not interleave with a reference removal.
+        async with _agent_reference_lock(state):
+            if occurrence:
+                changed = await service.update_occurrence(item_id, actor="rpc", **fields)
+                result: JsonObject = {
+                    "occurrence": _occurrence_payload(changed),
+                    "event": _event_payload(service.get_event(changed.event_id)),
+                }
+            else:
+                event = await service.update_event(item_id, actor="rpc", **fields)
+                result = {"event": _event_payload(event)}
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CALENDAR)
@@ -93,21 +97,27 @@ async def _calendar_update(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _calendar_delete(state: Any, params: JsonObject) -> JsonObject:
-    """Delete a whole event, or with an occurrence id one occurrence of a repeating event."""
+    """Delete a whole event with its Cron jobs, or with an occurrence id one occurrence."""
     _reject_unsupported(params, _DELETE_FIELDS, "calendar.delete")
     service = _calendar_service(state)
     item_id = _required_string(params, "id")
     try:
         if parse_occurrence_id(item_id) is not None:
-            removed = await service.delete_occurrence(item_id, actor="rpc")
+            # Without the occurrence, an earlier one's Cron job may catch up again.
+            async with _agent_reference_lock(state):
+                removed = await service.delete_occurrence(item_id, actor="rpc")
             result: JsonObject = {
                 "id": item_id,
                 "deleted": True,
                 "event": _event_payload(service.get_event(removed.event_id)),
             }
         else:
-            await service.delete_event(item_id, actor="rpc")
-            result = {"id": item_id, "deleted": True}
+            jobs = await service.delete_event(item_id, actor="rpc")
+            result = {
+                "id": item_id,
+                "deleted": True,
+                "cron_jobs": [{"id": job.id, "name": job.name} for job in jobs],
+            }
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CALENDAR)
@@ -160,6 +170,8 @@ def _cron_occurrence_payload(occurrence: Any) -> JsonObject:
         "name": occurrence.name,
         "fire_at": occurrence.fire_at_utc.isoformat(),
         "schedule_type": occurrence.schedule_type,
+        "event_id": occurrence.event_id,
+        "occurrence_id": occurrence.occurrence_id,
     }
 
 

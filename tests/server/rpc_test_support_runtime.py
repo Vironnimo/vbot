@@ -19,6 +19,7 @@ from core.automation import (
     ReflectionService,
     TriggerService,
 )
+from core.automation.cron import TERMINAL_CRON_JOB_STATUSES
 from core.chat import (
     ChatMessage,
     ChatSessionManager,
@@ -357,11 +358,15 @@ class StubTerminalManager:
 class StubJobService:
     """Cron or Bootstrap service double listing ``jobs``."""
 
-    def __init__(self) -> None:
-        self.jobs: list[Any] = []
+    def __init__(self, jobs: Sequence[Any] = ()) -> None:
+        self.jobs: list[Any] = list(jobs)
 
     def list_jobs(self) -> list[Any]:
         return list(self.jobs)
+
+    def can_fire(self, job: Any) -> bool:
+        """Whether a cron job can start another Run: it is not finished history."""
+        return job.status not in TERMINAL_CRON_JOB_STATUSES
 
     def add_changed_callback(self, _callback: Callable[[], None]) -> Callable[[], None]:
         return _unsubscribe

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
@@ -64,6 +65,7 @@ from core.calendar.errors import (
     CalendarStorageError,
     CalendarValidationError,
 )
+from core.calendar.event_jobs import BoundJob, EventJobs
 from core.calendar.recurrence import (
     FIRST_EVENT_YEAR,
     LAST_EVENT_YEAR,
@@ -118,6 +120,10 @@ class CalendarService:
     an offset name their instant. A new timed event keeps its times in the
     server zone of its creation; an all-day event keeps dates and follows the
     server zone.
+
+    Jobs that run at an event's occurrences belong to the owner bound with
+    :meth:`bind_event_jobs`: it may refuse an event change and deletes an
+    event's jobs with the event. Changes and deletions run one at a time.
     """
 
     def __init__(self, data_root: str | Path, *, tz: str | ZoneInfo | None = None) -> None:
@@ -132,6 +138,12 @@ class CalendarService:
         # The file holds the events of an earlier vBot version: the next save replaces it.
         self._replace_legacy_document = False
         self._changed_callbacks: set[Callable[[], None]] = set()
+        self._event_jobs: EventJobs | None = None
+        self._edits = asyncio.Lock()
+
+    def bind_event_jobs(self, event_jobs: EventJobs) -> None:
+        """Ask ``event_jobs`` before event changes and tell it about deleted events."""
+        self._event_jobs = event_jobs
 
     def add_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
         """Subscribe to persisted calendar changes and return an unsubscribe function."""
@@ -227,18 +239,20 @@ class CalendarService:
         occurrences the new rule no longer produces lose their changes.
         """
         self._ensure_events_loaded()
-        event = self._event(event_id)
+        self._event(event_id)
         unknown_fields = sorted(set(fields) - _EVENT_INPUT_FIELDS)
         if unknown_fields:
             raise CalendarValidationError(
                 f"Unsupported calendar event fields: {', '.join(unknown_fields)}"
             )
-        candidate = self._updated_event(event, fields)
-        changed = _changed_fields(event, candidate)
-        if not changed:
-            return _clone_event(event)
-        candidate.updated_at = _utc_now_iso()
-        self._store(candidate, event)
+        async with self._edits:
+            event = self._event(event_id)
+            candidate = self._updated_event(event, fields)
+            changed = _changed_fields(event, candidate)
+            if not changed:
+                return _clone_event(event)
+            candidate.updated_at = _utc_now_iso()
+            await self._store_change(candidate, event)
         _LOGGER.info(
             "Calendar event updated (event=%s fields=%s actor=%s)",
             event_id,
@@ -247,18 +261,28 @@ class CalendarService:
         )
         return _clone_event(candidate)
 
-    async def delete_event(self, event_id: str, *, actor: str = _DEFAULT_ACTOR) -> None:
-        """Delete one event with all its occurrences."""
-        self._ensure_events_loaded()
-        removed = self._event(event_id)
-        del self._events[event_id]
-        try:
-            self._save_events()
-        except Exception:
-            self._events[event_id] = removed
-            raise
-        self._notify_changed()
-        _LOGGER.info("Calendar event deleted (event=%s actor=%s)", event_id, actor)
+    async def delete_event(
+        self, event_id: str, *, actor: str = _DEFAULT_ACTOR
+    ) -> tuple[BoundJob, ...]:
+        """Delete one event with all its occurrences and the jobs bound to it.
+
+        Returns the deleted jobs. When they cannot be deleted, the event stays
+        deleted and their owner's error is raised; such jobs no longer run.
+        """
+        async with self._edits:
+            self._ensure_events_loaded()
+            removed = self._event(event_id)
+            del self._events[event_id]
+            try:
+                self._save_events()
+            except Exception:
+                self._events[event_id] = removed
+                raise
+            self._notify_changed()
+            _LOGGER.info("Calendar event deleted (event=%s actor=%s)", event_id, actor)
+            if self._event_jobs is None:
+                return ()
+            return await self._event_jobs.event_deleted(event_id, actor=actor)
 
     # -- occurrences ------------------------------------------------------------------------
 
@@ -280,14 +304,20 @@ class CalendarService:
         all-day). A change back to the series' own value drops that change.
         """
         self._ensure_events_loaded()
-        event, key = self._occurrence_target(occurrence_id)
-        if key is None:
-            raise CalendarEventNotFoundError(f"Calendar occurrence not found: {occurrence_id}")
         unknown_fields = sorted(set(fields) - OVERRIDE_FIELDS)
         if unknown_fields:
             raise CalendarValidationError(
                 f"Unsupported calendar occurrence fields: {', '.join(unknown_fields)}"
             )
+        async with self._edits:
+            return await self._update_occurrence(occurrence_id, fields, actor)
+
+    async def _update_occurrence(
+        self, occurrence_id: str, fields: dict[str, Any], actor: str
+    ) -> EventOccurrence:
+        event, key = self._occurrence_target(occurrence_id)
+        if key is None:
+            raise CalendarEventNotFoundError(f"Calendar occurrence not found: {occurrence_id}")
         current = self._occurrence(event, key)
         override = dict(event.overrides.get(key, {}))
         if "title" in fields:
@@ -315,7 +345,7 @@ class CalendarService:
                 f"events allow at most {MAX_OVERRIDES_PER_EVENT} changed occurrences"
             )
         candidate.updated_at = _utc_now_iso()
-        self._store(candidate, event)
+        await self._store_change(candidate, event)
         _LOGGER.info(
             "Calendar occurrence updated (event=%s occurrence=%s fields=%s actor=%s)",
             event.id,
@@ -333,19 +363,20 @@ class CalendarService:
         The rest of the series stays; the occurrence's changes go with it.
         """
         self._ensure_events_loaded()
-        event, key = self._occurrence_target(occurrence_id)
-        if key is None:
-            raise CalendarEventNotFoundError(f"Calendar occurrence not found: {occurrence_id}")
-        removed = self._occurrence(event, key)
-        if len(event.exdates) >= MAX_EXDATES_PER_EVENT:
-            raise CalendarValidationError(
-                f"events allow at most {MAX_EXDATES_PER_EVENT} removed occurrences"
-            )
-        candidate = _clone_event(event)
-        candidate.exdates = sorted([*event.exdates, key])
-        candidate.overrides.pop(key, None)
-        candidate.updated_at = _utc_now_iso()
-        self._store(candidate, event)
+        async with self._edits:
+            event, key = self._occurrence_target(occurrence_id)
+            if key is None:
+                raise CalendarEventNotFoundError(f"Calendar occurrence not found: {occurrence_id}")
+            removed = self._occurrence(event, key)
+            if len(event.exdates) >= MAX_EXDATES_PER_EVENT:
+                raise CalendarValidationError(
+                    f"events allow at most {MAX_EXDATES_PER_EVENT} removed occurrences"
+                )
+            candidate = _clone_event(event)
+            candidate.exdates = sorted([*event.exdates, key])
+            candidate.overrides.pop(key, None)
+            candidate.updated_at = _utc_now_iso()
+            await self._store_change(candidate, event)
         _LOGGER.info(
             "Calendar occurrence removed (event=%s occurrence=%s actor=%s)", event.id, key, actor
         )
@@ -634,6 +665,15 @@ class CalendarService:
                 f"Calendar occurrence not found: {event.id} has no occurrence at {key}"
             )
         return occurrence
+
+    async def _store_change(self, candidate: CalendarEvent, previous: CalendarEvent) -> None:
+        """:meth:`_store` a changed event once the owner of its jobs accepts the change."""
+        _check_event(candidate)
+        if self._event_jobs is not None:
+            await self._event_jobs.check_event_change(
+                _clone_event(previous), _clone_event(candidate)
+            )
+        self._store(candidate, previous)
 
     def _store(self, candidate: CalendarEvent, previous: CalendarEvent | None) -> None:
         """Validate ``candidate``, persist it in place of ``previous`` and announce the change."""

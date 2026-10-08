@@ -6,7 +6,9 @@ from core.calendar.errors import (
     CalendarServiceError,
     CalendarStorageError,
     CalendarValidationError,
+    EventJobTargetMissingError,
 )
+from core.calendar.event_jobs import BoundJob, EventJobs
 from core.calendar.service import (
     MAX_CALENDAR_EVENTS,
     MAX_WINDOW_DAYS,
@@ -23,12 +25,15 @@ __all__ = [
     "MAX_CALENDAR_EVENTS",
     "MAX_WINDOW_DAYS",
     "WHEN_GRAMMAR",
+    "BoundJob",
     "CalendarEvent",
     "CalendarEventNotFoundError",
     "CalendarService",
     "CalendarServiceError",
     "CalendarStorageError",
     "CalendarValidationError",
+    "EventJobTargetMissingError",
+    "EventJobs",
     "EventOccurrence",
     "FreeSlot",
     "occurrence_id",

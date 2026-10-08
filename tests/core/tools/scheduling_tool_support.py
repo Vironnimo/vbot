@@ -145,7 +145,7 @@ def calendar_tool(tmp_path: Path, *, tz: str = SERVER_ZONE) -> CalendarTool:
     service = CalendarService(tmp_path, tz=tz)
     registry = ToolRegistry()
     reference_lock = asyncio.Lock()
-    register_calendar_tool(registry, service)
+    register_calendar_tool(registry, service, reference_lock=reference_lock)
     return CalendarTool(
         registry=registry, workspace=tmp_path, reference_lock=reference_lock, service=service
     )

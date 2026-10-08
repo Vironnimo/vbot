@@ -24,6 +24,7 @@ from core.sessions import (
     ArchiveEntryRef,
 )
 from server.events import ServerEventBus
+from tests.server.rpc_test_support_runtime import StubJobService
 
 
 class FakeResolver:
@@ -275,8 +276,8 @@ def stub_session_state() -> tuple[SimpleNamespace, FakeResolver, FakeSessions]:
         chat_sessions=sessions,
         chat_run_manager=chat_runs,
         snapshot_barrier=SnapshotBarrier(),
-        bootstrap_service=SimpleNamespace(list_jobs=lambda: []),
-        cron_service=SimpleNamespace(list_jobs=lambda: []),
+        bootstrap_service=StubJobService(),
+        cron_service=StubJobService(),
         terminal_manager=FakeTerminalManager(),
         agents=SimpleNamespace(
             update=lambda agent_id, **k: updates.append({agent_id: k}),

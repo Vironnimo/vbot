@@ -21,7 +21,7 @@ from core.projects.store import ProjectStore
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
 from server.events import ServerEventBus
-from tests.server.rpc_test_support_runtime import StubCalendarService
+from tests.server.rpc_test_support_runtime import StubCalendarService, StubJobService
 
 OPENCODE_AGENTS_SUBPATH = (".opencode", "agents")
 
@@ -178,8 +178,8 @@ def _make_state(
         global_agent_defaults=lambda: {},
     )
     chat_runs = ChatRunManager()
-    cron_service = SimpleNamespace(list_jobs=lambda: list(cron_jobs or []))
-    bootstrap_service = SimpleNamespace(list_jobs=lambda: list(bootstrap_jobs or []))
+    cron_service = StubJobService(cron_jobs or ())
+    bootstrap_service = StubJobService(bootstrap_jobs or ())
     calendar_service = StubCalendarService()
     runtime = SimpleNamespace(
         projects=projects,

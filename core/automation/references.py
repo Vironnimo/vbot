@@ -21,7 +21,6 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, Literal
 
 from core.automation.bootstrap import TERMINAL_BOOTSTRAP_STATUSES
-from core.automation.cron import TERMINAL_CRON_JOB_STATUSES
 from core.skills import rename_skill_triggers, triggered_skill_names
 
 if TYPE_CHECKING:
@@ -76,8 +75,10 @@ class AutomationReferences:
     """Answer which live automations start Runs of an Agent, Project or Session.
 
     Terminal history never starts another Run and does not count: completed
-    Bootstrap jobs and completed or missed Cron jobs. A paused or failed Cron job
-    can be enabled again, so it counts.
+    Bootstrap jobs, completed or missed Cron jobs, and Cron jobs bound to a
+    calendar event that can no longer fire (``CronService.can_fire``, for
+    example after a one-time event has passed). A paused or failed Cron job can
+    be enabled again, so it counts.
 
     ``lock`` serializes reference checks with the edits that create, move or
     remove references, across RPC handlers, Tools and commands. Hold it from the
@@ -176,8 +177,7 @@ class AutomationReferences:
         automations.extend(
             _LiveAutomation(AutomationReference("cron", job.id, job.name), partial(_job_texts, job))
             for job in self._cron.list_jobs()
-            if selects(job.agent_id, job.project_id, job.session_id)
-            and job.status not in TERMINAL_CRON_JOB_STATUSES
+            if selects(job.agent_id, job.project_id, job.session_id) and self._cron.can_fire(job)
         )
         return automations
 

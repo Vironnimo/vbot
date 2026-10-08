@@ -270,6 +270,7 @@ async def test_terminal_job_status_cannot_be_changed_through_update(tmp_path: Pa
         await service.update_job(job.id, status="active")
 
     assert service.get_job(job.id).status == terminal_status
+    assert service.can_fire(service.get_job(job.id)) is False
 
 
 @pytest.mark.asyncio

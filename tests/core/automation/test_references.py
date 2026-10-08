@@ -18,6 +18,7 @@ _SESSION = SessionAddress(project_id=None, agent_id="builder", session_id="s1")
 class _Automations:
     """Bootstrap and Cron fakes listing what a test arranges.
 
+    A cron job's ``fires`` says whether its service lets it start another Run.
     ``edits`` records each change of an automation's texts: the owner, the job
     id, and the changed fields.
     """
@@ -37,6 +38,7 @@ class _Automations:
             list_jobs=lambda: list(self.cron_jobs),
             get_job=lambda job_id: _find(self.cron_jobs, job_id),
             update_job=self._edit("cron"),
+            can_fire=lambda job: job.fires,
         )
 
     def _edit(self, owner: str) -> Callable[..., Any]:
@@ -75,7 +77,7 @@ def _bootstrap(**fields: Any) -> Callable[[_Automations], None]:
 
 
 def _cron(**fields: Any) -> Callable[[_Automations], None]:
-    return lambda automations: automations.cron_jobs.append(_job(**fields))
+    return lambda automations: automations.cron_jobs.append(_job(**{"fires": True, **fields}))
 
 
 @pytest.mark.parametrize(
@@ -111,9 +113,9 @@ def test_session_references_name_each_live_automation_in_the_session(
 @pytest.mark.parametrize(
     "arrange",
     [
-        # Terminal history never starts another Run.
-        pytest.param(_cron(status="completed"), id="cron-completed"),
-        pytest.param(_cron(status="missed"), id="cron-missed"),
+        # History never starts another Run: a finished job, or a cron job
+        # whose calendar event has no occurrence left for it.
+        pytest.param(_cron(fires=False), id="cron-history"),
         pytest.param(_bootstrap(status="completed"), id="bootstrap-completed"),
         # The same Session id under another Agent address is another Session.
         pytest.param(_cron(project_id="vbot"), id="cron-other-scope"),
@@ -148,9 +150,7 @@ def _project(references: AutomationReferences) -> tuple[AutomationReference, ...
         pytest.param(_project, _bootstrap(project_id="vbot"), ["bootstrap:job-1"], id="project"),
         pytest.param(_project, _cron(), [], id="project-not-identity-agent"),
         pytest.param(_project, _cron(project_id="other"), [], id="project-not-other-project"),
-        pytest.param(
-            _project, _cron(project_id="vbot", status="missed"), [], id="project-not-history"
-        ),
+        pytest.param(_project, _cron(project_id="vbot", fires=False), [], id="project-not-history"),
     ],
 )
 def test_agent_and_project_references_name_the_live_automations_of_their_target(
@@ -173,7 +173,7 @@ def test_agent_triggered_skill_names_read_every_live_text_of_the_identity_agent(
         # Terminal history triggers nothing here, and neither does a job of the
         # Project Agent with the same id: that Config Agent never loads the
         # Identity Agent's own Skills.
-        _cron(id="cron-2", prompt="$retired", status="completed"),
+        _cron(id="cron-2", prompt="$retired", fires=False),
         _cron(id="cron-3", prompt="$project-only", project_id="vbot"),
     ):
         arrange(automations)
@@ -191,7 +191,7 @@ def test_a_skill_merge_renames_the_triggers_in_the_identity_agents_automations()
         # Only a leading /name triggers, and $name only with the whole name.
         _cron(prompt="/deploy-web the release, not /deploy-web or $deploy-webhook."),
         _bootstrap(id="boot-1", prompt="Warm up with $deploy-web."),
-        _cron(id="cron-2", prompt="$deploy-web", status="completed"),
+        _cron(id="cron-2", prompt="$deploy-web", fires=False),
         _cron(id="cron-3", prompt="$deploy-web", project_id="vbot"),
         _cron(id="cron-4", prompt="/deploy the release."),
     ):

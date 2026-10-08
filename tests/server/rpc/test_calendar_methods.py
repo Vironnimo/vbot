@@ -7,12 +7,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from core.automation.cron import CronOccurrence
-from core.calendar import CalendarService
+from core.calendar import BoundJob, CalendarService
 from server.events import ServerEventBus
 from tests.server.rpc_test_support import resource_changes, rpc_error, rpc_result
 
@@ -52,7 +52,15 @@ async def test_calendar_window_returns_event_and_cron_layers(state: SimpleNamesp
             name="Check mail",
             fire_at_utc=datetime(2026, 9, 3, 9, 0, tzinfo=UTC),
             schedule_type="cron",
-        )
+        ),
+        CronOccurrence(
+            job_id="job-2",
+            name="Prepare",
+            fire_at_utc=datetime(2026, 9, 7, 6, 30, tzinfo=UTC),
+            schedule_type="event",
+            event_id="evt_x",
+            occurrence_id="evt_x_20260907T0900",
+        ),
     ]
 
     window = await rpc_result(
@@ -82,13 +90,30 @@ async def test_calendar_window_returns_event_and_cron_layers(state: SimpleNamesp
             "name": "Check mail",
             "fire_at": "2026-09-03T09:00:00+00:00",
             "schedule_type": "cron",
-        }
+            "event_id": None,
+            "occurrence_id": None,
+        },
+        # A job bound to an event names the occurrence it is due for.
+        {
+            "job_id": "job-2",
+            "name": "Prepare",
+            "fire_at": "2026-09-07T06:30:00+00:00",
+            "schedule_type": "event",
+            "event_id": "evt_x",
+            "occurrence_id": "evt_x_20260907T0900",
+        },
     ]
     assert window["system_timezone"] == service.system_timezone_name()
 
 
 @pytest.mark.asyncio
 async def test_calendar_event_create_update_delete_roundtrip(state: SimpleNamespace) -> None:
+    # Deleting an event deletes the cron jobs bound to it and reports them.
+    event_jobs = SimpleNamespace(
+        check_event_change=AsyncMock(),
+        event_deleted=AsyncMock(return_value=(BoundJob("cron_1", "Prepare"),)),
+    )
+    state.runtime.calendar_service.bind_event_jobs(event_jobs)
     created = await rpc_result(state, "calendar.create", **_WEEKLY_STANDUP)
     event_id = created["event"]["id"]
     updated = await rpc_result(
@@ -119,7 +144,11 @@ async def test_calendar_event_create_update_delete_roundtrip(state: SimpleNamesp
         None,
         "FREQ=DAILY",
     )
-    assert deleted == {"id": event_id, "deleted": True}
+    assert deleted == {
+        "id": event_id,
+        "deleted": True,
+        "cron_jobs": [{"id": "cron_1", "name": "Prepare"}],
+    }
     assert state.runtime.calendar_service.list_events() == []
     assert resource_changes(state) == [_CALENDAR_CHANGED] * 3
 

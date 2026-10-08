@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, date, datetime, time, timedelta
 from functools import cache
 from typing import TYPE_CHECKING, Any
@@ -162,10 +163,25 @@ def _normalize_calendar_arguments(arguments: Any) -> Any:
     return normalize_calendar_arguments(_repair_contract(), arguments)
 
 
-def register_calendar_tool(registry: ToolRegistry, calendar_service: CalendarService) -> None:
-    """Register the calendar tool with a vBot tool registry."""
+# Actions that can let a Cron job bound to the event run again.
+_REFERENCE_ACTIONS = frozenset({"update", "delete"})
+
+
+def register_calendar_tool(
+    registry: ToolRegistry, calendar_service: CalendarService, *, reference_lock: asyncio.Lock
+) -> None:
+    """Register the calendar tool with a vBot tool registry.
+
+    ``reference_lock`` is the Agent reference lock (``AutomationReferences.lock``).
+    update and delete hold it like the calendar RPCs, so an event change cannot
+    revive a Cron job bound to the event between a removal's reference check and
+    the removal.
+    """
 
     async def handler(_context: ToolContext, arguments: JsonObject) -> JsonObject:
+        if arguments.get("action") in _REFERENCE_ACTIONS:
+            async with reference_lock:
+                return await _handle_calendar_tool(calendar_service, arguments)
         return await _handle_calendar_tool(calendar_service, arguments)
 
     registry.register(
