@@ -25,6 +25,7 @@ from tests.core.chat.chat_loop_support import (
     last_run,
     session_address,
 )
+from tests.core.chat.usage_recorder_support import RecordingUsageRecorder
 
 JsonObject = dict[str, Any]
 Script = Callable[[], AsyncIterator[JsonObject]]
@@ -174,6 +175,71 @@ async def test_a_cancel_during_the_stream_keeps_the_results_of_finished_tool_cal
     assert [call.id for call in tool_turn_message.tool_calls or []] == ["call_berlin"]
     results = [message for message in persisted if message.role == "tool"]
     assert [message.tool_call_id for message in results] == ["call_berlin"]
+    assert json.loads(str(results[0].content)) == tool_success({"city": "Berlin"})
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_while_the_finished_stream_records_usage_keeps_started_calls(
+    tmp_path: Path,
+) -> None:
+    started: list[str] = []
+    recording = asyncio.Event()
+    release = asyncio.Event()
+
+    class WaitingUsageRecorder(RecordingUsageRecorder):
+        @override
+        async def finish(
+            self, call_id: Any, usage: Any = None, *, status: str = "completed"
+        ) -> Any:
+            recording.set()
+            await release.wait()
+            return await super().finish(call_id, usage, status=status)
+
+    async def tool_turn() -> AsyncIterator[JsonObject]:
+        yield _call("call_berlin", "Berlin")
+        yield {"type": "content_delta", "text": "Checking."}
+        await _until(lambda: started == ["call_berlin"])
+        yield {"type": "finish", "reason": "tool_calls"}
+
+    runtime = _runtime(tmp_path, _ScriptedStreamAdapter(tool_turn), started)
+    runtime.usage_recorder = WaitingUsageRecorder()
+    runtime.chat_sessions.create("coder", session_id=SESSION_ID)
+    run = await build_chat_loop(runtime).start_run("coder", "Weather?", session_id=SESSION_ID)
+    await asyncio.wait_for(recording.wait(), timeout=2)
+
+    run.request_cancel(reason="user")
+    release.set()
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+
+    persisted = history(runtime)
+    tool_turn_message = next(message for message in persisted if message.tool_calls)
+    assert [call.id for call in tool_turn_message.tool_calls or []] == ["call_berlin"]
+    results = [message for message in persisted if message.role == "tool"]
+    assert [message.tool_call_id for message in results] == ["call_berlin"]
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_failure_after_a_started_tool_call_keeps_it(tmp_path: Path) -> None:
+    started: list[str] = []
+
+    async def failing_turn() -> AsyncIterator[JsonObject]:
+        yield _call("call_berlin", "Berlin")
+        yield {"type": "content_delta", "text": "Checking."}
+        await _until(lambda: started == ["call_berlin"])
+        raise RuntimeError("malformed delta")
+
+    runtime = _runtime(tmp_path, _ScriptedStreamAdapter(failing_turn), started)
+
+    with pytest.raises(RuntimeError):
+        await build_chat_loop(runtime).send("coder", "Weather?", session_id=SESSION_ID)
+
+    # The call ran once and its turn and Result are durable, then the Run failed.
+    assert started == ["call_berlin"]
+    persisted = history(runtime)
+    tool_turn_message = next(message for message in persisted if message.tool_calls)
+    assert [call.id for call in tool_turn_message.tool_calls or []] == ["call_berlin"]
+    results = [message for message in persisted if message.role == "tool"]
     assert json.loads(str(results[0].content)) == tool_success({"city": "Berlin"})
 
 

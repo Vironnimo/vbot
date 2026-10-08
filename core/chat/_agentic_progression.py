@@ -573,14 +573,17 @@ class AgenticProgression:
                 removed_tool_names: frozenset[str] = removed_tool_names,
             ) -> None:
                 assert tool_round is not None
-                tool_round.start(
-                    _offered_tool_calls(
-                        _parse_response_tool_calls(raw_calls) or [],
-                        offered_tool_names,
-                        self._dependencies.tools,
-                        removed=removed_tool_names,
-                    )
+                tool_calls = _offered_tool_calls(
+                    _parse_response_tool_calls(raw_calls) or [],
+                    offered_tool_names,
+                    self._dependencies.tools,
+                    removed=removed_tool_names,
                 )
+                # A restart before the turn persists still shows these calls.
+                context.stream_draft.record_tool_calls(
+                    model=target.public_model, tool_calls=tool_calls
+                )
+                tool_round.start(tool_calls)
 
             while True:
                 run.raise_if_cancelled()
@@ -986,8 +989,10 @@ class AgenticProgression:
                                 start_index=len(started_tool_calls),
                             )
                         )
-                    tool_messages, media_outputs = await self._requests.store_tool_media(
-                        tool_messages, media_outputs
+                    # From here until their Results are persisted and
+                    # acknowledged, a Run cancel must not drop work already done.
+                    tool_messages, media_outputs = await _finish_visible_boundary(
+                        self._requests.store_tool_media(tool_messages, media_outputs), run, True
                     )
                     tool_request_messages: list[JsonObject] = []
                     for tool_message in tool_messages:
@@ -1013,8 +1018,12 @@ class AgenticProgression:
                         # The stream broke after these calls started; the note
                         # follows their results.
                         session.add_note(recovery_note)
-                    await self._persist_tool_results(
-                        context, tool_dispatch_context, assistant_message.id, tool_messages
+                    await _finish_visible_boundary(
+                        self._persist_tool_results(
+                            context, tool_dispatch_context, assistant_message.id, tool_messages
+                        ),
+                        run,
+                        True,
                     )
                     binding = context.request.temporary_binding
                     extension_registry = self._dependencies.get_extension_registry()

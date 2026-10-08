@@ -432,6 +432,7 @@ class SessionStore:
         model: str,
         reasoning_delta: str,
         content_delta: str,
+        tool_calls: Sequence[JsonObject] = (),
     ) -> None:
         """Append streamed output of a running Run's current Model step to its draft."""
         self._execute_write(
@@ -442,6 +443,7 @@ class SessionStore:
                 model=model,
                 reasoning_delta=reasoning_delta,
                 content_delta=content_delta,
+                tool_calls=tool_calls,
             )
         )
 

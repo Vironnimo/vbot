@@ -582,6 +582,9 @@ class WireRequestRunner:
                 recorder.finish(call_id, step.message.usage, status=status),
                 run,
                 step.message.interrupted
+                # Started Tool Calls may already have effects; their turn
+                # must reach the Session.
+                or accumulator.has_taken_tool_calls
                 or (
                     not step.message.tool_calls
                     and bool(step.message.content or step.message.reasoning)
@@ -847,6 +850,31 @@ class WireRequestRunner:
                 )
             else:
                 raise
+        except Exception as exc:
+            if not accumulator.has_taken_tool_calls:
+                delta_emitter.close()
+                raise
+            # Any other failure after Tool Calls started keeps them like a
+            # fatal stream break: their turn and Results persist, then the
+            # step fails.
+            delta_emitter.flush()
+            # The Run's terminal line reports the failure itself.
+            _LOGGER.debug(
+                "Model step failed after Tool Calls started; keeping them "
+                "(run=%s model=%s error_type=%s)",
+                run.id,
+                model_id,
+                type(exc).__name__,
+            )
+            step = self._finalize_after_started_tools(
+                public_model,
+                response_model,
+                accumulator,
+                run,
+                message_id=message_id,
+                output_cwd=output_cwd,
+            )
+            return replace(step, failure=exc)
         except BaseException:
             delta_emitter.close()
             raise

@@ -198,6 +198,7 @@ export default Object.freeze({
   'chat.toolPendingName': 'tool',
   'chat.toolCancelled': 'cancelled',
   'chat.toolPartial': 'partial',
+  'chat.toolInterrupted': 'interrupted',
   'chat.toolState.preparing': 'Preparing',
   'chat.toolState.preparingHint': 'The Model is still writing this Tool call.',
   'chat.toolState.running': 'Running',
@@ -207,6 +208,9 @@ export default Object.freeze({
     'Some of its operations failed; the result lists which.',
   'chat.toolState.failed': 'Failed',
   'chat.toolState.cancelled': 'Cancelled',
+  'chat.toolState.interrupted': 'Interrupted',
+  'chat.toolState.interruptedHint':
+    'The Run ended before this call returned a result.',
   'chat.toolState.background': 'Running in the background',
   'chat.toolState.backgroundHint':
     'vBot watches the command. Its result reaches the Agent as a new message when it ends.',

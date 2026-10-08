@@ -85,6 +85,9 @@ export const toolStatusLabel = (tool, nowMs = Date.now()) => {
     const duration = formatDurationMs(toolDurationMs(tool));
     return [t('chat.toolCancelled'), duration].filter(Boolean).join(' · ');
   }
+  if (toolStatus(tool) === 'interrupted') {
+    return t('chat.toolInterrupted');
+  }
   if (toolStatus(tool) === 'running') {
     if (isToolPreparing(tool)) {
       return '';
@@ -116,7 +119,12 @@ export const toolStatusDetails = (tool, nowMs = Date.now()) => {
   const startedAt = toolStartedTimestamp(tool);
   return {
     title: executionStateTitle(status),
-    text: status === 'partial' ? t('chat.toolState.partialHint') : '',
+    text:
+      status === 'partial'
+        ? t('chat.toolState.partialHint')
+        : status === 'interrupted'
+          ? t('chat.toolState.interruptedHint')
+          : '',
     rows: executionDetailRows({
       startedAt,
       finishedAt:

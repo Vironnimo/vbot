@@ -43,13 +43,27 @@ class _FakeHTTPError(Exception):
         self.retry_after = retry_after
 
 
+def _fake_discord_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    discord = discord_module._load_discord()
+    monkeypatch.setattr(
+        discord_module,
+        "_load_discord",
+        lambda: SimpleNamespace(
+            DiscordServerError=_FakeServerError, HTTPException=_FakeHTTPError, File=discord.File
+        ),
+    )
+
+
 def _fast_payload_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Retry payloads without waiting; a rate limit is the write failure that retries."""
+
     async def retry_payload(
         function: Callable[..., Awaitable[Any]], *args: Any, **kwargs: Any
     ) -> Any:
         return await retry_async(function, *args, max_retries=2, initial_delay=0, **kwargs)
 
     monkeypatch.setattr(discord_module, "retry_async", retry_payload)
+    _fake_discord_errors(monkeypatch)
 
 
 @pytest.mark.asyncio
@@ -66,7 +80,7 @@ async def test_reply_is_split_and_retries_only_the_failed_chunk(
     async def send(**payload: Any) -> None:
         attempts.append(payload)
         if payload["content"] == "tail" and (exhaust_retries or len(attempts) == 2):
-            raise TimeoutError("second chunk unavailable")
+            raise _FakeHTTPError(429)
         channel.sent.append(payload)
 
     monkeypatch.setattr(channel, "send", send)
@@ -82,6 +96,7 @@ async def test_reply_is_split_and_retries_only_the_failed_chunk(
                     initial_delay=0,
                 )
             assert failure.value.retryable is False
+            assert failure.value.possibly_delivered is True
             assert [entry["content"] for entry in attempts] == [first_chunk, "tail", "tail", "tail"]
             assert [entry["content"] for entry in channel.sent] == [first_chunk]
         else:
@@ -132,7 +147,7 @@ async def test_file_retry_recreates_consumed_sdk_file_handles(
         # discord.py consumes the stream and closes its SDK wrapper on either outcome.
         uploaded.close()
         if len(uploads) == 1:
-            raise TimeoutError("upload unavailable")
+            raise _FakeHTTPError(429)
 
     monkeypatch.setattr(channel, "send", send)
     try:
@@ -192,13 +207,15 @@ async def test_uncached_target_lookup_can_retry_transient_failure(tmp_path: Path
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("error", "retryable", "retry_after"),
+    ("error", "lookup_retryable", "post_retryable", "retry_after", "post_maybe_shown"),
     [
-        (TimeoutError("gateway timeout"), True, None),
-        (_FakeServerError("gateway unavailable"), True, None),
-        (_FakeHTTPError(403), False, None),
-        (_FakeHTTPError(500), True, None),
-        (_FakeHTTPError(429, retry_after=3.0), True, 3.0),
+        # After a connection error or server fault a posted message may already be
+        # visible, so only a target lookup repeats.
+        (TimeoutError("gateway timeout"), True, False, None, True),
+        (_FakeServerError("gateway unavailable"), True, False, None, True),
+        (_FakeHTTPError(403), False, False, None, False),
+        (_FakeHTTPError(500), True, False, None, True),
+        (_FakeHTTPError(429, retry_after=3.0), True, True, 3.0, False),
     ],
     ids=["timeout", "server-error", "http-403", "http-500", "rate-limit"],
 )
@@ -206,25 +223,35 @@ async def test_sdk_failures_are_classified_for_retry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     error: Exception,
-    retryable: bool,
+    lookup_retryable: bool,
+    post_retryable: bool,
     retry_after: float | None,
+    post_maybe_shown: bool,
 ) -> None:
-    monkeypatch.setattr(
-        discord_module,
-        "_load_discord",
-        lambda: SimpleNamespace(DiscordServerError=_FakeServerError, HTTPException=_FakeHTTPError),
-    )
-    h = make_adapter(tmp_path, target=FakeChannel(100, guild=None, recipient_id=50))
+    _fake_discord_errors(monkeypatch)
+    channel = FakeChannel(100, guild=None, recipient_id=50)
+    h = make_adapter(tmp_path, target=channel)
     h.client._channels.clear()
     h.client.fetch_channel = AsyncMock(side_effect=error)
 
     with pytest.raises(ChannelError) as failure:
         await h.adapter.send_text("100", "hello")
 
-    assert failure.value.retryable is retryable
-    assert failure.value.retry_after == retry_after
+    assert failure.value.retryable is lookup_retryable
+    assert failure.value.retry_after == (retry_after if lookup_retryable else None)
     # A permanent lookup failure names the unusable target instead.
-    assert isinstance(failure.value, ChannelConfigError) is not retryable
+    assert isinstance(failure.value, ChannelConfigError) is not lookup_retryable
+
+    _fast_payload_retries(monkeypatch)
+    h.client.fetch_channel = AsyncMock(return_value=channel)
+    posts = AsyncMock(side_effect=error)
+    monkeypatch.setattr(channel, "send", posts)
+
+    with pytest.raises(ChannelError) as failure:
+        await h.adapter.send("hello", "100")
+
+    assert posts.await_count == (3 if post_retryable else 1)
+    assert failure.value.possibly_delivered is post_maybe_shown
     await h.adapter.stop()
 
 

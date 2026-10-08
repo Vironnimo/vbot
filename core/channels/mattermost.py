@@ -10,7 +10,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 from websockets.asyncio.client import connect
 
 from core.channels._network_adapter import NetworkChannelAdapter
-from core.channels.adapter import ConversationFacts, FileData
+from core.channels.adapter import ConversationFacts, DeliveryProgress, FileData
 from core.channels.config import ChannelError
 from core.utils.tls import shared_ssl_context
 
@@ -174,10 +174,12 @@ class MattermostChannelAdapter(NetworkChannelAdapter):
             )
             file_ids.extend(info["id"] for info in upload["file_infos"])
         chunks = self.message_chunks(message) or [""]
-        for index, chunk in enumerate(chunks):
-            payload: dict[str, Any] = {"channel_id": platform_target, "message": chunk}
-            if thread_id:
-                payload["root_id"] = thread_id
-            if index == 0 and file_ids:
-                payload["file_ids"] = file_ids
-            await self._send_operation(self.api, "POST", "/posts", json=payload)
+        with DeliveryProgress() as progress:
+            for index, chunk in enumerate(chunks):
+                payload: dict[str, Any] = {"channel_id": platform_target, "message": chunk}
+                if thread_id:
+                    payload["root_id"] = thread_id
+                if index == 0 and file_ids:
+                    payload["file_ids"] = file_ids
+                await self._send_operation(self.api, "POST", "/posts", json=payload)
+                progress.delivered()

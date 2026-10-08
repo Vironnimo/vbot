@@ -377,6 +377,20 @@ describe('Sub-Agent status', () => {
       'success',
     ],
     [
+      // A server restart ends the child Run interrupted; its stored spawn
+      // result still says running, and the Run status skips re-inspection.
+      'settles a Run that ended interrupted',
+      runningSubAgentTool,
+      { 'run:run-child': 'interrupted' },
+      'interrupted',
+    ],
+    [
+      'keeps a spawn call its interrupted Parent Run never answered interrupted',
+      () => runningSubAgentTool({ status: 'interrupted' }),
+      { 'run:run-child': 'running' },
+      'interrupted',
+    ],
+    [
       'keeps a failed spawn call failed',
       () => runningSubAgentTool({ status: 'failed' }),
       { 'run:run-child': 'running' },
@@ -694,6 +708,13 @@ describe('Sub-Agent timing and last Tool', () => {
       'cancelled',
       {},
       () => t('chat.toolCancelled'),
+    ],
+    [
+      'the interrupted label with the child Run runtime',
+      runningSubAgentTool,
+      'interrupted',
+      { 'runDuration:run-child': 4200 },
+      () => [t('chat.toolInterrupted'), seconds('4.2')].join(' · '),
     ],
     [
       'a live tick from the child Run start',

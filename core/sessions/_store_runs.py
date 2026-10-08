@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
+from collections.abc import Sequence
 from datetime import datetime
 
 from core.chat.errors import ChatSessionError
@@ -325,17 +327,28 @@ def append_stream_draft(
     model: str,
     reasoning_delta: str,
     content_delta: str,
+    tool_calls: Sequence[JsonObject] = (),
 ) -> None:
-    """Append streamed output of a running Run's current Model step to its draft."""
+    """Append streamed output of a running Run's current Model step to its draft.
+
+    *tool_calls* are the canonical Tool Calls that started since the last chunk.
+    """
     if not model:
         raise ChatSessionError("A stream draft chunk requires its Model")
-    if not reasoning_delta and not content_delta:
+    if not reasoning_delta and not content_delta and not tool_calls:
         return
     run_key = _running_run_key(connection, address, run_id, "records a stream draft")
     connection.execute(
-        "INSERT INTO run_stream_drafts (run_key, model, reasoning_delta, content_delta) "
-        "VALUES (?, ?, ?, ?)",
-        (run_key, model, reasoning_delta, content_delta),
+        "INSERT INTO run_stream_drafts "
+        "(run_key, model, reasoning_delta, content_delta, tool_calls_json) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (
+            run_key,
+            model,
+            reasoning_delta,
+            content_delta,
+            json.dumps(list(tool_calls), ensure_ascii=False) if tool_calls else None,
+        ),
     )
 
 
@@ -355,21 +368,30 @@ def _materialize_stream_draft(
     timestamp: datetime,
 ) -> None:
     """Append what a Run streamed before a restart as its interrupted Assistant entry."""
-    from core.chat.messages import ChatMessage
+    from core.chat.messages import ChatMessage, ToolCall
 
     chunks = connection.execute(
-        "SELECT model, reasoning_delta, content_delta FROM run_stream_drafts "
+        "SELECT model, reasoning_delta, content_delta, tool_calls_json FROM run_stream_drafts "
         "WHERE run_key = ? ORDER BY chunk_key",
         (run_key,),
     ).fetchall()
     content = "".join(str(chunk["content_delta"]) for chunk in chunks)
     reasoning = "".join(str(chunk["reasoning_delta"]) for chunk in chunks)
-    if not content and not reasoning:
+    # Calls that started before the restart may have had effects; the entry
+    # records them, and the next request reports their unknown outcome.
+    tool_calls = [
+        ToolCall.from_dict(call)
+        for chunk in chunks
+        if chunk["tool_calls_json"] is not None
+        for call in json.loads(str(chunk["tool_calls_json"]))
+    ]
+    if not content and not reasoning and not tool_calls:
         return
     message = ChatMessage.assistant(
         model=str(chunks[-1]["model"]),
         content=content or None,
         reasoning=reasoning or None,
+        tool_calls=tool_calls or None,
         interrupted=True,
         interruption_cause="process_restart",
         timestamp=timestamp,

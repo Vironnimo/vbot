@@ -88,7 +88,9 @@ class ChannelError(VBotError):
     ``retryable`` marks transient transport failures (network blips, platform
     rate limits) that reply delivery may retry; permanent platform rejections
     stay non-retryable. ``retry_after`` carries a rate-limit wait hint honored
-    as a floor by the retry loop.
+    as a floor by the retry loop. ``possibly_delivered`` marks a failed send
+    that may nonetheless have shown the message, in full or in part: an earlier
+    part was acknowledged, or the platform's answer to a write never arrived.
     """
 
     def __init__(
@@ -97,10 +99,12 @@ class ChannelError(VBotError):
         *,
         retryable: bool = False,
         retry_after: float | None = None,
+        possibly_delivered: bool = False,
     ) -> None:
         super().__init__(message)
         self.retryable = retryable
         self.retry_after = retry_after
+        self.possibly_delivered = possibly_delivered
 
 
 class ChannelNotFoundError(ChannelError):

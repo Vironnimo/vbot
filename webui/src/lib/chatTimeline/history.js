@@ -6,7 +6,6 @@ import {
   CHAT_STATUS_FAILED,
   syncAssistantRunCollections,
   stripTimelineSequence,
-  CHAT_STATUS_CANCELLED,
   normalizedIterationCount,
   normalizedTiming,
   timingDurationMs,
@@ -18,7 +17,7 @@ import {
   mergeToolResult,
   toolResultCancelledByUser,
   hasResultFailure,
-  markPendingToolsCancelled,
+  settleUnfinishedTools,
 } from './runChildren.js';
 import { isPlainObject } from '../values.js';
 
@@ -362,17 +361,15 @@ function appendHistoryRunSummary(assistantRun, message) {
     assistantRun.changeStats = message.change_stats;
   }
   assistantRun.runSummaryMessage = message;
-  if (assistantRun.status === CHAT_STATUS_CANCELLED) {
-    // Live run_cancelled events settle every still-open Tool row. History must
-    // project the same terminal truth after those transient events are pruned;
-    // otherwise a cancelled foreground Sub-Agent is rebuilt as "starting"
-    // forever even though both Parent and Child Runs already stopped.
-    markPendingToolsCancelled(assistantRun, {
-      type: 'run_cancelled',
-      timestamp: message.timestamp,
-      payload: { status: CHAT_STATUS_CANCELLED },
-    });
-  }
+  // Live terminal events settle every still-open Tool row. History must
+  // project the same terminal truth after those transient events are pruned;
+  // otherwise a Tool call the Run never answered (a cancel, a server restart)
+  // is rebuilt as running forever.
+  settleUnfinishedTools(assistantRun, assistantRun.status, {
+    type: `run_${assistantRun.status}`,
+    timestamp: message.timestamp,
+    payload: { status: assistantRun.status },
+  });
 }
 
 function pushActiveAssistantRun(push, assistantRun, sources) {

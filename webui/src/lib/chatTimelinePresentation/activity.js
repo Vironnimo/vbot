@@ -515,7 +515,7 @@ function shouldRenderToolCall(tool) {
     return Boolean(
       subAgentNavigationTarget(tool) ||
       tool.resultEvent ||
-      ['failed', 'cancelled'].includes(toolStatus(tool)),
+      ['failed', 'cancelled', 'interrupted'].includes(toolStatus(tool)),
     );
   }
   return Boolean(

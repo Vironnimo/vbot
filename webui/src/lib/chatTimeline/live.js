@@ -30,7 +30,7 @@ import {
   mergeToolOutput,
   mergeToolResult,
   mergeSubAgentSessionStarted,
-  markPendingToolsCancelled,
+  settleUnfinishedTools,
 } from './runChildren.js';
 
 const PROVIDER_PROGRESS_RUN_EVENTS = new Set([
@@ -389,9 +389,7 @@ export function appendLiveRunEvent(assistantRun, event) {
     if (isPlainObject(event.payload?.change_stats)) {
       assistantRun.changeStats = event.payload.change_stats;
     }
-    if (event.type === 'run_cancelled') {
-      markPendingToolsCancelled(assistantRun, event);
-    }
+    settleUnfinishedTools(assistantRun, assistantRun.status, event);
     return;
   }
 

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from core.chat.messages import ToolCall
     from core.sessions import ChatSession
 
 STREAM_DRAFT_FLUSH_INTERVAL_SECONDS = 2.0
@@ -26,6 +27,9 @@ class StreamDraft:
     draft in the same transaction, so :meth:`settle` runs first: no draft write
     commits after that entry. A stream attempt that ends without an Assistant
     entry is :meth:`discard`-ed; its output never becomes history.
+
+    Tool Calls that start during the stream are written at once, not after the
+    flush interval: they may have effects that history must show.
     """
 
     def __init__(
@@ -45,6 +49,7 @@ class StreamDraft:
         self._model = ""
         self._reasoning: list[str] = []
         self._content: list[str] = []
+        self._tool_calls: list[dict[str, Any]] = []
         self._timer: asyncio.Task[None] | None = None
         self._write: asyncio.Task[None] | None = None
         self._last_write = clock()
@@ -61,6 +66,18 @@ class StreamDraft:
             self._reasoning.append(reasoning)
         if content:
             self._content.append(content)
+        self._schedule()
+
+    def record_tool_calls(self, *, model: str, tool_calls: Sequence[ToolCall]) -> None:
+        """Add Tool Calls that just started; their write follows at once."""
+        if not tool_calls:
+            return
+        self._model = model
+        self._tool_calls.extend(call.to_dict() for call in tool_calls)
+        timer, self._timer = self._timer, None
+        if timer is not None:
+            # A write waiting for the flush interval goes now instead.
+            timer.cancel()
         self._schedule()
 
     async def settle(self) -> None:
@@ -90,30 +107,42 @@ class StreamDraft:
             self._timer = asyncio.create_task(self._write_later(), name="run-stream-draft")
 
     async def _write_later(self) -> None:
-        await self._sleep(max(0.0, self._flush_interval - (self._clock() - self._last_write)))
+        if not self._tool_calls:
+            await self._sleep(max(0.0, self._flush_interval - (self._clock() - self._last_write)))
         self._timer = None
-        if not self._reasoning and not self._content:
+        if not self._has_pending():
             return
-        chunk = (self._model, "".join(self._reasoning), "".join(self._content))
+        chunk = (
+            self._model,
+            "".join(self._reasoning),
+            "".join(self._content),
+            list(self._tool_calls),
+        )
         self._clear_pending()
         # A running write is never cancelled: settle() waits for it instead.
         self._write = asyncio.create_task(self._store(*chunk), name="run-stream-draft-write")
 
-    async def _store(self, model: str, reasoning: str, content: str) -> None:
+    async def _store(
+        self, model: str, reasoning: str, content: str, tool_calls: list[dict[str, Any]]
+    ) -> None:
         try:
             await self._session.append_stream_draft_async(
-                model=model, reasoning_delta=reasoning, content_delta=content
+                model=model,
+                reasoning_delta=reasoning,
+                content_delta=content,
+                tool_calls=tool_calls,
             )
             self._stored = True
         except Exception:
             _LOGGER.warning("Failed to store the stream draft", exc_info=True)
-            # Keep the text in order for the next write.
+            # Keep the output in order for the next write.
             self._reasoning.insert(0, reasoning)
             self._content.insert(0, content)
+            self._tool_calls[:0] = tool_calls
         finally:
             self._last_write = self._clock()
             self._write = None
-            if self._reasoning or self._content:
+            if self._has_pending():
                 self._schedule()
 
     async def _drain(self) -> None:
@@ -131,6 +160,10 @@ class StreamDraft:
         finally:
             self._draining = False
 
+    def _has_pending(self) -> bool:
+        return bool(self._reasoning or self._content or self._tool_calls)
+
     def _clear_pending(self) -> None:
         self._reasoning.clear()
         self._content.clear()
+        self._tool_calls.clear()

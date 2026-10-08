@@ -687,6 +687,24 @@ describe('Tool row presentation', () => {
     });
   });
 
+  it('reads a Tool call its ended Run never answered as interrupted, not running', () => {
+    const startedAt = '2026-08-28T00:00:00.000Z';
+    const nowMs = Date.parse(startedAt) + 60_000;
+    const tool = {
+      name: 'bash',
+      status: 'interrupted',
+      startedEvent: { timestamp: startedAt },
+    };
+
+    expect(toolStatus(tool)).toBe('interrupted');
+    // No ticking runtime: the call has no end to measure against.
+    expect(toolStatusLabel(tool, nowMs)).toBe(t('chat.toolInterrupted'));
+    expect(toolStatusDetails(tool, nowMs)).toMatchObject({
+      title: t('chat.toolState.interrupted'),
+      text: t('chat.toolState.interruptedHint'),
+    });
+  });
+
   it.each([
     ['preparing', true],
     ['running', false],

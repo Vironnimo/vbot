@@ -217,6 +217,40 @@ async def test_a_refused_or_failed_run_button_send_keeps_no_binding(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        ChannelError("wire unconfirmed", possibly_delivered=True),
+        # An unexpected failure while sending leaves delivery unknown as well.
+        RuntimeError("adapter bug"),
+    ],
+    ids=["possibly-delivered", "unexpected-failure"],
+)
+async def test_a_possibly_delivered_run_button_send_keeps_its_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    adapter = BlockingAdapter()
+    service = await start_with_adapter(
+        tmp_path, monkeypatch, adapter, chat_sessions=_origin_sessions(tmp_path)
+    )
+    monkeypatch.setattr(adapter, "send", AsyncMock(side_effect=error))
+    try:
+        with pytest.raises(type(error)):
+            await _send_run_button(service)
+
+        # A tap on a button the chat may show must still reach its origin Session.
+        binding_ids = _saved_run_button_ids(service, "tg-assistant")
+        assert len(binding_ids) == 1
+        claim = service._state.claim_run_button_binding(
+            "tg-assistant", binding_ids[0], platform_target="12345", thread_id=None
+        )
+        assert claim.status == "claimed"
+    finally:
+        await service.aclose()
+        service.close()
+
+
+@pytest.mark.asyncio
 async def test_run_button_preparation_runs_each_database_on_its_own_pool(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

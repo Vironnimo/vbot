@@ -50,6 +50,9 @@ if TYPE_CHECKING:
 
 _LOGGER = get_logger("chat")
 
+# How long tool_result hooks of a finished call may still run after a Run cancel.
+_RESULT_HOOK_CANCEL_GRACE_SECONDS = 5.0
+
 TOOL_REMOVED_ERROR_CODE = "tool_removed"
 _TOOL_REMOVED_MESSAGE = (
     "Nothing was run: the Tool {name} was removed from your Tools in this Session. "
@@ -442,24 +445,9 @@ class _EmittingToolRegistry(ToolRegistry):
                 result_contract = context.result_contract
 
             if self._extension_registry is not None:
-                async with self._extension_hook_lock:
-                    result = await self._extension_registry.dispatch_tool_result(
-                        self._hook_context(),
-                        tool_name=context.tool_name,
-                        tool_call_id=context.tool_call_id,
-                        input=effective_arguments,
-                        result=result,
-                        validator=lambda extension_name, candidate: (
-                            _validated_extension_tool_hook_result(
-                                registry=self,
-                                tool_name=context.tool_name,
-                                extension_name=extension_name,
-                                hook_name="tool_result",
-                                result=candidate,
-                                contract=result_contract,
-                            )
-                        ),
-                    )
+                result = await self._finish_result_hooks(
+                    context, effective_arguments, result, result_contract
+                )
 
             if result.get("ok") is True:
                 context._commit_owned_effects()
@@ -519,6 +507,62 @@ class _EmittingToolRegistry(ToolRegistry):
             self._run.clear_tool_cancel(context.tool_call_id)
             if self._result_payloads is not None:
                 self._result_payloads.close_result_payloads(context.tool_call_id, keep=returned)
+
+    async def _finish_result_hooks(
+        self,
+        context: ToolContext,
+        arguments: JsonObject,
+        result: JsonObject,
+        result_contract: ToolContract | None,
+    ) -> JsonObject:
+        """Run the Extensions' tool_result hooks on a result the call produced.
+
+        The call's work is done, so a Run cancel lets the hooks finish within a
+        grace period and the result survives. A hook that outlasts it is
+        cancelled and the call ends without a result.
+        """
+        registry = self._extension_registry
+        assert registry is not None
+
+        async def run_hooks() -> JsonObject:
+            async with self._extension_hook_lock:
+                return await registry.dispatch_tool_result(
+                    self._hook_context(),
+                    tool_name=context.tool_name,
+                    tool_call_id=context.tool_call_id,
+                    input=arguments,
+                    result=result,
+                    validator=lambda extension_name, candidate: (
+                        _validated_extension_tool_hook_result(
+                            registry=self,
+                            tool_name=context.tool_name,
+                            extension_name=extension_name,
+                            hook_name="tool_result",
+                            result=candidate,
+                            contract=result_contract,
+                        )
+                    ),
+                )
+
+        hooks = asyncio.ensure_future(run_hooks())
+        try:
+            return await asyncio.shield(hooks)
+        except asyncio.CancelledError:
+            if not self._run.cancel_requested:
+                hooks.cancel()
+                raise
+        try:
+            async with asyncio.timeout(_RESULT_HOOK_CANCEL_GRACE_SECONDS):
+                return await asyncio.shield(hooks)
+        except TimeoutError:
+            hooks.cancel()
+            _LOGGER.warning(
+                "Extension tool_result hooks outlasted the cancel of Run %s; "
+                "Tool call %s ends without a result",
+                self._run.id,
+                context.tool_call_id,
+            )
+            raise asyncio.CancelledError from None
 
     def _answer_without_running(
         self,

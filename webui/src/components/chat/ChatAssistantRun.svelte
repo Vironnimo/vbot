@@ -313,6 +313,7 @@
                 class:done={dotStatus === 'success'}
                 class:error={dotStatus === 'failed'}
                 class:cancelled={dotStatus === 'cancelled'}
+                class:interrupted={dotStatus === 'interrupted'}
                 class:running={dotStatus === 'running'}
                 class="te-dot"
                 use:tooltip={statusDetails}>●</span
@@ -383,6 +384,7 @@
                 <span
                   class="te-time"
                   class:cancelled={dotStatus === 'cancelled'}
+                  class:interrupted={dotStatus === 'interrupted'}
                   use:tooltip={statusDetails}
                 >
                   {subAgentTimeLabel}
@@ -444,6 +446,7 @@
                 class:done={sendStatus === 'success'}
                 class:error={sendStatus === 'failed'}
                 class:cancelled={sendStatus === 'cancelled'}
+                class:interrupted={sendStatus === 'interrupted'}
                 class:running={sendStatus === 'running'}
                 class="te-dot"
                 use:tooltip={sendStatusDetails}>●</span
@@ -500,6 +503,7 @@
                 <span
                   class="te-time"
                   class:cancelled={sendStatus === 'cancelled'}
+                  class:interrupted={sendStatus === 'interrupted'}
                   use:tooltip={sendStatusDetails}
                 >
                   {sendTimeLabel}
@@ -559,6 +563,7 @@
                 class:error={rowDotStatus === 'failed'}
                 class:partial={rowDotStatus === 'partial'}
                 class:cancelled={rowDotStatus === 'cancelled'}
+                class:interrupted={rowDotStatus === 'interrupted'}
                 class:preparing
                 class:running={rowDotStatus === 'running' && !preparing}
                 class="te-dot"
@@ -573,6 +578,7 @@
                 <span
                   class="te-time"
                   class:cancelled={rowDotStatus === 'cancelled'}
+                  class:interrupted={rowDotStatus === 'interrupted'}
                   class:partial={rowDotStatus === 'partial'}
                   use:tooltip={rowStatusDetails}
                 >
