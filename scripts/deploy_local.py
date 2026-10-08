@@ -33,6 +33,8 @@ CHECKOUT = Path(__file__).resolve().parent.parent
 PLATFORM = "windows-x86_64"
 #: Outside the checkout, so the exported source tree never meets Ruff, mypy or pytest.
 WORK_ROOT = Path.home() / ".cache" / "vbot-deploy"
+#: Kept across runs: preparing the runtime's locked dependencies is the slowest build step.
+RUNTIME_CACHE = WORK_ROOT / "runtime-cache"
 
 
 class DeployError(RuntimeError):
@@ -118,8 +120,10 @@ def deploy(install_root: Path, *, keep_build: bool) -> int:
         raise DeployError(f"no vBot installation at {install_root}: {error}") from error
     revision = _committed_revision()
 
-    _remove(WORK_ROOT)
     source = WORK_ROOT / "source"
+    output = WORK_ROOT / "build"
+    _remove(source)
+    _remove(output)
     step(f"Exporting HEAD {revision[:12]}")
     _export_head(source)
     with (source / "pyproject.toml").open("rb") as stream:
@@ -127,7 +131,7 @@ def deploy(install_root: Path, *, keep_build: bool) -> int:
     target = version_id(version, revision)
     active = (install.root / "active-version").read_text(encoding="utf-8").strip()
     if target == active:
-        _remove(WORK_ROOT)
+        _remove(source)
         step(f"{target} is already the active version of {install.root}")
         return 0
 
@@ -135,7 +139,6 @@ def deploy(install_root: Path, *, keep_build: bool) -> int:
         step("Building the WebUI")
         _build_webui(source)
     step(f"Building the {install.install_shape} package {target}")
-    output = WORK_ROOT / "build"
     _run(
         [
             sys.executable,
@@ -154,6 +157,8 @@ def deploy(install_root: Path, *, keep_build: bool) -> int:
             revision,
             "--channel",
             "main",
+            "--runtime-cache",
+            RUNTIME_CACHE,
         ],
         cwd=source,
     )
@@ -170,7 +175,8 @@ def deploy(install_root: Path, *, keep_build: bool) -> int:
         step(f"Update failed with exit code {result.returncode}; build kept in {WORK_ROOT}")
         return result.returncode
     if not keep_build:
-        _remove(WORK_ROOT)
+        _remove(source)
+        _remove(output)
     step(f"Installed {target}")
     return 0
 

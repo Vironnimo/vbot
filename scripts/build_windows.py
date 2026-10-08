@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.metadata
 import os
 import shutil
 import subprocess
@@ -36,6 +38,16 @@ from scripts.windows.native_hosts import compile_hosts, run_tool
 __all__ = ["APP_FILES", "BuildError", "app_paths", "copy_application"]
 
 PLATFORM = "windows-x86_64"
+#: The checkout this builder runs from; its runtime preparation code keys the runtime cache.
+CODE_ROOT = Path(__file__).resolve().parent.parent
+#: Everything besides the input runtime that decides a prepared runtime's content.
+RUNTIME_KEY_FILES = (
+    "scripts/windows/requirements-{shape}.lock",
+    "scripts/windows/sqlite.lock.json",
+    "scripts/build_windows.py",
+    "scripts/package_build.py",
+    "cli/application/runtime_sqlite.py",
+)
 SEARCH_TARGET = "x86_64-pc-windows-msvc"
 RUNTIME_DLL = f"python{PYTHON_VERSION.replace('.', '')}.dll"
 
@@ -118,6 +130,56 @@ def copy_runtime(source: Path, destination: Path, *, app_source: Path, shape: st
     write_inventory(destination, site)
 
 
+def _runtime_key(source: Path, *, app_source: Path, shape: str) -> str:
+    digest = hashlib.sha256()
+    try:
+        pip_version = importlib.metadata.version("pip")
+    except importlib.metadata.PackageNotFoundError:
+        pip_version = ""
+    digest.update(repr((shape, sys.version, pip_version)).encode())
+    for template in RUNTIME_KEY_FILES:
+        relative = template.format(shape=shape)
+        root = app_source if relative.endswith((".lock", ".json")) else CODE_ROOT
+        path = root / relative
+        content = path.read_bytes() if path.is_file() else b"<missing>"
+        digest.update(repr((relative, hashlib.sha256(content).hexdigest())).encode())
+    # Bytecode comes and goes whenever the input interpreter runs; copy_runtime drops it.
+    for path in sorted(source.rglob("*"), key=lambda item: item.as_posix()):
+        if "__pycache__" in path.parts or path.suffix in {".pyc", ".pyo"} or not path.is_file():
+            continue
+        status = path.stat()
+        relative = path.relative_to(source).as_posix()
+        digest.update(repr((relative, status.st_size, status.st_mtime_ns)).encode())
+    return digest.hexdigest()
+
+
+def prepare_runtime(
+    source: Path, destination: Path, *, app_source: Path, shape: str, cache: Path | None = None
+) -> None:
+    """Copy and provision the runtime; with *cache*, reuse one prepared from the same inputs.
+
+    The cache keeps one prepared runtime per shape, keyed by the input runtime's files,
+    the shape's dependency lock, the SQLite lock and the code that prepares it.
+    """
+    if cache is None:
+        copy_runtime(source, destination, app_source=app_source, shape=shape)
+        remove_bytecode_caches(destination)
+        return
+    key = _runtime_key(source, app_source=app_source, shape=shape)
+    entry = cache / shape
+    stamp = entry / "key"
+    if not stamp.is_file() or stamp.read_text(encoding="ascii") != key:
+        partial = cache / f"{shape}.partial"
+        for stale in (partial, entry):
+            if stale.exists():
+                shutil.rmtree(stale)
+        copy_runtime(source, partial / "runtime", app_source=app_source, shape=shape)
+        remove_bytecode_caches(partial / "runtime")
+        (partial / "key").write_text(key, encoding="ascii")
+        partial.rename(entry)
+    _copy_tree(entry / "runtime", destination)
+
+
 def _runtime_python(runtime: Path) -> Path:
     candidates = (runtime / "python.exe", runtime / "python3.exe")
     for candidate in candidates:
@@ -168,8 +230,10 @@ def build(args: argparse.Namespace) -> Path:
         shutil.rmtree(package)
     version_root = package / "versions" / safe_version_id(args.version, args.revision)
     copy_application(source, version_root / "app", args.shape, search_target=SEARCH_TARGET)
-    copy_runtime(runtime, version_root / "runtime", app_source=source, shape=args.shape)
-    remove_bytecode_caches(version_root / "runtime")
+    runtime_cache = Path(str(args.runtime_cache)).resolve() if args.runtime_cache else None
+    prepare_runtime(
+        runtime, version_root / "runtime", app_source=source, shape=args.shape, cache=runtime_cache
+    )
     compile_hosts(source, version_root / "runtime", version=args.version)
     for filename in ("vBot.exe", "vBot.GUI.exe"):
         shutil.copy2(version_root / "runtime" / filename, package / filename)
@@ -214,6 +278,9 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--release-mode", action="store_true")
     value.add_argument("--channel", choices=CHANNELS, default="release")
     value.add_argument("--signing-key-env", default="VBOT_RELEASE_SIGNING_KEY")
+    value.add_argument(
+        "--runtime-cache", help="Reuse a prepared runtime from this directory (local builds)"
+    )
     return value
 
 

@@ -295,6 +295,34 @@ def test_runtime_provisioning_uses_shape_lock_with_hashes(
     assert command[-2:] == ["-r", str(lock)]
 
 
+def test_runtime_cache_reuses_a_runtime_only_for_the_same_inputs(
+    tmp_path: Path, pip_commands: list[list[str]]
+) -> None:
+    source = _source(tmp_path)
+    runtime = _runtime(tmp_path)
+
+    def prepare(name: str) -> Path:
+        destination = tmp_path / name
+        build_windows.prepare_runtime(
+            runtime, destination, app_source=source, shape="server", cache=tmp_path / "cache"
+        )
+        return destination
+
+    prepare("first")
+    reused = prepare("second")
+    assert len(pip_commands) == 1
+    assert (reused / "python.exe").read_bytes() == b"python"
+    assert (reused / "Lib" / "site-packages").is_dir()
+
+    lock = source / "scripts" / "windows" / "requirements-server.lock"
+    lock.write_text(lock.read_text(encoding="utf-8") + "# changed\n", encoding="utf-8")
+    prepare("third")
+    (runtime / "python.exe").write_bytes(b"python, upgraded")
+    upgraded = prepare("fourth")
+    assert len(pip_commands) == 3
+    assert (upgraded / "python.exe").read_bytes() == b"python, upgraded"
+
+
 def test_build_writes_complete_hashed_manifest_and_rooted_archive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -319,6 +347,7 @@ def test_build_writes_complete_hashed_manifest_and_rooted_archive(
         release_mode=False,
         channel="main",
         signing_key_env="UNUSED",
+        runtime_cache=None,
     )
     package = build_windows.build(args)
     version_root = package / "versions" / "v0_4_0_abcdef123456"
@@ -379,6 +408,7 @@ def test_release_build_fails_closed_without_signing_key(
         release_mode=True,
         channel="release",
         signing_key_env="MISSING_SIGNING_KEY",
+        runtime_cache=None,
     )
     with pytest.raises(build_windows.BuildError, match="requires signing key environment"):
         build_windows.build(args)
@@ -403,6 +433,7 @@ def test_release_archive_signature_covers_raw_sha256(
         release_mode=True,
         channel="release",
         signing_key_env="TEST_SIGNING_KEY",
+        runtime_cache=None,
     )
     build_windows.build(args)
 
