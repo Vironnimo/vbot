@@ -302,24 +302,29 @@ async def _turn_outcome(runtime: RuntimeServices, run: Run) -> tuple[str, str]:
     try:
         message = await run.wait()
     except RunCancelledError:
+        persisted = await _persisted_answer(runtime, run)
+        if persisted is not None and _is_complete_answer(persisted):
+            # Stop arrived after the final answer, for example during the
+            # Compaction that follows it: the turn's answer is whole.
+            return "completed", _message_text(persisted) or FORWARDED_NO_ANSWER_TEXT
         cancelled = (
             "was cancelled by the user"
             if run.cancel_reason == USER_CANCEL_REASON
             else "was cancelled"
         )
-        return cancelled, await _persisted_answer(runtime, run) or FORWARDED_NO_ANSWER_TEXT
+        return cancelled, _answer_text(persisted) or FORWARDED_NO_ANSWER_TEXT
     except RunInterruptedError as error:
-        answer = _message_text(error.result) or await _persisted_answer(runtime, run)
+        answer = _message_text(error.result) or _answer_text(await _persisted_answer(runtime, run))
         return "was interrupted", answer or FORWARDED_NO_ANSWER_TEXT
     except Exception as error:
-        answer = await _persisted_answer(runtime, run)
+        answer = _answer_text(await _persisted_answer(runtime, run))
         return "failed", answer or FORWARDED_FAILURE_TEXT_TEMPLATE.format(error=error)
-    answer = _message_text(message) or await _persisted_answer(runtime, run)
+    answer = _message_text(message) or _answer_text(await _persisted_answer(runtime, run))
     return "completed", answer or FORWARDED_NO_ANSWER_TEXT
 
 
-async def _persisted_answer(runtime: RuntimeServices, run: Run) -> str | None:
-    """Read the final Assistant answer the Run persisted, if it has one."""
+async def _persisted_answer(runtime: RuntimeServices, run: Run) -> ChatMessage | None:
+    """Read the last Assistant message with text the Run persisted, if it has one."""
     address = _run_address(run)
     for attempt in range(_RESULT_READ_ATTEMPTS):
         try:
@@ -328,10 +333,19 @@ async def _persisted_answer(runtime: RuntimeServices, run: Run) -> str | None:
         except Exception:
             return None
         if result is not None:
-            return _message_text(result.assistant)
+            return result.assistant
         if attempt + 1 < _RESULT_READ_ATTEMPTS:
             await asyncio.sleep(_RESULT_READ_DELAY_SECONDS)
     return None
+
+
+def _is_complete_answer(message: ChatMessage) -> bool:
+    """Whether *message* is a final answer the Model finished: no Tool calls, not interrupted."""
+    return not message.interrupted and not message.tool_calls
+
+
+def _answer_text(message: ChatMessage | None) -> str | None:
+    return None if message is None else _message_text(message)
 
 
 def _message_text(message: ChatMessage | Any) -> str | None:

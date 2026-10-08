@@ -15,8 +15,9 @@ from typing import Any
 import pytest
 
 import core.subagents.subagents as subagents_module
+from core.chat import ChatMessage
 from core.projects import AgentResolutionError, ResolutionProjectNotFoundError
-from core.runs import RunKind, RunStatus
+from core.runs import Run, RunAdmission, RunKind, RunStatus
 from core.sessions import (
     SESSION_WORKING_PROJECT_META_KEY,
     SUBAGENT_PARENT_META_KEY,
@@ -270,6 +271,42 @@ async def test_every_answer_reaches_the_parent_with_what_is_still_running(
     bodies = [notice.body for notice in harness.triggers.to(harness.parent)]
     assert len(bodies) == 2
     assert "answer to background result arrived" in bodies[1]
+
+
+@pytest.mark.parametrize(
+    ("interrupted", "outcome"),
+    [(False, "Its turn completed."), (True, "Its turn was cancelled.")],
+    ids=["after-the-answer", "during-the-answer"],
+)
+async def test_a_turn_stopped_after_its_final_answer_reaches_the_parent_as_completed(
+    harness: SubAgentHarness, interrupted: bool, outcome: str
+) -> None:
+    data = await harness.spawn("review")
+    await harness.settle()
+    child = harness.subagent_session(data["id"])
+    answered = asyncio.Event()
+
+    async def execute(run: Run) -> ChatMessage:
+        session = (await harness.sessions.get_async(child)).for_run(run.id)
+        answer = ChatMessage.assistant(
+            model="fixture", content="All fixed.", interrupted=interrupted
+        )
+        await session.append_many_async([answer])
+        answered.set()
+        # Compaction after the answer, for example, until Stop arrives.
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    run = await harness.manager.start(
+        child, execute, admission=RunAdmission(run_kind=RunKind.SYSTEM)
+    )
+    await answered.wait()
+    run.request_cancel()
+    await harness.settle()
+
+    body = harness.triggers.to(harness.parent)[-1].body
+    assert outcome in body
+    assert "All fixed." in body
 
 
 async def test_answer_names_working_subagents_of_the_subagent(harness: SubAgentHarness) -> None:
