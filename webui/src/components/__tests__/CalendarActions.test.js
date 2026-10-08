@@ -126,6 +126,7 @@ it('creates an action with a relative time and a fresh Session by default after 
     prompt: 'Prepare meeting',
     target: 'main',
     session: null,
+    max_delay_seconds: null,
   });
   expect(onChanged).toHaveBeenCalledOnce();
 });
@@ -146,6 +147,7 @@ it('preserves the Session and result after a single event moves', async () => {
           when: 'end + 30m',
           session: 'existing',
           prompt: 'Review meeting',
+          max_delay_seconds: 600,
         },
       ],
       executions: [
@@ -168,6 +170,7 @@ it('preserves the Session and result after a single event moves', async () => {
   button(t('common.edit')).click();
   await settle();
   expect(triggerLabel('calendar-action-session')).toBe('Existing discussion');
+  expect(document.getElementById('calendar-action-max-delay').value).toBe('10');
   change('calendar-action-amount', '45');
   button(t('common.save')).click();
   await settle();
@@ -177,6 +180,7 @@ it('preserves the Session and result after a single event moves', async () => {
     prompt: 'Review meeting',
     target: 'main',
     session: 'existing',
+    max_delay_seconds: 600,
   });
 });
 
@@ -302,6 +306,17 @@ it('builds the timing and Session from the choice fields', async () => {
   choose('calendar-action-unit', t('calendar.actions.minutes'));
   choose('calendar-action-anchor', t('calendar.actions.end'));
   change('calendar-action-prompt', 'Summarize');
+  change('calendar-action-max-delay', '1.5');
+  button(t('common.save')).click();
+  await settle();
+  expect(document.body.textContent).toContain(
+    t('calendar.actions.maxDelayInvalid'),
+  );
+  expect(rpcMock).not.toHaveBeenCalledWith(
+    'calendar.add_action',
+    expect.anything(),
+  );
+  change('calendar-action-max-delay', '15');
   button(t('common.save')).click();
   await settle();
   expect(rpcMock).toHaveBeenCalledWith('calendar.add_action', {
@@ -310,7 +325,42 @@ it('builds the timing and Session from the choice fields', async () => {
     prompt: 'Summarize',
     target: 'helper',
     session: 'helper-s1',
+    max_delay_seconds: 900,
   });
+});
+
+it('shows a pending execution without a latest start as unlimited', async () => {
+  component = mount(CalendarActions, {
+    target: document.body,
+    props: {
+      eventId: 'event1',
+      occurrenceStart: '2027-01-01T12:00',
+      actions: [
+        {
+          id: 'a1',
+          event_id: 'event1',
+          target: 'main',
+          when: 'end',
+          session: null,
+          prompt: 'Send the minutes',
+        },
+      ],
+      executions: [
+        {
+          action_id: 'a1',
+          occurrence_start: '2027-01-01T12:00',
+          target: 'main',
+          status: 'pending',
+          scheduled_at: '2027-01-01T13:00:00Z',
+          expires_at: null,
+        },
+      ],
+    },
+  });
+  await settle();
+  expect(document.body.textContent).toContain(
+    t('calendar.actions.expiresNever'),
+  );
 });
 
 it('hides the offset fields for an action at the event anchor', async () => {
