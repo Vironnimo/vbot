@@ -127,13 +127,15 @@ python server/main.py                 # Server foreground
 python cli/main.py server start       # Server background (managed)
 python desktop/main.py                # Desktop shell
 ```
-A git-ignored checkout marker selects dev data `~/.vbot-dev`, port `8421`; the installed CLI outside the checkout uses `~/.vbot`, `8420`; managed worktrees have their own. Never target the installed instance with development commands, including its interpreter: running an installed version's runtime interpreter (`versions/<id>/runtime/python.exe`, `runtime/bin/python3` on Linux) writes `__pycache__` into the verified version (`cli/application.md` -> Update operation).
+A git-ignored checkout marker selects dev data `~/.vbot-dev`, port `8421`; the installed CLI outside the checkout uses `~/.vbot`, `8420`; managed worktrees have their own. Never target the installed instance with development commands (the one exception is Local deploy below), including its interpreter: running an installed version's runtime interpreter (`versions/<id>/runtime/python.exe`, `runtime/bin/python3` on Linux) writes `__pycache__` into the verified version (`cli/application.md` -> Update operation).
 
 **Data store:** `python cli/main.py data-store status|snapshot|config-backup|incident|unregister` reports and manages every canonical database (`cli.md`). A data directory from before Generation 1 (vBot 0.4.4 and earlier) has no converter and is refused at startup (`database.md` -> Evolution contract, item 6).
 
 **Frontend build:** `cd webui && npm ci && npm run build`. It also compiles bundled Extension `ui/page.html` entries to relative `web/` assets (`webui/scripts/build-extension-pages.mjs`); installers ship assets and Extension sources. `npm run format`/`format:check`/`lint` and the commit hook cover these Extension sources too.
 
 **Release:** Read `.vorch/workflows/release-workflow.md` when the user requests a release.
+
+**Local deploy:** When the user asks to get the current state into their installed vBot ("deploy locally", "put main into my installation", "I want the latest version live"), run `python scripts/deploy_local.py` without pushing. It installs the committed HEAD of the checkout it runs from through the installation's own update (about 4-5 minutes; the server is down for about a minute, open Desktop windows need reopening) and refuses uncommitted changes, so commit first. A request to update the installation from GitHub instead means the installed `vbot update`.
 
 **Push:** Read `.vorch/workflows/push-workflow.md` when the user asks to push, and push only that way (`python scripts/push.py`, never a plain `git push`). A push is finished only when the `main-build` CI run it starts is green.
 
