@@ -148,7 +148,7 @@ describe('App navigation', () => {
     });
   });
 
-  it('returns to shared defaults from the Main menu and starts over on a second click', async () => {
+  it('returns to shared defaults from the Main menu and stays there on a second click', async () => {
     const settingsRpc = createSettingsRpcMock();
     const agentsRpc = agentsAppRpc({ agents: [baseAgent()] });
     rpcMock.mockImplementation((method, params) =>
@@ -174,14 +174,13 @@ describe('App navigation', () => {
     sidebarNavButton('agents').click();
     await waitForCondition(defaultsShown);
 
-    // Choosing the shown view again starts at its start: the selected Agent.
+    // Choosing the shown view again keeps its place and adds no step.
+    const entries = window.history.length;
     sidebarNavButton('agents').click();
-    await waitForCondition(() => {
-      expect(document.querySelector('.agent-editor-host')?.hidden).toBe(false);
-      expect(document.querySelector('.agent-shared-pane')?.hidden).toBe(true);
-      expect(agentShown('alpha')).toBe(true);
-      expect(window.location.hash).toBe('#agents/alpha');
-    });
+    flushSync();
+    await Promise.resolve();
+    defaultsShown();
+    expect(window.history.length).toBe(entries);
   });
 
   it('records each chosen record as a step and restores it with Back and Forward', async () => {

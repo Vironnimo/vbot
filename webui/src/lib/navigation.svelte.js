@@ -19,7 +19,7 @@
 // - With `guardExit` (the Desktop app) Back never leaves the app: a floor entry
 //   below the first app entry sends the WebView forward again.
 // - Choosing a main view returns to the place last shown there; choosing the
-//   view that is already shown goes to its start (its empty place).
+//   view that is already shown changes nothing.
 
 import { getContext, setContext } from 'svelte';
 
@@ -357,12 +357,10 @@ export function createNavigator({
     return commit(createLocation(view, place, extra), { replace: true });
   }
 
-  // The main-navigation choice of a view: its last place, or its start when
-  // it is already shown.
+  // The main-navigation choice of a view: its last place. Choosing the view
+  // already shown keeps its place and adds no step.
   function open(view) {
-    if (view === displayed.view) {
-      return navigate(view);
-    }
+    if (view === displayed.view) return false;
     const remembered = memory[view];
     return navigate(view, remembered?.place, { extra: remembered?.extra });
   }

@@ -216,20 +216,27 @@ describe('createNavigator', () => {
     expect(browser.location.hash).toBe('#settings/providers');
   });
 
-  it('returns to the last place of a view, or its start when already shown', () => {
-    const { navigator } = setup();
+  it('returns to the last place of a view and keeps the shown view in place', async () => {
+    const { navigator, browser } = setup();
     navigator.navigate('skills', ['all', 'pkg']);
     navigator.navigate('agents', ['alpha']);
 
     navigator.open('skills');
     expect(shown(navigator).place).toEqual(['all', 'pkg']);
+    const revision = navigator.location.revision;
 
-    navigator.open('skills');
+    expect(navigator.open('skills')).toBe(false);
+    expect(shown(navigator).place).toEqual(['all', 'pkg']);
+    expect(navigator.location.revision).toBe(revision);
+
+    navigator.back();
+    await settle();
     expect(shown(navigator)).toEqual({
-      view: 'skills',
-      place: [],
+      view: 'agents',
+      place: ['alpha'],
       extra: null,
     });
+    expect(browser.location.hash).toBe('#agents/alpha');
   });
 
   it('goes up through Back when the parent is the previous entry', async () => {

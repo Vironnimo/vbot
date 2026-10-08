@@ -143,7 +143,7 @@
       return modelsRefreshToken;
     },
     get selectView() {
-      return showView;
+      return openView;
     },
   });
   const desktop = createAppDesktop({
@@ -424,18 +424,14 @@
   provideNavigation(navigator);
   let activeViewId = $derived(navigator.location.view);
 
-  // The main navigation: a view's last place, or its start when it is shown.
-  // Leaving first-run setup for another view sets setup aside.
+  // The main navigation: a view's last place; the view already shown stays
+  // where it is. Leaving first-run setup for another view sets setup aside.
   const openView = (viewId) => {
     if (viewId !== activeViewId && !setup.operational) {
       setup.dismissOnboarding();
     }
     return navigator.open(viewId);
   };
-
-  // Show a view without leaving the place it shows now.
-  const showView = (viewId) =>
-    viewId === activeViewId ? false : openView(viewId);
 
   // Chat's first area reports every place it moves to; App turns places it
   // did not choose itself (Back/Forward, deep links, the main navigation)
