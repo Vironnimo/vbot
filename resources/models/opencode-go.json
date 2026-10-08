@@ -1,6 +1,71 @@
 {
-  "fetched_at": "2026-10-02T09:30:05.667792+00:00",
+  "fetched_at": "2026-10-08T12:33:32.487620+00:00",
   "models": {
+    "claude-haiku-5-5": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "claude-haiku",
+      "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_go": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
+      "name": "claude-haiku-5-5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.01,
+          "cache_write": 0.125,
+          "input": 0.1,
+          "output": 0.5,
+          "tiers": [
+            {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "input": 0.5,
+              "output": 2.5,
+              "tier": {
+                "size": 100000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:opencode-go/claude-haiku-5-5"
+      }
+    },
     "deepseek-flash": {
       "capabilities": {
         "input_modalities": [
@@ -11,7 +76,7 @@
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": null
         },
         "supported_parameters": [],
         "supported_voices": [],
@@ -232,7 +297,7 @@
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": null
         },
         "supported_parameters": [],
         "supported_voices": [],
@@ -1146,7 +1211,7 @@
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": null
         },
         "supported_parameters": [],
         "supported_voices": [],
@@ -1381,7 +1446,7 @@
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": null
         },
         "supported_parameters": [],
         "supported_voices": [],
@@ -1524,6 +1589,11 @@
       "context_window": 1000000,
       "family": "qwen3.7-plus",
       "max_output_tokens": 65536,
+      "metadata": {
+        "opencode_go": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "qwen3.7-plus",
       "pricing": {
         "rates": {
@@ -1633,6 +1703,11 @@
       "context_window": 1000000,
       "family": "qwen3.8-max",
       "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_go": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "qwen3.8-max",
       "pricing": {
         "rates": {
@@ -1644,7 +1719,7 @@
         "source": "models.dev:opencode-go/qwen3.8-max"
       }
     },
-    "space-bunny-free": {
+    "space-bunny": {
       "capabilities": {
         "input_modalities": [
           "text",
@@ -1685,15 +1760,15 @@
           "interleaved_field": "reasoning_content"
         }
       },
-      "name": "space-bunny-free",
+      "name": "space-bunny",
       "pricing": {
         "rates": {
-          "cache_read": 0.0,
+          "cache_read": 0.03,
           "cache_write": 0.0,
-          "input": 0.0,
-          "output": 0.0
+          "input": 0.15,
+          "output": 0.6
         },
-        "source": "models.dev:opencode-go/space-bunny-free"
+        "source": "models.dev:opencode-go/space-bunny"
       }
     }
   },

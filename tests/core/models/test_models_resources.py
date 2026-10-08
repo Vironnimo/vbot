@@ -281,7 +281,7 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
             "mimo-v2.6-pro",
             "hy4-preview",
             "hy3",
-            "space-bunny-free",
+            "space-bunny",
             "omen-alpha",
         ),
         "messages": (
@@ -293,6 +293,7 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
             "qwen3.7-plus",
             "qwen3.7-max",
             "qwen3.6-plus",
+            "claude-haiku-5-5",
         ),
     }
     expected = {
@@ -300,7 +301,7 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
         for protocol, model_ids in expected_by_protocol.items()
         for model_id in model_ids
     }
-    assert len(expected) == 36
+    assert len(expected) == 37
 
     assert {
         model_id: _wire_profile(registry, "opencode-go", model_id).protocol for model_id in expected
@@ -343,14 +344,14 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
     ("model_id", "expected"),
     [
         pytest.param(
-            "space-bunny-free",
+            "space-bunny",
             {
-                "name": "Space Bunny Free",
+                "name": "Space Bunny",
                 "context_window": 1_048_576,
                 "max_output_tokens": 524_288,
                 "reasoning": _FIVE_LEVELS,
             },
-            id="space-bunny-free",
+            id="space-bunny",
         ),
         pytest.param(
             "longcat-2.5-preview-free",
@@ -430,17 +431,6 @@ def test_opencode_go_gateway_profiles(
     assert _profile(model, *expected, wire=wire) == expected
 
 
-def test_openrouter_space_bunny_gateway_facts(registry: ModelRegistry) -> None:
-    router = registry.get("openrouter", "stealth/space-bunny-alpha")
-
-    assert _profile(router, "context_window", "max_output_tokens", "reasoning") == {
-        "context_window": 1_000_000,
-        "max_output_tokens": 524_288,
-        "reasoning": _FIVE_LEVELS,
-    }
-    assert router.capabilities.reasoning.mandatory is True
-
-
 def test_zen_snapshot_serves_every_reviewed_model_on_both_connections(
     registry: ModelRegistry,
 ) -> None:
@@ -469,7 +459,8 @@ def test_openai_reasoning_models_load_connection_specific_limits(
 
     The unsuffixed GPT-5.6 alias is a Platform alias only: the live ChatGPT
     Codex endpoint rejects it, while the named 5.6 variants are available on
-    both connections. (Their wire, including Responses routing, is the wire
+    both connections. GPT-5.5 left the Codex Model list (2026-10-08) and is a
+    Platform Model only. (Their wire, including Responses routing, is the wire
     profile's: ``resources/wire/openai.json``.)
     """
 
@@ -486,9 +477,10 @@ def test_openai_reasoning_models_load_connection_specific_limits(
     }
 
     gpt_55 = registry.get("openai", "gpt-5.5")
-    assert gpt_55.connections == ("api-key", "subscription")
+    assert gpt_55.connections == ("api-key",)
+    assert gpt_55.context_window_for("api-key") == 1_050_000
 
-    for model_id in ("gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"):
+    for model_id in ("gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"):
         model = registry.get("openai", model_id)
         assert model.context_window_for("api-key") == 1_050_000
         assert model.context_window_for("subscription") == 272_000

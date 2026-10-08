@@ -2354,6 +2354,61 @@
       "release_date": "2025-10-15",
       "temperature": true
     },
+    "anthropic/claude-haiku-5-5": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "claude-haiku",
+      "knowledge": "2026-06",
+      "last_updated": "2026-10-07",
+      "max_output_tokens": 128000,
+      "name": "Claude Haiku 5.5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.01,
+          "cache_write": 0.125,
+          "input": 0.1,
+          "output": 0.5,
+          "tiers": [
+            {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "input": 0.5,
+              "output": 2.5,
+              "tier": {
+                "size": 100000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:anthropic/claude-haiku-5-5"
+      },
+      "release_date": "2026-10-07",
+      "temperature": false
+    },
     "anthropic/claude-mythos-5": {
       "capabilities": {
         "input_modalities": [
@@ -3058,7 +3113,7 @@
       "name": "Claude Sonnet 5.5",
       "pricing": {
         "rates": {
-          "cache_read": 0.2,
+          "cache_read": 0.1,
           "cache_write": 2.5,
           "input": 2.0,
           "output": 10.0
@@ -3502,6 +3557,58 @@
       "name": "Seed Evolving",
       "release_date": "2026-06-23",
       "temperature": true
+    },
+    "bytedance-seed/seedance-2.0": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video",
+          "audio"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "family": "seed",
+      "last_updated": "2026-10-04",
+      "max_output_tokens": 0,
+      "name": "Seedance 2.0",
+      "release_date": "2026-02-12"
+    },
+    "bytedance-seed/seedance-2.5": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video",
+          "audio"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "family": "seed",
+      "last_updated": "2026-10-04",
+      "max_output_tokens": 0,
+      "name": "Seedance 2.5",
+      "release_date": "2026-07-31"
     },
     "cohere/c4ai-aya-expanse-32b": {
       "capabilities": {
@@ -4619,10 +4726,10 @@
       "name": "DeepSeek V4 Pro",
       "pricing": {
         "rates": {
-          "cache_read": 0.003625,
-          "input": 0.435,
-          "output": 0.87,
-          "reasoning": 0.87
+          "cache_read": 0.022,
+          "input": 0.66,
+          "output": 1.98,
+          "reasoning": 1.98
         },
         "source": "models.dev:deepseek/deepseek-v4-pro"
       },
@@ -7229,6 +7336,32 @@
       "release_date": "2024-12-11",
       "temperature": true
     },
+    "minimax/MiniMax-H3": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video",
+          "audio"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "family": "minimax",
+      "last_updated": "2026-10-04",
+      "max_output_tokens": 0,
+      "name": "MiniMax H3",
+      "release_date": "2026-07-31"
+    },
     "minimax/MiniMax-M2": {
       "capabilities": {
         "input_modalities": [
@@ -7383,7 +7516,7 @@
       "name": "MiniMax-M2.5-highspeed",
       "pricing": {
         "rates": {
-          "cache_read": 0.06,
+          "cache_read": 0.03,
           "cache_write": 0.375,
           "input": 0.6,
           "output": 2.4
@@ -7587,6 +7720,40 @@
       "max_output_tokens": 8192,
       "name": "Codestral-22B-v0.1",
       "release_date": "2024-05-29",
+      "temperature": true
+    },
+    "mistral/codestral-2508": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 128000,
+      "family": "codestral",
+      "last_updated": "2025-07-30",
+      "max_output_tokens": 8192,
+      "name": "Codestral 25.08",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.03,
+          "input": 0.3,
+          "output": 0.9
+        },
+        "source": "models.dev:mistral/codestral-2508"
+      },
+      "release_date": "2025-07-30",
       "temperature": true
     },
     "mistral/codestral-latest": {
@@ -7798,6 +7965,11 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -8134,6 +8306,46 @@
         "source": "models.dev:mistral/mistral-large-2512"
       },
       "release_date": "2025-12-02",
+      "temperature": true
+    },
+    "mistral/mistral-large-4": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "mistral-large",
+      "last_updated": "2026-10-06",
+      "max_output_tokens": 262144,
+      "name": "Mistral Large 4",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.07,
+          "input": 0.68,
+          "output": 2.09
+        },
+        "source": "models.dev:mistral/mistral-large-4"
+      },
+      "release_date": "2026-10-06",
       "temperature": true
     },
     "mistral/mistral-large-latest": {
@@ -8913,6 +9125,7 @@
       "pricing": {
         "rates": {
           "cache_read": 0.3,
+          "cache_write": 3.0,
           "input": 3.0,
           "output": 15.0
         },
@@ -13648,6 +13861,30 @@
       "max_output_tokens": 0,
       "name": "Grok Imagine Video 1.5",
       "release_date": "2026-05-30",
+      "temperature": false
+    },
+    "xai/grok-imagine-video-1.5-lite": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 1024,
+      "family": "grok",
+      "last_updated": "2026-10-01",
+      "max_output_tokens": 0,
+      "name": "Grok Imagine Video 1.5 Lite",
+      "release_date": "2026-10-01",
       "temperature": false
     },
     "xai/grok-voice-stt-1.0": {

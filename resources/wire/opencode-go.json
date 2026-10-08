@@ -29,9 +29,7 @@
       "note": "The GPT Models (gpt-5.6-luna, gpt-6-luna) answer top_p with HTTP 400 {\"model\": ...}, which names no parameter, so it cannot be learned; Grok and Muse Spark accept it (live 2026-10-03)."
     },
     {
-      "when": {
-        "ids": ["minimax-m2.5", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus", "qwen3.8-max"]
-      },
+      "when": {"ids": ["minimax-m2.5", "qwen3.6-plus", "qwen3.7-max"]},
       "set": {"protocol": "messages"},
       "note": "The gateway serves these MiniMax and Qwen Models on Anthropic Messages (/messages), but the catalog names no package for them."
     },
@@ -82,9 +80,22 @@
       "note": "Kimi K2.7 Code always thinks: the request always enables thinking and sends no effort."
     },
     {
-      "when": {"ids": ["grok-4.6", "grok-4.7", "kimi-k3", "space-bunny-free"]},
+      "when": {"ids": ["grok-4.6", "grok-4.7", "kimi-k3", "space-bunny"]},
       "set": {"reasoning": {"off": "low"}},
       "note": "These Models always reason; none asks for the cheapest rung (low) instead of the higher default."
+    },
+    {
+      "when": {"ids": ["claude-haiku-5-5"]},
+      "set": {
+        "request": {
+          "parameters": {
+            "temperature": {"mode": "drop"},
+            "top_p": {"mode": "drop"},
+            "top_k": {"mode": "drop"}
+          }
+        }
+      },
+      "note": "Go forwards Messages to Anthropic, where Claude Haiku 5.5 removed sampling parameters (catalog supports_temperature false in resources/wire/anthropic.json); temperature answers HTTP 400 \"`temperature` is deprecated for this model\" (live 2026-10-08), so they are never sent."
     },
     {
       "when": {"ids": ["glm-5.3-flash"]},
@@ -133,6 +144,23 @@
         "date": "2026-10-03",
         "connections": ["api-key"],
         "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:medium, effort:high, effort:xhigh, effort:none, sampling, tool_replay, replay, image"
+      }
+    },
+    "claude-haiku-5-5": {
+      "verified": {
+        "date": "2026-10-08",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:medium, effort:high, effort:xhigh, effort:max, effort:none, sampling, tool_replay, replay, image"
+      }
+    },
+    "space-bunny": {
+      "set": {
+        "response": {"reasoning_fields": ["reasoning_content", "reasoning", "reasoning_text", "thinking"]}
+      },
+      "verified": {
+        "date": "2026-10-08",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:medium, effort:high, effort:xhigh, effort:max, effort:none, sampling, tool_replay, replay, image"
       }
     }
   }

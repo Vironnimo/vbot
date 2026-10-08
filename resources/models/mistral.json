@@ -1,7 +1,8 @@
 {
-  "fetched_at": "2026-10-02T09:29:59.944510+00:00",
+  "fetched_at": "2026-10-08T12:33:26.904671+00:00",
   "models": {
     "codestral-2508": {
+      "canonical": "mistral/codestral-2508",
       "capabilities": {
         "input_modalities": [
           "text"
@@ -10,9 +11,6 @@
         "output_modalities": [
           "text"
         ],
-        "reasoning": {
-          "supported": false
-        },
         "supported_parameters": [
           "response_format",
           "tools"
@@ -29,8 +27,17 @@
         "api-key"
       ],
       "context_window": 256000,
-      "max_output_tokens": null,
-      "name": "codestral-2508"
+      "family": "codestral",
+      "max_output_tokens": 8192,
+      "name": "codestral-2508",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.03,
+          "input": 0.3,
+          "output": 0.9
+        },
+        "source": "models.dev:mistral/codestral-2508"
+      }
     },
     "codestral-embed": {
       "capabilities": {
@@ -170,6 +177,11 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -191,8 +203,16 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
-      "name": "labs-leanstral-1-5-1"
+      "family": "leanstral",
+      "max_output_tokens": 128000,
+      "name": "labs-leanstral-1-5-1",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:mistral/labs-leanstral-1-5-1"
+      }
     },
     "magistral-medium-latest": {
       "canonical": "mistral/magistral-medium-latest",
@@ -301,8 +321,17 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
-      "name": "ministral-14b-2512"
+      "family": "ministral",
+      "max_output_tokens": 262144,
+      "name": "ministral-14b-2512",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.02,
+          "input": 0.2,
+          "output": 0.2
+        },
+        "source": "models.dev:mistral/ministral-14b-2512"
+      }
     },
     "ministral-14b-latest": {
       "capabilities": {
@@ -369,8 +398,17 @@
         "api-key"
       ],
       "context_window": 131072,
-      "max_output_tokens": null,
-      "name": "ministral-3b-2512"
+      "family": "ministral",
+      "max_output_tokens": 262144,
+      "name": "ministral-3b-2512",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.01,
+          "input": 0.1,
+          "output": 0.1
+        },
+        "source": "models.dev:mistral/ministral-3b-2512"
+      }
     },
     "ministral-3b-latest": {
       "capabilities": {
@@ -445,8 +483,17 @@
         "api-key"
       ],
       "context_window": 262144,
-      "max_output_tokens": null,
-      "name": "ministral-8b-2512"
+      "family": "ministral",
+      "max_output_tokens": 262144,
+      "name": "ministral-8b-2512",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.015,
+          "input": 0.15,
+          "output": 0.15
+        },
+        "source": "models.dev:mistral/ministral-8b-2512"
+      }
     },
     "ministral-8b-latest": {
       "capabilities": {
@@ -1060,7 +1107,8 @@
     "voxtral-small-2507": {
       "capabilities": {
         "input_modalities": [
-          "text"
+          "text",
+          "audio"
         ],
         "json_mode": true,
         "output_modalities": [
@@ -1085,8 +1133,16 @@
         "api-key"
       ],
       "context_window": 32768,
-      "max_output_tokens": null,
-      "name": "voxtral-small-2507"
+      "family": "voxtral",
+      "max_output_tokens": 32000,
+      "name": "voxtral-small-2507",
+      "pricing": {
+        "rates": {
+          "input": 0.1,
+          "output": 0.4
+        },
+        "source": "models.dev:mistral/voxtral-small-2507"
+      }
     },
     "voxtral-small-latest": {
       "canonical": "mistral/voxtral-small-latest",

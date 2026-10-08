@@ -154,6 +154,19 @@
       "note": "Zen forwards Messages to Anthropic, where these adaptive-only Models reject thinking type disabled (resources/wire/anthropic.json), so effort none sends no thinking field."
     },
     {
+      "when": {"ids": ["claude-haiku-5-5"]},
+      "set": {
+        "request": {
+          "parameters": {
+            "temperature": {"mode": "drop"},
+            "top_p": {"mode": "drop"},
+            "top_k": {"mode": "drop"}
+          }
+        }
+      },
+      "note": "Zen forwards Messages to Anthropic, where Claude Haiku 5.5 removed sampling parameters (catalog supports_temperature false in resources/wire/anthropic.json); temperature answers HTTP 400 \"`temperature` is deprecated for this model\" (live 2026-10-08), so they are never sent."
+    },
+    {
       "when": {"ids": ["gpt-6.1-sol", "space-bunny-free"]},
       "set": {"reasoning": {"off": "low"}},
       "note": "These Models always reason; none asks for the cheapest rung, low (GPT 6.1 Sol verified 2026-10-02, Space Bunny 2026-09-24)."
@@ -187,6 +200,13 @@
         "date": "2026-10-03",
         "connections": ["api-key"],
         "evidence": "scripts/verify_wire_profile.py: send, stream, effort:minimal, effort:low, effort:medium, effort:high, effort:xhigh, effort:max, effort:none, sampling, tool_replay, replay, image"
+      }
+    },
+    "claude-haiku-5-5": {
+      "verified": {
+        "date": "2026-10-08",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:medium, effort:high, effort:xhigh, effort:max, effort:none, sampling, tool_replay, replay, image"
       }
     }
   }

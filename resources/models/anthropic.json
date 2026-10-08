@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-10-02T09:29:56.902430+00:00",
+  "fetched_at": "2026-10-08T12:33:24.145539+00:00",
   "models": {
     "claude-fable-5": {
       "canonical": "anthropic/claude-fable-5",
@@ -13,6 +13,17 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
         "supported_parameters": [],
         "supported_voices": [],
         "task_types": [
@@ -58,6 +69,17 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
         "supported_parameters": [],
         "supported_voices": [],
         "task_types": [
@@ -103,6 +125,10 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "control": "budget",
+          "supported": true
+        },
         "supported_parameters": [],
         "supported_voices": [],
         "task_types": [
@@ -136,6 +162,74 @@
         "source": "models.dev:anthropic/claude-haiku-4-5-20251001"
       }
     },
+    "claude-haiku-5-5": {
+      "canonical": "anthropic/claude-haiku-5-5",
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "claude-haiku",
+      "max_output_tokens": 128000,
+      "metadata": {
+        "anthropic": {
+          "supports_temperature": false
+        }
+      },
+      "name": "Claude Haiku 5.5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.01,
+          "cache_write": 0.125,
+          "input": 0.1,
+          "output": 0.5,
+          "tiers": [
+            {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "input": 0.5,
+              "output": 2.5,
+              "tier": {
+                "size": 100000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:anthropic/claude-haiku-5-5"
+      }
+    },
     "claude-opus-4-5-20251101": {
       "canonical": "anthropic/claude-opus-4-5-20251101",
       "capabilities": {
@@ -148,6 +242,10 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "control": "budget",
+          "supported": true
+        },
         "supported_parameters": [],
         "supported_voices": [],
         "task_types": [
@@ -193,6 +291,16 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
         "supported_parameters": [],
         "supported_voices": [],
         "task_types": [
@@ -238,6 +346,17 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
         "supported_parameters": [],
         "supported_voices": [],
         "task_types": [
@@ -283,6 +402,17 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
         "supported_parameters": [],
         "supported_voices": [],
         "task_types": [
@@ -328,6 +458,17 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
         "supported_parameters": [],
         "supported_voices": [],
         "task_types": [
@@ -373,6 +514,17 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
         "supported_parameters": [],
         "supported_voices": [],
         "task_types": [
@@ -418,6 +570,10 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "control": "budget",
+          "supported": true
+        },
         "supported_parameters": [],
         "supported_voices": [],
         "task_types": [
@@ -432,7 +588,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 1000000,
+      "context_window": 200000,
       "family": "claude-sonnet",
       "max_output_tokens": 64000,
       "metadata": {
@@ -463,6 +619,16 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
         "supported_parameters": [],
         "supported_voices": [],
         "task_types": [
@@ -508,6 +674,17 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
         "supported_parameters": [],
         "supported_voices": [],
         "task_types": [
@@ -553,6 +730,17 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
         "supported_parameters": [],
         "supported_voices": [],
         "task_types": [
@@ -578,7 +766,7 @@
       "name": "Claude Sonnet 5.5",
       "pricing": {
         "rates": {
-          "cache_read": 0.2,
+          "cache_read": 0.1,
           "cache_write": 2.5,
           "input": 2.0,
           "output": 10.0

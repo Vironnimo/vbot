@@ -26,7 +26,8 @@ from tests.core.providers.openrouter_test_support import (
     sent_body,
 )
 
-SPACE_BUNNY = "stealth/space-bunny-alpha"
+# The bundled catalog marks its Reasoning mandatory, with low as the cheapest rung.
+MANDATORY_REASONING_MODEL = "openai/gpt-6.1-sol"
 
 
 @pytest.mark.parametrize(
@@ -49,10 +50,10 @@ async def test_mandatory_reasoning_model_never_renders_off(
     route = respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=CHAT_SUCCESS))
     adapter = openrouter_adapter(lookup)
 
-    await adapter.send(HELLO, model_id=SPACE_BUNNY, thinking_effort=effort)
+    await adapter.send(HELLO, model_id=MANDATORY_REASONING_MODEL, thinking_effort=effort)
 
     body = sent_body(route)
-    intent = adapter.describe_reasoning_render(SPACE_BUNNY, effort)
+    intent = adapter.describe_reasoning_render(MANDATORY_REASONING_MODEL, effort)
     if expected is None:
         assert "reasoning" not in body
         assert intent.kind == "default"

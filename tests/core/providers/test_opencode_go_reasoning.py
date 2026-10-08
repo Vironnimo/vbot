@@ -58,9 +58,9 @@ def _sent_payload(route: respx.Route) -> dict[str, Any]:
         ("longcat-2.5-preview-free", "none", {"type": "disabled"}, None, ("off", None)),
         ("longcat-2.5-preview-free", "high", {"type": "enabled"}, None, ("on", None)),
         # Space Bunny: mandatory Reasoning maps an off request to its cheapest rung.
-        ("space-bunny-free", None, None, None, ("default", None)),
-        ("space-bunny-free", "none", None, "low", ("effort", "low")),
-        ("space-bunny-free", "high", None, "high", ("effort", "high")),
+        ("space-bunny", None, None, None, ("default", None)),
+        ("space-bunny", "none", None, "low", ("effort", "low")),
+        ("space-bunny", "high", None, "high", ("effort", "high")),
     ],
 )
 @pytest.mark.asyncio
