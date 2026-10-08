@@ -161,10 +161,6 @@
       direction: match?.[2] ?? 'at',
       amount: Number(match?.[3] ?? 1),
       unit: match?.[4] ?? 'h',
-      // Minutes as text; empty leaves the limit to the event.
-      maxDelay: Number.isInteger(action?.max_delay_seconds)
-        ? String(action.max_delay_seconds / 60)
-        : '',
     };
     error = '';
     loadSessions();
@@ -211,15 +207,6 @@
       error = t('calendar.actions.required');
       return;
     }
-    const maxDelayText = String(editor.maxDelay ?? '').trim();
-    const maxDelayMinutes = Number(maxDelayText);
-    if (
-      maxDelayText &&
-      !(Number.isInteger(maxDelayMinutes) && maxDelayMinutes >= 0)
-    ) {
-      error = t('calendar.actions.maxDelayInvalid');
-      return;
-    }
     const when =
       editor.direction === 'at'
         ? editor.anchor
@@ -230,7 +217,6 @@
       prompt: editor.prompt,
       target: editor.target,
       session: editor.session || null,
-      max_delay_seconds: maxDelayText ? maxDelayMinutes * 60 : null,
     };
     busy = true;
     error = '';
@@ -500,19 +486,6 @@
           /></FormField
         >
       </div>
-      <FormField
-        label={t('calendar.actions.maxDelay')}
-        controlId="calendar-action-max-delay"
-        ><TextField
-          id="calendar-action-max-delay"
-          type="number"
-          min="0"
-          step="1"
-          value={editor.maxDelay}
-          placeholder={t('calendar.actions.maxDelayPlaceholder')}
-          onInput={(value) => (editor.maxDelay = value)}
-        /></FormField
-      >
       <FormField
         label={t('calendar.actions.instruction')}
         controlId="calendar-action-prompt"

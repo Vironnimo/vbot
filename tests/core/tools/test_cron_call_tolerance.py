@@ -252,10 +252,12 @@ def test_refusal_names_other_fields_the_corrected_call_drops(tool: CronTool) -> 
             "schedule": "every 2h",
             "deliver": "origin",
             "skills": ["ops"],
+            "max_delay": "1h",
         },
     )
 
     assert '"skills" is not a parameter.' in message
+    assert '"max_delay" has no effect.' in message
 
 
 # -- Claude Code, Hermes, OpenClaw, scheduled-task Tools --------------------------------------
@@ -525,52 +527,30 @@ def test_repeat_words_and_invalid_counts(tool: CronTool) -> None:
 
 
 @pytest.mark.parametrize(
-    ("fields", "seconds"),
+    ("fields", "note"),
     [
-        ({"max_delay": "2 hours"}, 7200),
-        ({"maxDelay": "PT30M"}, 1800),
-        ({"max_delay": "0"}, 0),
-        ({"misfire_grace_time": 3600}, 3600),
-        ({"startingDeadlineSeconds": "120"}, 120),
-        ({"catch_up_missed": False}, 0),
-        ({"skipMissedJobs": "true"}, 0),
-        ({"catchUp": True}, None),
+        ({"max_delay": "2h"}, '"max_delay" has no effect.'),
+        ({"maxDelay": "PT30M"}, '"maxDelay" has no effect.'),
+        ({"misfire_grace_time": 3600}, '"misfire_grace_time" has no effect.'),
+        (
+            {"catch_up_missed": False, "skipMissedJobs": "true"},
+            '"catch_up_missed" and "skipMissedJobs" have no effect.',
+        ),
+        ({"max_delay": None}, None),
         ({"max_delay": "none"}, None),
     ],
 )
-def test_max_delay_spellings_set_the_limit(
-    tool: CronTool, fields: dict[str, Any], seconds: int | None
+def test_late_start_limits_have_no_effect_and_the_result_says_so(
+    tool: CronTool, fields: dict[str, Any], note: str | None
 ) -> None:
-    job, _text = tool.created(
+    envelope, text = tool.call(
         {"action": "create", "prompt": "Brief", "schedule": "0 7 * * *", **fields}
     )
-
-    assert job.max_delay_seconds == seconds
-
-
-@pytest.mark.parametrize(
-    "fields",
-    [
-        {"max_delay": 90},
-        {"max_delay": "soon"},
-        {"catch_up": "maybe"},
-        {"max_delay": "2h", "skip_missed": True},
-    ],
-)
-def test_unreadable_or_conflicting_max_delay_is_refused(
-    tool: CronTool, fields: dict[str, Any]
-) -> None:
-    message = tool.refused(
-        {"action": "create", "prompt": "Brief", "schedule": "0 7 * * *", **fields}
-    )
-
-    assert next(iter(fields)) in message
-
-
-def test_null_max_delay_on_update_removes_the_limit(tool: CronTool) -> None:
-    job_id = tool.add_job(max_delay="1h")
-
-    envelope, text = tool.call({"action": "update", "id": job_id, "max_delay": None})
 
     assert envelope["ok"] is True, text
-    assert tool.only_job().max_delay_seconds is None
+    data = envelope["data"]
+    assert "max_delay" not in data
+    if note is None:
+        assert "note" not in data
+    else:
+        assert data["note"].startswith(note)

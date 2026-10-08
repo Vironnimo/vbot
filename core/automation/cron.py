@@ -65,7 +65,6 @@ from core.automation._cron_jobs import (
     ScheduleType,
     _as_utc,
     _derive_cron_job_name,
-    _format_duration,
     _load_cron_jobs_payload,
     _parse_iso_datetime,
     _resolve_timezone,
@@ -106,7 +105,6 @@ __all__ = [
     "validate_cron_jobs_data",
     "validate_cron_jobs_file",
     "CronService",
-    "format_max_delay",
 ]
 
 
@@ -118,8 +116,8 @@ _POST_FIRE_SAVE_RETRY_SECONDS = 5.0
 
 _ONCE_FIRE_CLAIMS_DIR_NAME = "once-fire-claims"
 
-# A fire that starts at most this late counts as on time: no late notice, and
-# ``max_delay_seconds`` does not apply. Wall-clock waits recheck every minute.
+# A fire that starts at most this late counts as on time and gets no late notice.
+# Wall-clock waits recheck every minute.
 _ON_TIME_SECONDS = 60
 
 _SCHEDULE_FIELDS = (
@@ -206,7 +204,6 @@ class CronService:
         session_id: str | None = None,
         status: CronJobStatus = "active",
         project_id: str | None = None,
-        max_delay_seconds: int | None = None,
         actor: str = _DEFAULT_ACTOR,
     ) -> CronJob:
         """Create and persist a new cron job.
@@ -238,7 +235,6 @@ class CronService:
                 last_fired_at=None,
                 created_at=_timing._utc_now_iso(),
                 project_id=project_id,
-                max_delay_seconds=max_delay_seconds,
             )
             self._validate_job(job, validate_references=False)
             await self._validate_references_async(job)
@@ -765,9 +761,8 @@ class CronService:
         """Fire a cron or interval job at each due instant, catching up missed fires.
 
         A fire that came due while vBot did not run the job (offline, asleep)
-        starts once, late, for the most recent due instant, unless the job's
-        ``max_delay_seconds`` forbids it. Due instants that pass while the
-        job's own Run is still running are skipped.
+        starts once, late, for the most recent due instant. Due instants that
+        pass while the job's own Run is still running are skipped.
         """
         while True:
             current = self._jobs.get(job.id)
@@ -809,11 +804,7 @@ class CronService:
                     self._timezone, _timing._utc_now(), current
                 ) or _schedule.OwedFire(due_at=due_at)
 
-            late = self._late_fire(owed)
-            if late is not None and _exceeds_max_delay(current, late):
-                await self._skip_missed_fire(current.id, late)
-                continue
-            await self._trigger_job_run(current, late=late)
+            await self._trigger_job_run(current, late=self._late_fire(owed))
             if job.id in self._pending_restarts:
                 return
 
@@ -840,11 +831,8 @@ class CronService:
             if latest is None or latest.status != "active" or latest.schedule_type != "once":
                 return
             if failed_fire_attempts == 0:
-                # Retries of a failed fire keep the first attempt's decision.
+                # Retries of a failed fire keep the first attempt's late notice.
                 late = self._late_fire(_schedule.OwedFire(due_at=run_at_utc))
-                if late is not None and _exceeds_max_delay(latest, late):
-                    await self._skip_missed_fire(latest.id, late)
-                    return
 
             claimed_at = _timing._utc_now_iso()
             try:
@@ -954,29 +942,6 @@ class CronService:
         if (now - owed.due_at).total_seconds() <= _ON_TIME_SECONDS and not owed.earlier_missed:
             return None
         return _LateFire(owed=owed, noticed_at=now, timezone=self._timezone)
-
-    async def _skip_missed_fire(self, job_id: str, late: _LateFire) -> None:
-        """Record missed fires that the job's ``max_delay_seconds`` does not let start."""
-        job = self._jobs.get(job_id)
-        if job is None:
-            return
-        max_delay_seconds = job.max_delay_seconds or 0
-        job.covered_until = late.noticed_at.isoformat()
-        job.last_outcome = "missed"
-        job.last_error = _truncate_error(late.skip_reason(max_delay_seconds))
-        if job.schedule_type == "once":
-            job.status = "missed"
-        self._jobs[job_id] = job
-        _LOGGER.info(
-            "Cron job skipped a missed fire (job=%s due_at=%s late_by=%ds earlier_missed=%d "
-            "max_delay=%ds)",
-            job_id,
-            late.owed.due_at.isoformat(),
-            late.late_by_seconds,
-            late.owed.earlier_missed,
-            max_delay_seconds,
-        )
-        await self._persist_after_fire(job_id)
 
     async def _trigger_job_run(self, job: CronJob, *, late: _LateFire | None = None) -> bool:
         self._executing_jobs.add(job.id)
@@ -1475,36 +1440,10 @@ class _LateFire:
             "on when it runs, such as a greeting, a deadline that has passed, or the period it "
             "covers."
         )
-        return " ".join(sentences)
-
-    def skip_reason(self, max_delay_seconds: int) -> str:
-        """Why the missed fire did not start, for the job's ``last_error``."""
-        due = f"the fire due at {self._local(self.owed.due_at)}"
-        earlier = self.owed.earlier_missed
-        if earlier:
-            count = (
-                f"at least {earlier}"
-                if earlier >= _schedule.MAX_COUNTED_MISSED_FIRES
-                else str(earlier)
-            )
-            due += f" and {count} earlier {'one' if earlier == 1 else 'ones'}"
-        if max_delay_seconds == 0:
-            return f"vBot missed {due} and skipped it: the job's max_delay is 0m."
-        return (
-            f"vBot missed {due} and skipped it: at {self._local(self.noticed_at)} it was more "
-            f"than the job's max_delay of {format_max_delay(max_delay_seconds)} late."
+        sentences.append(
+            "If the instruction no longer makes sense this late, say so instead of carrying it out."
         )
+        return " ".join(sentences)
 
     def _local(self, instant: datetime) -> str:
         return instant.astimezone(self.timezone).replace(microsecond=0).isoformat()
-
-
-def _exceeds_max_delay(job: CronJob, late: _LateFire) -> bool:
-    return job.max_delay_seconds is not None and late.late_by_seconds > max(
-        job.max_delay_seconds, _ON_TIME_SECONDS
-    )
-
-
-def format_max_delay(seconds: int) -> str:
-    """Spell a maximum delay as the duration the cron Tool accepts, such as ``2h`` or ``0m``."""
-    return "0m" if seconds == 0 else _format_duration(seconds)

@@ -104,7 +104,6 @@ _MUTABLE_FIELDS = frozenset(
         "session_id",
         "status",
         "project_id",
-        "max_delay_seconds",
     )
 )
 
@@ -335,18 +334,6 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], item_path: str, i
             f"{item_path}.interval_seconds",
             f"must be a whole number of minutes ({MIN_INTERVAL_SECONDS} seconds or more)",
         )
-    max_delay_seconds = item.get("max_delay_seconds")
-    if max_delay_seconds is not None and (
-        isinstance(max_delay_seconds, bool)
-        or not isinstance(max_delay_seconds, int)
-        or max_delay_seconds < 0
-        or max_delay_seconds % MIN_INTERVAL_SECONDS != 0
-    ):
-        add_error(
-            diagnostics,
-            f"{item_path}.max_delay_seconds",
-            "must be a whole number of minutes in seconds, or null",
-        )
     remaining_runs = item.get("remaining_runs")
     if remaining_runs is not None and (
         isinstance(remaining_runs, bool)
@@ -415,11 +402,9 @@ class CronJob:
     structured half of the outside ``agent@projekt`` address form (parsed once at
     the RPC edge), never an ``@`` string stored in ``agent_id``.
 
-    ``max_delay_seconds`` bounds how late a missed fire may still start
-    (``None``: no bound; ``0``: missed fires never start). ``covered_until``
-    marks the instant through which no fire is owed even though no Run started:
-    activation, a schedule change, or skipped fires. Fires due after it, after
-    ``created_at`` and after the last attempt and completion are owed.
+    ``covered_until`` marks the instant through which no fire is owed even
+    though no Run started: activation or a schedule change. Fires due after it,
+    after ``created_at`` and after the last attempt and completion are owed.
     """
 
     id: str
@@ -443,7 +428,6 @@ class CronJob:
     last_outcome: CronRunOutcome | None = None
     last_error: str | None = None
     consecutive_failures: int = 0
-    max_delay_seconds: int | None = None
     covered_until: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -470,7 +454,6 @@ class CronJob:
             "last_outcome": self.last_outcome,
             "last_error": self.last_error,
             "consecutive_failures": self.consecutive_failures,
-            "max_delay_seconds": self.max_delay_seconds,
             "covered_until": self.covered_until,
         }
 
@@ -505,7 +488,6 @@ class CronJob:
             last_outcome=payload.get("last_outcome"),
             last_error=payload.get("last_error"),
             consecutive_failures=int(payload.get("consecutive_failures") or 0),
-            max_delay_seconds=payload.get("max_delay_seconds"),
             covered_until=payload.get("covered_until"),
         )
 
@@ -662,14 +644,5 @@ def normalize_job_fields(job: CronJob) -> None:
         job.last_error = _truncate_error(job.last_error)
     if job.covered_until is not None:
         _parse_utc_timestamp(job.covered_until, field_name="covered_until")
-    if job.max_delay_seconds is not None and (
-        isinstance(job.max_delay_seconds, bool)
-        or not isinstance(job.max_delay_seconds, int)
-        or job.max_delay_seconds < 0
-        or job.max_delay_seconds % MIN_INTERVAL_SECONDS != 0
-    ):
-        raise CronJobValidationError(
-            "max_delay_seconds must be a whole number of minutes in seconds, or null"
-        )
     if job.last_run_id is not None and not isinstance(job.last_run_id, str):
         raise CronJobValidationError("last_run_id must be a string when provided")

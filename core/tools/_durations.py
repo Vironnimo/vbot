@@ -1,25 +1,24 @@
-"""Read durations written by Models, and the ``max_delay`` that ``cron`` and ``calendar`` share.
+"""Read durations written by Models, and the late-start limits ``cron`` and ``calendar`` ignore.
 
-Both Tools take ``max_delay``: how late a start that vBot missed, for example
-while the server was off, can still happen. Models write it under the names of
-schedulers they know (APScheduler ``misfire_grace_time``, Kubernetes
-``startingDeadlineSeconds``, Hermes ``catch_up_missed``, OpenClaw
-``skipMissedJobs``) and as words, numbers or ISO 8601 durations. This module
-reads every spelling into one canonical value and converts it to seconds.
+Models limit how late a missed start can still happen under the names of
+schedulers they know (``max_delay``, APScheduler ``misfire_grace_time``,
+Kubernetes ``startingDeadlineSeconds``, Hermes ``catch_up_missed``, OpenClaw
+``skipMissedJobs``). Neither Tool takes such a limit: a missed start happens
+late and its Run is told how late it is. A call that sends one still executes,
+and its result says that the field has no effect.
 """
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
 from core.tools.call_syntax import is_placeholder, spelling
+from core.tools.contracts import JsonObject
 
-MAX_DELAY_UNLIMITED = "unlimited"
-"""The canonical ``max_delay`` that removes a limit."""
-MAX_DELAY_STAND_IN = "<duration such as 2h>"
-"""The ``max_delay`` a corrected call shows in place of a value it could not read."""
+LATE_LIMITS_FIELD = "late_limits_note"
+"""Unadvertised field that carries the note on ignored late-start limits to the handler."""
+LATE_LIMITS_PARAMETER: dict[str, Any] = {"type": "string", "minLength": 1}
 
 _DURATION_WORDS = {
     "s": 1,
@@ -49,11 +48,8 @@ _DURATION = re.compile(r"^(\d+)\s*([a-z]+)$")
 _ISO_DURATION = re.compile(
     r"^p(?:(\d+)w)?(?:(\d+)d)?(?:t(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?)?$", re.IGNORECASE
 )
-_CANONICAL = re.compile(r"^(\d+)([mhd])$")
-_UNIT_SECONDS = {"m": 60, "h": 3600, "d": 86400}
-_UNLIMITED_WORDS = frozenset({"unlimited", "infinite", "infinity", "forever", "always"})
-# Spellings of the latest start of a missed start: durations, and seconds as numbers.
-_MAX_DELAY_KEYS = frozenset(
+# Spellings of a limit on how late a missed start can still happen.
+_LATE_LIMIT_KEYS = frozenset(
     {
         "maxdelay",
         "maxlateness",
@@ -65,23 +61,22 @@ _MAX_DELAY_KEYS = frozenset(
         "gracetime",
         "graceperiod",
         "startingdeadline",
-    }
-)
-_MAX_DELAY_SECONDS_KEYS = frozenset(
-    {
         "maxdelayseconds",
         "misfiregracetime",
         "misfiregraceseconds",
         "startingdeadlineseconds",
         "gracetimeseconds",
         "graceperiodseconds",
+        # Hermes ``catch_up_missed`` and OpenClaw ``skipMissedJobs`` flags.
+        "catchup",
+        "catchupmissed",
+        "runmissed",
+        "startwhenavailable",
+        "skipmissed",
+        "skipmissedjobs",
+        "skipmissedruns",
     }
 )
-# Hermes ``catch_up_missed`` and OpenClaw ``skipMissedJobs`` flags.
-_CATCH_UP_KEYS = frozenset({"catchup", "catchupmissed", "runmissed", "startwhenavailable"})
-_SKIP_MISSED_KEYS = frozenset({"skipmissed", "skipmissedjobs", "skipmissedruns"})
-_ZERO_DURATION = re.compile(r"^(?:0+\s*[a-z]*|pt?0+[a-z]?)$")
-_BOOLEAN_WORDS = {"true": True, "yes": True, "1": True, "false": False, "no": False, "0": False}
 
 
 def duration_text(text: str) -> str | None:
@@ -112,99 +107,46 @@ def duration_from_seconds(seconds: float) -> str | None:
     return f"{minutes}m"
 
 
-def read_max_delay(arguments: dict[str, Any], *, missed: str) -> list[str]:
-    """Read every spelling of ``max_delay`` into one canonical value; return refusal texts.
+def take_late_limits(arguments: dict[str, Any], behavior: str) -> str | None:
+    """Remove every late-start limit from a call; return the note for the result, if any.
 
-    Canonical values are ``30m``, ``2h`` or ``1d``, ``0m`` (missed starts never
-    happen) and ``unlimited``. A number names seconds only under a key that says
-    so. ``missed`` names what ``0m`` skips in the refusal texts, such as
-    ``missed fire``.
+    ``behavior`` says what happens to a missed start instead. Empty values and
+    placeholders request nothing and leave no note.
     """
-    texts: list[str] = []
-    readings: list[str] = []
-    keys = _MAX_DELAY_KEYS | _MAX_DELAY_SECONDS_KEYS | _CATCH_UP_KEYS | _SKIP_MISSED_KEYS
+    sent: list[str] = []
     for key in list(arguments):
-        word = spelling(key)
-        if word not in keys:
-            continue
-        item = arguments.pop(key)
-        if item is None:
-            readings.append(MAX_DELAY_UNLIMITED)
-            continue
-        if is_placeholder(item):
-            continue
-        if word in _CATCH_UP_KEYS | _SKIP_MISSED_KEYS:
-            flag = _BOOLEAN_WORDS.get(item.strip().casefold()) if isinstance(item, str) else item
-            if not isinstance(flag, bool):
-                texts.append(f'"{key}" must be true or false.')
-            elif flag == (word in _CATCH_UP_KEYS):
-                readings.append(MAX_DELAY_UNLIMITED)
-            else:
-                readings.append("0m")
-            continue
-        reading = _max_delay_text(item, seconds=word in _MAX_DELAY_SECONDS_KEYS)
-        if reading is None:
-            value = json.dumps(item, ensure_ascii=False)
-            texts.append(
-                f'"{key}" {value} is not a duration. max_delay takes a duration such as "30m", '
-                f'"2h" or "1d", "0m" to skip every {missed}, or "unlimited".'
-            )
-            continue
-        readings.append(reading)
-    if len(set(readings)) > 1:
-        texts.append("it sets more than one max_delay; choose one.")
-    elif readings:
-        arguments["max_delay"] = readings[0]
-    return texts
-
-
-def max_delay_seconds(value: Any, *, missed: str) -> int | None:
-    """Return the seconds of a canonical ``max_delay``; ``None`` is no limit.
-
-    Raises ``ValueError`` with the refusal text for any other value.
-    """
-    if value == MAX_DELAY_UNLIMITED:
+        if spelling(key) in _LATE_LIMIT_KEYS and not is_placeholder(arguments.pop(key)):
+            sent.append(f'"{key}"')
+    if not sent:
         return None
-    match = _CANONICAL.fullmatch(str(value))
-    if match is None:
-        raise ValueError(
-            f'max_delay "{value}" is not a duration. Use "30m", "2h" or "1d", "0m" to skip '
-            f'every {missed}, or "unlimited".'
-        )
-    return int(match.group(1)) * _UNIT_SECONDS[match.group(2)]
+    names = sent[0] if len(sent) == 1 else f"{', '.join(sent[:-1])} and {sent[-1]}"
+    return f"{names} {'has' if len(sent) == 1 else 'have'} no effect. {behavior}"
 
 
-def max_delay_text(seconds: int) -> str:
-    """Spell a limit in seconds as the canonical ``max_delay``, such as ``2h`` or ``0m``."""
-    return duration_from_seconds(seconds) or "0m"
-
-
-def _max_delay_text(value: Any, *, seconds: bool) -> str | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int | float):
-        if value == 0:
-            return "0m"
-        # A bare number names no unit.
-        return duration_from_seconds(value) if seconds else None
-    if not isinstance(value, str):
-        return None
-    text = value.strip().casefold()
-    if spelling(text) in _UNLIMITED_WORDS:
-        return MAX_DELAY_UNLIMITED
-    if text.isdigit():
-        return _max_delay_text(int(text), seconds=seconds)
-    if _ZERO_DURATION.match(text.replace(" ", "")):
-        return "0m"
-    return duration_text(text)
+def with_late_limits_note(result: JsonObject, note: str, refusal_prefix: str) -> JsonObject:
+    """Add the note to a Tool result; a refusal keeps its cause first and its call last."""
+    if result.get("ok"):
+        data = result["data"]
+        data["note"] = f"{data['note']} {note}" if data.get("note") else note
+        return result
+    error = result["error"]
+    message = str(error["message"])
+    head, separator, call = message.rpartition(" Send: ")
+    if separator:
+        error["message"] = f"{head} {note}{separator}{call}"
+    elif message.startswith(refusal_prefix) and message.endswith("}"):
+        # A choice ends with its calls; the note goes before its cause.
+        error["message"] = f"{refusal_prefix}{note} {message.removeprefix(refusal_prefix)}"
+    else:
+        error["message"] = f"{message} {note}"
+    return result
 
 
 __all__ = [
-    "MAX_DELAY_STAND_IN",
-    "MAX_DELAY_UNLIMITED",
+    "LATE_LIMITS_FIELD",
+    "LATE_LIMITS_PARAMETER",
     "duration_from_seconds",
     "duration_text",
-    "max_delay_seconds",
-    "max_delay_text",
-    "read_max_delay",
+    "take_late_limits",
+    "with_late_limits_note",
 ]

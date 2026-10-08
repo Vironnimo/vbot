@@ -69,8 +69,7 @@ _TERMINAL = frozenset({"completed", "failed", "cancelled", "interrupted", "misse
 _MAX_OFFSET = 31 * 24 * 60
 _MAX_ACTIONS = 16
 _MAX_ERROR_CHARS = 500
-# A start at most this late counts as on time: no late notice, and
-# ``max_delay_seconds`` never closes a window sooner.
+# A start at most this late counts as on time and gets no late notice.
 _ON_TIME = timedelta(seconds=60)
 # The window of an occurrence that no later occurrence of its event replaces:
 # it can start however late. Stored like any expiry, as a timestamp.
@@ -93,12 +92,11 @@ _ACTION_FIELDS = frozenset(
         "prompt",
         "target",
         "session",
-        "max_delay_seconds",
         "created_at",
         "scanned_until",
     )
 )
-_UPDATE_FIELDS = frozenset(("when", "prompt", "target", "session", "max_delay_seconds"))
+_UPDATE_FIELDS = frozenset(("when", "prompt", "target", "session"))
 _EXECUTION_FIELDS = frozenset(
     (
         "id",
@@ -268,16 +266,6 @@ def _validate_action_record(action: Any) -> None:
     session = action.get("session")
     if session is not None and (not isinstance(session, str) or not session.strip()):
         raise CalendarValidationError("session must be a non-empty string or null")
-    max_delay = action.get("max_delay_seconds")
-    if max_delay is not None and (
-        not isinstance(max_delay, int)
-        or isinstance(max_delay, bool)
-        or max_delay < 0
-        or max_delay % 60
-    ):
-        raise CalendarValidationError(
-            "max_delay_seconds must be a whole number of minutes in seconds, or null"
-        )
 
 
 def _validate_execution_record(key: str, row: Any) -> None:
@@ -494,16 +482,10 @@ class CalendarActions:
         prompt: str,
         target: str,
         session: str | None = None,
-        max_delay_seconds: int | None = None,
         now: datetime | None = None,
         actor: str = _DEFAULT_ACTOR,
     ) -> dict[str, Any]:
-        """Add an action to an event.
-
-        ``max_delay_seconds`` closes an occurrence's window that many seconds
-        after it was due, when that is sooner than its event allows; ``None``
-        keeps the event's window.
-        """
+        """Add an action to an event."""
         async with self._edits:
             self._load()
             self._calendar.get_event(event_id)
@@ -524,8 +506,6 @@ class CalendarActions:
                 "created_at": stamp,
                 "scanned_until": stamp,
             }
-            if max_delay_seconds is not None:
-                action["max_delay_seconds"] = max_delay_seconds
             await self._validate_async(action)
             # The event may have been deleted while the references were checked.
             self._calendar.get_event(event_id)
@@ -545,7 +525,7 @@ class CalendarActions:
             self._get(action_id)
             if not fields or set(fields) - _UPDATE_FIELDS:
                 raise CalendarValidationError(
-                    "update_action requires when, prompt, target, session, or max_delay_seconds"
+                    "update_action requires when, prompt, target, or session"
                 )
 
             def updated(current: dict[str, Any]) -> dict[str, Any]:
@@ -879,7 +859,7 @@ class CalendarActions:
         still start late: the event's start for an action due before it, its end
         for one due during it, and for one due at or after its end the start of
         the event's next occurrence, which replaces it; without a next
-        occurrence, ``_NO_EXPIRY``. ``max_delay_seconds`` closes it sooner.
+        occurrence, ``_NO_EXPIRY``.
         """
         zone = ZoneInfo(self._calendar.system_timezone_name())
         start, end = occurrence.start_utc, occurrence.end_utc
@@ -899,9 +879,6 @@ class CalendarActions:
             # Strictly later: a back-to-back occurrence starting at the due time replaces it.
             following = self._calendar.next_start(event, due + timedelta(microseconds=1))
             expires = following or _NO_EXPIRY
-        max_delay = action.get("max_delay_seconds")
-        if max_delay is not None:
-            expires = min(expires, due + max(timedelta(seconds=max_delay), _ON_TIME))
         key = f"{action['id']}:{occurrence.occurrence_start if event.rrule else 'single'}"
         return (
             key,
@@ -1354,7 +1331,8 @@ def late_notice(action_id: str, due: datetime, starting: datetime, zone_name: st
         f"{local(starting)}. vBot did not run it at the due time, for example because the "
         "server was off or the computer was asleep. Carry out the instruction that follows "
         "now, and adapt any part of it that depends on when it runs, such as the time left "
-        "before the event or how long ago it ended."
+        "before the event or how long ago it ended. If the instruction no longer makes sense "
+        "this late, say so instead of carrying it out."
     )
 
 

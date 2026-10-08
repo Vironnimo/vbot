@@ -310,7 +310,6 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
       ...intervalFormFields(null),
       run_at: '',
       repeat: '',
-      max_delay: '',
       session_id: '',
       original_run_at: '',
       system_timezone: systemTimezone,
@@ -339,11 +338,6 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
       normalized.remaining_runs === null
         ? ''
         : String(normalized.remaining_runs),
-    // Minutes; empty means a missed fire starts however late.
-    max_delay:
-      normalized.max_delay_seconds === null
-        ? ''
-        : String(normalized.max_delay_seconds / 60),
     session_id: normalized.session_id ?? '',
     original_run_at: normalized.run_at ?? '',
     system_timezone: systemTimezone,
@@ -387,7 +381,6 @@ export function cronFormFingerprint(formValues) {
     interval_seconds: cronIntervalSeconds(values),
     run_at: asText(values.run_at),
     repeat: asText(values.repeat),
-    max_delay: asText(values.max_delay),
     session_id: asText(values.session_id),
   });
 }
@@ -415,10 +408,6 @@ export function buildCreateCronPayload(formValues) {
   const repeat = optionalPositiveInteger(formValues?.repeat);
   if (repeat !== null) {
     payload.repeat = repeat;
-  }
-  const maxDelaySeconds = cronMaxDelaySeconds(formValues);
-  if (maxDelaySeconds !== null) {
-    payload.max_delay_seconds = maxDelaySeconds;
   }
 
   const sessionId = optionalText(formValues?.session_id);
@@ -450,20 +439,8 @@ export function buildUpdateCronPayload(formValues) {
   }
   const repeat = optionalPositiveInteger(formValues?.repeat);
   payload.repeat = repeat;
-  payload.max_delay_seconds = cronMaxDelaySeconds(formValues);
 
   return payload;
-}
-
-// The form's late-start limit in seconds: null for an empty field (no limit),
-// NaN for a value that is not a whole number of minutes from 0.
-export function cronMaxDelaySeconds(formValues) {
-  const text = asText(formValues?.max_delay).trim();
-  if (!text) {
-    return null;
-  }
-  const minutes = Number(text);
-  return Number.isInteger(minutes) && minutes >= 0 ? minutes * 60 : NaN;
 }
 
 function resolveOnceRunAtValue(formValues) {
@@ -493,10 +470,6 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
     Number.isInteger(job?.remaining_runs) && job.remaining_runs >= 0
       ? job.remaining_runs
       : null;
-  const maxDelaySeconds =
-    Number.isInteger(job?.max_delay_seconds) && job.max_delay_seconds >= 0
-      ? job.max_delay_seconds
-      : null;
   const lastFiredAt = optionalText(job?.last_fired_at);
   const lastAttemptAt = optionalText(job?.last_attempt_at);
   const lastCompletedAt = optionalText(job?.last_completed_at);
@@ -516,7 +489,6 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
     interval_seconds: intervalSeconds,
     run_at: runAt,
     remaining_runs: remainingRuns,
-    max_delay_seconds: maxDelaySeconds,
     session_id: optionalText(job?.session_id),
     status: normalizeStatus(job?.status),
     last_fired_at: lastFiredAt,

@@ -39,7 +39,6 @@ def test_schema_advertises_only_the_canonical_fields() -> None:
         "prompt",
         "schedule",
         "repeat",
-        "max_delay",
     ]
     assert properties["action"]["enum"] == [
         "create",
@@ -261,24 +260,6 @@ def test_update_with_null_repeat_removes_the_limit(tmp_path: Path) -> None:
     assert tool.only_job().remaining_runs is None
 
 
-def test_max_delay_is_set_shown_and_removed(tmp_path: Path) -> None:
-    tool = cron_tool(tmp_path)
-    created, text = tool.call(
-        {"action": "create", "prompt": PROMPT, "schedule": "0 7 * * *", "max_delay": "2h"}
-    )
-    job_id = created["data"]["id"]
-    assert tool.only_job().max_delay_seconds == 7200
-    assert "max_delay: 2h" in text
-
-    _envelope, text = tool.call({"action": "update", "id": job_id, "max_delay": "0m"})
-    assert tool.only_job().max_delay_seconds == 0
-    assert "max_delay: 0m" in text
-
-    _envelope, text = tool.call({"action": "update", "id": job_id, "max_delay": "unlimited"})
-    assert tool.only_job().max_delay_seconds is None
-    assert "max_delay" not in text
-
-
 def test_update_to_a_one_time_schedule_fires_once(tmp_path: Path) -> None:
     tool = cron_tool(tmp_path)
     created, _ = tool.call({"action": "create", "prompt": PROMPT, "schedule": "every 1d"})
@@ -293,15 +274,18 @@ def test_update_to_a_one_time_schedule_fires_once(tmp_path: Path) -> None:
     assert re.search(rf"^schedule: {BERLIN_TIME}$", text, re.MULTILINE)
 
 
-def test_update_needs_a_change(tmp_path: Path) -> None:
+@pytest.mark.parametrize("fields", [{}, {"max_delay": "1h"}])
+def test_update_needs_a_change(tmp_path: Path, fields: dict[str, Any]) -> None:
     tool = cron_tool(tmp_path)
     created, _ = tool.call({"action": "create", "prompt": PROMPT, "schedule": "every 2h"})
     job_id = created["data"]["id"]
 
-    envelope, _text = tool.call({"action": "update", "id": job_id})
+    envelope, _text = tool.call({"action": "update", "id": job_id, **fields})
 
     message = _error(envelope)["message"]
     assert message.startswith("cron was not run: update needs a field to change")
+    # A field without effect is named, not dropped silently.
+    assert ('"max_delay" has no effect.' in message) == bool(fields)
     assert message.endswith(f'Send: {{"action":"update","id":"{job_id}","schedule":"<when>"}}')
     before = tool.only_job().to_dict()
 

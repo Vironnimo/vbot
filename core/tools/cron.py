@@ -21,6 +21,7 @@ from core.automation.cron import (
 from core.projects import InvalidAgentAddressError, format_agent_address, parse_agent_address
 from core.tools._cron_arguments import (
     ENABLED_FIELD,
+    REFUSAL_PREFIX,
     SELF_TARGET,
     UNADVERTISED_PARAMETERS,
     CronCallRefusedError,
@@ -28,12 +29,7 @@ from core.tools._cron_arguments import (
     refusal,
 )
 from core.tools._cron_timezone import zoned_schedule
-from core.tools._durations import (
-    MAX_DELAY_STAND_IN,
-    MAX_DELAY_UNLIMITED,
-    max_delay_seconds,
-    max_delay_text,
-)
+from core.tools._durations import LATE_LIMITS_FIELD, with_late_limits_note
 from core.tools.contracts import ToolContract, compile_tool_contract
 from core.tools.tools import (
     JsonObject,
@@ -64,7 +60,7 @@ CRON_TOOL_DESCRIPTION = (
 CRON_ACTIONS = frozenset(("create", "list", "update", "delete", "enable", "disable"))
 
 _ID_ACTIONS = frozenset({"update", "delete", "enable", "disable"})
-_UPDATE_FIELDS = ("target", "name", "prompt", "schedule", "repeat", "max_delay", ENABLED_FIELD)
+_UPDATE_FIELDS = ("target", "name", "prompt", "schedule", "repeat", ENABLED_FIELD)
 _SCHEDULE_FORMS = (
     'Use five cron fields in server time such as "0 9 * * 1-5" (weekdays at 09:00), '
     '"every 2h", "in 30m", or a local time such as "2030-01-01T09:00".'
@@ -136,17 +132,6 @@ CRON_TOOL_PARAMETERS: JsonObject = {
                 "removes a limit. One-time schedules fire once."
             ),
         },
-        "max_delay": {
-            "type": "string",
-            "minLength": 1,
-            "description": (
-                "How late a fire that vBot missed, for example while the server was off, can "
-                "still start: a duration such as '30m', '2h' or '1d'; '0m' skips every missed "
-                "fire. Omit to start one late Run for the most recent missed fire, however late. "
-                "Set it only when the user asks for it or a late Run would be useless. On "
-                "update, 'unlimited' removes a limit."
-            ),
-        },
     },
     "required": ["action"],
 }
@@ -207,6 +192,19 @@ def register_cron_tool(
 
 
 async def _handle_cron_tool(
+    cron_service: CronService,
+    context: ToolContext,
+    arguments: JsonObject,
+) -> JsonObject:
+    arguments = dict(arguments)
+    late_limits = arguments.pop(LATE_LIMITS_FIELD, None)
+    result = await _run_cron_action(cron_service, context, arguments)
+    if late_limits:
+        return with_late_limits_note(result, late_limits, REFUSAL_PREFIX)
+    return result
+
+
+async def _run_cron_action(
     cron_service: CronService,
     context: ToolContext,
     arguments: JsonObject,
@@ -315,7 +313,6 @@ async def _handle_create(
         session_id=None,
         status="paused" if paused else "active",
         project_id=project_id,
-        max_delay_seconds=_max_delay_seconds(arguments),
         actor="tool",
     )
     notes = [note] if note else []
@@ -344,8 +341,8 @@ async def _handle_update(
     if not any(name in arguments for name in _UPDATE_FIELDS):
         raise CronCallRefusedError(
             refusal(
-                "update needs a field to change: name, prompt, schedule, repeat, max_delay, or "
-                "target. To pause or resume the job, use disable or enable.",
+                "update needs a field to change: name, prompt, schedule, repeat, or target. To "
+                "pause or resume the job, use disable or enable.",
                 arguments,
                 schedule=_SCHEDULE_STAND_IN,
             )
@@ -374,23 +371,10 @@ async def _handle_update(
             updates["remaining_runs"] = 1
     if "repeat" in arguments:
         updates["remaining_runs"] = arguments["repeat"]
-    if "max_delay" in arguments:
-        updates["max_delay_seconds"] = _max_delay_seconds(arguments)
     if ENABLED_FIELD in arguments:
         updates["status"] = "active" if arguments[ENABLED_FIELD] else "paused"
     job = await cron_service.update_job(job_id, actor="tool", **updates)
     return _job_success(cron_service, job, [note] if note else [])
-
-
-def _max_delay_seconds(arguments: JsonObject) -> int | None:
-    """The job's ``max_delay_seconds`` for a canonical ``max_delay``; ``None`` is no limit."""
-    value = arguments.get("max_delay", MAX_DELAY_UNLIMITED)
-    try:
-        return max_delay_seconds(value, missed="missed fire")
-    except ValueError as error:
-        raise CronCallRefusedError(
-            refusal(str(error), arguments, max_delay=MAX_DELAY_STAND_IN)
-        ) from error
 
 
 def _target_agent(context: ToolContext, target: str) -> tuple[str, str | None]:
@@ -484,8 +468,6 @@ def _job_fields(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> Json
     }
     if job.schedule_type != "once" and job.remaining_runs is not None:
         data["repeat"] = job.remaining_runs
-    if job.max_delay_seconds is not None:
-        data["max_delay"] = max_delay_text(job.max_delay_seconds)
     last_run = job.last_fired_at or job.last_attempt_at
     if last_run:
         data["last_run"] = _local_time(last_run, zone)

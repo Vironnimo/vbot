@@ -26,6 +26,7 @@ from core.tools._calendar_arguments import (
     LOCATION_FIELD,
     OMIT,
     QUERY_FIELD,
+    REFUSAL_PREFIX,
     STAND_INS,
     TIMEZONE_FIELD,
     UNADVERTISED_PARAMETERS,
@@ -52,6 +53,7 @@ from core.tools._calendar_times import (
     unknown_zone,
     window_text,
 )
+from core.tools._durations import LATE_LIMITS_FIELD, with_late_limits_note
 from core.tools._named_zones import named_zone
 from core.tools.contracts import ToolContract, compile_tool_contract
 from core.tools.tools import (
@@ -176,19 +178,6 @@ CALENDAR_TOOL_PARAMETERS: JsonObject = {
                 "each time."
             ),
         },
-        "max_delay": {
-            "type": "string",
-            "minLength": 1,
-            "description": (
-                "How late an action that vBot missed, for example while the server was off, can "
-                "still start: a duration such as '30m' or '2h'; '0m' skips every missed start. "
-                "Without it, an action due before its event can start until the event starts, "
-                "one due during it until it ends, and one due after it until its next "
-                "occurrence, or however late after the last; max_delay only shortens this. Set "
-                "it only when the user asks for it or a late Run would be useless. On "
-                "update_action, 'unlimited' removes the limit."
-            ),
-        },
     },
     "required": ["action"],
 }
@@ -274,6 +263,17 @@ def register_calendar_tool(
 
 async def _handle_calendar_tool(
     calendar_service: CalendarService, arguments: JsonObject, context: ToolContext | None = None
+) -> JsonObject:
+    arguments = dict(arguments)
+    late_limits = arguments.pop(LATE_LIMITS_FIELD, None)
+    result = await _run_calendar_action(calendar_service, arguments, context)
+    if late_limits:
+        return with_late_limits_note(result, late_limits, REFUSAL_PREFIX)
+    return result
+
+
+async def _run_calendar_action(
+    calendar_service: CalendarService, arguments: JsonObject, context: ToolContext | None
 ) -> JsonObject:
     action = arguments.get("action")
     if not isinstance(action, str) or action not in CALENDAR_ACTIONS:

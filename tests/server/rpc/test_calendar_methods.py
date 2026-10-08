@@ -125,16 +125,10 @@ async def test_calendar_actions_roundtrip(state: SimpleNamespace) -> None:
         prompt="prepare",
         target="main",
         session="chosen",
-        max_delay_seconds=600,
     )
     action_id = created["action"]["id"]
     updated = await rpc_result(
-        state,
-        "calendar.update_action",
-        id=action_id,
-        session=None,
-        when="end",
-        max_delay_seconds=None,
+        state, "calendar.update_action", id=action_id, session=None, when="end"
     )
     window = await rpc_result(
         state, "calendar.window", **{"from": "2026-09-10", "to": "2026-09-10"}
@@ -142,13 +136,11 @@ async def test_calendar_actions_roundtrip(state: SimpleNamespace) -> None:
     deleted = await rpc_result(state, "calendar.delete_action", id=action_id)
 
     assert event["event"]["recurring"] is False
-    assert created["action"]["max_delay_seconds"] == 600
     assert updated["action"]["session"] is None
-    assert updated["action"]["max_delay_seconds"] is None
     assert updated["action"]["prompt"] == "prepare"
     assert window["actions"][0]["id"] == action_id
     assert window["executions"][0]["action_id"] == action_id
-    # Due after a single event without a limit, the execution can start however late.
+    # Due after a single event, the execution can start however late.
     assert window["executions"][0]["expires_at"] is None
     assert deleted == {"id": action_id, "deleted": True}
     assert service.actions.list_actions() == []
@@ -215,18 +207,6 @@ async def test_calendar_update_that_would_revive_an_action_checks_it_under_the_r
             {"id": "{single}", "occurrence_start": "2026-09-14T09:00:00", "bogus": 1},
             "invalid_request",
             "bogus",
-        ),
-        (
-            "calendar.add_action",
-            {
-                "id": "{single}",
-                "when": "end",
-                "prompt": "review",
-                "target": "main",
-                "max_delay_seconds": 90,
-            },
-            "domain_error",
-            "max_delay_seconds",
         ),
         # An action's Session must belong to its target.
         (

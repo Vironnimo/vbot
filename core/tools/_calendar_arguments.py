@@ -24,7 +24,7 @@ from collections.abc import Mapping
 from datetime import date, datetime, time
 from typing import Any
 
-from core.tools._durations import MAX_DELAY_STAND_IN, read_max_delay
+from core.tools._durations import LATE_LIMITS_FIELD, LATE_LIMITS_PARAMETER, take_late_limits
 from core.tools._named_zones import named_zone
 from core.tools.call_syntax import (
     SpellingAliases,
@@ -49,12 +49,14 @@ UNADVERTISED_PARAMETERS: dict[str, Any] = {
     # event's kind stores, which needs the start, stored or sent.
     DURATION_MINUTES_FIELD: {"type": "integer", "minimum": 1},
     DURATION_DAYS_FIELD: {"type": "integer", "minimum": 1},
+    # The note on ignored late-start limits, which the handler adds to the result.
+    LATE_LIMITS_FIELD: LATE_LIMITS_PARAMETER,
 }
 OMIT = object()
 """``render_call`` override that removes a field from the rendered call."""
 
 EVENT_FIELDS = ("title", "start", "duration", "rrule", "notes")
-ACTION_FIELDS = ("when", "prompt", "target", "session", "max_delay")
+ACTION_FIELDS = ("when", "prompt", "target", "session")
 LENGTH_FIELDS = ("duration", DURATION_MINUTES_FIELD, DURATION_DAYS_FIELD)
 _EXTRA_EVENT_FIELDS = (END_FIELD, LOCATION_FIELD, TIMEZONE_FIELD)
 # Fields that describe an event, including unadvertised spellings of its length and end.
@@ -82,7 +84,7 @@ class CalendarCallRefusedError(ValueError):
     """A ``calendar`` call was refused before any side effect; the message names the fix."""
 
 
-_REFUSAL_PREFIX = "calendar was not run: "
+REFUSAL_PREFIX = "calendar was not run: "
 _CALL_ORDER = (
     "action",
     "id",
@@ -97,7 +99,13 @@ _CALL_ORDER = (
     "prompt",
     "target",
     "session",
-    "max_delay",
+)
+_LATE_START = (
+    "An action that vBot missed, for example while the server was off, still starts late: "
+    "one due before its event until the event starts, one due during it until it ends, and "
+    "one due after it until the event's next occurrence starts. Its Run is told how late it "
+    "is. To have a late Run skip the instruction sooner, say so in prompt, for example "
+    '"Skip this if it starts more than 30 minutes late."'
 )
 _LONG_TEXT = 120
 _LONG_TEXT_STAND_INS = {
@@ -414,10 +422,10 @@ class _Problems:
         if self.choice is not None:
             text, alternatives = self.choice
             calls = " or ".join(render_call(arguments, **overrides) for overrides in alternatives)
-            raise ToolContractError(_REFUSAL_PREFIX + " ".join([*self.texts, text, calls]))
+            raise ToolContractError(REFUSAL_PREFIX + " ".join([*self.texts, text, calls]))
         if self.texts:
             texts = " ".join(self.texts)
-            raise ToolContractError(f"{_REFUSAL_PREFIX}{texts} Send: {render_call(arguments)}")
+            raise ToolContractError(f"{REFUSAL_PREFIX}{texts} Send: {render_call(arguments)}")
 
 
 def normalize_calendar_arguments(contract: ToolContract, arguments: Any) -> Any:
@@ -455,9 +463,7 @@ def normalize_calendar_arguments(contract: ToolContract, arguments: Any) -> Any:
     if hours is not None:
         _merge(normalized, DURATION_MINUTES_FIELD, hours, problems)
     _read_extras(normalized, problems)
-    unread_delays = read_max_delay(normalized, missed="missed start")
-    for text in unread_delays:
-        problems.add(text)
+    late_limits = take_late_limits(normalized, _LATE_START)
     _omit_placeholders(normalized)
     _read_action(normalized, problems)
     action = normalized.get("action")
@@ -471,14 +477,16 @@ def normalize_calendar_arguments(contract: ToolContract, arguments: Any) -> Any:
         _read_action_when(normalized, problems)
     _read_duration(normalized, problems)
     _check_fields(normalized, problems)
-    if unread_delays:
-        normalized["max_delay"] = MAX_DELAY_STAND_IN
     if problems.texts or problems.choice:
         known = set(contract.input_schema["properties"])
         for key in normalized:
             if key not in known:
                 problems.add(f'"{key}" is not a parameter.')
+        if late_limits:
+            problems.add(late_limits)
     problems.raise_if_any(normalized)
+    if late_limits:
+        normalized[LATE_LIMITS_FIELD] = late_limits
     return normalized
 
 
@@ -498,12 +506,12 @@ def render_call(arguments: Mapping[str, Any], **overrides: Any) -> str:
 
 def refusal(text: str, arguments: Mapping[str, Any], **overrides: Any) -> str:
     """Return a refusal message that ends with the corrected call."""
-    return f"{_REFUSAL_PREFIX}{text} Send: {render_call(arguments, **overrides)}"
+    return f"{REFUSAL_PREFIX}{text} Send: {render_call(arguments, **overrides)}"
 
 
 def choice(text: str, alternatives: list[str]) -> str:
     """Return a refusal message offering several complete calls."""
-    return f"{_REFUSAL_PREFIX}{text} " + " or ".join(alternatives)
+    return f"{REFUSAL_PREFIX}{text} " + " or ".join(alternatives)
 
 
 def parse_date(text: str) -> date | None:
@@ -793,7 +801,7 @@ def _omit_placeholders(arguments: dict[str, Any]) -> None:
             # Kept, a stand-in would become the event's text, the Run's instruction or a
             # target; dropped, the value the call was meant to set would be lost or defaulted.
             raise ToolContractError(
-                f'{_REFUSAL_PREFIX}{name} "{item.strip()}" is a stand-in. {wanted}'
+                f'{REFUSAL_PREFIX}{name} "{item.strip()}" is a stand-in. {wanted}'
             )
     for name in (
         "id",
@@ -1383,6 +1391,7 @@ __all__ = [
     "LOCATION_FIELD",
     "OMIT",
     "QUERY_FIELD",
+    "REFUSAL_PREFIX",
     "STAND_INS",
     "TIMEZONE_FIELD",
     "UNADVERTISED_PARAMETERS",

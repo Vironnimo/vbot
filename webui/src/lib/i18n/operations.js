@@ -501,9 +501,6 @@ export default Object.freeze({
   'cron.detail.lastRun': 'Last Run',
   'cron.detail.remainingRuns': 'Remaining Runs',
   'cron.detail.unlimited': 'Unlimited',
-  'cron.detail.maxDelay': 'Late start limit',
-  'cron.detail.noMaxDelay': 'None, missed fires start late',
-  'cron.detail.maxDelayMinutes': '{minutes} min',
   'cron.sections.task': 'Task',
   'cron.sections.taskSubtitle':
     'What the Agent should do when this schedule fires.',
@@ -558,10 +555,6 @@ export default Object.freeze({
     'Exactly five space-separated fields: minute, hour, day of month, month, weekday. The minimum cadence is one minute; seconds are not supported.\n\nExample: 0 9 * * 1-5 runs at 09:00 on weekdays. * matches any value; ranges (1-5) and lists (1,3,5) work in every field.',
   'cron.form.repeat': 'Repeat limit',
   'cron.form.repeatPlaceholder': 'Unlimited',
-  'cron.form.maxDelay': 'Late start limit (minutes)',
-  'cron.form.maxDelayPlaceholder': 'No limit',
-  'cron.form.maxDelayHelp':
-    'A fire missed while vBot was not running starts once, late, when vBot is back. Set a limit to skip it when it is more than this many minutes late; 0 skips every missed fire.',
   'cron.deleteConfirmTitle': 'Delete Scheduled Run',
   'cron.deleteConfirm': 'Delete {name} permanently? It will no longer run.',
   'cron.menu.label': 'Actions for {name}',
@@ -577,7 +570,7 @@ export default Object.freeze({
   'cron.errors.delete': 'Cron job could not be deleted.',
   'cron.errors.toggle': 'Cron job status could not be updated.',
   'cron.errors.missingRequired':
-    'Agent, prompt, and a complete schedule are required: a time, at least one day for weekly schedules, and a valid day, minute, or interval. The repeat limit must be a positive whole number, and the late start limit a whole number of minutes.',
+    'Agent, prompt, and a complete schedule are required: a time, at least one day for weekly schedules, and a valid day, minute, or interval. The repeat limit must be a positive whole number.',
   'cron.messages.created': 'Cron job created.',
   'cron.messages.deleted': 'Cron job deleted.',
   'cron.messages.enabled': 'Cron job enabled.',
@@ -610,7 +603,7 @@ export default Object.freeze({
   'calendar.actions.afterAnchor': '{amount} {unit} after {anchor}',
   'calendar.actions.heading': 'Agent actions',
   'calendar.actions.help':
-    'Actions follow this event. Each execution gets a new Session unless you select an existing one. An action vBot missed, for example while it was not running, starts late: one due before the event until the event starts, one during it until it ends, one after it until the next occurrence, or at any time after the last. A late start limit shortens this; 0 skips every missed start.',
+    'Actions follow this event. Each execution gets a new Session unless you select an existing one. An action vBot missed, for example while it was not running, starts late: one due before the event until the event starts, one during it until it ends, one after it until the next occurrence, or at any time after the last.',
   'calendar.actions.add': 'Add action',
   'calendar.actions.series':
     'These actions apply to every occurrence in the series.',
@@ -618,10 +611,6 @@ export default Object.freeze({
   'calendar.actions.scheduled': 'Scheduled: {time}',
   'calendar.actions.expires': 'Latest start: {time}',
   'calendar.actions.expiresNever': 'Latest start: no limit',
-  'calendar.actions.maxDelay': 'Late start limit (minutes)',
-  'calendar.actions.maxDelayPlaceholder': 'Set by the event',
-  'calendar.actions.maxDelayInvalid':
-    'The late start limit must be a whole number of minutes from 0.',
   'calendar.actions.error': 'Could not start: {reason}',
   'calendar.actions.openSession': 'Open Session',
   'calendar.actions.deleteConfirm': 'Remove this action from the event?',

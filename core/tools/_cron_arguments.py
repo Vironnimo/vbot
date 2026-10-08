@@ -23,10 +23,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from core.tools._durations import (
-    MAX_DELAY_STAND_IN,
+    LATE_LIMITS_FIELD,
+    LATE_LIMITS_PARAMETER,
     duration_from_seconds,
     duration_text,
-    read_max_delay,
+    take_late_limits,
 )
 from core.tools.call_syntax import (
     PLACEHOLDER_WORDS,
@@ -40,10 +41,12 @@ from core.tools.contracts import ToolContract, ToolContractError
 TIMEZONE_FIELD = "timezone"
 ENABLED_FIELD = "enabled"
 # Accepted so a requested time zone or paused state reaches the handler, which
-# converts, applies or refuses it. Never advertised.
+# converts, applies or refuses it, and so the handler reports ignored late-start
+# limits. Never advertised.
 UNADVERTISED_PARAMETERS: dict[str, Any] = {
     TIMEZONE_FIELD: {"type": "string", "minLength": 1},
     ENABLED_FIELD: {"type": "boolean"},
+    LATE_LIMITS_FIELD: LATE_LIMITS_PARAMETER,
 }
 OMIT = object()
 """``render_call`` override that removes a field from the rendered call."""
@@ -53,9 +56,14 @@ class CronCallRefusedError(ValueError):
     """A ``cron`` call was refused before any side effect; the message names the fix."""
 
 
-_REFUSAL_PREFIX = "cron was not run: "
-_CHANGE_FIELDS = ("target", "name", "prompt", "schedule", "repeat", "max_delay", ENABLED_FIELD)
-_CALL_ORDER = ("action", "id", "target", "name", "prompt", "schedule", "repeat", "max_delay")
+REFUSAL_PREFIX = "cron was not run: "
+_CHANGE_FIELDS = ("target", "name", "prompt", "schedule", "repeat", ENABLED_FIELD)
+_CALL_ORDER = ("action", "id", "target", "name", "prompt", "schedule", "repeat")
+_LATE_START = (
+    "A fire that vBot missed, for example while the server was off, starts once, late, and "
+    "its Run is told how late it is. To have a late Run skip the instruction, say so in "
+    'prompt, for example "Skip this if it starts more than 30 minutes late."'
+)
 _LONG_PROMPT = 120
 _LONG_PROMPT_STAND_IN = "<the prompt from this call>"
 _TEMPLATE = re.compile(r"^\s*<[^<>]+>\s*$")
@@ -270,10 +278,10 @@ class _Problems:
         if self.choice is not None:
             text, alternatives = self.choice
             calls = " or ".join(render_call(call, **overrides) for overrides in alternatives)
-            raise ToolContractError(_REFUSAL_PREFIX + " ".join([*self.texts, text, calls]))
+            raise ToolContractError(REFUSAL_PREFIX + " ".join([*self.texts, text, calls]))
         if self.texts:
             texts = " ".join(self.texts)
-            raise ToolContractError(f"{_REFUSAL_PREFIX}{texts} Send: {render_call(call)}")
+            raise ToolContractError(f"{REFUSAL_PREFIX}{texts} Send: {render_call(call)}")
 
 
 def normalize_cron_arguments(contract: ToolContract, arguments: Any) -> Any:
@@ -300,8 +308,7 @@ def normalize_cron_arguments(contract: ToolContract, arguments: Any) -> Any:
     _read_recurrence(normalized, problems)
     _read_session(normalized, problems)
     _read_delivery(normalized, problems)
-    for text in read_max_delay(normalized, missed="missed fire"):
-        problems.add(text, max_delay=MAX_DELAY_STAND_IN)
+    late_limits = take_late_limits(normalized, _LATE_START)
     _read_extras(normalized)
     _omit_placeholders(normalized, problems)
     _read_action(normalized, problems)
@@ -311,7 +318,11 @@ def normalize_cron_arguments(contract: ToolContract, arguments: Any) -> Any:
         for key in normalized:
             if key not in known:
                 problems.add(f'"{key}" is not a parameter.')
+        if late_limits:
+            problems.add(late_limits)
     problems.raise_if_any(normalized)
+    if late_limits:
+        normalized[LATE_LIMITS_FIELD] = late_limits
     return normalized
 
 
@@ -342,7 +353,7 @@ def schedule_kind(schedule: str) -> str:
 
 def refusal(text: str, arguments: Mapping[str, Any], **overrides: Any) -> str:
     """Return a refusal message that ends with the corrected call."""
-    return f"{_REFUSAL_PREFIX}{text} Send: {render_call(arguments, **overrides)}"
+    return f"{REFUSAL_PREFIX}{text} Send: {render_call(arguments, **overrides)}"
 
 
 # -- operations and wrappers -------------------------------------------------------------
@@ -386,7 +397,7 @@ def _single_operation(
         names = " and ".join(action for _key, action, _payload in real)
         calls = " ".join(_operation_call(contract, operation) for operation in real)
         raise ToolContractError(
-            f"{_REFUSAL_PREFIX}one call performs one action, but this call asks for {names}. "
+            f"{REFUSAL_PREFIX}one call performs one action, but this call asks for {names}. "
             f"Send them as separate calls: {calls}"
         )
     kept = {k: v for k, v in arguments.items() if k not in {key for key, _, _ in operations}}
@@ -447,7 +458,7 @@ def _merge(outer: dict[str, Any], inner: Mapping[str, Any]) -> None:
     for key, item in inner.items():
         if key in outer and outer[key] != item:
             raise ToolContractError(
-                f"{_REFUSAL_PREFIX}it gives two different values for {key}; provide one."
+                f"{REFUSAL_PREFIX}it gives two different values for {key}; provide one."
             )
         outer[key] = item
 
@@ -848,13 +859,13 @@ def _omit_placeholders(arguments: dict[str, Any], problems: _Problems) -> None:
     if prompt is not None and _is_stand_in(prompt, PLACEHOLDER_WORDS) and "id" not in arguments:
         # A job would run the placeholder itself; a corrected call cannot supply the text.
         raise ToolContractError(
-            f'{_REFUSAL_PREFIX}prompt "{prompt}" is a placeholder. Send the complete '
+            f'{REFUSAL_PREFIX}prompt "{prompt}" is a placeholder. Send the complete '
             "instruction the Agent should run at each fire."
         )
     if isinstance(prompt, str) and _TEMPLATE.match(prompt):
         # Dropped, the new instruction the update was meant to set would be lost.
         raise ToolContractError(
-            f'{_REFUSAL_PREFIX}prompt "{prompt.strip()}" is a stand-in. Send the complete '
+            f'{REFUSAL_PREFIX}prompt "{prompt.strip()}" is a stand-in. Send the complete '
             "instruction the Agent should run at each fire in its place, or leave prompt out "
             "to keep the job's current one."
         )
@@ -865,7 +876,7 @@ def _omit_placeholders(arguments: dict[str, Any], problems: _Problems) -> None:
             "keep the job's current target" if "id" in arguments else "run the job as yourself"
         )
         raise ToolContractError(
-            f'{_REFUSAL_PREFIX}target "{target.strip()}" is a stand-in. Send an existing Agent '
+            f'{REFUSAL_PREFIX}target "{target.strip()}" is a stand-in. Send an existing Agent '
             f"id, or agent@project for a Project member, in its place, or leave target out to "
             f"{default}."
         )
@@ -1048,6 +1059,7 @@ __all__ = [
     "SELF_TARGET",
     "CronCallRefusedError",
     "OMIT",
+    "REFUSAL_PREFIX",
     "TIMEZONE_FIELD",
     "UNADVERTISED_PARAMETERS",
     "normalize_cron_arguments",
