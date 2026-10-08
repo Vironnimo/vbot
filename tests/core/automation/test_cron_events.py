@@ -337,18 +337,16 @@ async def test_a_schedule_change_replaces_the_event_binding(services: _Services)
         remaining_runs=3,
     )
 
-    bound = await services.cron.update_job(job.id, **_schedule(services.cron, event.id, "end"))
+    bound = await services.cron.update_job(job.id, schedule_type="event", event_id=event.id)
     listed = services.cron.list_jobs(event_id=event.id)
     unbound = await services.cron.update_job(
         job.id, schedule_type="cron", cron_expression="0 9 * * *"
     )
 
-    # The event's occurrences drive the repetition, so the remaining run count goes.
-    assert (bound.schedule_type, bound.remaining_runs, bound.interval_seconds) == (
-        "event",
-        None,
-        None,
-    )
+    # Without an event time the job runs at each start; the event's occurrences
+    # drive the repetition, so the remaining run count goes.
+    assert (bound.event_edge, bound.event_offset_minutes) == ("start", 0)
+    assert (bound.remaining_runs, bound.interval_seconds) == (None, None)
     assert [item.id for item in listed] == [job.id]
     assert services.cron.list_jobs(event_id=event.id) == []
     assert (unbound.event_id, unbound.event_edge, unbound.event_offset_minutes) == (
@@ -356,6 +354,9 @@ async def test_a_schedule_change_replaces_the_event_binding(services: _Services)
         None,
         None,
     )
+    # An event time means nothing without an event.
+    with pytest.raises(CronJobValidationError, match="apply only to a job bound"):
+        await services.cron.update_job(job.id, event_edge="end", event_offset_minutes=0)
 
 
 @pytest.mark.asyncio

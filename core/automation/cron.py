@@ -143,6 +143,11 @@ _SCHEDULE_FIELDS = (
 
 # An event job with no occurrence ahead waits for a calendar change.
 _NO_DUE = datetime.max.replace(tzinfo=UTC)
+_EVENT_FIELDS = frozenset(("event_id", "event_edge", "event_offset_minutes"))
+_EVENT_FIELDS_ELSEWHERE = (
+    "event_id and the event time apply only to a job bound to a calendar event "
+    "(schedule type event)"
+)
 
 EventCalendar = _events.EventCalendar
 
@@ -245,6 +250,10 @@ class CronService:
         names an existing calendar event; occurrences due before it was created
         are not owed.
         """
+        if schedule_type != "event" and (
+            event_id is not None or event_edge is not None or event_offset_minutes is not None
+        ):
+            raise CronJobValidationError(_EVENT_FIELDS_ELSEWHERE)
         async with self._edits:
             self._ensure_jobs_loaded()
             if len(self._jobs) >= MAX_STORED_CRON_JOBS:
@@ -571,13 +580,18 @@ class CronService:
                 and job.remaining_runs != 1
             ):
                 raise CronJobValidationError("Changing to a one-time schedule requires repeat: 1")
-        if (
-            candidate.schedule_type == "event"
-            and job.schedule_type != "event"
-            and "remaining_runs" not in fields
+        if candidate.schedule_type != "event" and any(
+            fields.get(name) is not None for name in _EVENT_FIELDS
         ):
+            raise CronJobValidationError(_EVENT_FIELDS_ELSEWHERE)
+        if candidate.schedule_type == "event" and job.schedule_type != "event":
             # The event's occurrences drive the repetition; a run budget does not carry over.
-            candidate.remaining_runs = None
+            if "remaining_runs" not in fields:
+                candidate.remaining_runs = None
+            # Without an event time the job runs at each occurrence's start.
+            if fields.get("event_edge") is None:
+                candidate.event_edge = "start"
+                candidate.event_offset_minutes = fields.get("event_offset_minutes") or 0
         if (
             candidate.schedule_type == "interval"
             and "interval_anchor_at" not in fields
