@@ -1,3 +1,4 @@
+import { tick } from 'svelte';
 import { asText, sessionDeleteErrorText } from './presentation.js';
 import {
   renameSession,
@@ -180,21 +181,34 @@ export function createSessionActions(context) {
 
     deleting = true;
     actionError = null;
+    let focusIntent;
     try {
+      // Let the closed confirmation restore focus before this action owns it.
+      await tick();
+      focusIntent = context.onSessionDeleteStarted?.({
+        sessionId: session.id,
+        agentAddress: targetAgentId,
+      });
       const result = await deleteSession(targetAgentId, session.id, {
         permanent,
       });
-      context.onSessionDeleted?.({
+      const deleted = {
         deletedSessionId: session.id,
         nextSessionId: asText(result?.next_session_id),
         agentAddress: targetAgentId,
-      });
+      };
+      const completion = focusIntent
+        ? context.onSessionDeleted?.(deleted, {
+            focusAfterLoad: focusIntent.focusAfterLoad,
+          })
+        : context.onSessionDeleted?.(deleted);
       // Re-fetch so the deleted row disappears immediately, without waiting for
       // the resource_changed round-trip.
-      await context.loadSessions();
+      await Promise.all([completion, context.loadSessions()]);
     } catch (error) {
       actionError = sessionDeleteErrorText(error);
     } finally {
+      focusIntent?.release();
       deleting = false;
     }
   };

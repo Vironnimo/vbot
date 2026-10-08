@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { flushSync, mount, unmount } from 'svelte';
+import { flushSync, mount, tick, unmount } from 'svelte';
 
 import {
   baseAgent,
@@ -367,6 +367,249 @@ describe('App navigation', () => {
               : [],
         }),
       });
+
+    it.each([
+      ['beta', ''],
+      ['beta', 'session-beta'],
+      ['builder@work', ''],
+      ['builder@work', 'session-builder'],
+    ])(
+      'adopts the Agent context from copied #chat/%s/%s',
+      async (address, sessionId) => {
+        const projectAgent = address.includes('@');
+        const scan = {
+          team: [{ agent_id: 'builder', display_name: 'Builder' }],
+          report: { clean: true, findings: [] },
+        };
+        let releaseProjects;
+        const projectCatalog = new Promise((resolve) => {
+          releaseProjects = () =>
+            resolve({
+              projects: [{ project_id: 'work', display_name: 'Work', scan }],
+            });
+        });
+        if (!projectAgent) releaseProjects();
+        rpcMock.mockImplementation(
+          createAppRpcMock({
+            agents: [
+              ALPHA,
+              { id: 'beta', name: 'Beta', current_session_id: 'session-beta' },
+            ],
+            history: (params) => ({
+              messages: [
+                {
+                  id: `reply-${params.session_id}`,
+                  role: 'assistant',
+                  content: `Reply in ${params.session_id}`,
+                },
+              ],
+            }),
+            methods: {
+              'project.list': () => projectCatalog,
+              'project.show': () => ({ project: { project_id: 'work' }, scan }),
+            },
+          }),
+        );
+        localStorage.setItem('vbot.selectedAgentId', 'alpha');
+        const copiedHash = `#chat/${address}${sessionId ? `/${sessionId}` : ''}`;
+        window.history.replaceState(null, '', copiedHash);
+        mountApp();
+        if (projectAgent) {
+          await waitForCondition(() =>
+            expect(rpcMock).toHaveBeenCalledWith(
+              'chat.history',
+              expect.objectContaining({ agent_id: 'alpha' }),
+            ),
+          );
+          expect(window.location.hash).toBe(copiedHash);
+          releaseProjects();
+        }
+
+        const expectContext = (expectedSessionId) => {
+          expect(window.location.hash).toBe(
+            `#chat/${address}${expectedSessionId ? `/${expectedSessionId}` : ''}`,
+          );
+          expect(window.history.state?.extra?.selection).toMatchObject(
+            projectAgent
+              ? {
+                  agentId: 'alpha',
+                  projectId: 'work',
+                  projectAgentId: 'builder',
+                }
+              : { agentId: 'beta', projectId: '' },
+          );
+          expect(document.querySelector('.msg-input')).toBeTruthy();
+        };
+        await waitForCondition(() => expectContext(sessionId));
+        if (sessionId) {
+          await waitForCondition(() =>
+            expect(document.body.textContent).toContain(
+              `Reply in ${sessionId}`,
+            ),
+          );
+          labelledButton('chat.newSession').click();
+          await waitForCondition(() => expectContext(''));
+          window.history.back();
+          await waitForCondition(() => expectContext(sessionId));
+          window.history.forward();
+          await waitForCondition(() => expectContext(''));
+        }
+
+        await selectPersonalAgent('Alpha');
+        await waitForCondition(() => expect(selectedAgentName()).toBe('Alpha'));
+        window.history.back();
+        await waitForCondition(() => expectContext(''));
+      },
+    );
+
+    it.each([
+      'librarian',
+      'hidden@work',
+      'builder@unavailable',
+      'builder@work',
+    ])(
+      'keeps an unselectable copied Session owner %s as an override',
+      async (address) => {
+        rpcMock.mockImplementation(
+          createAppRpcMock({
+            agents: [ALPHA],
+            history: () => ({
+              messages: [
+                {
+                  id: 'linked-reply',
+                  role: 'assistant',
+                  content: 'Linked reply',
+                },
+              ],
+            }),
+            methods: {
+              'project.list': () => {
+                if (address.endsWith('@unavailable'))
+                  throw new Error('Catalog unavailable');
+                return {
+                  projects: [
+                    {
+                      project_id: 'work',
+                      scan: {
+                        team: [
+                          { agent_id: 'builder', display_name: 'Builder' },
+                        ],
+                      },
+                    },
+                  ],
+                };
+              },
+              'project.show': () => ({
+                project: { project_id: 'work' },
+                scan: { team: [] },
+              }),
+            },
+          }),
+        );
+        localStorage.setItem('vbot.selectedAgentId', 'alpha');
+        window.history.replaceState(
+          null,
+          '',
+          `#chat/${address}/linked-session`,
+        );
+        mountApp();
+        const linkedSessionShown = () => {
+          expect(window.location.hash).toBe(`#chat/${address}/linked-session`);
+          expect(document.body.textContent).toContain('Linked reply');
+          expect(document.querySelector('.msg-input')).toBeTruthy();
+          expect(window.history.state?.extra?.selection).toMatchObject({
+            agentId: 'alpha',
+            projectId: '',
+          });
+        };
+        await waitForCondition(linkedSessionShown);
+        labelledButton('chat.newSession').click();
+        await waitForCondition(() =>
+          expect(window.location.hash).toBe('#chat/alpha'),
+        );
+        window.history.back();
+        await waitForCondition(linkedSessionShown);
+      },
+    );
+
+    it.each(['Agent', 'view'])(
+      'does not resume a copied Project link after a newer %s choice',
+      async (choice) => {
+        const scan = {
+          team: [{ agent_id: 'builder', display_name: 'Builder' }],
+        };
+        let releaseProject;
+        const readingProject = new Promise((resolve) => {
+          releaseProject = () =>
+            resolve({ project: { project_id: 'work' }, scan });
+        });
+        rpcMock.mockImplementation(
+          createAppRpcMock({
+            agents: [
+              ALPHA,
+              { id: 'beta', name: 'Beta', current_session_id: 'session-beta' },
+            ],
+            methods: {
+              'project.list': () => ({
+                projects: [{ project_id: 'work', scan }],
+              }),
+              'project.show': () => readingProject,
+            },
+          }),
+        );
+        window.history.replaceState(
+          null,
+          '',
+          '#chat/builder@work/linked-session',
+        );
+        mountApp();
+        await waitForCondition(() =>
+          expect(rpcMock).toHaveBeenCalledWith('project.show', {
+            project_id: 'work',
+          }),
+        );
+        if (choice === 'Agent') await selectPersonalAgent('Beta');
+        else sidebarNavButton('logs').click();
+        await waitForCondition(() =>
+          expect(window.location.hash).toMatch(
+            choice === 'Agent'
+              ? /^#chat\/beta\/session-beta$/
+              : /^#logs(?:\/|$)/,
+          ),
+        );
+        releaseProject();
+        await readingProject;
+        await tick();
+        await tick();
+        expect(window.location.hash).toMatch(
+          choice === 'Agent' ? /^#chat\/beta\/session-beta$/ : /^#logs(?:\/|$)/,
+        );
+        if (choice === 'Agent') {
+          expect(selectedAgentName()).toBe('Beta');
+          expect(localStorage.getItem('vbot.selectedProjectId')).toBeNull();
+        }
+        expect(rpcMock).not.toHaveBeenCalledWith(
+          'chat.history',
+          expect.objectContaining({ agent_id: 'builder@work' }),
+        );
+        if (choice === 'view') {
+          window.history.back();
+          await waitForCondition(() => {
+            expect(window.location.hash).toBe(
+              '#chat/builder@work/linked-session',
+            );
+            expect(rpcMock).toHaveBeenCalledWith(
+              'chat.history',
+              expect.objectContaining({
+                agent_id: 'builder@work',
+                session_id: 'linked-session',
+              }),
+            );
+            expect(document.querySelector('.msg-input')).toBeTruthy();
+          });
+        }
+      },
+    );
 
     it('opens the Session a startup link names and takes the link out of the address bar', async () => {
       rpcMock.mockImplementation(olderSessionRpc());

@@ -17,6 +17,7 @@
   import { onDestroy, onMount } from 'svelte';
 
   import { t } from '$lib/i18n.js';
+  import { isImeComposing } from '$lib/keyboard.js';
   import { useNavigation } from '$lib/navigation.svelte.js';
 
   const noop = () => {};
@@ -63,6 +64,13 @@
 
   function handleDocumentKeydown(event) {
     if (openModals.at(-1) !== stackEntry) {
+      return;
+    }
+
+    if (isImeComposing(event)) {
+      // Keep native IME cancellation, but do not let the same Escape close
+      // a background layer through the app shell's window handler.
+      if (event.key === 'Escape') event.stopPropagation();
       return;
     }
 

@@ -175,6 +175,9 @@ export function createChatViewActions(context) {
 
   const sendStream = async (agent, sessionState, content, options = {}) => {
     const presentation = captureDisplayedSession(sessionState?.key ?? '');
+    const focusAfterSend = context.layout.captureComposerFocus({
+      includeMobile: true,
+    });
     const outcome = await context.chatController.sendMessage(
       sessionState,
       content,
@@ -187,7 +190,7 @@ export function createChatViewActions(context) {
       });
     }
     if (isDisplayedSessionCurrent(presentation)) {
-      await presentSendOutcome(outcome, agent, sessionState);
+      await presentSendOutcome(outcome, agent, sessionState, focusAfterSend);
     }
     return isSent(outcome);
   };
@@ -198,6 +201,9 @@ export function createChatViewActions(context) {
   // Session leaves the draft displayed.
   const sendDraft = async (agent, draft, content, options = {}) => {
     const presentation = captureDisplayedSession(draft.key);
+    const focusAfterSend = context.layout.captureComposerFocus({
+      includeMobile: true,
+    });
     const outcome = await context.chatController.sendToNewSession(
       draft,
       content,
@@ -221,7 +227,7 @@ export function createChatViewActions(context) {
         )
       : isDisplayedSessionCurrent(presentation);
     if (shown) {
-      await presentSendOutcome(outcome, agent, sessionState);
+      await presentSendOutcome(outcome, agent, sessionState, focusAfterSend);
     }
     if (!isSent(outcome)) {
       return false;
@@ -229,10 +235,15 @@ export function createChatViewActions(context) {
     return sessionState ? { draftKey: sessionState.key } : true;
   };
 
-  const presentSendOutcome = async (outcome, agent, sessionState) => {
+  const presentSendOutcome = async (
+    outcome,
+    agent,
+    sessionState,
+    focusAfterSend,
+  ) => {
     if (outcome.kind === 'move') {
       await context.navigation.moveSessionToAgent(outcome.move);
-      context.layout.requestComposerFocus({ includeMobile: true });
+      focusAfterSend();
     } else if (outcome.kind === 'switch') {
       const targetAgentId = outcome.sessionSwitch.targetAgentId || agent.id;
       if (targetAgentId !== context.chatState.selectedAgentId) {
@@ -243,10 +254,10 @@ export function createChatViewActions(context) {
         targetAgentId,
         outcome.sessionSwitch.sessionId,
       );
-      context.layout.requestComposerFocus({ includeMobile: true });
+      focusAfterSend();
     } else if (outcome.kind === 'draft') {
       if (context.navigation.showAgentDraft(outcome.agentAddress)) {
-        context.layout.requestComposerFocus({ includeMobile: true });
+        focusAfterSend();
       } else {
         showChatToast(outcome.reply);
       }

@@ -109,6 +109,7 @@
     reportClientMetrics,
   } from '$lib/api.js';
   import { startClientMetrics } from '$lib/clientMetrics.js';
+  import { parseAgentAddress } from '$lib/agentAddress.js';
   import { isWebuiOutdated } from '$lib/webuiBuild.js';
   import {
     AUTOSAVE_STILL_SAVING_MS,
@@ -441,12 +442,27 @@
   let pendingSessionNavigation = $state(null);
   let chatRestoreRequestId = 0;
   let lastChatLocation = null;
+  let initialChatProjectCatalogSettled = $state(false);
+
+  // A copied Project link has no selection metadata. Wait until its Team is
+  // known before deciding whether it selects a member or views a hidden owner.
+  const chatLinkWaitingForProjects = (location) =>
+    !selection.projectsLoaded &&
+    !initialChatProjectCatalogSettled &&
+    !location.extra?.selection &&
+    Boolean(parseAgentAddress(location.place[0]).projectId);
 
   // Restores wait for the Agent roster, so an entry's Agent is known when
   // Chat applies it.
   $effect.pre(() => {
     const location = navigator.location;
-    if (location.view !== 'chat' || selection.agents.length === 0) return;
+    if (location.view !== 'chat') {
+      pendingSessionNavigation = null;
+      lastChatLocation = null;
+      return;
+    }
+    if (selection.agents.length === 0 || chatLinkWaitingForProjects(location))
+      return;
     untrack(() => {
       const previous = lastChatLocation;
       lastChatLocation = location;
@@ -504,6 +520,12 @@
   const handleChatSessionNavigation = (session, { replace = false } = {}) => {
     chatShownSession = session ?? null;
     if (!session) return false;
+    if (
+      replace &&
+      activeViewId === 'chat' &&
+      chatLinkWaitingForProjects(navigator.location)
+    )
+      return false;
     const place = [session.agentId, session.sessionId];
     const extra = chatExtra(session.subAgent);
     return replace || activeViewId !== 'chat'
@@ -789,7 +811,9 @@
 
     // Load the project list for the chat dropdown (best-effort; the chat works
     // identity-only when this fails).
-    selection.loadProjects();
+    void selection.loadProjects().finally(() => {
+      initialChatProjectCatalogSettled = true;
+    });
     // Voice routing and other non-Chat views also consume the shared Agent
     // roster, so seed it at app mount instead of relying on ChatView having
     // mounted first.

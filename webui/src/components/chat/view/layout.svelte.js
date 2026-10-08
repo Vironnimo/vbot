@@ -1,5 +1,31 @@
 export function createChatViewLayout(context) {
   let composerFocusRequest = $state(0);
+  let composerFocusSequence = 0;
+  let focusGeneration = 0;
+
+  const cancelComposerFocus = () => {
+    focusGeneration += 1;
+    // Also retire a request waiting for the Composer's next DOM tick.
+    composerFocusRequest = 0;
+  };
+
+  $effect(() => {
+    if (!context.active || !context.interactive) cancelComposerFocus();
+  });
+
+  $effect(() => {
+    if (typeof document === 'undefined') return;
+    // Capture runs before the navigation click's handler creates its intent.
+    // Later input and programmatic focus (such as a dialog) take precedence.
+    const events = ['pointerdown', 'keydown', 'click', 'focusin'];
+    for (const event of events)
+      document.addEventListener(event, cancelComposerFocus, true);
+    return () => {
+      cancelComposerFocus();
+      for (const event of events)
+        document.removeEventListener(event, cancelComposerFocus, true);
+    };
+  });
 
   // Live height of the floating composer stack over the timeline. The
   // surface exposes it as a CSS variable so the timeline reserves matching
@@ -29,6 +55,7 @@ export function createChatViewLayout(context) {
   const MOBILE_CHAT_MEDIA_QUERY = '(max-width: 640px)';
 
   const requestComposerFocus = ({ includeMobile = false } = {}) => {
+    cancelComposerFocus();
     if (!context.active || !context.interactive) return;
     const mobile =
       typeof window !== 'undefined' &&
@@ -37,7 +64,19 @@ export function createChatViewLayout(context) {
     if (!includeMobile && mobile) {
       return;
     }
-    composerFocusRequest += 1;
+    composerFocusRequest = ++composerFocusSequence;
+  };
+
+  // An async navigation keeps only this one-use focus intent, never the right
+  // to focus whichever Session or area happens to be visible when it finishes.
+  const captureComposerFocus = (options = {}) => {
+    cancelComposerFocus();
+    const generation = focusGeneration;
+    const eligible = context.active && context.interactive;
+    return () => {
+      if (eligible && generation === focusGeneration)
+        requestComposerFocus(options);
+    };
   };
 
   // History normally arrives quickly enough that loading feedback would only
@@ -67,6 +106,8 @@ export function createChatViewLayout(context) {
     return () => clearTimeout(timeoutId);
   });
   return {
+    cancelComposerFocus,
+    captureComposerFocus,
     get composerFocusRequest() {
       return composerFocusRequest;
     },

@@ -162,31 +162,45 @@ describe('ChatView slash commands', () => {
   });
 
   describe('navigation commands', () => {
-    it.each([
+    it.each(
       [
-        '/handoff',
-        {
-          command: 'handoff',
-          session_id: 'session-handoff',
-          agent_id: 'alpha',
-        },
-        ['alpha', 'Alpha'],
-      ],
-      [
-        '/handoff beta',
-        { command: 'handoff', session_id: 'session-handoff', agent_id: 'beta' },
-        ['beta', 'Beta'],
-      ],
-      [
-        // `/agent` moves the current Session: the same Session id opens under
-        // the target Agent.
-        '/agent beta',
-        { command: 'agent', session_id: 'session-1', agent_id: 'beta' },
-        ['beta', 'Beta'],
-      ],
-    ])(
-      '%s opens the Session its result names',
-      async (content, data, [agentId, agentName]) => {
+        [
+          '/handoff',
+          {
+            command: 'handoff',
+            session_id: 'session-handoff',
+            agent_id: 'alpha',
+          },
+          ['alpha', 'Alpha'],
+        ],
+        [
+          '/handoff beta',
+          {
+            command: 'handoff',
+            session_id: 'session-handoff',
+            agent_id: 'beta',
+          },
+          ['beta', 'Beta'],
+        ],
+        [
+          // `/agent` moves the current Session: the same Session id opens under
+          // the target Agent.
+          '/agent beta',
+          { command: 'agent', session_id: 'session-1', agent_id: 'beta' },
+          ['beta', 'Beta'],
+        ],
+      ].flatMap(([content, data, target]) =>
+        [false, true].map((focusChanged) => ({
+          content,
+          data,
+          target,
+          focusChanged,
+        })),
+      ),
+    )(
+      '$content opens the Session its result names (later focus: $focusChanged)',
+      async ({ content, data, target: [agentId, agentName], focusChanged }) => {
+        const [response, resolveResponse] = deferred();
         const agents = [
           createAgent(),
           createAgent({
@@ -202,12 +216,7 @@ describe('ChatView slash commands', () => {
               'session-handoff': [message('handoff-reply', 'Handoff reply')],
               'beta-current': [message('beta-reply', 'Beta current reply')],
             },
-            streamHandler: streamResponses({
-              [content]: handledCommand('Switched.', {
-                output: data.command === 'agent' ? 'action' : undefined,
-                data,
-              }),
-            }),
+            streamHandler: streamResponses({ [content]: response }),
           }),
         );
         // App's flow: `onAgentSelected` returns as `sharedSelectedAgentId`.
@@ -215,6 +224,16 @@ describe('ChatView slash commands', () => {
         await chat.mountChat(parent.props(['agent'], { sharedAgents: agents }));
 
         sendComposerMessage(content);
+        await waitForCondition(() => streamedContents().includes(content));
+        const laterControl = document.createElement('button');
+        document.body.append(laterControl);
+        if (focusChanged) laterControl.focus();
+        resolveResponse(
+          handledCommand('Switched.', {
+            output: data.command === 'agent' ? 'action' : undefined,
+            data,
+          }),
+        );
         await waitForCondition(
           () =>
             historyReads(data.session_id, agentId) > 0 &&
@@ -236,50 +255,71 @@ describe('ChatView slash commands', () => {
         });
         expect(historyReads('beta-current')).toBe(0);
         expect(subscribeRunEventsMock).not.toHaveBeenCalled();
+        await settle(2);
+        expect(document.activeElement).toBe(
+          focusChanged ? laterControl : document.querySelector('.msg-input'),
+        );
       },
     );
 
-    it('shows a draft for /new, keeps it for a command without a Session and creates the Session with the next message', async () => {
-      rpcMock.mockImplementation(
-        createChatRpcMock({
-          streamHandler: streamResponses({
-            '/new': handledCommand('', { data: { command: 'new' } }),
-            '/status': handledCommand('Draft status', {
-              output: 'transient',
-              data: { command: 'status', session_id: null },
+    it.each([false, true])(
+      'shows a draft for /new, keeps it for a command without a Session and creates the Session with the next message (later focus: %s)',
+      async (focusChanged) => {
+        const [newResponse, resolveNew] = deferred();
+        rpcMock.mockImplementation(
+          createChatRpcMock({
+            streamHandler: streamResponses({
+              '/new': newResponse,
+              '/status': handledCommand('Draft status', {
+                output: 'transient',
+                data: { command: 'status', session_id: null },
+              }),
+              'First draft message': {
+                ...runningRun('run-new'),
+                session_id: 'created-alpha',
+              },
             }),
-            'First draft message': {
-              ...runningRun('run-new'),
-              session_id: 'created-alpha',
-            },
           }),
-        }),
-      );
-      await chat.mountChat();
-      const alphaSessionId = () =>
-        testChatStateRefs[0].agents[0].current_session_id;
+        );
+        await chat.mountChat();
+        const alphaSessionId = () =>
+          testChatStateRefs[0].agents[0].current_session_id;
 
-      sendComposerMessage('/new');
-      await waitForCondition(() => alphaSessionId() === '');
-      expect(document.body.textContent).not.toContain('Hello');
-      expect(toastText()).toBeUndefined();
+        sendComposerMessage('/new');
+        await waitForCondition(() => streamedContents().includes('/new'));
+        const laterControl = document.createElement('button');
+        document.body.append(laterControl);
+        if (focusChanged) laterControl.focus();
+        resolveNew(handledCommand('', { data: { command: 'new' } }));
+        await waitForCondition(() => alphaSessionId() === '');
+        expect(document.body.textContent).not.toContain('Hello');
+        expect(toastText()).toBeUndefined();
+        await settle(2);
+        expect(document.activeElement).toBe(
+          focusChanged ? laterControl : document.querySelector('.msg-input'),
+        );
 
-      sendComposerMessage('/status');
-      await waitForCondition(() =>
-        document
-          .querySelector('.transient-card')
-          ?.textContent.includes('Draft status'),
-      );
-      expect(alphaSessionId()).toBe('');
+        sendComposerMessage('/status');
+        await waitForCondition(() =>
+          document
+            .querySelector('.transient-card')
+            ?.textContent.includes('Draft status'),
+        );
+        expect(alphaSessionId()).toBe('');
 
-      sendComposerMessage('First draft message');
-      await waitForCondition(() => alphaSessionId() === 'created-alpha');
-      expect(rpcCalls('chat.stream')).toEqual([
-        { agent_id: 'alpha', session_id: 'session-1', content: '/new' },
-        { agent_id: 'alpha', new_session: {}, content: '/status' },
-        { agent_id: 'alpha', new_session: {}, content: 'First draft message' },
-      ]);
-    });
+        sendComposerMessage('First draft message');
+        await waitForCondition(() => alphaSessionId() === 'created-alpha');
+        expect(rpcCalls('chat.stream')).toEqual([
+          { agent_id: 'alpha', session_id: 'session-1', content: '/new' },
+          { agent_id: 'alpha', new_session: {}, content: '/status' },
+          {
+            agent_id: 'alpha',
+            new_session: {},
+            content: 'First draft message',
+          },
+        ]);
+      },
+    );
 
     it('does not apply stale command navigation after the user selects another Agent', async () => {
       const [moveResponse, resolveMove] = deferred();

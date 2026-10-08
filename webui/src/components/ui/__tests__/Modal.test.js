@@ -117,43 +117,76 @@ describe('Modal', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('lets only the newest of stacked dialogs answer Escape and Tab', async () => {
-    const outerClose = vi.fn();
-    const onInnerClose = vi.fn();
-    render({ onClose: outerClose });
-    const inner = mount(Modal, {
-      target: document.body,
-      props: {
-        title: 'Choose folder',
-        body: snippet(
-          '<div class="modal-body"><button class="inner-action">Pick</button></div>',
-        ),
-        onClose: onInnerClose,
-      },
-    });
-    flushSync();
-    const innerClose = document.body
-      .querySelectorAll('.modal')[1]
-      .querySelector('.modal-close');
-    innerClose.focus();
+  it.each([
+    ['isComposing', { isComposing: true }],
+    ['legacy keyCode 229', { keyCode: 229 }],
+  ])(
+    'lets only the newest of stacked dialogs answer shortcuts outside IME (%s)',
+    async (_name, composition) => {
+      const outerClose = vi.fn();
+      const onInnerClose = vi.fn();
+      render({ onClose: outerClose });
+      const inner = mount(Modal, {
+        target: document.body,
+        props: {
+          title: 'Choose folder',
+          body: snippet(
+            '<div class="modal-body"><input class="inner-draft" /><button class="inner-action">Pick</button></div>',
+          ),
+          onClose: onInnerClose,
+        },
+      });
+      flushSync();
+      const innerClose = document.body
+        .querySelectorAll('.modal')[1]
+        .querySelector('.modal-close');
+      innerClose.focus();
 
-    // Tab between the inner dialog's own controls stays the browser's move.
-    const tab = new KeyboardEvent('keydown', {
-      key: 'Tab',
-      bubbles: true,
-      cancelable: true,
-    });
-    innerClose.dispatchEvent(tab);
-    expect(tab.defaultPrevented).toBe(false);
-    expect(document.activeElement).toBe(innerClose);
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-    expect(onInnerClose).toHaveBeenCalledTimes(1);
-    expect(outerClose).not.toHaveBeenCalled();
+      // Tab between the inner dialog's own controls stays the browser's move.
+      const tab = new KeyboardEvent('keydown', {
+        key: 'Tab',
+        bubbles: true,
+        cancelable: true,
+      });
+      innerClose.dispatchEvent(tab);
+      expect(tab.defaultPrevented).toBe(false);
+      expect(document.activeElement).toBe(innerClose);
 
-    await unmount(inner);
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-    expect(outerClose).toHaveBeenCalledTimes(1);
-  });
+      const draft = document.body.querySelector('.inner-draft');
+      draft.value = 'unfinished input';
+      draft.focus();
+      const composingEscape = new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+        ...composition,
+      });
+      const backgroundKeydown = vi.fn();
+      window.addEventListener('keydown', backgroundKeydown);
+      try {
+        draft.dispatchEvent(composingEscape);
+      } finally {
+        window.removeEventListener('keydown', backgroundKeydown);
+      }
+      expect(backgroundKeydown).not.toHaveBeenCalled();
+      expect(composingEscape.defaultPrevented).toBe(false);
+      expect(onInnerClose).not.toHaveBeenCalled();
+      expect(outerClose).not.toHaveBeenCalled();
+      expect(document.body.querySelectorAll('[role="dialog"]')).toHaveLength(2);
+      expect(document.activeElement).toBe(draft);
+      expect(draft.value).toBe('unfinished input');
+
+      draft.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      );
+      expect(onInnerClose).toHaveBeenCalledTimes(1);
+      expect(outerClose).not.toHaveBeenCalled();
+
+      await unmount(inner);
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      expect(outerClose).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('blocks every close path while closeDisabled', () => {
     const onClose = vi.fn();

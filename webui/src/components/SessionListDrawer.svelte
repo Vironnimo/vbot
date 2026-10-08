@@ -80,6 +80,9 @@
     // agentAddress } so ChatView can navigate if it was viewing the removed
     // session (#2).
     onSessionDeleted = () => {},
+    // Optional focus intent for a confirmed delete. Captured after the dialog
+    // restores focus, passed to completion, and released on success or error.
+    onSessionDeleteStarted = null,
     // Called with (agentAddress, sessionId, effectivePolicy) after a Session
     // Compaction Policy is saved, so Chat applies it without another read.
     onCompactionPolicyChange = () => {},
@@ -104,6 +107,9 @@
     },
     get onSessionDeleted() {
       return onSessionDeleted;
+    },
+    get onSessionDeleteStarted() {
+      return onSessionDeleteStarted;
     },
     get onCompactionPolicyChange() {
       return onCompactionPolicyChange;

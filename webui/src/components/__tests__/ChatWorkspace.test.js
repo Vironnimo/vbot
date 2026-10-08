@@ -5,6 +5,7 @@ import {
   rpcMock,
   createChatRpcMock,
   createAgent,
+  getSessionMock,
   listSessionsMock,
   message,
   selectAgentFromPicker,
@@ -843,37 +844,62 @@ describe('ChatWorkspace', () => {
       ).toEqual([]);
     });
 
-    it('completes its own deletion when the server event arrives first', async () => {
-      let props;
-      props = mountDeletableWorkspace({
-        beforeDeleteResponse: async () => {
-          // The WebSocket echo overtakes the delete response.
-          props.sessionDeletion = serverDeletion();
-          flushSync();
-          await waitForCondition(() =>
-            pane(0).textContent.includes('Second conversation sentinel'),
-          );
-        },
-      });
-      await waitForCondition(() => deletedHistoryReads() > 0);
-      const navigationReports = props.onSessionNavigation.mock.calls.length;
+    it.each([
+      { eventFirst: false, laterFocus: false },
+      { eventFirst: true, laterFocus: false },
+      { eventFirst: false, laterFocus: true },
+      { eventFirst: true, laterFocus: true },
+    ])(
+      'completes its own deletion (event first: $eventFirst, later focus: $laterFocus)',
+      async ({ eventFirst, laterFocus }) => {
+        const deletion = Promise.withResolvers();
+        let props;
+        props = mountDeletableWorkspace({
+          beforeDeleteResponse: async () => {
+            if (eventFirst) {
+              // The WebSocket echo overtakes the delete response.
+              props.sessionDeletion = serverDeletion();
+              flushSync();
+              await waitForCondition(() =>
+                pane(0).textContent.includes('Second conversation sentinel'),
+              );
+            }
+            await deletion.promise;
+          },
+        });
+        await waitForCondition(() => deletedHistoryReads() > 0);
+        const navigationReports = props.onSessionNavigation.mock.calls.length;
 
-      await deleteFromDrawer(0, 'First topic');
-      await waitForCondition(
-        () =>
-          props.onSessionNavigation.mock.calls.length > navigationReports &&
-          document.activeElement?.tagName === 'TEXTAREA' &&
-          pane(0).contains(document.activeElement),
-      );
-      const readsAtDeletion = deletedHistoryReads();
-      await settle();
+        await deleteFromDrawer(0, 'First topic');
+        await waitForCondition(() =>
+          rpcMock.mock.calls.some(([method]) => method === 'session.delete'),
+        );
+        const laterControl = document.createElement('button');
+        document.body.append(laterControl);
+        if (laterFocus) laterControl.focus();
+        deletion.resolve();
+        await waitForCondition(
+          () =>
+            props.onSessionNavigation.mock.calls.length > navigationReports &&
+            (laterFocus
+              ? document.activeElement === laterControl
+              : document.activeElement?.tagName === 'TEXTAREA' &&
+                pane(0).contains(document.activeElement)),
+        );
+        const readsAtDeletion = deletedHistoryReads();
+        await settle();
 
-      expect(deletedHistoryReads()).toBe(readsAtDeletion);
-      expect(testChatStateRefs[0].agents[0].current_session_id).toBe(
-        'session-2',
-      );
-      expect(pane(0).textContent).toContain('Second conversation sentinel');
-    });
+        expect(document.activeElement).toBe(
+          laterFocus ? laterControl : pane(0).querySelector('.msg-input'),
+        );
+
+        expect(deletedHistoryReads()).toBe(readsAtDeletion);
+        expect(testChatStateRefs[0].agents[0].current_session_id).toBe(
+          'session-2',
+        );
+        expect(pane(0).textContent).toContain('Second conversation sentinel');
+      },
+    );
   });
 
   it('opens a Session row or an Agent tab in the other area through its context menu', async () => {
@@ -977,6 +1003,111 @@ describe('ChatWorkspace', () => {
       expect.objectContaining({ agentId: 'beta', sessionId: 'session-2' }),
       { replace: false },
     );
+  });
+
+  it('opens a Sub-Agent Session and returns to its parent within the second area', async () => {
+    const agents = [createAgent(), createAgent({ id: 'beta', name: 'Beta' })];
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        agents,
+        sessionMessages: {
+          'session-2': [
+            {
+              id: 'delegation',
+              role: 'assistant',
+              content: null,
+              tool_calls: [
+                {
+                  id: 'child-call',
+                  name: 'subagent',
+                  arguments: {
+                    action: 'run',
+                    agent_id: 'beta',
+                    content: 'Review the work',
+                  },
+                },
+              ],
+            },
+            {
+              id: 'delegation-result',
+              role: 'tool',
+              tool_call_id: 'child-call',
+              name: 'subagent',
+              content: JSON.stringify({
+                ok: true,
+                data: {
+                  agent_id: 'beta',
+                  session_id: 'child-session',
+                  status: 'completed',
+                },
+              }),
+            },
+            message('parent-answer', 'Second-area parent history'),
+          ],
+          'child-session': [message('child-answer', 'Child history sentinel')],
+        },
+      }),
+    );
+    listSessionsMock.mockResolvedValue({
+      sessions: [{ id: 'session-2', title: 'Parent topic' }],
+    });
+    getSessionMock.mockImplementation(async (agentId, sessionId) => ({
+      session:
+        agentId === 'beta' && sessionId === 'child-session'
+          ? {
+              id: sessionId,
+              is_subagent_session: true,
+              subagent_parent: { agent_id: 'alpha', session_id: 'session-2' },
+            }
+          : { id: sessionId, title: 'Parent topic' },
+    }));
+    const onSessionNavigation = vi.fn();
+    harness.mount(
+      {
+        target: document.body,
+        props: {
+          sharedAgents: agents,
+          sharedSelectedAgentId: 'alpha',
+          onSessionNavigation,
+        },
+      },
+      ChatWorkspace,
+    );
+    await waitForCondition(() => pane(0)?.textContent.includes('Hello'));
+    action(0, 'Split view');
+    await waitForCondition(() => button(pane(1), 'Session list'));
+    action(1, 'Session list');
+    await waitForCondition(() => pane(1).querySelector('.session-row__select'));
+    pane(1).querySelector('.session-row__select').click();
+    await waitForCondition(() => button(pane(1), 'Open Sub-Agent Session'));
+    onSessionNavigation.mockClear();
+
+    action(1, 'Open Sub-Agent Session');
+
+    await waitForCondition(() =>
+      pane(1).textContent.includes('Child history sentinel'),
+    );
+    expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      agent_id: 'beta',
+      session_id: 'child-session',
+      limit: 100,
+    });
+    expect(pane(0).textContent).toContain('Hello');
+    expect(pane(0).textContent).not.toContain('Child history sentinel');
+    await waitForCondition(() => button(pane(1), 'Return to parent session'));
+    action(1, 'Return to parent session');
+    await waitForCondition(() =>
+      pane(1).textContent.includes('Second-area parent history'),
+    );
+    expect(pane(1).textContent).not.toContain('Child history sentinel');
+    expect(pane(0).textContent).toContain('Hello');
+    action(1, 'New session');
+    await waitForCondition(
+      () => testChatStateRefs[1].agents[0].current_session_id === '',
+    );
+    expect(testChatStateRefs[1].selectedAgentId).toBe('alpha');
+    expect(pane(0).textContent).toContain('Hello');
+    expect(onSessionNavigation).not.toHaveBeenCalled();
   });
 
   it('resizes with keyboard, clamps widths and restores equal sizes', async () => {
