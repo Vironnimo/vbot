@@ -253,7 +253,15 @@ class UsageRecorder:
             )
             return identifier
 
-        return await self.database.write_async(operation)
+        # A cancel cannot stop an admitted insert; the call it recorded is
+        # settled as cancelled instead of staying started until a restart.
+        identifier, cancelled = await _settled(
+            asyncio.create_task(self.database.write_async(operation))
+        )
+        if cancelled is not None:
+            await self._settle_save(identifier, None, "cancelled")
+            raise cancelled
+        return identifier
 
     async def finish(
         self, call_id: str, usage: Mapping[str, Any] | None = None, *, status: str = "completed"
@@ -285,14 +293,9 @@ class UsageRecorder:
     ) -> dict[str, Any]:
         # Once a response has supplied Usage, cancellation must not discard it
         # while its persistence is waiting for worker admission.
-        pending = asyncio.create_task(self.database.run_async(self._save, call_id, usage, status))
-        cancelled = None
-        while not pending.done():
-            try:
-                await asyncio.shield(pending)
-            except asyncio.CancelledError as error:
-                cancelled = error
-        result = pending.result()
+        result, cancelled = await _settled(
+            asyncio.create_task(self.database.run_async(self._save, call_id, usage, status))
+        )
         if cancelled is not None:
             raise cancelled
         return result
@@ -474,3 +477,16 @@ class UsageRecorder:
             self.database.write(
                 lambda connection: _import_cursor(connection, source_id, source_restore_id, 0)
             )
+
+
+async def _settled[Result](
+    pending: asyncio.Task[Result],
+) -> tuple[Result, asyncio.CancelledError | None]:
+    """Wait for *pending* through any cancellation; return its result and that cancellation."""
+    cancelled = None
+    while not pending.done():
+        try:
+            await asyncio.shield(pending)
+        except asyncio.CancelledError as error:
+            cancelled = error
+    return pending.result(), cancelled

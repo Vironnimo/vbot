@@ -123,18 +123,25 @@ async def test_restart_marks_unfinished_call_interrupted_and_snapshots_cover_it(
 
 
 @pytest.mark.asyncio
-async def test_finish_settles_reported_usage_before_repeated_cancellation(recorder, monkeypatch):
-    identifier = await recorder.start(model="p/m", kind="chat")
+@pytest.mark.parametrize("step", ["start", "finish"])
+async def test_cancelled_writes_settle_before_repeated_cancellation(recorder, monkeypatch, step):
+    """A started call never stays started, and reported Usage is never lost, on cancel."""
+    identifier = await recorder.start(model="p/m", kind="chat") if step == "finish" else None
     entered, release = threading.Event(), threading.Event()
-    original = recorder._save
+    owner, name = (recorder, "_save") if step == "finish" else (recorder.database, "write")
+    original = getattr(owner, name)
 
-    def delayed(*args):
+    def delayed(*args, **kwargs):
         entered.set()
         assert release.wait(timeout=5)
-        return original(*args)
+        return original(*args, **kwargs)
 
-    monkeypatch.setattr(recorder, "_save", delayed)
-    pending = asyncio.create_task(recorder.finish(identifier, {"input_tokens": 8}))
+    monkeypatch.setattr(owner, name, delayed)
+    pending = asyncio.create_task(
+        recorder.finish(identifier, {"input_tokens": 8})
+        if identifier is not None
+        else recorder.start(model="p/m", kind="chat")
+    )
     try:
         assert await asyncio.to_thread(entered.wait, 5)
         pending.cancel()
@@ -146,7 +153,11 @@ async def test_finish_settles_reported_usage_before_repeated_cancellation(record
         release.set()
     with pytest.raises(asyncio.CancelledError):
         await pending
-    assert read_ledger(recorder)[1][0].usage["input_tokens"] == 8
+    [record] = read_ledger(recorder)[1]
+    if step == "finish":
+        assert record.usage["input_tokens"] == 8
+    else:
+        assert record.status == "cancelled"
 
 
 @pytest.mark.asyncio

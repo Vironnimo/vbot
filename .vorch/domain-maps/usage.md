@@ -92,7 +92,9 @@ recorded restore replays once.
 
 Request producers must finish in cleanup even on validation errors and
 cancellation. Response persistence settles before repeated cancellation
-propagates. After a restart, a request still marked `started` becomes
+propagates, and so does `start`: a cancel cannot stop an insert the worker
+already admitted, so `start` waits for it, settles that call as `cancelled`
+and then raises the cancellation. After a restart, a request still marked `started` becomes
 `interrupted`; its counters remain unknown unless previously reported. This
 records dispatch intent, not proof that the Provider received or billed it.
 Inner Adapter transport retries that return no separate Usage are not separate
