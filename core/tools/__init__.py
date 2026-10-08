@@ -97,7 +97,6 @@ from core.tools.shell import (
     SHELL_TOOL_DESCRIPTION,
     SHELL_TOOL_NAME,
     SHELL_TOOL_PARAMETERS,
-    project_shell_tool_definitions,
     register_shell_tool,
 )
 from core.tools.skill import (
@@ -302,7 +301,6 @@ __all__ = [
     "SHELL_TOOL_DESCRIPTION",
     "SHELL_TOOL_NAME",
     "SHELL_TOOL_PARAMETERS",
-    "project_shell_tool_definitions",
     "register_shell_tool",
     "READ_MEDIA_ARTIFACT_KIND",
     "is_tool_result_envelope",

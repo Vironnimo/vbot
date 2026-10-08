@@ -166,10 +166,8 @@ class EvalWorker:
 
     def _route_definitions(self, agent: Any) -> list[dict[str, Any]]:
         from core.tools.image import ANALYZE_IMAGE_TOOL_NAME
-        from core.tools.shell import project_shell_tool_definitions
 
         definitions = self.runtime.system_prompts.provider_tool_definitions(agent)
-        definitions = project_shell_tool_definitions(definitions)
         return [
             dict(definition)
             for definition in definitions

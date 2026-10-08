@@ -30,7 +30,6 @@ from core.tools.shell import (
     SHELL_TOOL_PARAMETERS,
     background_command_statuses,
     command_terminal_result,
-    project_shell_tool_definitions,
     register_shell_tool,
     shell_detail_blocks,
 )
@@ -871,80 +870,6 @@ async def test_statuses_of_handed_off_commands_fold_from_results_and_deliveries(
     }
     assert shell.manager.command_status(terminal_id) == "failed"
     assert shell.manager.command_status("term_unknown") is None
-
-
-@pytest.mark.parametrize(
-    ("offered", "continuation"),
-    [
-        (
-            {"terminal"},
-            "A command still running after 90 seconds, or waiting for input, keeps running in "
-            "a terminal, and its result arrives as a new message when it exits.",
-        ),
-        (
-            set(),
-            "A command still running after 90 seconds keeps running in the background, and its "
-            "result arrives as a new message when it exits.",
-        ),
-    ],
-)
-def test_definition_fits_the_offered_terminal_tool(offered: set[str], continuation: str) -> None:
-    definitions: list[JsonObject] = [
-        {
-            "name": SHELL_TOOL_NAME,
-            "description": SHELL_TOOL_DESCRIPTION,
-            "parameters": SHELL_TOOL_PARAMETERS,
-        },
-        *({"name": name} for name in sorted(offered)),
-    ]
-
-    projected = project_shell_tool_definitions(definitions)[0]
-
-    description = projected["description"]
-    assert continuation in description
-    # The boundary to the terminal Tool appears only where that Tool is offered.
-    assert ("such as REPLs, TUIs and coding-agent CLIs, use terminal." in description) is (
-        "terminal" in offered
-    )
-    assert projected["parameters"] == SHELL_TOOL_PARAMETERS
-
-
-@pytest.mark.parametrize(
-    ("offered", "sentence"),
-    [
-        (
-            {"read", "search_files", "apply_patch", "web_fetch"},
-            "For reading, searching, creating and editing files, use read, search_files and "
-            "apply_patch instead of shell commands; for web pages, use web_fetch.",
-        ),
-        (
-            {"read", "search_files", "write", "edit"},
-            "For reading, searching, creating and editing files, use read, search_files, write "
-            "and edit instead of shell commands.",
-        ),
-        ({"read"}, "For reading files, use read instead of shell commands."),
-        ({"web_fetch"}, "For web pages, use web_fetch."),
-        (set(), None),
-    ],
-)
-def test_definition_names_only_the_offered_file_and_web_tools(
-    offered: set[str], sentence: str | None
-) -> None:
-    definitions: list[JsonObject] = [
-        {
-            "name": SHELL_TOOL_NAME,
-            "description": SHELL_TOOL_DESCRIPTION,
-            "parameters": SHELL_TOOL_PARAMETERS,
-        },
-        *({"name": name} for name in sorted({"terminal", *offered})),
-    ]
-
-    description = project_shell_tool_definitions(definitions)[0]["description"]
-
-    if sentence is not None:
-        assert sentence in description
-    for name in ("read", "search_files", "apply_patch", "write", "edit", "web_fetch"):
-        assert (re.search(rf"\b{name}\b", description) is not None) is (name in offered)
 
 
 def test_definition_states_the_host_shell_and_its_detached_start() -> None:

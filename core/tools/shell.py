@@ -23,7 +23,6 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Coroutine, Sequence
-from copy import deepcopy
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -94,23 +93,10 @@ _SCREEN_ROWS = TERMINAL_MAX_ROWS
 # Windows rejects longer command lines.
 _WINDOWS_COMMAND_LINE_MAX_CHARS = 32_000
 _TERMINAL_TOOL = "terminal"
-_WEB_FETCH_TOOL = "web_fetch"
 
 
 # Definition
 
-
-# The file Tools the description points to, by use; each use names the first of
-# its Tools that is offered. A route offers one file edit dialect: apply_patch,
-# or write and edit. Registry names, literal to avoid importing the file Tools.
-_FILE_TOOL_USES = (
-    ("reading", ("read",)),
-    ("searching", ("search_files",)),
-    ("creating", ("apply_patch", "write")),
-    ("editing", ("apply_patch", "edit")),
-)
-# The Tools a usual request offers alongside the shell: the canonical description's.
-_USUAL_TOOLS = frozenset({"read", "search_files", "apply_patch", _WEB_FETCH_TOOL, _TERMINAL_TOOL})
 
 if sys.platform == "win32":
     _OPENING = (
@@ -127,65 +113,11 @@ else:
     )
     _DETACHED_START = "nohup or a trailing &"
 
-
-def _joined(words: Sequence[str]) -> str:
-    return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
-
-
-def _neighbor_sentence(offered: frozenset[str]) -> str:
-    """Which offered Tools to use instead of shell commands for files and web pages."""
-    uses: list[tuple[str, str]] = []
-    for use, names in _FILE_TOOL_USES:
-        name = next((name for name in names if name in offered), None)
-        if name is not None:
-            uses.append((use, name))
-    parts: list[str] = []
-    if uses:
-        tools = list(dict.fromkeys(name for _, name in uses))
-        parts.append(
-            f"for {_joined([use for use, _ in uses])} files, use {_joined(tools)} "
-            "instead of shell commands"
-        )
-    if _WEB_FETCH_TOOL in offered:
-        parts.append(f"for web pages, use {_WEB_FETCH_TOOL}")
-    if not parts:
-        return ""
-    sentence = "; ".join(parts)
-    return f" {sentence[0].upper()}{sentence[1:]}."
-
-
-def _shell_description(offered: frozenset[str] | None) -> str:
-    """The description for the Tools offered with the shell.
-
-    *offered* None stands for the usual set (``_USUAL_TOOLS``).
-    """
-    offered = _USUAL_TOOLS if offered is None else offered
-    terminal = _TERMINAL_TOOL in offered
-    if terminal:
-        continuation = (
-            f" A command still running after {SHELL_HANDOFF_SECONDS:g} seconds, or waiting for "
-            "input, keeps running in a terminal, and its result arrives as a new message when "
-            "it exits."
-        )
-    else:
-        continuation = (
-            f" A command still running after {SHELL_HANDOFF_SECONDS:g} seconds keeps running "
-            "in the background, and its result arrives as a new message when it exits."
-        )
-    boundary = (
-        " For programs you operate by typing into them, such as REPLs, TUIs and coding-agent "
-        f"CLIs, use {_TERMINAL_TOOL}."
-        if terminal
-        else ""
-    )
-    return (
-        f"{_OPENING}{_neighbor_sentence(offered)} Output is rendered terminal text. No editor or "
-        "credential prompt is available: pass commit messages and answers as arguments."
-        f"{continuation}{boundary}"
-    )
-
-
-SHELL_TOOL_DESCRIPTION = _shell_description(None)
+# The same for every Tool set: what happens to a long or waiting command, and how
+# to answer a prompt, the results say when it happens.
+SHELL_TOOL_DESCRIPTION = (
+    f"{_OPENING} When another tool covers the task, use it instead of a shell command."
+)
 
 _COMMAND_PARAMETER: JsonObject = {
     "type": "string",
@@ -233,8 +165,8 @@ _MODE_PARAMETER: JsonObject = {
         "foreground returns when the command exits, or after "
         f"{SHELL_HANDOFF_SECONDS:g} seconds if it still runs then. background returns at "
         "once; use it for servers, watchers and other commands whose "
-        f"result your next step does not need, instead of {_DETACHED_START}. A background "
-        "command's result arrives as a new message when it exits. Omit for foreground."
+        f"result your next step does not need, instead of {_DETACHED_START}. Omit for "
+        "foreground."
     ),
 }
 
@@ -250,23 +182,6 @@ SHELL_TOOL_PARAMETERS: JsonObject = {
     },
     "required": ["command"],
 }
-
-
-def project_shell_tool_definitions(definitions: list[JsonObject]) -> list[JsonObject]:
-    """Fit the shell definition to one request: the Tools offered with it."""
-    offered = frozenset(str(definition.get("name")) for definition in definitions)
-    description = _shell_description(offered)
-    if description == SHELL_TOOL_DESCRIPTION:
-        return definitions
-    projected: list[JsonObject] = []
-    for definition in definitions:
-        if definition.get("name") != SHELL_TOOL_NAME:
-            projected.append(definition)
-            continue
-        fitted = deepcopy(definition)
-        fitted["description"] = description
-        projected.append(fitted)
-    return projected
 
 
 # Granted credentials
@@ -1256,7 +1171,6 @@ __all__ = [
     "command_terminal_result",
     "format_command_delivery",
     "format_shell_env_usage",
-    "project_shell_tool_definitions",
     "register_shell_tool",
     "shell_detail_blocks",
 ]

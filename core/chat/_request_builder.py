@@ -88,7 +88,6 @@ from core.tools import (
     edit_dialect,
     known_edit_dialect,
     offer_edit_dialect,
-    project_shell_tool_definitions,
     tool_is_ready,
 )
 from core.tools.terminal import project_terminal_tool_definitions
@@ -889,7 +888,6 @@ class RequestBuilder:
         """
 
         tools = offer_edit_dialect(tools, edit_dialect)
-        tools = project_shell_tool_definitions(tools)
         tools = project_terminal_tool_definitions(tools)
         if not any(definition.get("name") == ANALYZE_IMAGE_TOOL_NAME for definition in tools):
             return tools

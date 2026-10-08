@@ -29,7 +29,7 @@ from core.tools.edit import (
 from core.tools.file_state import FileReadState
 from core.tools.read import register_read_tool
 from core.tools.search_files import interpret_search_call, register_search_files_tool
-from core.tools.shell import project_shell_tool_definitions, register_shell_tool
+from core.tools.shell import register_shell_tool
 from core.tools.subagent import _render_subagent_prompt_block, register_subagent_tools
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolContext, ToolRegistry
@@ -231,7 +231,6 @@ class FirstUseFixture:
     def offered_definitions(self, dialect: EditDialect) -> list[dict[str, Any]]:
         """Return the definitions a Model of ``dialect`` is offered, as Chat routes them."""
         definitions = offer_edit_dialect(self.registry.provider_definitions(), dialect)
-        definitions = project_shell_tool_definitions(definitions)
         self.context = replace(
             self.context,
             offered_tools=frozenset(str(definition["name"]) for definition in definitions),

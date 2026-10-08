@@ -125,9 +125,9 @@ def test_definition_follows_flat_action_conventions_within_its_budget(tmp_path: 
         assert rendered.get("strict") is (False if profile == "explicit_non_strict" else None)
 
 
-_DELIVERY = (
-    "For terminals attached to this Session, a program's exit arrives as a new message, and so "
-    "does an interactive program's screen when its output settles after activity."
+_DELIVERIES = (
+    "While it runs, its screen arrives as a new message each time its output settles after "
+    "activity, and so does its exit. Continue with your next step instead of polling with status."
 )
 
 
@@ -136,19 +136,15 @@ _DELIVERY = (
     [
         (
             True,
-            "Start and operate programs in a live terminal: interactive programs you drive by "
-            "typing, such as REPLs, TUIs and coding-agent CLIs, and commands that {shell} left "
-            "running. Run all other commands with {shell}, servers and watchers with its mode "
-            "background. A program keeps running after your turn ends, until it exits or is "
-            "stopped. "
-            f"{_DELIVERY} Screen text is rendered terminal text, not exact file content.",
+            "Start and operate interactive programs you drive by typing, such as REPLs, TUIs and "
+            "coding-agent CLIs. Run all other commands, servers included, with {shell}. A "
+            "program keeps running after your turn ends, until it exits or is stopped.",
         ),
         (
             False,
-            "Start and operate programs in a live terminal: interactive programs you drive by "
-            "typing, such as REPLs, TUIs and coding-agent CLIs. A program keeps running after "
-            f"your turn ends, until it exits or is stopped. {_DELIVERY} Screen text is rendered "
-            "terminal text, not exact file content.",
+            "Start and operate interactive programs you drive by typing, such as REPLs, TUIs and "
+            "coding-agent CLIs. A program keeps running after your turn ends, until it exits or "
+            "is stopped.",
         ),
     ],
 )
@@ -204,6 +200,7 @@ async def test_start_returns_the_first_screen_once_startup_output_settles(
         "terminal_id": data["terminal_id"],
         "state": "running",
         "screen": data["screen"],
+        "next": _DELIVERIES,
     }
     assert data["screen"].splitlines() == ["Welcome", "ready>"]
     assert factory.calls[0][0] == [command or "host-shell"]
@@ -615,6 +612,7 @@ async def test_attach_grants_full_contract_and_detach_only_removes_binding(
         "name": "afk codex",
         "state": "running",
         "attached": "here",
+        "next": _DELIVERIES,
     }
     again = await run({"action": "attach"})
     assert again["data"]["note"] == (

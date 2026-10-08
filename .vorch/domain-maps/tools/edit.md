@@ -37,9 +37,7 @@ History: the retired `edit` Tool is preserved in `archive/edit.zip`
   own registered contract when policy allows it (`chat/request-building.md` ->
   Dispatch). `offered_edit_tool(context)` names the edit Tool a result may point to
   (`apply_patch`, then `edit`, through `ToolContext.offers`; `read`'s change-command
-  refusal and `search_files`' `--replace` note use it). The shell description's
-  file-Tool sentence names the first offered of `apply_patch` and `edit` from the
-  request's definitions (`project_shell_tool_definitions`, `shell.md`).
+  refusal and `search_files`' `--replace` note use it).
 - **Schema:** `path` plus `edits` (at least one item of `old_string`, `new_string`,
   optional `replace_all`), open model-facing schema; unknown root parameters fail
   at dispatch (`edit was not run: ... edit parameters: path (required), edits

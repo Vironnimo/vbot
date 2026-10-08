@@ -110,22 +110,13 @@ _SHELL_NAME = model_tool_name(BASH_TOOL_NAME)
 
 def _terminal_description(*, shell: str | None) -> str:
     """The description for one request: the shell Tool's name when offered."""
-    commands = f", and commands that {shell} left running" if shell else ""
     sentences = [
-        "Start and operate programs in a live terminal: interactive programs you drive by "
-        f"typing, such as REPLs, TUIs and coding-agent CLIs{commands}."
+        "Start and operate interactive programs you drive by typing, such as REPLs, TUIs and "
+        "coding-agent CLIs."
     ]
     if shell:
-        sentences.append(
-            f"Run all other commands with {shell}, servers and watchers with its mode background."
-        )
+        sentences.append(f"Run all other commands, servers included, with {shell}.")
     sentences.append("A program keeps running after your turn ends, until it exits or is stopped.")
-    sentences.append(
-        "For terminals attached to this Session, a program's exit arrives as a new "
-        "message, and so does an interactive program's screen when its output settles "
-        "after activity."
-    )
-    sentences.append("Screen text is rendered terminal text, not exact file content.")
     return " ".join(sentences)
 
 
@@ -533,7 +524,10 @@ async def _handle_start(
         )
     if requested_id is not None:
         notes.append(f"start assigns the terminal_id: use {terminal_id}, not {requested_id}.")
-    return tool_success(_with_notes(data, notes))
+    data = _with_notes(data, notes)
+    if data["state"] == "running":
+        data["next"] = _DELIVERIES_TEXT
+    return tool_success(data)
 
 
 def _handle_list(terminal_manager: TerminalManager, context: ToolContext) -> JsonObject:
@@ -573,6 +567,8 @@ def _handle_attach(
         data["note"] = "A command stays attached to the Session that ran it; nothing changed."
     elif not changed:
         data["note"] = "The terminal was already attached to this Session; nothing changed."
+    elif data["state"] == "running":
+        data["next"] = _DELIVERIES_TEXT
     return tool_success(data)
 
 
@@ -902,6 +898,13 @@ async def _command_result(
             lambda: terminal_manager.acknowledge_exit(terminal_id, owner)
         )
     return data
+
+
+# What an attached interactive program sends on its own; Agents polled for it.
+_DELIVERIES_TEXT = (
+    "While it runs, its screen arrives as a new message each time its output settles after "
+    "activity, and so does its exit. Continue with your next step instead of polling with status."
+)
 
 
 def _reply_pending_text(terminal_id: str) -> str:

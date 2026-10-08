@@ -141,7 +141,7 @@ async def test_ambiguous_tool_spelling_never_dispatches_a_harness_alias(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_shell_definition_fits_the_offered_tools(tmp_path: Path) -> None:
+async def test_shell_definition_carries_the_host_shell_name(tmp_path: Path) -> None:
     tools = ToolRegistry()
     tools.register(
         SHELL_TOOL_NAME,
@@ -155,12 +155,9 @@ async def test_shell_definition_fits_the_offered_tools(tmp_path: Path) -> None:
     await build_chat_loop(runtime).send("coder", "Run it", session_id="session-one")
 
     shell = runtime.adapter.requests[0]["kwargs"]["tools"][0]
-    # The Provider request carries the name the Model knows on this host; this
-    # Agent is offered neither file Tools nor the terminal Tool.
+    # The Provider request carries the name the Model knows on this host.
     assert shell["name"] == model_tool_name(SHELL_TOOL_NAME)
-    assert "read" not in shell["description"]
-    assert "use terminal" not in shell["description"]
-    assert "keeps running in the background" in shell["description"]
+    assert shell["description"] == SHELL_TOOL_DESCRIPTION
     assert shell["parameters"]["properties"]["mode"]["enum"] == ["foreground", "background"]
 
 
