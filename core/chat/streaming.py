@@ -23,7 +23,7 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderStreamingUnsupportedError,
 )
-from core.providers.reasoning import merge_reasoning_meta
+from core.providers.reasoning import merge_reasoning_meta, split_inline_reasoning
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     REASONING_DELTA_EVENT,
@@ -950,94 +950,6 @@ def _joined_or_none(parts: list[str]) -> str | None:
     if not parts:
         return None
     return "".join(parts)
-
-
-# Inline reasoning tag names some Models emit in their content instead of using
-# a dedicated reasoning field (observed behind Ollama).
-_INLINE_THINKING_TAG_NAMES = ("think", "thinking", "reasoning")
-# Request-only replay markup adapters inject into historical Assistant content.
-# Models may echo it; strip on ingest and never promote it to ``reasoning``.
-_DISCARD_LEADING_TAG_NAMES = ("reasoning_history",)
-
-
-def split_inline_reasoning(
-    content: str | None, reasoning: str | None
-) -> tuple[str | None, str | None]:
-    """Move inline reasoning markup out of a Model's answer content.
-
-    Every finished Model response passes through here, so Chat, Compaction and
-    every other kernel request see the same answer. Two shapes are reasoning:
-
-    - Leading ``<think>`` / ``<thinking>`` / ``<reasoning>`` blocks. An
-      unclosed leading block is reasoning up to the truncation point.
-    - Text before a closing tag that has no opening tag in front of it: chat
-      templates that open the thinking block in the prompt leave only
-      ``...</think>answer`` in the content.
-
-    Literal tag text inside a normal answer survives, since its opening tag
-    precedes the closing one. Request-only ``<reasoning_history>`` wrappers are
-    discarded (adapters inject those on replay, and Models sometimes echo
-    them). Extracted reasoning is appended to *reasoning*. Returns
-    ``(content, reasoning)``; an empty block with no history markup changes
-    nothing.
-    """
-
-    if not content:
-        return (content, reasoning)
-    remaining = content
-    thinking_parts: list[str] = []
-    discarded_history = False
-    orphan = _orphan_closing_thinking_tag(remaining)
-    if orphan is not None:
-        orphan_index, orphan_tag = orphan
-        thinking_parts.append(remaining[:orphan_index])
-        remaining = remaining[orphan_index + len(orphan_tag) + 3 :]
-    while True:
-        stripped = remaining.lstrip()
-        tag = next(
-            (
-                name
-                for name in (*_DISCARD_LEADING_TAG_NAMES, *_INLINE_THINKING_TAG_NAMES)
-                if stripped.startswith(f"<{name}>")
-            ),
-            None,
-        )
-        if tag is None:
-            break
-        is_history_markup = tag in _DISCARD_LEADING_TAG_NAMES
-        inner_start = len(remaining) - len(stripped) + len(tag) + 2
-        close_index = remaining.find(f"</{tag}>", inner_start)
-        if close_index == -1:
-            if is_history_markup:
-                discarded_history = True
-            else:
-                thinking_parts.append(remaining[inner_start:])
-            remaining = ""
-            break
-        if is_history_markup:
-            discarded_history = True
-        else:
-            thinking_parts.append(remaining[inner_start:close_index])
-        remaining = remaining[close_index + len(tag) + 3 :]
-    thinking = "\n".join(part for part in thinking_parts if part.strip())
-    if not thinking.strip():
-        if not discarded_history and orphan is None:
-            return (content, reasoning)
-        return (remaining.strip() or None, reasoning)
-    merged = f"{reasoning}\n{thinking}" if reasoning else thinking
-    return (remaining.strip() or None, merged)
-
-
-def _orphan_closing_thinking_tag(content: str) -> tuple[int, str] | None:
-    """Return the first closing thinking tag no opening tag precedes, if any."""
-    first: tuple[int, str] | None = None
-    for name in _INLINE_THINKING_TAG_NAMES:
-        close_index = content.find(f"</{name}>")
-        if close_index == -1 or f"<{name}>" in content[:close_index]:
-            continue
-        if first is None or close_index < first[0]:
-            first = (close_index, name)
-    return first
 
 
 async def _close_async_iterator(iterator: AsyncIterator[JsonObject]) -> None:

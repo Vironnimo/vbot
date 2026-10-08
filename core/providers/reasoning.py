@@ -34,6 +34,11 @@ _BAD_EFFORT_STATUS_CODE = 400
 # The one effort value that means "do not reason"; never flagged as swallowed.
 _NONE_EFFORT = "none"
 
+INLINE_THINKING_TAG_NAMES = ("think", "thinking", "reasoning")
+"""Tags some Models wrap their reasoning in inside the answer content instead of
+using a reasoning field (observed behind Ollama); chat templates that open the
+block in the prompt leave only the closing tag."""
+
 ReasoningReplayPolicy = Literal["none", "current_run", "tool_turns", "full_history"]
 """How persisted assistant ``reasoning``/``reasoning_meta`` replays natively.
 
@@ -717,3 +722,89 @@ def warn_effort_swallowed(
         model_id,
         _rendered_reasoning_label(rendered),
     )
+
+
+# Request-only replay markup adapters inject into historical Assistant content.
+# Models may echo it; strip on ingest and never promote it to ``reasoning``.
+_DISCARD_LEADING_TAG_NAMES = ("reasoning_history",)
+
+
+def split_inline_reasoning(
+    content: str | None, reasoning: str | None
+) -> tuple[str | None, str | None]:
+    """Move inline reasoning markup out of a Model's answer content.
+
+    Every finished Model response passes through here (``core/chat/streaming.py``),
+    so Chat, Compaction and every other kernel request see the same answer, and
+    the wire learning detects inline reasoning with the same rule. Two shapes are reasoning:
+
+    - Leading ``<think>`` / ``<thinking>`` / ``<reasoning>`` blocks. An
+      unclosed leading block is reasoning up to the truncation point.
+    - Text before a closing tag that has no opening tag in front of it: chat
+      templates that open the thinking block in the prompt leave only
+      ``...</think>answer`` in the content.
+
+    Literal tag text inside a normal answer survives, since its opening tag
+    precedes the closing one. Request-only ``<reasoning_history>`` wrappers are
+    discarded (adapters inject those on replay, and Models sometimes echo
+    them). Extracted reasoning is appended to *reasoning*. Returns
+    ``(content, reasoning)``; an empty block with no history markup changes
+    nothing.
+    """
+
+    if not content:
+        return (content, reasoning)
+    remaining = content
+    thinking_parts: list[str] = []
+    discarded_history = False
+    orphan = _orphan_closing_thinking_tag(remaining)
+    if orphan is not None:
+        orphan_index, orphan_tag = orphan
+        thinking_parts.append(remaining[:orphan_index])
+        remaining = remaining[orphan_index + len(orphan_tag) + 3 :]
+    while True:
+        stripped = remaining.lstrip()
+        tag = next(
+            (
+                name
+                for name in (*_DISCARD_LEADING_TAG_NAMES, *INLINE_THINKING_TAG_NAMES)
+                if stripped.startswith(f"<{name}>")
+            ),
+            None,
+        )
+        if tag is None:
+            break
+        is_history_markup = tag in _DISCARD_LEADING_TAG_NAMES
+        inner_start = len(remaining) - len(stripped) + len(tag) + 2
+        close_index = remaining.find(f"</{tag}>", inner_start)
+        if close_index == -1:
+            if is_history_markup:
+                discarded_history = True
+            else:
+                thinking_parts.append(remaining[inner_start:])
+            remaining = ""
+            break
+        if is_history_markup:
+            discarded_history = True
+        else:
+            thinking_parts.append(remaining[inner_start:close_index])
+        remaining = remaining[close_index + len(tag) + 3 :]
+    thinking = "\n".join(part for part in thinking_parts if part.strip())
+    if not thinking.strip():
+        if not discarded_history and orphan is None:
+            return (content, reasoning)
+        return (remaining.strip() or None, reasoning)
+    merged = f"{reasoning}\n{thinking}" if reasoning else thinking
+    return (remaining.strip() or None, merged)
+
+
+def _orphan_closing_thinking_tag(content: str) -> tuple[int, str] | None:
+    """Return the first closing thinking tag no opening tag precedes, if any."""
+    first: tuple[int, str] | None = None
+    for name in INLINE_THINKING_TAG_NAMES:
+        close_index = content.find(f"</{name}>")
+        if close_index == -1 or f"<{name}>" in content[:close_index]:
+            continue
+        if first is None or close_index < first[0]:
+            first = (close_index, name)
+    return first

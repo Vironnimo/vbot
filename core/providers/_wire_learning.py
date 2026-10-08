@@ -16,7 +16,8 @@ Every request path learns the same way. A request
 arrives; a stream (:func:`stream_learning_from_rejections`) when its first
 delta arrives, so a rejection that a wire reports as an in-band stream event
 (the Codex WebSocket) is learned like an HTTP rejection. A stream also records
-that the Model returned reasoning.
+that the Model returned reasoning, and that it ignores reasoning off when it
+reasons although the request turned reasoning off.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from core.providers.errors import ProviderAuthError, ProviderError
-from core.providers.reasoning import detail_names_rejected_effort
+from core.providers.reasoning import detail_names_rejected_effort, split_inline_reasoning
 from core.providers.reasoning_dialects import ReasoningCarriers, dialect_carriers
 from core.providers.wire_profile import WireProfile
 from core.providers.wire_profiles import WireBinding
@@ -97,6 +98,10 @@ _REASONING_META_PROOF_KEYS: tuple[str, ...] = (
 ``reasoning_details``/``encrypted_content``, Responses reasoning items and
 Messages thinking blocks. Response ids, the raw Responses output and Gemini
 parts are returned with or without reasoning."""
+
+_INLINE_REASONING_WATCH_CHARACTERS = 64 * 1024
+"""How much answer content an off request is watched for inline reasoning;
+Models put it at the start, so a longer answer is no longer checked."""
 
 
 @dataclass(frozen=True)
@@ -204,7 +209,9 @@ async def stream_learning_from_rejections(
     or an in-band error event) is learned and retried exactly like
     :func:`execute_learning_from_rejections`; once a delta was yielded, every
     error propagates unchanged. A delta carrying reasoning records that the
-    Model returned reasoning.
+    Model returned reasoning; when the request turned reasoning off, reasoning
+    in a delta or inline in the answer (``split_inline_reasoning``) records
+    that the Model ignores reasoning off.
     """
 
     async def establish() -> tuple[AsyncGenerator[dict[str, Any]], dict[str, Any] | None]:
@@ -226,6 +233,7 @@ async def stream_learning_from_rejections(
         provider_label=provider_label,
     )
     returned_reasoning = False
+    off_watch = _OffWatch() if _requests_off(payload, wire.profile(model_id)) else None
     async with aclosing(stream):
         if first is None:
             return
@@ -234,6 +242,9 @@ async def stream_learning_from_rejections(
             if not returned_reasoning and _delta_returns_reasoning(delta):
                 returned_reasoning = True
                 wire.observe_reasoning_returned(model_id)
+            if off_watch is not None and off_watch.reasons(delta, returned_reasoning):
+                off_watch = None
+                wire.observe_off_ignored(model_id)
             yield delta
             try:
                 delta = await anext(stream)
@@ -268,6 +279,36 @@ def _learn(detail: str, payload: Mapping[str, Any], profile: WireProfile) -> _Le
         switch = ".".join(carriers.off_switch)
         return _Lesson("effort", ("none",), f"reasoning off switch {switch}={carriers.off_value!r}")
     return None
+
+
+def _requests_off(payload: Mapping[str, Any], profile: WireProfile) -> bool:
+    """Whether ``payload`` turns reasoning off: a ``none`` effort or the off switch."""
+
+    carriers = dialect_carriers(profile.reasoning.dialect)
+    if carriers.effort and _value_at(payload, carriers.effort) == "none":
+        return True
+    return (
+        bool(carriers.off_switch)
+        and carriers.off_value is not None
+        and _value_at(payload, carriers.off_switch) == carriers.off_value
+    )
+
+
+class _OffWatch:
+    """Watch a stream whose request turned reasoning off for reasoning anyway."""
+
+    def __init__(self) -> None:
+        self._content = ""
+
+    def reasons(self, delta: Mapping[str, Any], returned_reasoning: bool) -> bool:
+        if returned_reasoning:
+            return True
+        text = delta.get("text") if delta.get("type") == "content_delta" else None
+        if not isinstance(text, str) or len(self._content) >= _INLINE_REASONING_WATCH_CHARACTERS:
+            return False
+        self._content += text
+        # Every reasoning tag ends with ``>``; only such a delta can complete one.
+        return ">" in text and split_inline_reasoning(self._content, None)[1] is not None
 
 
 def _rejects_off_switch(

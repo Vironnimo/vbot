@@ -4,7 +4,8 @@ Each case runs one request path (Adapter, wire, send or stream) against a mocked
 endpoint. A rejection the request can be blamed for is learned, retried once in
 the learned shape and remembered by later requests; every other error passes
 through unchanged and teaches nothing. A reply that carries reasoning records
-that the Model returned reasoning.
+that the Model returned reasoning, and that it ignores reasoning off when the
+request turned reasoning off.
 """
 
 from __future__ import annotations
@@ -437,3 +438,64 @@ async def test_a_reply_with_reasoning_records_that_the_model_returned_reasoning(
     wire = adapter.wire
     facts = wire.observations.facts_for(wire.provider_id, wire.connection_id, path.model_id)
     assert facts.reasoning_returned is returned
+
+
+_OFF_RUNG_CHAT = replace(
+    paths.CHAT,
+    adapter=lambda: compatible.make_adapter(
+        model=compatible.catalog_model(levels=("none", "low", "high"))
+    ),
+).streaming(paths.chat_sse)
+
+
+@pytest.mark.parametrize(
+    ("effort", "chunk", "ignored"),
+    [
+        pytest.param(
+            "none",
+            {"choices": [{"delta": {"reasoning_content": "Checking."}}]},
+            True,
+            id="reasoning-field",
+        ),
+        pytest.param(
+            "none",
+            {"choices": [{"delta": {"content": "Checking.</think>"}}]},
+            True,
+            id="inline-after-template-opened-block",
+        ),
+        pytest.param(
+            "none",
+            {"choices": [{"delta": {"content": "Wrap it in <think>tags</think>."}}]},
+            False,
+            id="tag-literal-in-answer",
+        ),
+        pytest.param(
+            "none", {"choices": [{"delta": {"content": "Plain."}}]}, False, id="no-reasoning"
+        ),
+        pytest.param(
+            "low",
+            {"choices": [{"delta": {"reasoning_content": "Checking."}}]},
+            False,
+            id="reasoning-requested",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_reasoning_despite_off_teaches_effort_none_to_send_the_lowest_level(
+    effort: str, chunk: dict[str, Any], ignored: bool
+) -> None:
+    adapter = _OFF_RUNG_CHAT.adapter()
+    with respx.mock:
+        route = respx.post(_OFF_RUNG_CHAT.url).mock(
+            side_effect=[paths.chat_sse(chunk), paths.chat_sse()]
+        )
+        for _ in range(2):
+            await paths.request(adapter, _OFF_RUNG_CHAT, {"thinking_effort": effort})
+
+    wire = adapter.wire
+    facts = wire.observations.facts_for(wire.provider_id, wire.connection_id, paths.CHAT.model_id)
+    assert facts.off_ignored is ignored
+    assert [_sent(call.request, ("reasoning_effort",)) for call in route.calls] == [
+        effort,
+        "low" if ignored else effort,
+    ]

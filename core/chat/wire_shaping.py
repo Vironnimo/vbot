@@ -39,7 +39,6 @@ from core.chat.messages import (
     error_kind_llm_visible,
     usage_token_is_estimated,
 )
-from core.chat.streaming import split_inline_reasoning
 from core.providers.adapter import (
     TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD,
     TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD,
@@ -54,6 +53,7 @@ from core.providers.reasoning import (
     REASONING_REPLAY_NONE,
     REASONING_REPLAY_TOOL_TURNS,
     ReasoningReplayPolicy,
+    split_inline_reasoning,
 )
 from core.sessions import (
     CHANNEL_MESSAGE_NOTE_PREFIX,

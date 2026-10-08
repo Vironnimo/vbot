@@ -598,6 +598,8 @@ def _learned_wire_facts_text(facts: ObservedFacts) -> str:
         parts.append(f"only one of: {groups}")
     if facts.rejected_efforts:
         parts.append(f"rejected reasoning efforts: {', '.join(facts.rejected_efforts)}")
+    if facts.off_ignored:
+        parts.append("reasoning off is ignored, so effort none sends the lowest level")
     return "; ".join(parts)
 
 

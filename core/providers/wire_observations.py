@@ -4,16 +4,17 @@ Codecs report what a Provider actually did for one (Provider, Connection,
 Model): which readable field carried reasoning, whether reasoning came back at
 all, which optional parameter the wire rejected, which parameters it accepts
 only one of at a time, which effort value it refused (``none`` also for a
-refused explicit off). The resolver turns these facts
+refused explicit off), and whether the Model reasons although the request
+turned reasoning off. The resolver turns these facts
 into profile values below every explicit Model entry, so a configured or
 verified profile always wins and an unconfigured Model improves after its first
 responses instead of failing the same way on every request.
 
-A rejection is not forever: each rejected parameter, parameter group or effort expires
-``REJECTION_TTL`` after it was learned, so a one-off or misattributed rejection
-heals by itself (the learner retries a rejected request at once, so re-learning
-a rejection that still holds costs one extra request). ``forget`` drops facts
-on request (``model.forget_wire_facts``).
+A rejection is not forever: each rejected parameter, parameter group or effort,
+and an ignored off, expires ``REJECTION_TTL`` after it was learned, so a one-off
+or misattributed rejection heals by itself (the learner retries a rejected
+request at once, so re-learning a rejection that still holds costs one extra
+request). ``forget`` drops facts on request (``model.forget_wire_facts``).
 
 The store is a disposable cache, not a durable document: it lives at
 ``<data-dir>/artifacts/wire-observations.json``, an unreadable or foreign file
@@ -43,10 +44,12 @@ _DEFAULT_SAVE_DELAY_SECONDS = 2.0
 _MAX_LIST_ENTRIES = 16
 
 Clock = Callable[[], datetime]
-# A rejection's identity within one target: ("parameter" | "exclusive" | "effort", name);
-# an exclusive group's name joins its parameters with ``+`` in the order kept first.
+# A rejection's identity within one target: ("parameter" | "exclusive" | "effort", name),
+# or _OFF_IGNORED; an exclusive group's name joins its parameters with ``+`` in the
+# order kept first.
 _Rejection = tuple[str, str]
 _RejectionTimes = dict[str, dict[_Rejection, datetime]]
+_OFF_IGNORED: _Rejection = ("off", "ignored")
 
 
 @dataclass(frozen=True)
@@ -59,6 +62,8 @@ class ObservedFacts:
     """Groups the wire accepts only one parameter of, each ``+``-joined, the kept one first."""
     rejected_efforts: tuple[str, ...] = ()
     reasoning_returned: bool = False
+    off_ignored: bool = False
+    """The Model reasoned although the request turned reasoning off."""
 
     def is_empty(self) -> bool:
         return self == _NO_FACTS
@@ -79,6 +84,8 @@ class ObservedFacts:
                     item for item in self.exclusive_parameters if item != name
                 ),
             )
+        if rejection == _OFF_IGNORED:
+            return replace(self, off_ignored=False)
         return replace(
             self, rejected_efforts=tuple(item for item in self.rejected_efforts if item != name)
         )
@@ -227,6 +234,18 @@ class WireObservations:
             rejection=("effort", effort),
         )
 
+    def record_off_ignored(self, provider_id: str, connection_id: str, model_id: str) -> None:
+        """The Model returned reasoning although the request turned reasoning off."""
+
+        self._update(
+            provider_id,
+            connection_id,
+            model_id,
+            lambda facts: replace(facts, off_ignored=True, reasoning_returned=True),
+            "the Model ignores reasoning off; effort none sends the lowest level",
+            rejection=_OFF_IGNORED,
+        )
+
     def forget(
         self,
         provider_id: str,
@@ -332,6 +351,7 @@ class WireObservations:
                     {("parameter", name) for name in updated.rejected_parameters}
                     | {("exclusive", name) for name in updated.exclusive_parameters}
                     | {("effort", name) for name in updated.rejected_efforts}
+                    | ({_OFF_IGNORED} if updated.off_ignored else set())
                 )
                 for evicted in [item for item in times if item not in kept]:
                     del times[evicted]
@@ -421,6 +441,8 @@ def _document(facts: Mapping[str, ObservedFacts], learned_at: _RejectionTimes) -
             }
         if item.reasoning_returned:
             entry["reasoning_returned"] = True
+        if item.off_ignored:
+            entry["off_ignored"] = _stamp(times.get(_OFF_IGNORED))
         if entry:
             targets[key] = entry
     return {"format_version": OBSERVATIONS_FORMAT_VERSION, "targets": targets}
@@ -459,11 +481,17 @@ def _read(
             if len(name.split(EXCLUSIVE_GROUP_SEPARATOR)) >= 2
         }
         efforts = _rejections(entry.get("rejected_efforts"), now)
+        stamp = entry.get("off_ignored")
+        off_ignored = _rejections({"ignored": stamp}, now).get("ignored")
+        if stamp in (None, False):
+            off_ignored = None
         times: dict[_Rejection, datetime] = {
             ("parameter", name): at for name, at in parameters.items()
         }
         times.update({("exclusive", name): at for name, at in groups.items()})
         times.update({("effort", name): at for name, at in efforts.items()})
+        if off_ignored is not None:
+            times[_OFF_IGNORED] = off_ignored
         if times:
             learned_at[key] = times
         facts[key] = ObservedFacts(
@@ -472,6 +500,7 @@ def _read(
             exclusive_parameters=tuple(groups),
             rejected_efforts=tuple(efforts),
             reasoning_returned=entry.get("reasoning_returned") is True,
+            off_ignored=off_ignored is not None,
         )
     return facts, learned_at
 

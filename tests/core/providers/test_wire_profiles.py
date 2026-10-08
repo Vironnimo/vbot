@@ -632,6 +632,7 @@ def test_learned_facts_shape_unconfigured_profiles_and_survive_a_restart(tmp_pat
     store.record_rejected_parameter("acme", "api-key", "m", "temperature")
     store.record_rejected_parameter("acme", "other", "m", "top_p")
     store.record_exclusive_parameters("acme", "api-key", "m", ("temperature", "top_p"))
+    store.record_off_ignored("acme", "api-key", "m")
     store.flush()
     after = _resolve(profiles, "m")
 
@@ -645,6 +646,8 @@ def test_learned_facts_shape_unconfigured_profiles_and_survive_a_restart(tmp_pat
     assert after.replay.history_field == "reasoning_content"
     assert after.reasoning.ladder == ("none", "low", "high")
     assert after.reasoning.plan("max").effort_level == "high"
+    assert before.reasoning.plan("none") == ReasoningIntent("off", "none")
+    assert after.reasoning.plan("none") == ReasoningIntent("effort", "low")
     assert set(after.request.parameters) == {"temperature"}
     assert after.request.exclusive_parameters == (("temperature", "top_p"),)
     assert _resolve(profiles, "unknown").reasoning.supported is True
@@ -667,11 +670,13 @@ def test_learned_rejections_expire_and_the_profile_follows(tmp_path: Path) -> No
     store.record_reasoning_field("acme", "api-key", "m", "reasoning_content")
     store.record_rejected_parameter("acme", "api-key", "m", "temperature")
     store.record_exclusive_parameters("acme", "api-key", "m", ("temperature", "top_k"))
+    store.record_off_ignored("acme", "api-key", "m")
     now[0] += timedelta(days=10)
     store.record_rejected_parameter("acme", "api-key", "m", "top_p")
     store.flush()
     assert set(_resolve(profiles, "m").request.parameters) == {"temperature", "top_p"}
     assert _resolve(profiles, "m").request.exclusive_parameters == (("temperature", "top_k"),)
+    assert _resolve(profiles, "m").reasoning.off == "lowest"
 
     now[0] += REJECTION_TTL - timedelta(days=10)
     remaining = ObservedFacts(
@@ -681,6 +686,7 @@ def test_learned_rejections_expire_and_the_profile_follows(tmp_path: Path) -> No
     )
     assert set(_resolve(profiles, "m").request.parameters) == {"top_p"}
     assert _resolve(profiles, "m").request.exclusive_parameters == ()
+    assert _resolve(profiles, "m").reasoning.off == "auto"
     assert store.facts_for("acme", "api-key", "m") == remaining
     store.flush()
     assert (

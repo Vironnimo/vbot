@@ -259,13 +259,15 @@ def _wire_profile_fails(_agent: Any) -> StatusWireProfile | None:
                     exclusive_parameters=("temperature+top_k",),
                     rejected_efforts=("xhigh",),
                     reasoning_returned=True,
+                    off_ignored=True,
                 ),
             ),
             [
                 "Wire profile: configured, unverified (Connection openai:api-key:work)",
                 "Learned wire facts: reasoning arrives in reasoning_content; "
                 "rejected parameters: temperature, top_p; only one of: temperature or top_k; "
-                "rejected reasoning efforts: xhigh",
+                "rejected reasoning efforts: xhigh; "
+                "reasoning off is ignored, so effort none sends the lowest level",
             ],
             id="configured-with-learned-facts",
         ),

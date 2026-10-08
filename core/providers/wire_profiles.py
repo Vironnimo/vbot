@@ -134,6 +134,10 @@ class WireBinding:
                 self.provider_id, self.connection_id, model_id, effort
             )
 
+    def observe_off_ignored(self, model_id: str) -> None:
+        if self.observations is not None:
+            self.observations.record_off_ignored(self.provider_id, self.connection_id, model_id)
+
 
 @dataclass(frozen=True)
 class _CacheEntry:
@@ -640,6 +644,11 @@ class _Resolution:
                     level for level in reasoning.ladder if level not in rejected
                 )
                 learned["effort_map"] = narrowed_map
+        if facts.off_ignored:
+            # The Model reasons anyway when the request turns reasoning off, and
+            # an ignored off can leak that reasoning into the answer: Agent
+            # effort ``none`` asks for the lowest level instead.
+            partial.setdefault("reasoning", {})["off"] = "lowest"
         _merge_into(self.values, partial, PROFILE_SCHEMA, "", LAYER_OBSERVED, self.provenance)
         if narrowed_map is not None:
             # A rejected mapping must disappear, not merge with the earlier map.
