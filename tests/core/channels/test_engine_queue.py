@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import core.channels._conversation_content as content_module
 import core.channels.engine as engine_module
 from core.runs import ChatRunManager, Run, RunCancelledError
 from core.sessions import SessionAddress
@@ -189,7 +190,7 @@ async def test_removed_run_admission_keeps_channel_followups_and_releases_reserv
             raise RunCancelledError("queued Run removed")
         return make_completed_run(output_text="next")
 
-    engine, _, _, _ = make_engine(
+    engine, _, _, transport = make_engine(
         tmp_path, trigger_run=AsyncMock(side_effect=trigger), waiting_work_manager=waiting
     )
     try:
@@ -200,6 +201,8 @@ async def test_removed_run_admission_keeps_channel_followups_and_releases_reserv
         await drain(engine, 12345)
         assert calls == 2
         assert waiting.waiting_work_count() == 0
+        # The removed message is answered, so the chat does not wait for it.
+        assert transport.sent_texts == [content_module._CANCELLED_REPLY, "next"]
     finally:
         release.set()
         await engine.stop()

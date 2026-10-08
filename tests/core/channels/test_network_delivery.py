@@ -128,16 +128,23 @@ async def test_long_markdown_is_split_without_breaking_code_fences(tmp_path: Pat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("failing_step", "status", "uploads", "completions"),
+    ("failing_step", "status", "uploads", "completions", "delivered"),
     [
-        ("upload", 429, 2, 1),
-        ("upload", 500, 1, 0),
-        ("files.completeUploadExternal", 500, 1, 1),
+        ("upload", 429, 2, 1, True),
+        ("upload", 500, 1, 0, False),
+        ("files.completeUploadExternal", 500, 1, 1, False),
+        # The chat lookup before anything is sent only reads, so it is retried.
+        ("conversations.info", 500, 1, 1, True),
     ],
-    ids=["upload-rate-limited", "upload-server-error", "complete-server-error"],
+    ids=["upload-rate-limited", "upload-server-error", "complete-server-error", "lookup-error"],
 )
 async def test_slack_file_failure_preserves_prior_delivery_and_upload(
-    tmp_path: Path, failing_step: str, status: int, uploads: int, completions: int
+    tmp_path: Path,
+    failing_step: str,
+    status: int,
+    uploads: int,
+    completions: int,
+    delivered: bool,
 ) -> None:
     calls: list[str] = []
 
@@ -155,13 +162,13 @@ async def test_slack_file_failure_preserves_prior_delivery_and_upload(
     h = make_adapter(tmp_path, "slack", http=fail_once)
     try:
         delivery = h.adapter.send("caption", "C1", files=[FileData("a.txt", "text/plain", b"a")])
-        if status == 500:
+        if delivered:
+            await delivery
+        else:
             # A server error after a write may hide a delivered part: never retried.
             with pytest.raises(ChannelError) as error:
                 await delivery
             assert not error.value.retryable
-        else:
-            await delivery
         assert calls.count("chat.postMessage") == 1
         assert calls.count("files.getUploadURLExternal") == 1
         assert calls.count("upload") == uploads
@@ -184,17 +191,20 @@ def _connection_lost(request: httpx.Request) -> httpx.Response:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("server", "retryable", "retry_after", "possibly_delivered"),
+    ("server", "method", "retryable", "retry_after", "possibly_delivered"),
     [
-        (_rate_limited, True, 7, False),
-        (_rate_limited_for_a_fraction, True, 1.5, False),
-        (_connection_lost, False, None, True),
+        (_rate_limited, "chat.postMessage", True, 7, False),
+        (_rate_limited_for_a_fraction, "chat.postMessage", True, 1.5, False),
+        (_connection_lost, "chat.postMessage", False, None, True),
+        # Slack sends lookups as POST too, but a lookup cannot have changed the chat.
+        (_connection_lost, "conversations.info", True, None, False),
     ],
-    ids=["rate-limited", "fractional-retry-after", "ambiguous-write"],
+    ids=["rate-limited", "fractional-retry-after", "ambiguous-write", "lost-lookup"],
 )
 async def test_request_failure_keeps_retry_hint_without_request_details(
     tmp_path: Path,
     server: HttpHandler,
+    method: str,
     retryable: bool,
     retry_after: float | None,
     possibly_delivered: bool,
@@ -202,7 +212,7 @@ async def test_request_failure_keeps_retry_hint_without_request_details(
     h = make_adapter(tmp_path, "slack", http=server)
     try:
         with pytest.raises(ChannelError) as error:
-            await h.adapter.api("chat.postMessage", {})
+            await h.adapter.api(method, {})
         assert (error.value.retryable, error.value.retry_after) == (retryable, retry_after)
         assert error.value.possibly_delivered is possibly_delivered
         # Request URLs and tokens never reach the error text or its chained cause.

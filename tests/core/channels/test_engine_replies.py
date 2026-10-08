@@ -13,7 +13,7 @@ import pytest
 import core.channels._conversation_content as content_module
 import core.channels.engine as engine_module
 from core.channels import ChannelError
-from core.runs import ASSISTANT_OUTPUT_EVENT, Run
+from core.runs import ASSISTANT_OUTPUT_EVENT, USER_MESSAGE_EVENT, Run
 from core.sessions import SessionAddress
 
 from .engine_test_support import (
@@ -41,15 +41,30 @@ def _recovered_run() -> Run:
     return run
 
 
-def _cancelled_after(*messages: dict[str, Any]) -> Callable[[], Run]:
+_STEERED_INPUT: dict[str, Any] = {}
+
+
+def _ended_after(end: str, *messages: dict[str, Any]) -> Callable[[], Run]:
+    """A Run that emitted ``messages`` (``_STEERED_INPUT`` is a user input) and then ended."""
+
     def make() -> Run:
-        run = Run(run_id="run-cancelled", agent_id="assistant", session_id=SESSION_ID)
+        run = Run(run_id=f"run-{end}", agent_id="assistant", session_id=SESSION_ID)
         for message in messages:
-            run.emit(ASSISTANT_OUTPUT_EVENT, {"message": message})
-        run.mark_cancelled()
+            if message is _STEERED_INPUT:
+                run.emit(USER_MESSAGE_EVENT, {})
+            else:
+                run.emit(ASSISTANT_OUTPUT_EVENT, {"message": message})
+        if end == "failed":
+            run.mark_failed(RuntimeError("could not record the Run's end"))
+        else:
+            run.mark_cancelled()
         return run
 
     return make
+
+
+def _cancelled_after(*messages: dict[str, Any]) -> Callable[[], Run]:
+    return _ended_after("cancelled", *messages)
 
 
 @pytest.mark.asyncio
@@ -60,6 +75,8 @@ def _cancelled_after(*messages: dict[str, Any]) -> Callable[[], Run]:
         (make_empty_completed_run, content_module._EMPTY_ASSISTANT_REPLY),
         # The failure text stays internal.
         (lambda: make_failed_run(message="boom"), engine_module._FAILED_REPLY),
+        # A failure after the complete answer still delivers it.
+        (_ended_after("failed", {"content": "final reply"}), "final reply"),
         (make_cancelled_run, content_module._CANCELLED_REPLY),
         # Stop after a complete answer (post-answer Compaction) delivers that answer.
         (_cancelled_after({"content": "final reply"}), "final reply"),
@@ -75,6 +92,11 @@ def _cancelled_after(*messages: dict[str, Any]) -> Callable[[], Run]:
             _cancelled_after({"content": "partial", "interrupted": True}),
             content_module._CANCELLED_REPLY,
         ),
+        # An answer given before a steered input does not answer that input.
+        (
+            _cancelled_after({"content": "first answer"}, _STEERED_INPUT),
+            content_module._CANCELLED_REPLY,
+        ),
         (lambda: make_interrupted_run(output_text="preserved partial"), "preserved partial"),
         # A recovered Run forwards partial and continuation without added text.
         (_recovered_run, "preserved partial continuation"),
@@ -83,10 +105,12 @@ def _cancelled_after(*messages: dict[str, Any]) -> Callable[[], Run]:
         "completed",
         "empty",
         "failed",
+        "failed-after-answer",
         "cancelled",
         "cancelled-after-answer",
         "cancelled-in-tool-turn",
         "cancelled-mid-answer",
+        "cancelled-after-steered-input",
         "interrupted",
         "recovered",
     ],
@@ -175,14 +199,20 @@ async def test_topic_message_reply_carries_thread_everywhere(tmp_path: Path) -> 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("send_errors", "attempts", "delivered"),
+    ("send_errors", "attempts", "logged"),
     [
-        ([ChannelError("network blip", retryable=True)], 2, True),
-        ([ChannelError("chat not found")], 1, False),
+        ([ChannelError("network blip", retryable=True)], 2, None),
+        ([ChannelError("chat not found")], 1, "Channel reply lost"),
         # One attempt plus the shared maximum of three retries.
-        ([ChannelError("still down", retryable=True)] * 4, 4, False),
+        ([ChannelError("still down", retryable=True)] * 4, 4, "Channel reply lost"),
+        # Earlier chunks reached the chat: the reply is incomplete, not lost.
+        (
+            [ChannelError("chunk 2 failed", possibly_delivered=True)],
+            1,
+            "Channel reply incomplete",
+        ),
     ],
-    ids=["transient-failure-retried", "permanent-failure", "retries-exhausted"],
+    ids=["transient-failure-retried", "permanent-failure", "retries-exhausted", "partly-sent"],
 )
 async def test_reply_delivery_retries_only_transient_failures_and_logs_lost_replies(
     tmp_path: Path,
@@ -190,7 +220,7 @@ async def test_reply_delivery_retries_only_transient_failures_and_logs_lost_repl
     caplog: pytest.LogCaptureFixture,
     send_errors: list[ChannelError],
     attempts: int,
-    delivered: bool,
+    logged: str | None,
 ) -> None:
     transport = FakeTransport()
     deliver = transport.send_text
@@ -217,6 +247,8 @@ async def test_reply_delivery_retries_only_transient_failures_and_logs_lost_repl
     await engine.stop()
 
     assert calls == attempts
-    assert transport.sent_texts == (["final answer"] if delivered else [])
-    lost = [record for record in caplog.records if "Channel reply lost" in record.getMessage()]
-    assert [record.levelno for record in lost] == ([] if delivered else [logging.ERROR])
+    assert transport.sent_texts == (["final answer"] if logged is None else [])
+    failed = [record for record in caplog.records if "Channel reply" in record.getMessage()]
+    assert [(record.levelno, record.getMessage().startswith(str(logged))) for record in failed] == (
+        [] if logged is None else [(logging.ERROR, True)]
+    )

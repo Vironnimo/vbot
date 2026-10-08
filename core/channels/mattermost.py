@@ -162,7 +162,7 @@ class MattermostChannelAdapter(NetworkChannelAdapter):
         buttons: Any = None,
     ) -> None:
         self.check_send(message, files, buttons)
-        self.remember(await self.target_facts(platform_target))
+        self.remember(await self._send_operation(self.target_facts, platform_target))
         file_ids: list[str] = []
         for file in files or []:
             upload = await self._send_operation(
