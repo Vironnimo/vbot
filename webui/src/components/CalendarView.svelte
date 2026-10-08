@@ -322,20 +322,19 @@
     return eventJobs(viewState.jobs, occurrence.event_id);
   }
 
-  // One Agent job as a details-card row: when it runs, with its time for this
-  // occurrence, then its Agent and instruction. A job that is not active is
-  // muted.
+  // One Agent job as a details-card row: its time for this occurrence as the
+  // label, then when it runs relative to the event, its Agent and
+  // instruction. A job that is not active is muted.
   function jobRow(job, occurrence) {
     const due = eventJobDueAt(job, occurrence);
     const timing = eventTimeLabel(job.event_edge, job.event_offset_minutes);
-    const time = due
-      ? formatTimeInZone(due.toISOString(), viewState.systemTimeZone, locale)
-      : '';
     const prompt =
       job.prompt.length > 80 ? `${job.prompt.slice(0, 79)}…` : job.prompt;
     return {
-      label: time ? `${timing} · ${time}` : timing,
-      value: `${job.target}: ${prompt}`,
+      label: due
+        ? formatTimeInZone(due.toISOString(), viewState.systemTimeZone, locale)
+        : '',
+      value: `${timing} · ${job.target}: ${prompt}`,
       tone: job.status === 'active' ? undefined : 'muted',
     };
   }

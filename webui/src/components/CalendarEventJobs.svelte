@@ -438,7 +438,10 @@
             >{/if}
         </FormField>
       </div>
-      <div class="calendar-job-timing">
+      <div
+        class="calendar-job-timing"
+        class:calendar-job-timing--at={editor.event_direction === 'at'}
+      >
         <FormField
           label={t('cron.eventTime.when')}
           controlId="calendar-job-direction"

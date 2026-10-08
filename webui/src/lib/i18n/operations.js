@@ -559,6 +559,8 @@ export default Object.freeze({
   'cron.sections.timing': 'Timing',
   'cron.sections.timingSubtitle':
     'When the schedule fires. Custom accepts any cron expression.',
+  'cron.sections.timingEventSubtitle':
+    'When the job runs, relative to each occurrence of its Calendar event.',
   'cron.sections.session': 'Session',
   'cron.sections.sessionSubtitle':
     'Choose whether Runs share existing context.',

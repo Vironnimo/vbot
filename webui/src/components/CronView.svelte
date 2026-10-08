@@ -810,7 +810,9 @@
                 </h3>
               </header>
               <p class="s-section__desc">
-                {t('cron.sections.timingSubtitle')}
+                {editor.isEventSchedule
+                  ? t('cron.sections.timingEventSubtitle')
+                  : t('cron.sections.timingSubtitle')}
               </p>
               <div class="s-section__body">
                 <div class="s-group">

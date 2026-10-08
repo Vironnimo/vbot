@@ -601,11 +601,11 @@ describe('CalendarView', () => {
       expect(entry.querySelector('.calendar-entry-jobs').textContent).toBe('1');
       focusWithKeyboard(entry);
       expect(tooltipRows()).toContainEqual([t('calendar.jobs.heading'), '1']);
-      const [label, value] = tooltipRows().find(([name]) =>
-        name.startsWith('30 minutes before start'),
+      const [label, value] = tooltipRows().find(([, text]) =>
+        text.startsWith('30 minutes before start'),
       );
       expect(label).toContain('08:30');
-      expect(value).toBe('main: Prepare the agenda');
+      expect(value).toBe('30 minutes before start · main: Prepare the agenda');
 
       entry.click();
       await waitForCondition(
