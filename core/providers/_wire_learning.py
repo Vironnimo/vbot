@@ -64,6 +64,7 @@ _PARAMETER_REJECTION_MARKERS: tuple[str, ...] = (
     "unrecognized request argument",
     "unrecognized parameter",
     "invalid parameter",
+    "is deprecated for this model",
 )
 """A parameter rejection names one of these markers and the parameter."""
 

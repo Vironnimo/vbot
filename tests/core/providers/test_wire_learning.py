@@ -104,6 +104,15 @@ _THINKING_OFF = {"type": "disabled"}
             id="messages-stream-parameter",
         ),
         pytest.param(
+            # Anthropic's wording for Models that removed sampling (Claude Haiku 5.5).
+            paths.MESSAGES,
+            {"temperature": 0.5, "thinking_effort": "none"},
+            _error("`temperature` is deprecated for this model."),
+            ("temperature",),
+            [0.5, ABSENT, ABSENT],
+            id="messages-send-deprecated-parameter",
+        ),
+        pytest.param(
             paths.MESSAGES,
             {"thinking_effort": "none"},
             _error("thinking.type: 'disabled' is not supported for this model"),
