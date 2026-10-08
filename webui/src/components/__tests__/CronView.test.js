@@ -628,6 +628,57 @@ describe('CronView', () => {
     });
   });
 
+  it('names the event of an event job and saves only its timing', async () => {
+    listCronJobsMock.mockResolvedValue({
+      jobs: [
+        cronJob({
+          id: 'job-event',
+          schedule_type: 'event',
+          cron_expression: null,
+          event_id: 'evt-1',
+          event_title: 'Team review',
+          event_edge: 'start',
+          event_offset_minutes: -30,
+        }),
+      ],
+    });
+
+    mountView();
+
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="cron-event-title"]'),
+    );
+    const row = document.querySelector('[data-testid="cron-item-job-event"]');
+    expect(row.textContent).toContain(
+      'Event: Team review — 30 minutes before start',
+    );
+    expect(
+      document.querySelector('[data-testid="cron-event-title"]').textContent,
+    ).toBe('Team review');
+    // The event's occurrences repeat the job: no frequency and no repeat limit.
+    expect(document.getElementById('cron-job-frequency')).toBeNull();
+    expect(document.getElementById('cron-job-repeat')).toBeNull();
+
+    inputById('cron-job-event-amount').value = '45';
+    inputById('cron-job-event-amount').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    flushSync();
+    buttonByText(t('common.save')).click();
+
+    await waitForCondition(() => updateCronJobMock.mock.calls.length === 1);
+    expect(updateCronJobMock).toHaveBeenCalledWith({
+      id: 'job-event',
+      agent_id: 'agent-alpha',
+      name: 'Default scheduled run',
+      prompt: 'Default cron prompt',
+      schedule_type: 'event',
+      event_id: 'evt-1',
+      event_time: 'start - 45m',
+      session_id: null,
+    });
+  });
+
   it('keeps unsaved edits on reselecting the row and saves them before switching jobs', async () => {
     const jobs = [cronJob({ id: 'job-one' }), cronJob({ id: 'job-two' })];
     listCronJobsMock.mockResolvedValue({

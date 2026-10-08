@@ -355,6 +355,14 @@
   flex: 1;
 }
 
+/* An event job names its Calendar event; the event itself is chosen in the
+   Calendar. */
+.cron-view .cron-event-title {
+  color: var(--text-hi);
+  font-size: var(--fs-body-md);
+  overflow-wrap: anywhere;
+}
+
 /* Weekday toggles follow the shared switch on-state: a light fill with dark
    text, keeping the accent free for selection and primary actions. */
 .cron-view .cron-weekdays {

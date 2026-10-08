@@ -8,6 +8,7 @@ import {
   CRON_FREQUENCY_ONCE,
   CRON_FREQUENCY_WEEKLY,
   CRON_STATUS_ACTIVE,
+  CRON_SCHEDULE_TYPE_EVENT,
   CRON_SCHEDULE_TYPE_INTERVAL,
   CRON_SCHEDULE_TYPE_ONCE,
   CRON_STATUS_COMPLETED,
@@ -42,6 +43,68 @@ export function intervalUnitOptions() {
     { value: 'hours', label: t('cron.form.intervalUnit.hours') },
     { value: 'days', label: t('cron.form.intervalUnit.days') },
   ];
+}
+
+// The choices of an event job's time: before, at or after the event's start
+// or end, by an amount in minutes, hours or days.
+export function eventDirectionOptions() {
+  return [
+    { value: 'before', label: t('cron.eventTime.before') },
+    { value: 'at', label: t('cron.eventTime.at') },
+    { value: 'after', label: t('cron.eventTime.after') },
+  ];
+}
+
+export function eventUnitOptions() {
+  return [
+    { value: 'm', label: t('cron.form.intervalUnit.minutes') },
+    { value: 'h', label: t('cron.form.intervalUnit.hours') },
+    { value: 'd', label: t('cron.form.intervalUnit.days') },
+  ];
+}
+
+export function eventEdgeOptions() {
+  return [
+    { value: 'start', label: t('cron.eventTime.start') },
+    { value: 'end', label: t('cron.eventTime.end') },
+  ];
+}
+
+// When an event job runs, in words: "At start", "30 minutes before start",
+// "1 day after end".
+export function eventTimeLabel(edge, offsetMinutes) {
+  const end = edge === 'end';
+  const offset = Number.isInteger(offsetMinutes) ? offsetMinutes : 0;
+  if (offset === 0) {
+    return end ? t('cron.eventTime.atEnd') : t('cron.eventTime.atStart');
+  }
+  const amount = eventAmountText(Math.abs(offset));
+  if (offset < 0) {
+    return end
+      ? t('cron.eventTime.beforeEnd', { amount })
+      : t('cron.eventTime.beforeStart', { amount });
+  }
+  return end
+    ? t('cron.eventTime.afterEnd', { amount })
+    : t('cron.eventTime.afterStart', { amount });
+}
+
+function eventAmountText(minutes) {
+  if (minutes % 1440 === 0) {
+    const count = minutes / 1440;
+    return count === 1
+      ? t('cron.eventTime.day')
+      : t('cron.eventTime.days', { count });
+  }
+  if (minutes % 60 === 0) {
+    const count = minutes / 60;
+    return count === 1
+      ? t('cron.eventTime.hour')
+      : t('cron.eventTime.hours', { count });
+  }
+  return minutes === 1
+    ? t('cron.eventTime.minute')
+    : t('cron.eventTime.minutes', { count: minutes });
 }
 
 // Monday-first weekday toggles: cron day number, short label, full name.
@@ -111,27 +174,44 @@ export function scheduleSummary(job) {
   if (job.schedule_type === CRON_SCHEDULE_TYPE_INTERVAL) {
     return displayValue(describeInterval(job.interval_seconds));
   }
+  if (job.schedule_type === CRON_SCHEDULE_TYPE_EVENT) {
+    // A gone or unreadable event is named by its id.
+    return t('cron.schedule.event', {
+      title: job.event_title || job.event_id || t('cron.notAvailable'),
+      timing: eventTimeLabel(job.event_edge, job.event_offset_minutes),
+    });
+  }
 
   return displayValue(describeCron(job.cron_expression));
 }
 
 // The exact value behind the readable cadence: the cron expression, or the
-// one-time instant. Intervals have nothing further to show.
+// one-time instant. Intervals and event jobs have nothing further to show.
 export function scheduleTechnicalValue(job) {
   if (job?.schedule_type === CRON_SCHEDULE_TYPE_ONCE) {
     return job.run_at ? job.schedule_description : '';
   }
-  if (job?.schedule_type === CRON_SCHEDULE_TYPE_INTERVAL) {
+  if (
+    job?.schedule_type === CRON_SCHEDULE_TYPE_INTERVAL ||
+    job?.schedule_type === CRON_SCHEDULE_TYPE_EVENT
+  ) {
     return '';
   }
 
   return job?.cron_expression ?? '';
 }
 
-// The second line of a list row. An active schedule shows when it runs next;
-// every other status leads with its name, followed by the cadence or, for
-// finished one-time history, when it ran.
+// The second line of a list row. An active schedule shows when it runs next,
+// an active event job its event and timing; every other status leads with its
+// name, followed by the cadence or, for finished one-time history, when it
+// ran.
 export function listRowDetail(job, timezone, now = new Date()) {
+  if (
+    job?.status === CRON_STATUS_ACTIVE &&
+    job.schedule_type === CRON_SCHEDULE_TYPE_EVENT
+  ) {
+    return scheduleSummary(job);
+  }
   if (job?.status === CRON_STATUS_ACTIVE) {
     return job.next_fire_at
       ? t('cron.list.next', {

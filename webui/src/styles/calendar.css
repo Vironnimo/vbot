@@ -306,6 +306,22 @@
   font-size: var(--fs-label-sm);
 }
 
+/* An event's Agent job count, in the Schedules layer color. */
+.calendar-entry-jobs {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  color: var(--blue);
+  font-size: var(--fs-label-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.calendar-entry-jobs svg {
+  fill: currentcolor;
+}
+
 .calendar-entry-more {
   font-size: var(--fs-label-sm);
   font-variant-numeric: tabular-nums;
@@ -469,6 +485,12 @@
   font-size: var(--fs-body-sm);
 }
 
+.calendar-detail-label {
+  margin-right: 6px;
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+}
+
 .calendar-form {
   display: flex;
   flex-direction: column;
@@ -535,7 +557,8 @@
   background: var(--text-hi);
 }
 
-.calendar-delete-choice {
+.calendar-delete-choice,
+.calendar-edit-scope {
   display: flex;
   gap: 16px;
   justify-content: center;
@@ -544,7 +567,21 @@
   font-size: var(--fs-body-md);
 }
 
-.calendar-delete-choice label {
+/* What an edit of a repeating event changes leads the form. */
+.calendar-edit-scope {
+  justify-content: flex-start;
+  margin-top: 0;
+}
+
+.calendar-delete-jobs {
+  margin: 10px 0 0;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  text-align: center;
+}
+
+.calendar-delete-choice label,
+.calendar-edit-scope label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -561,60 +598,67 @@
   }
 }
 
-.calendar-actions {
+.calendar-jobs {
   border-top: 1px solid var(--border);
   padding-top: 16px;
   display: grid;
   gap: 14px;
 }
-.calendar-actions-heading,
-.calendar-action-controls,
-.calendar-action-summary {
+.calendar-jobs-heading,
+.calendar-job-controls,
+.calendar-job-summary {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
 }
-.calendar-actions-heading h3 {
+.calendar-jobs-heading h3 {
   margin: 0;
   font-size: var(--fs-body-md);
   color: var(--text-hi);
 }
-.calendar-actions-heading > .btn {
+.calendar-jobs-heading > .btn {
   margin-left: auto;
 }
-.calendar-action-row {
+.calendar-job-row {
   display: grid;
   gap: 8px;
   padding: 12px 0;
   border-bottom: 1px solid var(--border);
 }
-.calendar-action-summary {
+.calendar-job-summary {
   color: var(--text-med);
   font-size: var(--fs-body-sm);
 }
-.calendar-action-summary strong {
+.calendar-job-summary strong {
   color: var(--text-hi);
 }
-.calendar-action-prompt {
+.calendar-job-due {
+  font-variant-numeric: tabular-nums;
+}
+.calendar-job-prompt {
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   color: var(--text-hi);
 }
-.calendar-action-editor {
+.calendar-job-error {
+  color: var(--red);
+  overflow-wrap: anywhere;
+}
+.calendar-job-editor {
   display: grid;
   gap: 14px;
   padding-top: 8px;
 }
-.calendar-action-timing {
+.calendar-job-timing {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 /* Choice fields fill their grid cell; the shared Dropdown's default minimum
    width would push the four timing fields past the dialog edge. */
-.calendar-action-editor .dropdown {
+.calendar-job-editor .dropdown {
   min-width: 0;
 }
 @media (max-width: 560px) {
@@ -630,7 +674,8 @@
     font-size: var(--fs-label-sm);
   }
   .calendar-cell-entries .calendar-entry-time,
-  .calendar-cell-entries .calendar-entry-repeat {
+  .calendar-cell-entries .calendar-entry-repeat,
+  .calendar-cell-entries .calendar-entry-jobs {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -638,10 +683,10 @@
     clip-path: inset(50%);
     white-space: nowrap;
   }
-  .calendar-action-timing {
+  .calendar-job-timing {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .calendar-action-editor .calendar-form-row {
+  .calendar-job-editor .calendar-form-row {
     grid-template-columns: 1fr;
   }
 }

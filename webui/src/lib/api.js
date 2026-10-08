@@ -209,10 +209,6 @@ export {
   createCalendarEvent,
   updateCalendarEvent,
   deleteCalendarEvent,
-  addCalendarExdate,
-  addCalendarAction,
-  updateCalendarAction,
-  deleteCalendarAction,
 } from './api/automation.js';
 
 export {

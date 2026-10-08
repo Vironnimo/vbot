@@ -5,7 +5,6 @@ import {
   createCalendarController,
   createCalendarViewState,
   dayKeyForOccurrence,
-  eventToFormValues,
   formatTimeInZone,
   groupByDay,
   isDayKey,
@@ -19,7 +18,7 @@ import {
   windowForView,
 } from '../calendarView.js';
 
-import { getCalendarWindow } from '../api.js';
+import { getCalendarWindow, listCronJobs } from '../api.js';
 
 vi.mock('../api.js', () => ({
   getCalendarWindow: vi.fn(() =>
@@ -33,7 +32,9 @@ vi.mock('../api.js', () => ({
   createCalendarEvent: vi.fn(() => Promise.resolve({})),
   updateCalendarEvent: vi.fn(() => Promise.resolve({})),
   deleteCalendarEvent: vi.fn(() => Promise.resolve({})),
-  addCalendarExdate: vi.fn(() => Promise.resolve({})),
+  listCronJobs: vi.fn(() =>
+    Promise.resolve({ jobs: [], system_timezone: 'UTC' }),
+  ),
 }));
 
 beforeEach(() => {
@@ -152,8 +153,9 @@ describe('server timezone rendering', () => {
     const allDay = {
       title: 'all day',
       all_day: true,
-      start_utc: null,
-      start_date: '2026-09-05',
+      // An all-day occurrence starts at the server zone's midnight.
+      start_utc: '2026-09-04T22:00:00+00:00',
+      start: '2026-09-05',
     };
 
     expect(
@@ -200,73 +202,6 @@ describe('server timezone rendering', () => {
       'late',
     ]);
   });
-
-  it.each([
-    [
-      'a recurring timed event from its local start',
-      {
-        start_utc: null,
-        start_local: '2026-08-31T09:00:00',
-        tz_name: 'Europe/Berlin',
-        duration_minutes: 30,
-        rrule: {
-          freq: 'weekly',
-          interval: 2,
-          count: 5,
-          until: null,
-          by_weekday: ['mo', 'we'],
-        },
-      },
-      {
-        start_date: '2026-08-31',
-        start_time: '09:00',
-        duration_minutes: 30,
-        freq: 'weekly',
-        interval: 2,
-        by_weekday: ['mo', 'we'],
-        end_mode: 'count',
-        end_count: 5,
-      },
-    ],
-    [
-      'a single timed event in the server zone, not raw UTC',
-      // 07:00 UTC is 09:00 in Berlin; the form presents that wall clock.
-      { start_utc: '2026-09-07T07:00:00+00:00' },
-      {
-        start_date: '2026-09-07',
-        start_time: '09:00',
-        freq: 'none',
-        end_mode: 'never',
-      },
-    ],
-    [
-      'a late single event on the next server day',
-      // 22:00 UTC is already 00:00 on 2026-09-03 in Berlin.
-      { start_utc: '2026-09-02T22:00:00+00:00' },
-      { start_date: '2026-09-03', start_time: '00:00' },
-    ],
-  ])('projects %s into editable values', (_label, fields, expected) => {
-    const values = eventToFormValues(
-      {
-        title: 'Event',
-        notes: null,
-        location: null,
-        all_day: false,
-        start_utc: null,
-        start_local: null,
-        tz_name: null,
-        start_date: null,
-        duration_minutes: 60,
-        duration_days: null,
-        rrule: null,
-        exdates: [],
-        ...fields,
-      },
-      'Europe/Berlin',
-    );
-
-    expect(values).toMatchObject(expected);
-  });
 });
 
 describe('controller', () => {
@@ -310,6 +245,46 @@ describe('controller', () => {
     expect(getCalendarWindow).toHaveBeenLastCalledWith(
       windowForView('day', '2026-09-09'),
     );
+  });
+
+  it('shows Agent jobs on their events instead of the Schedules layer', async () => {
+    const eventJob = {
+      id: 'cron-1',
+      schedule_type: 'event',
+      event_id: 'evt-1',
+    };
+    getCalendarWindow.mockResolvedValueOnce({
+      ...serverWindow('UTC'),
+      cron: [
+        { job_id: 'cron-1', event_id: 'evt-1', occurrence_id: 'evt-1' },
+        { job_id: 'cron-2', fire_at: '2026-09-09T08:00:00+00:00' },
+      ],
+    });
+    listCronJobs.mockResolvedValueOnce({
+      jobs: [eventJob, { id: 'cron-2', schedule_type: 'cron' }],
+    });
+    const state = createCalendarViewState();
+
+    await createCalendarController({ state }).show('week', '2026-09-09');
+
+    expect(state.cron.map((item) => item.job_id)).toEqual(['cron-2']);
+    expect(state.jobs).toEqual([eventJob]);
+    expect(state.jobsError).toBe('');
+  });
+
+  it('shows the events when their Agent jobs cannot be read', async () => {
+    getCalendarWindow.mockResolvedValueOnce({
+      ...serverWindow('UTC'),
+      events: [{ id: 'evt-1' }],
+    });
+    listCronJobs.mockRejectedValueOnce(new Error('cron store unreadable'));
+    const state = createCalendarViewState();
+
+    await createCalendarController({ state }).show('week', '2026-09-09');
+
+    expect(state.loadError).toBe('');
+    expect(state.events).toEqual([{ id: 'evt-1' }]);
+    expect(state.jobsError).toBe('cron store unreadable');
   });
 
   it('toggles layers', () => {

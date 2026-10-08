@@ -5,9 +5,11 @@ import {
   cronIntervalSeconds,
   CRON_FREQUENCY_CUSTOM,
   CRON_SCHEDULE_TYPE_CRON,
+  CRON_SCHEDULE_TYPE_EVENT,
   CRON_SCHEDULE_TYPE_INTERVAL,
   CRON_SCHEDULE_TYPE_ONCE,
   applyCronListResponse,
+  eventTimeText,
   updateCronSchedule,
   buildCreateCronPayload,
   buildUpdateCronPayload,
@@ -119,6 +121,12 @@ export function createCronEditor(context) {
 
   let isOnceSchedule = $derived(
     formValues.schedule_type === CRON_SCHEDULE_TYPE_ONCE,
+  );
+
+  // A job bound to a calendar event keeps its event; its event time is
+  // editable.
+  let isEventSchedule = $derived(
+    formValues.schedule_type === CRON_SCHEDULE_TYPE_EVENT,
   );
 
   // The readable sentence for the cron expression being edited; empty for
@@ -254,6 +262,10 @@ export function createCronEditor(context) {
       hasScheduleValue = formValues.cron_expression.trim().length > 0;
     } else if (isIntervalSchedule) {
       hasScheduleValue = cronIntervalSeconds(formValues) > 0;
+    } else if (isEventSchedule) {
+      hasScheduleValue =
+        formValues.event_id.trim().length > 0 &&
+        eventTimeText(formValues) !== '';
     }
     const repeat = formValues.repeat.trim();
     const repeatValue = Number(repeat);
@@ -482,6 +494,9 @@ export function createCronEditor(context) {
     },
     get isOnceSchedule() {
       return isOnceSchedule;
+    },
+    get isEventSchedule() {
+      return isEventSchedule;
     },
     set isOnceSchedule(value) {
       isOnceSchedule = value;

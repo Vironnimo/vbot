@@ -26,18 +26,77 @@ function calendarWindow({
   return { events, occurrences, cron, system_timezone: timezone };
 }
 
-function occurrence(title, startUtc, endUtc) {
+// A stored event; timed times are naive local times of `tz_name`.
+function calendarEvent(overrides = {}) {
   return {
-    event_id: `evt-${title}`,
-    title,
+    id: 'evt-1',
+    title: 'Standup',
+    description: null,
+    location: null,
     all_day: false,
     recurring: false,
-    notes: null,
+    start: '2026-09-23T09:00:00',
+    end: '2026-09-23T09:30:00',
+    tz_name: 'UTC',
+    rrule: null,
+    exdates: [],
+    overrides: {},
+    ...overrides,
+  };
+}
+
+function occurrence(title, startUtc, endUtc, overrides = {}) {
+  return {
+    id: `evt-${title}`,
+    event_id: `evt-${title}`,
+    title,
+    description: null,
+    location: null,
+    all_day: false,
+    recurring: false,
+    start: startUtc.slice(0, 19),
+    end: endUtc.slice(0, 19),
     start_utc: startUtc,
     end_utc: endUtc,
-    start_date: null,
-    end_date: null,
-    occurrence_start: startUtc,
+    original_start: startUtc.slice(0, 19),
+    overridden: false,
+    ...overrides,
+  };
+}
+
+// The weekly Standup on Wednesdays and its occurrence on 2026-09-23.
+function weeklyStandup() {
+  return calendarWindow({
+    events: [calendarEvent({ recurring: true, rrule: 'FREQ=WEEKLY;BYDAY=WE' })],
+    occurrences: [
+      occurrence(
+        'Standup',
+        '2026-09-23T09:00:00+00:00',
+        '2026-09-23T09:30:00+00:00',
+        { id: 'evt-1_20260923T0900', event_id: 'evt-1', recurring: true },
+      ),
+    ],
+  });
+}
+
+// An Agent job of `evt-1` as `cron.list` returns it.
+function eventJob(overrides = {}) {
+  return {
+    id: 'cron-1',
+    target: 'main',
+    agent_id: 'main',
+    name: 'Prepare the agenda',
+    prompt: 'Prepare the agenda',
+    schedule_type: 'event',
+    event_id: 'evt-1',
+    event_title: 'Standup',
+    event_edge: 'start',
+    event_offset_minutes: -30,
+    session_id: null,
+    status: 'active',
+    last_outcome: null,
+    next_fire_at: '2026-09-23T08:30:00+00:00',
+    ...overrides,
   };
 }
 
@@ -59,10 +118,22 @@ function focusWithKeyboard(element) {
   flushSync();
 }
 
-function serveWindow(window) {
+function serveWindow(window, jobs = []) {
   rpcMock.mockImplementation((method) => {
     if (method === 'calendar.window') {
       return Promise.resolve(window);
+    }
+    if (method === 'cron.list') {
+      return Promise.resolve({ jobs, system_timezone: window.system_timezone });
+    }
+    if (method === 'agent.list') {
+      return Promise.resolve({ agents: [{ id: 'main', name: 'Main' }] });
+    }
+    if (method === 'project.list') {
+      return Promise.resolve({ projects: [] });
+    }
+    if (method === 'session.list') {
+      return Promise.resolve({ sessions: [], next_cursor: null });
     }
     if (method.startsWith('calendar.')) {
       return Promise.resolve({});
@@ -282,7 +353,14 @@ describe('CalendarView', () => {
       expect(
         document.querySelector('.modal-body .calendar-form'),
       ).not.toBeNull();
-      for (const id of ['calendar-form-title-input', 'calendar-form-date']) {
+      for (const id of [
+        'calendar-form-title-input',
+        'calendar-form-location',
+        'calendar-form-start-date',
+        'calendar-form-start-time',
+        'calendar-form-end-date',
+        'calendar-form-end-time',
+      ]) {
         expect(
           document.querySelector(`.calendar-form label[for="${id}"]`),
         ).not.toBeNull();
@@ -290,7 +368,7 @@ describe('CalendarView', () => {
           null,
         );
       }
-      expect(document.getElementById('calendar-form-date').value).toBe(
+      expect(document.getElementById('calendar-form-start-date').value).toBe(
         '2026-09-23',
       );
 
@@ -301,7 +379,7 @@ describe('CalendarView', () => {
       // The first surface of the September grid is Monday, August 31.
       document.querySelector('.calendar-cell-surface').click();
       flushSync();
-      expect(document.getElementById('calendar-form-date').value).toBe(
+      expect(document.getElementById('calendar-form-start-date').value).toBe(
         '2026-08-31',
       );
     });
@@ -341,64 +419,71 @@ describe('CalendarView', () => {
         () => document.querySelector('.calendar-form') === null,
       );
 
+      // A new weekly event repeats on its start's weekday, a Wednesday.
       expect(rpcCalls('calendar.create')).toEqual([
         {
           title: 'Standup',
-          notes: null,
-          all_day: false,
+          description: null,
+          location: null,
           start: '2026-09-23T09:00:00',
-          duration_minutes: 60,
-          rrule: {
-            freq: 'weekly',
-            interval: 1,
-            by_weekday: ['mo', 'tu', 'we', 'th', 'fr'],
-            count: 10,
-          },
+          end: '2026-09-23T10:00:00',
+          rrule: 'FREQ=WEEKLY;BYDAY=WE;COUNT=10',
         },
       ]);
     });
 
+    it('enters an all-day event by its last day and stores the day after', async () => {
+      mountedComponent = await mountCalendarView();
+      button(t('calendar.newEvent')).click();
+      flushSync();
+      typeInto('calendar-form-title-input', 'Trip');
+      document.querySelector('.calendar-form-toggle [role="switch"]').click();
+      flushSync();
+
+      expect(document.getElementById('calendar-form-start-time')).toBeNull();
+      expect(
+        document.querySelector(
+          '.calendar-form label[for="calendar-form-end-date"]',
+        ).textContent,
+      ).toContain(t('calendar.form.lastDay'));
+      typeInto('calendar-form-end-date', '2026-09-25');
+      button(t('calendar.form.create')).click();
+      await waitForCondition(() => rpcCalls('calendar.create').length === 1);
+
+      expect(rpcCalls('calendar.create')[0]).toMatchObject({
+        start: '2026-09-23',
+        end: '2026-09-26',
+        rrule: null,
+      });
+    });
+
     it('opens an entry in the detail modal and saves an edit in the server wall clock', async () => {
-      const start = '2026-09-23T07:00:00+00:00';
       serveWindow(
         calendarWindow({
           timezone: 'Europe/Berlin',
           events: [
-            {
-              id: 'evt-1',
+            calendarEvent({
               title: 'Dentist',
-              notes: null,
-              location: null,
-              all_day: false,
-              start_utc: start,
-              start_local: null,
-              tz_name: null,
-              start_date: null,
-              duration_minutes: 60,
-              duration_days: null,
-              rrule: null,
-              exdates: [],
-            },
+              location: 'Main Street 4',
+              start: '2026-09-23T09:00:00',
+              end: '2026-09-23T10:00:00',
+              tz_name: 'Europe/Berlin',
+            }),
           ],
           occurrences: [
-            {
-              event_id: 'evt-1',
-              title: 'Dentist',
-              all_day: false,
-              recurring: false,
-              notes: null,
-              start_utc: start,
-              end_utc: '2026-09-23T08:00:00+00:00',
-              start_date: null,
-              end_date: null,
-              occurrence_start: start,
-            },
+            occurrence(
+              'Dentist',
+              '2026-09-23T07:00:00+00:00',
+              '2026-09-23T08:00:00+00:00',
+              { id: 'evt-1', event_id: 'evt-1', location: 'Main Street 4' },
+            ),
           ],
         }),
       );
       mountedComponent = await mountCalendarView();
 
-      // The entry's card gives the complete title and the zone of its time.
+      // The entry's card gives the complete title, the zone of its time and
+      // its location.
       focusWithKeyboard(
         document.querySelector('.calendar-cell .calendar-entry'),
       );
@@ -409,6 +494,10 @@ describe('CalendarView', () => {
         t('calendar.details.timeZone'),
         'Europe/Berlin',
       ]);
+      expect(tooltipRows()).toContainEqual([
+        t('calendar.form.location'),
+        'Main Street 4',
+      ]);
 
       document.querySelector('.calendar-cell .calendar-entry').click();
       flushSync();
@@ -417,14 +506,24 @@ describe('CalendarView', () => {
       // the form opened instead of the detail modal.
       expect(document.querySelector('.calendar-detail')).not.toBeNull();
       expect(document.querySelector('.calendar-form')).toBeNull();
+      expect(document.querySelector('.calendar-detail').textContent).toContain(
+        'Main Street 4',
+      );
 
       button(t('common.edit')).click();
       flushSync();
       // 07:00 UTC is 09:00 in Berlin; the form presents that wall clock.
-      expect(document.getElementById('calendar-form-date').value).toBe(
+      expect(document.getElementById('calendar-form-start-date').value).toBe(
         '2026-09-23',
       );
-      expect(document.getElementById('calendar-form-time').value).toBe('09:00');
+      expect(document.getElementById('calendar-form-start-time').value).toBe(
+        '09:00',
+      );
+      expect(document.getElementById('calendar-form-end-time').value).toBe(
+        '10:00',
+      );
+      // A single event has no occurrence to edit on its own.
+      expect(document.querySelector('.calendar-edit-scope')).toBeNull();
 
       button(t('common.save')).click();
       await waitForCondition(() => rpcCalls('calendar.update').length === 1);
@@ -435,13 +534,88 @@ describe('CalendarView', () => {
         {
           id: 'evt-1',
           title: 'Dentist',
-          notes: null,
-          all_day: false,
+          description: null,
+          location: 'Main Street 4',
           start: '2026-09-23T09:00:00',
-          duration_minutes: 60,
+          end: '2026-09-23T10:00:00',
           rrule: null,
         },
       ]);
+    });
+
+    it('changes only the chosen occurrence of a repeating event', async () => {
+      serveWindow(weeklyStandup());
+      mountedComponent = await mountCalendarView();
+      document.querySelector('.calendar-cell .calendar-entry').click();
+      flushSync();
+      button(t('common.edit')).click();
+      flushSync();
+
+      // The series is edited by default, with its repetition.
+      expect(document.getElementById('calendar-form-freq')).not.toBeNull();
+      const [series, only] = document.querySelectorAll(
+        '.calendar-edit-scope input[type="radio"]',
+      );
+      expect(series.checked).toBe(true);
+      only.click();
+      flushSync();
+      // One occurrence keeps the series' repetition.
+      expect(document.getElementById('calendar-form-freq')).toBeNull();
+
+      typeInto('calendar-form-title-input', 'Standup with guests');
+      typeInto('calendar-form-start-time', '10:00');
+      button(t('common.save')).click();
+      await waitForCondition(() => rpcCalls('calendar.update').length === 1);
+
+      // A new start keeps the occurrence's length.
+      expect(rpcCalls('calendar.update')).toEqual([
+        {
+          id: 'evt-1_20260923T0900',
+          title: 'Standup with guests',
+          description: null,
+          location: null,
+          start: '2026-09-23T10:00:00',
+          end: '2026-09-23T10:30:00',
+        },
+      ]);
+    });
+
+    it('shows the Agent jobs of an event on its entry instead of as Schedule Runs', async () => {
+      const window = weeklyStandup();
+      window.cron = [
+        {
+          job_id: 'cron-1',
+          name: 'Prepare the agenda',
+          fire_at: '2026-09-23T08:30:00+00:00',
+          schedule_type: 'event',
+          event_id: 'evt-1',
+          occurrence_id: 'evt-1_20260923T0900',
+        },
+      ];
+      serveWindow(window, [eventJob()]);
+      mountedComponent = await mountCalendarView();
+
+      // The job runs from its event, not as a separate Schedule entry.
+      expect(document.querySelector('.calendar-entry--cron')).toBeNull();
+      const entry = document.querySelector('.calendar-cell .calendar-entry');
+      expect(entry.querySelector('.calendar-entry-jobs').textContent).toBe('1');
+      focusWithKeyboard(entry);
+      expect(tooltipRows()).toContainEqual([t('calendar.jobs.heading'), '1']);
+      const [label, value] = tooltipRows().find(([name]) =>
+        name.startsWith('30 minutes before start'),
+      );
+      expect(label).toContain('08:30');
+      expect(value).toBe('main: Prepare the agenda');
+
+      entry.click();
+      await waitForCondition(
+        () =>
+          document.querySelector('[data-testid="calendar-job-cron-1"]') !==
+          null,
+      );
+      expect(document.querySelector('.calendar-jobs h3').textContent).toBe(
+        t('calendar.jobs.heading'),
+      );
     });
 
     it('explains Schedule Runs, hidden entries and layers in tooltips', async () => {
@@ -505,32 +679,8 @@ describe('CalendarView', () => {
       expect(chip.getAttribute('aria-pressed')).toBe('false');
     });
 
-    it('deletes only the chosen occurrence of a recurring event additively', async () => {
-      serveWindow(
-        calendarWindow({
-          events: [
-            {
-              id: 'evt-1',
-              title: 'Standup',
-              rrule: { freq: 'weekly', interval: 1 },
-            },
-          ],
-          occurrences: [
-            {
-              event_id: 'evt-1',
-              title: 'Standup',
-              all_day: false,
-              recurring: true,
-              notes: null,
-              start_utc: '2026-09-23T09:00:00+00:00',
-              end_utc: '2026-09-23T09:30:00+00:00',
-              start_date: null,
-              end_date: null,
-              occurrence_start: '2026-09-23T09:00:00',
-            },
-          ],
-        }),
-      );
+    it('deletes only the chosen occurrence of a repeating event by its id', async () => {
+      serveWindow(weeklyStandup(), [eventJob()]);
       mountedComponent = await mountCalendarView();
       // The entry's card names how the series repeats.
       focusWithKeyboard(
@@ -543,25 +693,31 @@ describe('CalendarView', () => {
       document.querySelector('.calendar-cell .calendar-entry').click();
       flushSync();
 
-      button(t('common.delete')).click();
+      // The footer deletes the event; each Agent job has its own Delete.
+      button(
+        t('common.delete'),
+        document.querySelector('.modal-footer'),
+      ).click();
       flushSync();
+      // Deleting the whole event takes its Agent jobs along.
+      expect(document.querySelector('.calendar-delete-jobs').textContent).toBe(
+        t('calendar.deleteJob'),
+      );
       document
         .querySelectorAll('.calendar-delete-choice input[type="radio"]')[1]
         .click();
       flushSync();
+      expect(document.querySelector('.calendar-delete-jobs')).toBeNull();
       button(
         t('calendar.deleteOccurrence'),
         document.querySelector('.modal-footer'),
       ).click();
-      await waitForCondition(() => rpcCalls('calendar.add_exdate').length > 0);
+      await waitForCondition(() => rpcCalls('calendar.delete').length > 0);
 
-      expect(rpcCalls('calendar.add_exdate')).toEqual([
-        { id: 'evt-1', occurrence_start: '2026-09-23T09:00:00' },
+      expect(rpcCalls('calendar.delete')).toEqual([
+        { id: 'evt-1_20260923T0900' },
       ]);
-      // Regression: excluding used to re-send the whole exdates array through
-      // an update, which could drop a concurrent tab's exclusion.
       expect(rpcCalls('calendar.update')).toEqual([]);
-      expect(rpcCalls('calendar.delete')).toEqual([]);
     });
   });
 });

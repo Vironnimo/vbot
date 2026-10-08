@@ -219,9 +219,6 @@ function sessionReferenceText(reference) {
   if (reference?.kind === 'cron') {
     return t('sessions.reference_cron', { name });
   }
-  if (reference?.kind === 'calendar') {
-    return t('sessions.reference_calendar', { name });
-  }
   if (reference?.kind === 'bootstrap') {
     return t('sessions.reference_bootstrap', { name });
   }

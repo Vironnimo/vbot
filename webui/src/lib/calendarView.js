@@ -1,17 +1,18 @@
 // Calendar view controller and pure date helpers.
 //
 // The calendar renders a server-owned projection: `calendar.window` returns
-// expanded event occurrences plus the live cron projection for one window. All
+// expanded event occurrences plus the live cron projection for one window, and
+// `cron.list` names the Cron jobs bound to events (their Agent jobs). All
 // instants arrive as UTC ISO strings and are rendered in the SERVER timezone
 // (reported per response) — never the browser's accidental local zone, matching
 // the Cron view's convention. Grid math itself works on plain calendar day
 // keys ("YYYY-MM-DD"), which are timezone-neutral.
 
 import {
-  addCalendarExdate,
   createCalendarEvent,
   deleteCalendarEvent,
   getCalendarWindow,
+  listCronJobs,
   updateCalendarEvent,
 } from './api.js';
 import { activeLocaleTag } from './i18n.js';
@@ -237,7 +238,7 @@ export function stepAnchor(view, anchorKey, direction) {
 
 export function dayKeyForOccurrence(occurrence, timeZone) {
   if (occurrence.all_day) {
-    return occurrence.start_date;
+    return String(occurrence.start ?? '').slice(0, 10);
   }
   return dayKeyInZone(occurrence.start_utc, timeZone);
 }
@@ -276,55 +277,21 @@ export function eventById(events, eventId) {
   return events.find((event) => event.id === eventId) ?? null;
 }
 
-// Build the editable form payload from one event record. Single timed events
-// are absolute UTC instants; the form must present the wall clock the user sees
-// in the grid (the server zone), not the raw UTC date -- otherwise editing and
-// resaving silently shifts the event by the zone offset.
-export function eventToFormValues(event, systemTimeZone = 'UTC') {
-  const rrule = event.rrule ?? null;
-  const recurringTimed = !event.all_day && Boolean(event.start_local);
-  return {
-    title: event.title ?? '',
-    notes: event.notes ?? '',
-    all_day: Boolean(event.all_day),
-    start_date: event.all_day
-      ? event.start_date
-      : recurringTimed
-        ? event.start_local.slice(0, 10)
-        : dayKeyInZone(event.start_utc, systemTimeZone),
-    start_time: event.all_day
-      ? '09:00'
-      : recurringTimed
-        ? event.start_local.slice(11, 16)
-        : wallTimeInZone(event.start_utc, systemTimeZone) || '09:00',
-    duration_minutes: event.duration_minutes ?? 60,
-    duration_days: event.duration_days ?? 1,
-    freq: rrule?.freq ?? 'none',
-    interval: rrule?.interval ?? 1,
-    by_weekday: rrule?.by_weekday ?? ['mo', 'tu', 'we', 'th', 'fr'],
-    end_mode: rrule
-      ? rrule.count != null
-        ? 'count'
-        : rrule.until != null
-          ? 'until'
-          : 'never'
-      : 'never',
-    end_count: rrule?.count ?? 10,
-    end_until: rrule?.until ?? '',
-  };
+// The Agent jobs of one event, in created order.
+export function eventJobs(jobs, eventId) {
+  return jobs.filter((job) => job.event_id === eventId);
 }
 
-// Render one UTC instant as the server-zone wall-clock time "HH:MM" (24-hour),
-// the same shape the recurring path already reads from start_local. The active
-// locale's hour cycle is unsafe for a <input type="time"> value (e.g. "9:00 AM"
-// is not a valid time string), so this is fixed to a canonical 24-hour form.
-function wallTimeInZone(instantIso, timeZone) {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).format(new Date(instantIso));
+// When an Agent job is due for one occurrence: its start or end, shifted by
+// the job's offset. Null when the occurrence has no such instant.
+export function eventJobDueAt(job, occurrence) {
+  const edge =
+    job.event_edge === 'end' ? occurrence.end_utc : occurrence.start_utc;
+  const instant = Date.parse(edge ?? '');
+  if (Number.isNaN(instant)) {
+    return null;
+  }
+  return new Date(instant + (job.event_offset_minutes ?? 0) * 60000);
 }
 
 // ---------------------------------------------------------------------------
@@ -339,10 +306,13 @@ export function createCalendarViewState() {
     anchorKey: todayKey(),
     occurrences: [],
     events: [],
+    // Schedule Runs of the window, without those of Agent jobs, which their
+    // events show.
     cron: [],
-    actions: [],
-    executions: [],
-    actionError: '',
+    // The Cron jobs bound to events (`schedule_type` event), as `cron.list`
+    // returns them; `jobsError` says why they could not be read.
+    jobs: [],
+    jobsError: '',
     systemTimeZone: 'UTC',
     timeZoneResolved: false,
     showLocalLayer: true,
@@ -378,8 +348,14 @@ export function createCalendarController({ state }) {
     state.loadError = '';
     const requestId = ++loadRequestId;
     const { from, to } = windowForView(state.view, state.anchorKey);
+    // The events still show when their jobs cannot be read.
+    const jobsRequest = listCronJobs().then(
+      (result) => ({ jobs: result?.jobs ?? [] }),
+      (error) => ({ error }),
+    );
     try {
       const result = await getCalendarWindow({ from, to });
+      const jobs = await jobsRequest;
       if (requestId !== loadRequestId) {
         return;
       }
@@ -397,10 +373,13 @@ export function createCalendarController({ state }) {
       }
       state.occurrences = result.occurrences ?? [];
       state.events = result.events ?? [];
-      state.cron = result.cron ?? [];
-      state.actions = result.actions ?? [];
-      state.executions = result.executions ?? [];
-      state.actionError = result.action_error ?? '';
+      state.cron = (result.cron ?? []).filter((item) => !item.event_id);
+      if (jobs.error) {
+        state.jobsError = jobs.error?.message ?? String(jobs.error);
+      } else {
+        state.jobs = jobs.jobs.filter((job) => job.schedule_type === 'event');
+        state.jobsError = '';
+      }
     } catch (error) {
       if (requestId !== loadRequestId) {
         return;
@@ -427,23 +406,19 @@ export function createCalendarController({ state }) {
     return result;
   }
 
-  async function updateEvent(eventId, payload) {
-    const result = await updateCalendarEvent({ id: eventId, ...payload });
+  // `id` names a whole event or, for a repeating event, one occurrence.
+  async function updateEvent(id, payload) {
+    const result = await updateCalendarEvent({ id, ...payload });
     await load({ silent: true });
     return result;
   }
 
-  async function deleteEvent(eventId) {
-    await deleteCalendarEvent(eventId);
+  // A whole event goes with its Agent jobs; an occurrence id removes only
+  // that occurrence.
+  async function deleteEvent(id) {
+    const result = await deleteCalendarEvent(id);
     await load({ silent: true });
-  }
-
-  async function excludeOccurrence(eventId, occurrenceStart) {
-    // Additive server-side exclusion (RFC 5545 EXDATE). Sending a full exdates
-    // array here would risk a lost-update race between tabs; the service owns
-    // the read-modify-write atomically.
-    await addCalendarExdate({ id: eventId, occurrence_start: occurrenceStart });
-    await load({ silent: true });
+    return result;
   }
 
   return {
@@ -453,7 +428,6 @@ export function createCalendarController({ state }) {
     createEvent,
     updateEvent,
     deleteEvent,
-    excludeOccurrence,
   };
 }
 

@@ -1,30 +1,40 @@
-import { todayKey, eventById, eventToFormValues } from '$lib/calendarView.js';
+import { todayKey, eventById } from '$lib/calendarView.js';
+import {
+  emptyEventForm,
+  eventFormPayload,
+  eventFormProblem,
+  eventFormValues,
+  monthlyChoices,
+  moveEventStart,
+  occurrenceFormValues,
+  weekdayCode,
+} from '$lib/calendarEventForm.js';
 import { t } from '$lib/i18n.js';
 
-export function createCalendarEventEditor(context) {
-  const EMPTY_FORM = () => ({
-    title: '',
-    notes: '',
-    all_day: false,
-    start_date: todayKey(context.viewState.systemTimeZone),
-    start_time: '09:00',
-    duration_minutes: 60,
-    duration_days: 1,
-    freq: 'none',
-    interval: 1,
-    by_weekday: ['mo', 'tu', 'we', 'th', 'fr'],
-    end_mode: 'never',
-    end_count: 10,
-    end_until: '',
-  });
+const FORM_PROBLEMS = {
+  title: () => t('calendar.errors.titleRequired'),
+  date: () => t('calendar.errors.dateRequired'),
+  end: () => t('calendar.errors.endBeforeStart'),
+  recurrence: () => t('calendar.errors.recurrence'),
+};
 
+// The event dialogs of the Calendar: the create and edit form, the details of
+// one occurrence and the delete confirmation. Editing a repeating event
+// changes the whole series or, by choice, only the shown occurrence.
+export function createCalendarEventEditor(context) {
   let formOpen = $state(false);
 
   let formMode = $state('create');
 
-  let formEventId = $state('');
+  // The occurrence an edit started from; its event is the edited series.
+  let formOccurrence = $state(null);
 
-  let formValues = $state(EMPTY_FORM());
+  // 'series' edits the whole event, 'occurrence' only `formOccurrence`.
+  let editScope = $state('series');
+
+  let formValues = $state(
+    emptyEventForm(todayKey(context.viewState.systemTimeZone)),
+  );
 
   let formError = $state('');
 
@@ -38,10 +48,17 @@ export function createCalendarEventEditor(context) {
 
   let deleteOccurrenceOnly = $state(false);
 
+  // A repeating event's edit offers the choice between the series and the
+  // occurrence it started from.
+  let canEditOccurrence = $derived(
+    formMode === 'edit' && Boolean(formOccurrence?.recurring),
+  );
+
   function openCreate(dayKey = context.viewState.anchorKey) {
     formMode = 'create';
-    formEventId = '';
-    formValues = { ...EMPTY_FORM(), start_date: dayKey };
+    formOccurrence = null;
+    editScope = 'series';
+    formValues = emptyEventForm(dayKey);
     formError = '';
     formOpen = true;
   }
@@ -57,24 +74,96 @@ export function createCalendarEventEditor(context) {
       return;
     }
     formMode = 'edit';
-    formEventId = event.id;
-    formValues = eventToFormValues(event, context.viewState.systemTimeZone);
+    formOccurrence = occurrence;
+    editScope = 'series';
+    formValues = eventFormValues(event, context.viewState.systemTimeZone);
     formError = '';
     detailOpen = false;
     formOpen = true;
   }
 
+  // Switching what an edit changes shows that target's own values.
+  function setEditScope(scope) {
+    if (!canEditOccurrence || scope === editScope) {
+      return;
+    }
+    const zone = context.viewState.systemTimeZone;
+    if (scope === 'occurrence') {
+      formValues = occurrenceFormValues(formOccurrence, zone);
+    } else {
+      const event = eventById(
+        context.viewState.events,
+        formOccurrence.event_id,
+      );
+      if (!event) {
+        return;
+      }
+      formValues = eventFormValues(event, zone);
+    }
+    editScope = scope;
+    formError = '';
+  }
+
+  // A new start keeps the event's length.
+  function setStart(patch) {
+    moveEventStart(formValues, patch);
+    keepMonthlyChoice();
+    formError = '';
+  }
+
+  function setAllDay(allDay) {
+    formValues.all_day = allDay;
+    if (formValues.end_date < formValues.start_date) {
+      formValues.end_date = formValues.start_date;
+    }
+    formError = '';
+  }
+
+  // Weekly repetition starts on the start's weekday.
+  function setFrequency(freq) {
+    formValues.freq = freq;
+    if (freq === 'weekly' && formValues.by_weekday.length === 0) {
+      formValues.by_weekday = [weekdayCode(formValues.start_date)];
+    }
+    keepMonthlyChoice();
+    formError = '';
+  }
+
+  function toggleWeekday(code) {
+    formValues.by_weekday = formValues.by_weekday.includes(code)
+      ? formValues.by_weekday.filter((day) => day !== code)
+      : [...formValues.by_weekday, code];
+  }
+
+  // A monthly weekday choice the new start day no longer offers falls back
+  // to its day of the month.
+  function keepMonthlyChoice() {
+    if (
+      !monthlyChoices(formValues.start_date).includes(formValues.monthly_by)
+    ) {
+      formValues.monthly_by = 'day';
+    }
+  }
+
   async function submitForm() {
-    if (!formValues.title.trim()) {
-      formError = t('calendar.errors.titleRequired');
+    if (submitting) {
+      return;
+    }
+    const repeats = editScope === 'series';
+    const problem = eventFormProblem(formValues, { repeats });
+    if (problem) {
+      formError = FORM_PROBLEMS[problem]();
       return;
     }
     submitting = true;
     formError = '';
     try {
-      const payload = formValuesToEventPayload(formValues);
+      const payload = eventFormPayload(formValues, { repeats });
       if (formMode === 'edit') {
-        await context.controller.updateEvent(formEventId, payload);
+        await context.controller.updateEvent(
+          repeats ? formOccurrence.event_id : formOccurrence.id,
+          payload,
+        );
       } else {
         const result = await context.controller.createEvent(payload);
         const occurrence = context.viewState.occurrences.find(
@@ -103,60 +192,20 @@ export function createCalendarEventEditor(context) {
       return;
     }
     try {
-      if (occurrence.recurring && deleteOccurrenceOnly) {
-        await context.controller.excludeOccurrence(
-          occurrence.event_id,
-          occurrenceExdateValue(occurrence),
-        );
-      } else {
-        await context.controller.deleteEvent(occurrence.event_id);
-      }
+      await context.controller.deleteEvent(
+        occurrence.recurring && deleteOccurrenceOnly
+          ? occurrence.id
+          : occurrence.event_id,
+      );
     } catch (error) {
-      context.onToast(error?.message ?? String(error));
+      context.onToast({
+        title: t('calendar.errors.delete'),
+        message: error?.message ?? String(error),
+        variant: 'error',
+      });
     }
   }
 
-  // The exclusion (RFC 5545 EXDATE) uses the event's own start form: a naive
-  // local datetime for timed events, a plain date for all-day events. The
-  // server renders it per occurrence in the event's anchor zone.
-  function occurrenceExdateValue(occurrence) {
-    return occurrence.occurrence_start;
-  }
-
-  function formValuesToEventPayload(values) {
-    const payload = {
-      title: values.title,
-      notes: values.notes || null,
-      all_day: values.all_day,
-    };
-    if (values.all_day) {
-      payload.start = values.start_date;
-      payload.duration_days = Number(values.duration_days) || 1;
-    } else {
-      payload.start = `${values.start_date}T${values.start_time || '09:00'}:00`;
-      payload.duration_minutes = Number(values.duration_minutes) || 60;
-    }
-    if (values.freq !== 'none') {
-      const rrule = {
-        freq: values.freq,
-        interval: Number(values.interval) || 1,
-      };
-      if (values.freq === 'weekly') {
-        rrule.by_weekday = values.by_weekday?.length
-          ? values.by_weekday
-          : ['mo'];
-      }
-      if (values.end_mode === 'count') {
-        rrule.count = Number(values.end_count) || 10;
-      } else if (values.end_mode === 'until') {
-        rrule.until = values.end_until || undefined;
-      }
-      payload.rrule = rrule;
-    } else {
-      payload.rrule = null;
-    }
-    return payload;
-  }
   return {
     get formOpen() {
       return formOpen;
@@ -167,26 +216,20 @@ export function createCalendarEventEditor(context) {
     get formMode() {
       return formMode;
     },
-    set formMode(value) {
-      formMode = value;
-    },
     get formValues() {
       return formValues;
-    },
-    set formValues(value) {
-      formValues = value;
     },
     get formError() {
       return formError;
     },
-    set formError(value) {
-      formError = value;
-    },
     get submitting() {
       return submitting;
     },
-    set submitting(value) {
-      submitting = value;
+    get editScope() {
+      return editScope;
+    },
+    get canEditOccurrence() {
+      return canEditOccurrence;
     },
     get detailOpen() {
       return detailOpen;
@@ -196,9 +239,6 @@ export function createCalendarEventEditor(context) {
     },
     get detailOccurrence() {
       return detailOccurrence;
-    },
-    set detailOccurrence(value) {
-      detailOccurrence = value;
     },
     get deleteTarget() {
       return deleteTarget;
@@ -212,23 +252,16 @@ export function createCalendarEventEditor(context) {
     set deleteOccurrenceOnly(value) {
       deleteOccurrenceOnly = value;
     },
-    get openCreate() {
-      return openCreate;
-    },
-    get openDetail() {
-      return openDetail;
-    },
-    get openEdit() {
-      return openEdit;
-    },
-    get submitForm() {
-      return submitForm;
-    },
-    get requestDelete() {
-      return requestDelete;
-    },
-    get confirmDelete() {
-      return confirmDelete;
-    },
+    openCreate,
+    openDetail,
+    openEdit,
+    setEditScope,
+    setStart,
+    setAllDay,
+    setFrequency,
+    toggleWeekday,
+    submitForm,
+    requestDelete,
+    confirmDelete,
   };
 }
