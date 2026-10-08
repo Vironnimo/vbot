@@ -704,7 +704,7 @@ async def test_follow_up_results_show_the_screen_without_repeating_launch_facts(
     terminal: Terminal, manager: tuple[TerminalManager, AdapterFactory]
 ) -> None:
     started = await terminal({"action": "start", "command": "fake-tui", "args": ["-q"]})
-    assert list(started["data"]) == ["terminal_id", "state", "screen"]
+    assert list(started["data"]) == ["terminal_id", "state", "screen", "next"]
     terminal_id = started["data"]["terminal_id"]
     manager[1].adapters[0].emit("".join(f"line-{index}\r\n" for index in range(30)) + "ready> ")
     await eventually(lambda: terminal.manager.terminal(terminal_id, OWNER).screen_revision > 0)
