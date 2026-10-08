@@ -412,13 +412,15 @@ CREATE TABLE checkpoint_projections (
 -- The streamed output of a running Run's current Model step that no Assistant
 -- entry holds yet, in append order. Appending the Run's next Assistant entry
 -- and finishing the Run delete it; restart recovery turns what is left into
--- the Run's interrupted Assistant entry.
+-- the Run's interrupted Assistant entry. tool_calls_json holds the Tool Calls
+-- that started with this chunk, as a JSON array of canonical Tool Call objects.
 CREATE TABLE run_stream_drafts (
   chunk_key INTEGER PRIMARY KEY,
   run_key INTEGER NOT NULL REFERENCES runs (run_key) ON DELETE CASCADE,
   model TEXT NOT NULL,
   reasoning_delta TEXT NOT NULL DEFAULT '',
-  content_delta TEXT NOT NULL DEFAULT ''
+  content_delta TEXT NOT NULL DEFAULT '',
+  tool_calls_json TEXT
 ) STRICT;
 
 -- Draft chunks of one Run in append order (recovery, deletes, the runs FK).
