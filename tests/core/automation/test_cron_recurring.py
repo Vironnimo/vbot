@@ -50,7 +50,7 @@ async def test_run_cron_job_fires_and_continues_after_trigger_failure(
     trigger_service.trigger_run.side_effect = trigger_then_fail_then_pause
 
     # Act
-    await service._run_cron_job(job)
+    await service._run_recurring_job(job, "cron")
 
     # Assert
     assert trigger_service.trigger_run.await_count == 2
