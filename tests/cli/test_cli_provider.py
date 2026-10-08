@@ -211,6 +211,33 @@ def test_provider_status_shows_the_provider_connections(
             ["- GitHub Copilot (github-copilot:oauth)  plan: -", "  error: Network error"],
             id="provider-error",
         ),
+        pytest.param(
+            (),
+            {},
+            {
+                "connection": "openrouter:api-key",
+                "display_name": "OpenRouter",
+                "plan": None,
+                "credits": {"enabled": True, "balance": 4.7312, "unit": "USD"},
+                "windows": [
+                    {
+                        "label": "API key spending cap",
+                        "used_percent": 25.0,
+                        "reset_at": None,
+                        "used_units": 2.5,
+                        "total_units": 10.0,
+                        "unit": "USD",
+                    }
+                ],
+                "error": None,
+            },
+            [
+                "- OpenRouter (openrouter:api-key)  plan: -",
+                "  credits: 4.73 USD",
+                "  - API key spending cap: used=25% remaining=75% reset_at=- units=2.5/10 USD",
+            ],
+            id="credits-and-units",
+        ),
     ],
 )
 def test_provider_usage_prints_the_live_usage_snapshot(

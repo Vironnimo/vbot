@@ -15,13 +15,51 @@ import {
   usageHistorySince,
   usageHistorySlots,
   usageHistorySummary,
+  usageCreditsText,
   usageSeverity,
+  usageWindowUnitsText,
 } from '../statisticsLimits.js';
 
 const byLabel = (content) =>
   Object.fromEntries(content.rows.map((row) => [row.label, row]));
 
 describe('statisticsLimits provider usage', () => {
+  it('words window units and credits in their unit, money with cents', () => {
+    expect(
+      usageWindowUnitsText({
+        remaining_units: 225,
+        total_units: 300,
+        unit: 'interactions',
+      }),
+    ).toBe('225 of 300 interactions remaining');
+    expect(
+      usageWindowUnitsText({
+        remaining_units: 4.731,
+        total_units: 10,
+        unit: 'USD',
+      }),
+    ).toBe('$4.73 of $10.00 remaining');
+    expect(usageWindowUnitsText({ used_units: 2.5, unit: 'USD' })).toBe(
+      '$2.50 used',
+    );
+    expect(usageWindowUnitsText({ unlimited: true })).toBe('Unlimited');
+    expect(usageWindowUnitsText({ used_percent: 3 })).toBeNull();
+
+    expect(
+      usageCreditsText({ enabled: true, balance: 4.731, unit: 'USD' }),
+    ).toBe('Balance $4.73');
+    expect(usageCreditsText({ enabled: true, balance: 1234, unit: null })).toBe(
+      '1,234 credits',
+    );
+    expect(usageCreditsText({ enabled: true, balance: null })).toBe(
+      'Credits available',
+    );
+    expect(
+      usageCreditsText({ enabled: false, balance: 0, unit: 'USD' }),
+    ).toBeNull();
+    expect(usageCreditsText(null)).toBeNull();
+  });
+
   it('clamps usage percentages into [0, 100] and buckets severity at the warn / critical thresholds', () => {
     expect([42.5, 150, -5, 'x'].map(clampUsagePercent)).toEqual([
       42.5, 100, 0, 0,

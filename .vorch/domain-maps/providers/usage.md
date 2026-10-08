@@ -12,11 +12,12 @@ The Runtime owns one service instance for shared caching and the hourly collecto
 
 The frozen serializable projection is:
 
-- `UsageWindow`: label, `used_percent` clamped to 0-100, ISO-8601 UTC `reset_at` or null, optional window duration, optional used/remaining/total unit counts and unit name, and optional unlimited marker.
+- `UsageWindow`: label, `used_percent` clamped to 0-100, ISO-8601 UTC `reset_at` or null, optional window duration, optional used/remaining/total unit counts and unit name (`USD` for money), and optional unlimited marker.
+- `UsageCredits`: `enabled`, optional `balance`, and optional `unit` (`USD` when the Provider states a currency; null for a Provider's own credit unit, such as OpenAI's).
 - `ProviderUsageSnapshot`: base Connection id, exact Account id, display name, optional plan, optional structured credits, windows, and optional error.
 - `UsageReport`: generation timestamp and Provider snapshots.
 
-`report(connections=None)` supports an optional Connection filter. Only Connections with registered fetchers and `is_usable()` are targets; disabled or uncredentialed Connections are never probed. A snapshot with neither windows, enabled credits, nor an error is omitted. The CLI exposes this as `provider usage [--connection <provider:connection-id>]...`; repeated filters are passed as one `connections` list and output includes used and derived remaining percentages, reset timestamps, and per-Provider errors.
+`report(connections=None)` supports an optional Connection filter. Only Connections with registered fetchers and `is_usable()` are targets; disabled or uncredentialed Connections are never probed. A snapshot with neither windows, enabled credits, nor an error is omitted. The CLI exposes this as `provider usage [--connection <provider:connection-id>]...`; repeated filters are passed as one `connections` list and output includes used and derived remaining percentages, reset timestamps, window units, credits (USD with cents), and per-Provider errors.
 
 ## Automatic history
 
@@ -24,7 +25,7 @@ On Runtime startup inside an active event loop, the collector reads the newest s
 
 Meaningful reports are stored in the canonical `<data-dir>/provider-usage.db` (kernel name `provider_usage`, `database.md`), registered in the data-store marker and in `Runtime.canonical_databases()` / `canonical_database_specs`, so snapshots, status and restore cover it. `ProviderUsageService` opens it through `ProviderUsageHistoryStore.open(data_root)` in every startup mode (verification checks it; only normal startup samples) and closes the store it opened in `close()`/`aclose()`; an injected store stays with its caller. Providers is the only writer and owner of this normalized upstream data; Statistics neither writes nor caches it. Error snapshots are stored so upstream outages remain visible gaps with reasons; an empty report caused by having no supported usable Connection is not stored. History is unbounded (retention is manual, via clear) and survives Connection removal because rows are not coupled to current configuration. Storage contains only the normalized public projection, never raw upstream responses or credentials.
 
-Schema (Generation 1, `core/providers/usage_history.py`): `usage_samples` (AUTOINCREMENT `sample_key`, `sampled_at`, indexed by `usage_samples_by_time` for the range read and the MAX read), `usage_snapshots` (one row per Provider snapshot, keyed by sample and report ordinal, with flattened plan/credits/error) and `usage_windows` (keyed by sample, snapshot ordinal and window ordinal). Children cascade from their sample. Every stored timestamp (`sampled_at`, `reset_at`) is canonical UTC `YYYY-MM-DDTHH:MM:SS.ffffffZ` (`core/utils/timestamps.py`); offsets are normalized on write and a naive timestamp is rejected, as are naive `since`/`until` bounds (the RPC edge reads a naive input as UTC before it reaches the store). A sample is validated completely before one write transaction (exact keys, finite numbers, `used_percent` clamped to 0-100), so an invalid report stores nothing. Reads reassemble the same public `{sampled_at, providers}` projection in report order.
+Schema (Generation 1, `core/providers/usage_history.py`): `usage_samples` (AUTOINCREMENT `sample_key`, `sampled_at`, indexed by `usage_samples_by_time` for the range read and the MAX read), `usage_snapshots` (one row per Provider snapshot, keyed by sample and report ordinal, with flattened plan/credits/error; `credits_unit` was added as a nullable column on 2026-10-08, so older rows read `unit: null`) and `usage_windows` (keyed by sample, snapshot ordinal and window ordinal). Children cascade from their sample. Every stored timestamp (`sampled_at`, `reset_at`) is canonical UTC `YYYY-MM-DDTHH:MM:SS.ffffffZ` (`core/utils/timestamps.py`); offsets are normalized on write and a naive timestamp is rejected, as are naive `since`/`until` bounds (the RPC edge reads a naive input as UTC before it reaches the store). A sample is validated completely before one write transaction (exact keys, finite numbers, `used_percent` clamped to 0-100), so an invalid report stores nothing. Reads reassemble the same public `{sampled_at, providers}` projection in report order.
 
 All store I/O runs on the database's worker pool, off the Event Loop; the sampler's `DatabaseError` and invalid-sample failures log a warning and skip that attempt. `provider.usage_history` accepts an inclusive optional `{since?, until?}` ISO-8601 window and returns samples oldest first. `provider.usage_history.clear` deletes every sample in one transaction and returns `{deleted_samples}`; the database file itself always remains. The WebUI places an explicit confirmation in front of that destructive RPC; the CLI is `provider history list|clear --yes`.
 
@@ -32,7 +33,7 @@ All store I/O runs on the database's worker pool, off the Event Loop; the sample
 
 Fetchers fan out concurrently. Each has a bounded timeout and fails open into its own snapshot: timeout, HTTP status, unsupported/invalid shape, or generic unavailable. One Provider cannot fail siblings.
 
-Successful snapshots cache per exact Connection+Account target for 10 seconds; error snapshots for 60 seconds. A per-target async lock coalesces concurrent cache misses so multiple browser windows and the automatic collector do not multiply outbound requests. The service caches normalized snapshots, never raw OAuth tokens.
+Successful snapshots cache per exact Connection+Account target for 10 seconds, or longer where a Provider sets a polling floor (`_MIN_CACHE_TTL_SECONDS`: Ollama Cloud 60 seconds); error snapshots for 60 seconds. A per-target async lock coalesces concurrent cache misses so multiple browser windows and the automatic collector do not multiply outbound requests. The service caches normalized snapshots, never raw OAuth tokens.
 
 Every fetch acquires fresh auth through Runtime token getters or reads narrowly required token-store extras. Logs include no token data. Provider-specific endpoint/header/shape facts remain in each Provider's map.
 
@@ -44,11 +45,12 @@ The hourly sampler isolates each automatic attempt. An unexpected collection fai
 
 - `openai:subscription`: ChatGPT usage windows/credits and account-scoped Codex headers; verified endpoint details in `providers/openai.md`.
 - `github-copilot:oauth`: Copilot entitlement/usage using stored GitHub OAuth extra; details in `providers/github-copilot.md`.
-- `ollama-cloud:api-key`: Ollama Cloud session/weekly quota ratios and observed per-Model request counts; details in `providers/ollama.md`.
+- `ollama-cloud:api-key`: Ollama Cloud session/weekly limits or monthly included credits with exact reset times, plus purchased USD credits, from the documented `/api/balance`; details in `providers/ollama.md`.
 - `minimax:api-key`: MiniMax token-plan remains projection; details in `providers/minimax.md`.
-- `openrouter:api-key`: account credits balance plus an optional API-key spending-cap window; a failed `/key` probe degrades to a credits-only snapshot. Verified endpoint details in `providers/openrouter.md`.
+- `openrouter:api-key`: account credits balance (USD) plus an optional API-key spending-cap window; a failed `/key` probe degrades to a credits-only snapshot. Verified endpoint details in `providers/openrouter.md`.
+- `opencode-go:api-key`: OpenCode Go 5-hour, weekly and monthly percentages with reset times from an undocumented endpoint; details in `providers/opencode-go.md`. OpenCode Zen exposes no usage to an API key.
 
-OpenAI and Ollama Cloud are live-verified as documented in their maps. Ollama Cloud's endpoint is not publicly documented and must remain strict and fail-open. Copilot and MiniMax parsing is intentionally fail-open against inferred upstream shapes; a mismatch must remain an error snapshot, not break the report. OpenRouter's `/credits` shape is live-verified; the spending-cap window path is unit-tested only (the probe key had no cap set).
+OpenAI, Ollama Cloud and OpenCode Go are live-verified as documented in their maps. OpenCode Go's endpoint is not publicly documented, and Ollama Cloud replaced its earlier undocumented one without notice on 2026-10-07; both parsers stay strict and fail open. Copilot and MiniMax parsing is intentionally fail-open against inferred upstream shapes; a mismatch must remain an error snapshot, not break the report. OpenRouter's `/credits` shape is live-verified; the spending-cap window path is unit-tested only (the probe key had no cap set).
 
 ## Source and tests
 

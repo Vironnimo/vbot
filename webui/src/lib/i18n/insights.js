@@ -337,8 +337,8 @@ export default Object.freeze({
   'statistics.limits.unavailable': 'Usage unavailable',
   'statistics.limits.usedPercent': '{percent}% used',
   'statistics.limits.resetsIn': 'Resets in {duration}',
-  'statistics.limits.observedUnits':
-    '{used} {unit} observed; quota usage is provider-weighted',
+  'statistics.limits.usedUnits': '{used} {unit} used',
+  'statistics.limits.usedAmount': '{used} used',
   'statistics.col.strategy': 'Strategy',
   'statistics.compactions.averageAfter': 'Average remaining tokens',
   'statistics.compactions.averageBefore': 'Average tokens before',
@@ -396,6 +396,7 @@ export default Object.freeze({
   'statistics.limits.correlationNotice':
     'These Runs overlap the observation interval. Parallel use outside vBot may also change the Subscription.',
   'statistics.limits.credits': '{balance} credits',
+  'statistics.limits.balance': 'Balance {balance}',
   'statistics.limits.creditsAvailable': 'Credits available',
   'statistics.limits.deleteHistory': 'Delete history',
   'statistics.limits.deleteHistoryBody':
@@ -427,6 +428,7 @@ export default Object.freeze({
   'statistics.limits.range7d': '7 days',
   'statistics.limits.rangeAll': 'All',
   'statistics.limits.remainingUnits': '{remaining} of {total} {unit} remaining',
+  'statistics.limits.remainingAmount': '{remaining} of {total} remaining',
   'statistics.limits.reset': 'Reset / discontinuity',
   'statistics.limits.runs': 'Runs',
   'statistics.limits.tokens': 'Tokens',

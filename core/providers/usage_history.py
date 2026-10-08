@@ -62,6 +62,7 @@ CREATE TABLE usage_snapshots (
   credits_enabled INTEGER CHECK (credits_enabled IS NULL OR credits_enabled IN (0, 1)),
   credits_balance REAL,
   error           TEXT,
+  credits_unit    TEXT,
   PRIMARY KEY (sample_key, ordinal),
   CHECK (credits_enabled IS NOT NULL OR credits_balance IS NULL)
 ) STRICT, WITHOUT ROWID;
@@ -110,7 +111,7 @@ _WINDOW_KEYS = frozenset(
         "unlimited",
     }
 )
-_CREDITS_KEYS = frozenset({"enabled", "balance"})
+_CREDITS_KEYS = frozenset({"enabled", "balance", "unit"})
 
 
 def provider_usage_database_spec(path: Path) -> DatabaseSpec:
@@ -273,7 +274,7 @@ class ProviderUsageHistoryStore:
             ).fetchall()
             snapshot_rows = connection.execute(
                 "SELECT n.sample_key, n.ordinal, n.connection, n.account, n.display_name, "
-                "n.plan, n.credits_enabled, n.credits_balance, n.error "
+                "n.plan, n.credits_enabled, n.credits_balance, n.error, n.credits_unit "
                 "FROM usage_snapshots AS n JOIN usage_samples AS s ON s.sample_key = n.sample_key"
                 f"{where} ORDER BY n.sample_key, n.ordinal",
                 parameters,
@@ -314,6 +315,7 @@ def _insert_sample(connection: sqlite3.Connection, sample: UsageHistorySample) -
                 None if credits is None else int(credits["enabled"]),
                 None if credits is None else credits["balance"],
                 snapshot["error"],
+                None if credits is None else credits["unit"],
             )
         )
         for ordinal, window in enumerate(snapshot["windows"]):
@@ -336,7 +338,8 @@ def _insert_sample(connection: sqlite3.Connection, sample: UsageHistorySample) -
             )
     connection.executemany(
         "INSERT INTO usage_snapshots(sample_key, ordinal, connection, account, display_name, "
-        "plan, credits_enabled, credits_balance, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "plan, credits_enabled, credits_balance, error, credits_unit) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         snapshot_rows,
     )
     connection.executemany(
@@ -415,6 +418,7 @@ def _assemble_samples(
             credits_enabled,
             credits_balance,
             error,
+            credits_unit,
         ) = row
         snapshots.setdefault(sample_key, []).append(
             {
@@ -425,7 +429,11 @@ def _assemble_samples(
                 "windows": windows.get((sample_key, ordinal), []),
                 "credits": None
                 if credits_enabled is None
-                else {"enabled": bool(credits_enabled), "balance": credits_balance},
+                else {
+                    "enabled": bool(credits_enabled),
+                    "balance": credits_balance,
+                    "unit": credits_unit,
+                },
                 "error": error,
             }
         )
@@ -500,6 +508,7 @@ def _credits_from_dict(raw: Any) -> JsonObject | None:
     return {
         "enabled": raw["enabled"],
         "balance": _optional_number(raw["balance"], "credits.balance"),
+        "unit": _optional_string(raw["unit"], "credits.unit"),
     }
 
 

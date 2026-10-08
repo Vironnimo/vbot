@@ -52,7 +52,7 @@ def _snapshot(**overrides: Any) -> dict[str, Any]:
         "display_name": "OpenAI",
         "plan": "pro",
         "windows": [_window()],
-        "credits": {"enabled": True, "balance": 12.0},
+        "credits": {"enabled": True, "balance": 12.0, "unit": "USD"},
         "error": None,
         **overrides,
     }
@@ -169,7 +169,7 @@ async def test_samples_reassemble_the_public_snapshot_projection(
         display_name="OpenRouter",
         plan=None,
         windows=[],
-        credits={"enabled": True, "balance": None},
+        credits={"enabled": True, "balance": None, "unit": None},
     )
     failed = _snapshot(
         connection="github-copilot:oauth",
@@ -241,7 +241,10 @@ async def test_append_normalizes_timestamps_and_clamps_percentages(
         ("2026-07-01T01:00:00+00:00", _snapshot(windows=[_window(window_seconds=0)])),
         ("2026-07-01T01:00:00+00:00", _snapshot(windows=[_window(reset_at="2026-07-01")])),
         ("2026-07-01T01:00:00+00:00", _snapshot(windows=[_window(unlimited="yes")])),
-        ("2026-07-01T01:00:00+00:00", _snapshot(credits={"enabled": 1, "balance": None})),
+        (
+            "2026-07-01T01:00:00+00:00",
+            _snapshot(credits={"enabled": 1, "balance": None, "unit": None}),
+        ),
         ("2026-07-01T01:00:00+00:00", _snapshot(account="")),
         ("2026-07-01T01:00:00+00:00", {**_snapshot(), "raw": {}}),
         ("2026-07-01T01:00:00", _snapshot()),
