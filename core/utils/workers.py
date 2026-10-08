@@ -265,6 +265,24 @@ async def settle_before_cancelling[SettledResult](
     return future.result()
 
 
+async def finish_despite_cancel[FinishedResult](work: Awaitable[FinishedResult]) -> FinishedResult:
+    """Await *work* and return its result, even when the caller is cancelled meanwhile.
+
+    For work whose result must reach the caller once it has begun, because its
+    effect cannot be taken back, such as a started Sub-Agent whose Parent must
+    receive the start result. Unlike :func:`settle_before_cancelling`, the
+    cancellation is absorbed: the caller returns the result normally, and an
+    enclosing ``asyncio.timeout`` does not expire. A failure of *work* propagates.
+    """
+    future = asyncio.ensure_future(work)
+    while True:
+        try:
+            return await asyncio.shield(future)
+        except asyncio.CancelledError:
+            if future.done():
+                return future.result()
+
+
 def _log_late_failure(work: str, error: BaseException) -> None:
     if isinstance(error, VBotError):
         _LOGGER.warning(

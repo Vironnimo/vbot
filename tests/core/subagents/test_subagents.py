@@ -17,7 +17,7 @@ import pytest
 import core.subagents.subagents as subagents_module
 from core.chat import ChatMessage
 from core.projects import AgentResolutionError, ResolutionProjectNotFoundError
-from core.runs import Run, RunAdmission, RunKind, RunStatus
+from core.runs import Run, RunAdmission, RunAdmissionBlockedError, RunKind, RunStatus
 from core.sessions import (
     SESSION_WORKING_PROJECT_META_KEY,
     SUBAGENT_PARENT_META_KEY,
@@ -569,6 +569,58 @@ async def test_stop_all_includes_a_child_whose_admission_is_in_flight(
     [(_event_type, started)] = harness.events
     assert harness.manager.get(started["data"]["run_id"]).status is RunStatus.CANCELLED
     assert harness.triggers.to(harness.parent) == []
+
+
+@pytest.mark.parametrize("action", ["run", "send"])
+async def test_a_call_cancelled_once_its_work_began_still_returns_its_result(
+    harness: SubAgentHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+) -> None:
+    harness.loop.hold("review")
+    working = await harness.spawn("review")
+    activities = harness.coordinator._activities  # noqa: SLF001
+    ensure_activity = activities.ensure
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def held_activity(address):
+        entered.set()
+        await release.wait()
+        return await ensure_activity(address)
+
+    monkeypatch.setattr(activities, "ensure", held_activity)
+    arguments: dict[str, Any] = (
+        {"description": "Do fix", "content": "fix"}
+        if action == "run"
+        else {"action": "send", "id": working["id"], "content": "fix"}
+    )
+    call = asyncio.create_task(harness.call(arguments))
+    await entered.wait()
+    # The calling Run's cancel lands after the Sub-Agent's turn began.
+    call.cancel()
+    await asyncio.sleep(0)
+    release.set()
+    result = await call
+
+    # The Parent gets the result, so it never starts the same work again.
+    assert result["ok"], result
+    assert harness.loop.turns[-1].content == "fix"
+    harness.subagent_session(result["data"]["id"])
+
+
+async def test_a_subagent_whose_run_cannot_start_leaves_no_session(
+    harness: SubAgentHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def refuse(*_arguments: Any, **_options: Any) -> Run:
+        raise RunAdmissionBlockedError("run manager is shutting down")
+
+    monkeypatch.setattr(harness.manager, "start", refuse)
+
+    result = await harness.call({"description": "Do review", "content": "review"})
+
+    assert result["ok"] is False
+    assert harness.sessions.subagent_children(harness.parent) == []
+    assert harness.sessions.list_addresses(agent_id="parent") == [harness.parent]
 
 
 @pytest.mark.parametrize(
