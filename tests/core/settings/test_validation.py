@@ -139,11 +139,16 @@ _DATA_DIR_DOCUMENTS: dict[str, tuple[str, dict[str, object]]] = {
 }
 
 
+# Documents whose current format is past version 1.
+_FORMAT_VERSIONS = {"calendar/events.json": 2}
+
+
 def _write_data_dir_documents(root: Path, *, current: bool) -> None:
     for relative_path, (legacy, fields) in _DATA_DIR_DOCUMENTS.items():
         path = root / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
-        text = json.dumps({"format_version": 1, **fields}) if current else legacy
+        version = _FORMAT_VERSIONS.get(relative_path, 1)
+        text = json.dumps({"format_version": version, **fields}) if current else legacy
         path.write_text(text, encoding="utf-8")
 
 

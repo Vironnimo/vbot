@@ -4,38 +4,23 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.calendar import CalendarService
+from core.calendar import CalendarService, parse_occurrence_id
 from server.events import RESOURCE_KIND_CALENDAR
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.event_bridge import publish_resource_changed
-from server.rpc.validation import (
-    _optional_positive_integer,
-    _optional_string,
-    _reject_unsupported,
-    _required_string,
-)
+from server.rpc.validation import _reject_unsupported, _required_string
 
 JsonObject = dict[str, Any]
 
 _WINDOW_FIELDS = frozenset({"from", "to"})
-_EVENT_MUTATION_FIELDS = frozenset(
-    {
-        "title",
-        "start",
-        "all_day",
-        "duration_minutes",
-        "duration_days",
-        "rrule",
-        "exdates",
-        "notes",
-    }
-)
-_CREATE_FIELDS = _EVENT_MUTATION_FIELDS
-_UPDATE_FIELDS = _EVENT_MUTATION_FIELDS | {"id"}
+# Texts a call may clear with null or "".
+_TEXT_FIELDS = ("description", "location", "rrule")
+_EVENT_FIELDS = frozenset({"title", "start", "end", *_TEXT_FIELDS})
+_CREATE_FIELDS = _EVENT_FIELDS
+_UPDATE_FIELDS = _EVENT_FIELDS | {"id"}
 _DELETE_FIELDS = frozenset({"id"})
-_ADD_EXDATE_FIELDS = frozenset({"id", "occurrence_start"})
 
 
 def _calendar_service(state: Any) -> CalendarService:
@@ -66,105 +51,106 @@ def _calendar_window(state: Any, params: JsonObject) -> JsonObject:
 def _calendar_create(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, _CREATE_FIELDS, "calendar.create")
     service = _calendar_service(state)
+    fields = _event_fields(params)
     title = _required_string(params, "title")
     start = _required_string(params, "start")
-    all_day = _optional_bool_value(params.get("all_day"), "all_day")
-    duration_minutes = _optional_positive_integer(params, "duration_minutes")
-    duration_days = _optional_positive_integer(params, "duration_days")
-    rrule = _optional_object(params.get("rrule"), "rrule")
-    exdates = _optional_string_list_value(params.get("exdates"), "exdates")
-    notes = _optional_string(params, "notes")
+    fields.pop("title")
+    fields.pop("start")
     try:
-        event = service.create_event(
-            title=title,
-            start=start,
-            all_day=all_day,
-            duration_minutes=duration_minutes,
-            duration_days=duration_days,
-            rrule=rrule,
-            exdates=exdates,
-            notes=notes,
-            actor="rpc",
-        )
+        event = service.create_event(title=title, start=start, actor="rpc", **fields)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CALENDAR)
-    result: JsonObject = {"event": _event_payload(event)}
-    return result
+    return {"event": _event_payload(event)}
 
 
 async def _calendar_update(state: Any, params: JsonObject) -> JsonObject:
+    """Change a whole event, or with an occurrence id one occurrence of a repeating event."""
     _reject_unsupported(params, _UPDATE_FIELDS, "calendar.update")
     service = _calendar_service(state)
-    event_id = _required_string(params, "id")
-    updates: JsonObject = {}
-    if "title" in params:
-        updates["title"] = _required_string(params, "title")
-    if "start" in params:
-        updates["start"] = _required_string(params, "start")
-    if "all_day" in params:
-        updates["all_day"] = _optional_bool_value(params.get("all_day"), "all_day")
-    if "duration_minutes" in params:
-        updates["duration_minutes"] = _optional_positive_integer(params, "duration_minutes")
-    if "duration_days" in params:
-        updates["duration_days"] = _optional_positive_integer(params, "duration_days")
-    if "rrule" in params:
-        updates["rrule"] = _optional_object(params.get("rrule"), "rrule")
-    if "exdates" in params:
-        updates["exdates"] = _optional_string_list_value(params.get("exdates"), "exdates")
-    if "notes" in params:
-        updates["notes"] = _optional_string(params, "notes")
+    item_id = _required_string(params, "id")
+    fields = _event_fields(params)
+    occurrence = parse_occurrence_id(item_id) is not None
+    if occurrence and "rrule" in fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.rrule changes a whole event; send the event id, not an occurrence id",
+        )
     try:
-        event = await service.update_event(event_id, actor="rpc", **updates)
+        if occurrence:
+            changed = await service.update_occurrence(item_id, actor="rpc", **fields)
+            result: JsonObject = {
+                "occurrence": _occurrence_payload(changed),
+                "event": _event_payload(service.get_event(changed.event_id)),
+            }
+        else:
+            event = await service.update_event(item_id, actor="rpc", **fields)
+            result = {"event": _event_payload(event)}
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CALENDAR)
-    return {"event": _event_payload(event)}
+    return result
 
 
-def _calendar_delete(state: Any, params: JsonObject) -> JsonObject:
+async def _calendar_delete(state: Any, params: JsonObject) -> JsonObject:
+    """Delete a whole event, or with an occurrence id one occurrence of a repeating event."""
     _reject_unsupported(params, _DELETE_FIELDS, "calendar.delete")
     service = _calendar_service(state)
-    event_id = _required_string(params, "id")
+    item_id = _required_string(params, "id")
     try:
-        service.delete_event(event_id, actor="rpc")
+        if parse_occurrence_id(item_id) is not None:
+            removed = await service.delete_occurrence(item_id, actor="rpc")
+            result: JsonObject = {
+                "id": item_id,
+                "deleted": True,
+                "event": _event_payload(service.get_event(removed.event_id)),
+            }
+        else:
+            await service.delete_event(item_id, actor="rpc")
+            result = {"id": item_id, "deleted": True}
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CALENDAR)
-    return {"id": event_id, "deleted": True}
+    return result
 
 
-def _calendar_add_exdate(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, _ADD_EXDATE_FIELDS, "calendar.add_exdate")
-    service = _calendar_service(state)
-    event_id = _required_string(params, "id")
-    occurrence_start = _required_string(params, "occurrence_start")
-    try:
-        event = service.add_exdate(event_id, occurrence_start, actor="rpc")
-    except Exception as exc:
-        raise _map_expected_error(exc) from exc
-    publish_resource_changed(state, RESOURCE_KIND_CALENDAR)
-    return {"event": _event_payload(event)}
+def _event_fields(params: JsonObject) -> JsonObject:
+    """The event fields of a call; null or "" clears a text field."""
+    fields: JsonObject = {}
+    for key in ("title", "start", "end"):
+        if key in params:
+            fields[key] = _required_string(params, key)
+    for key in _TEXT_FIELDS:
+        if key in params:
+            value = params[key]
+            if value is not None and not isinstance(value, str):
+                raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a string or null")
+            fields[key] = value or None
+    return fields
 
 
 def _event_payload(event: Any) -> JsonObject:
     payload: JsonObject = event.to_dict()
-    payload["recurring"] = event.rrule is not None
+    payload["all_day"] = event.all_day
+    payload["recurring"] = event.recurring
     return payload
 
 
 def _occurrence_payload(occurrence: Any) -> JsonObject:
     return {
+        "id": occurrence.id,
         "event_id": occurrence.event_id,
         "title": occurrence.title,
+        "description": occurrence.description,
+        "location": occurrence.location,
         "all_day": occurrence.all_day,
         "recurring": occurrence.recurring,
-        "notes": occurrence.notes,
-        "start_utc": occurrence.start_utc.isoformat() if occurrence.start_utc else None,
-        "end_utc": occurrence.end_utc.isoformat() if occurrence.end_utc else None,
-        "start_date": occurrence.start_date.isoformat() if occurrence.start_date else None,
-        "end_date": occurrence.end_date.isoformat() if occurrence.end_date else None,
-        "occurrence_start": occurrence.occurrence_start,
+        "start": occurrence.start,
+        "end": occurrence.end,
+        "start_utc": occurrence.start_utc.isoformat(),
+        "end_utc": occurrence.end_utc.isoformat(),
+        "original_start": occurrence.original_start,
+        "overridden": occurrence.overridden,
     }
 
 
@@ -177,30 +163,6 @@ def _cron_occurrence_payload(occurrence: Any) -> JsonObject:
     }
 
 
-def _optional_bool_value(value: Any, key: str) -> bool | None:
-    if value is None:
-        return None
-    if not isinstance(value, bool):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a boolean")
-    return value
-
-
-def _optional_object(value: Any, key: str) -> JsonObject | None:
-    if value is None:
-        return None
-    if not isinstance(value, dict):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be an object")
-    return value
-
-
-def _optional_string_list_value(value: Any, key: str) -> list[str] | None:
-    if value is None:
-        return None
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a list of strings")
-    return value
-
-
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return calendar RPC handlers."""
 
@@ -209,5 +171,4 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "calendar.create": _calendar_create,
         "calendar.update": _calendar_update,
         "calendar.delete": _calendar_delete,
-        "calendar.add_exdate": _calendar_add_exdate,
     }

@@ -1,53 +1,59 @@
-"""Calendar event catalog, recurrence orchestration and mutation lifecycle."""
+"""Calendar event catalog, occurrence changes, expansion and free-time search."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from datetime import UTC, date, datetime, time, timedelta
+from collections.abc import Callable, Iterator
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from core.calendar._events import (
-    _EVENT_INPUT_FIELDS,
-    _EXDATE_FORMAT_ERROR,
-    CALENDAR_EVENT_SHAPE,
     CALENDAR_EVENTS_FORMAT,
     DEFAULT_ALL_DAY_DURATION_DAYS,
     DEFAULT_EVENT_DURATION_MINUTES,
     FIND_FREE_MAX_RESULTS,
     FIND_FREE_ROUNDING_MINUTES,
     MAX_CALENDAR_EVENTS,
+    MAX_DESCRIPTION_LENGTH,
     MAX_DURATION_DAYS,
     MAX_DURATION_MINUTES,
     MAX_EXDATES_PER_EVENT,
-    MAX_NOTES_LENGTH,
+    MAX_LOCATION_LENGTH,
     MAX_OCCURRENCES_PER_EVENT,
+    MAX_OVERRIDES_PER_EVENT,
     MAX_TITLE_LENGTH,
     MAX_WINDOW_DAYS,
+    OVERRIDE_FIELDS,
     CalendarEvent,
     EventOccurrence,
     FreeSlot,
+    _check_event,
+    _check_span,
     _clone_event,
-    _event_to_inputs,
-    _is_valid_duration_days,
-    _is_valid_duration_minutes,
-    _load_events_payload,
-    _validate_duration_days,
-    _validate_duration_minutes,
-    _validate_event_data,
-    _validate_required_text,
-    _validate_text,
+    _load_events_document,
+    _optional_text,
+    _read_event,
+    _required_text,
+    is_legacy_events_document,
+    parse_occurrence_id,
     validate_calendar_events_data,
     validate_calendar_events_file,
+)
+from core.calendar._expansion import (
+    iter_occurrences,
+    local_time,
+    occurrence_at,
+    occurrence_key,
+    occurrence_keys,
+    single_occurrence,
+    window_occurrences,
 )
 from core.calendar._time import (
     _as_utc,
     _default_timezone,
-    _local_naive_iso,
     _merge_intervals,
     _parse_iso_datetime,
-    _parse_utc_instant,
     _resolve_zone,
     _round_up_to_minutes,
     _utc_now,
@@ -59,21 +65,15 @@ from core.calendar.errors import (
     CalendarValidationError,
 )
 from core.calendar.recurrence import (
-    expand_recurring_allday,
-    expand_recurring_timed,
+    FIRST_EVENT_YEAR,
+    LAST_EVENT_YEAR,
     normalize_rrule,
     parse_date_string,
-    recurring_allday_next_start,
-    recurring_timed_next_start,
-    resolve_local_span,
 )
 from core.calendar.when import looks_like_date, parse_when
-from core.config_validation import (
-    JsonDiagnostic,
-)
+from core.config_validation import JsonDiagnostic
 from core.json_documents import (
     JsonDocumentWriteError,
-    strip_unknown_fields,
     write_json_document,
 )
 from core.utils.file_status import exists_strict
@@ -83,6 +83,10 @@ from core.utils.logging import get_logger
 _LOGGER = get_logger("calendar.service")
 # Who caused a mutation when the caller does not say (direct in-process callers).
 _DEFAULT_ACTOR = "internal"
+_EVENT_INPUT_FIELDS = frozenset(("title", "description", "location", "start", "end", "rrule"))
+_DEFAULT_LENGTH = timedelta(minutes=DEFAULT_EVENT_DURATION_MINUTES)
+_DEFAULT_DAYS = timedelta(days=DEFAULT_ALL_DAY_DURATION_DAYS)
+_ONE_DAY = timedelta(days=1)
 
 __all__ = [
     "MAX_CALENDAR_EVENTS",
@@ -90,7 +94,8 @@ __all__ = [
     "MAX_OCCURRENCES_PER_EVENT",
     "MAX_WINDOW_DAYS",
     "MAX_TITLE_LENGTH",
-    "MAX_NOTES_LENGTH",
+    "MAX_DESCRIPTION_LENGTH",
+    "MAX_LOCATION_LENGTH",
     "MAX_DURATION_MINUTES",
     "MAX_DURATION_DAYS",
     "DEFAULT_EVENT_DURATION_MINUTES",
@@ -107,7 +112,13 @@ __all__ = [
 
 
 class CalendarService:
-    """Manage persisted calendar events, expansion, and free-slot search."""
+    """Manage persisted calendar events, their occurrences, expansion and free-slot search.
+
+    Input times without an offset are local times of the server zone; times with
+    an offset name their instant. A new timed event keeps its times in the
+    server zone of its creation; an all-day event keeps dates and follows the
+    server zone.
+    """
 
     def __init__(self, data_root: str | Path, *, tz: str | ZoneInfo | None = None) -> None:
         self._data_root = Path(data_root).expanduser()
@@ -118,6 +129,8 @@ class CalendarService:
         self._invalid_event_entries: list[Any] = []
         self._storage_load_error: CalendarStorageError | None = None
         self._events_loaded = False
+        # The file holds the events of an earlier vBot version: the next save replaces it.
+        self._replace_legacy_document = False
         self._changed_callbacks: set[Callable[[], None]] = set()
 
     def add_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
@@ -141,47 +154,53 @@ class CalendarService:
         self._timezone = timezone
         self._notify_changed()
 
+    # -- events ---------------------------------------------------------------------------
+
     def create_event(
         self,
         *,
         title: str,
         start: str,
-        all_day: bool | None = None,
-        duration_minutes: int | None = None,
-        duration_days: int | None = None,
-        rrule: object | None = None,
-        exdates: list[str] | None = None,
-        notes: str | None = None,
+        end: str | None = None,
+        description: str | None = None,
+        location: str | None = None,
+        rrule: str | None = None,
         actor: str = _DEFAULT_ACTOR,
     ) -> CalendarEvent:
-        """Create and persist a new calendar event."""
+        """Create and persist a new event.
+
+        ``start`` is a date (an all-day event) or a time; ``end`` has the same
+        form and is exclusive, one hour or one day after the start when omitted.
+        An all-day end on the start day means that one day. ``rrule`` is an
+        RFC 5545 RRULE.
+        """
         self._ensure_events_loaded()
         if len(self._events) >= MAX_CALENDAR_EVENTS:
             raise CalendarValidationError(
                 f"The calendar stores at most {MAX_CALENDAR_EVENTS} events; delete old ones first"
             )
-        event = self._build_event(
-            created_at=_utc_now_iso(),
-            title=title,
-            all_day=all_day,
-            start=start,
-            duration_minutes=duration_minutes,
-            duration_days=duration_days,
-            rrule=rrule,
-            exdates=exdates,
-            notes=notes,
+        fields: dict[str, Any] = {"start": start}
+        if end is not None:
+            fields["end"] = end
+        start_text, end_text, tz_name = self._event_times(fields, None)
+        now = _utc_now_iso()
+        event = CalendarEvent(
+            id=new_id("evt", claim=lambda candidate: candidate not in self._events),
+            title=_required_text(title, "title", MAX_TITLE_LENGTH),
+            description=_optional_text(description, "description", MAX_DESCRIPTION_LENGTH),
+            location=_optional_text(location, "location", MAX_LOCATION_LENGTH),
+            start=start_text,
+            end=end_text,
+            tz_name=tz_name,
+            rrule=_event_rule(rrule, start_text, tz_name),
+            created_at=now,
+            updated_at=now,
         )
-        self._events[event.id] = event
-        try:
-            self._save_events()
-        except Exception:
-            self._events.pop(event.id, None)
-            raise
-        self._notify_changed()
+        self._store(event, None)
         _LOGGER.info(
             "Calendar event created (event=%s recurring=%s actor=%s)",
             event.id,
-            event.rrule is not None,
+            event.recurring,
             actor,
         )
         return _clone_event(event)
@@ -195,25 +214,31 @@ class CalendarService:
     def get_event(self, event_id: str) -> CalendarEvent:
         """Get one event by id."""
         self._ensure_events_loaded()
-        event = self._events.get(event_id)
-        if event is None:
-            raise CalendarEventNotFoundError(f"Calendar event not found: {event_id}")
-        return _clone_event(event)
+        return _clone_event(self._event(event_id))
 
     async def update_event(
         self, event_id: str, *, actor: str = _DEFAULT_ACTOR, **fields: Any
     ) -> CalendarEvent:
-        """Update one event from the same input shapes as create; omitted fields keep."""
-        event, candidate, changed = self._event_update(event_id, fields)
-        if candidate is None:
+        """Change a whole event: title, description, location, start, end or rrule.
+
+        Omitted fields keep their value. A new start alone keeps the event's
+        length; an empty or null rrule stops the repetition. Moving a repeating
+        event's start moves its removed and changed occurrences with it;
+        occurrences the new rule no longer produces lose their changes.
+        """
+        self._ensure_events_loaded()
+        event = self._event(event_id)
+        unknown_fields = sorted(set(fields) - _EVENT_INPUT_FIELDS)
+        if unknown_fields:
+            raise CalendarValidationError(
+                f"Unsupported calendar event fields: {', '.join(unknown_fields)}"
+            )
+        candidate = self._updated_event(event, fields)
+        changed = _changed_fields(event, candidate)
+        if not changed:
             return _clone_event(event)
-        self._events[event_id] = candidate
-        try:
-            self._save_events()
-        except Exception:
-            self._events[event_id] = event
-            raise
-        self._notify_changed()
+        candidate.updated_at = _utc_now_iso()
+        self._store(candidate, event)
         _LOGGER.info(
             "Calendar event updated (event=%s fields=%s actor=%s)",
             event_id,
@@ -222,51 +247,11 @@ class CalendarService:
         )
         return _clone_event(candidate)
 
-    def _event_update(
-        self, event_id: str, fields: dict[str, Any]
-    ) -> tuple[CalendarEvent, CalendarEvent | None, list[str]]:
-        """Return the stored event, its validated replacement and the changed input names.
-
-        The replacement is None when ``fields`` change nothing.
-        """
+    async def delete_event(self, event_id: str, *, actor: str = _DEFAULT_ACTOR) -> None:
+        """Delete one event with all its occurrences."""
         self._ensure_events_loaded()
-        event = self._events.get(event_id)
-        if event is None:
-            raise CalendarEventNotFoundError(f"Calendar event not found: {event_id}")
-        unknown_fields = sorted(set(fields) - _EVENT_INPUT_FIELDS)
-        if unknown_fields:
-            raise CalendarValidationError(
-                f"Unsupported calendar event fields: {', '.join(unknown_fields)}"
-            )
-
-        original = _event_to_inputs(event)
-        inputs = dict(original)
-        inputs.update(fields)
-        # Clearing recurrence leaves any exdates meaningless (a single event can
-        # hold no exceptions); drop them so a "no longer repeating" update does
-        # not trip the single-event validation.
-        if inputs.get("rrule") is None:
-            inputs["exdates"] = []
-        if inputs == original:
-            return event, None, []
-        changed = sorted(name for name in inputs if inputs[name] != original.get(name))
-
-        candidate = self._build_event(
-            created_at=event.created_at,
-            **inputs,
-        )
-        candidate.id = event_id
-        # A title/duration edit must retain the recurrence's original wall-clock zone.
-        if candidate.rrule is not None and event.rrule is not None and "start" not in fields:
-            candidate.tz_name = event.tz_name
-        return event, candidate, changed
-
-    def delete_event(self, event_id: str, *, actor: str = _DEFAULT_ACTOR) -> None:
-        """Delete one event by id."""
-        self._ensure_events_loaded()
-        if event_id not in self._events:
-            raise CalendarEventNotFoundError(f"Calendar event not found: {event_id}")
-        removed = self._events.pop(event_id)
+        removed = self._event(event_id)
+        del self._events[event_id]
         try:
             self._save_events()
         except Exception:
@@ -275,39 +260,96 @@ class CalendarService:
         self._notify_changed()
         _LOGGER.info("Calendar event deleted (event=%s actor=%s)", event_id, actor)
 
-    def add_exdate(
-        self, event_id: str, occurrence_start: str, *, actor: str = _DEFAULT_ACTOR
-    ) -> CalendarEvent:
-        """Exclude one occurrence of a recurring event (RFC 5545 EXDATE)."""
+    # -- occurrences ------------------------------------------------------------------------
+
+    def get_occurrence(self, occurrence_id: str) -> EventOccurrence:
+        """Get one occurrence by its id; a single event's id names its one occurrence."""
         self._ensure_events_loaded()
-        event = self._events.get(event_id)
-        if event is None:
-            raise CalendarEventNotFoundError(f"Calendar event not found: {event_id}")
-        if event.rrule is None:
+        event, key = self._occurrence_target(occurrence_id)
+        if key is None:
+            return single_occurrence(event, self._timezone)
+        return self._occurrence(event, key)
+
+    async def update_occurrence(
+        self, occurrence_id: str, *, actor: str = _DEFAULT_ACTOR, **fields: Any
+    ) -> EventOccurrence:
+        """Change one occurrence of a repeating event: title, description, location, start, end.
+
+        The rest of the series stays as it is. A new start alone keeps the
+        occurrence's length; the occurrence keeps the event's kind (timed or
+        all-day). A change back to the series' own value drops that change.
+        """
+        self._ensure_events_loaded()
+        event, key = self._occurrence_target(occurrence_id)
+        if key is None:
+            raise CalendarEventNotFoundError(f"Calendar occurrence not found: {occurrence_id}")
+        unknown_fields = sorted(set(fields) - OVERRIDE_FIELDS)
+        if unknown_fields:
             raise CalendarValidationError(
-                "Single events cannot exclude occurrences; delete the event instead"
+                f"Unsupported calendar occurrence fields: {', '.join(unknown_fields)}"
             )
-        normalized = self._validate_exdate_value(occurrence_start, event)
-        if normalized in event.exdates:
-            return _clone_event(event)
-        updated = _clone_event(event)
-        updated.exdates = [*event.exdates, normalized]
-        updated.updated_at = _utc_now_iso()
-        self._validate_event(updated)
-        self._events[event_id] = updated
-        try:
-            self._save_events()
-        except Exception:
-            self._events[event_id] = event
-            raise
-        self._notify_changed()
+        current = self._occurrence(event, key)
+        override = dict(event.overrides.get(key, {}))
+        if "title" in fields:
+            override["title"] = _required_text(fields["title"], "title", MAX_TITLE_LENGTH)
+        if "description" in fields:
+            override["description"] = _optional_text(
+                fields["description"], "description", MAX_DESCRIPTION_LENGTH
+            )
+        if "location" in fields:
+            override["location"] = _optional_text(
+                fields["location"], "location", MAX_LOCATION_LENGTH
+            )
+        if "start" in fields or "end" in fields:
+            override["start"], override["end"] = self._occurrence_times(event, current, fields)
+        override = _without_series_values(event, key, override)
+        candidate = _clone_event(event)
+        if override:
+            candidate.overrides[key] = override
+        else:
+            candidate.overrides.pop(key, None)
+        if candidate.overrides == event.overrides:
+            return current
+        if len(candidate.overrides) > MAX_OVERRIDES_PER_EVENT:
+            raise CalendarValidationError(
+                f"events allow at most {MAX_OVERRIDES_PER_EVENT} changed occurrences"
+            )
+        candidate.updated_at = _utc_now_iso()
+        self._store(candidate, event)
         _LOGGER.info(
-            "Calendar occurrence excluded (event=%s occurrence=%s actor=%s)",
-            event_id,
-            normalized,
+            "Calendar occurrence updated (event=%s occurrence=%s fields=%s actor=%s)",
+            event.id,
+            key,
+            ",".join(sorted(fields)),
             actor,
         )
-        return _clone_event(updated)
+        return self._occurrence(candidate, key)
+
+    async def delete_occurrence(
+        self, occurrence_id: str, *, actor: str = _DEFAULT_ACTOR
+    ) -> EventOccurrence:
+        """Remove one occurrence of a repeating event (an RFC 5545 EXDATE); return it.
+
+        The rest of the series stays; the occurrence's changes go with it.
+        """
+        self._ensure_events_loaded()
+        event, key = self._occurrence_target(occurrence_id)
+        if key is None:
+            raise CalendarEventNotFoundError(f"Calendar occurrence not found: {occurrence_id}")
+        removed = self._occurrence(event, key)
+        if len(event.exdates) >= MAX_EXDATES_PER_EVENT:
+            raise CalendarValidationError(
+                f"events allow at most {MAX_EXDATES_PER_EVENT} removed occurrences"
+            )
+        candidate = _clone_event(event)
+        candidate.exdates = sorted([*event.exdates, key])
+        candidate.overrides.pop(key, None)
+        candidate.updated_at = _utc_now_iso()
+        self._store(candidate, event)
+        _LOGGER.info(
+            "Calendar occurrence removed (event=%s occurrence=%s actor=%s)", event.id, key, actor
+        )
+        return removed
 
     def occurrences_in_window(
         self,
@@ -324,84 +366,42 @@ class CalendarService:
         ):
             raise CalendarValidationError("max_per_event must be a positive integer")
         self._ensure_events_loaded(allow_degraded=True)
-        window_start = _as_utc(window_start_utc)
-        window_end = _as_utc(window_end_utc)
-        if window_end <= window_start:
-            raise CalendarValidationError("window end must be after its start")
-        if (window_end - window_start).days > MAX_WINDOW_DAYS:
-            raise CalendarValidationError(f"window span must not exceed {MAX_WINDOW_DAYS} days")
-        system_tz = self._timezone
+        window_start, window_end = _checked_window(window_start_utc, window_end_utc)
         occurrences: list[EventOccurrence] = []
         for event in self._events.values():
             occurrences.extend(
-                self._event_occurrences(event, window_start, window_end, system_tz, max_per_event)
+                window_occurrences(event, window_start, window_end, self._timezone, max_per_event)
             )
-        occurrences.sort(
-            key=lambda item: (
-                item.start_utc
-                or datetime.combine(item.start_date or date.min, time.min, tzinfo=UTC),
-                item.event_id,
-            )
-        )
+        occurrences.sort(key=lambda item: (item.start_utc, item.event_id, item.id))
         return occurrences
 
     def event_occurrences(
         self, event: CalendarEvent, window_start: datetime, window_end: datetime
     ) -> list[EventOccurrence]:
-        """Expand one known event within a window using canonical recurrence rules."""
-        return self._event_occurrences(
-            event, window_start, window_end, self._timezone, MAX_OCCURRENCES_PER_EVENT
+        """The occurrences of one event overlapping the half-open UTC window."""
+        return window_occurrences(
+            event,
+            _as_utc(window_start),
+            _as_utc(window_end),
+            self._timezone,
+            MAX_OCCURRENCES_PER_EVENT,
         )
+
+    def iter_occurrences(self, event: CalendarEvent, after: datetime) -> Iterator[EventOccurrence]:
+        """Yield the occurrences of ``event`` that end after ``after``, in start order.
+
+        Lazy: a repeating event without an end yields without end, so callers stop
+        when they have what they need.
+        """
+        return iter_occurrences(event, _as_utc(after), self._timezone)
 
     def next_start(self, event: CalendarEvent, instant: datetime) -> datetime | None:
-        """The UTC start of ``event``'s first occurrence at or after ``instant``, if any.
-
-        Follows occurrence expansion: all-day occurrences start at midnight in
-        the system time zone, and a series ends with its count, its until date
-        and its removed occurrences.
-        """
+        """The UTC start of ``event``'s first occurrence at or after ``instant``, if any."""
         instant = _as_utc(instant)
-        if event.all_day:
-            start_date = parse_date_string(event.start_date, field_name="start_date")
-            if event.rrule is None:
-                start = datetime.combine(start_date, time.min, tzinfo=self._timezone)
-                start = start.astimezone(UTC)
-                return start if start >= instant else None
-            return recurring_allday_next_start(
-                start_date=start_date,
-                rrule_spec=event.rrule,
-                exdates=frozenset(event.exdates),
-                from_utc=instant,
-                system_tz=self._timezone,
-            )
-        if event.rrule is None:
-            start = self.event_span(event)[0]
-            return start if start >= instant else None
-        assert event.start_local is not None and event.tz_name is not None
-        return recurring_timed_next_start(
-            start_local=datetime.fromisoformat(event.start_local),
-            tz=_resolve_zone(event.tz_name),
-            rrule_spec=event.rrule,
-            exdates=frozenset(event.exdates),
-            from_utc=instant,
-        )
-
-    def event_span(self, event: CalendarEvent) -> tuple[datetime, datetime]:
-        """Return the UTC span of a timed event's anchor instance.
-
-        Uses the same arithmetic as occurrence expansion: single events last their
-        duration in real time; recurring events add it to the wall-clock start.
-        """
-        if event.all_day:
-            raise CalendarValidationError("event_span requires a timed event")
-        duration = timedelta(minutes=event.duration_minutes or DEFAULT_EVENT_DURATION_MINUTES)
-        if event.rrule is None:
-            start_utc = _parse_utc_instant(event.start_utc or "", field_name="start_utc")
-            return start_utc, start_utc + duration
-        assert event.start_local is not None and event.tz_name is not None
-        return resolve_local_span(
-            datetime.fromisoformat(event.start_local), _resolve_zone(event.tz_name), duration
-        )
+        for occurrence in self.iter_occurrences(event, instant):
+            if occurrence.start_utc >= instant:
+                return occurrence.start_utc
+        return None
 
     def find_free_slots(
         self,
@@ -429,36 +429,13 @@ class CalendarService:
             raise CalendarValidationError(
                 f"duration_minutes must not exceed {MAX_DURATION_MINUTES}"
             )
-        window_start = _as_utc(window_start_utc)
-        window_end = _as_utc(window_end_utc)
-        if window_end <= window_start:
-            raise CalendarValidationError("window end must be after its start")
-        if (window_end - window_start).days > MAX_WINDOW_DAYS:
-            raise CalendarValidationError(f"window span must not exceed {MAX_WINDOW_DAYS} days")
+        window_start, window_end = _checked_window(window_start_utc, window_end_utc)
         reference_now = _as_utc(now_utc) if now_utc is not None else datetime.now(UTC)
         duration = timedelta(minutes=duration_minutes)
-
-        self._ensure_events_loaded(allow_degraded=True)
-        busy: list[tuple[datetime, datetime]] = []
-        for event in self._events.values():
-            if event.all_day:
-                for start_date, end_date in self._allday_occurrence_dates(
-                    event, window_start, window_end
-                ):
-                    busy_start = datetime.combine(start_date, time.min, tzinfo=self._timezone)
-                    busy_end = datetime.combine(end_date, time.min, tzinfo=self._timezone)
-                    busy.append(
-                        (
-                            max(busy_start.astimezone(UTC), window_start),
-                            min(busy_end.astimezone(UTC), window_end),
-                        )
-                    )
-            else:
-                for start_utc, end_utc in self._timed_occurrence_spans(
-                    event, window_start, window_end
-                ):
-                    busy.append((max(start_utc, window_start), min(end_utc, window_end)))
-
+        busy = [
+            (max(item.start_utc, window_start), min(item.end_utc, window_end))
+            for item in self.occurrences_in_window(window_start, window_end)
+        ]
         merged = _merge_intervals(busy)
         cursor = max(window_start, reference_now)
         cursor = _round_up_to_minutes(cursor, FIND_FREE_ROUNDING_MINUTES)
@@ -473,105 +450,6 @@ class CalendarService:
         if len(slots) < max_results and cursor + duration <= window_end:
             slots.append(FreeSlot(start_utc=cursor, end_utc=window_end))
         return slots
-
-    def _event_occurrences(
-        self,
-        event: CalendarEvent,
-        window_start: datetime,
-        window_end: datetime,
-        system_tz: ZoneInfo,
-        max_per_event: int,
-    ) -> list[EventOccurrence]:
-        recurring = event.rrule is not None
-        if event.all_day:
-            pairs = self._allday_occurrence_dates(event, window_start, window_end)
-            return [
-                EventOccurrence(
-                    event_id=event.id,
-                    title=event.title,
-                    notes=event.notes,
-                    all_day=True,
-                    recurring=recurring,
-                    start_utc=None,
-                    end_utc=None,
-                    start_date=start_date,
-                    end_date=end_date,
-                    occurrence_start=start_date.isoformat(),
-                    occurrence_end=None,
-                )
-                for start_date, end_date in pairs[:max_per_event]
-            ]
-        spans = self._timed_occurrence_spans(event, window_start, window_end)
-        zone = _resolve_zone(event.tz_name) if event.tz_name else system_tz
-        return [
-            EventOccurrence(
-                event_id=event.id,
-                title=event.title,
-                notes=event.notes,
-                all_day=False,
-                recurring=recurring,
-                start_utc=start_utc,
-                end_utc=end_utc,
-                start_date=None,
-                end_date=None,
-                occurrence_start=_local_naive_iso(start_utc, zone),
-                occurrence_end=_local_naive_iso(end_utc, zone),
-            )
-            for start_utc, end_utc in spans[:max_per_event]
-        ]
-
-    def _timed_occurrence_spans(
-        self,
-        event: CalendarEvent,
-        window_start: datetime,
-        window_end: datetime,
-    ) -> list[tuple[datetime, datetime]]:
-        if event.rrule is None:
-            start_utc, end_utc = self.event_span(event)
-            if end_utc <= window_start or start_utc >= window_end:
-                return []
-            return [(start_utc, end_utc)]
-        assert event.start_local is not None and event.tz_name is not None
-        tz = _resolve_zone(event.tz_name)
-        return expand_recurring_timed(
-            start_local=datetime.fromisoformat(event.start_local),
-            tz=tz,
-            rrule_spec=event.rrule,
-            duration_minutes=int(event.duration_minutes or DEFAULT_EVENT_DURATION_MINUTES),
-            exdates=frozenset(event.exdates),
-            window_start_utc=window_start,
-            window_end_utc=window_end,
-            max_occurrences=MAX_OCCURRENCES_PER_EVENT,
-        )
-
-    def _allday_occurrence_dates(
-        self,
-        event: CalendarEvent,
-        window_start: datetime,
-        window_end: datetime,
-    ) -> list[tuple[date, date]]:
-        duration_days = int(event.duration_days or DEFAULT_ALL_DAY_DURATION_DAYS)
-        if event.rrule is None:
-            start_date = parse_date_string(event.start_date, field_name="start_date")
-            end_date = start_date + timedelta(days=duration_days)
-            start_utc = datetime.combine(start_date, time.min, tzinfo=self._timezone).astimezone(
-                UTC
-            )
-            end_utc = datetime.combine(end_date, time.min, tzinfo=self._timezone).astimezone(UTC)
-            if end_utc <= window_start or start_utc >= window_end:
-                return []
-            return [(start_date, end_date)]
-        assert event.start_date is not None
-        return expand_recurring_allday(
-            start_date=parse_date_string(event.start_date, field_name="start_date"),
-            duration_days=int(event.duration_days or DEFAULT_ALL_DAY_DURATION_DAYS),
-            rrule_spec=event.rrule,
-            exdates=frozenset(event.exdates),
-            window_start_utc=window_start,
-            window_end_utc=window_end,
-            system_tz=self._timezone,
-            max_occurrences=MAX_OCCURRENCES_PER_EVENT,
-        )
 
     def parse_window_bound(self, value: str, *, is_end: bool) -> datetime:
         """Parse one window bound: a date (local day) or an ISO 8601 datetime."""
@@ -595,11 +473,7 @@ class CalendarService:
         """Parse and validate a query window from agent-facing bound strings."""
         window_start = self.parse_window_bound(window_start_value, is_end=False)
         window_end = self.parse_window_bound(window_end_value, is_end=True)
-        if window_end <= window_start:
-            raise CalendarValidationError("window end must be after its start")
-        if (window_end - window_start).days > MAX_WINDOW_DAYS:
-            raise CalendarValidationError(f"window span must not exceed {MAX_WINDOW_DAYS} days")
-        return window_start, window_end
+        return _checked_window(window_start, window_end)
 
     def resolve_when(
         self, value: str, *, now_utc: datetime | None = None
@@ -607,275 +481,198 @@ class CalendarService:
         """Resolve one ``when`` expression (see core.calendar.when) to a UTC window."""
         return parse_when(value, now_utc=now_utc or _utc_now(), tz=self._timezone)
 
-    def _build_event(
-        self,
-        *,
-        created_at: str,
-        title: object,
-        start: object,
-        all_day: object = None,
-        duration_minutes: object = None,
-        duration_days: object = None,
-        rrule: object = None,
-        exdates: object = None,
-        notes: object = None,
-    ) -> CalendarEvent:
-        validated_title = _validate_required_text(
-            title, field_name="title", max_length=MAX_TITLE_LENGTH
-        )
-        validated_notes = _validate_text(notes, field_name="notes", max_length=MAX_NOTES_LENGTH)
-        normalized_rrule = normalize_rrule(rrule)
-        recurring = normalized_rrule is not None
+    # -- event times ----------------------------------------------------------------------
 
-        if not isinstance(start, str) or not start.strip():
-            raise CalendarValidationError(
-                "start must be a date (YYYY-MM-DD) or an ISO 8601 datetime"
+    def _updated_event(self, event: CalendarEvent, fields: dict[str, Any]) -> CalendarEvent:
+        """The event with ``fields`` applied, validated; occurrence keys follow its start."""
+        candidate = _clone_event(event)
+        if "title" in fields:
+            candidate.title = _required_text(fields["title"], "title", MAX_TITLE_LENGTH)
+        if "description" in fields:
+            candidate.description = _optional_text(
+                fields["description"], "description", MAX_DESCRIPTION_LENGTH
             )
-        start_text = start.strip()
-        is_date_only = looks_like_date(start_text)
+        if "location" in fields:
+            candidate.location = _optional_text(fields["location"], "location", MAX_LOCATION_LENGTH)
+        if "start" in fields or "end" in fields:
+            candidate.start, candidate.end, candidate.tz_name = self._event_times(fields, event)
+        if "rrule" in fields:
+            candidate.rrule = _event_rule(fields["rrule"], candidate.start, candidate.tz_name)
+        elif candidate.rrule is not None and (
+            candidate.start != event.start or candidate.tz_name != event.tz_name
+        ):
+            # The rule's meaning depends on the start (its weekday, UNTIL, BYHOUR).
+            candidate.rrule = _event_rule(candidate.rrule, candidate.start, candidate.tz_name)
+        if candidate.rrule is None or candidate.all_day != event.all_day:
+            candidate.exdates, candidate.overrides = [], {}
+        elif (candidate.start, candidate.rrule) != (event.start, event.rrule):
+            _move_occurrence_keys(candidate, event)
+        return candidate
 
-        if is_date_only:
-            if all_day is False:
-                raise CalendarValidationError(
-                    "all_day is false but start is a date; pass a datetime for timed events"
-                )
-            return self._build_allday_event(
-                created_at=created_at,
-                title=validated_title,
-                notes=validated_notes,
-                start_date=start_text,
-                duration_days=duration_days,
-                normalized_rrule=normalized_rrule,
-                exdates=exdates,
-            )
-
-        if all_day is True:
-            raise CalendarValidationError(
-                "all_day events use a YYYY-MM-DD date as start, not a datetime"
-            )
-        parsed_start = _parse_iso_datetime(start_text, field_name="start")
-        return self._build_timed_event(
-            created_at=created_at,
-            title=validated_title,
-            notes=validated_notes,
-            parsed_start=parsed_start,
-            recurring=recurring,
-            normalized_rrule=normalized_rrule,
-            duration_minutes=duration_minutes,
-            exdates=exdates,
-        )
-
-    def _build_timed_event(
-        self,
-        *,
-        created_at: str,
-        title: str,
-        notes: str | None,
-        parsed_start: datetime,
-        recurring: bool,
-        normalized_rrule: dict[str, Any] | None,
-        duration_minutes: object,
-        exdates: object,
-    ) -> CalendarEvent:
-        validated_duration = _validate_duration_minutes(duration_minutes)
-        if recurring:
-            # Recurring timed events anchor wall-clock in the server timezone;
-            # 09:00 stays 09:00 across DST transitions.
-            zone = self._timezone
-            if parsed_start.tzinfo is None:
-                wall_start = parsed_start
-            else:
-                wall_start = parsed_start.astimezone(zone).replace(tzinfo=None)
-            event = CalendarEvent(
-                id=new_id("evt", claim=lambda candidate: candidate not in self._events),
-                title=title,
-                all_day=False,
-                notes=notes,
-                start_utc=None,
-                start_local=wall_start.replace(microsecond=0).isoformat(),
-                tz_name=str(self._timezone),
-                start_date=None,
-                duration_minutes=validated_duration,
-                duration_days=None,
-                rrule=normalized_rrule,
-                exdates=[],
-                created_at=created_at,
-                updated_at=_utc_now_iso(),
-            )
-            event.exdates = self._validate_exdate_list(exdates, event)
-            self._validate_event(event)
-            return event
-
-        if parsed_start.tzinfo is None:
-            parsed_start = parsed_start.replace(tzinfo=self._timezone)
-        if exdates:
-            raise CalendarValidationError(
-                "exdates are only valid on recurring events; delete the event instead"
-            )
-        event = CalendarEvent(
-            id=new_id("evt", claim=lambda candidate: candidate not in self._events),
-            title=title,
-            all_day=False,
-            notes=notes,
-            start_utc=parsed_start.astimezone(UTC).isoformat(),
-            start_local=None,
-            tz_name=None,
-            start_date=None,
-            duration_minutes=validated_duration,
-            duration_days=None,
-            rrule=None,
-            exdates=[],
-            created_at=created_at,
-            updated_at=_utc_now_iso(),
-        )
-        self._validate_event(event)
-        return event
-
-    def _build_allday_event(
-        self,
-        *,
-        created_at: str,
-        title: str,
-        notes: str | None,
-        start_date: str,
-        duration_days: object,
-        normalized_rrule: dict[str, Any] | None,
-        exdates: object,
-    ) -> CalendarEvent:
-        validated_duration = _validate_duration_days(duration_days)
-        event = CalendarEvent(
-            id=new_id("evt", claim=lambda candidate: candidate not in self._events),
-            title=title,
-            all_day=True,
-            notes=notes,
-            start_utc=None,
-            start_local=None,
-            tz_name=None,
-            start_date=start_date,
-            duration_minutes=None,
-            duration_days=validated_duration,
-            rrule=normalized_rrule,
-            exdates=[],
-            created_at=created_at,
-            updated_at=_utc_now_iso(),
-        )
-        event.exdates = self._validate_exdate_list(exdates, event)
-        self._validate_event(event)
-        return event
-
-    def _validate_event(self, event: CalendarEvent) -> None:
-        if not event.title.strip():
-            raise CalendarValidationError("title must be a non-empty string")
-        if event.all_day:
-            if event.start_date is None:
-                raise CalendarValidationError("all-day events require start_date")
-            parse_date_string(event.start_date, field_name="start_date")
-            if not _is_valid_duration_days(event.duration_days):
-                raise CalendarValidationError(
-                    f"duration_days must be an integer between 1 and {MAX_DURATION_DAYS}"
-                )
-            if (
-                event.start_utc
-                or event.start_local
-                or event.tz_name
-                or event.duration_minutes is not None
-            ):
-                raise CalendarValidationError("all-day events must not carry timed fields")
-        elif event.rrule is not None:
-            if event.start_local is None or event.tz_name is None:
-                raise CalendarValidationError(
-                    "recurring timed events require start_local and tz_name"
-                )
-            _resolve_zone(event.tz_name)
-            datetime.fromisoformat(event.start_local)
-            if not _is_valid_duration_minutes(event.duration_minutes):
-                raise CalendarValidationError(
-                    f"duration_minutes must be an integer between 1 and {MAX_DURATION_MINUTES}"
-                )
-            if (
-                event.start_utc is not None
-                or event.start_date is not None
-                or event.duration_days is not None
-            ):
-                raise CalendarValidationError("timed events must not carry all-day fields")
+    def _event_times(
+        self, fields: dict[str, Any], event: CalendarEvent | None
+    ) -> tuple[str, str, str | None]:
+        """Stored start, end and zone of an event from the start and end a call sends."""
+        if "start" in fields:
+            start, zone = self._input_time(fields["start"], "start", event)
         else:
-            if event.start_utc is None:
-                raise CalendarValidationError("single timed events require start_utc")
-            _parse_utc_instant(event.start_utc, field_name="start_utc")
-            if not _is_valid_duration_minutes(event.duration_minutes):
-                raise CalendarValidationError(
-                    f"duration_minutes must be an integer between 1 and {MAX_DURATION_MINUTES}"
-                )
-            if (
-                event.start_local is not None
-                or event.tz_name is not None
-                or event.start_date is not None
-                or event.duration_days is not None
-            ):
-                raise CalendarValidationError("timed events must not carry all-day fields")
+            assert event is not None
+            start = local_time(event.start)
+            zone = None if event.tz_name is None else _resolve_zone(event.tz_name)
+        all_day = zone is None
+        if fields.get("end") is not None:
+            end, end_zone = self._input_time(fields["end"], "end", event)
+            if (end_zone is None) != all_day:
+                form = "a date" if all_day else "a date-time"
+                raise CalendarValidationError(f"end must be {form} like the start")
+        elif event is not None and event.all_day == all_day:
+            # A moved event keeps its length; an unmoved one its end.
+            end = start + (local_time(event.end) - local_time(event.start))
+        else:
+            end = start + (_DEFAULT_DAYS if all_day else _DEFAULT_LENGTH)
+        _check_span(start, end, all_day=all_day)
+        if all_day and end == start:
+            end = start + _ONE_DAY
+        return (
+            occurrence_key(start, all_day=all_day),
+            occurrence_key(end, all_day=all_day),
+            None if zone is None else str(zone),
+        )
 
-        if event.rrule is None and event.exdates:
-            raise CalendarValidationError("exdates are only valid on recurring events")
-        for exdate in event.exdates:
-            self._validate_exdate_value(exdate, event)
-        if len(event.exdates) > MAX_EXDATES_PER_EVENT:
-            raise CalendarValidationError(
-                f"events allow at most {MAX_EXDATES_PER_EVENT} excluded occurrences"
-            )
+    def _occurrence_times(
+        self, event: CalendarEvent, current: EventOccurrence, fields: dict[str, Any]
+    ) -> tuple[str, str]:
+        """Stored start and end of a changed occurrence; it keeps the event's kind."""
+        own_start = local_time(current.start)
+        length = local_time(current.end) - own_start
+        start = own_start
+        if fields.get("start") is not None:
+            start, _ = self._input_time(fields["start"], "start", event, kind_of=event)
+        if fields.get("end") is not None:
+            end, _ = self._input_time(fields["end"], "end", event, kind_of=event)
+        else:
+            end = start + length
+        _check_span(start, end, all_day=event.all_day)
+        if event.all_day and end == start:
+            end = start + _ONE_DAY
+        return (
+            occurrence_key(start, all_day=event.all_day),
+            occurrence_key(end, all_day=event.all_day),
+        )
 
-    def _validate_exdate_value(self, value: object, event: CalendarEvent) -> str:
+    def _input_time(
+        self,
+        value: object,
+        field_name: str,
+        event: CalendarEvent | None,
+        *,
+        kind_of: CalendarEvent | None = None,
+    ) -> tuple[datetime, ZoneInfo | None]:
+        """A sent start or end as a naive local time and its zone (None for a date).
+
+        A time without an offset is a server-local time; it is kept in the
+        zone of a timed ``event``, else in the server zone. With ``kind_of``,
+        the value must have that event's kind.
+        """
         if not isinstance(value, str) or not value.strip():
-            raise CalendarValidationError("exdate must be a non-empty string")
-        text = value.strip()
-        if event.all_day:
-            return parse_date_string(text, field_name="exdate").isoformat()
-        try:
-            parsed = datetime.fromisoformat(text)
-        except ValueError as error:
-            raise CalendarValidationError(_EXDATE_FORMAT_ERROR) from error
-        if parsed.tzinfo is not None:
-            raise CalendarValidationError(_EXDATE_FORMAT_ERROR)
-        return parsed.replace(microsecond=0).isoformat()
-
-    def _validate_exdate_list(self, exdates: object, event: CalendarEvent) -> list[str]:
-        if exdates is None:
-            return []
-        if not isinstance(exdates, list):
-            raise CalendarValidationError("exdates must be a list of occurrence start strings")
-        if len(exdates) > MAX_EXDATES_PER_EVENT:
             raise CalendarValidationError(
-                f"events allow at most {MAX_EXDATES_PER_EVENT} excluded occurrences"
+                f"{field_name} must be a date (YYYY-MM-DD) or an ISO 8601 datetime"
             )
-        normalized: list[str] = []
-        for value in exdates:
-            normalized_value = self._validate_exdate_value(value, event)
-            if normalized_value not in normalized:
-                normalized.append(normalized_value)
-        return normalized
+        text = value.strip()
+        if looks_like_date(text):
+            day = parse_date_string(text, field_name=field_name)
+            if kind_of is not None and not kind_of.all_day:
+                raise CalendarValidationError(
+                    f"{field_name} must be a date-time: an occurrence keeps the event's kind"
+                )
+            _check_year(day.year, field_name)
+            return datetime.combine(day, time.min), None
+        if kind_of is not None and kind_of.all_day:
+            raise CalendarValidationError(
+                f"{field_name} must be a date: an occurrence keeps the event's kind"
+            )
+        parsed = _parse_iso_datetime(text, field_name=field_name)
+        zone = (
+            _resolve_zone(event.tz_name)
+            if event is not None and event.tz_name is not None
+            else self._timezone
+        )
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=self._timezone)
+        local = parsed.astimezone(zone).replace(tzinfo=None, microsecond=0)
+        _check_year(local.year, field_name)
+        return local, zone
+
+    # -- storage --------------------------------------------------------------------------
+
+    def _event(self, event_id: str) -> CalendarEvent:
+        event = self._events.get(event_id)
+        if event is None:
+            raise CalendarEventNotFoundError(f"Calendar event not found: {event_id}")
+        return event
+
+    def _occurrence_target(self, occurrence_id: str) -> tuple[CalendarEvent, str | None]:
+        """The event an occurrence id names and its occurrence key (None for a single event)."""
+        parsed = parse_occurrence_id(occurrence_id)
+        if parsed is None:
+            event = self._event(occurrence_id)
+            if event.recurring:
+                raise CalendarEventNotFoundError(
+                    f"Calendar occurrence not found: {occurrence_id} is a repeating event"
+                )
+            return event, None
+        event_id, key = parsed
+        series = self._events.get(event_id)
+        if series is None or not series.recurring:
+            raise CalendarEventNotFoundError(f"Calendar occurrence not found: {occurrence_id}")
+        return series, key
+
+    def _occurrence(self, event: CalendarEvent, key: str) -> EventOccurrence:
+        occurrence = occurrence_at(event, key, self._timezone)
+        if occurrence is None:
+            raise CalendarEventNotFoundError(
+                f"Calendar occurrence not found: {event.id} has no occurrence at {key}"
+            )
+        return occurrence
+
+    def _store(self, candidate: CalendarEvent, previous: CalendarEvent | None) -> None:
+        """Validate ``candidate``, persist it in place of ``previous`` and announce the change."""
+        _check_event(candidate)
+        self._events[candidate.id] = candidate
+        try:
+            self._save_events()
+        except Exception:
+            if previous is None:
+                self._events.pop(candidate.id, None)
+            else:
+                self._events[candidate.id] = previous
+            raise
+        self._notify_changed()
 
     def _load_events(self) -> dict[str, CalendarEvent]:
         self._ensure_storage_exists()
-        raw_payload = _load_events_payload(self._events_path)
+        document = _load_events_document(self._events_path) or {"events": []}
         self._invalid_event_entries = []
+        if is_legacy_events_document(document):
+            ignored = document.get("events")
+            _LOGGER.warning(
+                "Ignoring the calendar events of an earlier vBot version; the next change "
+                "replaces them (events=%s)",
+                len(ignored) if isinstance(ignored, list) else 0,
+            )
+            self._replace_legacy_document = True
+            return {}
         events: dict[str, CalendarEvent] = {}
-        for index, item in enumerate(raw_payload):
+        for index, item in enumerate(document["events"]):
             diagnostics: list[JsonDiagnostic] = []
-            _validate_event_data(diagnostics, f"$.events[{index}]", item)
-            errors = [diagnostic for diagnostic in diagnostics if diagnostic.severity == "error"]
-            if errors:
+            event = _read_event(diagnostics, f"$.events[{index}]", item)
+            if event is None:
                 details = "; ".join(
-                    f"{diagnostic.path}: {diagnostic.message}" for diagnostic in errors
+                    f"{diagnostic.path}: {diagnostic.message}"
+                    for diagnostic in diagnostics
+                    if diagnostic.severity == "error"
                 )
                 _LOGGER.warning("Skipping invalid calendar event: %s", details)
-                self._invalid_event_entries.append(item)
-                continue
-            try:
-                event = CalendarEvent.from_dict(
-                    cast("dict[str, Any]", strip_unknown_fields(item, CALENDAR_EVENT_SHAPE))
-                )
-                self._validate_event(event)
-            except (CalendarValidationError, TypeError, ValueError) as error:
-                _LOGGER.warning("Skipping invalid calendar event at $.events[%d]: %s", index, error)
                 self._invalid_event_entries.append(item)
                 continue
             if event.id in events:
@@ -890,7 +687,8 @@ class CalendarService:
     def _save_events(self) -> None:
         """Write the events, invalid entries verbatim, and unknown fields back.
 
-        A file that no longer loads is never overwritten.
+        A file that no longer loads is never overwritten; one of an earlier vBot
+        version is replaced.
         """
         self._ensure_storage_exists()
         events = [
@@ -898,11 +696,17 @@ class CalendarService:
             for event in sorted(self._events.values(), key=lambda item: (item.created_at, item.id))
         ] + list(self._invalid_event_entries)
         try:
-            write_json_document(self._events_path, {"events": events}, CALENDAR_EVENTS_FORMAT)
+            write_json_document(
+                self._events_path,
+                {"events": events},
+                CALENDAR_EVENTS_FORMAT,
+                reset=self._replace_legacy_document,
+            )
         except JsonDocumentWriteError as error:
             raise CalendarStorageError(str(error)) from error
         except OSError as error:
             raise CalendarStorageError(f"Cannot write {self._events_path}: {error}") from error
+        self._replace_legacy_document = False
 
     def _notify_changed(self) -> None:
         for callback in tuple(self._changed_callbacks):
@@ -946,3 +750,63 @@ class CalendarService:
             raise CalendarStorageError(
                 f"Cannot initialize calendar storage at {self._calendar_dir}: {error}"
             ) from error
+
+
+def _event_rule(value: object, start: str, tz_name: str | None) -> str | None:
+    zone = None if tz_name is None else _resolve_zone(tz_name)
+    return normalize_rrule(value, start=local_time(start), zone=zone)
+
+
+def _move_occurrence_keys(candidate: CalendarEvent, event: CalendarEvent) -> None:
+    """Move removed and changed occurrences with a moved start; drop those the rule lost."""
+    shift = local_time(candidate.start) - local_time(event.start)
+    all_day = candidate.all_day
+
+    def moved(key: str) -> str:
+        return occurrence_key(local_time(key) + shift, all_day=all_day)
+
+    exdates = [moved(key) for key in event.exdates]
+    overrides = {moved(key): dict(value) for key, value in event.overrides.items()}
+    produced = occurrence_keys(candidate, [*exdates, *overrides])
+    candidate.exdates = sorted(key for key in exdates if key in produced)
+    candidate.overrides = {key: value for key, value in overrides.items() if key in produced}
+
+
+def _without_series_values(
+    event: CalendarEvent, key: str, override: dict[str, Any]
+) -> dict[str, Any]:
+    """Drop the changes of one occurrence that equal what the series gives it."""
+    result = dict(override)
+    for name in ("title", "description", "location"):
+        if name in result and result[name] == getattr(event, name):
+            del result[name]
+    if "start" in result:
+        own_start = local_time(key)
+        own_end = own_start + (local_time(event.end) - local_time(event.start))
+        if (result["start"], result["end"]) == (
+            occurrence_key(own_start, all_day=event.all_day),
+            occurrence_key(own_end, all_day=event.all_day),
+        ):
+            del result["start"], result["end"]
+    return result
+
+
+def _changed_fields(before: CalendarEvent, after: CalendarEvent) -> list[str]:
+    old, new = before.to_dict(), after.to_dict()
+    return sorted(name for name in new if name != "updated_at" and new[name] != old[name])
+
+
+def _check_year(year: int, field_name: str) -> None:
+    if not FIRST_EVENT_YEAR <= year <= LAST_EVENT_YEAR:
+        raise CalendarValidationError(
+            f"{field_name} must be between the years {FIRST_EVENT_YEAR} and {LAST_EVENT_YEAR}"
+        )
+
+
+def _checked_window(window_start: datetime, window_end: datetime) -> tuple[datetime, datetime]:
+    start, end = _as_utc(window_start), _as_utc(window_end)
+    if end <= start:
+        raise CalendarValidationError("window end must be after its start")
+    if (end - start).days > MAX_WINDOW_DAYS:
+        raise CalendarValidationError(f"window span must not exceed {MAX_WINDOW_DAYS} days")
+    return start, end

@@ -13,7 +13,14 @@ from typing import Any
 
 import pytest
 
-from tests.core.tools.scheduling_tool_support import DENTIST_START, CalendarTool, calendar_tool
+from tests.core.tools.scheduling_tool_support import (
+    DENTIST_START,
+    CalendarTool,
+    calendar_tool,
+    days_of,
+    minutes_of,
+    start_utc_of,
+)
 
 
 @pytest.fixture
@@ -88,7 +95,7 @@ class TestEventFields:
         )
 
         event = tool.only_event()
-        assert (event.title, event.notes, event.duration_minutes) == (
+        assert (event.title, event.description, minutes_of(event)) == (
             "Review",
             "Bring the draft.",
             30,
@@ -118,7 +125,7 @@ class TestEventFields:
         )
 
         event = tool.only_event()
-        assert (event.start_utc, event.duration_minutes) == ("2030-01-10T14:00:00+00:00", 75)
+        assert (start_utc_of(event), minutes_of(event)) == ("2030-01-10T14:00:00+00:00", 75)
 
     def test_google_all_day_end_date_is_exclusive(self, tool: CalendarTool) -> None:
         tool.call(
@@ -126,7 +133,7 @@ class TestEventFields:
         )
 
         event = tool.only_event()
-        assert (event.start_date, event.duration_days) == ("2030-01-10", 2)
+        assert (event.start, days_of(event)) == ("2030-01-10", 2)
 
     def test_start_and_end_in_different_zones_are_exact_moments(self, tool: CalendarTool) -> None:
         tool.call(
@@ -139,7 +146,7 @@ class TestEventFields:
 
         event = tool.only_event()
         # 16:00 in New York is 22:00 in Berlin: seven hours after 15:00 Berlin.
-        assert (event.start_utc, event.duration_minutes) == ("2030-01-10T14:00:00+00:00", 420)
+        assert (start_utc_of(event), minutes_of(event)) == ("2030-01-10T14:00:00+00:00", 420)
 
     def test_time_object_without_a_time_is_refused(self, tool: CalendarTool) -> None:
         _, text = tool.call({"summary": "X", "start": {"timeZone": "Europe/Berlin"}})
@@ -147,7 +154,7 @@ class TestEventFields:
         assert tool.events() == []
         assert '"start" needs a date or dateTime.' in text
 
-    def test_location_leads_the_notes_and_replaces_an_earlier_one(self, tool: CalendarTool) -> None:
+    def test_location_is_kept_apart_from_the_notes(self, tool: CalendarTool) -> None:
         tool.call(
             {
                 "action": "create",
@@ -160,7 +167,8 @@ class TestEventFields:
         event_id = tool.only_event().id
         tool.call({"action": "update", "id": event_id, "location": "Hall B"})
 
-        assert tool.only_event().notes == "Location: Hall B\nBring slides."
+        event = tool.only_event()
+        assert (event.location, event.description) == ("Hall B", "Bring slides.")
 
     def test_attendees_are_refused_with_a_call_that_records_them(self, tool: CalendarTool) -> None:
         _, text = tool.call(
@@ -217,33 +225,28 @@ class TestRepetition:
     @pytest.mark.parametrize(
         ("rule", "stored"),
         [
-            ("FREQ=WEEKLY;BYDAY=MO,WE", {"freq": "weekly", "by_weekday": ["mo", "we"]}),
-            (["RRULE:FREQ=DAILY;COUNT=5"], {"freq": "daily", "count": 5}),
-            ("every 2 weeks", {"freq": "weekly", "interval": 2}),
-            ("weekdays", {"freq": "weekly", "by_weekday": ["mo", "tu", "we", "th", "fr"]}),
-            ("FREQ=MONTHLY;BYMONTHDAY=10", {"freq": "monthly"}),
+            ("FREQ=WEEKLY;BYDAY=MO,WE", "FREQ=WEEKLY;BYDAY=MO,WE"),
+            (["RRULE:FREQ=DAILY;COUNT=5"], "FREQ=DAILY;COUNT=5"),
+            ({"freq": "weekly", "interval": 2}, "FREQ=WEEKLY;INTERVAL=2"),
+            ("every 2 weeks", "FREQ=WEEKLY;INTERVAL=2"),
+            ("weekdays", "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"),
+            ("FREQ=MONTHLY;BYMONTHDAY=10", "FREQ=MONTHLY"),
         ],
     )
-    def test_rule_texts_become_the_rule_object(
-        self, tool: CalendarTool, rule: Any, stored: dict[str, Any]
+    def test_rule_texts_become_the_stored_rule(
+        self, tool: CalendarTool, rule: Any, stored: str
     ) -> None:
         tool.call({"action": "create", "title": "R", "start": DENTIST_START, "rrule": rule})
 
-        event_rule = tool.only_event().rrule
-        assert event_rule is not None
-        kept = {key: value for key, value in event_rule.items() if value not in (None, 1)}
-        if "by_weekday" in kept:
-            kept["by_weekday"] = sorted(kept["by_weekday"])
-            stored = {**stored, "by_weekday": sorted(stored["by_weekday"])}
-        assert kept == stored
+        assert tool.only_event().rrule == stored
 
     @pytest.mark.parametrize(
         ("rule", "reason"),
         [
-            ("FREQ=DAILY;INTERVAL=abc", "rrule.interval must be an integer between 1 and 1000"),
+            ("FREQ=DAILY;INTERVAL=abc", "rrule INTERVAL must be a whole number from 1 to 1000"),
             (
                 {"freq": "daily", "count": "\u00b3"},
-                "rrule.count must be an integer between 1 and 10000",
+                "rrule COUNT must be a whole number from 1 to 10000",
             ),
         ],
     )
@@ -269,7 +272,7 @@ class TestRepetition:
             }
         )
 
-        assert 'repeats: {"freq":"daily","interval":2}' in text
+        assert "repeats: FREQ=DAILY;INTERVAL=2" in text
 
     def test_rule_part_on_another_day_is_refused_with_the_keepable_rule(
         self, tool: CalendarTool
@@ -338,7 +341,7 @@ class TestIds:
 
         _, text = tool.call({"action": "update", "id": "<event id>", "notes": "x"})
 
-        assert tool.only_event().notes is None
+        assert tool.only_event().description is None
         assert 'update needs the event "id"' in text
 
 
@@ -357,7 +360,7 @@ class TestStandIns:
         _, updated = tool.call({"action": "update", "id": event_id, field: stand_in})
 
         event = tool.only_event()
-        assert (event.title, event.notes) == ("Dentist", None)
+        assert (event.title, event.description) == ("Dentist", None)
         assert f'{field} "{stand_in}" is a stand-in.' in created
         assert f'{field} "{stand_in}" is a stand-in.' in updated
 

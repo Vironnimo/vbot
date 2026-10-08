@@ -9,10 +9,11 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
-from datetime import datetime, tzinfo
+from datetime import UTC, date, datetime, tzinfo
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar, cast, override
+from zoneinfo import ZoneInfo
 
 from core.automation.cron import CronJob, CronService
 from core.calendar import CalendarEvent, CalendarService
@@ -26,7 +27,7 @@ from tests.core.tools.tools_test_support import dispatch_as_executor
 SERVER_ZONE = "Europe/Berlin"
 JOB_PROMPT = "Lint the wiki and report broken links."
 DENTIST_START = "2030-01-10T15:00"
-WEEKLY_MONDAY = {"freq": "weekly", "by_weekday": ["mo"]}
+WEEKLY_MONDAY = "FREQ=WEEKLY;BYDAY=MO"
 
 
 @dataclass
@@ -148,6 +149,31 @@ def calendar_tool(tmp_path: Path, *, tz: str = SERVER_ZONE) -> CalendarTool:
     return CalendarTool(
         registry=registry, workspace=tmp_path, reference_lock=reference_lock, service=service
     )
+
+
+def start_utc_of(event: CalendarEvent) -> str:
+    """A timed event's start instant in UTC, ISO 8601."""
+    assert event.tz_name is not None
+    return _instant(event.start, event.tz_name).isoformat()
+
+
+def minutes_of(event: CalendarEvent) -> int | None:
+    """A timed event's length in real minutes; None for an all-day event."""
+    if event.tz_name is None:
+        return None
+    length = _instant(event.end, event.tz_name) - _instant(event.start, event.tz_name)
+    return int(length.total_seconds() // 60)
+
+
+def days_of(event: CalendarEvent) -> int | None:
+    """An all-day event's length in days; None for a timed event."""
+    if event.tz_name is not None:
+        return None
+    return (date.fromisoformat(event.end) - date.fromisoformat(event.start)).days
+
+
+def _instant(local: str, zone: str) -> datetime:
+    return datetime.fromisoformat(local).replace(tzinfo=ZoneInfo(zone)).astimezone(UTC)
 
 
 def clock_at(moment: datetime) -> type[datetime]:

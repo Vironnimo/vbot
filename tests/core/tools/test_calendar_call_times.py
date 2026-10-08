@@ -12,7 +12,14 @@ from typing import Any
 
 import pytest
 
-from tests.core.tools.scheduling_tool_support import DENTIST_START, CalendarTool, calendar_tool
+from tests.core.tools.scheduling_tool_support import (
+    DENTIST_START,
+    CalendarTool,
+    calendar_tool,
+    days_of,
+    minutes_of,
+    start_utc_of,
+)
 
 
 @pytest.fixture
@@ -36,12 +43,12 @@ class TestLengths:
         tool.call({"action": "create", "title": "L", "start": start, "duration": duration})
 
         event = tool.only_event()
-        assert (event.duration_minutes, event.duration_days) == (minutes, days)
+        assert (minutes_of(event), days_of(event)) == (minutes, days)
 
     def test_hours_field_becomes_minutes(self, tool: CalendarTool) -> None:
         tool.call({"action": "create", "title": "L", "start": DENTIST_START, "duration_hours": 1.5})
 
-        assert tool.only_event().duration_minutes == 90
+        assert minutes_of(tool.only_event()) == 90
 
     @pytest.mark.parametrize("length", [{"duration": "1h"}, {"minutes": 60}])
     def test_time_span_on_a_date_start_offers_a_timed_event_or_whole_days(
@@ -84,7 +91,7 @@ class TestLengths:
     ) -> None:
         _, text = tool.call({"action": "create", "title": "L", "start": start, "days": 2})
 
-        assert tool.only_event().duration_minutes == minutes
+        assert minutes_of(tool.only_event()) == minutes
         assert (
             f"note: A timed event lasts minutes: read 2 days as {minutes} minutes, so it ends "
             f"at {until}."
@@ -93,7 +100,7 @@ class TestLengths:
     def test_days_for_a_date_start_are_the_all_day_length(self, tool: CalendarTool) -> None:
         tool.call({"action": "create", "title": "L", "start": "2030-01-10", "days": 3})
 
-        assert tool.only_event().duration_days == 3
+        assert days_of(tool.only_event()) == 3
 
     @pytest.mark.parametrize(
         ("start", "change", "minutes", "days"),
@@ -118,14 +125,14 @@ class TestLengths:
         tool.call({"action": "update", "id": event_id, **change})
 
         event = tool.only_event()
-        assert (event.duration_minutes, event.duration_days) == (minutes, days)
+        assert (minutes_of(event), days_of(event)) == (minutes, days)
 
     def test_minutes_on_update_of_an_all_day_event_are_refused(self, tool: CalendarTool) -> None:
         event_id = tool.service.create_event(title="L", start="2030-01-10").id
 
         _, text = tool.call({"action": "update", "id": event_id, "minutes": 90})
 
-        assert tool.only_event().duration_days == 1
+        assert days_of(tool.only_event()) == 1
         assert text.endswith(
             f'{{"action":"update","id":"{event_id}","start":"2030-01-10T<HH:MM>","duration":90}} '
             "(a timed event; put its start time in place of <HH:MM>) or "
@@ -169,12 +176,12 @@ class TestLengths:
     ) -> None:
         tool.call({"action": "create", "title": "E", "start": start, "end": end})
 
-        assert tool.only_event().duration_minutes == minutes
+        assert minutes_of(tool.only_event()) == minutes
 
     def test_all_day_end_on_the_start_day_is_one_day(self, tool: CalendarTool) -> None:
         tool.call({"action": "create", "title": "E", "start": "2030-01-10", "end": "2030-01-10"})
 
-        assert tool.only_event().duration_days == 1
+        assert days_of(tool.only_event()) == 1
 
     def test_later_all_day_end_date_offers_both_readings(self, tool: CalendarTool) -> None:
         _, text = tool.call(
@@ -213,7 +220,7 @@ class TestLengths:
 
         tool.call({"action": "update", "id": event_id, "end": "17:15"})
 
-        assert tool.only_event().duration_minutes == 135
+        assert minutes_of(tool.only_event()) == 135
 
 
 class TestTimeZones:
@@ -231,7 +238,7 @@ class TestTimeZones:
         )
 
         event = tool.only_event()
-        assert (event.start_utc, event.duration_minutes) == ("2030-01-12T15:00:00+00:00", 60)
+        assert (start_utc_of(event), minutes_of(event)) == ("2030-01-12T15:00:00+00:00", 60)
         assert (
             'note: Read "2030-01-12T10:00" and "2030-01-12T11:00" as America/New_York time: '
             "2030-01-12T16:00 and 2030-01-12T17:00 in the server time zone Europe/Berlin."
@@ -242,7 +249,7 @@ class TestTimeZones:
             {"action": "create", "title": "C", "start": DENTIST_START, "timezone": "europe/berlin"}
         )
 
-        assert tool.only_event().start_utc == "2030-01-10T14:00:00+00:00"
+        assert start_utc_of(tool.only_event()) == "2030-01-10T14:00:00+00:00"
         assert "note" not in text
 
     def test_unknown_zone_is_refused(self, tool: CalendarTool) -> None:
@@ -286,7 +293,7 @@ class TestTimeZones:
             }
         )
 
-        assert tool.only_event().start_local == "2030-01-13T01:00:00"
+        assert tool.only_event().start == "2030-01-13T01:00:00"
 
     def test_repeating_event_from_a_skipped_time_keeps_its_wall_clock_time(
         self, tool: CalendarTool
@@ -303,7 +310,7 @@ class TestTimeZones:
             }
         )
 
-        assert tool.only_event().start_local == "2030-03-31T02:30:00"
+        assert tool.only_event().start == "2030-03-31T02:30:00"
 
     def test_repeating_event_that_moves_to_another_day_is_refused(self, tmp_path: Path) -> None:
         tool = calendar_tool(tmp_path, tz="UTC")
@@ -352,7 +359,7 @@ class TestTimeZones:
             }
         )
 
-        assert tool.only_event().start_utc == "2030-01-10T10:00:00+00:00"
+        assert start_utc_of(tool.only_event()) == "2030-01-10T10:00:00+00:00"
 
     @pytest.mark.parametrize(
         ("start", "reason", "meant"),
@@ -393,11 +400,12 @@ class TestTimeZones:
             f"Send the one that is meant: {sends}"
         )
 
-        tool.call({**call, "start": meant[1]})
+        # A stored local time names the first of two instants, so the first reading is kept.
+        tool.call({**call, "start": meant[0]})
 
         event = tool.only_event()
-        expected = datetime.fromisoformat(meant[1]).astimezone(UTC).isoformat()
-        assert (event.start_utc, event.duration_minutes) == (expected, 90)
+        expected = datetime.fromisoformat(meant[0]).astimezone(UTC).isoformat()
+        assert (start_utc_of(event), minutes_of(event)) == (expected, 90)
 
     def test_end_in_the_repeated_hour_is_refused_with_each_instant(
         self, tool: CalendarTool
@@ -427,7 +435,7 @@ class TestTimeZones:
             }
         )
 
-        assert tool.only_event().start_date == "2030-01-10"
+        assert tool.only_event().start == "2030-01-10"
 
     def test_list_window_is_read_in_the_named_zone(self, tool: CalendarTool) -> None:
         tool.add_dentist()

@@ -48,10 +48,14 @@ class TestList:
     def test_list_shows_events_with_ids_times_repetition_and_notes(self, tmp_path: Path) -> None:
         tool = calendar_tool(tmp_path)
         weekly = tool.service.create_event(
-            title="Weekly", start="2030-01-07T09:00:00", duration_minutes=30, rrule=WEEKLY_MONDAY
+            title="Weekly", start="2030-01-07T09:00:00", end="2030-01-07T09:30", rrule=WEEKLY_MONDAY
         )
         trip = tool.service.create_event(
-            title="Trip", start="2030-01-08", duration_days=3, notes="Pack.\nBook seats."
+            title="Trip",
+            start="2030-01-08",
+            end="2030-01-11",
+            location="Lake",
+            description="Pack.\nBook seats.",
         )
 
         envelope, text = tool.call({"action": "list", "when": "2030-01-06..2030-01-19"})
@@ -67,20 +71,21 @@ class TestList:
             "title: Weekly\n"
             "start: 2030-01-07T09:00\n"
             "end: 2030-01-07T09:30\n"
-            'repeats: {"freq":"weekly","by_weekday":["mo"]}\n'
+            "repeats: FREQ=WEEKLY;BYDAY=MO\n"
             "occurrences: 2030-01-07T09:00, 2030-01-14T09:00\n"
             "\n"
             f"id: {trip.id}\n"
             "title: Trip\n"
             "start: 2030-01-08\n"
             "days: 3\n"
+            "location: Lake\n"
             "notes: Pack.\n"
             "  Book seats."
         )
 
     def test_list_abbreviates_many_occurrences(self, tmp_path: Path) -> None:
         tool = calendar_tool(tmp_path)
-        tool.service.create_event(title="Daily", start="2030-01-01T08:00", rrule={"freq": "daily"})
+        tool.service.create_event(title="Daily", start="2030-01-01T08:00", rrule="FREQ=DAILY")
 
         _, text = tool.call({"action": "list", "when": "2030-01"})
 
@@ -104,7 +109,9 @@ class TestList:
     def test_list_filters_by_query_in_title_and_notes(self, tmp_path: Path) -> None:
         tool = calendar_tool(tmp_path)
         tool.service.create_event(title="Dentist", start="2030-01-05T10:00")
-        tool.service.create_event(title="Call", start="2030-01-06T10:00", notes="about the DENTIST")
+        tool.service.create_event(
+            title="Call", start="2030-01-06T10:00", description="about the DENTIST"
+        )
         tool.service.create_event(title="Gym", start="2030-01-07T10:00")
 
         envelope, text = tool.call({"action": "list", "when": "2030-01", "query": "dentist"})
@@ -130,8 +137,11 @@ class TestCreate:
         _, text = tool.call({"action": "create", "title": "Dentist", "start": "2030-01-10T15:00"})
 
         event = tool.only_event()
-        assert event.start_utc == "2030-01-10T14:00:00+00:00"
-        assert event.duration_minutes == 60
+        assert (event.start, event.end, event.tz_name) == (
+            "2030-01-10T15:00:00",
+            "2030-01-10T16:00:00",
+            "Europe/Berlin",
+        )
         assert text == (
             f"id: {event.id}\ntitle: Dentist\nstart: 2030-01-10T15:00\nend: 2030-01-10T16:00"
         )
@@ -144,25 +154,8 @@ class TestCreate:
         )
 
         event = tool.only_event()
-        assert (event.all_day, event.duration_days, event.duration_minutes) == (True, 3, None)
+        assert (event.all_day, event.start, event.end) == (True, "2030-01-14", "2030-01-17")
         assert "start: 2030-01-14\ndays: 3" in text
-
-    def test_single_event_end_uses_real_time_across_dst_fall_back(self, tmp_path: Path) -> None:
-        tool = calendar_tool(tmp_path)
-
-        _, created = tool.call(
-            {
-                "action": "create",
-                "title": "Night shift",
-                "start": "2030-10-27T01:30:00",
-                "duration": 120,
-            }
-        )
-        _, free = tool.call({"action": "find_free", "when": "2030-10-27", "duration": 60})
-
-        # 01:30 CEST plus two real hours is 02:30 CET, not 03:30 wall-clock time.
-        assert "end: 2030-10-27T02:30" in created
-        assert "2030-10-27T02:30 to 2030-10-28T00:00" in free
 
     def test_create_repeating_event_anchors_in_server_zone(self, tmp_path: Path) -> None:
         tool = calendar_tool(tmp_path)
@@ -177,8 +170,8 @@ class TestCreate:
         )
 
         event = tool.only_event()
-        assert (event.tz_name, event.start_local) == ("Europe/Berlin", "2030-01-07T09:00:00")
-        assert 'repeats: {"freq":"weekly","by_weekday":["mo"]}' in text
+        assert (event.tz_name, event.start) == ("Europe/Berlin", "2030-01-07T09:00:00")
+        assert "repeats: FREQ=WEEKLY;BYDAY=MO" in text
 
     def test_create_without_title_names_the_call_with_its_start(self, tmp_path: Path) -> None:
         tool = calendar_tool(tmp_path)
@@ -212,7 +205,7 @@ class TestUpdate:
         _, text = tool.call({"action": "update", "id": event.id, "title": "Daily"})
 
         updated = tool.only_event()
-        assert (updated.title, updated.duration_minutes) == ("Daily", 60)
+        assert (updated.title, updated.end) == ("Daily", "2030-01-07T10:00:00")
         assert updated.rrule is not None
         assert "title: Daily" in text
 
@@ -224,18 +217,21 @@ class TestUpdate:
         tool.call({"action": "update", "id": timed.id, "duration": 90})
         tool.call({"action": "update", "id": trip.id, "duration": 5})
 
-        assert tool.service.get_event(timed.id).duration_minutes == 90
-        assert tool.service.get_event(trip.id).duration_days == 5
+        assert tool.service.get_event(timed.id).end == "2030-01-10T16:30:00"
+        assert tool.service.get_event(trip.id).end == "2030-01-19"
 
     def test_update_start_switches_all_day_event_to_timed(self, tmp_path: Path) -> None:
         tool = calendar_tool(tmp_path)
-        event = tool.service.create_event(title="Trip", start="2030-01-14", duration_days=3)
+        event = tool.service.create_event(title="Trip", start="2030-01-14", end="2030-01-17")
 
         tool.call({"action": "update", "id": event.id, "start": "2030-01-14T15:00", "duration": 60})
 
         updated = tool.only_event()
-        assert (updated.all_day, updated.start_utc) == (False, "2030-01-14T14:00:00+00:00")
-        assert (updated.duration_minutes, updated.duration_days) == (60, None)
+        assert (updated.all_day, updated.start, updated.end) == (
+            False,
+            "2030-01-14T15:00:00",
+            "2030-01-14T16:00:00",
+        )
 
     def test_update_null_rrule_stops_repetition(self, tmp_path: Path) -> None:
         tool = calendar_tool(tmp_path)
@@ -246,7 +242,7 @@ class TestUpdate:
         _, text = tool.call({"action": "update", "id": event.id, "rrule": None})
 
         updated = tool.only_event()
-        assert (updated.rrule, updated.start_utc) == (None, "2030-01-07T08:00:00+00:00")
+        assert (updated.rrule, updated.start) == (None, "2030-01-07T09:00:00")
         assert "repeats" not in text
 
     def test_update_without_changes_names_a_call(self, tmp_path: Path) -> None:
@@ -351,8 +347,8 @@ class TestFindFree:
 
     def test_find_free_skips_gaps_shorter_than_the_duration(self, tmp_path: Path) -> None:
         tool = calendar_tool(tmp_path)
-        tool.service.create_event(title="A", start="2030-09-03T09:00", duration_minutes=60)
-        tool.service.create_event(title="B", start="2030-09-03T10:30", duration_minutes=60)
+        tool.service.create_event(title="A", start="2030-09-03T09:00", end="2030-09-03T10:00")
+        tool.service.create_event(title="B", start="2030-09-03T10:30", end="2030-09-03T11:30")
 
         _, text = tool.call({"action": "find_free", "when": "2030-09-03", "duration": 45})
 
