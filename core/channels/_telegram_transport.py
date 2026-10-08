@@ -10,6 +10,7 @@ from typing import Any, cast
 
 from core.attachments import AttachmentStore
 from core.channels.adapter import (
+    DeliveryProgress,
     FileData,
     QuotedMessageFacts,
     content_blocks_for_attachment,
@@ -126,26 +127,47 @@ class TelegramTransport:
         # last chunk of a split reply.
         chunks = split_telegram_message(message, TELEGRAM_MESSAGE_LIMIT)
         last_index = len(chunks) - 1
-        for index, chunk in enumerate(chunks):
-            payload: dict[str, Any] = {"chat_id": chat_id, "text": chunk}
-            if message_thread_id is not None:
-                payload["message_thread_id"] = message_thread_id
-            if reply_markup is not None and index == last_index:
-                payload["reply_markup"] = reply_markup
-            if reply_parameters is not None and index == 0:
-                payload["reply_parameters"] = reply_parameters
+        with DeliveryProgress() as progress:
+            for index, chunk in enumerate(chunks):
+                await self._send_chunk(
+                    bot,
+                    chat_id,
+                    chunk,
+                    message_thread_id=message_thread_id,
+                    reply_markup=reply_markup if index == last_index else None,
+                    reply_parameters=reply_parameters if index == 0 else None,
+                )
+                progress.delivered()
 
-            async def send_chunk(payload: dict[str, Any] = payload) -> None:
-                with _telegram_error_boundary(self._channel_id, write=True):
-                    await bot.send_message(**payload)
+    async def _send_chunk(
+        self,
+        bot: Any,
+        chat_id: int,
+        chunk: str,
+        *,
+        message_thread_id: int | None,
+        reply_markup: Any,
+        reply_parameters: Any,
+    ) -> None:
+        payload: dict[str, Any] = {"chat_id": chat_id, "text": chunk}
+        if message_thread_id is not None:
+            payload["message_thread_id"] = message_thread_id
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        if reply_parameters is not None:
+            payload["reply_parameters"] = reply_parameters
 
-            try:
-                await retry_async(send_chunk)
-            except ChannelError as error:
-                # This chunk exhausted its retries. Retrying the whole transport
-                # call would duplicate all earlier, acknowledged chunks.
-                error.retryable = False
-                raise
+        async def send_chunk() -> None:
+            with _telegram_error_boundary(self._channel_id, write=True):
+                await bot.send_message(**payload)
+
+        try:
+            await retry_async(send_chunk)
+        except ChannelError as error:
+            # This chunk exhausted its retries. Retrying the whole transport
+            # call would duplicate all earlier, acknowledged chunks.
+            error.retryable = False
+            raise
 
     async def _send_with_files(
         self,
@@ -161,10 +183,14 @@ class TelegramTransport:
         # is delivered as standalone text first (so nothing is dropped) and the files go out
         # uncaptioned.
         if message is not None and _utf16_length(message) > TELEGRAM_CAPTION_LIMIT:
-            await self._send_text_chunks(bot, chat_id, message, message_thread_id=message_thread_id)
-            await self._send_files(
-                bot, chat_id, files, caption=None, message_thread_id=message_thread_id
-            )
+            with DeliveryProgress() as progress:
+                await self._send_text_chunks(
+                    bot, chat_id, message, message_thread_id=message_thread_id
+                )
+                progress.delivered()
+                await self._send_files(
+                    bot, chat_id, files, caption=None, message_thread_id=message_thread_id
+                )
             return
         await self._send_files(
             bot, chat_id, files, caption=message, message_thread_id=message_thread_id
@@ -204,7 +230,8 @@ class TelegramTransport:
                 payload["caption"] = caption
             if message_thread_id is not None:
                 payload["message_thread_id"] = message_thread_id
-            await bot.send_photo(**payload)
+            with _telegram_error_boundary(self._channel_id, write=True):
+                await bot.send_photo(**payload)
             return
 
         payload = {"chat_id": chat_id, "document": input_file}
@@ -212,7 +239,8 @@ class TelegramTransport:
             payload["caption"] = caption
         if message_thread_id is not None:
             payload["message_thread_id"] = message_thread_id
-        await bot.send_document(**payload)
+        with _telegram_error_boundary(self._channel_id, write=True):
+            await bot.send_document(**payload)
 
     async def _send_file_batch(
         self,
@@ -232,20 +260,19 @@ class TelegramTransport:
                 doc_files.append(file_data)
 
         caption_pending = caption
-        for partition, is_image in ((image_files, True), (doc_files, False)):
-            if not partition:
-                continue
-
-            for batch in batched(partition, 10, strict=False):
-                await self._send_homogeneous_batch(
-                    bot,
-                    chat_id,
-                    batch,
-                    caption=caption_pending,
-                    is_image=is_image,
-                    message_thread_id=message_thread_id,
-                )
-                caption_pending = None
+        with DeliveryProgress() as progress:
+            for partition, is_image in ((image_files, True), (doc_files, False)):
+                for batch in batched(partition, 10, strict=False):
+                    await self._send_homogeneous_batch(
+                        bot,
+                        chat_id,
+                        batch,
+                        caption=caption_pending,
+                        is_image=is_image,
+                        message_thread_id=message_thread_id,
+                    )
+                    progress.delivered()
+                    caption_pending = None
 
     async def _send_homogeneous_batch(
         self,
@@ -281,7 +308,8 @@ class TelegramTransport:
         payload: dict[str, Any] = {"chat_id": chat_id, "media": media_items}
         if message_thread_id is not None:
             payload["message_thread_id"] = message_thread_id
-        await bot.send_media_group(**payload)
+        with _telegram_error_boundary(self._channel_id, write=True):
+            await bot.send_media_group(**payload)
 
     async def send_text(
         self,

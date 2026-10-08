@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
+from core.channels.config import ChannelError
 from core.chat.content_blocks import ContentBlock, FileBlock, MediaBlock
 from core.chat.messages import GroupRole
 from core.extensions import InteractionButton
@@ -370,6 +371,28 @@ def content_blocks_for_attachment(record: AttachmentRecord) -> list[ContentBlock
     return [file_block]
 
 
+class DeliveryProgress:
+    """Mark a multi-part send's failure as possibly delivered once a part was shown.
+
+    Wrap the parts in ``with progress:`` and call ``delivered()`` after each part
+    the platform acknowledged as visible; a ``ChannelError`` leaving the block
+    afterwards carries ``possibly_delivered``.
+    """
+
+    def __init__(self) -> None:
+        self._delivered = False
+
+    def delivered(self) -> None:
+        self._delivered = True
+
+    def __enter__(self) -> DeliveryProgress:
+        return self
+
+    def __exit__(self, _type: object, error: BaseException | None, _traceback: object) -> None:
+        if self._delivered and isinstance(error, ChannelError):
+            error.possibly_delivered = True
+
+
 class ChannelAdapter(ABC):
     """Base class for platform-specific channel adapters."""
 
@@ -427,6 +450,10 @@ class ChannelAdapter(ABC):
         to the message so taps come back as channel interaction events. Only
         adapters that support interactive messages honor it; the rest reject a
         non-``None`` value with a clean error.
+
+        A failure raises ``ChannelError``. It sets ``possibly_delivered`` unless
+        nothing of the message can be visible: once a part was acknowledged
+        (``DeliveryProgress``), or when a write's outcome is unknown.
         """
 
     async def relay_run(

@@ -100,6 +100,8 @@ async def test_chunk_retry_never_replays_delivered_text(
                 await h.adapter.send_text("C1", "x" * 3500 + "tail")
             # Once one chunk exhausts its retries, resending the message would duplicate.
             assert not error.value.retryable
+            # The refused tail follows a visible first chunk.
+            assert error.value.possibly_delivered
             assert attempts() == ["x" * 3500] + ["tail"] * 4
         else:
             await h.adapter.send_text("C1", "x" * 3500 + "tail")
@@ -182,11 +184,11 @@ def _connection_lost(request: httpx.Request) -> httpx.Response:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("server", "retryable", "retry_after"),
+    ("server", "retryable", "retry_after", "possibly_delivered"),
     [
-        (_rate_limited, True, 7),
-        (_rate_limited_for_a_fraction, True, 1.5),
-        (_connection_lost, False, None),
+        (_rate_limited, True, 7, False),
+        (_rate_limited_for_a_fraction, True, 1.5, False),
+        (_connection_lost, False, None, True),
     ],
     ids=["rate-limited", "fractional-retry-after", "ambiguous-write"],
 )
@@ -195,12 +197,14 @@ async def test_request_failure_keeps_retry_hint_without_request_details(
     server: HttpHandler,
     retryable: bool,
     retry_after: float | None,
+    possibly_delivered: bool,
 ) -> None:
     h = make_adapter(tmp_path, "slack", http=server)
     try:
         with pytest.raises(ChannelError) as error:
             await h.adapter.api("chat.postMessage", {})
         assert (error.value.retryable, error.value.retry_after) == (retryable, retry_after)
+        assert error.value.possibly_delivered is possibly_delivered
         # Request URLs and tokens never reach the error text or its chained cause.
         assert "secret" not in str(error.value) and "credential" not in str(error.value)
         assert error.value.__cause__ is None

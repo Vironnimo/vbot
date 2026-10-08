@@ -10,7 +10,7 @@ import httpx
 from websockets.asyncio.client import connect
 
 from core.channels._network_adapter import NetworkChannelAdapter
-from core.channels.adapter import ConversationFacts, FileData
+from core.channels.adapter import ConversationFacts, DeliveryProgress, FileData
 from core.channels.config import ChannelError
 from core.utils.tls import shared_ssl_context
 
@@ -173,38 +173,43 @@ class SlackChannelAdapter(NetworkChannelAdapter):
     ) -> None:
         self.check_send(message, files, buttons)
         self.remember(await self.target_facts(platform_target))
-        for chunk in self.message_chunks(message):
-            payload: dict[str, Any] = {
-                "channel": platform_target,
-                "text": chunk,
-                "unfurl_links": False,
-                "unfurl_media": False,
-            }
-            if thread_id:
-                payload["thread_ts"] = thread_id
-            await self._send_operation(self.api, "chat.postMessage", payload)
-        for file in files or []:
-            # Slack retired files.upload; use the external upload flow.
-            upload = await self._send_operation(
-                self.api,
-                "files.getUploadURLExternal",
-                {"filename": file.filename, "length": len(file.data)},
-            )
-            url = urlsplit(upload["upload_url"])
-            if url.scheme != "https" or url.hostname != "files.slack.com":
-                raise ChannelError("Slack returned an invalid upload address")
-            await self._send_operation(self._upload_bytes, upload["upload_url"], file.data)
-            complete: dict[str, Any] = {
-                "files": [{"id": upload["file_id"], "title": file.filename}],
-                "channel_id": platform_target,
-            }
-            if thread_id:
-                complete["thread_ts"] = thread_id
-            await self._send_operation(self.api, "files.completeUploadExternal", complete)
+        with DeliveryProgress() as progress:
+            for chunk in self.message_chunks(message):
+                payload: dict[str, Any] = {
+                    "channel": platform_target,
+                    "text": chunk,
+                    "unfurl_links": False,
+                    "unfurl_media": False,
+                }
+                if thread_id:
+                    payload["thread_ts"] = thread_id
+                await self._send_operation(self.api, "chat.postMessage", payload)
+                progress.delivered()
+            for file in files or []:
+                # Slack retired files.upload; use the external upload flow.
+                upload = await self._send_operation(
+                    self.api,
+                    "files.getUploadURLExternal",
+                    {"filename": file.filename, "length": len(file.data)},
+                )
+                url = urlsplit(upload["upload_url"])
+                if url.scheme != "https" or url.hostname != "files.slack.com":
+                    raise ChannelError("Slack returned an invalid upload address")
+                await self._send_operation(self._upload_bytes, upload["upload_url"], file.data)
+                complete: dict[str, Any] = {
+                    "files": [{"id": upload["file_id"], "title": file.filename}],
+                    "channel_id": platform_target,
+                }
+                if thread_id:
+                    complete["thread_ts"] = thread_id
+                await self._send_operation(self.api, "files.completeUploadExternal", complete)
+                progress.delivered()
 
     async def _upload_bytes(self, url: str, data: bytes) -> None:
         try:
             response = await self._http.post(url, content=data)
         except httpx.RequestError:
-            raise ChannelError("Slack upload could not be confirmed") from None
-        self.check_response(response, retry_server_error=False)
+            raise ChannelError(
+                "Slack upload could not be confirmed", possibly_delivered=True
+            ) from None
+        self.check_response(response, write=True)

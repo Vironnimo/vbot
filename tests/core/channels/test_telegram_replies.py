@@ -155,20 +155,47 @@ async def test_a_failed_chunk_is_retried_without_resending_delivered_chunks(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("with_files", [False, True], ids=["text-chunks", "text-then-files"])
+async def test_a_send_failing_after_a_delivered_part_is_possibly_delivered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, with_files: bool
+) -> None:
+    adapter, _sessions, _trigger, bot = make_adapter(
+        tmp_path, monkeypatch, allowed_chat_ids=[12345]
+    )
+    rejected = BadRequest("Chat not found")
+    if with_files:
+        # A message over the caption limit goes out as text before the files.
+        message = "a" * (TELEGRAM_CAPTION_LIMIT + 1)
+        bot.send_document.side_effect = rejected
+        files = [FileData("notes.txt", "text/plain", b"notes")]
+    else:
+        message = "a" * TELEGRAM_MESSAGE_LIMIT + "b"
+        bot.send_message.side_effect = [None, rejected]
+        files = None
+
+    with pytest.raises(ChannelError) as raised:
+        await adapter.send(message, "12345", files=files)
+
+    # A certain rejection of a later part still leaves the first part visible.
+    assert raised.value.possibly_delivered is True
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("make_error", "ptb_timedelta", "attempts", "retry_hints", "retry_after"),
+    ("make_error", "ptb_timedelta", "attempts", "retry_hints", "retry_after", "maybe_shown"),
     [
         # BadRequest also subclasses NetworkError, yet a rejected request never retries.
-        (lambda: BadRequest("Message caption is too long"), False, 1, [], None),
+        (lambda: BadRequest("Message caption is too long"), False, 1, [], None, False),
         # Telegram may have posted the message before the timeout or the dropped
         # connection, so a repeat could duplicate it.
-        (lambda: TimedOut("read timeout"), False, 1, [], None),
-        (lambda: NetworkError("server disconnected"), False, 1, [], None),
+        (lambda: TimedOut("read timeout"), False, 1, [], None, True),
+        (lambda: NetworkError("server disconnected"), False, 1, [], None, True),
         # A connection that never opened sent nothing.
-        (_unsent_failure, False, 4, [None] * 3, None),
-        (lambda: RetryAfter(retry_after=7), False, 4, [7.0] * 3, 7.0),
+        (_unsent_failure, False, 4, [None] * 3, None, False),
+        (lambda: RetryAfter(retry_after=7), False, 4, [7.0] * 3, 7.0, False),
         # python-telegram-bot reports the flood wait as a timedelta in this mode.
-        (lambda: RetryAfter(retry_after=7), True, 4, [7.0] * 3, 7.0),
+        (lambda: RetryAfter(retry_after=7), True, 4, [7.0] * 3, 7.0, False),
     ],
     ids=[
         "bad-request",
@@ -187,6 +214,7 @@ async def test_send_errors_are_retried_by_their_telegram_classification(
     attempts: int,
     retry_hints: list[float | None],
     retry_after: float | None,
+    maybe_shown: bool,
 ) -> None:
     monkeypatch.setenv("PTB_TIMEDELTA", "1" if ptb_timedelta else "0")
     hints: list[float | None] = []
@@ -213,6 +241,7 @@ async def test_send_errors_are_retried_by_their_telegram_classification(
     # The caller must not retry a send whose chunk already exhausted its attempts.
     assert raised.value.retryable is False
     assert raised.value.retry_after == retry_after
+    assert raised.value.possibly_delivered is maybe_shown
     await adapter.stop()
 
 

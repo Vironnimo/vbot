@@ -15,7 +15,7 @@ from core.channels._whatsapp_setup import (
     child_options,
     node_executable,
 )
-from core.channels.adapter import ConversationFacts, FileData
+from core.channels.adapter import ConversationFacts, DeliveryProgress, FileData
 from core.channels.config import ChannelError
 
 
@@ -110,7 +110,9 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
     def _fail_pending_calls(self) -> None:
         for future in self._pending.values():
             if not future.done():
-                future.set_exception(ChannelError("WhatsApp connection closed"))
+                future.set_exception(
+                    ChannelError("WhatsApp connection closed", possibly_delivered=True)
+                )
 
     @override
     async def stop(self) -> None:
@@ -156,7 +158,9 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
             return response
         except TimeoutError, OSError:
             # Delivery might already have happened; do not automatically resend.
-            raise ChannelError("WhatsApp operation could not be confirmed") from None
+            raise ChannelError(
+                "WhatsApp operation could not be confirmed", possibly_delivered=True
+            ) from None
         finally:
             self._pending.pop(request_id, None)
             # Disconnect can fail the response while stdin.drain is still
@@ -210,19 +214,22 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
         if platform_target != "self" or thread_id is not None:
             raise ChannelError("WhatsApp supports only platform_target 'self', without threads")
         self.remember(self.self_facts())
-        for chunk in self.message_chunks(message):
-            await self.call_bridge({"action": "send", "target": "self", "text": chunk})
-        for file in files or []:
-            if self._attachment_store:
-                self._attachment_store.ensure_within_limit(len(file.data))
-            await self.call_bridge(
-                {
-                    "action": "send",
-                    "target": "self",
-                    "file": {
-                        "name": file.filename,
-                        "mimetype": file.media_type,
-                        "data": base64.b64encode(file.data).decode(),
-                    },
-                }
-            )
+        with DeliveryProgress() as progress:
+            for chunk in self.message_chunks(message):
+                await self.call_bridge({"action": "send", "target": "self", "text": chunk})
+                progress.delivered()
+            for file in files or []:
+                if self._attachment_store:
+                    self._attachment_store.ensure_within_limit(len(file.data))
+                await self.call_bridge(
+                    {
+                        "action": "send",
+                        "target": "self",
+                        "file": {
+                            "name": file.filename,
+                            "mimetype": file.media_type,
+                            "data": base64.b64encode(file.data).decode(),
+                        },
+                    }
+                )
+                progress.delivered()

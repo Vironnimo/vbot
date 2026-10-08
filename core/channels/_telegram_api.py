@@ -317,7 +317,9 @@ def _classify_telegram_error(
     network_error = getattr(telegram_error_module, "NetworkError", None)
     if network_error is not None and isinstance(error, network_error):
         # Covers TimedOut as well; PTB chains the httpx error it translated.
-        channel_error.retryable = not write or isinstance(error.__cause__, _UNSENT_REQUEST_ERRORS)
+        unsent = isinstance(error.__cause__, _UNSENT_REQUEST_ERRORS)
+        channel_error.retryable = not write or unsent
+        channel_error.possibly_delivered = write and not unsent
     retry_after = getattr(error, "retry_after", None)
     if isinstance(retry_after, timedelta):
         retry_after = retry_after.total_seconds()

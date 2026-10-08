@@ -96,6 +96,7 @@ async def test_reply_is_split_and_retries_only_the_failed_chunk(
                     initial_delay=0,
                 )
             assert failure.value.retryable is False
+            assert failure.value.possibly_delivered is True
             assert [entry["content"] for entry in attempts] == [first_chunk, "tail", "tail", "tail"]
             assert [entry["content"] for entry in channel.sent] == [first_chunk]
         else:
@@ -206,15 +207,15 @@ async def test_uncached_target_lookup_can_retry_transient_failure(tmp_path: Path
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("error", "lookup_retryable", "post_retryable", "retry_after"),
+    ("error", "lookup_retryable", "post_retryable", "retry_after", "post_maybe_shown"),
     [
         # After a connection error or server fault a posted message may already be
         # visible, so only a target lookup repeats.
-        (TimeoutError("gateway timeout"), True, False, None),
-        (_FakeServerError("gateway unavailable"), True, False, None),
-        (_FakeHTTPError(403), False, False, None),
-        (_FakeHTTPError(500), True, False, None),
-        (_FakeHTTPError(429, retry_after=3.0), True, True, 3.0),
+        (TimeoutError("gateway timeout"), True, False, None, True),
+        (_FakeServerError("gateway unavailable"), True, False, None, True),
+        (_FakeHTTPError(403), False, False, None, False),
+        (_FakeHTTPError(500), True, False, None, True),
+        (_FakeHTTPError(429, retry_after=3.0), True, True, 3.0, False),
     ],
     ids=["timeout", "server-error", "http-403", "http-500", "rate-limit"],
 )
@@ -225,6 +226,7 @@ async def test_sdk_failures_are_classified_for_retry(
     lookup_retryable: bool,
     post_retryable: bool,
     retry_after: float | None,
+    post_maybe_shown: bool,
 ) -> None:
     _fake_discord_errors(monkeypatch)
     channel = FakeChannel(100, guild=None, recipient_id=50)
@@ -245,10 +247,11 @@ async def test_sdk_failures_are_classified_for_retry(
     posts = AsyncMock(side_effect=error)
     monkeypatch.setattr(channel, "send", posts)
 
-    with pytest.raises(ChannelError):
+    with pytest.raises(ChannelError) as failure:
         await h.adapter.send("hello", "100")
 
     assert posts.await_count == (3 if post_retryable else 1)
+    assert failure.value.possibly_delivered is post_maybe_shown
     await h.adapter.stop()
 
 
