@@ -291,7 +291,7 @@ Executable TTS targets send JSON to `/audio/speech` and return raw audio bytes. 
   The Settings preview uses its URL; ordinary clients still receive raw audio.
 - `POST /api/speech/synthesize` accepts JSON `{ "text": "..." }`, rejects malformed JSON or blank text before calling `SpeechService`, and returns raw audio bytes with the synthesized media type.
 - `GET /api/speech/artifacts/{artifact_id}` streams a persisted speech artifact through `FileResponse`.
-- The built-in `text_to_speech` tool accepts only `text`; it returns a tool artifact payload from `SpeechArtifact.to_dict()` and intentionally exposes no model, provider, voice, format, or speed arguments.
+- The built-in `generate_speech` Tool accepts only `text`; it returns a tool artifact payload from `SpeechArtifact.to_dict()` and intentionally exposes no model, provider, voice, format, or speed arguments.
 
 ## Artifacts
 
@@ -306,7 +306,7 @@ Callers of `SpeechService` should see expected speech errors as `SpeechError` su
 - `SpeechConfigurationError` for missing bindings, empty input, invalid artifact ids, and missing artifacts.
 - `SpeechUnsupportedTargetError` for configured local targets with no execution adapter.
 - `SpeechExecutionError` for provider/network/runtime request failures.
-- `SpeechOutcomeUnknownError` for TTS requests that may have completed but cannot be safely replayed; the `text_to_speech` Tool returns `provider_outcome_unknown`, `retryable: false`, plus the operation key in its message.
+- `SpeechOutcomeUnknownError` for TTS requests that may have completed but cannot be safely replayed; the `generate_speech` Tool returns `provider_outcome_unknown`, `retryable: false`, plus the operation key in its message.
 
 Missing STT bindings and Provider request failures are logged through `vbot.speech` without credentials; Provider/network failures raised inside `ProviderSpeechClient` and source-audio decode/convert failures are wrapped as `SpeechExecutionError`, with the TTS unknown-outcome subtype preserved for Tool/UI/log correlation. The server maps `SpeechConfigurationError` to HTTP 409, `SpeechUnsupportedTargetError` to 422, and `SpeechExecutionError` to 502. STT retains the shared historical provider retry policy; only TTS opts into the stricter non-idempotent policy.
 

@@ -55,7 +55,7 @@ _SOURCE_IMAGE_ALIASES = (
 )
 _OUTPUT_DIR_ALIASES = ("output_directory", "out_dir", "save_dir", "output_folder")
 
-# Names other image generators use for image_generation fields.
+# Names other image generators use for generate_image fields.
 GENERATION_FIELD_ALIASES = SpellingAliases(
     {
         "source_images": _SOURCE_IMAGE_ALIASES,
@@ -150,8 +150,8 @@ def normalize_analyze_image_arguments(contract: ToolContract, arguments: Any) ->
     )
 
 
-def normalize_image_generation_arguments(contract: ToolContract, arguments: Any) -> Any:
-    """Return canonical image_generation arguments for calls written in other dialects."""
+def normalize_generate_image_arguments(contract: ToolContract, arguments: Any) -> Any:
+    """Return canonical generate_image arguments for calls written in other dialects."""
     return normalize_call_arguments(
         contract,
         arguments,

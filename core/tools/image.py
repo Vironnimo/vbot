@@ -23,7 +23,7 @@ from core.model_tasks.image_profile import ImageProfile
 from core.tools._image_inputs import (
     UnusableImageError,
     normalize_analyze_image_arguments,
-    normalize_image_generation_arguments,
+    normalize_generate_image_arguments,
     resolve_analysis_images,
     resolve_local_images,
 )
@@ -51,9 +51,9 @@ from core.tools.tools import (
 )
 from core.utils.paths import model_path
 
-IMAGE_GENERATION_TOOL_NAME = "image_generation"
+GENERATE_IMAGE_TOOL_NAME = "generate_image"
 ANALYZE_IMAGE_TOOL_NAME = "analyze_image"
-_IMAGE_GENERATION_DIRECTORY_NAME = "image-gen"
+_GENERATE_IMAGE_DIRECTORY_NAME = "image-gen"
 _ANALYZE_IMAGE_RESULT_SCHEMA: JsonObject = {
     "type": "object",
     "properties": {
@@ -89,10 +89,10 @@ ANALYZE_IMAGE_TOOL_PARAMETERS: JsonObject = {
     },
     "required": ["prompt", "images"],
 }
-IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION = (
+GENERATE_IMAGE_TEXT_ONLY_TOOL_DESCRIPTION = (
     "Generate images from a text prompt and save them as local files."
 )
-IMAGE_GENERATION_TOOL_DESCRIPTION = (
+GENERATE_IMAGE_TOOL_DESCRIPTION = (
     "Generate images from a text prompt, or edit local images, and save them as local files."
 )
 # Only Models that accept source images can edit; the text-only profile drops this.
@@ -108,7 +108,7 @@ _CALL_OPTION_PROPERTIES: dict[str, str] = {
 }
 
 
-IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
+GENERATE_IMAGE_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
         "prompt": {
@@ -148,10 +148,10 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
 }
 
 
-def image_generation_parameters(profile: ImageProfile) -> JsonObject:
+def generate_image_parameters(profile: ImageProfile) -> JsonObject:
     """Return the image Tool schema for what the configured Model offers."""
 
-    parameters = copy.deepcopy(IMAGE_GENERATION_TOOL_PARAMETERS)
+    parameters = copy.deepcopy(GENERATE_IMAGE_TOOL_PARAMETERS)
     properties = parameters["properties"]
     if not profile.accepts_source_images:
         properties.pop("source_images")
@@ -181,9 +181,9 @@ _ANALYZE_IMAGE_CONTRACT = compile_tool_contract(
     input_schema=ANALYZE_IMAGE_TOOL_PARAMETERS,
     require_closed_input=False,
 )
-_IMAGE_GENERATION_CONTRACT = compile_tool_contract(
-    name=IMAGE_GENERATION_TOOL_NAME,
-    input_schema=IMAGE_GENERATION_TOOL_PARAMETERS,
+_GENERATE_IMAGE_CONTRACT = compile_tool_contract(
+    name=GENERATE_IMAGE_TOOL_NAME,
+    input_schema=GENERATE_IMAGE_TOOL_PARAMETERS,
     require_closed_input=False,
 )
 _UNDERSTANDING = ("image-understanding", "Image understanding")
@@ -194,8 +194,8 @@ def _normalize_analyze_image_arguments(arguments: Any) -> Any:
     return normalize_analyze_image_arguments(_ANALYZE_IMAGE_CONTRACT, arguments)
 
 
-def _normalize_image_generation_arguments(arguments: Any) -> Any:
-    return normalize_image_generation_arguments(_IMAGE_GENERATION_CONTRACT, arguments)
+def _normalize_generate_image_arguments(arguments: Any) -> Any:
+    return normalize_generate_image_arguments(_GENERATE_IMAGE_CONTRACT, arguments)
 
 
 def _invalid(message: str) -> JsonObject:
@@ -234,17 +234,17 @@ def _image_failure(error: ImageError, labels: tuple[str, str]) -> JsonObject:
     )
 
 
-def _image_generation_profile_resolver(image_service: Any):
+def _generate_image_profile_resolver(image_service: Any):
     def resolve(
         _context: ToolDefinitionProfileContext,
     ) -> ToolDefinitionProfile:
         profile = image_service.generation_profile()
         return ToolDefinitionProfile(
             key=_profile_key(profile),
-            description=IMAGE_GENERATION_TOOL_DESCRIPTION
+            description=GENERATE_IMAGE_TOOL_DESCRIPTION
             if profile.accepts_source_images
-            else IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION,
-            parameters=image_generation_parameters(profile),
+            else GENERATE_IMAGE_TEXT_ONLY_TOOL_DESCRIPTION,
+            parameters=generate_image_parameters(profile),
         )
 
     return resolve
@@ -343,7 +343,7 @@ def register_analyze_image_tool(
     )
 
 
-def make_image_generation_handler(image_service: Any):
+def make_generate_image_handler(image_service: Any):
     """Create an image generation tool handler bound to the runtime image service."""
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -365,7 +365,7 @@ def make_image_generation_handler(image_service: Any):
 
         try:
             call_options = _collect_call_options(arguments)
-            output_dir = _image_generation_output_dir(context, arguments)
+            output_dir = _generate_image_output_dir(context, arguments)
         except ValueError as exc:
             return _invalid(str(exc))
         source_paths: tuple[Path, ...] = ()
@@ -422,7 +422,7 @@ def make_image_generation_handler(image_service: Any):
     return handler
 
 
-def _image_generation_output_dir(context: ToolContext, arguments: JsonObject) -> Path:
+def _generate_image_output_dir(context: ToolContext, arguments: JsonObject) -> Path:
     """Resolve an explicit destination or choose the caller-owned default directory."""
 
     output_dir = optional_string(arguments.get("output_dir"), field_name="output_dir")
@@ -430,20 +430,20 @@ def _image_generation_output_dir(context: ToolContext, arguments: JsonObject) ->
         return context.resolve_path(output_dir)
 
     root = context.workspace if context.project_id is None else context.effective_cwd
-    return root / _IMAGE_GENERATION_DIRECTORY_NAME
+    return root / _GENERATE_IMAGE_DIRECTORY_NAME
 
 
-def register_image_generation_tool(registry: ToolRegistry, image_service: Any) -> None:
+def register_generate_image_tool(registry: ToolRegistry, image_service: Any) -> None:
     """Register the image generation tool with a vBot tool registry."""
 
     registry.register(
-        IMAGE_GENERATION_TOOL_NAME,
-        IMAGE_GENERATION_TOOL_DESCRIPTION,
-        IMAGE_GENERATION_TOOL_PARAMETERS,
-        make_image_generation_handler(image_service),
+        GENERATE_IMAGE_TOOL_NAME,
+        GENERATE_IMAGE_TOOL_DESCRIPTION,
+        GENERATE_IMAGE_TOOL_PARAMETERS,
+        make_generate_image_handler(image_service),
         family="media",
         open_input_schema=True,
-        argument_normalizer=_normalize_image_generation_arguments,
+        argument_normalizer=_normalize_generate_image_arguments,
         result_schema={"type": "object", "required": ["images"]},
         display=ToolDisplay(
             primary_candidates=(ToolDisplayField("prompt", kind="text", quote=True),),
@@ -455,5 +455,5 @@ def register_image_generation_tool(registry: ToolRegistry, image_service: Any) -
             fact_builder=result_count_fact_builder("images"),
             details=True,
         ),
-        definition_profile_resolver=_image_generation_profile_resolver(image_service),
+        definition_profile_resolver=_generate_image_profile_resolver(image_service),
     )

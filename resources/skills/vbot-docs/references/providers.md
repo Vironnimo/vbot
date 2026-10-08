@@ -121,7 +121,7 @@ vbot task-model set text_embedding openai/text-embedding-3-small::api-key
 
 The fields depend on the bound Model and Connection: `option list` returns only the settings that this Model accepts on this Connection, with their exact names and choices. Read the names from `option list` instead of assuming them.
 
-- Image generation: for example the image count `n`, `quality`, and `size` or `aspect_ratio` and `resolution`. The `image_generation` Tool can override `aspect_ratio`, `resolution`, and `background` per call; the stored value applies when a call omits them. Image count and quality are set only here.
+- Image generation: for example the image count `n`, `quality`, and `size` or `aspect_ratio` and `resolution`. The `generate_image` Tool can override `aspect_ratio`, `resolution`, and `background` per call; the stored value applies when a call omits them. Image count and quality are set only here.
 - Video generation: `duration` in seconds, `aspect_ratio`, `resolution` or `size`, `generate_audio`, and `seed`, as the Model offers them. The `generate_video` Tool can override `duration`, `aspect_ratio`, `resolution`, and `generate_audio` per call.
 - Music generation: `temperature`, `top_p`, and `seed`, as the Model offers them. An unset field uses the Provider's default.
 

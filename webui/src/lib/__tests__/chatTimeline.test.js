@@ -341,7 +341,7 @@ describe('History and live Run projection', () => {
       ok: true,
       data: { artifact: { kind: 'speech', url: '/a' } },
     };
-    const toolCall = { id: 'call', name: 'text_to_speech', arguments: {} };
+    const toolCall = { id: 'call', name: 'generate_speech', arguments: {} };
     const toolIds = () => assistantRun(state).tools.map((tool) => tool.id);
     startRun(state, { run_id: 'run', status: 'running' });
     append(state, 'run', 1, 'user_message_persisted', {
@@ -350,7 +350,7 @@ describe('History and live Run projection', () => {
     // The streamed Tool preview creates the row before the stable events.
     append(state, 'run', 2, 'tool_call_delta', {
       tool_call_id: 'call',
-      name_delta: 'text_to_speech',
+      name_delta: 'generate_speech',
     });
     append(state, 'run', 3, 'assistant_output', {
       message: { id: 'call-step', role: 'assistant', tool_calls: [toolCall] },
@@ -384,7 +384,7 @@ describe('History and live Run projection', () => {
           id: 'tool',
           role: 'tool',
           tool_call_id: 'call',
-          name: 'text_to_speech',
+          name: 'generate_speech',
           content: JSON.stringify(result),
         },
         { id: 'answer', role: 'assistant', content: 'Spoken.' },

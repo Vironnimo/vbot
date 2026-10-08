@@ -84,8 +84,8 @@ DEFAULT_DEFAULT_THINKING_EFFORT: str | None = None
 # decision 10). This is the SINGLE source for the creation seed and the UI "reset
 # to defaults" — change the base list here and both move together. A persisted
 # ``project.json`` always carries ``allowed_tools``; there is no missing-field fallback.
-# The default-off-but-UI-toggleable Tools (``session_search``, ``image_generation``,
-# ``text_to_speech``, ``cron``, ``channel_send``, the Home-Assistant tools) are
+# The default-off-but-UI-toggleable Tools (``session_search``, ``generate_image``,
+# ``generate_speech``, ``cron``, ``channel_send``, the Home-Assistant tools) are
 # deliberately absent. Automatic and Identity-only Tools are never directly
 # configurable Project Tools; ``skill`` itself is directly configurable and default-on.
 PROJECT_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (

@@ -1,4 +1,4 @@
-"""image_generation: the profile the configured model allows, the files it returns, where
+"""generate_image: the profile the configured model allows, the files it returns, where
 they go, source images, and what refused or failed calls say."""
 
 from __future__ import annotations
@@ -21,9 +21,9 @@ from core.model_tasks import (
 from core.model_tasks.artifacts import OutputDirectoryError, OutputWriteError
 from core.model_tasks.image_profile import ImageProfile
 from core.tools.image import (
-    IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION,
-    IMAGE_GENERATION_TOOL_DESCRIPTION,
-    IMAGE_GENERATION_TOOL_NAME,
+    GENERATE_IMAGE_TEXT_ONLY_TOOL_DESCRIPTION,
+    GENERATE_IMAGE_TOOL_DESCRIPTION,
+    GENERATE_IMAGE_TOOL_NAME,
 )
 from core.tools.tools import ToolDefinitionProfileContext, ToolRegistry
 from core.utils.errors import ProviderError
@@ -48,7 +48,7 @@ _TEXT_ONLY_REFUSAL = (
 
 def _definition(registry: ToolRegistry) -> dict[str, Any]:
     [definition] = registry.provider_definitions(
-        [IMAGE_GENERATION_TOOL_NAME],
+        [GENERATE_IMAGE_TOOL_NAME],
         profile_context=ToolDefinitionProfileContext(agent_id="agent"),
     )
     return definition
@@ -57,14 +57,14 @@ def _definition(registry: ToolRegistry) -> dict[str, Any]:
 @pytest.mark.parametrize(
     ("profile", "description", "offered"),
     [
-        pytest.param(TEXT_ONLY_PROFILE, IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION, {}, id="text"),
+        pytest.param(TEXT_ONLY_PROFILE, GENERATE_IMAGE_TEXT_ONLY_TOOL_DESCRIPTION, {}, id="text"),
         pytest.param(
             ImageProfile(
                 wire="openai_images",
                 call_choices={"aspect_ratio": ("1:1", "16:9"), "background": ("transparent",)},
                 max_source_images=16,
             ),
-            IMAGE_GENERATION_TOOL_DESCRIPTION,
+            GENERATE_IMAGE_TOOL_DESCRIPTION,
             {
                 "source_images": {"maxItems": 16},
                 "aspect_ratio": {"enum": ["1:1", "16:9"]},
@@ -101,7 +101,7 @@ async def test_generated_images_are_returned_as_local_file_facts(
 ) -> None:
     service = ImageService(image_path=tmp_path / "artifact-1.png", revised_prompt=revised_prompt)
     registry = image_registry(service)
-    context = make_context(tmp_path, IMAGE_GENERATION_TOOL_NAME)
+    context = make_context(tmp_path, GENERATE_IMAGE_TOOL_NAME)
 
     result = await dispatch_as_executor(registry, context, {"prompt": "a red fox"})
 
@@ -118,7 +118,7 @@ async def test_generated_images_are_returned_as_local_file_facts(
         image["revised_prompt"] = revised_prompt
     assert result == {"ok": True, "error": None, "data": {"images": [image]}, "artifacts": []}
     display = registry.display_for_call(
-        IMAGE_GENERATION_TOOL_NAME, {"prompt": "a red fox"}, context=context, result=result
+        GENERATE_IMAGE_TOOL_NAME, {"prompt": "a red fox"}, context=context, result=result
     )
     assert display["facts"] == [{"kind": "count", "value": 1, "unit": "results", "at_least": False}]
 
@@ -215,9 +215,9 @@ async def test_the_call_reaches_the_image_model(
         pytest.param(
             {"prompt": "a", "unexpected": True},
             contract_refusal(
-                "image_generation was not run:\n"
+                "generate_image was not run:\n"
                 '- "unexpected" is not a parameter.\n'
-                "image_generation parameters: prompt (required), source_images, aspect_ratio, "
+                "generate_image parameters: prompt (required), source_images, aspect_ratio, "
                 "resolution, background, output_dir."
             ),
             id="unknown-argument",
@@ -225,20 +225,20 @@ async def test_the_call_reaches_the_image_model(
         pytest.param(
             {"prompt": "a", "aspect_ratio": "  ", "resolution": ""},
             contract_refusal(
-                r'image_generation was not run: "aspect_ratio" must match the pattern .*\S.*; '
+                r'generate_image was not run: "aspect_ratio" must match the pattern .*\S.*; '
                 'received "  ".'
             ),
             id="blank-options",
         ),
         pytest.param(
             {"prompt": "a", "source_images": []},
-            contract_refusal('image_generation was not run: "source_images" must not be empty.'),
+            contract_refusal('generate_image was not run: "source_images" must not be empty.'),
             id="no-source-images",
         ),
         pytest.param(
             {"prompt": "a", "source_images": {"path": "a.png", "url": "b.png"}},
             contract_refusal(
-                'image_generation was not run: "source_images[0]" must be a string; received '
+                'generate_image was not run: "source_images[0]" must be a string; received '
                 "an object."
             ),
             id="two-paths-in-one-object",
@@ -294,7 +294,7 @@ async def test_unusable_calls_are_refused_before_generating(
 ) -> None:
     write_image(tmp_path / "photo.png")
     service = ImageService()
-    context = make_context(tmp_path, IMAGE_GENERATION_TOOL_NAME)
+    context = make_context(tmp_path, GENERATE_IMAGE_TOOL_NAME)
 
     result = await dispatch_as_executor(image_registry(service), context, arguments)
 
@@ -312,9 +312,9 @@ async def test_a_text_only_model_refuses_source_images(tmp_path: Path) -> None:
     service = ImageService(profile=TEXT_ONLY_PROFILE)
     registry = image_registry(service)
     contract = registry.contracts_for_provider_definitions([_definition(registry)])[
-        IMAGE_GENERATION_TOOL_NAME
+        GENERATE_IMAGE_TOOL_NAME
     ]
-    context = make_context(tmp_path, IMAGE_GENERATION_TOOL_NAME)
+    context = make_context(tmp_path, GENERATE_IMAGE_TOOL_NAME)
     arguments = {"prompt": "make it rainy", "source_images": ["photo.png"]}
 
     # The profile contract refuses the field; without it, the Tool still refuses.
@@ -324,9 +324,9 @@ async def test_a_text_only_model_refuses_source_images(tmp_path: Path) -> None:
     unoffered = await dispatch_as_executor(registry, context, arguments)
 
     assert offered["error"] == contract_refusal(
-        "image_generation was not run:\n"
+        "generate_image was not run:\n"
         '- "source_images" is not a parameter.\n'
-        "image_generation parameters: prompt (required), output_dir."
+        "generate_image parameters: prompt (required), output_dir."
     )
     assert unoffered["error"] == failure("invalid_arguments", _TEXT_ONLY_REFUSAL)
     assert service.output_dirs == []

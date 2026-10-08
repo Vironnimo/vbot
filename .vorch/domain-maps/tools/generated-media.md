@@ -35,5 +35,5 @@ Tool definitions, display metadata, result shaping, failure projection, and regi
 | `first_frame`: `Local image to start the video with. Relative paths start at the working directory. ... Omit to start from the prompt alone.` / `last_frame`: `Local image to end the video with. ... Omit to let the model choose the ending.` | Role, path base and an omit rule; without the omit rule weak Models fill every field. |
 | `output_dir`: `Folder for the generated video, created if missing; relative paths start at the working directory. Omit to use the default video-gen folder.` (music: `music`, `music-gen`) | Weak Models fill `output_dir`; the sentence says omission is fine and where files go. |
 | `duration`: `Length in seconds. Omit to use the default.` | The schema carries the offered seconds; the unit is not visible from an integer enum. |
-| `aspect_ratio`, `resolution`: as in `image_generation` | One wording for the same choice across media Tools. |
+| `aspect_ratio`, `resolution`: as in `generate_image` | One wording for the same choice across media Tools. |
 | `generate_audio`: `true to generate audio with the video, false for a silent video. Omit to use the default.` | States what each value produces. `audio` covers speech and effects; `soundtrack` read as music only. |

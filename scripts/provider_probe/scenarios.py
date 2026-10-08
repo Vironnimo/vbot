@@ -40,8 +40,8 @@ from scripts.provider_probe.scenario_history import (
 )
 from scripts.provider_probe.scenario_media import (
     _analyze_image_scenario,
-    _image_generation_scenario,
-    _text_to_speech_scenario,
+    _generate_image_scenario,
+    _generate_speech_scenario,
 )
 from scripts.provider_probe.scenario_web import _web_fetch_scenario, _web_search_scenario
 
@@ -237,8 +237,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _ha_list_entities_scenario(str(args.ha_list_entities_case))
     if name == "ha_list_services":
         return _ha_list_services_scenario(str(args.ha_list_services_case))
-    if name == "image_generation":
-        return _image_generation_scenario(str(args.image_generation_case))
+    if name == "generate_image":
+        return _generate_image_scenario(str(args.generate_image_case))
     if name == "mcp":
         return _mcp_scenario(str(args.mcp_case))
     if name == "memory":
@@ -257,8 +257,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _status_scenario(str(args.status_case))
     if name == "subagent":
         return _subagent_scenario(str(args.subagent_case))
-    if name == "text_to_speech":
-        return _text_to_speech_scenario(str(args.speech_case))
+    if name == "generate_speech":
+        return _generate_speech_scenario(str(args.speech_case))
     if name == "web_fetch":
         return _web_fetch_scenario(str(args.web_fetch_case))
     if name == "web_search":

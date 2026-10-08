@@ -378,7 +378,7 @@ async def test_media_outputs_are_read_media_artifacts_and_loaded_pixels(tmp_path
         lambda _c, _a: tool_success({"content": "loaded"}, artifacts=[media]),
     )
     tools.register(
-        "image_generation",
+        "generate_image",
         "Generates images.",
         {"type": "object"},
         lambda _c, _a: tool_success(
@@ -395,7 +395,7 @@ async def test_media_outputs_are_read_media_artifacts_and_loaded_pixels(tmp_path
     tools.register("computer", "Operates the desktop.", {"type": "object"}, failing_with_screenshot)
     harness = ToolDispatchHarness(tmp_path, tools)
 
-    dispatched = await harness.dispatch([call("read"), call("image_generation"), call("computer")])
+    dispatched = await harness.dispatch([call("read"), call("generate_image"), call("computer")])
 
     assert len(dispatched.messages) == 3
     # Pixels a Tool loaded reach the Model with a failed Result too.
