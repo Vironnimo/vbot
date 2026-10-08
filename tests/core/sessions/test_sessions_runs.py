@@ -174,8 +174,12 @@ async def test_restart_settles_run_streamed_output_and_unfinished_calls_once(man
     await session.append_stream_draft_async(
         model="first", reasoning_delta="Plan ", content_delta="Half"
     )
+    # A Tool Call started while the step still streamed.
     await session.append_stream_draft_async(
-        model="second", reasoning_delta="more.", content_delta=" an answer"
+        model="second",
+        reasoning_delta="more.",
+        content_delta=" an answer",
+        tool_calls=[{"id": "started", "name": "read", "arguments": {"path": "a.txt"}}],
     )
     manager.recover_interrupted_runs()
     first = session.load()
@@ -188,13 +192,15 @@ async def test_restart_settles_run_streamed_output_and_unfinished_calls_once(man
         "Half an answer",
         "Plan more.",
     )
+    assert partial.tool_calls == [ToolCall(id="started", name="read", arguments={"path": "a.txt"})]
     assert (partial.interrupted, partial.interruption_cause) == (True, "process_restart")
     summary = session.find_run_summary(run_id="abandoned")
     assert (summary.status, summary.completion_reason) == ("interrupted", "process_restart")
     assert first[-1] == summary
     with sqlite3.connect(manager._store.path) as connection:
         assert connection.execute("SELECT status, result_entry_key FROM tool_calls").fetchall() == [
-            ("interrupted", None)
+            ("interrupted", None),
+            ("interrupted", None),
         ]
         assert connection.execute("SELECT count(*) FROM run_stream_drafts").fetchone() == (0,)
 

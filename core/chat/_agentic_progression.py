@@ -573,14 +573,17 @@ class AgenticProgression:
                 removed_tool_names: frozenset[str] = removed_tool_names,
             ) -> None:
                 assert tool_round is not None
-                tool_round.start(
-                    _offered_tool_calls(
-                        _parse_response_tool_calls(raw_calls) or [],
-                        offered_tool_names,
-                        self._dependencies.tools,
-                        removed=removed_tool_names,
-                    )
+                tool_calls = _offered_tool_calls(
+                    _parse_response_tool_calls(raw_calls) or [],
+                    offered_tool_names,
+                    self._dependencies.tools,
+                    removed=removed_tool_names,
                 )
+                # A restart before the turn persists still shows these calls.
+                context.stream_draft.record_tool_calls(
+                    model=target.public_model, tool_calls=tool_calls
+                )
+                tool_round.start(tool_calls)
 
             while True:
                 run.raise_if_cancelled()
