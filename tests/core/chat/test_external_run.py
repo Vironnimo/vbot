@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+import core.chat._external_run as external_run_module
 from core.chat import ChatError
 from core.chat.messages import INPUT_ORIGIN_LIVE_VOICE
 from core.runs import RunCancelledError, RunKind, RunStatus
@@ -134,6 +135,68 @@ async def test_cancelling_an_external_run_ends_the_conversation(tmp_path: Path) 
     session = runtime.chat_sessions.get(session_address("coder", external.session_id))
     results = [json.loads(m.content) for m in session.load() if m.role == "tool"]
     assert [result["error"]["code"] for result in results] == ["tool_stopped"]
+
+
+@pytest.mark.asyncio
+async def test_a_call_still_running_when_the_conversation_ends_is_stored_as_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(external_run_module, "_SETTLE_SECONDS", 0)
+    gate = asyncio.Event()
+    runtime = _runtime(tmp_path, _tools(gate=gate))
+    loop = build_chat_loop(runtime)
+    external = await loop.start_external_run("coder", model="voice-model", title="Live call")
+    call = asyncio.create_task(external.run_tool("call_1", "lookup", {"q": "slow"}))
+    await asyncio.sleep(0)
+
+    await external.finish()
+    await asyncio.wait_for(external.run.wait(), WAIT_SECONDS)
+    # The call settles after the conversation ended; its turn is already stored.
+    gate.set()
+    await asyncio.wait_for(call, WAIT_SECONDS)
+
+    session = runtime.chat_sessions.get(session_address("coder", external.session_id))
+    stored = [message for message in session.load() if message.role in {"assistant", "tool"}]
+    assert [message.role for message in stored] == ["assistant", "tool"]
+    assert stored[0].tool_calls[0].name == "lookup"
+    assert json.loads(stored[1].content)["error"]["code"] == "tool_stopped"
+
+
+@pytest.mark.asyncio
+async def test_a_deadline_while_a_finished_call_is_stored_returns_its_result(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path, _tools())
+    loop = build_chat_loop(runtime)
+    external = await loop.start_external_run("coder", model="voice-model", title="Live call")
+    session = external._session  # noqa: SLF001
+    append_many_async = session.append_many_async
+    storing, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_append(*arguments: Any, **options: Any) -> Any:
+        storing.set()
+        await release.wait()
+        return await append_many_async(*arguments, **options)
+
+    session.append_many_async = slow_append  # type: ignore[method-assign]
+    deadlines: list[asyncio.Timeout] = []
+
+    async def bounded_call() -> Any:
+        async with asyncio.timeout(None) as deadline:
+            deadlines.append(deadline)
+            return await external.run_tool("call_1", "lookup", {"q": "weather"})
+
+    call = asyncio.create_task(bounded_call())
+    await storing.wait()
+    deadlines[0].reschedule(asyncio.get_running_loop().time())
+    await asyncio.sleep(0)
+    release.set()
+    result = await asyncio.wait_for(call, WAIT_SECONDS)
+    await external.finish()
+
+    # The voice Model hears the result that history holds, not a timeout.
+    assert result["ok"] is True and result["data"] == {"found": "weather"}
+    assert [role for role, _ in _stored(runtime, external.session_id)] == ["assistant", "tool"]
 
 
 @pytest.mark.asyncio

@@ -120,6 +120,7 @@ from core.tools.tools import (
 )
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
+from core.utils.workers import finish_despite_cancel
 
 if TYPE_CHECKING:
     from core.runtime.interfaces import RuntimeServices
@@ -444,34 +445,69 @@ class SubAgentCoordinator:
                 return tool_failure(
                     "run_cancelled", "Your Run was cancelled before the Sub-Agent started."
                 )
-            new_subagent_id = new_id("sub")
-            session = await sessions.run_async(
-                _open_subagent_session,
-                runtime,
-                target_agent_id,
-                target_project_id,
-                _session_title(description),
-                new_subagent_id,
-                context,
-                overrides,
+            # Past this check the start completes even when the calling Run is
+            # cancelled meanwhile: once the child Run exists, the Parent must
+            # receive this result, or it takes the call as unfinished and may
+            # start the same work a second time.
+            return await finish_despite_cancel(
+                self._start_subagent(
+                    context,
+                    cast(str, arguments["content"]),
+                    target_agent_id,
+                    target_project_id,
+                    description=description,
+                    overrides=overrides,
+                    temporary_parent=temporary_parent,
+                    notes=notes,
+                )
             )
-            address = session.address
-            activity = await self._activities.ensure(address)
-            executor = runtime.chat_loop.run_executor(
-                cast(str, arguments["content"]),
-                parent_agent_input=True,
-                temporary_parent_binding=temporary_parent,
-            )
+
+    async def _start_subagent(
+        self,
+        context: ToolContext,
+        content: str,
+        target_agent_id: str,
+        target_project_id: str | None,
+        *,
+        description: str,
+        overrides: dict[str, str],
+        temporary_parent: TemporarySessionBinding | None,
+        notes: list[str],
+    ) -> JsonObject:
+        """Create the Sub-Agent Session, start its Run and return the ``run`` result.
+
+        A Run that cannot start removes the Session again, so no Sub-Agent
+        exists without its first Run.
+        """
+        runtime = self._runtime
+        sessions = runtime.chat_sessions
+        new_subagent_id = new_id("sub")
+        session = await sessions.run_async(
+            _open_subagent_session,
+            runtime,
+            target_agent_id,
+            target_project_id,
+            _session_title(description),
+            new_subagent_id,
+            context,
+            overrides,
+        )
+        address = session.address
+        executor = runtime.chat_loop.run_executor(
+            content, parent_agent_input=True, temporary_parent_binding=temporary_parent
+        )
+        try:
             run = await runtime.chat_run_manager.start(
                 address,
                 executor,
                 admission=_admission(
-                    context,
-                    new_subagent_id,
-                    _child_working_project(context, target_project_id),
+                    context, new_subagent_id, _child_working_project(context, target_project_id)
                 ),
             )
-
+        except Exception:
+            await _remove_unstarted_session(runtime, address)
+            raise
+        activity = await self._activities.ensure(address)
         activity_file = self._activities.path(address)
         _LOGGER.info(
             "Sub-agent started (subagent=%s parent_run=%s parent_session=%s child_session=%s "
@@ -581,9 +617,7 @@ class SubAgentCoordinator:
                 ),
                 retryable=False,
             )
-        content = cast(str, arguments["content"])
         steerable = context.execution_owner is None and temporary_parent is None
-        manager = runtime.chat_run_manager
         # A message to an idle Sub-Agent starts its next Run, which counts against the limits.
         async with self._admission_lock:
             if not is_working(runtime, address):
@@ -596,20 +630,52 @@ class SubAgentCoordinator:
                 return tool_failure(
                     "run_cancelled", "Your Run was cancelled before the message was sent."
                 )
-            if overrides:
-                await sessions.run_async(
-                    runtime.agent_resolver.update_session_overrides, address, overrides
+            # Past this check the message is sent even when the calling Run is
+            # cancelled meanwhile, and the Parent receives the result, so it
+            # never sends the same message a second time.
+            return await finish_despite_cancel(
+                self._deliver_send(
+                    context,
+                    link.id,
+                    address,
+                    cast(str, arguments["content"]),
+                    overrides=overrides,
+                    temporary_parent=temporary_parent,
+                    working_project_id=working_project_id,
+                    steerable=steerable,
                 )
-            executor = runtime.chat_loop.run_executor(
-                content, parent_agent_input=True, temporary_parent_binding=temporary_parent
             )
-            item = await manager.enqueue(
-                address,
-                executor,
-                display_content=content,
-                steerable=steerable,
-                admission=_admission(context, link.id, working_project_id),
+
+    async def _deliver_send(
+        self,
+        context: ToolContext,
+        subagent_id: str,
+        address: SessionAddress,
+        content: str,
+        *,
+        overrides: dict[str, str],
+        temporary_parent: TemporarySessionBinding | None,
+        working_project_id: str | None,
+        steerable: bool,
+    ) -> JsonObject:
+        """Store *overrides*, enqueue *content* and return the ``send`` result."""
+        runtime = self._runtime
+        sessions = runtime.chat_sessions
+        manager = runtime.chat_run_manager
+        if overrides:
+            await sessions.run_async(
+                runtime.agent_resolver.update_session_overrides, address, overrides
             )
+        executor = runtime.chat_loop.run_executor(
+            content, parent_agent_input=True, temporary_parent_binding=temporary_parent
+        )
+        item = await manager.enqueue(
+            address,
+            executor,
+            display_content=content,
+            steerable=steerable,
+            admission=_admission(context, subagent_id, working_project_id),
+        )
         status, note = "queued", SUBAGENT_SEND_QUEUED_NOTE
         if item.future.done() and not item.future.cancelled():
             status, note = "started", SUBAGENT_SEND_STARTED_NOTE
@@ -630,13 +696,13 @@ class SubAgentCoordinator:
             context,
             SUBAGENT_SESSION_STARTED_EVENT,
             _event_data(
-                link.id,
+                subagent_id,
                 address,
                 status="running" if status != "queued" else "queued",
                 activity_file=self._activities.path(address),
             ),
         )
-        result = _public_identity(link.id, address)
+        result = _public_identity(subagent_id, address)
         result["status"] = status
         result["note"] = note
         return tool_success(result)
@@ -990,6 +1056,19 @@ def _open_subagent_session(
     if overrides:
         runtime.agent_resolver.update_session_overrides(address, overrides)
     return session
+
+
+async def _remove_unstarted_session(runtime: RuntimeServices, address: SessionAddress) -> None:
+    """Remove a Sub-Agent Session whose first Run could not start."""
+    sessions = runtime.chat_sessions
+    try:
+        await sessions.run_async(sessions.delete, address)
+    except Exception:
+        _LOGGER.warning(
+            "Could not remove a Sub-Agent Session whose Run did not start (session=%s)",
+            address.session_id,
+            exc_info=True,
+        )
 
 
 def _child_working_project(context: ToolContext, target_project_id: str | None) -> str | None:
