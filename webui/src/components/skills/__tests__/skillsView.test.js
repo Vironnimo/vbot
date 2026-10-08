@@ -657,21 +657,55 @@ describe('Skills manager', () => {
       'Also exists as Main’s private copy.',
     );
   });
-  it('edits a shared original using its owner scope', async () => {
-    await render();
-    choose('shared');
-    await settle();
-    click(button('Edit instructions'));
-    const dialog = document.querySelector('[role="dialog"]');
-    input(dialog.querySelector('textarea'), 'updated-content-sentinel');
-    click(button('Save', dialog));
-    await settle();
-    expect(rpcMock).toHaveBeenCalledWith('skill.update', {
-      scope: 'agent:main',
-      name: 'notes',
-      content: 'updated-content-sentinel',
-    });
-  });
+  it.each([false, true])(
+    'saves a shared original in its owner scope and preserves newer edits (%s)',
+    async (editWhileSaving) => {
+      let finishSave;
+      rpcMock.mockImplementation((method, params) =>
+        method === 'skill.update'
+          ? new Promise((resolve) => (finishSave = resolve))
+          : Promise.resolve(defaultRpc(method, params)),
+      );
+      await render();
+      choose('shared');
+      await settle();
+      click(button('Edit instructions'));
+      const dialog = document.querySelector('[role="dialog"]');
+      const textarea = dialog.querySelector('textarea');
+      input(textarea, 'updated-content-sentinel');
+      click(button('Save', dialog));
+      expect(calls('skill.update')).toEqual([
+        {
+          scope: 'agent:main',
+          name: 'notes',
+          content: 'updated-content-sentinel',
+        },
+      ]);
+      if (editWhileSaving) {
+        textarea.focus();
+        input(textarea, 'newer-content-sentinel');
+      }
+      finishSave({});
+      await settle();
+      if (editWhileSaving) {
+        expect(document.querySelector('[role="dialog"]')).toBe(dialog);
+        expect(dialog.querySelector('textarea')).toBe(textarea);
+        expect(textarea.value).toBe('newer-content-sentinel');
+        expect(document.activeElement).toBe(textarea);
+        expect(button('Save', dialog).disabled).toBe(false);
+        expect(calls('skill.update')).toHaveLength(1);
+        click(button('Save', dialog));
+        expect(calls('skill.update').at(-1)).toEqual({
+          scope: 'agent:main',
+          name: 'notes',
+          content: 'newer-content-sentinel',
+        });
+        finishSave({});
+        await settle();
+      }
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+    },
+  );
   it('creates in the selected Agent scope and retains draft content during inventory refresh', async () => {
     await render();
     collection('Main');

@@ -809,6 +809,223 @@ describe('Projects controller Team overrides', () => {
     expect(setOverride).not.toHaveBeenCalled();
   });
 
+  it.each(['0.7', '0.3'])(
+    'preserves and saves a newer %s draft after an explicit override reset',
+    async (latestDraft) => {
+      const clearing = deferred();
+      const setting = deferred();
+      const setStarted = deferred();
+      const clearedScan = structuredClone(scan);
+      delete clearedScan.team[0].overrides.temperature;
+      clearedScan.team[0].effective.temperature = {
+        value: 0.1,
+        source: 'project_default',
+      };
+      const setOverride = vi.fn(() => {
+        setStarted.resolve();
+        return setting.promise;
+      });
+      const clearOverride = vi.fn(() => clearing.promise);
+      const { controller, state } = await loadedController(
+        {},
+        { clearOverride, setOverride },
+      );
+      controller.selectProject('demo', scan);
+      expect(controller.requestOverrideReset('builder', 'temperature')).toBe(
+        true,
+      );
+      expect(state.pendingOverrideReset).toMatchObject({
+        agentId: 'builder',
+        field: 'temperature',
+      });
+      const saving = controller.savePendingOverrides();
+      expect(clearOverride).toHaveBeenCalledWith(
+        'demo',
+        'builder',
+        'temperature',
+      );
+      expect(setOverride).not.toHaveBeenCalled();
+
+      // Even returning to the original override is a new edit after Reset.
+      controller.updateOverrideDraft('builder', 'temperature', '0.7');
+      controller.updateOverrideDraft('builder', 'temperature', latestDraft);
+      clearing.resolve({ scan: clearedScan });
+      await setStarted.promise;
+
+      expect(state.pendingOverrideReset).toBeNull();
+      expect(controller.overrideDraft('builder').temperature).toBe(latestDraft);
+      expect(setOverride).toHaveBeenCalledExactlyOnceWith(
+        'demo',
+        'builder',
+        'temperature',
+        Number(latestDraft),
+      );
+      const savedScan = structuredClone(scan);
+      savedScan.team[0].overrides.temperature = Number(latestDraft);
+      savedScan.team[0].effective.temperature.value = Number(latestDraft);
+      setting.resolve({ scan: savedScan });
+      await expect(saving).resolves.toBe(true);
+      expect(controller.overrideDraft('builder').temperature).toBe(latestDraft);
+      expect(controller.pendingOverrideChanges()).toEqual([]);
+      controller.destroy();
+    },
+  );
+
+  it('keeps a queued reset when an earlier write normalizes the draft', async () => {
+    const firstWrite = deferred();
+    const writtenScan = structuredClone(scan);
+    writtenScan.team[0].overrides.temperature = 0.7;
+    writtenScan.team[0].effective.temperature.value = 0.7;
+    const clearedScan = structuredClone(scan);
+    delete clearedScan.team[0].overrides.temperature;
+    clearedScan.team[0].effective.temperature = {
+      value: 0.1,
+      source: 'project_default',
+    };
+    const setOverride = vi.fn(() => firstWrite.promise);
+    const clearOverride = vi.fn().mockResolvedValue({ scan: clearedScan });
+    const { controller, state } = await loadedController(
+      {},
+      { setOverride, clearOverride },
+    );
+    controller.selectProject('demo', scan);
+    controller.updateOverrideDraft('builder', 'temperature', '0,7');
+    const saving = controller.savePendingOverrides();
+    expect(controller.requestOverrideReset('builder', 'temperature')).toBe(
+      true,
+    );
+    firstWrite.resolve({ scan: writtenScan });
+    await expect(saving).resolves.toBe(true);
+    expect(controller.overrideDraft('builder').temperature).toBe('0.7');
+    expect(state.pendingOverrideReset).toMatchObject({
+      agentId: 'builder',
+      field: 'temperature',
+    });
+
+    await expect(controller.savePendingOverrides()).resolves.toBe(true);
+
+    expect(setOverride).toHaveBeenCalledExactlyOnceWith(
+      'demo',
+      'builder',
+      'temperature',
+      0.7,
+    );
+    expect(clearOverride).toHaveBeenCalledExactlyOnceWith(
+      'demo',
+      'builder',
+      'temperature',
+    );
+    expect(setOverride.mock.invocationCallOrder[0]).toBeLessThan(
+      clearOverride.mock.invocationCallOrder[0],
+    );
+    expect(controller.overrideDraft('builder').temperature).toBe('');
+    expect(state.pendingOverrideReset).toBeNull();
+    expect(controller.pendingOverrideChanges()).toEqual([]);
+    controller.destroy();
+  });
+
+  it.each(
+    ['set', 'clear'].flatMap((operation) =>
+      [false, true].flatMap((returnToOriginal) =>
+        ['success', 'error'].map((outcome) => ({
+          operation,
+          returnToOriginal,
+          outcome,
+        })),
+      ),
+    ),
+  )(
+    'ignores stale $operation $outcome after selection changes (return: $returnToOriginal)',
+    async ({ operation, returnToOriginal, outcome }) => {
+      const older = deferred();
+      const newer = deferred();
+      const request = vi
+        .fn()
+        .mockReturnValueOnce(older.promise)
+        .mockReturnValueOnce(newer.promise);
+      const onToast = vi.fn();
+      const state = createProjectsState();
+      state.projects = [
+        { project_id: 'demo', display_name: 'Demo' },
+        { project_id: 'other', display_name: 'Other' },
+      ];
+      const controller = createProjectsController({
+        operations: operations({
+          [operation === 'set' ? 'setOverride' : 'clearOverride']: request,
+        }),
+        state,
+        onToast,
+      });
+      const mutate = () =>
+        operation === 'set'
+          ? controller.setMemberOverride('builder', 'temperature')
+          : controller.clearMemberOverride('builder', 'temperature');
+      controller.selectProject('demo', scan);
+      controller.updateOverrideDraft('builder', 'temperature', '0.7');
+      const oldMutation = mutate();
+
+      const currentScan = structuredClone(scan);
+      currentScan.team[0].display_name = 'Current team sentinel';
+      currentScan.team[0].overrides.temperature = 0.4;
+      currentScan.team[0].effective.temperature.value = 0.4;
+      controller.selectProject('other', currentScan);
+      if (returnToOriginal) controller.selectProject('demo', currentScan);
+      controller.updateOverrideDraft('builder', 'temperature', '0.9');
+      const currentMutation = mutate();
+      const currentTeam = state.activeTeam;
+      expect(state.overrideBusyKey).toBe('builder:temperature');
+
+      if (outcome === 'error') older.reject(new Error('Old failure sentinel'));
+      else older.resolve({ scan });
+      await expect(oldMutation).resolves.toBe(false);
+
+      expect(state.selectedProjectId).toBe(returnToOriginal ? 'demo' : 'other');
+      expect(state.activeTeam).toBe(currentTeam);
+      expect(controller.overrideDraft('builder').temperature).toBe('0.9');
+      expect(state.overrideBusyKey).toBe('builder:temperature');
+      expect(onToast).not.toHaveBeenCalled();
+      newer.resolve({ scan: currentScan });
+      await expect(currentMutation).resolves.toBe(true);
+      expect(state.overrideBusyKey).toBe('');
+      controller.destroy();
+    },
+  );
+
+  it.each(['0.6', '0.8'])(
+    'uses the current %s draft for a later field in an override save',
+    async (latestTopP) => {
+      const firstWrite = deferred();
+      const temperatureScan = structuredClone(scan);
+      temperatureScan.team[0].overrides.temperature = 0.7;
+      temperatureScan.team[0].effective.temperature.value = 0.7;
+      const savedScan = structuredClone(temperatureScan);
+      savedScan.team[0].overrides.top_p = Number(latestTopP);
+      savedScan.team[0].effective.top_p.value = Number(latestTopP);
+      const setOverride = vi
+        .fn()
+        .mockReturnValueOnce(firstWrite.promise)
+        .mockResolvedValue({ scan: savedScan });
+      const { controller } = await loadedController({}, { setOverride });
+      controller.selectProject('demo', scan);
+      controller.updateOverrideDraft('builder', 'temperature', '0.7');
+      controller.updateOverrideDraft('builder', 'top_p', '0.9');
+      const saving = controller.savePendingOverrides();
+      controller.updateOverrideDraft('builder', 'top_p', latestTopP);
+      firstWrite.resolve({ scan: temperatureScan });
+      await expect(saving).resolves.toBe(true);
+
+      expect(setOverride.mock.calls).toEqual([
+        ['demo', 'builder', 'temperature', 0.7],
+        ...(latestTopP === '0.8'
+          ? []
+          : [['demo', 'builder', 'top_p', Number(latestTopP)]]),
+      ]);
+      expect(controller.overrideDraft('builder').top_p).toBe(latestTopP);
+      expect(controller.pendingOverrideChanges()).toEqual([]);
+      controller.destroy();
+    },
+  );
+
   it('owns overrides and re-pointing without leaking transport details', async () => {
     const setOverride = vi.fn().mockResolvedValue({ scan: {} });
     const clearOverride = vi.fn().mockResolvedValue({ scan: {} });

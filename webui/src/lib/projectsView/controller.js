@@ -76,6 +76,8 @@ export function createProjectsController({
   let active = true;
   let listRequestId = 0;
   let scanRequestId = 0;
+  let selectionVersion = 0;
+  const overrideEditVersions = new Map();
   let autoSaveTimer = null;
   let toolAccessOverrideAutoSaveTimer = null;
 
@@ -148,6 +150,8 @@ export function createProjectsController({
   }
 
   function resetSelectionState(project = null) {
+    selectionVersion += 1;
+    overrideEditVersions.clear();
     clearToolAccessOverrideAutoSave({ flushPending: false });
     state.editForm = createProjectEditForm(project);
     state.autoLoadDraft = '';
@@ -159,6 +163,7 @@ export function createProjectsController({
     state.activeScanSkills = emptyScanSkills();
     state.expandedMembers = {};
     state.overrideDrafts = {};
+    state.pendingOverrideReset = null;
     state.overrideBusyKey = '';
   }
 
@@ -222,7 +227,9 @@ export function createProjectsController({
   }
 
   function overrideDraftsHaveChanges() {
-    return pendingOverrideChanges().length > 0;
+    return (
+      state.pendingOverrideReset !== null || pendingOverrideChanges().length > 0
+    );
   }
 
   function projectReloadCanApply() {
@@ -611,6 +618,8 @@ export function createProjectsController({
   }
 
   function updateOverrideDraft(agentId, field, value) {
+    const key = overrideKey(agentId, field);
+    overrideEditVersions.set(key, overrideEditVersion(agentId, field) + 1);
     state.overrideDrafts = {
       ...state.overrideDrafts,
       [agentId]: { ...overrideDraft(agentId), [field]: value },
@@ -621,6 +630,23 @@ export function createProjectsController({
 
   function overrideKey(agentId, field) {
     return `${agentId}:${field}`;
+  }
+
+  function overrideEditVersion(agentId, field) {
+    return overrideEditVersions.get(overrideKey(agentId, field)) ?? 0;
+  }
+
+  // Clear is an explicit intent in the same participant as ordinary edits.
+  // Its click-time edit version survives a write already running, whose
+  // normalization must not count as a newer edit that cancels the reset.
+  function requestOverrideReset(agentId, field) {
+    if (!selectedProject() || state.pendingOverrideReset) return false;
+    state.pendingOverrideReset = {
+      agentId,
+      field,
+      editVersion: overrideEditVersion(agentId, field),
+    };
+    return true;
   }
 
   function isOverrideBusy(agentId, field) {
@@ -685,20 +711,39 @@ export function createProjectsController({
 
   async function savePendingOverrides() {
     clearToolAccessOverrideAutoSave({ flushPending: false });
-    for (const change of pendingOverrideChanges()) {
-      if (isClearedSamplingDraft(change.agentId, change.field)) {
-        if (!(await clearMemberOverride(change.agentId, change.field)))
-          return false;
+    const reset = state.pendingOverrideReset;
+    if (reset) {
+      if (
+        !(await clearMemberOverride(
+          reset.agentId,
+          reset.field,
+          reset.editVersion,
+        ))
+      )
+        return false;
+      if (state.pendingOverrideReset === reset)
+        state.pendingOverrideReset = null;
+    }
+    // Keep only field identities across awaits. A previous response can
+    // update inheritance, and the user can edit a later field meanwhile.
+    for (const { agentId, field } of pendingOverrideChanges()) {
+      if (
+        (state.pendingOverrideReset?.agentId === agentId &&
+          state.pendingOverrideReset.field === field) ||
+        !pendingOverrideChanges().some(
+          (change) => change.agentId === agentId && change.field === field,
+        )
+      )
+        continue;
+      if (isClearedSamplingDraft(agentId, field)) {
+        if (!(await clearMemberOverride(agentId, field))) return false;
         continue;
       }
-      if (!canSetOverride(change.agentId, change.field)) {
+      if (!canSetOverride(agentId, field)) {
         state.editError = t('errors.validation');
         return false;
       }
-      if (
-        !(await setMemberOverride(change.agentId, change.field, change.value))
-      )
-        return false;
+      if (!(await setMemberOverride(agentId, field))) return false;
     }
     return true;
   }
@@ -711,6 +756,26 @@ export function createProjectsController({
     );
   }
 
+  // A save or reset advances the scan's baseline, but the edited field may
+  // already hold a newer value. Capture it before applyScan: a newer value
+  // equal to the old baseline would otherwise look untouched there.
+  function applyOverrideScan(scan, agentId, field, editVersion) {
+    const latestValue = state.overrideDrafts[agentId]?.[field];
+    const hasNewerEdit = overrideEditVersion(agentId, field) !== editVersion;
+    applyScan(scan);
+    const member = state.activeTeam.find((entry) => entry.agent_id === agentId);
+    if (!member || !state.overrideDrafts[agentId]) return;
+    state.overrideDrafts = {
+      ...state.overrideDrafts,
+      [agentId]: {
+        ...state.overrideDrafts[agentId],
+        [field]: hasNewerEdit
+          ? latestValue
+          : seedTeamOverrideDraft(member)[field],
+      },
+    };
+  }
+
   async function setMemberOverride(agentId, field, explicitValue = undefined) {
     const project = selectedProject();
     if (
@@ -720,7 +785,8 @@ export function createProjectsController({
     ) {
       return false;
     }
-    const submittedDrafts = JSON.parse(JSON.stringify(state.overrideDrafts));
+    const selection = selectionVersion;
+    const editVersion = overrideEditVersion(agentId, field);
     state.overrideBusyKey = overrideKey(agentId, field);
     state.editError = '';
     try {
@@ -732,29 +798,13 @@ export function createProjectsController({
           ? overrideValueForField(agentId, field)
           : explicitValue,
       );
-      if (!active) {
+      if (!active || selection !== selectionVersion) {
         return false;
       }
-      applyScan(result?.scan);
-      const member = state.activeTeam.find(
-        (entry) => entry.agent_id === agentId,
-      );
-      if (
-        member &&
-        JSON.stringify(state.overrideDrafts[agentId]?.[field]) ===
-          JSON.stringify(submittedDrafts[agentId]?.[field])
-      ) {
-        state.overrideDrafts = {
-          ...state.overrideDrafts,
-          [agentId]: {
-            ...state.overrideDrafts[agentId],
-            [field]: seedTeamOverrideDraft(member)[field],
-          },
-        };
-      }
+      applyOverrideScan(result?.scan, agentId, field, editVersion);
       return true;
     } catch (error) {
-      if (active) {
+      if (active && selection === selectionVersion) {
         onToast({
           title: `${t('projects.team.overrideError')} ${errorText(error)}`,
           variant: 'error',
@@ -763,14 +813,18 @@ export function createProjectsController({
       }
       return false;
     } finally {
-      if (active) {
+      if (active && selection === selectionVersion) {
         state.overrideBusyKey = '';
         flushPendingProjects();
       }
     }
   }
 
-  async function clearMemberOverride(agentId, field) {
+  async function clearMemberOverride(
+    agentId,
+    field,
+    editVersion = overrideEditVersion(agentId, field),
+  ) {
     const project = selectedProject();
     if (!project || state.overrideBusyKey) {
       return false;
@@ -778,6 +832,7 @@ export function createProjectsController({
     if (field === 'tool_access') {
       clearToolAccessOverrideAutoSave({ flushPending: false });
     }
+    const selection = selectionVersion;
     state.overrideBusyKey = overrideKey(agentId, field);
     state.editError = '';
     try {
@@ -786,31 +841,17 @@ export function createProjectsController({
         agentId,
         field,
       );
-      if (!active) {
+      if (!active || selection !== selectionVersion) {
         return false;
       }
-      applyScan(result?.scan);
-      // Only the cleared field returns to what it inherits; the other drafts,
-      // saved or not, stay as they are.
-      const member = state.activeTeam.find(
-        (entry) => entry.agent_id === agentId,
-      );
-      if (member && state.overrideDrafts[agentId]) {
-        state.overrideDrafts = {
-          ...state.overrideDrafts,
-          [agentId]: {
-            ...state.overrideDrafts[agentId],
-            [field]: seedTeamOverrideDraft(member)[field],
-          },
-        };
-      }
+      applyOverrideScan(result?.scan, agentId, field, editVersion);
       onToast({
         title: t('projects.team.overrideCleared'),
         variant: 'success',
       });
       return true;
     } catch (error) {
-      if (active) {
+      if (active && selection === selectionVersion) {
         onToast({
           title: `${t('projects.team.overrideClearError')} ${errorText(error)}`,
           variant: 'error',
@@ -819,7 +860,7 @@ export function createProjectsController({
       }
       return false;
     } finally {
-      if (active) {
+      if (active && selection === selectionVersion) {
         state.overrideBusyKey = '';
         flushPendingProjects();
       }
@@ -861,6 +902,7 @@ export function createProjectsController({
     overrideDraft,
     pendingChanges,
     pendingOverrideChanges,
+    requestOverrideReset,
     flushPendingProjects,
     refreshScan,
     replaceListField,

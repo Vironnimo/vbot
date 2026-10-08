@@ -39,6 +39,8 @@ vi.mock('$lib/api.js', () =>
 );
 
 const { default: ProjectsView } = await import('../ProjectsView.svelte');
+const { default: AutosaveContextHost } =
+  await import('./AutosaveContextHost.support.svelte');
 // Loaded after the Svelte mock, so its context lookups share the components'
 // runtime.
 const { createStandaloneNavigation } =
@@ -288,6 +290,7 @@ function setupProjectsViewSuite() {
     clearOverrideMock.mockResolvedValue(saved);
   });
   afterEach(async () => {
+    vi.useRealTimers();
     if (mountedComponent) {
       await unmount(mountedComponent);
       mountedComponent = null;
@@ -297,8 +300,17 @@ function setupProjectsViewSuite() {
   });
   return {
     // Mount the view into the document; the suite unmounts it after the test.
-    mount(props = {}) {
-      mountedComponent = mount(ProjectsView, { target: document.body, props });
+    mount(props = {}, coordinator = null) {
+      mountedComponent = coordinator
+        ? mount(AutosaveContextHost, {
+            target: document.body,
+            props: {
+              component: ProjectsView,
+              componentProps: props,
+              coordinator,
+            },
+          })
+        : mount(ProjectsView, { target: document.body, props });
       flushSync();
       return mountedComponent;
     },

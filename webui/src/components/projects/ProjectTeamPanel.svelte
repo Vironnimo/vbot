@@ -35,6 +35,7 @@
     findingsExpanded = $bindable(false),
     trackModelDropdownOpen,
     updateToolAccessOverride,
+    clearOverride,
     navigateToExtensions,
   } = $props();
 
@@ -256,7 +257,7 @@
   }
 
   function applyClearOverride(agentId, field) {
-    void projectsController.clearMemberOverride(agentId, field);
+    void clearOverride(agentId, field);
   }
 
   function groupLabel(type) {

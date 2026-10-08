@@ -158,6 +158,8 @@ Credential values go only to the dedicated operation and are never added to conn
 
 Server-projected inventory ids distinguish same-name packages; `editable_scope` alone enables human editing/deletion. The inspection request is versioned independently of inventory refresh, and stale responses cannot replace a newer selection. The view reloads on Skills, Agents and Projects refresh tokens; open drafts survive those refreshes. The add menu offers "Install from link or file...", "Create skill..." (defaulting to the selected Agent's private home, else global) and "Manage skill folders...", a page with Back whose folder editor stays mounted after first visit so its autosave participant survives collection changes. Creation separates name, description, and instructions and serializes quoted YAML metadata; original-text editing preserves the full authored document. Mounted regression coverage (drill-in and return, tooltip-only descriptions, own toggles, row context menus, pins and facts, history and revert together, the Archived collection) lives in `components/skills/__tests__/skillsView.test.js`; the rules in `skillAccess.test.js`.
 
+Saving edited Skill instructions closes the dialog only while the same editing visit still contains the submitted text. Text entered during the request stays in the mounted editor and can be saved again (`skillsView.test.js`).
+
 Local STT/TTS setup and TTS previews are owned by `LocalSpeechSupport.svelte`,
 keyed by the selected target in the Voice speech Model editor, which also passes the
 target's `metadata`. Its setup runs on

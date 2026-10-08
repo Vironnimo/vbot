@@ -7,6 +7,9 @@ import {
   flushSync,
   setOverrideMock,
   clearOverrideMock,
+  listProjectsMock,
+  showProjectMock,
+  createStandaloneNavigation,
   AUTO_SAVE_WAIT_MS,
   project,
   member,
@@ -25,6 +28,8 @@ import {
   expandMember,
   setupProjectsViewSuite,
 } from './ProjectsView.support.js';
+
+const { createAutosaveCoordinator } = await import('../../lib/autosave.js');
 
 function effective(model, temperature, thinkingEffort, topP) {
   return {
@@ -264,6 +269,24 @@ describe('ProjectsView Team', () => {
         ],
       }),
     });
+    setOverrideMock.mockResolvedValue({
+      project: project({ project_id: 'demo' }),
+      scan: cleanScan({
+        team: [
+          member({
+            agent_id: 'builder',
+            display_name: 'Builder',
+            overrides: { top_p: 0.9 },
+            effective: effective(
+              { value: 'openai/gpt-5.2', source: 'agent' },
+              null,
+              null,
+              { value: 0.9, source: 'override' },
+            ),
+          }),
+        ],
+      }),
+    });
     view.mount();
     await selectDemo();
     await expandMember('builder');
@@ -279,9 +302,128 @@ describe('ProjectsView Team', () => {
           '[data-testid="project-override-clear-model-builder"]',
         ),
     );
-    // Another field's unsaved draft survives the clear.
-    expect(inputById('project-override-builder-top-p').value).toBe('0,9');
+    // The same tracked operation also saves the other field's draft.
+    await waitForCondition(() => setOverrideMock.mock.calls.length === 1);
+    expect(setOverrideMock).toHaveBeenCalledWith(
+      'demo',
+      'builder',
+      'top_p',
+      0.9,
+    );
+    expect(inputById('project-override-builder-top-p').value).toBe('0.9');
   });
+
+  it.each([false, true])(
+    'saves input made during a reset before changing Projects (retry: %s)',
+    async (retry) => {
+      const onToast = vi.fn();
+      const scan = (temperature) =>
+        cleanScan({
+          team: [
+            member({
+              agent_id: 'builder',
+              display_name: 'Builder',
+              overrides: temperature === null ? {} : { temperature },
+              effective: effective(null, {
+                value: temperature ?? 0.2,
+                source: temperature === null ? 'project_default' : 'override',
+              }),
+            }),
+          ],
+        });
+      const demo = project({ project_id: 'demo', display_name: 'Demo' });
+      const other = project({ project_id: 'other', display_name: 'Other' });
+      listProjectsMock.mockResolvedValue({ projects: [demo, other] });
+      showProjectMock.mockImplementation(async (projectId) => ({
+        project: projectId === 'demo' ? demo : other,
+        scan:
+          projectId === 'demo'
+            ? scan(0.3)
+            : cleanScan({ team: [member({ agent_id: 'other-agent' })] }),
+      }));
+      let finishReset;
+      const resetResponse = new Promise((resolve) => {
+        finishReset = resolve;
+      });
+      if (retry)
+        clearOverrideMock.mockRejectedValueOnce(new Error('reset failed'));
+      clearOverrideMock.mockImplementation(() => resetResponse);
+      let finishSave;
+      const saveResponse = new Promise((resolve) => {
+        finishSave = resolve;
+      });
+      setOverrideMock.mockImplementation(() => saveResponse);
+
+      const coordinator = createAutosaveCoordinator();
+      const navigation = createStandaloneNavigation(['demo']);
+      const navigate = navigation.navigate;
+      let transition;
+      navigation.navigate = (...args) => {
+        transition = coordinator
+          .flushPending()
+          .then((saved) => (saved ? navigate(...args) : false));
+        return transition;
+      };
+      view.mount({ navigation, onToast }, coordinator);
+      await expandMember('builder');
+      inputById('project-override-builder-sampling-toggle').click();
+      flushSync();
+      vi.useFakeTimers();
+      const temperature = inputById('project-override-builder-temperature');
+      temperature.closest('.s-row-control').querySelector('button').click();
+      await vi.advanceTimersByTimeAsync(0);
+      flushSync();
+      expect(clearOverrideMock).toHaveBeenCalledTimes(1);
+      expect(coordinator.hasPending()).toBe(true);
+      if (retry) {
+        expect(onToast).toHaveBeenCalledWith(
+          expect.objectContaining({ variant: 'error' }),
+        );
+        buttonWithTextContent(
+          t('common.save'),
+          document.querySelector('.save-status'),
+        ).click();
+        await vi.advanceTimersByTimeAsync(0);
+        flushSync();
+        expect(clearOverrideMock).toHaveBeenCalledTimes(2);
+      }
+
+      setInputValue('project-override-builder-temperature', '0.8');
+      await vi.advanceTimersByTimeAsync(1600);
+      flushSync();
+      expect(temperature.disabled).toBe(false);
+      expect(setOverrideMock).not.toHaveBeenCalled();
+      buttonByTestId('project-toggle-other').click();
+      await vi.advanceTimersByTimeAsync(0);
+      flushSync();
+      expect(navigation.place).toEqual(['demo']);
+      expect(document.querySelector('[role="alert"]')).toBeNull();
+
+      finishReset({ project: demo, scan: scan(null) });
+      await vi.advanceTimersByTimeAsync(0);
+      flushSync();
+      expect(setOverrideMock).toHaveBeenCalledExactlyOnceWith(
+        'demo',
+        'builder',
+        'temperature',
+        0.8,
+      );
+      expect(temperature.value).toBe('0.8');
+      expect(navigation.place).toEqual(['demo']);
+
+      finishSave({ project: demo, scan: scan(0.8) });
+      await expect(transition).resolves.toBe(true);
+      await vi.advanceTimersByTimeAsync(0);
+      flushSync();
+      expect(navigation.place).toEqual(['other']);
+      expect(
+        document.querySelector(
+          '[data-testid="project-team-member-other-agent"]',
+        ),
+      ).toBeTruthy();
+      expect(coordinator.hasPending()).toBe(false);
+    },
+  );
 
   it('sets a sampling override with the comma-tolerant value', async () => {
     serveProject(

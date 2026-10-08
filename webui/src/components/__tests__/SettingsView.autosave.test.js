@@ -13,20 +13,25 @@ import {
   flushAsyncUpdates,
   getButton,
   getSettingsUpdateCalls,
+  openSearchableDropdown,
   openSubAgentsPanel,
   openWebSearchPanel,
   resetSettingsViewHarness,
   rpcMock,
+  selectSearchableOption,
   setInputValue,
   settingsPayload,
   waitForCondition,
 } from './SettingsView.support.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
 
 const { default: SettingsView } = await import('../SettingsView.svelte');
+const { default: SettingsGeneralPanel } =
+  await import('../settings/SettingsGeneralPanel.svelte');
 const { default: AutosaveContextHost } =
   await import('./AutosaveContextHost.support.svelte');
 
@@ -266,6 +271,103 @@ describe('SettingsView editor saving', () => {
       '50',
     ]);
   });
+
+  it.each([
+    ['keep_awake', 'response', 'system', false, true],
+    ['keep_awake', 'invalidation', 'system', false, true],
+    ['timezone', 'response', 'preferences', 'UTC', 'Europe/Berlin'],
+    ['timezone', 'invalidation', 'preferences', 'UTC', 'Europe/Berlin'],
+  ])(
+    'saves a reverted %s choice when the %s arrives first',
+    async (field, firstEvent, page, initial, firstChoice) => {
+      const settings = settingsPayload();
+      settings.general[field] = initial;
+      settings.general.available_timezones = ['UTC', 'Europe/Berlin'];
+      const firstSave = Promise.withResolvers();
+      let writeCount = 0;
+      const backend = createSettingsRpcMock({
+        settings,
+        settingsUpdate: async (params, current) => {
+          if (++writeCount === 1) await firstSave.promise;
+          return {
+            ...current,
+            general: { ...current.general, ...params.server },
+          };
+        },
+      });
+      rpcMock.mockImplementation(backend);
+      const props = reactiveProps({
+        settings,
+        page,
+        onCommit: (next) => (props.settings = next),
+      });
+      const coordinator = createAutosaveCoordinator();
+      mountedComponent = mount(AutosaveContextHost, {
+        target: document.body,
+        props: {
+          component: SettingsGeneralPanel,
+          componentProps: props,
+          coordinator,
+        },
+      });
+      flushSync();
+      const displayedValue = () =>
+        field === 'timezone'
+          ? document
+              .querySelector('#settings-general-timezone')
+              .textContent.trim()
+          : document
+              .querySelector('[role="switch"]')
+              .getAttribute('aria-checked') === 'true';
+      const choose = async (value) => {
+        if (field === 'timezone') {
+          await openSearchableDropdown('settings-general-timezone');
+          selectSearchableOption('settings-general-timezone', value);
+        } else {
+          document.querySelector('[role="switch"]').click();
+          flushSync();
+        }
+      };
+
+      await choose(firstChoice);
+      await waitForCondition(() => getSettingsUpdateCalls().length === 1);
+      await choose(initial);
+      expect(displayedValue()).toBe(initial);
+      expect(getSettingsUpdateCalls()).toHaveLength(1);
+
+      // An invalidation can publish the first write before its response. It
+      // must not mistake the user's newer revert for an untouched field.
+      if (firstEvent === 'invalidation') {
+        props.settings = {
+          ...settings,
+          general: { ...settings.general, [field]: firstChoice },
+        };
+        flushSync();
+        expect(displayedValue()).toBe(initial);
+      }
+      firstSave.resolve();
+      await waitForCondition(() => !coordinator.hasPending());
+      expect(getSettingsUpdateCalls().map(([, params]) => params)).toEqual([
+        { server: { [field]: firstChoice } },
+        { server: { [field]: initial } },
+      ]);
+      expect((await backend('settings.get')).general[field]).toBe(initial);
+      expect(displayedValue()).toBe(initial);
+      await expect(coordinator.flushPending()).resolves.toBe(true);
+      expect(getSettingsUpdateCalls()).toHaveLength(2);
+
+      // Once clean, another writer's change still rebases the visible field
+      // without producing an unsolicited write back to the server.
+      props.settings = {
+        ...props.settings,
+        general: { ...props.settings.general, [field]: firstChoice },
+      };
+      flushSync();
+      expect(displayedValue()).toBe(firstChoice);
+      expect(coordinator.hasPending()).toBe(false);
+      expect(getSettingsUpdateCalls()).toHaveLength(2);
+    },
+  );
 
   // A cleared number field falls back to its default. It writes only when the
   // stored value differs, and never leaves a pending draft that blocks
