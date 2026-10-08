@@ -8,6 +8,7 @@ import pytest
 
 from core.chat.messages import ChatMessage
 from core.chat.usage import (
+    ContextRoute,
     RequestContextUsage,
     aggregate_session_usage,
     latest_session_context_usage,
@@ -174,12 +175,30 @@ class _BiasedInputAdapter:
         return 120_000 + estimate_request_input_tokens(messages, tools)[0]
 
 
+def _route(adapter: Any = None, model: str = "model") -> ContextRoute:
+    return ContextRoute(adapter or _BiasedInputAdapter(), model, f"provider/{model}")
+
+
+class _Calibration:
+    """A fixed correction that records what it learns."""
+
+    def __init__(self, factor: float) -> None:
+        self.value = factor
+        self.samples: list[tuple[str, int, int]] = []
+
+    def input_estimate_factor(self, model: str) -> float:
+        return self.value
+
+    def record_input_estimate(self, model: str, *, measured: int, estimated: int) -> None:
+        self.samples.append((model, measured, estimated))
+
+
 def test_request_measurement_cancels_existing_estimation_bias_and_counts_changes():
     accounting = RequestContextUsage()
     adapter = _BiasedInputAdapter()
     base = [{"role": "system", "content": "rules"}, {"role": "user", "content": "task"}]
     tools = [{"type": "function", "function": {"name": "read", "description": "x" * 500}}]
-    args = {"adapter": adapter, "model_id": "model", "tools": tools, "scope": "epoch"}
+    args = {"target": _route(adapter), "tools": tools, "scope": "epoch"}
     accounting.observe({"input_tokens": 150_000, "output_tokens": 20_000}, base, **args)
     assert accounting.project(base, **args)["tokens"] == 150_000
     assert accounting.project(base, **args)["estimated"] is False
@@ -203,40 +222,87 @@ def test_request_measurement_cancels_existing_estimation_bias_and_counts_changes
 
 
 def test_estimate_factor_scales_only_the_estimated_part_of_a_projection():
-    accounting = RequestContextUsage()
+    calibration = _Calibration(1.5)
+    accounting = RequestContextUsage(calibration)
     adapter = _BiasedInputAdapter()
     base = [{"role": "system", "content": "rules"}, {"role": "user", "content": "task"}]
-    args = {"adapter": adapter, "model_id": "model", "tools": [], "scope": "epoch"}
+    args = {"target": _route(adapter), "tools": [], "scope": "epoch"}
     raw = adapter.estimate_request_input_tokens(base, model_id="model")
-    assert accounting.project(base, **args, estimate_factor=1.5)["tokens"] == round(raw * 1.5)
-    # Observing returns the calibration sample: measured input, uncorrected estimate.
-    assert accounting.observe({"input_tokens": 150_000}, base, **args) == (150_000, raw)
-    assert accounting.project(base, **args, estimate_factor=1.5)["tokens"] == 150_000
+    assert accounting.project(base, **args)["tokens"] == round(raw * 1.5)
+    assert accounting.estimate(base, target=args["target"], tools=[]) == round(raw * 1.5)
+    # A measurement teaches the calibration with the uncorrected estimate.
+    accounting.observe({"input_tokens": 150_000}, base, **args)
+    assert calibration.samples == [("provider/model", 150_000, raw)]
+    assert accounting.project(base, **args)["tokens"] == 150_000
     assistant = {"role": "assistant", "content": "done " * 200}
     delta = estimate_request_input_tokens([assistant])[0]
-    projection = accounting.project([*base, assistant], **args, estimate_factor=1.5)
+    projection = accounting.project([*base, assistant], **args)
     assert projection["estimated_delta_tokens"] == round(delta * 1.5)
     assert projection["tokens"] == 150_000 + round(delta * 1.5)
-    assert (
-        accounting.observe({"input_tokens": 9, "input_tokens_estimated": True}, base, **args)
-        is None
+    accounting.observe({"input_tokens": 9, "input_tokens_estimated": True}, base, **args)
+    assert len(calibration.samples) == 1
+
+
+def test_measurement_continues_across_runs_until_compaction():
+    """A new Run resumes the Session's anchor; history corrects with its factor."""
+    first = RequestContextUsage(_Calibration(1.5))
+    base = [{"role": "system", "content": "rules"}, {"role": "user", "content": "task"}]
+    args = {"target": _route(), "tools": [], "scope": "epoch"}
+    first.observe({"input_tokens": 150_000, "output_tokens": 50}, base, **args)
+    answer = {"role": "assistant", "content": "done"}
+    assistant = _assistant(
+        {
+            "input_tokens": 150_000,
+            "output_tokens": 50,
+            "context_usage": first.project([*base, answer], **args),
+            "context_estimation": first.estimation_record(args["target"]),
+        }
+    )
+    newer = ChatMessage.user("next task " * 100)
+    # A later Run has a new Adapter instance for the same route.
+    resumed = RequestContextUsage.resume([assistant, newer], _Calibration(1.5))
+    next_args = {**args, "target": _route()}
+    next_request = [*base, answer, {"role": "user", "content": "next task " * 100}]
+    projection = resumed.project(next_request, **next_args)
+    assert projection["provider_input_tokens"] == 150_000
+    delta = estimate_request_input_tokens(next_request[2:])[0]
+    assert projection["tokens"] == 150_000 + round(delta * 1.5)
+    history = latest_session_context_usage([assistant, newer])
+    assert history is not None
+    assert history["tokens"] - assistant.usage["context_usage"]["tokens"] == round(
+        estimate_request_input_tokens(next_request[3:])[0] * 1.5
+    )
+
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="summary",
+        projection=[ChatMessage.user("tail")],
+        compacted_token_count=10_000,
+        context_tokens_before=150_000,
+        context_tokens_after=4_000,
+    ).with_compaction_context_tokens(
+        context_tokens_before=150_000, context_tokens_after=4_000, estimate_factor=2.0
+    )
+    after_compaction = RequestContextUsage.resume([assistant, checkpoint], _Calibration(1.5))
+    assert "provider_input_tokens" not in after_compaction.project(base, **next_args)
+    assert latest_session_context_usage([assistant, checkpoint, newer])["tokens"] == 4_000 + round(
+        estimate_request_input_tokens([{"role": "user", "content": "next task " * 100}])[0] * 2.0
     )
 
 
-@pytest.mark.parametrize("change", ["model", "adapter", "tools", "system", "reset"])
+@pytest.mark.parametrize("change", ["route", "scope", "tools", "system", "reset"])
 def test_request_measurement_does_not_cross_rebuilt_context(change):
     accounting = RequestContextUsage()
     base = [{"role": "system", "content": "rules"}, {"role": "user", "content": "task"}]
-    args = {"adapter": _BiasedInputAdapter(), "model_id": "model", "tools": [], "scope": "epoch"}
+    args = {"target": _route(), "tools": [], "scope": "epoch"}
     accounting.observe({"input_tokens": 10_000}, base, **args)
     if change == "system":
         base = [{"role": "system", "content": "new rules"}, *base[1:]]
     elif change == "reset":
         accounting.reset()
     else:
-        args[{"model": "model_id"}.get(change, change)] = {
-            "model": "different",
-            "adapter": _BiasedInputAdapter(),
+        args[{"route": "target"}.get(change, change)] = {
+            "route": _route(model="different"),
+            "scope": "new-epoch",
             "tools": [{"function": {"name": "new"}}],
         }[change]
     projection = accounting.project(base, **args)
@@ -254,7 +320,7 @@ def test_request_projection_accounts_for_retired_images_and_persists_signed_delt
         ],
     }
     base = [{"role": "user", "content": "task"}, image]
-    args = {"adapter": _BiasedInputAdapter(), "model_id": "model", "tools": [], "scope": "epoch"}
+    args = {"target": _route(), "tools": [], "scope": "epoch"}
     accounting.observe({"input_tokens": 30_000}, base, **args)
     projection = accounting.project(base[:1], **args)
     assert projection["estimated_delta_tokens"] < 0
@@ -271,7 +337,7 @@ def test_request_projection_accounts_for_retired_images_and_persists_signed_delt
 
 def test_estimated_input_never_anchors_or_replaces_a_measurement():
     accounting = RequestContextUsage()
-    args = {"adapter": _BiasedInputAdapter(), "model_id": "model", "tools": [], "scope": "epoch"}
+    args = {"target": _route(), "tools": [], "scope": "epoch"}
     base = [{"role": "user", "content": "task"}]
     accounting.observe({"input_tokens": 10, "input_tokens_estimated": True}, base, **args)
     assert accounting.project(base, **args) == {
@@ -291,7 +357,7 @@ def test_estimated_input_never_anchors_or_replaces_a_measurement():
 
 def test_removal_cannot_project_nonempty_request_to_zero_tokens():
     accounting = RequestContextUsage()
-    args = {"adapter": _BiasedInputAdapter(), "model_id": "model", "tools": [], "scope": "epoch"}
+    args = {"target": _route(), "tools": [], "scope": "epoch"}
     base = [{"role": "user", "content": "task"}, {"role": "assistant", "content": "word " * 500}]
     accounting.observe({"input_tokens": 100}, base, **args)
     projected = accounting.project(base[:1], **args)
@@ -313,7 +379,7 @@ def test_identical_requests_are_estimated_once_and_changes_estimate_afresh():
     """A Step projects, observes and re-projects one request with one estimate."""
     accounting = RequestContextUsage()
     adapter = _CountingAdapter()
-    args = {"adapter": adapter, "model_id": "model", "tools": [], "scope": "epoch"}
+    args = {"target": _route(adapter), "tools": [], "scope": "epoch"}
     request = [{"role": "system", "content": "rules"}, {"role": "user", "content": "task"}]
 
     before = accounting.project(request, **args)
@@ -333,7 +399,7 @@ def test_identical_requests_are_estimated_once_and_changes_estimate_afresh():
 
 def test_estimate_memo_is_bounded_and_retains_only_digests():
     accounting = RequestContextUsage()
-    args = {"adapter": _CountingAdapter(), "model_id": "model", "tools": [], "scope": "epoch"}
+    args = {"target": _route(_CountingAdapter()), "tools": [], "scope": "epoch"}
     for index in range(10):
         accounting.project([{"role": "user", "content": f"private {index}"}], **args)
 

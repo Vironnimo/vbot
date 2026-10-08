@@ -140,6 +140,8 @@ async def test_automatic_compaction_commits_a_checkpoint_and_rebuilds_the_reques
         "compacted_token_count": 42,
         "context_tokens_before": 90,
         "context_tokens_after": tokens_after,
+        # The factor newer messages are estimated with (no calibration here).
+        "context_estimation": {"factor": 1.0},
     }
     assert isinstance(duration_ms, int) and duration_ms >= 0
     assert lifecycle[1].payload["duration_ms"] == duration_ms

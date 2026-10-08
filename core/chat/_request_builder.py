@@ -1047,11 +1047,6 @@ class RequestBuilder:
             if isinstance(resolved_content, list):
                 tool_message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] = local_content + resolved_content
 
-    def input_estimate_factor(self, target: _ModelTarget) -> float:
-        """The learned correction of local input estimates for this target's Model."""
-        recorder = self._dependencies.usage_recorder
-        return 1.0 if recorder is None else recorder.input_estimate_factor(target.model_reference)
-
     def resolve_context_window(self, agent: Any, target: _ModelTarget) -> int | None:
         """Resolve the usable context window for the current Model target.
 

@@ -27,6 +27,7 @@ from core.chat.model_resolution import (
     _resolve_agent_connection,
     _split_agent_model,
 )
+from core.chat.usage import ContextRoute, RequestContextUsage
 from core.chat.wire_shaping import PINNED_IMAGE_RETIREMENT_SLOT, RequestImageBudget
 from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.projects import resolve_prompt_project, resolve_skill_scope, runtime_agent_body
@@ -44,7 +45,6 @@ from core.prompts.pinned_context import (
     stamp_prompt_files_read,
 )
 from core.providers.accounts import ConnectionRef
-from core.providers.adapter import estimate_wire_request_input_tokens
 from core.sessions import ChatSession, PromptEpoch
 
 if TYPE_CHECKING:
@@ -66,6 +66,8 @@ class ManualCompactionRequest:
     active_adapter: Any
     active_provider_id: str
     active_model_id: str
+    # The route the manual Compaction measures the Session's Context for.
+    active_target: ContextRoute
     summary_adapter: Any
     summary_provider_id: str
     summary_model_id: str
@@ -139,8 +141,9 @@ class ChatCompactionHost:
     def resolve_context_window(self, agent: Any, target: Any) -> int | None:
         return self._requests.resolve_context_window(agent, target)
 
-    def input_estimate_factor(self, target: Any) -> float:
-        return self._requests.input_estimate_factor(target)
+    def context_accounting(self, messages: list[ChatMessage]) -> RequestContextUsage:
+        """The Session's Context accounting, continuing its newest measurement."""
+        return RequestContextUsage.resume(messages, self._dependencies.usage_recorder)
 
     async def materialize_manual_request(
         self,
@@ -234,14 +237,15 @@ class ChatCompactionHost:
                 run.project_id,
                 skill_project_id=skill_project_id,
             )
+            model_reference = _resolved_model_reference(
+                self._dependencies,
+                provider_id,
+                connection_id,
+                model_id,
+            )
             inputs = RequestBuildInputs(
                 replay_policy=adapter.reasoning_replay_policy(model_id),
-                reasoning_scope_model=_resolved_model_reference(
-                    self._dependencies,
-                    provider_id,
-                    connection_id,
-                    model_id,
-                ),
+                reasoning_scope_model=model_reference,
                 input_modalities=_model_input_modalities_for_target(
                     self._dependencies,
                     provider_id,
@@ -273,6 +277,7 @@ class ChatCompactionHost:
                 active_adapter=adapter,
                 active_provider_id=provider_id,
                 active_model_id=model_id,
+                active_target=ContextRoute(adapter, model_id, model_reference),
                 summary_adapter=summary_adapter,
                 summary_provider_id=summary_provider_id,
                 summary_model_id=summary_model_id,
@@ -506,8 +511,8 @@ class ChatCompactionHost:
         context_tokens_before: int,
         request_inputs: object,
         prompt_refresh: object | None,
-        active_adapter: Any,
-        active_model_id: str,
+        active_target: Any,
+        accounting: RequestContextUsage,
         live_request_messages: list[JsonObject] | None = None,
     ) -> tuple[ChatMessage, RequestState]:
         inputs = cast(RequestBuildInputs, request_inputs).merged_with_refresh(
@@ -523,16 +528,17 @@ class ChatCompactionHost:
             ),
             live_messages=live_request_messages,
         )
+        # The new prompt epoch has no measurement yet: a whole corrected estimate.
         context_tokens_after = await self.run_transform(
-            estimate_wire_request_input_tokens,
-            active_adapter,
+            accounting.estimate,
             projected_state.messages,
-            model_id=active_model_id,
+            target=active_target,
             tools=projected_state.tools,
         )
         stamped_checkpoint = checkpoint.with_compaction_context_tokens(
             context_tokens_before=context_tokens_before,
             context_tokens_after=context_tokens_after,
+            estimate_factor=accounting.factor(active_target),
         )
         return stamped_checkpoint, projected_state
 
@@ -555,8 +561,8 @@ class ChatCompactionHost:
             context_tokens_before=context_tokens_before,
             request_inputs=RequestBuildInputs.from_context(context, target),
             prompt_refresh=prompt_refresh,
-            active_adapter=target.adapter,
-            active_model_id=target.model_id,
+            active_target=target,
+            accounting=context.context_usage,
             live_request_messages=live_request_messages,
         )
 

@@ -437,11 +437,11 @@ async def test_input_estimate_calibration_learns_per_model_and_survives_restart(
     model = "anthropic/claude::anthropic:api"
     assert recorder.input_estimate_factor(model) == 1.0
     # Tiny requests and implausible ratios are not evidence.
-    await recorder.record_input_estimate(model, measured=900, estimated=600)
-    await recorder.record_input_estimate(model, measured=500_000, estimated=100_000)
+    recorder.record_input_estimate(model, measured=900, estimated=600)
+    recorder.record_input_estimate(model, measured=500_000, estimated=100_000)
     assert recorder.input_estimate_factor(model) == 1.0
     for _ in range(40):
-        await recorder.record_input_estimate(model, measured=125_000, estimated=100_000)
+        recorder.record_input_estimate(model, measured=125_000, estimated=100_000)
     learned = recorder.input_estimate_factor(model)
     assert 1.2 < learned < 1.25
     # The Connection scope is not part of the calibrated identity; other Models are unaffected.

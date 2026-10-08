@@ -10,12 +10,12 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 from core.chat import RequestState, checkpoint_ordinal, has_unconsumed_skill_activation
 from core.chat.messages import JsonObject
 from core.chat.usage import (
+    ContextTarget,
     RequestContextUsage,
     aggregate_session_usage,
     checkpoint_context_usage,
     latest_context_window,
     latest_session_context_usage,
-    with_context_window,
 )
 from core.compaction.compaction import (
     COMPACTION_POLICY_META_KEY,
@@ -28,7 +28,6 @@ from core.compaction.compaction import (
     effective_compaction_policy,
 )
 from core.performance import record_span, session_track
-from core.providers.adapter import estimate_wire_request_input_tokens
 from core.runs import (
     COMPACTION_ABORTED_EVENT,
     COMPACTION_COMPLETED_EVENT,
@@ -75,6 +74,9 @@ class ManualCompactionRequest(Protocol):
 
     @property
     def active_provider_id(self) -> str: ...
+
+    @property
+    def active_target(self) -> ContextTarget: ...
 
     @property
     def summary_adapter(self) -> Any: ...
@@ -165,8 +167,8 @@ class CompactionRunHost(Protocol):
         context_tokens_before: int,
         request_inputs: object,
         prompt_refresh: object | None,
-        active_adapter: Any,
-        active_model_id: str,
+        active_target: Any,
+        accounting: RequestContextUsage,
         live_request_messages: list[JsonObject] | None = None,
     ) -> tuple[ChatMessage, RequestState]: ...
 
@@ -202,7 +204,7 @@ class CompactionRunHost(Protocol):
 
     def resolve_context_window(self, agent: Any, target: Any) -> int | None: ...
 
-    def input_estimate_factor(self, target: Any) -> float: ...
+    def context_accounting(self, messages: list[ChatMessage]) -> RequestContextUsage: ...
 
 
 class CompactionRunCoordinator:
@@ -261,19 +263,23 @@ class CompactionRunCoordinator:
                     messages,
                     settings,
                 )
-                wire_context_tokens_before = await self._host.run_transform(
-                    estimate_wire_request_input_tokens,
-                    request.active_adapter,
-                    request.request_state.messages,
-                    model_id=request.active_model_id,
-                    tools=request.request_state.tools,
+                prompt_cache_affinity_id = await self._host.run_transform(
+                    self._host.sessions.prompt_cache_affinity_id,
+                    session.address,
                 )
-                context_usage = with_context_window(
-                    {"tokens": wire_context_tokens_before, "estimated": True},
-                    latest_context_window(messages),
+                # The same rule as a Run: the Session's newest measurement plus the
+                # corrected change of the exact request being compacted.
+                accounting = self._host.context_accounting(messages)
+                context_usage = await self._host.run_transform(
+                    accounting.project,
+                    request.request_state.messages,
+                    target=request.active_target,
+                    tools=request.request_state.tools,
+                    scope=prompt_cache_affinity_id,
+                    context_window=latest_context_window(messages),
                 )
                 run.terminal_payload_extras["context_usage"] = context_usage
-                context_tokens_before = wire_context_tokens_before
+                context_tokens_before = int(context_usage["tokens"])
                 checkpoint = await compaction_service.compact(
                     messages,
                     session_address=session.address,
@@ -284,10 +290,7 @@ class CompactionRunCoordinator:
                     group_id=(
                         run.execution_owner.group_id if run.execution_owner is not None else None
                     ),
-                    prompt_cache_affinity_id=await self._host.run_transform(
-                        self._host.sessions.prompt_cache_affinity_id,
-                        session.address,
-                    ),
+                    prompt_cache_affinity_id=prompt_cache_affinity_id,
                     summary_adapter=request.summary_adapter,
                     summary_model_id=request.summary_model_id,
                     storage=self._host.storage,
@@ -299,6 +302,7 @@ class CompactionRunCoordinator:
                     active_model_id=request.active_model_id,
                     active_tools=request.request_state.tools,
                     active_thinking_effort=agent.thinking_effort,
+                    estimate_factor=accounting.factor(request.active_target),
                     summary_model_reference=f"{request.summary_provider_id}/{request.summary_model_id}",
                     active_model_reference=f"{request.active_provider_id}/{request.active_model_id}",
                 )
@@ -339,8 +343,8 @@ class CompactionRunCoordinator:
                 context_tokens_before=context_tokens_before,
                 request_inputs=request.request_inputs,
                 prompt_refresh=prompt_refresh,
-                active_adapter=request.active_adapter,
-                active_model_id=request.active_model_id,
+                active_target=request.active_target,
+                accounting=accounting,
             )
             if not await self._host.commit_checkpoint(
                 session,
@@ -442,12 +446,10 @@ class CompactionRunCoordinator:
         effective_context_usage = await self._host.run_transform(
             accounting.project,
             current_request_messages,
-            adapter=target.adapter,
-            model_id=target.model_id,
+            target=target,
             tools=tools,
             scope=context.prompt_cache_affinity_id,
             context_window=context_window,
-            estimate_factor=self._host.input_estimate_factor(target),
         )
         input_tokens = int(effective_context_usage["tokens"])
         run.terminal_payload_extras["context_usage"] = effective_context_usage
@@ -482,6 +484,7 @@ class CompactionRunCoordinator:
             active_adapter=target.adapter,
             active_model_id=target.model_id,
             minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
+            estimate_factor=accounting.factor(target),
         )
         if not has_new_context:
             if forced:
@@ -549,6 +552,7 @@ class CompactionRunCoordinator:
                     active_tools=tools,
                     active_thinking_effort=agent.thinking_effort,
                     minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
+                    estimate_factor=accounting.factor(target),
                 )
             except CompactionInsufficientReclaimError as exc:
                 run.emit(

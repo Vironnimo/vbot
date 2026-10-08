@@ -35,8 +35,10 @@ attribution snapshots without foreign keys to removable domain records.
   estimated)` are the input estimate calibration (`_calibration.py`). vBot counts
   every Model with one local encoding (`providers/request-policy.md`), while
   Providers tokenize privately, so local estimates miss by a stable per-Model
-  ratio. Chat records each step whose Provider measured its input together with
-  the uncorrected local estimate of exactly that request (`chat/usage.md`); the
+  ratio. Chat's Context accounting records each step whose Provider measured its
+  input together with the uncorrected local estimate of exactly that request
+  (`chat/usage.md` -> One Context rule); `record_input_estimate` writes
+  synchronously and runs on Chat's transform workers; the
   factor is the ratio of their exponentially decayed sums (decay 0.98 per
   sample) with a 20,000-token prior at 1.0, clamped to 0.5-2.0. Samples below
   1,000 estimated tokens or with a ratio beyond 4x either way are ignored. The

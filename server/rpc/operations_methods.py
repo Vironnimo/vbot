@@ -333,17 +333,26 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
     tool_definitions = await prompt_manager.provider_tool_definitions_async(agent)
 
     def estimate_preview() -> tuple[int, bool, int, list[JsonObject]]:
+        # Corrected like every Context estimate: local count times the learned
+        # input estimate factor of the Agent's Model.
+        factor = (
+            state.runtime.usage_recorder.input_estimate_factor(agent.model) if agent.model else 1.0
+        )
+
+        def corrected(count: int) -> int:
+            return round(count * factor)
+
         token_count, estimated = estimate_tokens(text)
         tool_tokens = estimate_json_tokens(tool_definitions)[0] if tool_definitions else 0
         tools = (
             [
-                {"definition": definition, "tokens": estimate_json_tokens(definition)[0]}
+                {"definition": definition, "tokens": corrected(estimate_json_tokens(definition)[0])}
                 for definition in tool_definitions
             ]
             if include_tools
             else []
         )
-        return token_count, estimated, tool_tokens, tools
+        return corrected(token_count), estimated, corrected(tool_tokens), tools
 
     token_count, estimated, tool_tokens, tools = await _PROMPT_RPC_WORKERS.run(estimate_preview)
     result: JsonObject = {
