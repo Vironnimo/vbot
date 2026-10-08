@@ -113,24 +113,41 @@ async def test_edit_preserves_event_id_and_moves_actions(tmp_path):
     assert {row["action_id"] for row in rows} == {before["id"], after["id"]}
     assert rows[0]["scheduled_at"] != initial[0]["scheduled_at"]
     assert datetime.fromisoformat(rows[0]["expires_at"]) == now + timedelta(hours=3)
-    assert datetime.fromisoformat(rows[1]["expires_at"]) == now + timedelta(hours=6, minutes=30)
+    # Due after a single event, it can start however late.
+    assert rows[1]["expires_at"] is None
     reloaded = CalendarService(tmp_path, tz="Europe/Berlin")
     assert reloaded.get_event(event.id).id == event.id
     assert reloaded.actions.list_actions() == service.actions.list_actions()
 
 
 @pytest.mark.asyncio
-async def test_deadlines_use_start_end_and_post_event_grace(tmp_path):
-    service, event, _, now = setup(tmp_path)
-    for when in ("start - 1h", "start", "end", "end + 30m"):
-        await service.actions.add(event.id, when=when, prompt="test", target="main")
-    rows = service.actions.project(window(service, now))
-    assert [datetime.fromisoformat(row["expires_at"]) - now for row in rows] == [
-        timedelta(minutes=30),
-        timedelta(minutes=90),
-        timedelta(minutes=150),
-        timedelta(minutes=180),
-    ]
+@pytest.mark.parametrize(
+    ("recurring", "when", "max_delay_seconds", "closes"),
+    [
+        # The event starts in 30 minutes and lasts an hour.
+        pytest.param(False, "start - 1h", None, timedelta(minutes=30), id="before-start"),
+        pytest.param(False, "start", None, timedelta(minutes=90), id="during"),
+        pytest.param(False, "end + 30m", None, None, id="after-a-single-event"),
+        # The next daily occurrence replaces a follow-up of this one.
+        pytest.param(True, "end", None, timedelta(days=1, minutes=30), id="after-in-a-series"),
+        pytest.param(True, "end", 600, timedelta(minutes=100), id="max-delay"),
+        # Lateness within a minute is on time, even with a limit of zero.
+        pytest.param(False, "start", 0, timedelta(minutes=31), id="max-delay-zero"),
+        pytest.param(False, "start - 1h", 7200, timedelta(minutes=30), id="event-closes-sooner"),
+    ],
+)
+async def test_windows_close_with_the_event_or_its_next_occurrence(
+    tmp_path, recurring, when, max_delay_seconds, closes
+):
+    # Whole minutes: a series keeps its start to the second.
+    now = datetime.now(UTC).replace(second=0, microsecond=0)
+    service, event, _, now = setup(tmp_path, recurring=recurring, now=now)
+    await service.actions.add(
+        event.id, when=when, prompt="test", target="main", max_delay_seconds=max_delay_seconds
+    )
+    row = service.actions.project(window(service, now))[0]
+    expires = row["expires_at"]
+    assert (datetime.fromisoformat(expires) - now if expires else None) == closes
 
 
 @pytest.mark.asyncio
@@ -457,6 +474,60 @@ async def test_all_day_deadlines_respect_dst(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("recurring", "max_delay_seconds", "statuses"),
+    [
+        pytest.param(False, None, ["completed"], id="single-event"),
+        # Each earlier follow-up closed when the next occurrence started.
+        pytest.param(True, None, ["missed", "missed", "completed"], id="series"),
+        pytest.param(False, 3600, ["missed"], id="later-than-max-delay"),
+    ],
+)
+async def test_a_follow_up_missed_while_vbot_was_off_starts_once_late(
+    tmp_path, monkeypatch, recurring, max_delay_seconds, statuses
+):
+    now = datetime(2026, 10, 8, 8, 0, tzinfo=UTC)
+    monkeypatch.setattr(actions_module, "_utc_now", lambda: now)
+    # The last occurrence ended a day ago, 09:00 Berlin; vBot was off since before the first.
+    first_start = now - timedelta(days=3 if recurring else 1, hours=2)
+    service, event, trigger, _ = setup(tmp_path, start=first_start, recurring=recurring, now=now)
+    await service.actions.add(
+        event.id,
+        when="end",
+        prompt="Send the minutes",
+        target="main",
+        max_delay_seconds=max_delay_seconds,
+        now=first_start - timedelta(days=1),
+    )
+
+    await service.actions.tick(now)
+    await drain(service)
+
+    rows = service.actions.project(
+        service.occurrences_in_window(first_start - timedelta(days=1), now)
+    )
+    assert [row["status"] for row in rows] == statuses
+    if statuses[-1] != "completed":
+        trigger.trigger_run.assert_not_awaited()
+        return
+    trigger.trigger_run.assert_awaited_once()
+    notice = trigger.trigger_run.await_args.kwargs["context_note"]
+    assert f"Calendar action {rows[-1]['action_id']} was due at 2026-10-07T09:00+02:00" in notice
+    assert "starting late, at 2026-10-08T10:00+02:00" in notice
+
+
+@pytest.mark.asyncio
+async def test_an_action_added_after_its_event_ended_does_not_run_for_it(tmp_path):
+    service, event, trigger, now = setup(tmp_path, start=datetime.now(UTC) - timedelta(hours=3))
+    action = await service.actions.add(event.id, when="end", prompt="review", target="main")
+
+    await service.actions.tick(now)
+
+    trigger.trigger_run.assert_not_awaited()
+    assert service.actions.can_fire(action["id"], now=now) is False
+
+
+@pytest.mark.asyncio
 async def test_timeout_after_admission_is_failed_not_missed(tmp_path):
     service, event, trigger, now = setup(tmp_path)
     trigger.trigger_run.side_effect = None
@@ -610,6 +681,7 @@ async def _yearly(service, event, trigger, now):
             False, "start - 20m", _fired_ahead_of_its_event, False, id="fired-ahead-of-its-event"
         ),
         pytest.param(False, "start", _at(timedelta(hours=2)), False, id="expired-unused"),
+        pytest.param(False, "end", _at(timedelta(days=30)), True, id="due-after-its-event"),
         pytest.param(True, "start", _fired, True, id="series-continues"),
         pytest.param(
             True, "start - 20m", _fired_ahead_of_its_event, True, id="series-continues-ahead"

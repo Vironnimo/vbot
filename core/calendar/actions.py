@@ -69,6 +69,12 @@ _TERMINAL = frozenset({"completed", "failed", "cancelled", "interrupted", "misse
 _MAX_OFFSET = 31 * 24 * 60
 _MAX_ACTIONS = 16
 _MAX_ERROR_CHARS = 500
+# A start at most this late counts as on time: no late notice, and
+# ``max_delay_seconds`` never closes a window sooner.
+_ON_TIME = timedelta(seconds=60)
+# The window of an occurrence that no later occurrence of its event replaces:
+# it can start however late. Stored like any expiry, as a timestamp.
+_NO_EXPIRY = datetime.max.replace(tzinfo=UTC)
 # Finished history is kept this long after expiry, then pruned once the scan
 # window no longer reaches its occurrence (it can then never become due again).
 _RETENTION = timedelta(days=30)
@@ -80,8 +86,19 @@ _ACTIONS_WRITER = OrderedWorker(name="calendar-actions")
 
 CALENDAR_ACTIONS_FORMAT_VERSION = 1
 _ACTION_FIELDS = frozenset(
-    ("id", "event_id", "when", "prompt", "target", "session", "created_at", "scanned_until")
+    (
+        "id",
+        "event_id",
+        "when",
+        "prompt",
+        "target",
+        "session",
+        "max_delay_seconds",
+        "created_at",
+        "scanned_until",
+    )
 )
+_UPDATE_FIELDS = frozenset(("when", "prompt", "target", "session", "max_delay_seconds"))
 _EXECUTION_FIELDS = frozenset(
     (
         "id",
@@ -251,6 +268,16 @@ def _validate_action_record(action: Any) -> None:
     session = action.get("session")
     if session is not None and (not isinstance(session, str) or not session.strip()):
         raise CalendarValidationError("session must be a non-empty string or null")
+    max_delay = action.get("max_delay_seconds")
+    if max_delay is not None and (
+        not isinstance(max_delay, int)
+        or isinstance(max_delay, bool)
+        or max_delay < 0
+        or max_delay % 60
+    ):
+        raise CalendarValidationError(
+            "max_delay_seconds must be a whole number of minutes in seconds, or null"
+        )
 
 
 def _validate_execution_record(key: str, row: Any) -> None:
@@ -467,9 +494,16 @@ class CalendarActions:
         prompt: str,
         target: str,
         session: str | None = None,
+        max_delay_seconds: int | None = None,
         now: datetime | None = None,
         actor: str = _DEFAULT_ACTOR,
     ) -> dict[str, Any]:
+        """Add an action to an event.
+
+        ``max_delay_seconds`` closes an occurrence's window that many seconds
+        after it was due, when that is sooner than its event allows; ``None``
+        keeps the event's window.
+        """
         async with self._edits:
             self._load()
             self._calendar.get_event(event_id)
@@ -490,6 +524,8 @@ class CalendarActions:
                 "created_at": stamp,
                 "scanned_until": stamp,
             }
+            if max_delay_seconds is not None:
+                action["max_delay_seconds"] = max_delay_seconds
             await self._validate_async(action)
             # The event may have been deleted while the references were checked.
             self._calendar.get_event(event_id)
@@ -507,9 +543,9 @@ class CalendarActions:
         async with self._edits:
             self._load()
             self._get(action_id)
-            if not fields or set(fields) - {"when", "prompt", "target", "session"}:
+            if not fields or set(fields) - _UPDATE_FIELDS:
                 raise CalendarValidationError(
-                    "update_action requires when, prompt, target, or session"
+                    "update_action requires when, prompt, target, session, or max_delay_seconds"
                 )
 
             def updated(current: dict[str, Any]) -> dict[str, Any]:
@@ -775,16 +811,15 @@ class CalendarActions:
         # An occurrence starting at or after the horizon is not due yet; one
         # starting before it may already have fired, even ahead of its start.
         horizon = now - shift + timedelta(days=1)
-        if self._calendar.occurs_from(event, horizon):
+        if self._calendar.next_start(event, horizon) is not None:
             return True
-        # An occurrence that started earlier expires at most an hour after its
-        # end plus a positive offset, so older ones can no longer fire.
-        lower = now - timedelta(minutes=max(offset, 0), hours=2)
+        # Earlier occurrences that can still start were scanned since the last
+        # tick, or are stored as pending.
+        lower = self._scan_floor(action, shift, now)
         created = _instant(action["created_at"])
         for occurrence in self._calendar.event_occurrences(event, lower, max(now, horizon)):
-            key, row = self._execution(action, event, occurrence)
-            expires = _instant(row["expires_at"])
-            if expires <= now or expires <= created:
+            key, row, after_event = self._execution(action, event, occurrence)
+            if _instant(row["expires_at"]) <= now or not _owed(row, after_event, created):
                 continue
             if key in self._invalid_executions:
                 return True
@@ -799,22 +834,28 @@ class CalendarActions:
         except CalendarStorageError:
             return []
         result = []
-        actions = self.list_actions()
+        now = datetime.now(UTC)
         for occurrence in occurrences:
             event = self._calendar.get_event(occurrence.event_id)
-            for action in actions:
+            for action in self._actions.values():
                 if action["event_id"] == event.id:
-                    key, row = self._execution(action, event, occurrence)
+                    key, row, after_event = self._execution(action, event, occurrence)
                     if key in self._invalid_executions:
                         continue  # Its stored row cannot be read; the occurrence is held.
                     previous = self._executions.get(key)
+                    # An occurrence the action was not owed closed when the action was made.
+                    closes = (
+                        _instant(row["expires_at"])
+                        if _owed(row, after_event, _instant(action["created_at"]))
+                        else _instant(row["scheduled_at"])
+                    )
                     if previous and self._consumed(previous, row):
                         row = previous
-                    elif _instant(row["expires_at"]) <= datetime.now(UTC) - _RETENTION:
+                    elif closes <= now - _RETENTION:
                         continue  # History beyond retention is no longer known.
-                    elif _instant(row["expires_at"]) <= datetime.now(UTC):
+                    elif closes <= now:
                         row["status"] = "missed"
-                    result.append(copy.deepcopy(row))
+                    result.append(_public_row(row))
         return result
 
     @property
@@ -831,7 +872,15 @@ class CalendarActions:
 
     def _execution(
         self, action: dict[str, Any], event: CalendarEvent, occurrence: EventOccurrence
-    ) -> tuple[str, dict[str, Any]]:
+    ) -> tuple[str, dict[str, Any], bool]:
+        """The execution key and fresh row of one occurrence, and whether it is due after the event.
+
+        The row's ``expires_at`` closes the window in which the occurrence can
+        still start late: the event's start for an action due before it, its end
+        for one due during it, and for one due at or after its end the start of
+        the event's next occurrence, which replaces it; without a next
+        occurrence, ``_NO_EXPIRY``. ``max_delay_seconds`` closes it sooner.
+        """
         zone = ZoneInfo(self._calendar.system_timezone_name())
         start, end = occurrence.start_utc, occurrence.end_utc
         if occurrence.all_day:
@@ -841,20 +890,53 @@ class CalendarActions:
         assert start is not None and end is not None
         anchor, minutes, _ = parse_action_when(action["when"])
         due = (start if anchor == "start" else end) + timedelta(minutes=minutes)
-        expires = start if due < start else end if due < end else due + timedelta(hours=1)
+        after_event = due >= end
+        if due < start:
+            expires = start
+        elif not after_event:
+            expires = end
+        else:
+            # Strictly later: a back-to-back occurrence starting at the due time replaces it.
+            following = self._calendar.next_start(event, due + timedelta(microseconds=1))
+            expires = following or _NO_EXPIRY
+        max_delay = action.get("max_delay_seconds")
+        if max_delay is not None:
+            expires = min(expires, due + max(timedelta(seconds=max_delay), _ON_TIME))
         key = f"{action['id']}:{occurrence.occurrence_start if event.rrule else 'single'}"
-        return key, {
-            "id": key,
-            "action_id": action["id"],
-            "event_id": event.id,
-            "occurrence_start": occurrence.occurrence_start,
-            "scheduled_at": due.isoformat(),
-            "expires_at": expires.isoformat(),
-            "target": action["target"],
-            "session": action.get("session"),
-            "run_id": None,
-            "status": "pending",
-        }
+        return (
+            key,
+            {
+                "id": key,
+                "action_id": action["id"],
+                "event_id": event.id,
+                "occurrence_start": occurrence.occurrence_start,
+                "scheduled_at": due.isoformat(),
+                "expires_at": expires.isoformat(),
+                "target": action["target"],
+                "session": action.get("session"),
+                "run_id": None,
+                "status": "pending",
+            },
+            after_event,
+        )
+
+    def _scan_floor(self, action: dict[str, Any], shift: timedelta, now: datetime) -> datetime:
+        """Where a scan of the action's occurrences starts.
+
+        It reaches back to the previous scan, and to every stored pending
+        occurrence whose window is still open, so a long window that waits for
+        a worker or was withdrawn before admission is not lost.
+        """
+        floor = min(_instant(action["scanned_until"]), now)
+        for row in self._executions.values():
+            if (
+                row["action_id"] == action["id"]
+                and row["status"] == "pending"
+                and _instant(row["expires_at"]) > now
+            ):
+                floor = min(floor, _instant(row["scheduled_at"]))
+        # Include overlapping long events.
+        return floor - shift - timedelta(days=1)
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -926,14 +1008,14 @@ class CalendarActions:
             anchor, offset, _ = parse_action_when(action["when"])
             duration = timedelta(days=event.duration_days or 0, minutes=event.duration_minutes or 0)
             shift = timedelta(minutes=offset) + (duration if anchor == "end" else timedelta())
-            # Include the previous scan boundary and overlapping long events.
-            lower = min(_instant(action["scanned_until"]), now) - shift - timedelta(days=1)
+            lower = self._scan_floor(action, shift, now)
             upper = now - shift + timedelta(days=1)
+            created = _instant(action["created_at"])
             while lower < upper:
                 edge = min(lower + timedelta(days=60), upper)
                 occurrences = self._calendar.event_occurrences(event, lower, edge)
                 for occurrence in occurrences:
-                    key, row = self._execution(action, event, occurrence)
+                    key, row, after_event = self._execution(action, event, occurrence)
                     seen.add(key)
                     if key in self._invalid_executions:
                         # The unreadable row may record a consumed claim: never fire over it.
@@ -943,7 +1025,7 @@ class CalendarActions:
                         self._sleep_seconds = min(
                             self._sleep_seconds, max(0.05, (due - now).total_seconds())
                         )
-                    if expires <= _instant(action["created_at"]) or due > now:
+                    if due > now or not _owed(row, after_event, created):
                         continue
                     previous = self._executions.get(key)
                     if previous and self._consumed(previous, row):
@@ -1081,7 +1163,8 @@ class CalendarActions:
         try:
             assert self._trigger is not None
             await self._validate_async(action)
-            if _remaining_seconds(row) <= 0:
+            remaining = _remaining_seconds(row)
+            if remaining is not None and remaining <= 0:
                 mark(status="missed")
                 _log_missed(row, "expired before it started")
                 return
@@ -1090,13 +1173,25 @@ class CalendarActions:
             await self._save_async()
             # A slow save spends the occurrence's window like any other wait.
             remaining = _remaining_seconds(row)
-            if remaining <= 0:
+            if remaining is not None and remaining <= 0:
                 mark(status="missed")
                 _log_missed(row, "expired while its claim was saved")
                 return
             agent, project = parse_agent_address(action["target"])
             message = action_message(
                 action, event, occurrence, event.tz_name or self._calendar.system_timezone_name()
+            )
+            due, starting = _instant(row["scheduled_at"]), _utc_now()
+            late_by = starting - due if starting - due > _ON_TIME else None
+            # Omitted for an on-time start, so its call shape stays unchanged.
+            note: dict[str, Any] = (
+                {
+                    "context_note": late_notice(
+                        action["id"], due, starting, self._calendar.system_timezone_name()
+                    )
+                }
+                if late_by is not None
+                else {}
             )
             async with asyncio.timeout(remaining):
                 run = await self._trigger.trigger_run(
@@ -1106,17 +1201,19 @@ class CalendarActions:
                     project_id=project,
                     run_kind=RunKind.CALENDAR,
                     input_persisted_hook=admitted,
+                    **note,
                 )
             self._runs[key] = run
             mark(status="running", run_id=run.id, session=run.session_id)
             _LOGGER.info(
-                "Calendar action fired (action=%s event=%s agent=%s%s run=%s session=%s)",
+                "Calendar action fired (action=%s event=%s agent=%s%s run=%s session=%s%s)",
                 action["id"],
                 event.id,
                 agent,
                 f" project={project}" if project else "",
                 run.id,
                 run.session_id,
+                f" late_by={int(late_by.total_seconds())}s" if late_by is not None else "",
             )
             try:
                 await self._save_async()
@@ -1217,9 +1314,48 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def _remaining_seconds(row: dict[str, Any]) -> float:
-    """Seconds until the execution row's occurrence expires."""
-    return (_instant(row["expires_at"]) - _utc_now()).total_seconds()
+def _remaining_seconds(row: dict[str, Any]) -> float | None:
+    """Seconds until the execution row's occurrence expires; ``None`` when it never does."""
+    expires = _instant(row["expires_at"])
+    if expires == _NO_EXPIRY:
+        return None
+    return (expires - _utc_now()).total_seconds()
+
+
+def _owed(row: dict[str, Any], after_event: bool, created: datetime) -> bool:
+    """Whether the action owes this occurrence a Run, given when the action was made.
+
+    An occurrence due before the action existed is owed only while its event
+    still needs it: one due before or during the event while that window is
+    open. One due after the event is owed only when it came due later.
+    """
+    if after_event:
+        return _instant(row["scheduled_at"]) >= created
+    return _instant(row["expires_at"]) > created
+
+
+def _public_row(row: dict[str, Any]) -> dict[str, Any]:
+    """A copy of an execution row for readers: ``expires_at`` is ``None`` for no limit."""
+    public = copy.deepcopy(row)
+    if _instant(public["expires_at"]) == _NO_EXPIRY:
+        public["expires_at"] = None
+    return public
+
+
+def late_notice(action_id: str, due: datetime, starting: datetime, zone_name: str) -> str:
+    """The note before a late Run's message that says when the action was due."""
+    zone = ZoneInfo(zone_name)
+
+    def local(instant: datetime) -> str:
+        return instant.astimezone(zone).isoformat(timespec="minutes")
+
+    return (
+        f"Calendar action {action_id} was due at {local(due)} and is starting late, at "
+        f"{local(starting)}. vBot did not run it at the due time, for example because the "
+        "server was off or the computer was asleep. Carry out the instruction that follows "
+        "now, and adapt any part of it that depends on when it runs, such as the time left "
+        "before the event or how long ago it ended."
+    )
 
 
 def _instant(value: str) -> datetime:

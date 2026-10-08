@@ -289,15 +289,17 @@ class TestOccurrencesInWindow:
         assert len(occurrences) == 3
 
     @pytest.mark.parametrize(
-        ("fields", "instant", "occurs"),
+        ("fields", "instant", "next_start"),
         [
             # Berlin midnight on 2026-09-14 is 22:00 UTC the day before.
-            pytest.param({"start": "2026-09-14"}, "2026-09-13T21:59", True, id="all-day-ahead"),
-            pytest.param({"start": "2026-09-14"}, "2026-09-13T22:01", False, id="all-day-started"),
+            pytest.param(
+                {"start": "2026-09-14"}, "2026-09-13T21:59", "2026-09-13T22:00", id="all-day-ahead"
+            ),
+            pytest.param({"start": "2026-09-14"}, "2026-09-13T22:01", None, id="all-day-started"),
             pytest.param(
                 {"start": "2026-09-14", "rrule": {"freq": "daily", "count": 3}},
                 "2026-09-16T12:00",
-                False,
+                None,
                 id="all-day-series-ended",
             ),
             pytest.param(
@@ -307,7 +309,7 @@ class TestOccurrencesInWindow:
                     "exdates": ["2026-09-16"],
                 },
                 "2026-09-15T12:00",
-                False,
+                None,
                 id="all-day-rest-removed",
             ),
             pytest.param(
@@ -316,7 +318,7 @@ class TestOccurrencesInWindow:
                     "rrule": {"freq": "weekly", "until": "2026-09-21"},
                 },
                 "2026-09-21T06:59",
-                True,
+                "2026-09-21T07:00",
                 id="timed-last-occurrence-ahead",
             ),
             pytest.param(
@@ -326,24 +328,29 @@ class TestOccurrencesInWindow:
                     "exdates": ["2026-09-21T09:00:00"],
                 },
                 "2026-09-15T00:00",
-                False,
+                None,
                 id="timed-rest-removed",
             ),
             pytest.param(
                 {"start": "2026-09-07T09:00:00", "rrule": {"freq": "monthly"}},
                 "2031-01-01T00:00",
-                True,
+                "2031-01-07T08:00",
                 id="timed-series-without-end",
             ),
         ],
     )
-    def test_occurs_from_follows_expansion(
-        self, service: CalendarService, fields: dict[str, Any], instant: str, occurs: bool
+    def test_next_start_follows_expansion(
+        self,
+        service: CalendarService,
+        fields: dict[str, Any],
+        instant: str,
+        next_start: str | None,
     ) -> None:
         event = service.create_event(title="Event", **fields)
 
         at = datetime.fromisoformat(instant).replace(tzinfo=UTC)
-        assert service.occurs_from(event, at) is occurs
+        expected = datetime.fromisoformat(next_start).replace(tzinfo=UTC) if next_start else None
+        assert service.next_start(event, at) == expected
 
     def test_rejects_inverted_window(self, service: CalendarService) -> None:
         with pytest.raises(CalendarValidationError, match="after"):
