@@ -408,8 +408,10 @@
   white-space: nowrap;
 }
 
+/* Shrinks but never grows: an open row stretches to the full content width,
+   and the facts and time must stay right after the arguments. */
 .te-primary {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   max-width: min(42rem, max(8rem, calc(100vw - 430px)));
 }
 
