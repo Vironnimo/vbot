@@ -101,11 +101,9 @@ _CALL_ORDER = (
     "session",
 )
 _LATE_START = (
-    "An action that vBot missed, for example while the server was off, still starts late: "
-    "one due before its event until the event starts, one due during it until it ends, and "
-    "one due after it until the event's next occurrence starts. Its Run is told how late it "
-    "is. To have a late Run skip the instruction sooner, say so in prompt, for example "
-    '"Skip this if it starts more than 30 minutes late."'
+    "A missed action still starts late, and its Run is told how late it is. To have a late "
+    'Run skip the instruction, say so in prompt, for example "Skip this if it starts more '
+    'than 30 minutes late."'
 )
 _LONG_TEXT = 120
 _LONG_TEXT_STAND_INS = {
