@@ -8,7 +8,7 @@ Local-first calendar: a persisted event store with iCalendar (RFC 5545) semantic
 
 Automation owns all scheduling and Run admission; Settings owns application timezone configuration. External calendar sync is absent: CalDAV is a future Extension (user decision 2026-08-27); the store's standard iCalendar semantics exist so that extension becomes a thin adapter. `location` is a real free-text event field (user decision 2026-10-08). No time-zone parameter is advertised: input times without an offset are server-local, and events keep the server zone of their creation.
 
-Open (in progress on this branch): the `calendar` Tool still has its earlier parameters (`notes` for the description, one occurrence removed by `delete` with `start`) mapped onto the new event fields (`tools/calendar.md`), and the WebUI still calls the removed `calendar.add_exdate` and `calendar.*_action` RPCs.
+Open (in progress on this branch): the `calendar` Tool still has its earlier parameters (`notes` for the description, one occurrence removed by `delete` with `start`) mapped onto the new event fields (`tools/calendar.md`).
 
 ## Terms
 
@@ -25,6 +25,9 @@ Per-occurrence changes of a repeating event, like an iCalendar RECURRENCE-ID or 
 
 ### Removed occurrence (EXDATE)
 RFC 5545 exception that removes one occurrence from a repeating event while keeping the series (`delete_occurrence`); its change goes with it.
+
+### Agent job
+The WebUI's name for a Cron job of schedule type `event` (`automation.md` -> Conventions -> Event jobs): an Agent instruction bound to an event, listed and edited in the event's detail modal and counted on its entries. RPC, CLI and Tool call it an event job; it replaces the removed Calendar actions.
 
 ### when expression
 The agent-facing window grammar (`today`, `this week`, `next month`, a date, a year-month, `start..end`) parsed by `core/calendar/when.py` against the server zone and current time, so models never do date arithmetic. Not an ISO window; RPC `calendar.window` takes explicit `from`/`to` bounds.
@@ -66,7 +69,7 @@ New event ids use `evt_` plus 12 lowercase base32 characters, with collision che
 - The `when` grammar is deliberately small; unknown expressions raise `CalendarValidationError` naming the grammar. A `start..end` range's end side is an inclusive day when given as a date.
 - A repeating event's moved occurrence can start far from its original start: expansion merges moved occurrences into the rule's stream (`_expansion.py`), so callers must use the service's expansion instead of the rule.
 - Tool tests must build fixtures relative to `service.resolve_when(...)` - the tool resolves `when` against the real clock, so hard-coded dates silently break when the month rolls over.
-- In WebUI code, eslint forbids mutable `Map` in Svelte derived contexts - group with plain objects. The edit form renders a single timed event's start in the server zone (not the raw UTC value), so a save without edits keeps the wall clock.
+- In WebUI code, eslint forbids mutable `Map` in Svelte derived contexts - group with plain objects. The event form (`webui/src/lib/calendarEventForm.js`) shows a timed event's start and end on the server zone's wall clock, converted from the event's `tz_name`, and sends them as naive server-local times, so a save without edits keeps the wall clock; an all-day event is entered by its last day and sent with the exclusive end. It edits common RRULE shapes as choices and keeps any other rule as custom text. The WebUI reads an event's Agent jobs from `cron.list` (schedule type `event`) and leaves `calendar.window` Cron rows with an `event_id` out of the Schedules layer, so an Agent job shows only on its event (`webui/design.md` -> Calendar).
 - The WebUI's current day, Today navigation, default event date, and agenda window use `calendar.window.system_timezone`, never the browser zone or UTC. The view's place (`webui/app-shell.md` -> Navigation) is `[mode, 'YYYY-MM-DD']` (mode `month`, `week`, `day` or `agenda`); Prev, Next, Today and each mode tab are history steps, layer toggles are not. Before the first response establishes the zone, the view may make a provisional UTC-window request; an empty place is corrected to today in the server zone only once that zone is known, and an explicit day in the place is never moved. Agenda navigation always derives its window from the displayed anchor.
 - Start the worktree server as `python -m server.main`; `python server/main.py` imports `core` through the main repo's editable install and new RPC methods come back `method_not_found`.
 
