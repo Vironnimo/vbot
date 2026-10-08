@@ -40,6 +40,17 @@ def _recovered_run() -> Run:
     return run
 
 
+def _cancelled_after(*messages: dict[str, Any]) -> Callable[[], Run]:
+    def make() -> Run:
+        run = Run(run_id="run-cancelled", agent_id="assistant", session_id=SESSION_ID)
+        for message in messages:
+            run.emit(ASSISTANT_OUTPUT_EVENT, {"message": message})
+        run.mark_cancelled()
+        return run
+
+    return make
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("make_run", "reply"),
@@ -49,11 +60,35 @@ def _recovered_run() -> Run:
         # The failure text stays internal.
         (lambda: make_failed_run(message="boom"), engine_module._FAILED_REPLY),
         (make_cancelled_run, engine_module._CANCELLED_REPLY),
+        # Stop after a complete answer (post-answer Compaction) delivers that answer.
+        (_cancelled_after({"content": "final reply"}), "final reply"),
+        # Text before Tool calls or an interrupted partial is no answer.
+        (
+            _cancelled_after(
+                {"content": "final reply"},
+                {"content": "let me check", "tool_calls": [{"id": "call-1"}]},
+            ),
+            engine_module._CANCELLED_REPLY,
+        ),
+        (
+            _cancelled_after({"content": "partial", "interrupted": True}),
+            engine_module._CANCELLED_REPLY,
+        ),
         (lambda: make_interrupted_run(output_text="preserved partial"), "preserved partial"),
         # A recovered Run forwards partial and continuation without added text.
         (_recovered_run, "preserved partial continuation"),
     ],
-    ids=["completed", "empty", "failed", "cancelled", "interrupted", "recovered"],
+    ids=[
+        "completed",
+        "empty",
+        "failed",
+        "cancelled",
+        "cancelled-after-answer",
+        "cancelled-in-tool-turn",
+        "cancelled-mid-answer",
+        "interrupted",
+        "recovered",
+    ],
 )
 async def test_each_run_outcome_becomes_one_reply(
     tmp_path: Path, make_run: Callable[[], Run], reply: str
