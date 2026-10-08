@@ -34,8 +34,10 @@ from core.providers.errors import ProviderContentRefusedError, ProviderOutcomeUn
 from core.providers.task_client import TaskClientRuntime
 from core.usage import UsageRecorder
 from core.utils.errors import TaskError, VBotError
+from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
+_LOGGER = get_logger(__name__)
 
 #: Per-call choices a video Model can offer, in Tool order.
 VIDEO_CALL_OPTIONS = ("duration", "aspect_ratio", "resolution")
@@ -177,6 +179,15 @@ class VideoService:
             model_tasks,
             configuration_error=VideoConfigurationError,
         )
+        self._cancelled_jobs: set[asyncio.Task[None]] = set()
+
+    async def aclose(self) -> None:
+        """Stop following cancelled jobs; each one still running logs its job id."""
+
+        jobs = list(self._cancelled_jobs)
+        for job in jobs:
+            job.cancel()
+        await asyncio.gather(*jobs, return_exceptions=True)
 
     def generation_profile(self) -> VideoProfile:
         """Return what the configured video Model offers, without a request."""
@@ -226,11 +237,21 @@ class VideoService:
             ),
             debug_context=task_debug_context(usage_context, target_ref),
         )
+        model_ref = f"{target_ref.provider_id}/{target_ref.model_id}"
+
+        def follow_cancelled_job(job_id: str, polling: asyncio.Task[JsonObject]) -> None:
+            job = asyncio.create_task(
+                _settle_cancelled_job(job_id, polling, model_ref), name="video-job-cost"
+            )
+            self._cancelled_jobs.add(job)
+            job.add_done_callback(self._cancelled_jobs.discard)
+
         try:
             return await client.generate(
                 normalized_prompt,
                 options=merged_options,
                 frame_images=frames,
+                on_cancelled_job=follow_cancelled_job,
             )
         except ProviderContentRefusedError as exc:
             raise VideoRefusedError(exc.reason) from exc
@@ -305,6 +326,41 @@ class VideoService:
         return tuple(
             (frame_type, image) for (frame_type, _), image in zip(ordered, images, strict=True)
         )
+
+
+async def _settle_cancelled_job(
+    job_id: str, polling: asyncio.Task[JsonObject], model_ref: str
+) -> None:
+    """Follow a cancelled generation's job until the provider reports its cost.
+
+    The job cannot be cancelled at the provider and is billed when it finishes;
+    its final status carries the cost, which the poll records on the create
+    call's Usage. When that cannot happen, the job id is logged so the charge
+    can still be traced.
+    """
+
+    try:
+        await polling
+    except asyncio.CancelledError:
+        _LOGGER.warning(
+            "Stopped following a cancelled video job; its cost is not recorded (job=%s model=%s)",
+            job_id,
+            model_ref,
+        )
+        raise
+    except ProviderContentRefusedError:
+        _LOGGER.debug("Cancelled video job was refused (model=%s)", model_ref)
+    except VideoJobUnfinishedError as exc:
+        _LOGGER.warning(
+            "Cancelled video job did not report its cost (job=%s model=%s reason=%s)",
+            job_id,
+            model_ref,
+            exc.reason,
+        )
+    except VBotError as exc:
+        _LOGGER.debug("Cancelled video job failed (model=%s error=%s)", model_ref, exc)
+    else:
+        _LOGGER.debug("Cancelled video job finished; its cost is recorded (model=%s)", model_ref)
 
 
 def _shape_options(

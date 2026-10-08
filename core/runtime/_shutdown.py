@@ -147,6 +147,9 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
     if (subagents := runtime._subagent_coordinator) is not None:
         # Every Run has ended; each Sub-Agent activity file records its outcome.
         yield _Step("subagent_activity", None, subagents.drain_activity)
+    if (video := runtime._video) is not None:
+        # Every Run has ended; a video job its cancel left running logs its id.
+        yield _Step("video", None, video.aclose)
 
     if (speech := runtime._speech) is not None:
         yield _Step("speech", speech.close, speech.aclose)

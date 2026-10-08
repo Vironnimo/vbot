@@ -267,6 +267,49 @@ async def test_video_poll_updates_create_usage_before_download_failure(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("finishes", [True, False], ids=["job-finishes", "shutdown-first"])
+@respx.mock
+async def test_cancelled_video_generation_follows_its_paid_job(
+    finishes: bool,
+    recorder: UsageRecorder,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The provider cannot cancel a job: its cost is recorded, else its id is logged."""
+
+    monkeypatch.setattr("core.model_tasks.video_providers.VIDEO_POLL_INTERVAL_SECONDS", 0)
+    polled, release = asyncio.Event(), asyncio.Event()
+
+    async def status(_request: httpx.Request) -> httpx.Response:
+        polled.set()
+        await release.wait()
+        return httpx.Response(200, json={"status": "completed", "usage": {"cost": 0.4}})
+
+    respx.post(BASE + "/videos").respond(200, json={"id": "job-7", "status": "pending"})
+    respx.get(BASE + "/videos/job-7").mock(side_effect=status)
+    content = respx.get(BASE + "/videos/job-7/content?index=0").respond(200, content=b"v")
+    service = VideoService(_Bindings(), _runtime(), usage_recorder=recorder)
+    generation = asyncio.create_task(service.generate("video"))
+    await polled.wait()
+    generation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await generation
+
+    if finishes:
+        release.set()
+        followers = [t for t in asyncio.all_tasks() if t.get_name() == "video-job-cost"]
+        await asyncio.wait_for(asyncio.gather(*followers), timeout=1)
+    await service.aclose()
+
+    _, records = read_ledger(recorder)
+    assert len(records) == 1
+    assert records[0].usage.get("reported_cost_usd") == (0.4 if finishes else None)
+    assert not content.called
+    logged_job = [r for r in caplog.records if r.levelname == "WARNING" and "job-7" in r.message]
+    assert bool(logged_job) is not finishes
+
+
+@pytest.mark.asyncio
 async def test_local_cancelled_attempt_stays_unknown_and_cost_projection_keeps_snapshot(
     recorder: UsageRecorder,
 ) -> None:
