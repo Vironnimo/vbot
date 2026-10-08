@@ -13,29 +13,22 @@ class CalendarValidationError(CalendarServiceError):
     """Raised when calendar event data is invalid."""
 
 
-class CalendarActionTargetMissingError(CalendarValidationError):
-    """An event change would let actions run again whose target no longer exists.
+class EventJobTargetMissingError(CalendarValidationError):
+    """An event change would let jobs bound to the event run again whose target no longer exists.
 
-    ``problems`` pairs each action id with what is missing. An action that can
-    no longer fire is history, so removing its Agent, Project or selected
-    Session did not check it; reviving it would only fail.
+    ``problems`` pairs each job id with what is missing. A job that can no
+    longer fire is history, so removing its Agent, Project or selected Session
+    did not check it; reviving it would only fail.
     """
 
     def __init__(self, problems: Sequence[tuple[str, str]]) -> None:
         self.problems = tuple(problems)
+        subject = "a cron job" if len(self.problems) == 1 else "cron jobs"
+        listing = "; ".join(f"{job_id} ({problem})" for job_id, problem in self.problems)
         super().__init__(
-            f"This event change would let {self.subject} run again whose target no longer "
-            f"exists: {self.listing}. Change each action's target or Session, or delete the "
-            "action, first."
+            f"This event change would let {subject} run again whose target no longer exists: "
+            f"{listing}. Change each job's target or Session, or delete the job, first."
         )
-
-    @property
-    def subject(self) -> str:
-        return "an action" if len(self.problems) == 1 else "actions"
-
-    @property
-    def listing(self) -> str:
-        return "; ".join(f"{action_id} ({problem})" for action_id, problem in self.problems)
 
 
 class CalendarEventNotFoundError(CalendarServiceError):

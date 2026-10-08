@@ -364,7 +364,6 @@ def test_snapshot_document_paths_lists_exactly_the_documents_in_scope(tmp_path: 
         "cron/jobs.json",
         "bootstrap/jobs.json",
         "calendar/events.json",
-        "calendar/actions.json",
         "skills/policy.json",
         "terminals/launch-history.json",
         "terminals/groups.json",
@@ -372,6 +371,8 @@ def test_snapshot_document_paths_lists_exactly_the_documents_in_scope(tmp_path: 
         "extension-data/mcp/connections.json",
     ]
     others = [
+        # Calendar actions are gone; a file an earlier version left is no longer read.
+        "calendar/actions.json",
         "mcp/connections.json",
         "agents/main/memory.json",
         "agents/.staged/agent.json",

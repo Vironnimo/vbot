@@ -54,6 +54,7 @@ def _cron_state(cron_service: Any | None = None, *, resolver: Any | None = None)
         cron_service = Mock()
         cron_service.format_schedule.side_effect = CronService.format_schedule
         cron_service.next_fire_at.return_value = None
+        cron_service.bound_event.return_value = SimpleNamespace(title="Standup")
         for edit in ("create_job", "update_job", "delete_job", "enable_job", "disable_job"):
             setattr(cron_service, edit, AsyncMock())
     return SimpleNamespace(
@@ -75,6 +76,9 @@ def _cron_job(**changes: Any) -> SimpleNamespace:
         "interval_seconds": None,
         "interval_anchor_at": None,
         "run_at": None,
+        "event_id": None,
+        "event_edge": None,
+        "event_offset_minutes": None,
         "remaining_runs": None,
         "session_id": "session-1",
         "status": "active",
@@ -253,6 +257,39 @@ async def test_bootstrap_list_projects_each_job() -> None:
             {"schedule": "2099-01-01T09:00:00+00:00", "run_at": "2099-01-01T09:00:00+00:00"},
             id="once",
         ),
+        # The event time is read at the edge into an edge and a signed offset.
+        pytest.param(
+            {
+                "agent_id": "main",
+                "prompt": "Prepare",
+                "schedule_type": "event",
+                "event_id": "evt_1",
+                "event_time": "START-30m",
+            },
+            _cron_job(
+                name="Prepare",
+                schedule_type="event",
+                cron_expression=None,
+                event_id="evt_1",
+                event_edge="start",
+                event_offset_minutes=-30,
+            ),
+            {
+                "agent_id": "main",
+                "schedule_type": "event",
+                "event_id": "evt_1",
+                "event_edge": "start",
+                "event_offset_minutes": -30,
+            },
+            {
+                "schedule": "start - 30m",
+                "event_id": "evt_1",
+                "event_edge": "start",
+                "event_offset_minutes": -30,
+                "event_title": "Standup",
+            },
+            id="event",
+        ),
     ],
 )
 async def test_cron_create_passes_the_normalized_job_to_the_service(
@@ -308,6 +345,10 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
                 "interval_seconds": None,
                 "interval_anchor_at": None,
                 "run_at": None,
+                "event_id": None,
+                "event_edge": None,
+                "event_offset_minutes": None,
+                "event_title": None,
                 "remaining_runs": None,
                 "session_id": "session-1",
                 "status": "active",
@@ -343,6 +384,16 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
         ),
         # A recurring job may clear its repeat count.
         pytest.param({"repeat": None}, {"remaining_runs": None}, id="clear-repeat"),
+        pytest.param(
+            {"schedule_type": "event", "event_id": "evt_1", "event_time": "end + 1h"},
+            {
+                "schedule_type": "event",
+                "event_id": "evt_1",
+                "event_edge": "end",
+                "event_offset_minutes": 60,
+            },
+            id="event",
+        ),
         # Re-targeting re-parses the address, so a bare target clears the Project.
         pytest.param({"agent_id": "main"}, {"agent_id": "main", "project_id": None}, id="retarget"),
     ],
@@ -411,6 +462,21 @@ async def test_cron_job_actions_address_one_job(
                 "repeat": None,
             },
         ),
+        (
+            "cron.create",
+            {"agent_id": "main", "prompt": "Prepare", "schedule_type": "event"},
+        ),
+        (
+            "cron.create",
+            {
+                "agent_id": "main",
+                "prompt": "Prepare",
+                "schedule_type": "event",
+                "event_id": "evt_1",
+                "event_time": "noon",
+            },
+        ),
+        ("cron.update", {"id": "job-1", "event_time": "start - 32d"}),
         ("cron.list", {"extra": True}),
         ("bootstrap.list", {"extra": True}),
         ("cron.update", {"prompt": "missing id"}),

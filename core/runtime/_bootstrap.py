@@ -639,21 +639,19 @@ def bootstrap(runtime: Runtime) -> None:
             agent_resolver=runtime._agent_resolver,
             sessions=runtime._chat_sessions,
         )
+        runtime._calendar_service = CalendarService(runtime._storage.data_dir, tz=timezone_name)
         runtime._cron_service = CronService(
             runtime._trigger_service,
             runtime._storage.data_dir,
             agent_resolver=runtime._agent_resolver,
             sessions=runtime._chat_sessions,
             tz=timezone_name,
+            calendar=runtime._calendar_service,
         )
-        runtime._calendar_service = CalendarService(runtime._storage.data_dir, tz=timezone_name)
-        runtime._calendar_service.actions.configure(
-            runtime._trigger_service, runtime._agent_resolver, runtime._chat_sessions
-        )
+        runtime._calendar_service.bind_event_jobs(runtime._cron_service)
         runtime._automation_references = AutomationReferences(
             bootstrap=runtime._bootstrap_service,
             cron=runtime._cron_service,
-            calendar=runtime._calendar_service,
         )
         runtime._librarian_service = _librarian_service(runtime)
         runtime._archive = ArchiveService(_archive_services(runtime))
@@ -705,7 +703,6 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._sync_channel_tool_registration()
         if runtime.safe_startup_mode is None:
             runtime._start_cron_service()
-            runtime._start_calendar_service()
         register_cron_tool(
             runtime._tools,
             runtime._cron_service,
@@ -715,6 +712,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._tools,
             runtime._calendar_service,
             reference_lock=runtime._automation_references.lock,
+            cron_service=runtime._cron_service,
         )
         register_shell_tool(
             runtime._tools,

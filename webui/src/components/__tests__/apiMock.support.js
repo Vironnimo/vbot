@@ -24,9 +24,6 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     rebuildRecallIndex: () => call('recall.rebuild_index'),
     setServiceKey: (params) => call('settings.set_service_key', params),
     listAgents: () => call('agent.list'),
-    addCalendarAction: (params) => call('calendar.add_action', params),
-    updateCalendarAction: (params) => call('calendar.update_action', params),
-    deleteCalendarAction: (id) => call('calendar.delete_action', { id }),
     reorderAgents: (agentIds, expectedRevision) =>
       call('agent.reorder', {
         agent_ids: agentIds,
@@ -118,7 +115,6 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     createCalendarEvent: (params) => call('calendar.create', params),
     updateCalendarEvent: (params) => call('calendar.update', params),
     deleteCalendarEvent: (id) => call('calendar.delete', { id }),
-    addCalendarExdate: (params) => call('calendar.add_exdate', params),
     startChatRun: (params) => call('chat.stream', params),
     controlRun: ({ agentId, sessionId, runId, action, toolCallId } = {}) =>
       call('chat.control_run', {

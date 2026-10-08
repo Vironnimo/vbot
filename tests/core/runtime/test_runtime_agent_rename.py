@@ -53,10 +53,6 @@ async def _seed(runtime: Runtime, *, channel_enabled: bool = False) -> str:
         agent_id="coder", prompt="Check in", schedule_type="interval", interval_seconds=3600
     )
     runtime.bootstrap_service.create_job(agent_id="coder", prompt="Verify", mode="once")
-    event = runtime.calendar_service.create_event(title="Review", start="2026-10-01T09:00:00")
-    await runtime.calendar_service.actions.add(
-        event.id, when="start - 1h", prompt="Prepare", target="coder"
-    )
     return coder.current_session_id
 
 
@@ -68,9 +64,6 @@ def _assert_agent_is(runtime: Runtime, agent_id: str, current_session_id: str) -
     assert [channel.agent_id for channel in runtime.channel_service.list_channels()] == [agent_id]
     assert [job.agent_id for job in runtime.cron_service.list_jobs()] == [agent_id]
     assert [job.agent_id for job in runtime.bootstrap_service.list_jobs()] == [agent_id]
-    assert [action["target"] for action in runtime.calendar_service.actions.list_actions()] == [
-        agent_id
-    ]
     assert not (runtime.storage.data_dir / "agents" / "rename-pending.json").exists()
 
 
@@ -182,17 +175,15 @@ async def test_a_live_rename_moves_every_reference_or_none(
         if channels_running:
             runtime.channel_service.start()
         channel_loops, started_adapters = _record_channel_changes(runtime, monkeypatch)
-        # The rename never holds a Session pool worker while its Cron and
-        # Calendar steps wait for that pool, so a single worker serves it.
+        # The rename never holds a Session pool worker while its Cron step
+        # waits for that pool, so a single worker serves it.
         _one_session_worker(runtime, monkeypatch)
-        # Every read and change of the jobs and actions the running services keep
-        # on the Event Loop happens there, never on a worker.
+        # Every read and change of the jobs the running services keep on the
+        # Event Loop happens there, never on a worker.
         automation_threads: set[int] = set()
         for owner, names in (
             (runtime.cron_service, ("list_jobs", "retarget_agent_async", "_notify_changed")),
             (runtime.bootstrap_service, ("list_jobs", "retarget_agent")),
-            (runtime.calendar_service.actions, ("list_actions", "retarget_identity_async")),
-            (runtime.calendar_service, ("_notify_changed",)),
         ):
             _record_threads(owner, names, automation_threads, monkeypatch)
         # Live Terminal Sessions follow the Agent's Sessions, and back on a revert.
@@ -201,18 +192,13 @@ async def test_a_live_rename_moves_every_reference_or_none(
 
         def record_terminal_move(agent_id: str, new_agent_id: str) -> int:
             terminal_moves.append((agent_id, new_agent_id))
+            if fails and new_agent_id == "researcher":
+                # The last step fails after every reference moved.
+                raise OSError("terminal scope is read-only")
             return transfer(agent_id, new_agent_id)
 
         monkeypatch.setattr(runtime.terminal_manager, "transfer_agent_scope", record_terminal_move)
         if fails:
-            # The last reference fails after every other one moved.
-            _fail_when_retargeted_to(
-                runtime.calendar_service.actions,
-                "retarget_identity_async",
-                "researcher",
-                OSError("calendar storage is read-only"),
-                monkeypatch,
-            )
             with pytest.raises(OSError, match="read-only"):
                 await runtime.rename_agent("coder", "researcher")
         else:
@@ -220,7 +206,6 @@ async def test_a_live_rename_moves_every_reference_or_none(
             assert outcome.agent.id == "researcher"
             assert outcome.channel_ids == ("tg-coder",)
             assert len(outcome.cron_job_ids) == len(outcome.bootstrap_job_ids) == 1
-            assert outcome.calendar_action_count == 1
 
         _assert_agent_is(runtime, "coder" if fails else "researcher", current_session_id)
         # Every change of a running Channel, forward and back, runs on this Event
@@ -293,11 +278,12 @@ def _kill_moving_bootstrap_jobs(runtime: Runtime, patch: pytest.MonkeyPatch) -> 
 
 
 def _kill_reverting_bootstrap_jobs(runtime: Runtime, patch: pytest.MonkeyPatch) -> None:
+    # The last step fails after every reference moved, and the revert dies.
     _fail_when_retargeted_to(
-        runtime.calendar_service.actions,
-        "retarget_identity_async",
+        runtime.terminal_manager,
+        "transfer_agent_scope",
         "researcher",
-        OSError("calendar storage is read-only"),
+        OSError("terminal scope is read-only"),
         patch,
     )
     _fail_when_retargeted_to(runtime.bootstrap_service, "retarget_agent", "coder", _Killed(), patch)

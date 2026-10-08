@@ -94,6 +94,60 @@ describe('cron form payloads and history projection', () => {
     );
   });
 
+  it('edits an event job as its event time and sends it as event time text', () => {
+    const job = {
+      id: 'job-event',
+      agent_id: 'main',
+      name: 'Prepare review',
+      prompt: 'Collect the agenda',
+      schedule_type: 'event',
+      event_id: 'evt-1',
+      event_title: 'Review',
+      event_edge: 'start',
+      event_offset_minutes: -90,
+      remaining_runs: null,
+      status: 'active',
+    };
+    const form = createCronFormValues(job);
+
+    // 90 minutes stay minutes; whole hours or days use the larger unit.
+    expect(form).toMatchObject({
+      frequency: 'event',
+      event_id: 'evt-1',
+      event_title: 'Review',
+      event_edge: 'start',
+      event_direction: 'before',
+      event_amount: '90',
+      event_unit: 'm',
+    });
+    // The event's occurrences repeat it, so neither payload has a repeat.
+    expect(buildUpdateCronPayload(form)).toMatchObject({
+      schedule_type: 'event',
+      event_id: 'evt-1',
+      event_time: 'start - 90m',
+    });
+    expect(buildUpdateCronPayload(form)).not.toHaveProperty('repeat');
+
+    updateCronSchedule(form, {
+      event_direction: 'after',
+      event_edge: 'end',
+      event_amount: '2',
+      event_unit: 'd',
+    });
+    expect(form.frequency).toBe('event');
+    expect(buildCreateCronPayload({ ...form, repeat: '3' })).toEqual({
+      agent_id: 'main',
+      name: 'Prepare review',
+      prompt: 'Collect the agenda',
+      schedule_type: 'event',
+      event_id: 'evt-1',
+      event_time: 'end + 2d',
+    });
+    // More than 31 days from the event is no event time.
+    updateCronSchedule(form, { event_amount: '32' });
+    expect(buildUpdateCronPayload(form).event_time).toBe('');
+  });
+
   it('uses the prompt as a readable fallback for legacy payloads without a name', () => {
     const [job] = visibleCronJobs([
       {

@@ -1,30 +1,31 @@
 """Read ``calendar`` calls written in vBot's schema or another calendar dialect.
 
-Models describe events with the fields of calendar APIs they know: Google
-Calendar (``summary``, ``description``, ``location``, ``start``/``end`` objects
-with ``dateTime``/``date``/``timeZone``, ``recurrence`` lists of RRULE strings,
-``eventId``, ``timeMin``/``timeMax``), iCalendar (``DTSTART``, RRULE strings),
-and generic event Tools (``start_time``/``end_time``, ``date``, ``event_id``).
-This owner maps them onto the canonical fields so a call whose intent is clear
-executes. Readings with different effects, and effects the calendar cannot
-provide (invitations, several calendars), fail before any side effect with the
-corrected call.
+Models describe events with the fields of the calendar APIs they know, mostly
+Google Calendar v3 and the MCP servers built on it: ``summary``, ``start`` and
+``end`` objects with ``dateTime``/``date``/``timeZone``, ``recurrence`` lists of
+RRULE strings, ``eventId``, ``originalStartTime``, ``timeMin``/``timeMax`` and
+``q``. This owner maps them onto the canonical fields so a call whose intent is
+clear executes; readings with different effects fail before any side effect
+with the corrected call.
 
-``timezone``, ``end``, ``location`` and a list ``query`` stay unadvertised: they
-reach the handler, which needs the server zone or the stored event to apply them
-exactly.
+Reminders and instructions to run at an event (``reminders``,
+``minutes_before``, ``prompt``, ``add_action``) become the unadvertised
+``reminder``, which the handler refuses with the ``cron`` call that does it:
+only the handler knows whether that Tool is offered. A ``when`` phrase such as
+``this week`` stays unadvertised for the handler, which resolves it against
+the server clock and time zone.
 """
 
 from __future__ import annotations
 
-import calendar
 import json
 import re
 from collections.abc import Mapping
-from datetime import date, datetime, time
+from datetime import date, datetime, timedelta
 from typing import Any
 
-from core.tools._durations import LATE_LIMITS_FIELD, LATE_LIMITS_PARAMETER, take_late_limits
+from core.calendar import occurrence_id, parse_occurrence_id
+from core.tools._durations import duration_minutes
 from core.tools._named_zones import named_zone
 from core.tools.call_syntax import (
     SpellingAliases,
@@ -34,107 +35,70 @@ from core.tools.call_syntax import (
 )
 from core.tools.contracts import ToolContract, ToolContractError
 
-TIMEZONE_FIELD = "timezone"
-END_FIELD = "end"
-LOCATION_FIELD = "location"
-QUERY_FIELD = "query"
-DURATION_MINUTES_FIELD = "duration_minutes"
-DURATION_DAYS_FIELD = "duration_days"
+REFUSAL_PREFIX = "calendar was not run: "
+WHEN_FIELD = "when"
+REMINDER_FIELD = "reminder"
 UNADVERTISED_PARAMETERS: dict[str, Any] = {
-    TIMEZONE_FIELD: {"type": "string", "minLength": 1},
-    END_FIELD: {"type": "string", "minLength": 1},
-    LOCATION_FIELD: {"type": "string", "minLength": 1},
-    QUERY_FIELD: {"type": "string", "minLength": 1},
-    # A length whose unit the call names; the handler turns it into the duration the
-    # event's kind stores, which needs the start, stored or sent.
-    DURATION_MINUTES_FIELD: {"type": "integer", "minimum": 1},
-    DURATION_DAYS_FIELD: {"type": "integer", "minimum": 1},
-    # The note on ignored late-start limits, which the handler adds to the result.
-    LATE_LIMITS_FIELD: LATE_LIMITS_PARAMETER,
+    WHEN_FIELD: {"type": "string", "minLength": 1},
+    # The schedule and instruction of a requested reminder; the handler refuses it.
+    REMINDER_FIELD: {"type": "object"},
 }
 OMIT = object()
 """``render_call`` override that removes a field from the rendered call."""
 
-EVENT_FIELDS = ("title", "start", "duration", "rrule", "notes")
-ACTION_FIELDS = ("when", "prompt", "target", "session")
-LENGTH_FIELDS = ("duration", DURATION_MINUTES_FIELD, DURATION_DAYS_FIELD)
-_EXTRA_EVENT_FIELDS = (END_FIELD, LOCATION_FIELD, TIMEZONE_FIELD)
-# Fields that describe an event, including unadvertised spellings of its length and end.
-EVENT_CHANGE_FIELDS = (*EVENT_FIELDS, *LENGTH_FIELDS[1:], END_FIELD, LOCATION_FIELD)
-_WINDOW_ACTIONS = frozenset({"list", "find_free"})
-_EVENT_ACTIONS = frozenset({"create", "update"})
-_ACTION_ACTIONS = frozenset({"add_action", "update_action", "delete_action"})
-_ACTION_ID_PREFIX = "act_"
-WHEN_STAND_IN = "<e.g. start - 1h>"
+WINDOW_ACTIONS = frozenset({"list", "find_free_time"})
+CHANGE_FIELDS = ("title", "start", "end", "description", "location", "rrule")
 STAND_INS = {
+    "id": "<event id from list>",
     "title": "<title>",
-    "start": "<2030-01-10 or 2030-01-10T15:00>",
-    "duration": "<minutes, or days for all-day>",
-    "rrule": '<rule such as {"freq":"weekly"}>',
-    "notes": "<notes>",
-    "when": WHEN_STAND_IN,
-    "prompt": "<instruction>",
-    "target": "<agent or agent@project>",
+    "start": "<2030-01-10T15:00 or 2030-01-10>",
+    "end": "<same form as start>",
+    "rrule": "<rule such as FREQ=WEEKLY;BYDAY=MO>",
+    "time_min": "<2030-01-10 or 2030-01-10T15:00>",
+    "time_max": "<2030-01-10 or 2030-01-10T15:00>",
+    "duration": "<minutes>",
+    WHEN_FIELD: "this week",
 }
 """Values only the Agent can supply, shown in a corrected call in their field's place."""
-_EVENT_ID_PREFIX = "evt_"
+REMINDER_SCHEDULE_STAND_IN = "<start or end, e.g. start - 30m>"
+REMINDER_PROMPT_STAND_IN = "<instruction>"
 
 
 class CalendarCallRefusedError(ValueError):
     """A ``calendar`` call was refused before any side effect; the message names the fix."""
 
 
-REFUSAL_PREFIX = "calendar was not run: "
 _CALL_ORDER = (
     "action",
     "id",
     "title",
     "start",
-    "duration",
-    DURATION_MINUTES_FIELD,
-    DURATION_DAYS_FIELD,
+    "end",
     "rrule",
-    "notes",
-    "when",
-    "prompt",
-    "target",
-    "session",
-)
-_LATE_START = (
-    "A missed action still starts late, and its Run is told how late it is. To have a late "
-    'Run skip the instruction, say so in prompt, for example "Skip this if it starts more '
-    'than 30 minutes late."'
+    "location",
+    "description",
+    "time_min",
+    "time_max",
+    "query",
+    "duration",
+    WHEN_FIELD,
 )
 _LONG_TEXT = 120
-_LONG_TEXT_STAND_INS = {
-    "prompt": "<the prompt from this call>",
-    "notes": "<the notes from this call>",
-}
+_REMINDER_ACTION = "add_reminder"
 _TEMPLATE = re.compile(r"^\s*<[^<>]+>\s*$")
-_FILLED_BY_AGENT = {
-    "title": "Send the event's actual title in its place.",
-    "notes": "Send the actual notes in its place, or leave notes out.",
-    "prompt": "Send the actual instruction the action's Run carries out in its place.",
-    "target": (
-        "Send an existing Agent id, or agent@project for a Project member, in its place, or "
-        "leave target out: a new action then runs as yourself, and update_action keeps the "
-        "current target."
-    ),
-}
-"""Fields whose stand-in only the Agent can replace, with what belongs there."""
 
 _FIELD_ALIASES = SpellingAliases(
     {
         "id": (
             "event_id",
             "uid",
-            "event_uid",
             "calendar_event_id",
-            "action_id",
-            "reminder_id",
+            "occurrence_id",
+            "instance_id",
+            "recurring_event_id",
         ),
-        "title": ("summary", "name", "subject", "event_title", "event_name", "label"),
-        "notes": ("description", "details", "note", "body", "event_description"),
+        "title": ("summary", "name", "subject", "event_title", "event_name"),
+        "description": ("notes", "note", "details", "body", "event_description"),
         "start": (
             "start_time",
             "start_at",
@@ -144,48 +108,16 @@ _FIELD_ALIASES = SpellingAliases(
             "datetime",
             "date",
             "begin",
-            "begins_at",
             "dtstart",
-            "occurrence_start",
-            "original_start",
-            "original_start_time",
-            "instance_start",
-            "recurrence_id",
         ),
-        "duration": ("length", "slot_duration"),
-        DURATION_MINUTES_FIELD: (
-            "minutes",
-            "length_minutes",
-            "duration_min",
-            "duration_mins",
-            "slot_minutes",
-        ),
-        DURATION_DAYS_FIELD: ("length_days",),
-        "rrule": (
-            "recurrence",
-            "recurrence_rule",
-            "repeat",
-            "repeats",
-            "rule",
-            "rrule_string",
-            "repetition",
-        ),
-        "prompt": ("instruction", "instructions", "message", "task", "action_prompt", "text"),
-        "target": ("agent", "agent_id", "agent_name", "target_agent", "target_agent_id"),
-        "session": ("session_id", "session_key"),
-        "when": ("window", "range", "period", "time_range", "date_range", "timeframe", "offset"),
-        END_FIELD: (
-            "end_time",
-            "end_at",
-            "ends_at",
-            "end_datetime",
-            "end_date",
-            "dtend",
-            "until_time",
-        ),
-        LOCATION_FIELD: ("place", "venue", "where", "address"),
-        TIMEZONE_FIELD: ("tz", "time_zone", "zone", "timezone_name", "iana_timezone"),
-        QUERY_FIELD: ("q", "search", "search_text", "keyword", "keywords", "filter", "contains"),
+        "end": ("end_time", "end_at", "ends_at", "end_datetime", "end_date", "dtend"),
+        "location": ("place", "venue", "where", "address"),
+        "rrule": ("recurrence", "recurrence_rule", "rule", "repeat", "repeats"),
+        "time_min": ("from", "since", "window_start", "range_start"),
+        "time_max": ("to", "till", "window_end", "range_end"),
+        "query": ("q", "search", "search_text", "keyword", "keywords"),
+        "duration": ("length", "minutes", "duration_minutes", "length_minutes", "slot_duration"),
+        WHEN_FIELD: ("window", "range", "period", "time_range", "date_range", "timeframe"),
     }
 )
 _ACTION_SYNONYMS = SpellingAliases(
@@ -194,11 +126,11 @@ _ACTION_SYNONYMS = SpellingAliases(
             "get",
             "show",
             "view",
-            "ls",
             "read",
             "events",
             "list_events",
             "get_events",
+            "get_event",
             "search",
             "search_events",
             "query",
@@ -214,7 +146,6 @@ _ACTION_SYNONYMS = SpellingAliases(
             "book",
             "create_event",
             "add_event",
-            "new_event",
             "insert_event",
         ),
         "update": (
@@ -239,71 +170,45 @@ _ACTION_SYNONYMS = SpellingAliases(
             "remove_event",
             "cancel_event",
         ),
-        "find_free": (
+        "find_free_time": (
+            "find_free",
             "free",
             "free_time",
-            "find_free_time",
             "availability",
-            "available",
             "check_availability",
             "freebusy",
             "free_busy",
+            "get_freebusy",
             "find_slot",
             "find_slots",
             "find_time",
-            "suggest_time",
         ),
-        "add_action": (
-            "add_reminder",
-            "set_reminder",
-            "create_reminder",
+        _REMINDER_ACTION: (
+            "add_action",
             "create_action",
             "attach_action",
             "schedule_action",
-            "new_action",
-        ),
-        "update_action": (
-            "edit_action",
-            "modify_action",
-            "change_action",
-            "update_reminder",
-            "edit_reminder",
-        ),
-        "delete_action": (
-            "remove_action",
-            "cancel_action",
-            "delete_reminder",
-            "remove_reminder",
+            "set_reminder",
+            "create_reminder",
+            "remind",
         ),
     }
 )
 
 _WRAPPER_KEYS = frozenset({"event", "resource", "requestbody", "body", "data", "eventdata"})
 _TIME_OBJECT_KEYS = frozenset(
-    {"start", "end", "originalstarttime", "starttime", "endtime", "dtstart", "dtend"}
+    {"start", "end", "starttime", "endtime", "originalstarttime", "timemin", "timemax"}
 )
-_WINDOW_START_KEYS = frozenset({"timemin", "from", "since", "after", "windowstart", "rangestart"})
-_WINDOW_END_KEYS = frozenset({"timemax", "to", "till", "before", "windowend", "rangeend"})
-_RULE_PART_KEYS = {
-    "freq": "freq",
-    "frequency": "freq",
-    "recurrencefrequency": "freq",
-    "interval": "interval",
-    "count": "count",
-    "occurrences": "count",
-    "until": "until",
-    "untildate": "until",
-    "byday": "by_weekday",
-    "byweekday": "by_weekday",
-    "weekdays": "by_weekday",
-    "daysofweek": "by_weekday",
-    "days": "by_weekday",
-}
-_NESTED_RULE_KEYS = {"enddate": "until", "endson": "until", "repeatuntil": "until", "ends": "until"}
-_HOUR_KEYS = frozenset({"durationhours", "hours", "lengthhours"})
+_ORIGINAL_START_KEYS = frozenset(
+    {"originalstart", "originalstarttime", "occurrencestart", "instancestart", "recurrenceid"}
+)
+_ZONE_KEYS = frozenset({"timezone", "tz", "zone", "timezonename"})
+_RULE_KEYS = frozenset({"rrule", "recurrence", "recurrencerule", "rule", "repeat", "repeats"})
+_REMINDER_KEYS = frozenset({"reminders", "reminder", "alarms", "alarm", "notifications"})
 _BEFORE_KEYS = frozenset(
     {"minutesbefore", "beforeminutes", "reminderminutes", "remindminutesbefore", "leadminutes"}
 )
+_PROMPT_KEYS = frozenset({"prompt", "instruction", "instructions", "task", "actionprompt"})
 _INERT_KEYS = frozenset(
     {
         "singleevents",
@@ -317,6 +222,7 @@ _INERT_KEYS = frozenset(
         "transparency",
         "guestscanmodify",
         "guestscaninviteothers",
+        "guestscanseeotherguests",
         "showdeleted",
         "status",
         "kind",
@@ -325,79 +231,7 @@ _INERT_KEYS = frozenset(
 _CALENDAR_KEYS = frozenset({"calendarid", "calendar", "calendarname"})
 _DEFAULT_CALENDARS = frozenset({"primary", "default", "main", "mine", "local"})
 _ATTENDEE_KEYS = frozenset({"attendees", "guests", "invitees", "participants"})
-_REMINDER_KEYS = frozenset({"reminders", "reminder", "alarms", "alarm", "notifications"})
-_SESSION_FRESH_WORDS = frozenset({"new", "fresh", "isolated", "auto", "default", "none"})
-
-_WEEKDAYS = ("mo", "tu", "we", "th", "fr", "sa", "su")
-_WEEKDAY_NAMES = {
-    "monday": "mo",
-    "mon": "mo",
-    "tuesday": "tu",
-    "tue": "tu",
-    "tues": "tu",
-    "wednesday": "we",
-    "wed": "we",
-    "thursday": "th",
-    "thu": "th",
-    "thur": "th",
-    "thurs": "th",
-    "friday": "fr",
-    "fri": "fr",
-    "saturday": "sa",
-    "sat": "sa",
-    "sunday": "su",
-    "sun": "su",
-}
-_FREQ_WORDS = {
-    "daily": "daily",
-    "day": "daily",
-    "days": "daily",
-    "everyday": "daily",
-    "weekly": "weekly",
-    "week": "weekly",
-    "weeks": "weekly",
-    "monthly": "monthly",
-    "month": "monthly",
-    "months": "monthly",
-    "yearly": "yearly",
-    "year": "yearly",
-    "years": "yearly",
-    "annually": "yearly",
-    "annual": "yearly",
-}
-_EVERY_PHRASE = re.compile(r"^every\s+(?:(\d+)\s+)?(day|week|month|year)s?$")
-_WEEKDAY_PHRASES = {
-    "weekdays": ["mo", "tu", "we", "th", "fr"],
-    "everyweekday": ["mo", "tu", "we", "th", "fr"],
-    "workdays": ["mo", "tu", "we", "th", "fr"],
-    "weekends": ["sa", "su"],
-}
-_RRULE_SUPPORTED_PARTS = frozenset({"FREQ", "INTERVAL", "COUNT", "UNTIL", "BYDAY", "WKST"})
-_DURATION_TEXT = re.compile(r"^(\d+(?:\.\d+)?)\s*([a-z]+)$")
-_ISO_DURATION = re.compile(
-    r"^p(?:(\d+)w)?(?:(\d+)d)?(?:t(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?)?$", re.IGNORECASE
-)
-_MINUTE_UNITS = {
-    "m": 1,
-    "min": 1,
-    "mins": 1,
-    "minute": 1,
-    "minutes": 1,
-    "h": 60,
-    "hr": 60,
-    "hrs": 60,
-    "hour": 60,
-    "hours": 60,
-}
-_DAY_UNITS = frozenset({"d", "day", "days"})
-_ACTION_WHEN = re.compile(r"^(start|end)(?:\s*([+-])\s*(\d+)\s*([mhd]))?$")
-_RELATIVE_PHRASE = re.compile(
-    r"^(?:at\s+)?(?:(\d+(?:\.\d+)?)\s*([a-z]+)\s+)?(before|after|at)\s*(?:the\s+)?"
-    r"(start|end|begin|beginning|event)?$"
-)
-_SIGNED_OFFSET = re.compile(r"^([+-])\s*(\d+(?:\.\d+)?)\s*([a-z]*)$")
-_DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_TIME_ONLY = re.compile(r"^\d{1,2}:\d{2}(?::\d{2})?$")
+_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 class _Problems:
@@ -422,8 +256,7 @@ class _Problems:
             calls = " or ".join(render_call(arguments, **overrides) for overrides in alternatives)
             raise ToolContractError(REFUSAL_PREFIX + " ".join([*self.texts, text, calls]))
         if self.texts:
-            texts = " ".join(self.texts)
-            raise ToolContractError(f"{REFUSAL_PREFIX}{texts} Send: {render_call(arguments)}")
+            raise ToolContractError(refusal(" ".join(self.texts), arguments))
 
 
 def normalize_calendar_arguments(contract: ToolContract, arguments: Any) -> Any:
@@ -434,71 +267,45 @@ def normalize_calendar_arguments(contract: ToolContract, arguments: Any) -> Any:
     problems = _Problems()
     value = _lift_wrappers(value, problems)
     value = _read_time_objects(value, problems)
-    value, rule_parts = _take_rule_parts(value)
-    hours = _take_hours(value, problems)
+    zone_name, original_start = _take_zone(value), _take_original_start(value)
+    reminder = _take_reminder(value)
+    for key in [key for key in value if spelling(key) in _RULE_KEYS]:
+        value[key] = _rule_text(value[key], problems)
     normalized = normalize_call_arguments(
         contract,
         value,
         enum_fields=("action",),
         field_aliases=_FIELD_ALIASES,
         field_normalizers={"action": _action_word},
-        empty_as_omitted=(
-            "id",
-            "title",
-            "start",
-            "notes",
-            "when",
-            "prompt",
-            "target",
-            "session",
-            END_FIELD,
-            LOCATION_FIELD,
-            TIMEZONE_FIELD,
-        ),
+        empty_as_omitted=("id", "title", "start", "end", "time_min", "time_max", "query"),
     )
     if not isinstance(normalized, dict):
         return normalized
-    if hours is not None:
-        _merge(normalized, DURATION_MINUTES_FIELD, hours, problems)
     _read_extras(normalized, problems)
-    late_limits = take_late_limits(normalized, _LATE_START)
     _omit_placeholders(normalized)
-    _read_action(normalized, problems)
-    action = normalized.get("action")
-    _read_recurrence(normalized, rule_parts, problems)
-    if action in _WINDOW_ACTIONS:
-        if _reads_only(normalized, problems):
-            _read_window(normalized, problems)
-    elif action in _EVENT_ACTIONS:
-        _read_event_times(normalized, problems)
-    elif action in _ACTION_ACTIONS:
-        _read_action_when(normalized, problems)
-    _read_duration(normalized, problems)
-    _check_fields(normalized, problems)
+    action = _read_action(normalized, reminder)
+    if zone_name is not None:
+        _apply_zone(normalized, zone_name, problems)
+    if action in WINDOW_ACTIONS:
+        _read_window(normalized, problems)
+    else:
+        _read_event(normalized, original_start, problems)
     if problems.texts or problems.choice:
         known = set(contract.input_schema["properties"])
         for key in normalized:
             if key not in known:
                 problems.add(f'"{key}" is not a parameter.')
-        if late_limits:
-            problems.add(late_limits)
     problems.raise_if_any(normalized)
-    if late_limits:
-        normalized[LATE_LIMITS_FIELD] = late_limits
     return normalized
 
 
 def render_call(arguments: Mapping[str, Any], **overrides: Any) -> str:
     """Render a canonical ``calendar`` call as compact JSON; ``OMIT`` removes a field."""
     call = {**arguments, **overrides}
-    ordered: dict[str, Any] = {}
-    for name in (*_CALL_ORDER, *_EXTRA_EVENT_FIELDS):
-        if name in call and call[name] is not OMIT:
-            ordered[name] = call[name]
-    for name, stand_in in _LONG_TEXT_STAND_INS.items():
-        text = ordered.get(name)
-        if isinstance(text, str) and len(text) > _LONG_TEXT:
-            ordered[name] = stand_in
+    ordered = {name: call[name] for name in _CALL_ORDER if name in call and call[name] is not OMIT}
+    text = ordered.get("description")
+    if isinstance(text, str) and len(text) > _LONG_TEXT:
+        ordered["description"] = "<the description from this call>"
     return json.dumps(ordered, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -507,93 +314,15 @@ def refusal(text: str, arguments: Mapping[str, Any], **overrides: Any) -> str:
     return f"{REFUSAL_PREFIX}{text} Send: {render_call(arguments, **overrides)}"
 
 
-def choice(text: str, alternatives: list[str]) -> str:
-    """Return a refusal message offering several complete calls."""
-    return f"{REFUSAL_PREFIX}{text} " + " or ".join(alternatives)
-
-
-def parse_date(text: str) -> date | None:
-    """Parse a date written as YYYY-MM-DD; None when it is not one or no such day exists."""
-    value = text.strip()
-    if not _DATE_ONLY.match(value):
-        return None
-    try:
-        return date.fromisoformat(value)
-    except ValueError:
-        return None
-
-
-def is_date(text: str) -> bool:
-    return parse_date(text) is not None
-
-
-_MONTH_NAMES = (
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-)
-
-
-def missing_date_reason(text: str) -> str | None:
-    """Say why a YYYY-MM-DD text names no day; None when it is a day or not date-shaped."""
-    value = text.strip()
-    if not _DATE_ONLY.match(value) or parse_date(value) is not None:
-        return None
-    year, month = int(value[:4]), int(value[5:7])
-    if not 1 <= month <= 12:
-        return "a year has 12 months"
-    if year < 1:
-        return "the calendar starts at year 0001"
-    days = calendar.monthrange(year, month)[1]
-    return f"{_MONTH_NAMES[month - 1]} {year} has {days} days"
-
-
-def parse_time_of_day(text: str) -> time | None:
-    """Parse a clock time such as 9:00 or 16:30:15; None when it is not one."""
-    value = text.strip()
-    if not _TIME_ONLY.match(value):
-        return None
-    hours, _, rest = value.partition(":")
-    try:
-        return time.fromisoformat(f"{int(hours):02d}:{rest}")
-    except ValueError:
-        return None
-
-
-def is_time_of_day(text: str) -> bool:
-    return parse_time_of_day(text) is not None
-
-
-def parse_local(text: str) -> datetime | None:
-    """Parse an ISO date-time (``Z`` allowed); None when it is not one."""
-    value = text.strip()
-    if is_date(value):
-        return None
-    try:
-        return datetime.fromisoformat(value)
-    except ValueError:
-        return None
-
-
-def minutes_text(minutes: int) -> str:
-    """Render an action offset in the largest exact unit: 90 -> 90m, 120 -> 2h."""
-    if minutes % 1440 == 0:
-        return f"{minutes // 1440}d"
-    if minutes % 60 == 0:
-        return f"{minutes // 60}h"
+def length_text(minutes: int) -> str:
+    """Render minutes in the largest exact unit: 90 -> 90m, 120 -> 2h, 1440 -> 1d."""
+    for size, unit in ((1440, "d"), (60, "h")):
+        if minutes % size == 0:
+            return f"{minutes // size}{unit}"
     return f"{minutes}m"
 
 
-# -- shapes ----------------------------------------------------------------------------
+# -- shapes ------------------------------------------------------------------------------
 
 
 def _json_object(value: Any) -> dict[str, Any] | None:
@@ -609,131 +338,156 @@ def _lift_wrappers(arguments: dict[str, Any], problems: _Problems) -> dict[str, 
     """Lift an ``event``/``resource``/``requestBody`` object into the call."""
     result = dict(arguments)
     for key in list(result):
-        if spelling(key) not in _WRAPPER_KEYS:
-            continue
-        inner = _json_object(result[key])
+        inner = _json_object(result[key]) if spelling(key) in _WRAPPER_KEYS else None
         if inner is None:
             continue
         del result[key]
         for name, item in inner.items():
             if name in result and result[name] != item:
                 problems.add(f'"{name}" is given twice with different values; send one.')
-                continue
             result[name] = item
     return result
 
 
 def _read_time_objects(arguments: dict[str, Any], problems: _Problems) -> dict[str, Any]:
-    """Unpack Google-style ``{"dateTime", "date", "timeZone"}`` objects."""
+    """Unpack Google ``{"dateTime" | "date", "timeZone"}`` objects into their time text."""
     result = dict(arguments)
-    zones: set[str] = set()
-    zoned: dict[str, str] = {}
-    all_day_end: str | None = None
-    for key in list(result):
-        item = result[key]
+    for key, item in arguments.items():
         if spelling(key) not in _TIME_OBJECT_KEYS or not isinstance(item, dict):
             continue
         fields = {spelling(name): value for name, value in item.items()}
-        moment = fields.get("datetime")
-        day = fields.get("date")
-        zone = fields.get("timezone")
-        if isinstance(zone, str) and zone.strip():
-            zones.add(zone.strip())
+        moment, day, zone = fields.get("datetime"), fields.get("date"), fields.get("timezone")
         if isinstance(moment, str) and moment.strip():
-            result[key] = moment.strip()
-            if isinstance(zone, str) and zone.strip():
-                zoned[key] = zone.strip()
+            result[key] = _in_zone(moment.strip(), zone, problems)
         elif isinstance(day, str) and day.strip():
-            if spelling(key) in {"end", "endtime", "dtend"}:
-                # Google and iCalendar all-day ends are exclusive dates.
-                all_day_end = day.strip()
-                del result[key]
-            else:
-                result[key] = day.strip()
+            result[key] = day.strip()
         else:
             problems.add(f'"{key}" needs a date or dateTime.')
-    if len(zones) > 1:
-        # Each time names its own zone, so each is an exact moment: a flight, for example.
-        for key, name in zoned.items():
-            found = named_zone(name)
-            moment = parse_local(str(result[key]))
-            if found is None:
-                problems.add(f'"timeZone" "{name}" is not a known time zone.')
-            elif moment is not None and moment.tzinfo is None:
-                result[key] = moment.replace(tzinfo=found).isoformat()
-    elif zones:
-        name = zones.pop()
-        existing = next(
-            (value for key, value in result.items() if spelling(key) in {"timezone", "tz"}),
-            None,
-        )
-        if existing is not None and existing != name:
-            problems.add(f'"timeZone" "{name}" differs from "timezone" "{existing}"; send one.')
-        elif existing is None:
-            result[TIMEZONE_FIELD] = name
-    if all_day_end is not None:
-        start = next(
-            (value for key, value in result.items() if spelling(key) in {"start", "starttime"}),
-            None,
-        )
-        if isinstance(start, str) and is_date(start) and is_date(all_day_end):
-            days = (date.fromisoformat(all_day_end) - date.fromisoformat(start)).days
-            if days >= 1:
-                result["duration"] = days
-            else:
-                problems.add('the all-day "end" date must come after "start".')
-        else:
-            problems.add('an all-day "end" date needs an all-day "start" date.')
     return result
 
 
-def _take_rule_parts(arguments: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Take top-level recurrence parts (``frequency``, ``byday``) out of the call."""
-    rest: dict[str, Any] = {}
-    parts: dict[str, Any] = {}
-    has_freq = any(
-        _RULE_PART_KEYS.get(spelling(key)) == "freq" and value not in (None, "")
-        for key, value in arguments.items()
-    )
-    for key, value in arguments.items():
-        part = _RULE_PART_KEYS.get(spelling(key))
-        if part is not None and (has_freq or part == "freq"):
-            parts[part] = value
-        elif spelling(key) == "days" and _number(value) is not None:
-            # "days": 3 without a frequency is a length in days; the handler reads it against
-            # the start, which decides whether the event lasts whole days.
-            rest[DURATION_DAYS_FIELD] = value
-        else:
-            rest[key] = value
-    return rest, parts
+def _in_zone(text: str, zone_name: Any, problems: _Problems) -> str:
+    """A local date-time read in the named zone, as a time with that zone's offset."""
+    if not isinstance(zone_name, str) or not zone_name.strip() or _DATE.match(text):
+        return text
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        return text
+    if moment.tzinfo is not None:
+        return text
+    zone = named_zone(zone_name)
+    if zone is None:
+        problems.add(f'"timeZone" "{zone_name}" is not a known time zone.')
+        return text
+    return moment.replace(tzinfo=zone).isoformat(timespec="minutes")
 
 
-def _take_hours(arguments: dict[str, Any], problems: _Problems) -> int | None:
-    for key in list(arguments):
-        if spelling(key) in _HOUR_KEYS:
-            value = arguments.pop(key)
-            number = _number(value)
-            if number is None or number <= 0 or number * 60 != int(number * 60):
-                problems.add(f'"{key}" must be a positive number of hours.')
-                return None
-            return int(number * 60)
+def _take_zone(arguments: dict[str, Any]) -> str | None:
+    zones = [arguments.pop(key) for key in list(arguments) if spelling(key) in _ZONE_KEYS]
+    return next((zone for zone in zones if isinstance(zone, str) and zone.strip()), None)
+
+
+def _apply_zone(arguments: dict[str, Any], zone_name: str, problems: _Problems) -> None:
+    """Read local date-times in a call's own time zone as exact times."""
+    for name in ("start", "end", "time_min", "time_max"):
+        item = arguments.get(name)
+        if isinstance(item, str):
+            arguments[name] = _in_zone(item.strip(), zone_name, problems)
+
+
+def _take_original_start(arguments: dict[str, Any]) -> str | None:
+    """The original start that names one occurrence of a series, as local wall-clock text."""
+    found = [arguments.pop(key) for key in list(arguments) if spelling(key) in _ORIGINAL_START_KEYS]
+    for item in found:
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if _DATE.match(text):
+            return text
+        try:
+            return datetime.fromisoformat(text).replace(tzinfo=None).isoformat(timespec="minutes")
+        except ValueError:
+            continue
     return None
 
 
-def _merge(arguments: dict[str, Any], name: str, value: Any, problems: _Problems) -> None:
-    if name in arguments and arguments[name] != value:
-        problems.choose(
-            f'"{name}" is given twice with different values:',
-            [{name: arguments[name]}, {name: value}],
-        )
-        return
-    arguments[name] = value
+def _take_reminder(arguments: dict[str, Any]) -> dict[str, str] | None:
+    """Take reminder and instruction fields out of the call; None when none asks for one."""
+    asked = False
+    schedule: str | None = None
+    prompt: str | None = None
+    for key in list(arguments):
+        word = spelling(key)
+        if word in _REMINDER_KEYS:
+            item = arguments.pop(key)
+            if _requests_reminder(item):
+                asked = True
+                schedule = schedule or _before_start(_reminder_minutes(item))
+        elif word in _BEFORE_KEYS:
+            asked = True
+            schedule = schedule or _before_start(duration_minutes(arguments.pop(key)))
+        elif word in _PROMPT_KEYS:
+            item = arguments.pop(key)
+            if isinstance(item, str) and item.strip() and not _TEMPLATE.match(item):
+                asked, prompt = True, item.strip()
+    if not asked:
+        return None
+    result = {"prompt": prompt or REMINDER_PROMPT_STAND_IN}
+    if schedule is not None:
+        result["schedule"] = schedule
+    return result
+
+
+def _requests_reminder(item: Any) -> bool:
+    if item in (None, False, "", [], {}):
+        return False
+    if isinstance(item, dict):
+        # Google's default reminders ask for nothing beyond the user's own calendar settings.
+        uses_default = item.get("useDefault", item.get("use_default")) is True
+        return not (uses_default and not item.get("overrides"))
+    return True
+
+
+def _reminder_minutes(item: Any) -> int | None:
+    if isinstance(item, dict):
+        overrides = item.get("overrides")
+        if overrides is None:
+            return duration_minutes(item.get("minutes"))
+        item = overrides
+    if isinstance(item, list) and item:
+        return _reminder_minutes(item[0])
+    return duration_minutes(item)
+
+
+def _before_start(minutes: int | None) -> str | None:
+    return None if minutes is None else f"start - {length_text(minutes)}"
+
+
+def _rule_text(value: Any, problems: _Problems) -> Any:
+    """Read ``RRULE:`` text, a one-rule list or a rule object as RRULE text; null is ""."""
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        rules = [item for item in value if isinstance(item, str | dict)]
+        if len(rules) > 1 or len(rules) != len(value):
+            problems.add("rrule takes one rule such as FREQ=WEEKLY;BYDAY=MO.")
+            return value
+        value = rules[0] if rules else ""
+    if isinstance(value, dict):
+        parts = []
+        for key, item in value.items():
+            name = {"byweekday": "BYDAY", "frequency": "FREQ"}.get(spelling(key), key.upper())
+            text = ",".join(map(str, item)) if isinstance(item, list) else str(item)
+            parts.append(f"{name}={text.replace('-', '') if name == 'UNTIL' else text}".upper())
+        value = ";".join(sorted(parts, key=lambda part: not part.startswith("FREQ=")))
+    if isinstance(value, str) and value.strip().upper().startswith("RRULE:"):
+        return value.strip()[6:].strip()
+    return value
 
 
 def _action_word(value: Any) -> Any:
-    if not isinstance(value, str):
-        return value
-    return _ACTION_SYNONYMS.get(value, value)
+    return _ACTION_SYNONYMS.get(value, value) if isinstance(value, str) else value
 
 
 # -- fields ------------------------------------------------------------------------------
@@ -751,658 +505,185 @@ def _read_extras(arguments: dict[str, Any], problems: _Problems) -> None:
                     f'there is one local calendar; "{key}" "{item}" cannot select another.'
                 )
         elif word in _ATTENDEE_KEYS:
-            item = arguments.pop(key)
-            if item:
-                names = _attendee_names(item)
+            names = _attendee_names(arguments.pop(key))
+            if names:
                 problems.add(
-                    "the calendar cannot invite attendees. To record them, put them in notes."
+                    "the calendar cannot invite attendees. To record them, put them in description."
                 )
-                if names:
-                    line = "Attendees: " + ", ".join(names)
-                    notes = arguments.get("notes")
-                    arguments["notes"] = f"{notes}\n{line}" if isinstance(notes, str) else line
-        elif word in _REMINDER_KEYS:
-            item = arguments.pop(key)
-            if _requests_reminder(item):
-                problems.add(
-                    "the calendar has no reminders. After creating the event, add_action with "
-                    'its id, a "when" such as "start - 30m" and a prompt runs an Agent then.'
-                )
+                line = "Attendees: " + ", ".join(names)
+                text = arguments.get("description")
+                arguments["description"] = f"{text}\n{line}" if isinstance(text, str) else line
 
 
 def _attendee_names(item: Any) -> list[str]:
     names: list[str] = []
     for entry in item if isinstance(item, list) else [item]:
+        if isinstance(entry, dict):
+            entry = entry.get("displayName") or entry.get("name") or entry.get("email")
         if isinstance(entry, str) and entry.strip():
             names.append(entry.strip())
-        elif isinstance(entry, dict):
-            name = entry.get("displayName") or entry.get("name") or entry.get("email")
-            if isinstance(name, str) and name.strip():
-                names.append(name.strip())
     return names
 
 
-def _requests_reminder(item: Any) -> bool:
-    if item in (None, False, "", [], {}):
-        return False
-    if isinstance(item, dict):
-        use_default = item.get("useDefault", item.get("use_default"))
-        overrides = item.get("overrides")
-        return not (use_default is True and not overrides) and bool(overrides or item)
-    return True
-
-
 def _omit_placeholders(arguments: dict[str, Any]) -> None:
-    for name, wanted in _FILLED_BY_AGENT.items():
-        item = arguments.get(name)
-        if isinstance(item, str) and _TEMPLATE.match(item):
-            # Kept, a stand-in would become the event's text, the Run's instruction or a
-            # target; dropped, the value the call was meant to set would be lost or defaulted.
-            raise ToolContractError(
-                f'{REFUSAL_PREFIX}{name} "{item.strip()}" is a stand-in. {wanted}'
-            )
-    for name in (
-        "id",
-        "title",
-        "notes",
-        "start",
-        "when",
-        "prompt",
-        "target",
-        "session",
-        LOCATION_FIELD,
-    ):
+    """Drop optional values that stand for nothing, such as "none" or "<title>"."""
+    for name in ("id", "title", "description", "location", "start", "end", "query", WHEN_FIELD):
         item = arguments.get(name)
         if isinstance(item, str) and (is_placeholder(item) or _TEMPLATE.match(item)):
             del arguments[name]
-    session = arguments.get("session")
-    if isinstance(session, str) and spelling(session) in _SESSION_FRESH_WORDS:
-        del arguments["session"]
 
 
-def _read_action(arguments: dict[str, Any], problems: _Problems) -> None:
+def _read_action(arguments: dict[str, Any], reminder: dict[str, str] | None) -> str | None:
+    """Settle the action, inferring a missing one, and attach a requested reminder."""
     action = arguments.get("action")
-    item_id = arguments.get("id")
-    action_id = isinstance(item_id, str) and item_id.startswith(_ACTION_ID_PREFIX)
-    has_event_fields = any(name in arguments for name in EVENT_CHANGE_FIELDS)
-    has_action_fields = "prompt" in arguments or "session" in arguments
+    if action == _REMINDER_ACTION:
+        reminder = reminder or {"prompt": REMINDER_PROMPT_STAND_IN}
+        action = None
     if action is None:
-        arguments["action"] = _inferred_action(arguments, action_id, has_event_fields)
-        if arguments["action"] is None:
-            del arguments["action"]
-            problems.choose(
-                f'the call names "{item_id}" but no action:',
-                (
-                    [{"action": "delete_action"}, {"action": "list"}]
-                    if action_id
-                    else [{"action": "delete"}, {"action": "list"}]
-                ),
-            )
-        return
-    if action == "delete" and action_id:
-        arguments["action"] = "delete_action"
-    elif action == "update" and action_id and not has_event_fields:
-        arguments["action"] = "update_action"
-    elif action == "update" and (has_action_fields or "target" in arguments) and not action_id:
-        # An event id with an action id's kind of action is resolved by the handler, which
-        # knows which actions and events the ids name.
-        fields: list[str] = [name for name in ("prompt", "target", "session") if name in arguments]
-        when = arguments.get("when")
-        if when is not None and not (
-            isinstance(when, str) and (is_date(when) or parse_local(when) is not None)
-        ):
-            fields.insert(0, "when")
-        verb = "belongs" if len(fields) == 1 else "belong"
-        text = (
-            f"{', '.join(fields)} {verb} to an action. add_action attaches one to this event "
-            'with its id, "when" and prompt; update_action changes one by its act_ id.'
-        )
-        if has_event_fields:
-            # Offer the event change alone; the action follows in its own call.
-            for name in fields:
-                del arguments[name]
-            problems.choose(text + " To change the event, send update without them:", [{}])
+        if "id" in arguments and (reminder or any(name in arguments for name in CHANGE_FIELDS)):
+            action = "update"
+        elif "title" in arguments or reminder:
+            action = "create"
+        elif "duration" in arguments:
+            action = "find_free_time"
         else:
-            arguments["action"] = "add_action"
-            problems.choose(
-                text + " To attach one:", [{"when": arguments.get("when", WHEN_STAND_IN)}]
-            )
-
-
-def _inferred_action(
-    arguments: Mapping[str, Any], action_id: bool, has_event_fields: bool
-) -> str | None:
-    if "id" not in arguments:
-        if "title" in arguments:
-            return "create"
-        if any(name in arguments for name in LENGTH_FIELDS) and (
-            "when" in arguments or "start" in arguments
-        ):
-            return "find_free"
-        return "list"
-    if action_id:
-        return "update_action" if any(name in arguments for name in ACTION_FIELDS) else None
-    if "prompt" in arguments and "when" in arguments:
-        return "add_action"
-    if has_event_fields:
-        return "update"
-    return None
-
-
-def _read_recurrence(arguments: dict[str, Any], parts: dict[str, Any], problems: _Problems) -> None:
-    if parts:
-        if "rrule" in arguments and arguments["rrule"] is not None:
-            problems.add("repetition is given twice (rrule and top-level fields); send rrule.")
-            return
-        arguments["rrule"] = parts
-    if "rrule" not in arguments or arguments["rrule"] is None:
-        return
-    start = arguments.get("start")
-    rule = _rule(arguments["rrule"], problems, start if isinstance(start, str) else None)
-    if rule is None:
-        return
-    arguments["rrule"] = rule
-
-
-def _rule(value: Any, problems: _Problems, start: str | None) -> dict[str, Any] | None:
-    """Return a canonical rrule object for an object, RRULE string, or phrase."""
-    if isinstance(value, list):
-        rules = [item for item in value if not (isinstance(item, str) and not item.strip())]
-        if len(rules) != 1:
-            problems.add("rrule takes one repetition rule; send one object.")
-            return None
-        value = rules[0]
-    if isinstance(value, str):
-        text = value.strip()
-        if "=" in text:
-            return _rrule_text(text, problems, start)
-        return _rule_phrase(text, problems)
-    if not isinstance(value, dict):
-        problems.add('rrule must be an object such as {"freq":"weekly"}.')
-        return None
-    rule: dict[str, Any] = {}
-    for key, item in value.items():
-        part = _RULE_PART_KEYS.get(spelling(key)) or _NESTED_RULE_KEYS.get(spelling(key))
-        if part is None:
-            rule[key] = item
-            continue
-        rule[part] = item
-    if isinstance(rule.get("freq"), str):
-        freq = _FREQ_WORDS.get(spelling(rule["freq"]))
-        if freq is not None:
-            rule["freq"] = freq
-    for name in ("interval", "count"):
-        if isinstance(rule.get(name), str) and rule[name].strip().isdecimal():
-            rule[name] = int(rule[name].strip())
-    if "until" in rule and isinstance(rule["until"], str):
-        until = _until_date(rule["until"])
-        if until is None:
-            problems.add(f'rrule until "{rule["until"]}" must be a date such as 2030-06-30.')
-        else:
-            rule["until"] = until
-    if "by_weekday" in rule:
-        days = _weekdays(rule["by_weekday"])
-        if days is None:
-            problems.add("rrule by_weekday must list days such as mo, we, fr.")
-        else:
-            rule["by_weekday"] = days
-    for name in ("interval", "count"):
-        if rule.get(name) is None:
-            rule.pop(name, None)
-    if rule.get("until") is None:
-        rule.pop("until", None)
-    return rule
-
-
-def _rrule_text(text: str, problems: _Problems, start: str | None) -> dict[str, Any] | None:
-    body = text.split(":", 1)[1] if text.upper().startswith("RRULE:") else text
-    fields: dict[str, str] = {}
-    for part in body.split(";"):
-        if not part.strip():
-            continue
-        name, _sep, value = part.partition("=")
-        fields[name.strip().upper()] = value.strip()
-    rule: dict[str, Any] = {}
-    freq = _FREQ_WORDS.get(spelling(fields.get("FREQ", "")))
-    if freq is None:
-        problems.add(
-            f'RRULE FREQ "{fields.get("FREQ", "")}" must be DAILY, WEEKLY, MONTHLY or YEARLY.'
-        )
-        return None
-    rule["freq"] = freq
-    unsupported = sorted(set(fields) - _RRULE_SUPPORTED_PARTS - _start_parts(fields, freq, start))
-    if unsupported:
-        problems.add(
-            f"the calendar cannot repeat by {', '.join(unsupported)}; it repeats by freq, "
-            "interval, count or until, and weekdays for weekly rules, always on the start's "
-            "day and time. The call below repeats that way without "
-            f"{', '.join(unsupported)}; send it only if that is meant."
-        )
-    for key, field in (("INTERVAL", "interval"), ("COUNT", "count")):
-        if number := fields.get(key):
-            # A value that is not a whole number stays text, which validation refuses.
-            rule[field] = int(number) if number.isdecimal() else number
-    if "UNTIL" in fields:
-        until = _until_date(fields["UNTIL"])
-        if until is None:
-            problems.add(f'RRULE UNTIL "{fields["UNTIL"]}" is not a date.')
-            return None
-        rule["until"] = until
-    if "BYDAY" in fields:
-        days = _weekdays(fields["BYDAY"].split(","))
-        if days is None:
-            problems.add(
-                f'RRULE BYDAY "{fields["BYDAY"]}" must list plain weekdays such as MO,WE; '
-                "positions such as 1MO cannot be kept."
-            )
-            return None
-        rule["by_weekday"] = days
-    return rule
-
-
-def _start_parts(fields: Mapping[str, str], freq: str, start: str | None) -> set[str]:
-    """RRULE parts that only restate the start's own day, which every rule repeats on."""
-    day = date.fromisoformat(start[:10]) if start and is_date(start[:10]) else None
-    if day is None:
-        return set()
-    same: set[str] = set()
-    if freq in {"monthly", "yearly"} and fields.get("BYMONTHDAY") == str(day.day):
-        same.add("BYMONTHDAY")
-    if freq == "yearly" and fields.get("BYMONTH") == str(day.month):
-        same.add("BYMONTH")
-    return same
-
-
-def _rule_phrase(text: str, problems: _Problems) -> dict[str, Any] | None:
-    word = spelling(text)
-    if word in _FREQ_WORDS:
-        return {"freq": _FREQ_WORDS[word]}
-    if word in _WEEKDAY_PHRASES:
-        return {"freq": "weekly", "by_weekday": list(_WEEKDAY_PHRASES[word])}
-    match = _EVERY_PHRASE.match(" ".join(text.lower().split()))
-    if match is not None:
-        count, unit = match.groups()
-        rule: dict[str, Any] = {"freq": _FREQ_WORDS[unit]}
-        if count and int(count) > 1:
-            rule["interval"] = int(count)
-        return rule
-    days = _weekdays(re.split(r"[\s,]+", text.lower().removeprefix("every ").strip()))
-    if days is not None:
-        return {"freq": "weekly", "by_weekday": days}
-    problems.add(
-        f'rrule "{text}" is not a repetition rule. Send an object such as '
-        '{"freq":"weekly","by_weekday":["mo"]}.'
-    )
-    return None
-
-
-def _until_date(text: str) -> str | None:
-    value = text.strip()
-    if re.fullmatch(r"\d{8}(T\d{6}Z?)?", value):
-        value = f"{value[:4]}-{value[4:6]}-{value[6:8]}"
-    elif "T" in value:
-        value = value.split("T", 1)[0]
-    try:
-        return date.fromisoformat(value).isoformat()
-    except ValueError:
-        return None
-
-
-def _weekdays(value: Any) -> list[str] | None:
-    items = value if isinstance(value, list) else re.split(r"[\s,]+", str(value))
-    days: list[str] = []
-    for item in items:
-        if not isinstance(item, str) or not item.strip():
-            continue
-        word = spelling(item)
-        code = word if word in _WEEKDAYS else _WEEKDAY_NAMES.get(word)
-        if code is None:
-            return None
-        if code not in days:
-            days.append(code)
-    return days or None
-
-
-def _reads_only(arguments: dict[str, Any], problems: _Problems) -> bool:
-    """list and find_free only read: refuse fields that ask for a change. False stops reading."""
-    action = arguments["action"]
-    changes = [
-        name
-        for name in ("rrule", "notes", "prompt", "target", "session", LOCATION_FIELD)
-        if name in arguments
-    ]
-    if not changes:
-        return True
-    if "title" in arguments and "start" in arguments and "prompt" not in arguments:
-        problems.choose(
-            f"{action} only reads the calendar, but the call describes an event:",
-            [{"action": "create"}],
-        )
-        return False
-    for name in changes:
-        del arguments[name]
-    problems.add(
-        f"{action} only reads the calendar; {', '.join(changes)} would change it. create makes "
-        "an event and add_action attaches an instruction to one. To read the calendar:"
-    )
-    return True
+            action = "list"
+        arguments["action"] = action
+    if reminder is not None and action in {"create", "update"}:
+        when = arguments.pop(WHEN_FIELD, None)
+        if isinstance(when, str) and "schedule" not in reminder:
+            reminder["schedule"] = when
+        arguments[REMINDER_FIELD] = reminder
+    return action if isinstance(action, str) else None
 
 
 def _read_window(arguments: dict[str, Any], problems: _Problems) -> None:
-    """For list and find_free, read start/end or timeMin/timeMax as the window."""
-    start = arguments.pop("start", None)
-    end = arguments.pop(END_FIELD, None)
-    for key in list(arguments):
-        word = spelling(key)
-        if word in _WINDOW_START_KEYS and start is None:
-            start = arguments.pop(key)
-        elif word in _WINDOW_END_KEYS and end is None:
-            end = arguments.pop(key)
-    if start is None and end is None:
-        return
-    if isinstance(start, str) and not isinstance(end, str) and parse_local(start) is not None:
-        # A lone start time reads as its day.
-        start = start.strip()[:10]
-    window = (
-        f"{start}..{end}"
-        if isinstance(start, str) and isinstance(end, str)
-        else start
-        if isinstance(start, str)
-        else None
-    )
-    if window is None:
-        problems.add('a window needs a start; use "when" such as "this week" or "start..end".')
-        return
-    if "when" in arguments and arguments["when"] != window:
-        problems.choose('the window is given twice ("when" and start/end):', [{}, {"when": window}])
-        return
-    arguments["when"] = window
-
-
-def _read_event_times(arguments: dict[str, Any], problems: _Problems) -> None:
-    """``when`` holding a date or time on create/update is the start."""
-    when = arguments.get("when")
-    if isinstance(when, str) and (is_date(when) or parse_local(when) is not None):
-        del arguments["when"]
-        _merge(arguments, "start", when, problems)
-    elif when is not None and "prompt" not in arguments:
-        # With a prompt, the field check explains the action as a whole.
-        text = (
-            '"when" sets an action time or a list window; an event takes "start" (a date or '
-            "local time)."
-        )
-        relative = isinstance(when, str) and _ACTION_WHEN.match(" ".join(when.lower().split()))
-        if relative and "id" in arguments:
-            problems.choose(
-                text + " To attach an action at that time:",
-                [{"action": "add_action", "prompt": "<instruction>"}],
-            )
-        else:
-            problems.choose(text, [{"when": OMIT, "start": "<2030-01-10 or 2030-01-10T15:00>"}])
-
-
-def _read_action_when(arguments: dict[str, Any], problems: _Problems) -> None:
-    """Read reminder-style offsets: '1h before', '-30m', minutes_before."""
-    for key in list(arguments):
-        if spelling(key) in _BEFORE_KEYS:
-            minutes = _number(arguments.pop(key))
-            if minutes is None or minutes < 0 or minutes != int(minutes):
-                problems.add(f'"{key}" must be a whole number of minutes.')
-            else:
-                _merge(arguments, "when", _when_text("start", -int(minutes)), problems)
-    when = arguments.get("when")
-    if isinstance(when, str) and re.fullmatch(r"\s*-?\d+\s*", when):
-        # A bare number of minutes, possibly already turned into text by the schema.
-        when = int(when)
-    if isinstance(when, (int, float)) and not isinstance(when, bool):
-        if when == int(when) and when < 0:
-            arguments["when"] = _when_text("start", int(when))
-            return
-        problems.choose(
-            f"when {when} has no anchor or unit:",
-            [
-                {"when": _when_text("start", -abs(int(when)))},
-                {"when": _when_text("end", abs(int(when)))},
-            ],
-        )
-        return
-    if not isinstance(when, str):
-        return
-    text = " ".join(when.lower().split())
-    if _ACTION_WHEN.match(text):
-        arguments["when"] = _canonical_when(text)
-        return
-    phrase = _RELATIVE_PHRASE.match(text)
-    if phrase is not None:
-        amount, unit, relation, anchor = phrase.groups()
-        minutes = _offset_minutes(amount, unit) if amount else 0
-        if minutes is None:
-            problems.add(f'when "{when}" needs a duration in m, h or d, e.g. "start - 1h".')
-            return
-        base = {"begin": "start", "beginning": "start", "event": None}.get(anchor or "", anchor)
-        if relation == "at":
-            arguments["when"] = base or "start"
-        elif relation == "before":
-            arguments["when"] = _when_text(base or "start", -minutes)
-        elif base is not None:
-            arguments["when"] = _when_text(base, minutes)
-        else:
-            problems.choose(
-                f'when "{when}" can mean after the start or after the end:',
-                [
-                    {"when": _when_text("start", minutes)},
-                    {"when": _when_text("end", minutes)},
-                ],
-            )
-        return
-    signed = _SIGNED_OFFSET.match(text)
-    if signed is not None:
-        sign, amount, unit = signed.groups()
-        minutes = _offset_minutes(amount, unit or "m")
-        if minutes is None:
-            problems.add(f'when "{when}" needs a duration in m, h or d, e.g. "start - 1h".')
-        elif sign == "-":
-            arguments["when"] = _when_text("start", -minutes)
-        else:
-            problems.choose(
-                f'when "{when}" can count from the start or from the end:',
-                [
-                    {"when": _when_text("start", minutes)},
-                    {"when": _when_text("end", minutes)},
-                ],
-            )
-
-
-def _canonical_when(text: str) -> str:
-    match = _ACTION_WHEN.match(text)
-    assert match is not None
-    anchor, sign, count, unit = match.groups()
-    return f"{anchor} {sign} {count}{unit}" if sign else anchor
-
-
-def _when_text(anchor: str, minutes: int) -> str:
-    if minutes == 0:
-        return anchor
-    return f"{anchor} {'-' if minutes < 0 else '+'} {minutes_text(abs(minutes))}"
-
-
-def _offset_minutes(amount: str | None, unit: str | None) -> int | None:
-    if amount is None:
-        return None
-    number = float(amount)
-    word = (unit or "").strip()
-    factor = _MINUTE_UNITS.get(word) or (1440 if word in _DAY_UNITS else None)
-    if factor is None:
-        return None
-    minutes = number * factor
-    return int(minutes) if minutes == int(minutes) else None
-
-
-def _read_duration(arguments: dict[str, Any], problems: _Problems) -> None:
-    """Read a duration written with a unit ("1.5h", "2 days", "PT90M") as minutes or days.
-
-    The unit, not the event, decides which: the handler relates the length to the
-    start, which a call that changes only the length does not carry.
-    """
-    duration = arguments.get("duration")
-    if not isinstance(duration, str) or duration.strip().isdigit():
-        return
-    minutes, days = _duration_units(duration.strip().lower())
-    if minutes is not None:
-        del arguments["duration"]
-        _merge(arguments, DURATION_MINUTES_FIELD, minutes, problems)
-    elif days is not None:
-        del arguments["duration"]
-        _merge(arguments, DURATION_DAYS_FIELD, days, problems)
+    """list and find_free_time read a window: start and end name its bounds."""
+    for edge, bound in (("start", "time_min"), ("end", "time_max")):
+        if edge in arguments:
+            _merge(arguments, bound, arguments.pop(edge), problems)
+    if arguments["action"] == "list":
+        if "title" in arguments and "query" not in arguments:
+            arguments["query"] = arguments["title"]
+        keep = {"action", "id", "time_min", "time_max", "query", WHEN_FIELD}
     else:
-        problems.add(
-            f'duration "{duration}" is not a length. Send a whole number: minutes for a timed '
-            "event, days for an all-day event."
-        )
-        arguments["duration"] = STAND_INS["duration"]
+        keep = {"action", "time_min", "time_max", "duration", WHEN_FIELD}
+        if "duration" in arguments:
+            minutes = duration_minutes(arguments["duration"])
+            if minutes is None:
+                problems.add(f'duration "{arguments["duration"]}" is not a number of minutes.')
+                arguments["duration"] = STAND_INS["duration"]
+            else:
+                arguments["duration"] = minutes
+    for name in list(arguments):
+        if name not in keep:
+            del arguments[name]
 
 
-def _duration_units(text: str) -> tuple[int | None, int | None]:
-    """Whole positive minutes or days a duration text names; (None, None) when unreadable."""
-    iso = _ISO_DURATION.match(text)
-    if iso is not None and any(iso.groups()):
-        weeks, day_count, hours, mins, seconds = (int(part or 0) for part in iso.groups())
-        if seconds or ((weeks or day_count) and (hours or mins)):
-            return None, None
-        if weeks or day_count:
-            return None, weeks * 7 + day_count
-        return hours * 60 + mins or None, None
-    match = _DURATION_TEXT.match(text)
-    if match is None:
-        return None, None
-    number, unit = float(match.group(1)), match.group(2)
-    if unit in _MINUTE_UNITS:
-        minutes = number * _MINUTE_UNITS[unit]
-        return (int(minutes), None) if minutes == int(minutes) and minutes > 0 else (None, None)
-    whole = int(number) if number == int(number) and number > 0 else None
-    if unit in _DAY_UNITS and whole is not None:
-        return None, whole
-    if unit in {"w", "week", "weeks"} and whole is not None:
-        return None, whole * 7
-    return None, None
-
-
-def _check_fields(arguments: dict[str, Any], problems: _Problems) -> None:
-    """Refuse fields that point to another action than the one named; drop unused ones."""
-    action = arguments.get("action")
-    if action in _WINDOW_ACTIONS:
-        if problems.choice is not None:
-            return
-        if action == "list" and "title" in arguments and QUERY_FIELD not in arguments:
-            # A title on a read names what to look for.
-            arguments[QUERY_FIELD] = arguments["title"]
-        keep = {"action", "when", TIMEZONE_FIELD}
-        keep |= set(LENGTH_FIELDS) if action == "find_free" else {QUERY_FIELD, "id"}
-        for name in list(arguments):
-            if name not in keep:
-                del arguments[name]
-        return
-    arguments.pop(QUERY_FIELD, None)
+def _read_event(arguments: dict[str, Any], original_start: str | None, problems: _Problems) -> None:
+    """create, update and delete: an event's times, rule and the occurrence they name."""
+    action = arguments["action"]
+    when = arguments.pop(WHEN_FIELD, None)
+    if isinstance(when, str) and "start" not in arguments and _is_time(when):
+        arguments["start"] = when.strip()
+    for name in ("time_min", "time_max", "query"):
+        arguments.pop(name, None)
+    item_id = arguments.get("id")
+    if isinstance(item_id, str) and original_start and parse_occurrence_id(item_id) is None:
+        arguments["id"] = occurrence_id(item_id, original_start)
     if action == "create":
+        if arguments.get("rrule") == "":
+            del arguments["rrule"]
         if "id" in arguments:
             problems.choose(
                 f'create makes a new event and takes no id; to change "{arguments["id"]}" use '
                 "update:",
                 [{"action": "update"}, {"id": OMIT}],
             )
-            return
-        action_fields = [name for name in ACTION_FIELDS if name in arguments]
-        if action_fields:
-            verb = "belongs" if len(action_fields) == 1 else "belong"
-            for name in action_fields:
-                del arguments[name]
-            problems.choose(
-                f"{', '.join(action_fields)} {verb} to an action, which attaches to an existing "
-                'event. Create the event first, then send add_action with its id, "when" and '
-                "prompt. The create call:",
-                [{}],
-            )
-        return
+    if "duration" in arguments:
+        _read_length(arguments, problems)
     if action == "delete":
-        # A start on delete names the occurrence to remove, not a change.
-        changes = [name for name in EVENT_CHANGE_FIELDS if name != "start" and name in arguments]
-        for name in ACTION_FIELDS:
-            arguments.pop(name, None)
-        if "start" not in arguments:
-            arguments.pop(TIMEZONE_FIELD, None)
+        changes = [name for name in CHANGE_FIELDS if name in arguments]
         if changes and "id" in arguments:
             problems.choose(
                 "delete removes the event, but the call also sends changes:",
-                [
-                    dict.fromkeys((*changes, TIMEZONE_FIELD), OMIT),
-                    {"action": "update", "start": OMIT},
-                ],
+                [dict.fromkeys(changes, OMIT), {"action": "update"}],
             )
+
+
+def _read_length(arguments: dict[str, Any], problems: _Problems) -> None:
+    """Turn a create or update length into the end it gives, counted from the start sent."""
+    length = arguments.pop("duration")
+    minutes = duration_minutes(length)
+    start = arguments.get("start")
+    start = start.strip() if isinstance(start, str) else None
+    end = None if minutes is None or start is None else _end_after(start, minutes)
+    if end is None:
+        if minutes is None:
+            reason = f'duration "{length}" is not a length'
+        elif start is None:
+            reason = "duration counts from start, which this call does not send"
+        elif _DATE.match(start):
+            reason = f"an all-day event lasts whole days, but duration {length} is minutes"
+        else:
+            return  # The calendar explains a malformed start.
+        problems.add(f"{reason}; send end instead.")
+        arguments.setdefault("end", STAND_INS["end"])
         return
-    if action in {"add_action", "update_action"} and "when" not in arguments:
-        start = arguments.get("start")
-        if isinstance(start, str):
-            # A due time sent as start; the handler relates it to the event.
-            arguments["when"] = arguments.pop("start")
-    if action in _ACTION_ACTIONS:
-        # Event fields stay: the handler names the ones it does not apply, and a title
-        # without an id finds the event.
-        when = arguments.get("when")
-        clock_time = isinstance(when, str) and (is_date(when) or parse_local(when) is not None)
-        event_times = "start" in arguments or END_FIELD in arguments
-        if (action == "delete_action" or not clock_time) and not event_times:
-            # A zone matters for a clock-time when, which the handler relates to the event,
-            # and for event times, which the handler names with their zone.
-            arguments.pop(TIMEZONE_FIELD, None)
-        sent = [name for name in ACTION_FIELDS if name in arguments]
-        if action == "delete_action" and sent:
-            verb = "change" if len(sent) > 1 else "changes"
-            problems.choose(
-                f"delete_action removes the action, but the call also sends {', '.join(sent)}, "
-                f"which {verb} it. Either delete it or change it:",
-                [
-                    dict.fromkeys(sent, OMIT),
-                    {"action": "update_action"},
-                ],
-            )
+    if "end" in arguments and arguments["end"] != end:
+        problems.choose('"end" and "duration" give different ends:', [{}, {"end": end}])
+        return
+    arguments["end"] = end
 
 
-def _number(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
+def _end_after(start: str, minutes: int) -> str | None:
+    """The end ``minutes`` after a start, on the wall clock; None when the kinds do not fit."""
+    if _DATE.match(start):
+        if minutes % 1440:
+            return None
         try:
-            return float(value.strip())
+            return (date.fromisoformat(start) + timedelta(days=minutes // 1440)).isoformat()
         except ValueError:
             return None
-    return None
+    try:
+        begin = datetime.fromisoformat(start)
+    except ValueError:
+        return None
+    return (begin + timedelta(minutes=minutes)).isoformat(timespec="minutes")
+
+
+def _is_time(text: str) -> bool:
+    try:
+        datetime.fromisoformat(text.strip())
+    except ValueError:
+        return False
+    return True
+
+
+def _merge(arguments: dict[str, Any], name: str, item: Any, problems: _Problems) -> None:
+    if name in arguments and arguments[name] != item:
+        problems.choose(
+            f'"{name}" is given twice with different values:',
+            [{name: arguments[name]}, {name: item}],
+        )
+        return
+    arguments[name] = item
 
 
 __all__ = [
-    "DURATION_DAYS_FIELD",
-    "DURATION_MINUTES_FIELD",
-    "END_FIELD",
-    "EVENT_CHANGE_FIELDS",
-    "LENGTH_FIELDS",
-    "LOCATION_FIELD",
+    "CHANGE_FIELDS",
     "OMIT",
-    "QUERY_FIELD",
     "REFUSAL_PREFIX",
+    "REMINDER_FIELD",
+    "REMINDER_PROMPT_STAND_IN",
+    "REMINDER_SCHEDULE_STAND_IN",
     "STAND_INS",
-    "TIMEZONE_FIELD",
     "UNADVERTISED_PARAMETERS",
-    "WHEN_STAND_IN",
+    "WHEN_FIELD",
+    "WINDOW_ACTIONS",
     "CalendarCallRefusedError",
-    "choice",
-    "is_date",
-    "is_time_of_day",
-    "minutes_text",
+    "length_text",
     "normalize_calendar_arguments",
-    "parse_date",
-    "parse_local",
-    "parse_time_of_day",
     "refusal",
     "render_call",
 ]

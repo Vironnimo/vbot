@@ -252,16 +252,6 @@ async def test_a_refused_agent_rename_leaves_every_agent_in_place(
     assert state.event_bus.events == []
 
 
-def _calendar_action(**fields: Any) -> Callable[[Any], None]:
-    """List one Calendar action for the Agent ``coder`` unless *fields* say otherwise."""
-
-    def arrange(state: Any) -> None:
-        action = {"id": "act-coder", "event_id": "evt-1", "target": "coder", **fields}
-        state.runtime.calendar_service.actions.actions.append(action)
-
-    return arrange
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("arrange", "code", "named"),
@@ -280,7 +270,6 @@ def _calendar_action(**fields: Any) -> Callable[[Any], None]:
             "bootstrap:boot-coder",
             id="bootstrap",
         ),
-        pytest.param(_calendar_action(), "agent_in_use", "calendar:act-coder", id="calendar"),
     ],
 )
 async def test_agent_delete_refuses_a_referenced_agent(
@@ -348,8 +337,6 @@ async def test_agent_delete_refuses_the_last_agent(tmp_path: Path) -> None:
         # same-named identity Agent.
         pytest.param(_listed_job("cron_service", project_id="vbot"), id="project-qualified"),
         pytest.param(_listed_job("cron_service", status="completed"), id="terminal-history"),
-        # An action that can no longer fire, for example of a past one-time event.
-        pytest.param(_calendar_action(spent=True), id="calendar-used-up"),
     ],
 )
 async def test_agent_delete_ignores_automations_that_never_start_a_run_for_the_agent(

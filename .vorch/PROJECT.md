@@ -70,7 +70,7 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 | storage.md | `core/storage/` | Data-directory layout, temp-file lifecycle, persistence |
 | skills.md | `core/skills/` | Skill loading/validation, scopes, authoring, history and archive, Prompt-Epoch Catalog |
 | automation.md | `core/automation/` | Cron/Bootstrap triggering, queue semantics, Reflection, Librarian passes |
-| calendar.md | `core/calendar/` | Local events, recurrence, event-relative Agent actions, cron projection, calendar tool |
+| calendar.md | `core/calendar/` | Local events, recurrence, occurrence changes, event deletion with its Cron jobs, cron projection, calendar tool |
 | channels.md | `core/channels/` | Channel adapters, conversation engine, outbound send |
 | model-communication.md | cross-cutting | Sanctioned kernel-to-Model channels; never invent one |
 | server.md | `server/` | Transport/RPC boundary, events, source routing |

@@ -194,13 +194,6 @@ def _cron_job(**fields: Any) -> dict[str, list[Any]]:
             "bootstrap:boot-1",
             id="bootstrap",
         ),
-        pytest.param(
-            {"calendar_actions": [{"id": "act-1", "event_id": "evt-1", "target": "builder@vbot"}]},
-            "vbot",
-            "project_in_use",
-            "calendar:act-1",
-            id="calendar",
-        ),
         pytest.param({}, "ghost", "project_not_found", "", id="unknown-project"),
     ],
 )
@@ -225,15 +218,6 @@ async def test_rm_refusals_keep_the_project(
         pytest.param(_cron_job(project_id=None), id="bare-identity-job"),
         pytest.param(_cron_job(status="missed"), id="terminal-history"),
         pytest.param(_cron_job(project_id="other"), id="other-project"),
-        # An action that can no longer fire, for example of a past one-time event.
-        pytest.param(
-            {
-                "calendar_actions": [
-                    {"id": "act-1", "event_id": "evt-1", "target": "builder@vbot", "spent": True}
-                ]
-            },
-            id="calendar-used-up",
-        ),
     ],
 )
 async def test_rm_ignores_automations_that_never_start_a_run_for_the_project(

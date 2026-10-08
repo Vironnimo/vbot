@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.automation.cron import CronJobValidationError, CronService
 from core.projects import format_agent_address
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
@@ -18,7 +19,7 @@ from server.rpc.validation import (
 )
 
 JsonObject = dict[str, Any]
-CRON_SCHEDULE_TYPES = frozenset(("cron", "interval", "once"))
+CRON_SCHEDULE_TYPES = frozenset(("cron", "interval", "once", "event"))
 CRON_JOB_STATUSES = frozenset(("active", "paused"))
 BOOTSTRAP_MODES = frozenset(("once", "always"))
 
@@ -32,6 +33,8 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
         "cron_expression",
         "interval_seconds",
         "run_at",
+        "event_id",
+        "event_time",
         "repeat",
         "session_id",
     }
@@ -56,8 +59,23 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
     run_at = _optional_string(params, "run_at")
     repeat = _optional_positive_integer(params, "repeat")
     session_id = _optional_string(params, "session_id")
+    event_fields: JsonObject = {}
 
-    if schedule_type == "cron":
+    if schedule_type == "event":
+        event_id = _optional_string(params, "event_id")
+        if event_id is None:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "params.event_id is required when params.schedule_type is 'event'",
+            )
+        event_fields = {
+            "event_id": event_id,
+            **_event_time_fields(_optional_string(params, "event_time") or "start"),
+        }
+        cron_expression = None
+        interval_seconds = None
+        run_at = None
+    elif schedule_type == "cron":
         if cron_expression is None:
             raise RpcError(
                 RPC_ERROR_INVALID_REQUEST,
@@ -101,6 +119,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
                 session_id=session_id,
                 project_id=project_id,
                 actor="rpc",
+                **event_fields,
             )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -132,6 +151,8 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
         "cron_expression",
         "interval_seconds",
         "run_at",
+        "event_id",
+        "event_time",
         "repeat",
         "session_id",
         "status",
@@ -172,6 +193,10 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
         updates["interval_seconds"] = interval_seconds
     if "run_at" in params:
         updates["run_at"] = _required_string(params, "run_at")
+    if "event_id" in params:
+        updates["event_id"] = _required_string(params, "event_id")
+    if "event_time" in params:
+        updates.update(_event_time_fields(_required_string(params, "event_time")))
     if "repeat" in params:
         repeat = _optional_positive_integer(params, "repeat")
         if updates.get("schedule_type") == "once" and repeat is None:
@@ -233,7 +258,17 @@ async def _cron_disable(state: Any, params: JsonObject) -> JsonObject:
     return _cron_job_response(state.runtime.cron_service, job)
 
 
+def _event_time_fields(event_time: str) -> JsonObject:
+    """The job fields of an event time such as ``start - 30m``."""
+    try:
+        edge, offset = CronService.parse_event_time(event_time)
+    except CronJobValidationError as error:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.event_time: {error}") from error
+    return {"event_edge": edge, "event_offset_minutes": offset}
+
+
 def _cron_job_response(cron_service: Any, job: Any) -> JsonObject:
+    event = cron_service.bound_event(job) if job.schedule_type == "event" else None
     return {
         "id": job.id,
         "agent_id": job.agent_id,
@@ -249,6 +284,11 @@ def _cron_job_response(cron_service: Any, job: Any) -> JsonObject:
         "interval_seconds": job.interval_seconds,
         "interval_anchor_at": job.interval_anchor_at,
         "run_at": job.run_at,
+        "event_id": job.event_id,
+        "event_edge": job.event_edge,
+        "event_offset_minutes": job.event_offset_minutes,
+        # None for another schedule, or while the event is gone or unreadable.
+        "event_title": None if event is None else event.title,
         "remaining_runs": job.remaining_runs,
         "session_id": job.session_id,
         "status": job.status,

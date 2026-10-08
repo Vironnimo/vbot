@@ -1,59 +1,60 @@
-"""RFC 5545 recurrence semantics for the calendar domain (v1 subset).
+"""RFC 5545 repetition rules of calendar events.
 
-Recurrence follows RFC 5545 wall-clock anchoring: a recurring event starts at a
-local wall time in its IANA zone, so "every Monday 09:00" stays 09:00 across DST
-transitions. Expansion runs on naive local datetimes and attaches the zone per
-occurrence afterwards. The v1 subset covers daily/weekly/monthly/yearly
-frequencies, an interval, a count or inclusive until date, and weekday
-restrictions for weekly rules; anything richer is rejected instead of being
-expanded incorrectly.
+An event repeats by one RRULE, stored without its ``RRULE:`` prefix. A timed
+event repeats at a local wall-clock time in its IANA zone, so "every Monday
+09:00" stays 09:00 across DST transitions: dateutil expands the rule on naive
+local datetimes, and the zone is attached to each occurrence afterwards. An
+all-day event repeats on dates, expanded from local midnight.
+
+The calendar expands rules of daily or coarser frequency with every BY part
+RFC 5545 defines except BYSECOND. A rule that never produces an occurrence is
+refused instead of being stored.
 """
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, date, datetime, time, timedelta
-from typing import Any, cast
+from typing import cast
 from zoneinfo import ZoneInfo
 
-from dateutil.rrule import (
-    DAILY,
-    FR,
-    MO,
-    MONTHLY,
-    SA,
-    SU,
-    TH,
-    TU,
-    WE,
-    WEEKLY,
-    YEARLY,
-    rrule,
-)
+from dateutil.rrule import rrule, rrulestr
 
 from core.calendar.errors import CalendarValidationError
 
-ALLOWED_RRULE_FREQS = frozenset(("daily", "weekly", "monthly", "yearly"))
-WEEKDAY_CODES = ("mo", "tu", "we", "th", "fr", "sa", "su")
+RRULE_FREQUENCIES = ("DAILY", "WEEKLY", "MONTHLY", "YEARLY")
 MAX_RRULE_INTERVAL = 1000
 MAX_RRULE_COUNT = 10000
+MAX_RRULE_LENGTH = 500
+# BYHOUR x BYMINUTE: how many starts a rule may give one day.
+MAX_DAILY_STARTS = 24
+# Events start in these years: the probe below shifts a start by whole Gregorian
+# cycles towards the last year dateutil expands.
+FIRST_EVENT_YEAR = 1000
+LAST_EVENT_YEAR = 9000
 
-RRULE_FIELDS = frozenset(("freq", "interval", "count", "until", "by_weekday"))
-_DATEUTIL_FREQS = {
-    "daily": DAILY,
-    "weekly": WEEKLY,
-    "monthly": MONTHLY,
-    "yearly": YEARLY,
-}
-_DATEUTIL_WEEKDAYS = {
-    "mo": MO,
-    "tu": TU,
-    "we": WE,
-    "th": TH,
-    "fr": FR,
-    "sa": SA,
-    "su": SU,
-}
+_PARTS = (
+    "FREQ",
+    "INTERVAL",
+    "COUNT",
+    "UNTIL",
+    "BYMONTH",
+    "BYWEEKNO",
+    "BYYEARDAY",
+    "BYMONTHDAY",
+    "BYDAY",
+    "BYHOUR",
+    "BYMINUTE",
+    "BYSETPOS",
+    "WKST",
+)
+_UNTIL = re.compile(r"(\d{8})(?:T(\d{6})(Z?))?")
+_PREFIX = "RRULE:"
 _END_OF_DAY = time(23, 59, 59)
+# The Gregorian calendar repeats every 400 years, weekdays included.
+_CYCLE_YEARS = 400
+_MAX_YEAR = 9999
+_RULE_EXAMPLE = "such as FREQ=WEEKLY;BYDAY=MO,WE"
 
 
 def parse_date_string(value: object, *, field_name: str) -> date:
@@ -66,65 +67,43 @@ def parse_date_string(value: object, *, field_name: str) -> date:
         raise CalendarValidationError(f"{field_name} must be a date in YYYY-MM-DD form") from error
 
 
-def normalize_rrule(payload: object) -> dict[str, Any] | None:
-    """Validate and normalize one rrule payload into its persisted form."""
-    if payload is None:
+def normalize_rrule(value: object, *, start: datetime, zone: ZoneInfo | None) -> str | None:
+    """Validate one RRULE text for an event starting at ``start``; return its stored form.
+
+    ``start`` is the event's naive local start, midnight for an all-day event;
+    ``zone`` is a timed event's zone and None for an all-day event. An ``RRULE:``
+    prefix and any letter case are accepted. None or an empty text means no
+    repetition. The stored form names FREQ first and keeps the other parts in
+    the order given.
+    """
+    if value is None:
         return None
-    if not isinstance(payload, dict):
-        raise CalendarValidationError("rrule must be an object")
-    unknown_fields = sorted(set(payload) - RRULE_FIELDS)
-    if unknown_fields:
-        raise CalendarValidationError(f"Unsupported rrule fields: {', '.join(unknown_fields)}")
+    if not isinstance(value, str):
+        raise CalendarValidationError(f"rrule must be a text {_RULE_EXAMPLE}")
+    text = "".join(value.split()).upper()
+    if text.startswith(_PREFIX):
+        text = text[len(_PREFIX) :]
+    text = text.strip(";")
+    if not text:
+        return None
+    if len(text) > MAX_RRULE_LENGTH:
+        raise CalendarValidationError(f"rrule must not exceed {MAX_RRULE_LENGTH} characters")
+    parts = _rule_parts(text)
+    _check_parts(parts, all_day=zone is None)
+    if not text.isascii():
+        raise CalendarValidationError(f"rrule must be plain ASCII text {_RULE_EXAMPLE}")
+    rule = _build(parts, start, zone)
+    _check_first_occurrence(rule, parts, start, zone)
+    ordered = {"FREQ": parts["FREQ"]} | parts
+    return ";".join(f"{key}={item}" for key, item in ordered.items())
 
-    freq = payload.get("freq")
-    if not isinstance(freq, str) or freq not in _DATEUTIL_FREQS:
-        options = ", ".join(sorted(_DATEUTIL_FREQS))
-        raise CalendarValidationError(f"rrule.freq must be one of: {options}")
 
-    interval = payload.get("interval", 1)
-    if (
-        isinstance(interval, bool)
-        or not isinstance(interval, int)
-        or not 1 <= interval <= MAX_RRULE_INTERVAL
-    ):
-        raise CalendarValidationError(
-            f"rrule.interval must be an integer between 1 and {MAX_RRULE_INTERVAL}"
-        )
+def build_rule(rule_text: str, start: datetime, zone: ZoneInfo | None) -> rrule:
+    """The dateutil rule of a stored RRULE for an event starting at ``start``.
 
-    count = payload.get("count")
-    if count is not None and (
-        isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MAX_RRULE_COUNT
-    ):
-        raise CalendarValidationError(
-            f"rrule.count must be an integer between 1 and {MAX_RRULE_COUNT}"
-        )
-
-    until = payload.get("until")
-    if count is not None and until is not None:
-        raise CalendarValidationError("rrule must use either count or until, not both")
-    until_date = None if until is None else parse_date_string(until, field_name="rrule.until")
-
-    by_weekday = payload.get("by_weekday")
-    if by_weekday is not None:
-        if freq != "weekly":
-            raise CalendarValidationError("rrule.by_weekday is only valid for weekly recurrence")
-        if (
-            not isinstance(by_weekday, list)
-            or not by_weekday
-            or not all(isinstance(code, str) and code in _DATEUTIL_WEEKDAYS for code in by_weekday)
-        ):
-            raise CalendarValidationError(
-                "rrule.by_weekday must be a non-empty list drawn from: " + ", ".join(WEEKDAY_CODES)
-            )
-        by_weekday = sorted(set(by_weekday))
-
-    return {
-        "freq": freq,
-        "interval": interval,
-        "count": count,
-        "until": until_date.isoformat() if until_date is not None else None,
-        "by_weekday": by_weekday,
-    }
+    ``start`` and ``zone`` mean what they mean for :func:`normalize_rrule`.
+    """
+    return _build(_rule_parts(rule_text), start, zone)
 
 
 def resolve_local_span(
@@ -140,147 +119,123 @@ def resolve_local_span(
     return local_start.astimezone(UTC), (local_start + duration).astimezone(UTC)
 
 
-def expand_recurring_timed(
-    *,
-    start_local: datetime,
-    tz: ZoneInfo,
-    rrule_spec: dict[str, Any],
-    duration_minutes: int,
-    exdates: frozenset[str],
-    window_start_utc: datetime,
-    window_end_utc: datetime,
-    max_occurrences: int,
-) -> list[tuple[datetime, datetime]]:
-    """Expand one recurring timed event into UTC (start, end) pairs.
-
-    Returns occurrences overlapping the half-open window. Occurrence ends use
-    wall-clock arithmetic in the event zone. A start in a DST gap is shifted
-    forward by the gap before adding its duration; ambiguous starts use the
-    first occurrence (fold=0).
-    """
-    duration = timedelta(minutes=duration_minutes)
-    window_start_local = window_start_utc.astimezone(tz).replace(tzinfo=None)
-    window_end_local = window_end_utc.astimezone(tz).replace(tzinfo=None)
-    rule = _build_rrule(start_local, rrule_spec)
-    candidates = rule.between(
-        window_start_local - duration - timedelta(days=1),
-        window_end_local + timedelta(days=1),
-        inc=True,
-    )
-
-    occurrences: list[tuple[datetime, datetime]] = []
-    for naive_start in candidates:
-        if naive_start.isoformat() in exdates:
-            continue
-        if naive_start < start_local:
-            continue
-        start_utc, end_utc = resolve_local_span(naive_start, tz, duration)
-        if start_utc.astimezone(tz).replace(tzinfo=None).isoformat() in exdates:
-            continue
-        if end_utc <= window_start_utc or start_utc >= window_end_utc:
-            continue
-        occurrences.append((start_utc, end_utc))
-        if len(occurrences) >= max_occurrences:
-            break
-    return occurrences
+def _rule_parts(text: str) -> dict[str, str]:
+    parts: dict[str, str] = {}
+    for item in text.split(";"):
+        key, separator, part_value = item.partition("=")
+        if not separator or not key or not part_value:
+            raise CalendarValidationError(
+                f'rrule part "{item}" must be NAME=VALUE, {_RULE_EXAMPLE}'
+            )
+        if key not in _PARTS:
+            raise CalendarValidationError(f"rrule part {key} is not supported")
+        if key in parts:
+            raise CalendarValidationError(f"rrule gives {key} twice")
+        parts[key] = part_value
+    return parts
 
 
-def expand_recurring_allday(
-    *,
-    start_date: date,
-    duration_days: int,
-    rrule_spec: dict[str, Any],
-    exdates: frozenset[str],
-    window_start_utc: datetime,
-    window_end_utc: datetime,
-    system_tz: ZoneInfo,
-    max_occurrences: int,
-) -> list[tuple[date, date]]:
-    """Expand one recurring all-day event into inclusive (start, exclusive end) dates."""
-    window_start_date = window_start_utc.astimezone(system_tz).date()
-    window_end_date = window_end_utc.astimezone(system_tz).date()
-    rule = _build_rrule(datetime.combine(start_date, time.min), rrule_spec)
-    lookback_start = datetime.combine(window_start_date - timedelta(days=duration_days), time.min)
-    window_end_bound = datetime.combine(window_end_date, time.min)
-    candidates = rule.between(lookback_start, window_end_bound, inc=True)
-
-    occurrences: list[tuple[date, date]] = []
-    for naive_start in candidates:
-        occurrence_date = naive_start.date()
-        if occurrence_date.isoformat() in exdates:
-            continue
-        occurrence_end = occurrence_date + timedelta(days=duration_days)
-        start_utc = datetime.combine(occurrence_date, time.min, tzinfo=system_tz).astimezone(UTC)
-        end_utc = datetime.combine(occurrence_end, time.min, tzinfo=system_tz).astimezone(UTC)
-        if end_utc <= window_start_utc or start_utc >= window_end_utc:
-            continue
-        occurrences.append((occurrence_date, occurrence_end))
-        if len(occurrences) >= max_occurrences:
-            break
-    return occurrences
-
-
-def recurring_timed_next_start(
-    *,
-    start_local: datetime,
-    tz: ZoneInfo,
-    rrule_spec: dict[str, Any],
-    exdates: frozenset[str],
-    from_utc: datetime,
-) -> datetime | None:
-    """The UTC start of a recurring timed event's first occurrence at or after ``from_utc``.
-
-    Uses the start arithmetic and EXDATE matching of :func:`expand_recurring_timed`,
-    so a series ended by its count, its until date or removed occurrences has none.
-    """
-    rule = _build_rrule(start_local, rrule_spec)
-    # A day earlier covers a DST-gap start that shifts forward past ``from_utc``.
-    after = from_utc.astimezone(tz).replace(tzinfo=None) - timedelta(days=1)
-    for naive_start in rule.xafter(after, inc=True):
-        if naive_start.isoformat() in exdates or naive_start < start_local:
-            continue
-        start_utc, _ = resolve_local_span(naive_start, tz, timedelta())
-        if start_utc.astimezone(tz).replace(tzinfo=None).isoformat() in exdates:
-            continue
-        if start_utc >= from_utc:
-            return start_utc
-    return None
-
-
-def recurring_allday_next_start(
-    *,
-    start_date: date,
-    rrule_spec: dict[str, Any],
-    exdates: frozenset[str],
-    from_utc: datetime,
-    system_tz: ZoneInfo,
-) -> datetime | None:
-    """The UTC start of a recurring all-day event's first occurrence at or after ``from_utc``.
-
-    An all-day occurrence starts at midnight in the system time zone, as in
-    :func:`expand_recurring_allday`.
-    """
-    rule = _build_rrule(datetime.combine(start_date, time.min), rrule_spec)
-    after = datetime.combine(from_utc.astimezone(system_tz).date() - timedelta(days=1), time.min)
-    for naive_start in rule.xafter(after, inc=True):
-        occurrence_date = naive_start.date()
-        if occurrence_date.isoformat() in exdates:
-            continue
-        start_utc = datetime.combine(occurrence_date, time.min, tzinfo=system_tz).astimezone(UTC)
-        if start_utc >= from_utc:
-            return start_utc
-    return None
-
-
-def _build_rrule(dtstart: datetime, spec: dict[str, Any]) -> rrule:
-    kwargs: dict[str, Any] = {"dtstart": dtstart, "interval": spec["interval"]}
-    if spec.get("count") is not None:
-        kwargs["count"] = spec["count"]
-    if spec.get("until") is not None:
-        kwargs["until"] = datetime.combine(
-            parse_date_string(spec["until"], field_name="rrule.until"), _END_OF_DAY
+def _check_parts(parts: dict[str, str], *, all_day: bool) -> None:
+    frequency = parts.get("FREQ")
+    if frequency not in RRULE_FREQUENCIES:
+        raise CalendarValidationError("rrule FREQ must be DAILY, WEEKLY, MONTHLY or YEARLY")
+    _check_whole_number(parts, "INTERVAL", MAX_RRULE_INTERVAL)
+    _check_whole_number(parts, "COUNT", MAX_RRULE_COUNT)
+    if "COUNT" in parts and "UNTIL" in parts:
+        raise CalendarValidationError("rrule must give COUNT or UNTIL, not both")
+    if "UNTIL" in parts and _UNTIL.fullmatch(parts["UNTIL"]) is None:
+        raise CalendarValidationError(
+            "rrule UNTIL must be a date such as 20301231, or a time such as 20301231T235959Z"
         )
-    if spec.get("by_weekday"):
-        kwargs["byweekday"] = tuple(_DATEUTIL_WEEKDAYS[code] for code in spec["by_weekday"])
-    frequency = cast(Any, _DATEUTIL_FREQS[spec["freq"]])
-    return cast(rrule, rrule(frequency, **kwargs))
+    if all_day and ("BYHOUR" in parts or "BYMINUTE" in parts):
+        raise CalendarValidationError(
+            "an all-day event repeats on days; rrule must not give BYHOUR or BYMINUTE"
+        )
+    starts = len(parts.get("BYHOUR", "0").split(",")) * len(parts.get("BYMINUTE", "0").split(","))
+    if starts > MAX_DAILY_STARTS:
+        raise CalendarValidationError(
+            f"rrule must not repeat more than {MAX_DAILY_STARTS} times a day"
+        )
+
+
+def _check_whole_number(parts: dict[str, str], key: str, maximum: int) -> None:
+    text = parts.get(key)
+    if text is not None and (
+        not (text.isascii() and text.isdecimal()) or not 1 <= int(text) <= maximum
+    ):
+        raise CalendarValidationError(f"rrule {key} must be a whole number from 1 to {maximum}")
+
+
+def _build(parts: dict[str, str], start: datetime, zone: ZoneInfo | None) -> rrule:
+    expanded = ";".join(f"{key}={item}" for key, item in parts.items() if key != "UNTIL")
+    try:
+        rule = cast(rrule, rrulestr(f"{_PREFIX}{expanded}", dtstart=start))
+    except (ValueError, TypeError) as error:
+        raise CalendarValidationError(f"rrule is not valid: {error}") from error
+    until = parts.get("UNTIL")
+    if until is None:
+        return rule
+    return cast(rrule, rule.replace(until=_until(until, zone)))
+
+
+def _until(text: str, zone: ZoneInfo | None) -> datetime:
+    """The last start an UNTIL allows, as a naive local time of the event."""
+    match = _UNTIL.fullmatch(text)
+    assert match is not None
+    try:
+        day = datetime.strptime(match.group(1), "%Y%m%d")
+        clock = (
+            None if match.group(2) is None else datetime.strptime(match.group(2), "%H%M%S").time()
+        )
+    except ValueError as error:
+        raise CalendarValidationError(f"rrule UNTIL {text} is not a real date or time") from error
+    if clock is None:
+        # A date allows every start of that local day.
+        return day if zone is None else datetime.combine(day.date(), _END_OF_DAY)
+    moment = datetime.combine(day.date(), clock)
+    if match.group(3):
+        moment = moment.replace(tzinfo=UTC)
+        if zone is not None:
+            moment = moment.astimezone(zone)
+        moment = moment.replace(tzinfo=None)
+    if zone is None:
+        # All-day occurrences start at midnight: a time allows its own day.
+        return datetime.combine(moment.date(), time.min)
+    return moment
+
+
+def _check_first_occurrence(
+    rule: rrule, parts: dict[str, str], start: datetime, zone: ZoneInfo | None
+) -> None:
+    """Refuse a rule without any occurrence from the event's start on.
+
+    dateutil looks for the next occurrence until the year 9999, which takes
+    seconds for a rule that has none. The calendar repeats every 400 years, so
+    the probe moves the start by whole cycles towards that year and looks at
+    the rule there; its first occurrence, moved back, is the rule's first one.
+    """
+    if not FIRST_EVENT_YEAR <= start.year <= LAST_EVENT_YEAR:
+        raise CalendarValidationError(
+            f"a repeating event must start between the years {FIRST_EVENT_YEAR} and "
+            f"{LAST_EVENT_YEAR}"
+        )
+    shift = (_MAX_YEAR - 2 * _CYCLE_YEARS - start.year) // _CYCLE_YEARS * _CYCLE_YEARS
+    unbounded = {key: item for key, item in parts.items() if key not in {"COUNT", "UNTIL"}}
+    probe = _build(unbounded, start.replace(year=start.year + shift), zone)
+    first = next(iter(probe), None)
+    if first is None:
+        raise CalendarValidationError("rrule produces no occurrence")
+    first = first.replace(year=first.year - shift)
+    if "UNTIL" in parts and first > _until(parts["UNTIL"], zone):
+        raise CalendarValidationError("rrule UNTIL ends the repetition before its first occurrence")
+
+
+__all__ = [
+    "MAX_RRULE_COUNT",
+    "MAX_RRULE_INTERVAL",
+    "RRULE_FREQUENCIES",
+    "build_rule",
+    "normalize_rrule",
+    "parse_date_string",
+    "resolve_local_span",
+]

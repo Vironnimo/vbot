@@ -436,7 +436,7 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
             ("run_failed", "Windows notification from the vBot tray when an Agent Run fails."),
             (
                 "automation_failed",
-                "Windows notification from the vBot tray when a Cron job or Calendar action fails.",
+                "Windows notification from the vBot tray when a Cron job fails.",
             ),
             (
                 "update_result",

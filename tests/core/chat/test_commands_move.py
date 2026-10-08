@@ -353,7 +353,6 @@ async def test_move_of_a_session_an_automation_selects_is_refused_naming_it() ->
     harness = _MoveHarness(
         pinned=(
             AutomationReference("bootstrap", "boot-1", "Warm up"),
-            AutomationReference("calendar", "act-1", "Weekly review"),
             AutomationReference("cron", "cron-1", "Daily report"),
         )
     )
@@ -365,9 +364,8 @@ async def test_move_of_a_session_an_automation_selects_is_refused_naming_it() ->
     assert harness.changes == []
     assert outcome.feedback is not None
     assert outcome.feedback.text == (
-        'This session cannot be moved while it is used by the Bootstrap job "Warm up", a '
-        'Calendar action of "Weekly review" and the Cron job "Daily report". Choose another '
-        "session for each of them or delete them first."
+        'This session cannot be moved while it is used by the Bootstrap job "Warm up" and the '
+        'Cron job "Daily report". Choose another session for each of them or delete them first.'
     )
     # The source address is checked under the reference lock, so no automation can
     # select the Session between the check and the move.

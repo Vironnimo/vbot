@@ -122,8 +122,6 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
         yield _Step("channels", channels.stop, channels.aclose)
     if (cron := runtime._cron_service) is not None:
         yield _Step("cron", cron.stop, cron.aclose)
-    if (calendar := runtime._calendar_service) is not None:
-        yield _Step("calendar_actions", calendar.actions.stop, calendar.actions.aclose)
     if (bootstrap := runtime._bootstrap_service) is not None:
         yield _Step("bootstrap", bootstrap.stop, bootstrap.aclose)
     if (archive := runtime._archive) is not None:

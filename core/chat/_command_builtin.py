@@ -563,8 +563,6 @@ def _pinned_session_refusal(references: Sequence[AutomationReference]) -> str:
 def _reference_phrase(reference: AutomationReference) -> str:
     if reference.kind == "cron":
         return f'the Cron job "{reference.name}"'
-    if reference.kind == "calendar":
-        return f'a Calendar action of "{reference.name}"'
     return f'the Bootstrap job "{reference.name}"'
 
 

@@ -100,7 +100,6 @@ const COMPOSED_KEYS = {
   'statistics.skills.scopedOrigin.*': ['agent', 'project'],
   // terminalsView/protocol.js parseTerminalCommandLine() errors
   'terminals.commandError.*': ['unclosedQuote', 'emptyArgument'],
-  'calendar.actions.status.*': 'tOr', // Calendar action status
   'chat.voice.progress.*': 'tOr', // speech job phase
   'live.tool.*': 'tOr', // Live Tool name in an action update
   'logs.level.*': 'tOr', // log record level

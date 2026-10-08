@@ -1046,6 +1046,7 @@
           onToast={desktop.showToast}
           {serverUnavailable}
           {calendarRefreshToken}
+          {cronRefreshToken}
           agentsRefreshToken={selection.agentsRefreshToken}
           onOpenCronJob={openCronJobFromCalendar}
           onOpenSession={navigateToSession}

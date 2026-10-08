@@ -513,7 +513,7 @@ export default Object.freeze({
   'agents.deleteBusy':
     'This Agent has an active or queued Run and cannot be deleted right now.',
   'agents.deleteInUse':
-    'A schedule, Bootstrap job, Calendar action or Channel still uses this Agent, so it cannot be deleted. Remove or retarget it first.',
+    'A schedule, Bootstrap job or Channel still uses this Agent, so it cannot be deleted. Remove or retarget it first.',
   'agents.menu.label': 'Actions for {name}',
   'agents.menu.openChat': 'Open chat',
   'agents.menu.copyId': 'Copy ID',
@@ -743,7 +743,7 @@ export default Object.freeze({
   'projects.remove.busy':
     'This project has an active or queued run and cannot be removed right now.',
   'projects.remove.inUse':
-    'A schedule, Bootstrap job or Calendar action uses one of this project’s agents, so it cannot be removed. Remove or retarget it first.',
+    'A schedule or Bootstrap job uses one of this project’s agents, so it cannot be removed. Remove or retarget it first.',
   'projects.detail.sectionAutoLoad': 'Auto-load files',
   'projects.detail.autoLoadInfo':
     'These files are embedded into the system prompt of every session in this project — the agent always sees their full content, with higher weight than normal chat history, and they are never dropped or summarized by context compaction.\n\nPaths are relative to the project folder (absolute paths also work), files load in list order, and missing files are skipped. When an outside Identity Agent explicitly loads the project with the project Tool, the same files are returned as Project Context.',

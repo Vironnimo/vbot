@@ -6,12 +6,18 @@ import asyncio
 import dataclasses
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
 
+from core.calendar import (
+    BoundJob,
+    CalendarEventNotFoundError,
+    CalendarStorageError,
+    EventJobTargetMissingError,
+)
 from core.config_validation import (
     JsonDiagnostic,
 )
@@ -31,9 +37,11 @@ from core.utils.workers import OrderedWorker, settle_before_cancelling
 
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
+    from core.calendar import CalendarEvent
     from core.projects import AgentResolver
     from core.sessions import ChatSessionManager
 from core.automation import _cron_claims as _claims
+from core.automation import _cron_events as _events
 from core.automation import _cron_schedule as _schedule
 from core.automation import _cron_timing as _timing
 from core.automation._cron_jobs import (
@@ -61,6 +69,7 @@ from core.automation._cron_jobs import (
     CronTargetError,
     CronTargetProjectNotFoundError,
     CronTargetUnavailableError,
+    EventEdge,
     ParsedSchedule,
     ScheduleType,
     _as_utc,
@@ -92,6 +101,7 @@ __all__ = [
     "CronTargetError",
     "CronTargetProjectNotFoundError",
     "CronTargetUnavailableError",
+    "EventCalendar",
     "MAX_ACTIVE_CRON_JOBS",
     "MAX_CONCURRENT_CRON_RUNS",
     "MAX_CONSECUTIVE_CRON_FAILURES",
@@ -126,7 +136,20 @@ _SCHEDULE_FIELDS = (
     "interval_seconds",
     "interval_anchor_at",
     "run_at",
+    "event_id",
+    "event_edge",
+    "event_offset_minutes",
 )
+
+# An event job with no occurrence ahead waits for a calendar change.
+_NO_DUE = datetime.max.replace(tzinfo=UTC)
+_EVENT_FIELDS = frozenset(("event_id", "event_edge", "event_offset_minutes"))
+_EVENT_FIELDS_ELSEWHERE = (
+    "event_id and the event time apply only to a job bound to a calendar event "
+    "(schedule type event)"
+)
+
+EventCalendar = _events.EventCalendar
 
 
 _LOGGER = get_logger("automation.cron")
@@ -147,6 +170,11 @@ class CronService:
     Session database's pool, then applies to memory and the job tasks at once and
     saves; a failed save undoes both. Edits run one at a time and finish even
     when their caller is cancelled, so that undo is exact.
+
+    With a ``calendar``, jobs can run at the occurrences of a calendar event
+    (schedule type ``event``). The calendar asks this service before an event
+    change and after an event is deleted (``check_event_change`` and
+    ``event_deleted``), and its change notifications wake the event jobs.
     """
 
     def __init__(
@@ -157,10 +185,12 @@ class CronService:
         agent_resolver: AgentResolver | None = None,
         sessions: ChatSessionManager | None = None,
         tz: str | ZoneInfo | None = None,
+        calendar: EventCalendar | None = None,
     ) -> None:
         self._trigger_service = trigger_service
         self._agent_resolver = agent_resolver
         self._sessions = sessions
+        self._calendar = calendar
         self._data_root = Path(data_root).expanduser()
         self._cron_dir = self._data_root / "cron"
         self._jobs_path = self._cron_dir / "jobs.json"
@@ -176,9 +206,13 @@ class CronService:
         self._changed_callbacks: set[Callable[[], None]] = set()
         self._timezone = _resolve_timezone(tz)
         self._timezone_changed = asyncio.Event()
+        # Replaced and set on every calendar change: event jobs recompute their occurrences.
+        self._calendar_changed = asyncio.Event()
         self._started = False
         self._edits = asyncio.Lock()
         self._crash_saves: set[asyncio.Task[bool]] = set()
+        if calendar is not None:
+            calendar.add_changed_callback(self._on_calendar_changed)
 
     def add_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
         """Subscribe to persisted Cron changes and return an unsubscribe function."""
@@ -200,6 +234,9 @@ class CronService:
         interval_seconds: int | None = None,
         interval_anchor_at: str | None = None,
         run_at: str | None = None,
+        event_id: str | None = None,
+        event_edge: EventEdge | None = None,
+        event_offset_minutes: int | None = None,
         remaining_runs: int | None = None,
         session_id: str | None = None,
         status: CronJobStatus = "active",
@@ -209,8 +246,14 @@ class CronService:
         """Create and persist a new cron job.
 
         ``project_id=None`` is a global/identity target (unchanged); a set value
-        scopes the fired Session/Run to that project's anchor.
+        scopes the fired Session/Run to that project's anchor. An ``event`` job
+        names an existing calendar event; occurrences due before it was created
+        are not owed.
         """
+        if schedule_type != "event" and (
+            event_id is not None or event_edge is not None or event_offset_minutes is not None
+        ):
+            raise CronJobValidationError(_EVENT_FIELDS_ELSEWHERE)
         async with self._edits:
             self._ensure_jobs_loaded()
             if len(self._jobs) >= MAX_STORED_CRON_JOBS:
@@ -229,6 +272,9 @@ class CronService:
                 interval_seconds=interval_seconds,
                 interval_anchor_at=interval_anchor_at,
                 run_at=run_at,
+                event_id=event_id,
+                event_edge=event_edge,
+                event_offset_minutes=event_offset_minutes,
                 remaining_runs=remaining_runs,
                 session_id=session_id,
                 status=status,
@@ -237,6 +283,7 @@ class CronService:
                 project_id=project_id,
             )
             self._validate_job(job, validate_references=False)
+            self._check_event_binding(job)
             await self._validate_references_async(job)
             self._reject_past_once_run(job)
             self._validate_capacity(job)
@@ -260,11 +307,15 @@ class CronService:
         )
         return self._clone_job(job)
 
-    def list_jobs(self) -> list[CronJob]:
-        """List all persisted cron jobs in stable created-order."""
+    def list_jobs(self, *, event_id: str | None = None) -> list[CronJob]:
+        """List persisted cron jobs in created order; with ``event_id``, that event's jobs."""
         self._ensure_jobs_loaded(allow_degraded=True)
         ordered = sorted(self._jobs.values(), key=lambda value: (value.created_at, value.id))
-        return [self._clone_job(job) for job in ordered]
+        return [
+            self._clone_job(job)
+            for job in ordered
+            if event_id is None or (job.schedule_type == "event" and job.event_id == event_id)
+        ]
 
     def get_job(self, job_id: str) -> CronJob:
         """Get one cron job by id."""
@@ -297,13 +348,70 @@ class CronService:
         )
 
     @staticmethod
+    def parse_event_time(event_time: str) -> tuple[EventEdge, int]:
+        """The edge and signed offset in minutes of an event time such as ``start - 30m``.
+
+        An event time is ``start`` or ``end``, optionally + or - a duration of
+        at most 31 days.
+        """
+        return _events.parse_event_time(event_time)
+
+    @staticmethod
+    def parse_event_schedule(event_id: str, event_time: str) -> ParsedSchedule:
+        """The schedule of a job that runs at every occurrence of ``event_id`` at ``event_time``."""
+        edge, offset = _events.parse_event_time(event_time)
+        return ParsedSchedule(
+            schedule_type="event",
+            event_id=event_id,
+            event_edge=edge,
+            event_offset_minutes=offset,
+        )
+
+    @staticmethod
     def format_schedule(job: CronJob) -> str:
         """Return the canonical schedule string for one job."""
         return _schedule.format_schedule(job)
 
     def next_fire_at(self, job: CronJob, *, reference_time: datetime | None = None) -> str | None:
-        """Project the next fire in the current application timezone."""
-        return _schedule.next_fire_at(self._timezone, reference_time or _timing._utc_now(), job)
+        """Project the next fire in the current application timezone.
+
+        An event job's next fire is its next occurrence's due time after the
+        reference time; None when no occurrence lies ahead or its event is gone.
+        """
+        reference = reference_time or _timing._utc_now()
+        if job.schedule_type != "event":
+            return _schedule.next_fire_at(self._timezone, reference, job)
+        if job.status != "active":
+            return None
+        event = self._bound_event(job)
+        if event is None or self._calendar is None:
+            return None
+        due = _events.next_due(self._calendar, event, job, _as_utc(reference))
+        return None if due is None else due.due_at.isoformat()
+
+    def bound_event(self, job: CronJob) -> CalendarEvent | None:
+        """The calendar event an event job runs at; None when it is gone or cannot be read."""
+        return self._bound_event(job)
+
+    def can_fire(self, job: CronJob, *, now: datetime | None = None) -> bool:
+        """Whether a job that is not terminal history can still start a Run.
+
+        An event job can no longer fire once no occurrence of its event is owed
+        or ahead, for example after a one-time event has passed, or when its
+        event is gone; such a job is history until the event moves later. While
+        the calendar cannot be read, an event job counts as able to fire.
+        """
+        if job.status in TERMINAL_CRON_JOB_STATUSES:
+            return False
+        if job.schedule_type != "event":
+            return True
+        try:
+            event = self._event_of(job)
+        except CalendarStorageError:
+            return True
+        if event is None:
+            return False
+        return self._event_job_can_fire(job, event, now or _timing._utc_now())
 
     def project_occurrences(
         self,
@@ -328,6 +436,11 @@ class CronService:
         occurrences: list[CronOccurrence] = []
         for job in sorted(self._jobs.values(), key=lambda item: (item.created_at, item.id)):
             if job.status != "active" or job.remaining_runs == 0:
+                continue
+            if job.schedule_type == "event":
+                occurrences.extend(
+                    self._project_event_job(job, window_start, window_end, max_per_job)
+                )
                 continue
             occurrences.extend(
                 _schedule._project_job_occurrences(
@@ -467,6 +580,18 @@ class CronService:
                 and job.remaining_runs != 1
             ):
                 raise CronJobValidationError("Changing to a one-time schedule requires repeat: 1")
+        if candidate.schedule_type != "event" and any(
+            fields.get(name) is not None for name in _EVENT_FIELDS
+        ):
+            raise CronJobValidationError(_EVENT_FIELDS_ELSEWHERE)
+        if candidate.schedule_type == "event" and job.schedule_type != "event":
+            # The event's occurrences drive the repetition; a run budget does not carry over.
+            if "remaining_runs" not in fields:
+                candidate.remaining_runs = None
+            # Without an event time the job runs at each occurrence's start.
+            if fields.get("event_edge") is None:
+                candidate.event_edge = "start"
+                candidate.event_offset_minutes = fields.get("event_offset_minutes") or 0
         if (
             candidate.schedule_type == "interval"
             and "interval_anchor_at" not in fields
@@ -497,6 +622,10 @@ class CronService:
             return job, job, [], False
 
         self._validate_job(candidate, validate_references=validate_references)
+        if set(_SCHEDULE_FIELDS) & set(changed_fields) or (
+            candidate.status == "active" and job.status != "active"
+        ):
+            self._check_event_binding(candidate)
         if {"run_at", "schedule_type"} & set(changed_fields) or (
             candidate.status == "active" and job.status != "active"
         ):
@@ -735,6 +864,8 @@ class CronService:
         task: asyncio.Task[None]
         if job.schedule_type == "once":
             task = asyncio.create_task(self._run_once_job(job), name=f"cron-job:{job.id}:once")
+        elif job.schedule_type == "event":
+            task = asyncio.create_task(self._run_event_job(job), name=f"cron-job:{job.id}:event")
         else:
             task = asyncio.create_task(
                 self._run_recurring_job(job, job.schedule_type),
@@ -807,6 +938,52 @@ class CronService:
             await self._trigger_job_run(current, late=self._late_fire(owed))
             if job.id in self._pending_restarts:
                 return
+
+    async def _run_event_job(self, job: CronJob) -> None:
+        """Fire an event job once for each occurrence of its event, as each comes due.
+
+        An occurrence that came due while vBot did not run the job starts late
+        while its catch-up window is open (``_cron_events``); several such
+        occurrences each start their own Run, earliest first. Starting a Run
+        uses the occurrence even when the Run fails. A calendar change wakes
+        the job: moved occurrences come due at their new time, removed ones
+        never, and an event that is gone leaves the job waiting.
+        """
+        # Nothing due through this instant is owed until the calendar changes:
+        # catch-up windows only close as time passes.
+        settled: datetime | None = None
+        while True:
+            current = self._jobs.get(job.id)
+            if current is None or current.status != "active" or current.schedule_type != "event":
+                return
+            wake = self._calendar_changed
+            now = _timing._utc_now()
+            event = self._bound_event(current)
+            owed = (
+                None
+                if event is None or self._calendar is None
+                else _events.owed_occurrence(self._calendar, event, current, now, after=settled)
+            )
+            if owed is not None:
+                await self._trigger_job_run(
+                    current,
+                    late=self._late_fire(_schedule.OwedFire(due_at=owed.due_at)),
+                    event_due=owed,
+                )
+                if job.id in self._pending_restarts:
+                    return
+                continue
+            settled = now
+            upcoming = (
+                None
+                if event is None or self._calendar is None
+                else _events.next_due(self._calendar, event, current, now)
+            )
+            reached = await _timing._sleep_until_utc(
+                _NO_DUE if upcoming is None else upcoming.due_at, wake_event=wake
+            )
+            if not reached:
+                settled = None
 
     async def _run_once_job(self, job: CronJob) -> None:
         """Sleep until run_at, fire once, then mark completed.
@@ -936,6 +1113,17 @@ class CronService:
         await self._save_jobs_after_fire(job_id)
         await self._remove_claim(job_id)
 
+    def _run_context(
+        self, job: CronJob, late: _LateFire | None, event_due: _events.EventDue | None
+    ) -> str | None:
+        """The note before the Run's input: the event the job is due for, and lateness."""
+        parts = []
+        if event_due is not None:
+            parts.append(_events.context_note(job, event_due))
+        if late is not None:
+            parts.append(late.notice(job.id, _timing._utc_now()))
+        return "\n\n".join(parts) or None
+
     def _late_fire(self, owed: _schedule.OwedFire) -> _LateFire | None:
         """Describe a fire that starts after it was due; ``None`` when it is on time."""
         now = _timing._utc_now()
@@ -943,7 +1131,13 @@ class CronService:
             return None
         return _LateFire(owed=owed, noticed_at=now, timezone=self._timezone)
 
-    async def _trigger_job_run(self, job: CronJob, *, late: _LateFire | None = None) -> bool:
+    async def _trigger_job_run(
+        self,
+        job: CronJob,
+        *,
+        late: _LateFire | None = None,
+        event_due: _events.EventDue | None = None,
+    ) -> bool:
         self._executing_jobs.add(job.id)
         try:
             async with self._run_slots:
@@ -953,6 +1147,11 @@ class CronService:
 
                 latest.last_attempt_at = _timing._utc_now_iso()
                 latest.last_error = None
+                if event_due is not None:
+                    # The occurrence is used now, even when its Run cannot start.
+                    latest.covered_until = max(
+                        _events.coverage(latest), event_due.due_at
+                    ).isoformat()
                 self._jobs[latest.id] = latest
                 await self._save_jobs_after_fire(latest.id)
                 # Before admission begins, a scheduling edit withdraws this fire;
@@ -973,12 +1172,9 @@ class CronService:
                         else ""
                     ),
                 )
-                # Omitted for an on-time fire, so its call shape stays unchanged.
-                note: dict[str, Any] = (
-                    {"context_note": late.notice(latest.id, _timing._utc_now())}
-                    if late is not None
-                    else {}
-                )
+                # Omitted when there is nothing to note, so the call shape stays unchanged.
+                context = self._run_context(latest, late, event_due)
+                note: dict[str, Any] = {"context_note": context} if context else {}
                 run: Any | None = None
                 try:
                     run = await self._trigger_service.trigger_run(
@@ -1274,6 +1470,173 @@ class CronService:
         job = self._jobs.get(job_id)
         if self._started and job is not None and job.status == "active":
             self._start_job_task(job)
+
+    # -- jobs bound to calendar events ------------------------------------------------------
+
+    async def check_event_change(self, before: CalendarEvent, after: CalendarEvent) -> None:
+        """Refuse an event change that would revive jobs into a target that is gone.
+
+        A job that can no longer fire is history, so removing its Agent,
+        Project or selected Session did not check it. When the change (for
+        example, moving a past one-time event later) lets such a job fire
+        again, its target is checked like a new job's; a target that exists but
+        cannot run now is allowed, because it can recover. The Agent and
+        Session reads run on the Session pool, and only for revived jobs.
+
+        Raises:
+            EventJobTargetMissingError: naming each revived job and what it misses.
+        """
+        try:
+            self._ensure_jobs_loaded()
+        except CronStorageError:
+            return  # Scheduling is disabled; nothing can fire.
+        now = _timing._utc_now()
+        revived = [
+            self._clone_job(job)
+            for job in self._jobs.values()
+            if job.schedule_type == "event"
+            and job.event_id == after.id
+            and job.status not in TERMINAL_CRON_JOB_STATUSES
+            and not self._event_job_can_fire(job, before, now)
+            and self._event_job_can_fire(job, after, now)
+        ]
+        if not revived:
+            return
+        problems = (
+            self._missing_targets(revived)
+            if self._sessions is None
+            else await self._sessions.run_async(self._missing_targets, revived)
+        )
+        if problems:
+            raise EventJobTargetMissingError(problems)
+
+    async def event_deleted(self, event_id: str, *, actor: str) -> tuple[BoundJob, ...]:
+        """Delete the jobs bound to a deleted calendar event; return what was deleted."""
+        async with self._edits:
+            try:
+                self._ensure_jobs_loaded()
+            except CronStorageError:
+                _LOGGER.error("Cron jobs of deleted calendar event %s cannot be read", event_id)
+                raise
+            removed = {
+                job_id: job
+                for job_id, job in self._jobs.items()
+                if job.schedule_type == "event" and job.event_id == event_id
+            }
+            if not removed:
+                return ()
+            for job_id in removed:
+                del self._jobs[job_id]
+                self._cancel_job_task(job_id)
+
+            def undo() -> None:
+                self._jobs.update(removed)
+                for job in removed.values():
+                    if self._started and job.status == "active":
+                        self._restart_job_task(job)
+
+            await settle_before_cancelling(self._save_edit(undo))
+        ordered = sorted(removed.values(), key=lambda item: (item.created_at, item.id))
+        for job in ordered:
+            _LOGGER.info(
+                "Cron job deleted with its calendar event (job=%s event=%s actor=%s)",
+                job.id,
+                event_id,
+                actor,
+            )
+        return tuple(BoundJob(id=job.id, name=job.name) for job in ordered)
+
+    def _on_calendar_changed(self) -> None:
+        """Wake the event jobs, and tell listeners their next fires may have moved."""
+        previous = self._calendar_changed
+        self._calendar_changed = asyncio.Event()
+        previous.set()
+        if any(job.schedule_type == "event" for job in self._jobs.values()):
+            self._notify_changed()
+
+    def _event_of(self, job: CronJob) -> CalendarEvent | None:
+        """The event of an event job; None when it is gone. Raises CalendarStorageError."""
+        if self._calendar is None or job.schedule_type != "event" or job.event_id is None:
+            return None
+        try:
+            return self._calendar.get_event(job.event_id)
+        except CalendarEventNotFoundError:
+            return None
+
+    def _bound_event(self, job: CronJob) -> CalendarEvent | None:
+        """:meth:`_event_of`, with an unreadable calendar treated as no event."""
+        try:
+            return self._event_of(job)
+        except CalendarStorageError:
+            return None
+
+    def _event_job_can_fire(self, job: CronJob, event: CalendarEvent, now: datetime) -> bool:
+        if self._calendar is None:
+            return False
+        if job.id in self._executing_jobs:
+            return True
+        return _events.can_fire(self._calendar, event, job, now)
+
+    def _check_event_binding(self, job: CronJob) -> None:
+        """Refuse an event job whose calendar event does not exist."""
+        if job.schedule_type != "event":
+            return
+        if self._calendar is None:
+            raise CronJobValidationError("Calendar events are not available for cron jobs")
+        try:
+            event = self._event_of(job)
+        except CalendarStorageError as error:
+            raise CronStorageError(f"The calendar cannot be read: {error}") from error
+        if event is None:
+            raise CronJobValidationError(f"Calendar event not found: {job.event_id}")
+
+    def _project_event_job(
+        self, job: CronJob, window_start: datetime, window_end: datetime, cap: int
+    ) -> list[CronOccurrence]:
+        event = self._bound_event(job)
+        if event is None or self._calendar is None:
+            return []
+        return [
+            CronOccurrence(
+                job_id=job.id,
+                name=job.name,
+                fire_at_utc=due.due_at,
+                schedule_type="event",
+                event_id=due.occurrence.event_id,
+                occurrence_id=due.occurrence.id,
+            )
+            for due in _events.dues_in_window(
+                self._calendar, event, job, window_start, window_end, cap
+            )
+        ]
+
+    def _missing_targets(self, jobs: list[CronJob]) -> list[tuple[str, str]]:
+        """Pair each job whose target is partly gone with what is missing; blocking."""
+        return [(job.id, problem) for job in jobs if (problem := self._missing_target(job))]
+
+    def _missing_target(self, job: CronJob) -> str | None:
+        """Say which part of the job's target no longer exists, if one does; blocking."""
+        target = format_agent_address(job.agent_id, job.project_id)
+        if self._agent_resolver is not None:
+            try:
+                self._agent_resolver.resolve_agent(job.project_id, job.agent_id)
+            except ResolutionProjectNotFoundError:
+                return f"Project {job.project_id} no longer exists"
+            except ResolutionAgentNotFoundError:
+                return f"Agent {target} no longer exists"
+            except AgentResolutionError:
+                pass  # It exists but cannot run now; the fire records why.
+        if (
+            job.session_id is not None
+            and self._sessions is not None
+            and not self._sessions.exists(
+                SessionAddress(
+                    project_id=job.project_id, agent_id=job.agent_id, session_id=job.session_id
+                )
+            )
+        ):
+            return f"Session {job.session_id} of {target} no longer exists"
+        return None
 
     def _validate_job(self, job: CronJob, *, validate_references: bool = True) -> None:
         normalize_job_fields(job)

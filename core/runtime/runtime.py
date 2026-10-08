@@ -530,10 +530,6 @@ class Runtime:
     def _start_cron_service(self) -> None:
         start_event_loop_service(self._cron_service, "Cron service not available")
 
-    def _start_calendar_service(self) -> None:
-        assert self._calendar_service is not None
-        self._calendar_service.actions.start()
-
     def _start_provider_usage_service(self) -> None:
         start_event_loop_service(self._provider_usage, "Provider usage service not available")
 
@@ -871,10 +867,10 @@ class Runtime:
         """Rename one Identity Agent and every reference to it as one recoverable change.
 
         The Agent's tree, config, Sessions and Sub-Agent links move together with
-        the Channels, Cron and Bootstrap jobs, Calendar actions, delegation
+        the Channels, Cron and Bootstrap jobs, delegation
         allow-lists and live Terminal Session scopes that name it. A failure
         reverts all of it; an interrupted rename completes on the next start.
-        While a Channel, Cron or Bootstrap job or Calendar action still names
+        While a Channel, Cron or Bootstrap job still names
         ``new_agent_id``, the rename is refused with ``AgentReferencedError``
         before anything changes; a delegation allow-list entry naming the unused
         id is a leftover the rename removes instead. The caller holds the Run
@@ -926,14 +922,12 @@ class Runtime:
         channels = self._channel_service
         cron = self._cron_service
         bootstrap_jobs = self._bootstrap_service
-        calendar = self._calendar_service
         if (
             agents is None
             or sessions is None
             or channels is None
             or cron is None
             or bootstrap_jobs is None
-            or calendar is None
         ):
             raise RuntimeError("Agent rename services are not available")
         return AgentRenameServices(
@@ -942,7 +936,6 @@ class Runtime:
             channels=channels,
             cron=cron,
             bootstrap=bootstrap_jobs,
-            calendar=calendar,
             snapshot_barrier=self._snapshot_barrier,
             terminals=self._terminal_manager,
         )

@@ -40,13 +40,20 @@ from core.settings import is_valid_agent_id, is_valid_project_id
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
-ScheduleType = Literal["cron", "interval", "once"]
+ScheduleType = Literal["cron", "interval", "once", "event"]
+
+EventEdge = Literal["start", "end"]
 
 CronJobStatus = Literal["active", "paused", "completed", "failed", "missed"]
 
 CronRunOutcome = Literal["success", "failed", "cancelled", "missed", "unknown"]
 
-_ALLOWED_SCHEDULE_TYPES = frozenset(("cron", "interval", "once"))
+_ALLOWED_SCHEDULE_TYPES = frozenset(("cron", "interval", "once", "event"))
+
+_ALLOWED_EVENT_EDGES = frozenset(("start", "end"))
+
+# How far an event job may run before or after its event edge.
+MAX_EVENT_OFFSET_MINUTES = 31 * 24 * 60
 
 _ALLOWED_STATUSES = frozenset(("active", "paused", "completed", "failed", "missed"))
 
@@ -59,6 +66,9 @@ _RESTART_FIELDS = frozenset(
         "interval_seconds",
         "interval_anchor_at",
         "run_at",
+        "event_id",
+        "event_edge",
+        "event_offset_minutes",
         "remaining_runs",
         "status",
     )
@@ -100,6 +110,9 @@ _MUTABLE_FIELDS = frozenset(
         "interval_seconds",
         "interval_anchor_at",
         "run_at",
+        "event_id",
+        "event_edge",
+        "event_offset_minutes",
         "remaining_runs",
         "session_id",
         "status",
@@ -291,6 +304,7 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], item_path: str, i
         "cron_expression",
         "interval_anchor_at",
         "run_at",
+        "event_id",
         "session_id",
         "project_id",
         "last_fired_at",
@@ -304,6 +318,21 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], item_path: str, i
             diagnostics,
             f"{item_path}.{field_name}",
             item.get(field_name),
+        )
+    validate_optional_allowed_string(
+        diagnostics, f"{item_path}.event_edge", item.get("event_edge"), _ALLOWED_EVENT_EDGES
+    )
+    event_offset = item.get("event_offset_minutes")
+    if event_offset is not None and (
+        isinstance(event_offset, bool)
+        or not isinstance(event_offset, int)
+        or abs(event_offset) > MAX_EVENT_OFFSET_MINUTES
+    ):
+        add_error(
+            diagnostics,
+            f"{item_path}.event_offset_minutes",
+            f"must be a whole number of minutes from -{MAX_EVENT_OFFSET_MINUTES} "
+            f"to {MAX_EVENT_OFFSET_MINUTES}",
         )
     validate_optional_allowed_string(
         diagnostics,
@@ -370,6 +399,9 @@ class ParsedSchedule:
     interval_seconds: int | None = None
     interval_anchor_at: str | None = None
     run_at: str | None = None
+    event_id: str | None = None
+    event_edge: EventEdge | None = None
+    event_offset_minutes: int | None = None
 
     def as_job_fields(self) -> dict[str, str | int | None]:
         """Return all persisted schedule fields, clearing incompatible kinds."""
@@ -379,17 +411,25 @@ class ParsedSchedule:
             "interval_seconds": self.interval_seconds,
             "interval_anchor_at": self.interval_anchor_at,
             "run_at": self.run_at,
+            "event_id": self.event_id,
+            "event_edge": self.event_edge,
+            "event_offset_minutes": self.event_offset_minutes,
         }
 
 
 @dataclass(frozen=True, slots=True)
 class CronOccurrence:
-    """One projected fire instant of an active job, for read-only display."""
+    """One projected fire instant of an active job, for read-only display.
+
+    An event job's fire names the event and the occurrence it belongs to.
+    """
 
     job_id: str
     name: str
     fire_at_utc: datetime
     schedule_type: ScheduleType
+    event_id: str | None = None
+    occurrence_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -405,6 +445,12 @@ class CronJob:
     ``covered_until`` marks the instant through which no fire is owed even
     though no Run started: activation or a schedule change. Fires due after it,
     after ``created_at`` and after the last attempt and completion are owed.
+
+    An ``event`` job runs at every occurrence of the calendar event
+    ``event_id``, ``event_offset_minutes`` before (negative) or after its
+    ``event_edge``. Its occurrences are owed one by one, so its
+    ``covered_until`` is the due time of the last occurrence it fired for (or
+    its activation), not its last attempt.
     """
 
     id: str
@@ -422,6 +468,9 @@ class CronJob:
     interval_seconds: int | None = None
     interval_anchor_at: str | None = None
     remaining_runs: int | None = None
+    event_id: str | None = None
+    event_edge: EventEdge | None = None
+    event_offset_minutes: int | None = None
     last_attempt_at: str | None = None
     last_completed_at: str | None = None
     last_run_id: str | None = None
@@ -442,6 +491,9 @@ class CronJob:
             "interval_seconds": self.interval_seconds,
             "interval_anchor_at": self.interval_anchor_at,
             "run_at": self.run_at,
+            "event_id": self.event_id,
+            "event_edge": self.event_edge,
+            "event_offset_minutes": self.event_offset_minutes,
             "remaining_runs": self.remaining_runs,
             "session_id": self.session_id,
             "status": self.status,
@@ -470,6 +522,9 @@ class CronJob:
             interval_seconds=payload.get("interval_seconds"),
             interval_anchor_at=payload.get("interval_anchor_at"),
             run_at=payload.get("run_at"),
+            event_id=payload.get("event_id"),
+            event_edge=payload.get("event_edge"),
+            event_offset_minutes=payload.get("event_offset_minutes"),
             remaining_runs=(
                 payload.get("remaining_runs")
                 if payload.get("remaining_runs") is not None
@@ -593,7 +648,7 @@ def normalize_job_fields(job: CronJob) -> None:
     job.prompt = job.prompt.strip()
 
     if job.schedule_type not in _ALLOWED_SCHEDULE_TYPES:
-        raise CronJobValidationError("schedule_type must be 'cron', 'interval', or 'once'")
+        raise CronJobValidationError("schedule_type must be 'cron', 'interval', 'once' or 'event'")
 
     if job.status not in _ALLOWED_STATUSES:
         raise CronJobValidationError("status must be active, paused, completed, failed, or missed")

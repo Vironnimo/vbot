@@ -68,7 +68,7 @@ The repository at `cwd` remains outside the anchor and is never mutated. Changin
 `project.rm` holds the server Agent-reference lock and calls `ArchiveService.archive_project` (`archive.md`), which coordinates the domain boundaries; the RPC maps its refusals (`project_in_use`, `project_busy`) and returns the archive entry id with the Agents whose default Project it cleared and their copied and backed-up identity files:
 
 - It acquires `ChatRunManager.project_admission_guard`. Guard acquisition atomically rejects active or queued Project-anchored work and work of Identity Sessions whose Working Project (`working_project_id`) is the Project; while held, every Run ingress rejects new work for either relationship until removal finishes.
-- It rejects removal while a live Cron job, Bootstrap job or Calendar action targets an Agent of the Project (`AutomationReferences.project_references`, `automation.md`).
+- It rejects removal while a live Cron or Bootstrap job targets an Agent of the Project (`AutomationReferences.project_references`, `automation.md`).
 - It identifies Identity Agents whose default Project it is and records each reset (`unrooted_agents`) in the entry before it happens. When their Workspace moves back to the Agent default, the workflow can preserve `SOUL.md`, `USER.md`, and `MEMORY.md`, updates those Agents, and rolls back the coordinated changes if removal fails; a restore gives them the default Project again.
 - It archives the Project Anchor and Project Sessions, and invalidates Team and Skill caches; Identity Sessions working in the Project stay live and refuse Runs until a restore (`projects.md`); the RPC publishes Agent and Project resource changes.
 

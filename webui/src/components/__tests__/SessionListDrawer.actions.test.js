@@ -227,14 +227,14 @@ describe('SessionListDrawer row actions', () => {
       name: 'a Session that automations use',
       error: Object.assign(
         new Error(
-          'cannot delete Session referenced by calendar:act-1, cron:cron-1',
+          'cannot delete Session referenced by bootstrap:boot-1, cron:cron-1',
         ),
         {
           code: 'session_in_use',
           details: {
             data: {
               references: [
-                { kind: 'calendar', id: 'act-1', name: 'Weekly review' },
+                { kind: 'bootstrap', id: 'boot-1', name: 'Weekly review' },
                 { kind: 'cron', id: 'cron-1', name: 'Daily report' },
               ],
             },
@@ -242,7 +242,7 @@ describe('SessionListDrawer row actions', () => {
         },
       ),
       shown: ['Weekly review', 'Daily report'],
-      hidden: ['calendar:act-1', 'cron:cron-1'],
+      hidden: ['bootstrap:boot-1', 'cron:cron-1'],
     },
   ])(
     'surfaces a refused delete of $name as an inline error',

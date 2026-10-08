@@ -31,6 +31,12 @@ CREATED = {"agent_id": "assistant", "prompt": "Check the news", "name": "Morning
             {"schedule_type": "once", "run_at": "2026-07-01T09:00:00+00:00"},
             id="once",
         ),
+        # The server reads the event time.
+        pytest.param(
+            ("--event", "evt_1", "--event-time", "start - 30m"),
+            {"schedule_type": "event", "event_id": "evt_1", "event_time": "start - 30m"},
+            id="event",
+        ),
     ],
 )
 def test_cron_create_sends_the_schedule_fields(
@@ -62,6 +68,14 @@ def test_cron_create_rejects_invalid_schedule_options(
         run_cli(*CREATE, *options)
 
     assert exc_info.value.code == 2
+    assert rpc.calls == []
+
+
+def test_cron_create_refuses_an_event_time_without_an_event(rpc: FakeRpc, run_cli: RunCli) -> None:
+    code, out, _err = run_cli(*CREATE, "--cron", "0 9 * * *", "--event-time", "end")
+
+    assert code == 1
+    assert "--event" in out
     assert rpc.calls == []
 
 
@@ -128,6 +142,17 @@ def test_cron_list_prints_one_row_per_job(rpc: FakeRpc, run_cli: RunCli) -> None
                     "status": "paused",
                     "next_fire_at": None,
                 },
+                {
+                    "id": "job-3",
+                    "agent_id": "assistant",
+                    "name": "Prepare standup",
+                    "prompt": "Prepare the standup",
+                    "schedule_type": "event",
+                    "schedule": "start - 30m",
+                    "event_id": "evt_1",
+                    "status": "active",
+                    "next_fire_at": "2026-06-15T06:30:00+00:00",
+                },
             ]
         },
     )
@@ -145,6 +170,10 @@ def test_cron_list_prints_one_row_per_job(rpc: FakeRpc, run_cli: RunCli) -> None
         "schedule=once[2026-07-01T09:00:00+00:00] remaining_runs=1 "
         "next_fire_at=- session=new last_outcome=- last_error=- "
         "prompt=" + "A" * 57 + "...",
+        "- name=Prepare standup id=job-3 agent=assistant status=active "
+        "schedule=event[evt_1 start - 30m] remaining_runs=unlimited "
+        "next_fire_at=2026-06-15T06:30:00+00:00 session=new last_outcome=- "
+        "last_error=- prompt=Prepare the standup",
     ]
 
 
@@ -191,6 +220,13 @@ def test_cron_show_prints_exactly_the_complete_saved_job(
             id="schedule",
         ),
         pytest.param(("--status", "paused"), {"status": "paused"}, id="status"),
+        pytest.param(
+            ("--event", "evt_1", "--event-time", "end + 1h"),
+            {"schedule_type": "event", "event_id": "evt_1", "event_time": "end + 1h"},
+            id="event",
+        ),
+        # A job already bound to an event keeps it.
+        pytest.param(("--event-time", "end"), {"event_time": "end"}, id="event-time"),
     ],
 )
 def test_cron_update_sends_only_the_given_changes(
@@ -217,6 +253,8 @@ def test_cron_update_without_changes_names_every_option(rpc: FakeRpc, run_cli: R
         "--cron",
         "--every",
         "--at",
+        "--event",
+        "--event-time",
         "--repeat",
         "--session",
         "--status",

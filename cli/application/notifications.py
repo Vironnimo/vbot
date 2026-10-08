@@ -36,7 +36,7 @@ _RUN_OUTCOMES = {
     "run_interrupted": "interrupted",
 }
 _FOREGROUND_RUN_KINDS = frozenset({"user", "system"})
-_AUTOMATION_RUN_KINDS = {"cron": "Cron", "calendar": "Calendar"}
+_AUTOMATION_RUN_KINDS = {"cron": "Cron"}
 _FAILED_UPDATE_PHASES = frozenset({"failed", "rolled_back", "needs_attention"})
 _REMEMBERED_RUNS = 256
 

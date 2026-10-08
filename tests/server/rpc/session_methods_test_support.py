@@ -24,6 +24,7 @@ from core.sessions import (
     ArchiveEntryRef,
 )
 from server.events import ServerEventBus
+from tests.server.rpc_test_support_runtime import StubJobService
 
 
 class FakeResolver:
@@ -275,12 +276,8 @@ def stub_session_state() -> tuple[SimpleNamespace, FakeResolver, FakeSessions]:
         chat_sessions=sessions,
         chat_run_manager=chat_runs,
         snapshot_barrier=SnapshotBarrier(),
-        bootstrap_service=SimpleNamespace(list_jobs=lambda: []),
-        cron_service=SimpleNamespace(list_jobs=lambda: []),
-        calendar_service=SimpleNamespace(
-            actions=SimpleNamespace(list_actions=lambda: [], can_fire=lambda _action_id: True),
-            list_events=lambda: [],
-        ),
+        bootstrap_service=StubJobService(),
+        cron_service=StubJobService(),
         terminal_manager=FakeTerminalManager(),
         agents=SimpleNamespace(
             update=lambda agent_id, **k: updates.append({agent_id: k}),
@@ -306,7 +303,6 @@ def stub_session_state() -> tuple[SimpleNamespace, FakeResolver, FakeSessions]:
     runtime.automation_references = AutomationReferences(
         bootstrap=cast(Any, runtime.bootstrap_service),
         cron=cast(Any, runtime.cron_service),
-        calendar=cast(Any, runtime.calendar_service),
     )
     # The real archive service composes these fakes, as the server's Runtime does.
     runtime.archive = ArchiveService(

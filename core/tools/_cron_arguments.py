@@ -7,11 +7,13 @@ schema (``agent_id``, ``schedule_type``, ``cron_expression``, ``run_at``,
 (``cron``, ``recurring``, ``durable``), Hermes ``cronjob`` (``job_id``,
 ``pause``/``resume``/``remove``, ``deliver``), OpenClaw ``cron`` (a ``job``
 with ``schedule`` and ``payload`` objects, ``jobId``), and scheduled-task Tools
-(``cronExpression``, ``fireAt``, ``description``). This owner maps them onto
-the canonical fields so a call whose intent is clear executes. What vBot cannot
-honor as written (delivering the reply, choosing a Session, firing on demand,
-several actions in one call, readings with different effects) fails before any
-side effect with the corrected call.
+(``cronExpression``, ``fireAt``, ``description``). With an ``event_id``, the
+schedule is an event time, which Models also write as reminder offsets
+(``minutes_before: 30``, ``-PT30M``, ``30 minutes before``, ``before_start``).
+This owner maps them onto the canonical fields so a call whose intent is clear
+executes. What vBot cannot honor as written (delivering the reply, choosing a
+Session, firing on demand, several actions in one call, readings with different
+effects) fails before any side effect with the corrected call.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from core.tools._durations import (
     LATE_LIMITS_FIELD,
     LATE_LIMITS_PARAMETER,
     duration_from_seconds,
+    duration_minutes,
     duration_text,
     take_late_limits,
 )
@@ -57,8 +60,8 @@ class CronCallRefusedError(ValueError):
 
 
 REFUSAL_PREFIX = "cron was not run: "
-_CHANGE_FIELDS = ("target", "name", "prompt", "schedule", "repeat", ENABLED_FIELD)
-_CALL_ORDER = ("action", "id", "target", "name", "prompt", "schedule", "repeat")
+_CHANGE_FIELDS = ("target", "name", "prompt", "schedule", "event_id", "repeat", ENABLED_FIELD)
+_CALL_ORDER = ("action", "id", "event_id", "target", "name", "prompt", "schedule", "repeat")
 _LATE_START = (
     "A fire that vBot missed, for example while the server was off, starts once, late, and "
     "its Run is told how late it is. To have a late Run skip the instruction, say so in "
@@ -71,6 +74,7 @@ _TEMPLATE = re.compile(r"^\s*<[^<>]+>\s*$")
 _FIELD_ALIASES = SpellingAliases(
     {
         "id": ("job_id", "cron_id", "task_id", "schedule_id"),
+        "event_id": ("event", "calendar_event_id", "calendar_event"),
         "target": (
             "agent_id",
             "agent",
@@ -251,6 +255,34 @@ _CLOCK_TEXT = re.compile(r"^(?:at\s*)?(?:(\d{1,2}):(\d{2})|(\d{2})(\d{2}))$")
 _EPOCH_SECONDS = (1_000_000_000, 10_000_000_000)
 _EPOCH_MILLISECONDS = (1_000_000_000_000, 10_000_000_000_000)
 _MOMENT_STAND_IN = "<local time such as 2030-01-01T09:00>"
+EVENT_TIME_STAND_IN = "<start or end, e.g. start - 30m>"
+EVENT_REPEAT_REFUSAL = (
+    "a job at a calendar event runs at every occurrence of the event, so it takes no repeat. "
+    "Nothing was changed."
+)
+# Offsets from an event edge under their own names: the edge and the direction they count.
+_EVENT_OFFSET_KEYS = {
+    "minutesbefore": ("start", "-"),
+    "beforeminutes": ("start", "-"),
+    "reminderminutes": ("start", "-"),
+    "remindminutesbefore": ("start", "-"),
+    "leadminutes": ("start", "-"),
+    "beforestart": ("start", "-"),
+    "minutesbeforestart": ("start", "-"),
+    "afterstart": ("start", "+"),
+    "minutesafterstart": ("start", "+"),
+    "beforeend": ("end", "-"),
+    "minutesbeforeend": ("end", "-"),
+    "afterend": ("end", "+"),
+    "minutesafterend": ("end", "+"),
+}
+_EVENT_TIME_KEYS = frozenset({"schedule", "offset", "eventtime", "trigger", "edge", "time"})
+_EDGE_KEYS = frozenset({"edge", "eventedge"})
+_SIGNED_OFFSET_KEYS = frozenset({"offset", "eventoffsetminutes", "offsetminutes"})
+_EVENT_EDGE = re.compile(r"^(start|end)\s*(?:([+-])\s*(.+))?$")
+_EVENT_PHRASE = re.compile(
+    r"^(?:(.+?)\s+)?(before|after|at)(?:\s+(?:the\s+)?(start|end|beginning|event))?$"
+)
 
 
 class _Problems:
@@ -303,7 +335,15 @@ def normalize_cron_arguments(contract: ToolContract, arguments: Any) -> Any:
     )
     if not isinstance(normalized, dict):
         return normalized
-    _read_schedule(normalized, problems)
+    if is_placeholder(normalized.get("event_id")):
+        normalized.pop("event_id", None)
+    if "event_id" in normalized:
+        _read_event_schedule(normalized, problems)
+    elif normalized.get("action") == "update" and _names_event_offset(normalized):
+        # An update of a job at an event may send the new offset alone.
+        _read_event_schedule(normalized, problems, bound=False)
+    else:
+        _read_schedule(normalized, problems)
     _read_enabled(normalized, problems)
     _read_recurrence(normalized, problems)
     _read_session(normalized, problems)
@@ -735,6 +775,139 @@ def _json_value(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+def _names_event_offset(arguments: Mapping[str, Any]) -> bool:
+    words = {spelling(key) for key in arguments}
+    return bool(words & _EVENT_OFFSET_KEYS.keys()) or bool(
+        words & _EDGE_KEYS and words & _SIGNED_OFFSET_KEYS
+    )
+
+
+def _read_event_schedule(
+    arguments: dict[str, Any], problems: _Problems, *, bound: bool = True
+) -> None:
+    """Resolve the event time of a job bound to a calendar event into ``schedule``."""
+    candidates: list[tuple[str, Any, list[str]]] = []
+    edges = [key for key in arguments if spelling(key) in _EDGE_KEYS]
+    offsets = [key for key in arguments if spelling(key) in _SIGNED_OFFSET_KEYS]
+    if len(edges) == 1 and len(offsets) == 1:
+        # vBot's stored form: an edge and a signed offset in minutes.
+        edge, offset = arguments.pop(edges[0]), arguments.pop(offsets[0])
+        minutes = duration_minutes(abs(offset)) if isinstance(offset, int) else None
+        if edge in {"start", "end"} and (minutes is not None or offset == 0):
+            sign = "-" if offset < 0 else "+"
+            candidates.append((edges[0], edge, [_event_time(edge, sign, minutes or 0)]))
+        else:
+            problems.add(
+                f"{edges[0]} {_json_value(edge)} with {offsets[0]} {_json_value(offset)} is not "
+                "an event time.",
+                schedule=EVENT_TIME_STAND_IN,
+            )
+    for key in list(arguments):
+        word = spelling(key)
+        if word in _EVENT_OFFSET_KEYS:
+            edge, sign = _EVENT_OFFSET_KEYS[word]
+            item = arguments.pop(key)
+            minutes = duration_minutes(item)
+            if minutes is None:
+                problems.add(
+                    f'"{key}" {_json_value(item)} is not a duration such as 30 (minutes) or "1h".',
+                    schedule=EVENT_TIME_STAND_IN,
+                )
+                continue
+            candidates.append((key, item, [_event_time(edge, sign, minutes)]))
+        elif word in _EVENT_TIME_KEYS | _AT_KEYS | _IN_KEYS and not is_placeholder(arguments[key]):
+            item = arguments.pop(key)
+            candidates.append((key, item, event_time_readings(item)))
+    readings = list(dict.fromkeys(text for _key, _item, found in candidates for text in found))
+    offsets = [reading for reading in readings if reading not in {"start", "end"}]
+    if len(offsets) == 1 and all(offsets[0].startswith(reading) for reading in readings):
+        # A bare edge beside an offset from it, such as schedule "start" with minutes_before 15.
+        readings = offsets
+    if len(readings) > 1:
+        if len(candidates) > 1:
+            names = ", ".join(f"{key} {_json_value(item)}" for key, item, _found in candidates)
+            text = f"it names more than one event time ({names}); send only the one that is meant:"
+        else:
+            key, item, _found = candidates[0]
+            text = ambiguous_event_time(key, item, readings)
+        problems.choose(text, [{"schedule": reading} for reading in readings])
+    if readings:
+        arguments["schedule"] = readings[0]
+    elif candidates:
+        # The handler explains an event time it cannot read.
+        arguments["schedule"] = " ".join(str(candidates[0][1]).split())
+    if not bound:
+        return
+    if arguments.pop("repeat", None) is not None:
+        problems.add(EVENT_REPEAT_REFUSAL)
+    arguments.pop(TIMEZONE_FIELD, None)
+
+
+def ambiguous_event_time(key: str, value: Any, readings: list[str]) -> str:
+    """Say what an event time with several ``readings`` leaves open, before the choices."""
+    edges = {reading.split(" ", 1)[0] for reading in readings}
+    if len(edges) > 1:
+        return (
+            f"{key} {_json_value(value)} does not say whether it counts from the event's start "
+            "or end:"
+        )
+    return (
+        f"{key} {_json_value(value)} does not say whether the job runs before or after the "
+        f"event's {edges.pop()}:"
+    )
+
+
+def event_time_readings(value: Any) -> list[str]:
+    """The canonical event times a value can mean, such as ``start - 30m``; [] when none.
+
+    A value that does not say whether it counts before or after the event has two.
+    """
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        if value == 0:
+            return ["start"]
+        minutes = duration_minutes(abs(value))
+        if minutes is None:
+            return []
+        if value < 0:
+            return [_event_time("start", "-", minutes)]
+        return [_event_time("start", "-", minutes), _event_time("start", "+", minutes)]
+    if not isinstance(value, str):
+        return []
+    text = " ".join(value.casefold().replace("_", " ").split())
+    edge = _EVENT_EDGE.match(text)
+    if edge is not None:
+        anchor, sign, amount = edge.groups()
+        minutes = duration_minutes(amount) if amount else 0
+        return [] if minutes is None else [_event_time(anchor, sign or "+", minutes)]
+    phrase = _EVENT_PHRASE.match(text)
+    if phrase is not None:
+        amount, relation, anchor = phrase.groups()
+        anchor = {"beginning": "start", "event": None}.get(anchor or "", anchor)
+        minutes = duration_minutes(amount) if amount else 0
+        if minutes is None or (relation == "at") == bool(amount):
+            # "at" takes no amount; before and after need one.
+            return []
+        if relation == "at":
+            return [anchor or "start"]
+        if anchor is not None or relation == "before":
+            return [_event_time(anchor or "start", "-" if relation == "before" else "+", minutes)]
+        return [_event_time("start", "+", minutes), _event_time("end", "+", minutes)]
+    sign, rest = (text[0], text[1:].strip()) if text[:1] in {"+", "-"} else ("", text)
+    minutes = duration_minutes(rest)
+    if minutes is None:
+        return []
+    if sign == "-":
+        return [_event_time("start", "-", minutes)]
+    if sign == "+":
+        return [_event_time("start", "+", minutes), _event_time("end", "+", minutes)]
+    return [_event_time("start", "-", minutes), _event_time("start", "+", minutes)]
+
+
+def _event_time(edge: str, sign: str, minutes: int) -> str:
+    """The canonical event time ``minutes`` before or after an edge: ``start - 30m``."""
+    return f"{edge} {sign} {duration_from_seconds(minutes * 60)}" if minutes else edge
+
+
 # -- state, recurrence, Session, delivery --------------------------------------------------
 
 
@@ -978,12 +1151,12 @@ def _read_action(arguments: dict[str, Any], problems: _Problems) -> None:
             [{"action": "create"}],
         )
     elif action == "list":
-        extra = [name for name in changes if name != ENABLED_FIELD]
+        extra = [name for name in changes if name not in {ENABLED_FIELD, "event_id"}]
         arguments.pop(ENABLED_FIELD, None)
         arguments.pop(TIMEZONE_FIELD, None)
         if extra:
             text = (
-                "list only shows jobs (optionally one job by id); it takes no "
+                "list only shows jobs (one job by id, or the jobs of an event_id); it takes no "
                 + ", ".join(extra)
                 + ". To show jobs, leave them out"
             )
@@ -1056,12 +1229,16 @@ def _boolean(value: Any) -> Any:
 __all__ = [
     "CLOCK_SCHEDULE",
     "ENABLED_FIELD",
+    "EVENT_REPEAT_REFUSAL",
+    "EVENT_TIME_STAND_IN",
     "SELF_TARGET",
     "CronCallRefusedError",
     "OMIT",
     "REFUSAL_PREFIX",
     "TIMEZONE_FIELD",
     "UNADVERTISED_PARAMETERS",
+    "ambiguous_event_time",
+    "event_time_readings",
     "normalize_cron_arguments",
     "refusal",
     "render_call",

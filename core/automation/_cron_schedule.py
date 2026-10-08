@@ -10,8 +10,10 @@ from zoneinfo import ZoneInfo
 
 from croniter import CroniterBadDateError, croniter  # type: ignore[import-untyped]
 
+from core.automation._cron_events import format_event_time
 from core.automation._cron_jobs import (
     CRON_EXPRESSION_FIELD_COUNT,
+    MAX_EVENT_OFFSET_MINUTES,
     MIN_INTERVAL_SECONDS,
     CronJob,
     CronJobValidationError,
@@ -105,9 +107,10 @@ def owed_fire(timezone: ZoneInfo, now: datetime, job: CronJob) -> OwedFire | Non
 
     Fires due at or before :func:`covered_until` are not owed: the job was
     created, activated, rescheduled, attempted or completed after them, or they
-    were skipped. Several owed fires collapse into the most recent one.
+    were skipped. Several owed fires collapse into the most recent one. An event
+    job's occurrences come from the calendar (``_cron_events``).
     """
-    if job.status != "active" or job.remaining_runs == 0:
+    if job.status != "active" or job.remaining_runs == 0 or job.schedule_type == "event":
         return None
     now_utc = _as_utc(now)
     if job.schedule_type == "once":
@@ -207,14 +210,19 @@ def format_schedule(job: CronJob) -> str:
             if job.interval_seconds is not None
             else ""
         )
+    if job.schedule_type == "event":
+        return format_event_time(job.event_edge, job.event_offset_minutes)
     return job.run_at or ""
 
 
 def next_fire_at(
     timezone: ZoneInfo, now: datetime, job: CronJob, *, reference_time: datetime | None = None
 ) -> str | None:
-    """Project the next UTC fire instant from the canonical schedule rules."""
-    if job.status != "active" or job.remaining_runs == 0:
+    """Project the next UTC fire instant from the canonical schedule rules.
+
+    An event job's next fire comes from the calendar (``_cron_events``).
+    """
+    if job.status != "active" or job.remaining_runs == 0 or job.schedule_type == "event":
         return None
     if job.schedule_type == "once":
         return _parse_run_at_utc(timezone, job).isoformat()
@@ -385,6 +393,12 @@ def _next_interval_fire_at(
 
 
 def normalize_job_schedule(timezone: ZoneInfo, now: datetime, job: CronJob) -> None:
+    if job.schedule_type == "event":
+        _normalize_event_schedule(job)
+        return
+    job.event_id = None
+    job.event_edge = None
+    job.event_offset_minutes = None
     if job.schedule_type == "cron":
         if not isinstance(job.cron_expression, str) or not job.cron_expression.strip():
             raise CronJobValidationError("cron_expression is required for cron jobs")
@@ -439,3 +453,30 @@ def normalize_job_schedule(timezone: ZoneInfo, now: datetime, job: CronJob) -> N
     job.cron_expression = None
     job.interval_seconds = None
     job.interval_anchor_at = None
+
+
+def _normalize_event_schedule(job: CronJob) -> None:
+    """Check an event job's binding; the event itself is checked against the calendar."""
+    if not isinstance(job.event_id, str) or not job.event_id.strip():
+        raise CronJobValidationError("event_id is required for event jobs")
+    job.event_id = job.event_id.strip()
+    if job.event_edge not in ("start", "end"):
+        raise CronJobValidationError("event_edge must be start or end")
+    offset = job.event_offset_minutes
+    if offset is None:
+        job.event_offset_minutes = 0
+    elif (
+        isinstance(offset, bool)
+        or not isinstance(offset, int)
+        or abs(offset) > MAX_EVENT_OFFSET_MINUTES
+    ):
+        raise CronJobValidationError("event_offset_minutes must be a whole number within 31 days")
+    if job.remaining_runs is not None:
+        raise CronJobValidationError(
+            "repeat is not available for a job bound to a calendar event: "
+            "it runs at every occurrence of the event"
+        )
+    job.cron_expression = None
+    job.interval_seconds = None
+    job.interval_anchor_at = None
+    job.run_at = None

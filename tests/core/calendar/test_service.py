@@ -1,4 +1,4 @@
-"""Tests for the local calendar service."""
+"""Tests for the local calendar service: events, occurrences, expansion and storage."""
 
 from __future__ import annotations
 
@@ -6,7 +6,8 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,8 @@ from core.calendar import (
     CalendarService,
     CalendarStorageError,
     CalendarValidationError,
+    occurrence_id,
+    parse_occurrence_id,
     validate_calendar_events_file,
 )
 
@@ -26,10 +29,15 @@ def service(tmp_path: Path) -> CalendarService:
     return CalendarService(tmp_path, tz="Europe/Berlin")
 
 
+def _window(service: CalendarService, lower: str, upper: str) -> list[Any]:
+    window_start, window_end = service.parse_window(lower, upper)
+    return service.occurrences_in_window(window_start, window_end)
+
+
 @pytest.mark.parametrize("start", ["2026-09-03", "2026-09-03T09:00:00"])
 def test_occurrence_limit_applies_to_each_event(service, start):
     events = [
-        service.create_event(title=title, start=start, rrule={"freq": "daily"})
+        service.create_event(title=title, start=start, rrule="FREQ=DAILY")
         for title in ("First", "Second")
     ]
     occurrences = service.occurrences_in_window(
@@ -49,89 +57,102 @@ def test_invalid_occurrence_limit_is_rejected(service, limit):
 
 
 class TestCreateEvent:
-    def test_conflicting_recurrence_limits_cannot_mutate_store(self, service):
-        event = service.create_event(title="Existing", start="2026-09-03")
-        invalid_rule = {"freq": "daily", "count": 2, "until": "2026-09-14"}
-        with pytest.raises(CalendarValidationError):
-            service.create_event(title="Invalid", start="2026-09-03", rrule=invalid_rule)
-        with pytest.raises(CalendarValidationError):
-            asyncio.run(service.update_event(event.id, rrule=invalid_rule))
-        assert service.list_events() == [event]
-
-    def test_single_timed_event_stores_utc_instant(self, service: CalendarService) -> None:
-        event = service.create_event(title="Zahnarzt", start="2026-09-03T15:00:00+02:00")
-        assert event.start_utc == "2026-09-03T13:00:00+00:00"
-        assert event.start_local is None
-        assert event.tz_name is None
-        assert event.duration_minutes == 60
-
-    def test_recurring_timed_event_anchors_to_wall_clock(self, service: CalendarService) -> None:
-        event = service.create_event(
-            title="Standup",
-            start="2026-08-31T09:00:00",
-            rrule={"freq": "weekly", "by_weekday": ["mo"]},
-        )
-        assert event.start_local == "2026-08-31T09:00:00"
-        assert event.tz_name == "Europe/Berlin"
-        assert event.rrule is not None
-        assert event.start_utc is None
-
-    def test_recurring_with_offset_normalizes_into_target_zone(
-        self, service: CalendarService
+    @pytest.mark.parametrize(
+        "start", ["2026-09-03T15:00", "2026-09-03T15:00:00+02:00", "2026-09-03T13:00:00Z"]
+    )
+    def test_timed_event_keeps_local_times_in_the_server_zone(
+        self, service: CalendarService, start: str
     ) -> None:
-        event = service.create_event(
-            title="Sync",
-            start="2026-08-31T09:00:00+02:00",
-            rrule={"freq": "weekly", "by_weekday": ["mo"]},
-        )
-        assert event.start_local == "2026-08-31T09:00:00"
-        assert event.tz_name == "Europe/Berlin"
+        event = service.create_event(title="Dentist", start=start)
 
-    def test_date_only_start_creates_all_day_event(self, service: CalendarService) -> None:
-        event = service.create_event(title="Urlaub", start="2026-09-14", duration_days=3)
-        assert event.all_day is True
-        assert event.start_date == "2026-09-14"
-        assert event.duration_days == 3
+        assert (event.start, event.end, event.tz_name) == (
+            "2026-09-03T15:00:00",
+            "2026-09-03T16:00:00",
+            "Europe/Berlin",
+        )
+        assert (event.all_day, event.recurring, event.description, event.location) == (
+            False,
+            False,
+            None,
+            None,
+        )
+
+    def test_end_description_and_location_are_kept(self, service: CalendarService) -> None:
+        event = service.create_event(
+            title=" Review ",
+            start="2026-09-03T15:00",
+            end="2026-09-03T17:30",
+            description="Bring the draft.\nPrint it.",
+            location="  Room 4 ",
+        )
+
+        assert (event.title, event.end, event.description, event.location) == (
+            "Review",
+            "2026-09-03T17:30:00",
+            "Bring the draft.\nPrint it.",
+            "Room 4",
+        )
+
+    @pytest.mark.parametrize(
+        ("end", "stored_end"),
+        [
+            pytest.param(None, "2026-09-15", id="default-one-day"),
+            pytest.param("2026-09-14", "2026-09-15", id="end-on-start-day-is-one-day"),
+            pytest.param("2026-09-17", "2026-09-17", id="exclusive-end"),
+        ],
+    )
+    def test_all_day_event_has_an_exclusive_end_date(
+        self, service: CalendarService, end: str | None, stored_end: str
+    ) -> None:
+        event = service.create_event(title="Holiday", start="2026-09-14", end=end)
+
+        assert (event.all_day, event.tz_name, event.start, event.end) == (
+            True,
+            None,
+            "2026-09-14",
+            stored_end,
+        )
 
     @pytest.mark.parametrize(
         ("fields", "message"),
         [
-            pytest.param(
-                {"start": "2026-09-14", "all_day": False}, "all_day", id="date-not-all-day"
-            ),
-            pytest.param(
-                {"start": "2026-09-14T10:00:00+00:00", "all_day": True},
-                "all_day",
-                id="datetime-all-day",
-            ),
-            pytest.param(
-                {"start": "2026-09-14T10:00:00+00:00", "exdates": ["2026-09-14"]},
-                "exdates",
-                id="exdates-on-single-event",
-            ),
-            pytest.param({"title": "  ", "start": "2026-09-14"}, "title", id="empty-title"),
+            pytest.param({"title": "  "}, "title", id="empty-title"),
             pytest.param({"start": "next tuesday"}, "start", id="invalid-start"),
+            pytest.param({"end": "2026-09-14T08:00"}, "end must be after start", id="end-first"),
+            pytest.param({"end": "2026-09-15"}, "end must be a date-time", id="end-kind"),
+            pytest.param({"end": "2026-10-20T09:00"}, "at most 30 days", id="too-long"),
+            pytest.param({"start": "0999-01-01T09:00"}, "between the years", id="year"),
+            pytest.param({"location": "x" * 501}, "location must not exceed", id="location"),
         ],
     )
     def test_rejects_invalid_fields(
         self, service: CalendarService, fields: dict[str, Any], message: str
     ) -> None:
         with pytest.raises(CalendarValidationError, match=message):
-            service.create_event(**{"title": "X", **fields})
+            service.create_event(**{"title": "X", "start": "2026-09-14T09:00", **fields})
         assert service.list_events() == []
 
     def test_rejects_unknown_constructor_timezone(self, tmp_path: Path) -> None:
         with pytest.raises(CalendarValidationError, match="IANA"):
             CalendarService(tmp_path, tz="Mars/Olympus")
 
-    def test_timezone_change_applies_to_future_local_events(self, tmp_path: Path) -> None:
+    def test_events_keep_the_zone_of_their_creation(self, tmp_path: Path) -> None:
         service = CalendarService(tmp_path, tz="UTC")
+        before = service.create_event(title="Before", start="2026-01-15T09:00:00")
 
         service.set_timezone("Europe/Berlin")
-        event = service.create_event(title="Local", start="2026-01-15T09:00:00")
+        after = service.create_event(title="After", start="2026-01-15T09:00:00")
 
         assert service.system_timezone_name() == "Europe/Berlin"
-        assert event.start_utc == "2026-01-15T08:00:00+00:00"
+        assert service.get_event(before.id).tz_name == "UTC"
+        assert after.tz_name == "Europe/Berlin"
+        starts = {
+            item.title: item.start_utc for item in _window(service, "2026-01-15", "2026-01-15")
+        }
+        assert starts == {
+            "Before": datetime(2026, 1, 15, 9, tzinfo=UTC),
+            "After": datetime(2026, 1, 15, 8, tzinfo=UTC),
+        }
 
     def test_capacity_limit(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         service = CalendarService(tmp_path)
@@ -149,34 +170,105 @@ class TestUpdateEvent:
         self, service: CalendarService, caplog: pytest.LogCaptureFixture
     ) -> None:
         event = service.create_event(
-            title="Standup",
-            start="2026-08-31T09:00:00",
-            rrule={"freq": "weekly", "by_weekday": ["mo"]},
+            title="Standup", start="2026-08-31T09:00:00", location="Hall", rrule="FREQ=WEEKLY"
         )
         with caplog.at_level(logging.INFO, logger="vbot.calendar.service"):
             updated = asyncio.run(
-                service.update_event(event.id, title="Daily", duration_minutes=15)
+                service.update_event(event.id, title="Daily", end="2026-08-31T09:15")
             )
-        assert updated.title == "Daily"
-        assert updated.duration_minutes == 15
-        assert updated.start_local == "2026-08-31T09:00:00"
-        assert updated.rrule == event.rrule
+        assert (updated.title, updated.start, updated.end) == (
+            "Daily",
+            "2026-08-31T09:00:00",
+            "2026-08-31T09:15:00",
+        )
+        assert (updated.location, updated.rrule) == ("Hall", "FREQ=WEEKLY")
         # The log names the changed fields, never the title itself.
         [message] = [r.getMessage() for r in caplog.records if r.name == "vbot.calendar.service"]
         assert "title" in message
         assert "Daily" not in message
 
-    def test_update_can_clear_recurrence_dropping_exdates(self, service: CalendarService) -> None:
-        event = service.create_event(
-            title="Standup",
-            start="2026-08-31T09:00:00",
-            rrule={"freq": "weekly", "by_weekday": ["mo"]},
+    @pytest.mark.parametrize(
+        ("created", "start", "expected"),
+        [
+            pytest.param(
+                ("2026-09-03T15:00", "2026-09-03T17:30"),
+                "2026-09-04T08:00",
+                ("2026-09-04T08:00:00", "2026-09-04T10:30:00"),
+                id="timed-keeps-length",
+            ),
+            pytest.param(
+                ("2026-09-14", "2026-09-17"),
+                "2026-09-20",
+                ("2026-09-20", "2026-09-23"),
+                id="all-day-keeps-length",
+            ),
+            pytest.param(
+                ("2026-09-14", "2026-09-17"),
+                "2026-09-20T10:00",
+                ("2026-09-20T10:00:00", "2026-09-20T11:00:00"),
+                id="kind-switch-takes-the-default",
+            ),
+        ],
+    )
+    def test_new_start_alone_moves_the_end(
+        self,
+        service: CalendarService,
+        created: tuple[str, str],
+        start: str,
+        expected: tuple[str, str],
+    ) -> None:
+        event = service.create_event(title="X", start=created[0], end=created[1])
+
+        updated = asyncio.run(service.update_event(event.id, start=start))
+
+        assert (updated.start, updated.end) == expected
+
+    def test_moving_a_series_moves_its_changed_and_removed_occurrences(
+        self, service: CalendarService
+    ) -> None:
+        event = service.create_event(title="Weekly", start="2030-01-07T09:00", rrule="FREQ=WEEKLY")
+        asyncio.run(service.delete_occurrence(occurrence_id(event.id, "2030-01-14T09:00:00")))
+        asyncio.run(
+            service.update_occurrence(occurrence_id(event.id, "2030-01-21T09:00:00"), title="Kept")
         )
-        service.add_exdate(event.id, "2026-09-14T09:00:00")
-        updated = asyncio.run(service.update_event(event.id, rrule=None))
-        assert updated.rrule is None
-        assert updated.exdates == []
-        assert updated.start_utc == "2026-08-31T07:00:00+00:00"
+
+        moved = asyncio.run(service.update_event(event.id, start="2030-01-08T10:00"))
+
+        assert moved.exdates == ["2030-01-15T10:00:00"]
+        assert moved.overrides == {"2030-01-22T10:00:00": {"title": "Kept"}}
+        assert [
+            (item.start, item.title) for item in _window(service, "2030-01-01", "2030-01-31")
+        ] == [
+            ("2030-01-08T10:00:00", "Weekly"),
+            ("2030-01-22T10:00:00", "Kept"),
+            ("2030-01-29T10:00:00", "Weekly"),
+        ]
+
+    def test_new_rule_drops_the_changes_of_occurrences_it_no_longer_has(
+        self, service: CalendarService
+    ) -> None:
+        event = service.create_event(title="Weekly", start="2030-01-07T09:00", rrule="FREQ=WEEKLY")
+        asyncio.run(service.delete_occurrence(occurrence_id(event.id, "2030-01-14T09:00:00")))
+        asyncio.run(
+            service.update_occurrence(occurrence_id(event.id, "2030-01-21T09:00:00"), title="Kept")
+        )
+
+        changed = asyncio.run(service.update_event(event.id, rrule="FREQ=WEEKLY;INTERVAL=2"))
+
+        assert changed.exdates == []
+        assert changed.overrides == {"2030-01-21T09:00:00": {"title": "Kept"}}
+
+    @pytest.mark.parametrize("rrule", [None, ""])
+    def test_stopping_repetition_drops_occurrence_changes(
+        self, service: CalendarService, rrule: str | None
+    ) -> None:
+        event = service.create_event(title="Standup", start="2026-08-31T09:00", rrule="FREQ=WEEKLY")
+        asyncio.run(service.delete_occurrence(occurrence_id(event.id, "2026-09-14T09:00:00")))
+
+        updated = asyncio.run(service.update_event(event.id, rrule=rrule))
+
+        assert (updated.rrule, updated.exdates, updated.overrides) == (None, [], {})
+        assert updated.start == "2026-08-31T09:00:00"
 
     def test_update_rejects_unknown_fields(self, service: CalendarService) -> None:
         event = service.create_event(title="X", start="2026-09-14")
@@ -191,37 +283,147 @@ class TestUpdateEvent:
 class TestDeleteEvent:
     def test_delete_removes_event(self, service: CalendarService) -> None:
         event = service.create_event(title="X", start="2026-09-14")
-        service.delete_event(event.id)
+        asyncio.run(service.delete_event(event.id))
         assert service.list_events() == []
 
     def test_delete_missing_event(self, service: CalendarService) -> None:
         with pytest.raises(CalendarEventNotFoundError):
-            service.delete_event("nope")
+            asyncio.run(service.delete_event("nope"))
 
 
-class TestAddExdate:
-    def test_adds_normalized_exdate(self, service: CalendarService) -> None:
-        event = service.create_event(
-            title="Standup",
-            start="2026-08-31T09:00:00",
-            rrule={"freq": "weekly", "by_weekday": ["mo"]},
+class TestOccurrences:
+    def test_occurrence_ids_name_the_original_start(self, service: CalendarService) -> None:
+        weekly = service.create_event(title="W", start="2030-01-07T09:00", rrule="FREQ=WEEKLY")
+        daily = service.create_event(title="D", start="2030-01-07", rrule="FREQ=DAILY;COUNT=2")
+        single = service.create_event(title="S", start="2030-01-08T12:00")
+
+        ids = [item.id for item in _window(service, "2030-01-07", "2030-01-08")]
+
+        assert ids == [
+            f"{daily.id}_20300107",
+            f"{weekly.id}_20300107T0900",
+            f"{daily.id}_20300108",
+            single.id,
+        ]
+        assert parse_occurrence_id(f"{weekly.id}_20300107T0900") == (
+            weekly.id,
+            "2030-01-07T09:00:00",
         )
-        updated = service.add_exdate(event.id, "2026-10-12T09:00:00")
-        assert updated.exdates == ["2026-10-12T09:00:00"]
-
-    def test_rejects_exdate_on_single_event(self, service: CalendarService) -> None:
-        event = service.create_event(title="X", start="2026-09-14T10:00:00+00:00")
-        with pytest.raises(CalendarValidationError, match="Single events"):
-            service.add_exdate(event.id, "2026-09-14")
-
-    def test_rejects_offset_exdate_for_timed_event(self, service: CalendarService) -> None:
-        event = service.create_event(
-            title="Standup",
-            start="2026-08-31T09:00:00",
-            rrule={"freq": "weekly", "by_weekday": ["mo"]},
+        assert parse_occurrence_id(single.id) is None
+        occurrence = service.get_occurrence(f"{weekly.id}_20300107T0900")
+        assert (occurrence.event_id, occurrence.original_start, occurrence.overridden) == (
+            weekly.id,
+            "2030-01-07T09:00:00",
+            False,
         )
-        with pytest.raises(CalendarValidationError, match="naive local"):
-            service.add_exdate(event.id, "2026-10-12T09:00:00+02:00")
+        assert service.get_occurrence(single.id).original_start is None
+
+    def test_update_occurrence_changes_only_that_occurrence(self, service: CalendarService) -> None:
+        event = service.create_event(
+            title="Standup", start="2030-01-07T09:00", end="2030-01-07T09:30", rrule="FREQ=WEEKLY"
+        )
+        second = occurrence_id(event.id, "2030-01-14T09:00:00")
+
+        changed = asyncio.run(
+            service.update_occurrence(
+                second, title="Planning", location="Hall", start="2030-01-15T14:00"
+            )
+        )
+
+        assert (changed.id, changed.title, changed.location) == (second, "Planning", "Hall")
+        assert (changed.start, changed.end, changed.overridden) == (
+            "2030-01-15T14:00:00",
+            "2030-01-15T14:30:00",
+            True,
+        )
+        assert service.get_event(event.id).overrides == {
+            "2030-01-14T09:00:00": {
+                "title": "Planning",
+                "location": "Hall",
+                "start": "2030-01-15T14:00:00",
+                "end": "2030-01-15T14:30:00",
+            }
+        }
+        assert [
+            (item.start, item.title) for item in _window(service, "2030-01-07", "2030-01-21")
+        ] == [
+            ("2030-01-07T09:00:00", "Standup"),
+            ("2030-01-15T14:00:00", "Planning"),
+            ("2030-01-21T09:00:00", "Standup"),
+        ]
+
+    def test_changing_an_occurrence_back_drops_its_change(self, service: CalendarService) -> None:
+        event = service.create_event(title="Standup", start="2030-01-07T09:00", rrule="FREQ=WEEKLY")
+        second = occurrence_id(event.id, "2030-01-14T09:00:00")
+        asyncio.run(service.update_occurrence(second, title="Other", start="2030-01-14T10:00"))
+
+        asyncio.run(service.update_occurrence(second, title="Standup", start="2030-01-14T09:00"))
+
+        assert service.get_event(event.id).overrides == {}
+        assert service.get_occurrence(second).overridden is False
+
+    def test_occurrence_keeps_the_event_kind(self, service: CalendarService) -> None:
+        event = service.create_event(title="Standup", start="2030-01-07T09:00", rrule="FREQ=WEEKLY")
+
+        with pytest.raises(CalendarValidationError, match="keeps the event's kind"):
+            asyncio.run(
+                service.update_occurrence(
+                    occurrence_id(event.id, "2030-01-14T09:00:00"), start="2030-01-14"
+                )
+            )
+
+    def test_delete_occurrence_removes_it_with_its_change(self, service: CalendarService) -> None:
+        event = service.create_event(title="Standup", start="2030-01-07T09:00", rrule="FREQ=WEEKLY")
+        second = occurrence_id(event.id, "2030-01-14T09:00:00")
+        asyncio.run(service.update_occurrence(second, title="Other"))
+
+        removed = asyncio.run(service.delete_occurrence(second))
+
+        stored = service.get_event(event.id)
+        assert (removed.id, removed.title) == (second, "Other")
+        assert (stored.exdates, stored.overrides) == (["2030-01-14T09:00:00"], {})
+        assert [item.start for item in _window(service, "2030-01-07", "2030-01-21")] == [
+            "2030-01-07T09:00:00",
+            "2030-01-21T09:00:00",
+        ]
+        with pytest.raises(CalendarEventNotFoundError):
+            service.get_occurrence(second)
+
+    def test_ids_that_name_no_occurrence_are_not_found(self, service: CalendarService) -> None:
+        weekly = service.create_event(title="W", start="2030-01-07T09:00", rrule="FREQ=WEEKLY")
+        single = service.create_event(title="S", start="2030-01-08T12:00")
+
+        for missing in (
+            weekly.id,
+            f"{weekly.id}_20300108T0900",
+            f"{single.id}_20300108T1200",
+            "evt_missing_20300107",
+        ):
+            with pytest.raises(CalendarEventNotFoundError):
+                service.get_occurrence(missing)
+            with pytest.raises(CalendarEventNotFoundError):
+                asyncio.run(service.delete_occurrence(missing))
+        with pytest.raises(CalendarEventNotFoundError):
+            asyncio.run(service.update_occurrence(single.id, title="X"))
+
+    def test_iter_occurrences_runs_lazily_in_start_order(self, service: CalendarService) -> None:
+        event = service.create_event(title="Daily", start="2030-01-07T09:00", rrule="FREQ=DAILY")
+        asyncio.run(
+            service.update_occurrence(
+                occurrence_id(event.id, "2030-01-08T09:00:00"), start="2030-01-09T12:00"
+            )
+        )
+        asyncio.run(service.delete_occurrence(occurrence_id(event.id, "2030-01-10T09:00:00")))
+        stored = service.get_event(event.id)
+
+        after = datetime(2030, 1, 7, 12, tzinfo=UTC)
+        first = list(islice(service.iter_occurrences(stored, after), 3))
+
+        assert [(item.original_start, item.start) for item in first] == [
+            ("2030-01-09T09:00:00", "2030-01-09T09:00:00"),
+            ("2030-01-08T09:00:00", "2030-01-09T12:00:00"),
+            ("2030-01-11T09:00:00", "2030-01-11T09:00:00"),
+        ]
 
 
 class TestOccurrencesInWindow:
@@ -229,7 +431,7 @@ class TestOccurrencesInWindow:
     @pytest.mark.parametrize("day", ["2026-09-03", "2026-03-29", "2026-10-25"])
     def test_allday_blocks_intraday_window(self, service, recurring, day):
         event = service.create_event(
-            title="Busy", start=day, rrule={"freq": "daily", "count": 1} if recurring else None
+            title="Busy", start=day, rrule="FREQ=DAILY;COUNT=1" if recurring else None
         )
         start, end = service.parse_window(f"{day}T09:00:00", f"{day}T17:00:00")
         assert [item.event_id for item in service.occurrences_in_window(start, end)] == [event.id]
@@ -241,101 +443,74 @@ class TestOccurrencesInWindow:
         )
 
     def test_shifted_dst_occurrence_can_be_excluded(self, service):
-        event = service.create_event(
+        service.create_event(
             title="Daily",
             start="2026-03-28T02:30:00",
-            duration_minutes=30,
-            rrule={"freq": "daily", "count": 3},
+            end="2026-03-28T03:00:00",
+            rrule="FREQ=DAILY;COUNT=3",
         )
         start, end = service.parse_window("2026-03-29T03:35:00", "2026-03-29T03:45:00")
         (occurrence,) = service.occurrences_in_window(start, end)
         assert occurrence.start_utc == datetime(2026, 3, 29, 1, 30, tzinfo=UTC)
         assert occurrence.end_utc == datetime(2026, 3, 29, 2, 0, tzinfo=UTC)
         assert service.find_free_slots(start, end, 5, now_utc=start) == []
-        service.add_exdate(event.id, occurrence.occurrence_start)
+        asyncio.run(service.delete_occurrence(occurrence.id))
         assert service.occurrences_in_window(start, end) == []
 
     def test_single_and_recurring_and_allday_expand(self, service: CalendarService) -> None:
-        service.create_event(title="Single", start="2026-09-03T15:00:00+02:00", duration_minutes=60)
-        service.create_event(
-            title="Weekly",
-            start="2026-09-07T09:00:00",
-            rrule={"freq": "weekly", "by_weekday": ["mo"]},
-        )
-        service.create_event(title="Urlaub", start="2026-09-14", duration_days=3)
-        window_start, window_end = service.parse_window("2026-09-01", "2026-09-30")
-        occurrences = service.occurrences_in_window(window_start, window_end)
-        titles = [occurrence.title for occurrence in occurrences]
-        assert titles.count("Weekly") == 4
-        assert titles.count("Single") == 1
-        weekly = [occurrence for occurrence in occurrences if occurrence.title == "Weekly"]
-        assert weekly[0].occurrence_start == "2026-09-07T09:00:00"
-        assert weekly[0].occurrence_end == "2026-09-07T10:00:00"
-        urlaub = [occurrence for occurrence in occurrences if occurrence.title == "Urlaub"]
-        assert urlaub[0].start_date == date(2026, 9, 14)
-        assert urlaub[0].end_date == date(2026, 9, 17)
-        assert urlaub[0].occurrence_start == "2026-09-14"
-        assert urlaub[0].occurrence_end is None
+        service.create_event(title="Single", start="2026-09-03T15:00:00+02:00")
+        service.create_event(title="Weekly", start="2026-09-07T09:00:00", rrule="FREQ=WEEKLY")
+        service.create_event(title="Urlaub", start="2026-09-14", end="2026-09-17")
 
-    def test_excluded_occurrence_does_not_expand(self, service: CalendarService) -> None:
-        event = service.create_event(
-            title="Weekly",
-            start="2026-09-07T09:00:00",
-            rrule={"freq": "weekly", "by_weekday": ["mo"]},
+        occurrences = _window(service, "2026-09-01", "2026-09-30")
+
+        titles = [occurrence.title for occurrence in occurrences]
+        assert (titles.count("Weekly"), titles.count("Single"), titles.count("Urlaub")) == (4, 1, 1)
+        weekly = next(item for item in occurrences if item.title == "Weekly")
+        assert (weekly.start, weekly.end, weekly.recurring) == (
+            "2026-09-07T09:00:00",
+            "2026-09-07T10:00:00",
+            True,
         )
-        service.add_exdate(event.id, "2026-09-14T09:00:00")
-        window_start, window_end = service.parse_window("2026-09-01", "2026-09-30")
-        occurrences = service.occurrences_in_window(window_start, window_end)
-        assert len(occurrences) == 3
+        urlaub = next(item for item in occurrences if item.title == "Urlaub")
+        assert (urlaub.start, urlaub.end, urlaub.all_day) == ("2026-09-14", "2026-09-17", True)
+        assert urlaub.start_utc == datetime(2026, 9, 13, 22, tzinfo=UTC)
 
     @pytest.mark.parametrize(
-        ("fields", "instant", "next_start"),
+        ("fields", "removed", "instant", "next_start"),
         [
             # Berlin midnight on 2026-09-14 is 22:00 UTC the day before.
             pytest.param(
-                {"start": "2026-09-14"}, "2026-09-13T21:59", "2026-09-13T22:00", id="all-day-ahead"
+                {"start": "2026-09-14"}, [], "2026-09-13T21:59", "2026-09-13T22:00", id="ahead"
             ),
-            pytest.param({"start": "2026-09-14"}, "2026-09-13T22:01", None, id="all-day-started"),
+            pytest.param({"start": "2026-09-14"}, [], "2026-09-13T22:01", None, id="started"),
             pytest.param(
-                {"start": "2026-09-14", "rrule": {"freq": "daily", "count": 3}},
+                {"start": "2026-09-14", "rrule": "FREQ=DAILY;COUNT=3"},
+                [],
                 "2026-09-16T12:00",
                 None,
-                id="all-day-series-ended",
+                id="series-ended",
             ),
             pytest.param(
-                {
-                    "start": "2026-09-14",
-                    "rrule": {"freq": "daily", "count": 3},
-                    "exdates": ["2026-09-16"],
-                },
+                {"start": "2026-09-14", "rrule": "FREQ=DAILY;COUNT=3"},
+                ["2026-09-16"],
                 "2026-09-15T12:00",
                 None,
-                id="all-day-rest-removed",
+                id="rest-removed",
             ),
             pytest.param(
-                {
-                    "start": "2026-09-07T09:00:00",
-                    "rrule": {"freq": "weekly", "until": "2026-09-21"},
-                },
+                {"start": "2026-09-07T09:00:00", "rrule": "FREQ=WEEKLY;UNTIL=20260921"},
+                [],
                 "2026-09-21T06:59",
                 "2026-09-21T07:00",
-                id="timed-last-occurrence-ahead",
+                id="last-occurrence-ahead",
             ),
             pytest.param(
-                {
-                    "start": "2026-09-07T09:00:00",
-                    "rrule": {"freq": "weekly", "until": "2026-09-21"},
-                    "exdates": ["2026-09-21T09:00:00"],
-                },
-                "2026-09-15T00:00",
-                None,
-                id="timed-rest-removed",
-            ),
-            pytest.param(
-                {"start": "2026-09-07T09:00:00", "rrule": {"freq": "monthly"}},
+                {"start": "2026-09-07T09:00:00", "rrule": "FREQ=MONTHLY"},
+                [],
                 "2031-01-01T00:00",
                 "2031-01-07T08:00",
-                id="timed-series-without-end",
+                id="series-without-end",
             ),
         ],
     )
@@ -343,10 +518,14 @@ class TestOccurrencesInWindow:
         self,
         service: CalendarService,
         fields: dict[str, Any],
+        removed: list[str],
         instant: str,
         next_start: str | None,
     ) -> None:
         event = service.create_event(title="Event", **fields)
+        for key in removed:
+            asyncio.run(service.delete_occurrence(occurrence_id(event.id, key)))
+        event = service.get_event(event.id)
 
         at = datetime.fromisoformat(instant).replace(tzinfo=UTC)
         expected = datetime.fromisoformat(next_start).replace(tzinfo=UTC) if next_start else None
@@ -371,11 +550,7 @@ class TestOccurrencesInWindow:
 class TestFindFreeSlots:
     @pytest.mark.parametrize("end_minute,second,expected", [(2, 0, 5), (5, 0, 5), (5, 1, 10)])
     def test_rounds_cursor_after_busy_interval(self, service, end_minute, second, expected):
-        service.create_event(
-            title="Busy",
-            start=f"2026-09-03T09:{end_minute:02}:{second:02}+00:00",
-            duration_minutes=60,
-        )
+        service.create_event(title="Busy", start=f"2026-09-03T09:{end_minute:02}:{second:02}+00:00")
         start = datetime(2026, 9, 3, 9, 30, tzinfo=UTC)
         end = datetime(2026, 9, 3, 11, tzinfo=UTC)
         slots = service.find_free_slots(start, end, 30, now_utc=start)
@@ -383,14 +558,14 @@ class TestFindFreeSlots:
 
     def test_first_read_after_restart_uses_persisted_events(self, tmp_path: Path) -> None:
         original = CalendarService(tmp_path, tz="Europe/Berlin")
-        original.create_event(title="All day", start="2026-09-03", duration_days=1)
+        original.create_event(title="All day", start="2026-09-03")
         restarted = CalendarService(tmp_path, tz="Europe/Berlin")
         start, end = restarted.parse_window("2026-09-03", "2026-09-03")
 
         assert restarted.find_free_slots(start, end, 60, now_utc=start) == []
 
     def test_slots_are_whole_gaps_around_events(self, service: CalendarService) -> None:
-        service.create_event(title="Block", start="2026-09-03T15:00:00+02:00", duration_minutes=60)
+        service.create_event(title="Block", start="2026-09-03T15:00:00+02:00")
         window_start, window_end = service.parse_window("2026-09-03", "2026-09-03")
 
         slots = service.find_free_slots(window_start, window_end, 60, now_utc=window_start)
@@ -402,8 +577,8 @@ class TestFindFreeSlots:
         ]
 
     def test_gaps_shorter_than_the_duration_are_skipped(self, service: CalendarService) -> None:
-        service.create_event(title="A", start="2026-09-03T09:00:00+00:00", duration_minutes=60)
-        service.create_event(title="B", start="2026-09-03T10:30:00+00:00", duration_minutes=60)
+        service.create_event(title="A", start="2026-09-03T09:00:00+00:00")
+        service.create_event(title="B", start="2026-09-03T10:30:00+00:00")
         window_start = datetime(2026, 9, 3, 9, 0, tzinfo=UTC)
         window_end = datetime(2026, 9, 3, 13, 0, tzinfo=UTC)
 
@@ -412,12 +587,6 @@ class TestFindFreeSlots:
         assert [(slot.start_utc, slot.end_utc) for slot in slots] == [
             (datetime(2026, 9, 3, 11, 30, tzinfo=UTC), window_end)
         ]
-
-    def test_fully_booked_window_returns_no_slots(self, service: CalendarService) -> None:
-        service.create_event(title="All day", start="2026-09-03", duration_days=1)
-        window_start, window_end = service.parse_window("2026-09-03", "2026-09-03")
-        slots = service.find_free_slots(window_start, window_end, 60, now_utc=window_start)
-        assert slots == []
 
     @pytest.mark.parametrize(
         ("reference_now", "first_start"),
@@ -468,131 +637,109 @@ class TestParseWindow:
             service.parse_window("2026-09-04", "2026-09-03")
 
 
+def _events_path(root: Path) -> Path:
+    return root / "calendar" / "events.json"
+
+
 class TestPersistence:
-    @pytest.mark.parametrize("start", ["2026-09-14", "2026-09-14T09:00:00"])
     @pytest.mark.parametrize(
-        "rrule",
+        ("field", "value", "path"),
         [
-            {},
-            {"freq": "hourly"},
-            {"freq": "daily", "interval": 0},
-            {"freq": "daily", "until": "invalid"},
-            {"freq": "daily", "count": 2, "until": "2026-09-15"},
-            {"freq": "weekly", "by_weekday": ["invalid"]},
+            pytest.param("rrule", {"freq": "daily"}, "$.events[0].rrule", id="rule-object"),
+            pytest.param("rrule", "FREQ=HOURLY", "$.events[0]", id="rule-text"),
+            pytest.param("start", "soon", "$.events[0]", id="start"),
+            pytest.param("tz_name", "Mars/Olympus", "$.events[0]", id="zone"),
+            pytest.param(
+                "overrides",
+                {"2026-09-15T09:00:00": {"title": 5}},
+                "$.events[0].overrides",
+                id="change",
+            ),
         ],
     )
-    def test_invalid_stored_recurrence_is_reported_and_isolated(self, tmp_path, start, rrule):
+    def test_invalid_stored_event_is_reported_isolated_and_kept(
+        self, tmp_path: Path, field: str, value: Any, path: str
+    ) -> None:
         service = CalendarService(tmp_path, tz="UTC")
-        broken = service.create_event(title="Broken", start=start, rrule={"freq": "daily"})
+        broken = service.create_event(title="Broken", start="2026-09-14T09:00", rrule="FREQ=DAILY")
         valid = service.create_event(title="Valid", start="2026-09-14")
-        path = tmp_path / "calendar" / "events.json"
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(_events_path(tmp_path).read_text(encoding="utf-8"))
         invalid_entry = next(entry for entry in payload["events"] if entry["id"] == broken.id)
-        invalid_entry["rrule"] = rrule
+        invalid_entry[field] = value
         invalid_entry["future_field"] = {"retained": True}
-        path.write_text(json.dumps(payload), encoding="utf-8")
+        _events_path(tmp_path).write_text(json.dumps(payload), encoding="utf-8")
 
-        report = validate_calendar_events_file(path)
-        assert [item.path for item in report.diagnostics if item.severity == "error"] == [
-            "$.events[0].rrule"
-        ]
+        report = validate_calendar_events_file(_events_path(tmp_path))
+        errors = [item.path for item in report.diagnostics if item.severity == "error"]
+        assert errors and all(item.startswith(path) for item in errors)
         restarted = CalendarService(tmp_path, tz="UTC")
         assert [event.id for event in restarted.list_events()] == [valid.id]
-        lower, upper = restarted.parse_window("2026-09-14", "2026-09-14")
-        assert [event.event_id for event in restarted.occurrences_in_window(lower, upper)] == [
+        assert [item.event_id for item in _window(restarted, "2026-09-14", "2026-09-14")] == [
             valid.id
         ]
-        assert restarted.find_free_slots(lower, upper, 30, now_utc=lower) == []
 
         asyncio.run(restarted.update_event(valid.id, title="Updated"))
-        rewritten = json.loads(path.read_text(encoding="utf-8"))
+        rewritten = json.loads(_events_path(tmp_path).read_text(encoding="utf-8"))
         assert next(entry for entry in rewritten["events"] if entry["id"] == broken.id) == (
             invalid_entry
         )
 
-    def test_stored_recurrence_defaults_are_normalized_without_rewriting_on_read(self, tmp_path):
-        service = CalendarService(tmp_path, tz="UTC")
-        event = service.create_event(
-            title="Daily", start="2026-09-14T09:00:00", rrule={"freq": "daily"}
-        )
-        path = tmp_path / "calendar" / "events.json"
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        payload["events"][0]["rrule"] = {"freq": "daily", "future_rule": {"kept": True}}
-        original = json.dumps(payload)
-        path.write_text(original, encoding="utf-8")
-
-        assert not any(
-            item.severity == "error" for item in validate_calendar_events_file(path).diagnostics
-        )
-        restarted = CalendarService(tmp_path, tz="UTC")
-        assert restarted.get_event(event.id).rrule == event.rrule
-        lower, upper = restarted.parse_window("2026-09-14", "2026-09-15")
-        assert len(restarted.occurrences_in_window(lower, upper)) == 2
-        assert path.read_text(encoding="utf-8") == original
-
-        asyncio.run(restarted.update_event(event.id, title="Updated"))
-        rewritten = json.loads(path.read_text(encoding="utf-8"))
-        assert rewritten["events"][0]["rrule"]["future_rule"] == {"kept": True}
-
-    def test_invalid_entries_are_preserved_and_skipped(self, tmp_path: Path) -> None:
-        events_path = tmp_path / "calendar" / "events.json"
-        events_path.parent.mkdir(parents=True)
-        valid = {
-            "id": "valid-1",
-            "title": "Valid",
-            "all_day": False,
-            "start_utc": "2026-09-14T10:00:00+00:00",
-            "duration_minutes": 30,
-            "created_at": "2026-08-27T00:00:00+00:00",
-        }
-        events_path.write_text(
-            json.dumps({"format_version": 1, "events": [{"bogus": "entry"}, valid]}),
-            encoding="utf-8",
-        )
-        service = CalendarService(tmp_path)
-        assert [event.id for event in service.list_events()] == ["valid-1"]
-        # The invalid entry survives saves so no data is silently destroyed.
-        other = service.create_event(title="New", start="2026-09-15T10:00:00+00:00")
-        raw = json.loads(events_path.read_text(encoding="utf-8"))["events"]
-        assert {"bogus": "entry"} in [
-            entry for entry in raw if isinstance(entry, dict) and "bogus" in entry
-        ]
-        assert len([item for item in raw if isinstance(item, dict) and item.get("id")]) == 2
-        assert other.id
-
     def test_events_survive_restart_and_saves_keep_unknown_fields(self, tmp_path: Path) -> None:
         service = CalendarService(tmp_path, tz="Europe/Berlin")
         event = service.create_event(
-            title="Standup",
-            start="2026-08-31T09:00:00",
-            rrule={"freq": "weekly", "by_weekday": ["mo"]},
+            title="Standup", start="2026-08-31T09:00:00", rrule="FREQ=WEEKLY;BYDAY=MO"
         )
-        events_path = tmp_path / "calendar" / "events.json"
-        raw = json.loads(events_path.read_text(encoding="utf-8"))
+        asyncio.run(
+            service.update_occurrence(occurrence_id(event.id, "2026-09-07T09:00:00"), title="Demo")
+        )
+        raw = json.loads(_events_path(tmp_path).read_text(encoding="utf-8"))
         raw["future_setting"] = "kept"
         raw["events"][0]["color"] = "blue"
-        raw["events"][0]["rrule"]["by_month_day"] = [1]
-        events_path.write_text(json.dumps(raw), encoding="utf-8")
+        _events_path(tmp_path).write_text(json.dumps(raw), encoding="utf-8")
 
         reloaded = CalendarService(tmp_path, tz="Europe/Berlin")
-        loaded = reloaded.get_event(event.id)
-        assert loaded.title == "Standup"
-        assert loaded.rrule == event.rrule
-        assert loaded.exdates == []
+        assert reloaded.get_event(event.id) == service.get_event(event.id)
         asyncio.run(reloaded.update_event(event.id, title="Weekly standup"))
 
-        rewritten = json.loads(events_path.read_text(encoding="utf-8"))
-        assert rewritten["format_version"] == 1
+        rewritten = json.loads(_events_path(tmp_path).read_text(encoding="utf-8"))
+        assert rewritten["format_version"] == 2
         assert rewritten["future_setting"] == "kept"
-        assert rewritten["events"][0]["title"] == "Weekly standup"
-        assert rewritten["events"][0]["color"] == "blue"
-        assert rewritten["events"][0]["rrule"]["by_month_day"] == [1]
+        stored = rewritten["events"][0]
+        assert (stored["title"], stored["color"], stored["rrule"]) == (
+            "Weekly standup",
+            "blue",
+            "FREQ=WEEKLY;BYDAY=MO",
+        )
+        assert stored["overrides"] == {"2026-09-07T09:00:00": {"title": "Demo"}}
+
+    def test_events_of_an_earlier_version_are_ignored_and_replaced(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        old_event = {"id": "evt_old", "title": "Old", "start_utc": "2026-09-14T10:00:00+00:00"}
+        _events_path(tmp_path).parent.mkdir(parents=True)
+        _events_path(tmp_path).write_text(
+            json.dumps({"format_version": 1, "events": [old_event]}), encoding="utf-8"
+        )
+
+        report = validate_calendar_events_file(_events_path(tmp_path))
+        assert [(item.severity, item.path) for item in report.diagnostics] == [
+            ("warning", "$.format_version")
+        ]
+        service = CalendarService(tmp_path)
+        with caplog.at_level(logging.WARNING, logger="vbot.calendar.service"):
+            assert service.list_events() == []
+        assert "earlier vBot version" in caplog.text
+        new = service.create_event(title="New", start="2026-09-15")
+
+        rewritten = json.loads(_events_path(tmp_path).read_text(encoding="utf-8"))
+        assert rewritten["format_version"] == 2
+        assert [entry["id"] for entry in rewritten["events"]] == [new.id]
 
     @pytest.mark.parametrize(
         ("content", "message", "denied"),
         [
             pytest.param(
-                json.dumps({"format_version": 2, "events": []}),
+                json.dumps({"format_version": 3, "events": []}),
                 "written by a newer vBot",
                 False,
                 id="newer-format",
@@ -600,7 +747,7 @@ class TestPersistence:
             pytest.param("{not an array", "Invalid JSON", False, id="malformed"),
             # A file that cannot be checked is not missing: it is never seeded over.
             pytest.param(
-                json.dumps({"format_version": 1, "events": []}),
+                json.dumps({"format_version": 2, "events": []}),
                 "Cannot initialize calendar storage",
                 True,
                 id="access-denied",
@@ -616,7 +763,7 @@ class TestPersistence:
         message: str,
         denied: bool,
     ) -> None:
-        events_path = tmp_path / "calendar" / "events.json"
+        events_path = _events_path(tmp_path)
         events_path.parent.mkdir(parents=True)
         events_path.write_text(content, encoding="utf-8")
         if denied:
@@ -633,15 +780,15 @@ class TestPersistence:
         service = CalendarService(tmp_path)
         calls: list[int] = []
         unsubscribe = service.add_changed_callback(lambda: calls.append(1))
-        event = service.create_event(title="X", start="2026-09-14")
-        assert calls == [1]
+        event = service.create_event(title="X", start="2026-09-14", rrule="FREQ=DAILY")
         asyncio.run(service.update_event(event.id, title="Y"))
-        assert calls == [1, 1]
-        service.delete_event(event.id)
-        assert calls == [1, 1, 1]
+        asyncio.run(service.update_occurrence(occurrence_id(event.id, "2026-09-15"), title="Z"))
+        asyncio.run(service.delete_occurrence(occurrence_id(event.id, "2026-09-16")))
+        asyncio.run(service.delete_event(event.id))
+        assert len(calls) == 5
         unsubscribe()
         service.create_event(title="Y", start="2026-09-15")
-        assert calls == [1, 1, 1]
+        assert len(calls) == 5
 
 
 def test_short_event_ids_skip_collisions_after_reload(tmp_path, monkeypatch):

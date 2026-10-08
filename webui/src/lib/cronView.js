@@ -6,6 +6,7 @@ import { asText } from './values.js';
 export const CRON_SCHEDULE_TYPE_CRON = 'cron';
 export const CRON_SCHEDULE_TYPE_INTERVAL = 'interval';
 export const CRON_SCHEDULE_TYPE_ONCE = 'once';
+export const CRON_SCHEDULE_TYPE_EVENT = 'event';
 
 // The schedule planner offers readable frequencies instead of raw cron syntax.
 // `once` and `interval` map to their own schedule types; hourly, daily, weekly
@@ -19,6 +20,9 @@ export const CRON_FREQUENCY_DAILY = 'daily';
 export const CRON_FREQUENCY_WEEKLY = 'weekly';
 export const CRON_FREQUENCY_MONTHLY = 'monthly';
 export const CRON_FREQUENCY_CUSTOM = 'custom';
+// A job bound to a calendar event runs at each occurrence; it is not a
+// planner frequency and is only ever loaded, never chosen.
+export const CRON_FREQUENCY_EVENT = 'event';
 
 // Seconds per interval unit, in display order.
 export const CRON_INTERVAL_UNIT_SECONDS = {
@@ -131,6 +135,10 @@ export function buildCronExpression(values) {
 export function updateCronSchedule(formValues, patch) {
   const previousFrequency = formValues.frequency;
   Object.assign(formValues, patch);
+  // An event job keeps its event; only its event time changes.
+  if (formValues.schedule_type === CRON_SCHEDULE_TYPE_EVENT) {
+    return;
+  }
   const frequency = formValues.frequency;
 
   // A one-time schedule runs exactly once: its hidden repeat limit is 1, and
@@ -195,6 +203,49 @@ function intervalFormFields(seconds) {
     interval_value: String(Math.round(seconds / 60)),
     interval_unit: 'minutes',
   };
+}
+
+// An event job runs at its event's start or end, shifted by a signed offset
+// in minutes. Forms edit it as an edge (start, end), a direction (before, at,
+// after) and an amount in one unit (m, h, d); `cron.create` and `cron.update`
+// take it as event time text such as `start - 30m`.
+export const EVENT_TIME_UNIT_MINUTES = { m: 1, h: 60, d: 1440 };
+const MAX_EVENT_OFFSET_MINUTES = 31 * 1440;
+
+// The form fields of an event edge and offset, in the largest whole unit.
+export function eventTimeFields(edge, offsetMinutes) {
+  const offset = Number.isInteger(offsetMinutes) ? offsetMinutes : 0;
+  const minutes = Math.abs(offset);
+  const unit = minutes % 1440 === 0 ? 'd' : minutes % 60 === 0 ? 'h' : 'm';
+  return {
+    event_edge: edge === 'end' ? 'end' : 'start',
+    event_direction: offset < 0 ? 'before' : offset > 0 ? 'after' : 'at',
+    event_amount: minutes
+      ? String(minutes / EVENT_TIME_UNIT_MINUTES[unit])
+      : '30',
+    event_unit: minutes ? unit : 'm',
+  };
+}
+
+// The event time text the form fields describe, or '' while the amount is
+// missing or the offset exceeds 31 days.
+export function eventTimeText(fields) {
+  const edge = fields?.event_edge === 'end' ? 'end' : 'start';
+  const direction = fields?.event_direction;
+  if (direction !== 'before' && direction !== 'after') {
+    return edge;
+  }
+  const amount = positiveInteger(fields.event_amount);
+  const unitMinutes = EVENT_TIME_UNIT_MINUTES[fields.event_unit];
+  if (
+    !amount ||
+    !unitMinutes ||
+    amount * unitMinutes > MAX_EVENT_OFFSET_MINUTES
+  ) {
+    return '';
+  }
+  const sign = direction === 'before' ? '-' : '+';
+  return `${edge} ${sign} ${amount}${fields.event_unit}`;
 }
 
 function cronNumber(value, min, max) {
@@ -309,6 +360,9 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
       ...schedule,
       ...intervalFormFields(null),
       run_at: '',
+      event_id: '',
+      event_title: '',
+      ...eventTimeFields('start', 0),
       repeat: '',
       session_id: '',
       original_run_at: '',
@@ -322,6 +376,8 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
     schedule.frequency = CRON_FREQUENCY_ONCE;
   } else if (normalized.schedule_type === CRON_SCHEDULE_TYPE_INTERVAL) {
     schedule.frequency = CRON_FREQUENCY_INTERVAL;
+  } else if (normalized.schedule_type === CRON_SCHEDULE_TYPE_EVENT) {
+    schedule.frequency = CRON_FREQUENCY_EVENT;
   }
 
   return {
@@ -334,6 +390,9 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
     ...schedule,
     ...intervalFormFields(normalized.interval_seconds),
     run_at: toDateTimeLocalInput(normalized.run_at, systemTimezone),
+    event_id: normalized.event_id ?? '',
+    event_title: normalized.event_title ?? '',
+    ...eventTimeFields(normalized.event_edge, normalized.event_offset_minutes),
     repeat:
       normalized.remaining_runs === null
         ? ''
@@ -380,6 +439,8 @@ export function cronFormFingerprint(formValues) {
     cron_expression: asText(values.cron_expression),
     interval_seconds: cronIntervalSeconds(values),
     run_at: asText(values.run_at),
+    event_id: asText(values.event_id),
+    event_time: eventTimeText(values),
     repeat: asText(values.repeat),
     session_id: asText(values.session_id),
   });
@@ -402,11 +463,15 @@ export function buildCreateCronPayload(formValues) {
     payload.cron_expression = requiredText(formValues?.cron_expression);
   } else if (scheduleType === CRON_SCHEDULE_TYPE_INTERVAL) {
     payload.interval_seconds = cronIntervalSeconds(formValues);
+  } else if (scheduleType === CRON_SCHEDULE_TYPE_EVENT) {
+    payload.event_id = requiredText(formValues?.event_id);
+    payload.event_time = eventTimeText(formValues);
   } else {
     payload.run_at = requiredText(formValues?.run_at);
   }
+  // The event's occurrences drive an event job's repetition.
   const repeat = optionalPositiveInteger(formValues?.repeat);
-  if (repeat !== null) {
+  if (repeat !== null && scheduleType !== CRON_SCHEDULE_TYPE_EVENT) {
     payload.repeat = repeat;
   }
 
@@ -434,6 +499,11 @@ export function buildUpdateCronPayload(formValues) {
     payload.cron_expression = requiredText(formValues?.cron_expression);
   } else if (scheduleType === CRON_SCHEDULE_TYPE_INTERVAL) {
     payload.interval_seconds = cronIntervalSeconds(formValues);
+  } else if (scheduleType === CRON_SCHEDULE_TYPE_EVENT) {
+    payload.event_id = requiredText(formValues?.event_id);
+    payload.event_time = eventTimeText(formValues);
+    // The event's occurrences drive the repetition; a job has no repeat limit.
+    return payload;
   } else {
     payload.run_at = resolveOnceRunAtValue(formValues);
   }
@@ -488,6 +558,13 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
     cron_expression: cronExpression,
     interval_seconds: intervalSeconds,
     run_at: runAt,
+    event_id: optionalText(job?.event_id),
+    event_edge: job?.event_edge === 'end' ? 'end' : 'start',
+    event_offset_minutes: Number.isInteger(job?.event_offset_minutes)
+      ? job.event_offset_minutes
+      : 0,
+    // Null while the event is gone or unreadable.
+    event_title: optionalText(job?.event_title),
     remaining_runs: remainingRuns,
     session_id: optionalText(job?.session_id),
     status: normalizeStatus(job?.status),
@@ -528,6 +605,9 @@ function deriveScheduleDescription(
   }
   if (scheduleType === CRON_SCHEDULE_TYPE_INTERVAL) {
     return formatInterval(intervalSeconds);
+  }
+  if (scheduleType === CRON_SCHEDULE_TYPE_EVENT) {
+    return '';
   }
 
   return formatTimestamp(runAt, systemTimezone);
@@ -613,8 +693,11 @@ export {
 } from './agentTargetOptions.js';
 
 function normalizeScheduleType(value) {
-  if (value === CRON_SCHEDULE_TYPE_INTERVAL) {
-    return CRON_SCHEDULE_TYPE_INTERVAL;
+  if (
+    value === CRON_SCHEDULE_TYPE_INTERVAL ||
+    value === CRON_SCHEDULE_TYPE_EVENT
+  ) {
+    return value;
   }
   return value === CRON_SCHEDULE_TYPE_ONCE
     ? CRON_SCHEDULE_TYPE_ONCE

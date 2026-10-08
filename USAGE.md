@@ -430,7 +430,7 @@ vbot data-store config-backup restore <backup-id> --file settings.json --yes
 vbot data-store config-backup restore <backup-id> --all --yes
 ```
 
-`status` reports safe operational metadata per database, including the Session search index state, verified data snapshots, and every unacknowledged recovery incident without returning Session content; for a stopped local server it reads the data directory directly. Snapshot creation is an explicit backup, through the running server, of every canonical database and of the JSON configuration documents (settings, Agents, Projects, Channels, prompt layouts, Cron, Bootstrap and Calendar jobs, the Skill policy, Terminal state, MCP connections and OAuth tokens; attachment and speech metadata stay out, like the files they describe). A recovery incident remains visible until the exact incident is acknowledged; acknowledgement does not delete snapshots or quarantine evidence.
+`status` reports safe operational metadata per database, including the Session search index state, verified data snapshots, and every unacknowledged recovery incident without returning Session content; for a stopped local server it reads the data directory directly. Snapshot creation is an explicit backup, through the running server, of every canonical database and of the JSON configuration documents (settings, Agents, Projects, Channels, prompt layouts, Cron and Bootstrap jobs, Calendar events, the Skill policy, Terminal state, MCP connections and OAuth tokens; attachment and speech metadata stay out, like the files they describe). A recovery incident remains visible until the exact incident is acknowledged; acknowledgement does not delete snapshots or quarantine evidence.
 
 Restore is offline maintenance: it requires `--yes`, checks the snapshot first, stops the exact target server when it runs and starts it again afterwards, and must be rehearsed on a copied data directory first. Without a selector it restores every database in the snapshot; `--database` restores only the named ones; `--documents` restores the JSON documents as one set, alone or together with `--database`; `--all` restores the complete snapshot, moves databases registered after the snapshot to quarantine, and takes no other selector. Restored documents become exactly the snapshot's: documents created after it are removed, and every replaced or removed document is kept under `quarantine/json-documents/`. An interrupted restore keeps the server from starting until a restore is repeated and completes.
 
@@ -922,7 +922,7 @@ The selected service receives requested URLs and may charge for extraction. Free
 An installed vBot on Windows shows Windows notifications from its `vBot.exe` tray. Under **Settings → General → Desktop notifications**, switch each kind on or off; all are on by default:
 
 - **Run completed** and **Run failed**: an Agent Run in a Session finished or ended with an error.
-- **Automation failed**: a Cron job or Calendar action failed.
+- **Automation failed**: a Cron job failed.
 - **Update result**: an application update finished or failed.
 - **Server stopped**: the local vBot server stopped unexpectedly.
 
@@ -1034,11 +1034,12 @@ Connection handshakes, routing, file APIs, access rejection, WhatsApp self-chat/
 
 ## Cron
 
-Cron schedules one-time or recurring Agent Runs. Names default from the prompt when omitted and need not be unique; the generated job id is the identity. A job may target an Identity Agent or `agent@project`, use an existing Session, or create a fresh Session each time it fires.
+Cron schedules one-time or recurring Agent Runs, or a Run at every occurrence of a calendar event. Names default from the prompt when omitted and need not be unique; the generated job id is the identity. A job may target an Identity Agent or `agent@project`, use an existing Session, or create a fresh Session each time it fires.
 
 ```bash
 vbot cron create assistant --name "Morning priorities" --prompt "Summarize today's priorities" --cron "0 9 * * *"
 vbot cron create reviewer@my-project --name "Repository review" --prompt "Review the repository status" --every 60 --repeat 3
+vbot cron create assistant --name "Standup prep" --prompt "Prepare my notes for the standup" --event EVENT_ID --event-time "start - 30m"
 vbot cron list
 vbot cron show JOB_ID
 vbot cron update JOB_ID --status paused
@@ -1047,7 +1048,7 @@ vbot cron disable JOB_ID
 vbot cron delete JOB_ID
 ```
 
-Recurring expressions contain exactly five fields and have a minimum cadence of one minute. On create, omitting `--session` gives each fire a fresh Session. On update, omission preserves the target; `--clear-session` restores fresh Sessions. Use `show` to read the full prompt before replacing it. `--every` takes whole minutes; `--repeat` limits future fires. A fire missed while vBot was not running (server off, computer asleep) starts once when vBot runs again, for the most recent missed time; earlier missed times do not run separately, and the Run is told when it was due. Invalid individual job records are skipped and preserved for repair; a malformed Cron store disables scheduling and blocks mutations rather than overwriting the source.
+Recurring expressions contain exactly five fields and have a minimum cadence of one minute. On create, omitting `--session` gives each fire a fresh Session. On update, omission preserves the target; `--clear-session` restores fresh Sessions. Use `show` to read the full prompt before replacing it. `--every` takes whole minutes; `--repeat` limits future fires. A fire missed while vBot was not running (server off, computer asleep) starts once when vBot runs again, for the most recent missed time; earlier missed times do not run separately, and the Run is told when it was due. `--event` binds the job to a calendar event: it runs once at every occurrence, at `--event-time` (`start` or `end`, optionally `+` or `-` up to 31 days such as `30m`, `2h` or `1d`; default `start`), follows moved occurrences and skips removed ones, and is deleted with its event. The Run receives the event's title, time, location and description with the prompt. An occurrence missed while vBot was not running still starts late while it is relevant: until the event starts when the job was due before it, until it ends when due during it, and otherwise until the next occurrence starts. Invalid individual job records are skipped and preserved for repair; a malformed Cron store disables scheduling and blocks mutations rather than overwriting the source.
 
 ## Bootstrap
 

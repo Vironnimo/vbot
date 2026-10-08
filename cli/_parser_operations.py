@@ -66,6 +66,7 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     )
     create_schedule_group = create_parser.add_mutually_exclusive_group(required=True)
     _add_cron_schedule_arguments(create_schedule_group)
+    _add_cron_event_time_argument(create_parser)
     create_parser.add_argument(
         "--repeat",
         type=int,
@@ -88,6 +89,7 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     update_parser.add_argument("--prompt", help="Prompt text injected when the job fires")
     update_schedule_group = update_parser.add_mutually_exclusive_group()
     _add_cron_schedule_arguments(update_schedule_group)
+    _add_cron_event_time_argument(update_parser)
     update_parser.add_argument(
         "--repeat",
         type=int,
@@ -131,6 +133,23 @@ def _add_cron_schedule_arguments(group: argparse._MutuallyExclusiveGroup) -> Non
         "--at",
         metavar="<iso-datetime>",
         help="One-time schedule as an ISO 8601 datetime",
+    )
+    group.add_argument(
+        "--event",
+        metavar="<event-id>",
+        help="Run once at every occurrence of this calendar event",
+    )
+
+
+def _add_cron_event_time_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--event-time",
+        metavar="<event-time>",
+        help=(
+            "When a job bound to a calendar event runs at each occurrence: start or end, "
+            "optionally + or - minutes (m), hours (h) or days (d) up to 31 days, for example "
+            '"start - 30m"; defaults to start'
+        ),
     )
 
 

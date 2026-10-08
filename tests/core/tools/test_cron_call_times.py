@@ -1,7 +1,8 @@
 """Real dispatch reads ``cron`` schedules and time zones written in other shapes.
 
-Schedule spellings of other harnesses, clock and epoch times, and named time
-zones reach exactly the fires the call meant. Each repair is paired with a
+Schedule spellings of other harnesses, clock and epoch times, named time zones,
+and event times written as reminder offsets reach exactly the fires the call
+meant. Each repair is paired with a
 nearby call that means something else and is refused, before any job changes,
 with the corrected call.
 """
@@ -552,3 +553,92 @@ def test_timezone_alone_on_update_is_refused(tool: CronTool) -> None:
     message = tool.refused({"action": "update", "id": job_id, "timezone": "America/New_York"})
 
     assert "cannot keep America/New_York" in message
+
+
+# -- event times -----------------------------------------------------------------------------
+
+
+def _standup(tool: CronTool) -> str:
+    return tool.calendar.create_event(
+        title="Standup", start="2030-01-07T09:00", rrule="FREQ=WEEKLY"
+    ).id
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"minutes_before": 30},
+        {"before_start": 30},
+        {"before_start": "30m"},
+        {"schedule": "-PT30M"},
+        {"schedule": "30 minutes before"},
+        {"schedule": "30 min before the start"},
+        {"schedule": "start-30m"},
+        {"schedule": "start", "minutes_before": 30},
+        {"edge": "start", "offset": -30},
+    ],
+)
+def test_reminder_offsets_reach_the_event_time(tool: CronTool, fields: dict[str, Any]) -> None:
+    standup = _standup(tool)
+
+    job, _text = tool.created(
+        {"action": "create", "event_id": standup, "prompt": JOB_PROMPT, **fields}
+    )
+
+    assert tool.service.format_schedule(job) == "start - 30m"
+
+
+def test_offset_alone_moves_an_event_job(tool: CronTool) -> None:
+    standup = _standup(tool)
+    job = tool.created(
+        {"action": "create", "event_id": standup, "prompt": JOB_PROMPT, "schedule": "start"}
+    )[0]
+
+    tool.succeeded({"action": "update", "id": job.id, "minutes_before": 10})
+
+    assert tool.service.format_schedule(tool.only_job()) == "start - 10m"
+
+
+@pytest.mark.parametrize(
+    ("schedule", "question", "readings"),
+    [
+        (
+            "30m",
+            "whether the job runs before or after the event's start",
+            ["start - 30m", "start + 30m"],
+        ),
+        ("+30m", "whether it counts from the event's start or end", ["start + 30m", "end + 30m"]),
+    ],
+)
+def test_unsigned_or_edgeless_event_time_is_refused_with_each_reading(
+    tool: CronTool, schedule: str, question: str, readings: list[str]
+) -> None:
+    standup = _standup(tool)
+    call = {"action": "create", "event_id": standup, "prompt": JOB_PROMPT}
+
+    message = tool.refused({**call, "schedule": schedule})
+
+    choices = " or ".join(
+        f'{{"action":"create","event_id":"{standup}","prompt":"{JOB_PROMPT}",'
+        f'"schedule":"{reading}"}}'
+        for reading in readings
+    )
+    assert message == f'cron was not run: schedule "{schedule}" does not say {question}: {choices}'
+
+
+def test_unclear_event_time_on_an_event_job_update_is_refused_with_each_reading(
+    tool: CronTool,
+) -> None:
+    standup = _standup(tool)
+    job = tool.created(
+        {"action": "create", "event_id": standup, "prompt": JOB_PROMPT, "schedule": "start"}
+    )[0]
+
+    message = tool.refused({"action": "update", "id": job.id, "schedule": "1h after"})
+
+    assert message == (
+        'cron was not run: schedule "1h after" does not say whether it counts from the '
+        "event's start or end: "
+        f'{{"action":"update","id":"{job.id}","schedule":"start + 1h"}} '
+        f'or {{"action":"update","id":"{job.id}","schedule":"end + 1h"}}'
+    )

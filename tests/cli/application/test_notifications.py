@@ -83,7 +83,7 @@ def _read(run_id: str = "run_1") -> dict[str, Any]:
         pytest.param("run_interrupted", {"run_kind": "user"}, "run_failed", id="interrupted"),
         pytest.param("run_cancelled", {"run_kind": "user"}, None, id="cancelled"),
         pytest.param("run_completed", {"run_kind": "cron"}, None, id="cron-done"),
-        pytest.param("run_failed", {"run_kind": "calendar"}, "automation_failed", id="calendar"),
+        pytest.param("run_failed", {"run_kind": "cron"}, "automation_failed", id="cron-failed"),
         pytest.param("run_failed", {"run_kind": "subagent"}, None, id="subagent"),
         pytest.param(
             "run_failed",

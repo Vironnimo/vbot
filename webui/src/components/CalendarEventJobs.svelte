@@ -1,4 +1,7 @@
 <script>
+  // The Agent jobs of one calendar event: the Cron jobs bound to it, each
+  // with when it runs relative to the event, its Agent, instruction and
+  // state, and a form to add, change or delete one.
   import { onMount } from 'svelte';
   import Button from './ui/Button.svelte';
   import Banner from './ui/Banner.svelte';
@@ -8,11 +11,11 @@
   import StatusChip from './ui/StatusChip.svelte';
   import InfoHint from './ui/InfoHint.svelte';
   import Dropdown from './Dropdown.svelte';
-  import { t, tOr, activeLocaleTag } from '$lib/i18n.js';
+  import { t, activeLocaleTag } from '$lib/i18n.js';
   import {
-    addCalendarAction,
-    updateCalendarAction,
-    deleteCalendarAction,
+    createCronJob,
+    updateCronJob,
+    deleteCronJob,
     listAgents,
     listProjects,
     showProject,
@@ -22,13 +25,27 @@
     buildAgentTargetOptions,
     createAgentTargetCatalogLoader,
   } from '$lib/agentTargetOptions.js';
+  import { eventTimeFields, eventTimeText } from '$lib/cronView.js';
+  import { eventJobDueAt, eventJobs } from '$lib/calendarView.js';
+  import {
+    compactTimestamp,
+    eventDirectionOptions,
+    eventEdgeOptions,
+    eventTimeLabel,
+    eventUnitOptions,
+    outcomeLabel,
+    statusChipVariant,
+    statusLabel,
+  } from './cron/presentation.js';
 
   let {
     eventId,
-    occurrenceStart,
-    recurring = false,
-    actions = [],
-    executions = [],
+    // The shown occurrence: its due times are listed.
+    occurrence,
+    // Every Agent job (Cron jobs of schedule type event); this event's show.
+    jobs = [],
+    // Why the jobs could not be read, or ''.
+    jobsError = '',
     timeZone = 'UTC',
     serverUnavailable = false,
     // Bumped when the Agents change, such as a new name.
@@ -53,11 +70,9 @@
   let error = $state('');
   let busy = $state(false);
   let deleting = $state('');
-  let eventActions = $derived(
-    actions.filter((action) => action.event_id === eventId),
-  );
+  let shownJobs = $derived(eventJobs(jobs, eventId));
   // A stored target or Session that is no longer listed stays selectable under
-  // its raw id, so opening an older action never silently changes it.
+  // its raw id, so opening an older job never silently changes it.
   let targetOptions = $derived(
     editor?.target && !options.some((option) => option.value === editor.target)
       ? [{ value: editor.target, label: editor.target }, ...options]
@@ -66,7 +81,7 @@
   let sessionOptions = $derived([
     {
       value: '',
-      label: t('calendar.actions.newSession'),
+      label: t('calendar.jobs.newSession'),
     },
     ...(editor?.session &&
     !sessions.some((session) => session.id === editor.session)
@@ -77,20 +92,9 @@
       label: session.title || session.auto_title || session.id,
     })),
   ]);
-  let directionOptions = $derived([
-    { value: '-', label: t('calendar.actions.before') },
-    { value: 'at', label: t('calendar.actions.at') },
-    { value: '+', label: t('calendar.actions.after') },
-  ]);
-  let unitOptions = $derived([
-    { value: 'm', label: t('calendar.actions.minutes') },
-    { value: 'h', label: t('calendar.actions.hours') },
-    { value: 'd', label: t('calendar.actions.days') },
-  ]);
-  let anchorOptions = $derived([
-    { value: 'start', label: t('calendar.actions.start') },
-    { value: 'end', label: t('calendar.actions.end') },
-  ]);
+  const directionOptions = eventDirectionOptions();
+  const unitOptions = eventUnitOptions();
+  const edgeOptions = eventEdgeOptions();
 
   const targetCatalog = createAgentTargetCatalogLoader({
     listAgents,
@@ -108,7 +112,7 @@
       error = failure
         ? (failure.message ?? String(failure))
         : catalog.failedProjects.length
-          ? t('calendar.actions.targetsPartial')
+          ? t('calendar.jobs.targetsPartial')
           : '';
     }
     loadTargets();
@@ -148,22 +152,29 @@
     options = buildAgentTargetOptions(targetAgents, targetTeams);
   }
 
-  function begin(action = null) {
-    const match = /^(start|end)(?:\s*([+-])\s*(\d+)([mhd]))?$/.exec(
-      action?.when ?? 'start - 1h',
-    );
+  function agentLabel(target) {
+    return options.find((option) => option.value === target)?.label ?? target;
+  }
+
+  // A new job runs 30 minutes before the event starts.
+  function begin(job = null) {
+    const time = job
+      ? eventTimeFields(job.event_edge, job.event_offset_minutes)
+      : eventTimeFields('start', -30);
     editor = {
-      id: action?.id ?? '',
-      target: action?.target ?? options[0]?.value ?? '',
-      prompt: action?.prompt ?? '',
-      session: action?.session ?? '',
-      anchor: match?.[1] ?? 'start',
-      direction: match?.[2] ?? 'at',
-      amount: Number(match?.[3] ?? 1),
-      unit: match?.[4] ?? 'h',
+      id: job?.id ?? '',
+      target: job?.target ?? options[0]?.value ?? '',
+      prompt: job?.prompt ?? '',
+      session: job?.session_id ?? '',
+      ...time,
     };
     error = '';
     loadSessions();
+  }
+
+  function cancel() {
+    editor = null;
+    sessionRequest += 1;
   }
 
   async function loadSessions(append = false) {
@@ -203,26 +214,33 @@
 
   async function save() {
     if (!editor || busy) return;
-    if (!editor.target || !editor.prompt.trim()) {
-      error = t('calendar.actions.required');
+    const eventTime = eventTimeText(editor);
+    if (!editor.target || !editor.prompt.trim() || !eventTime) {
+      error = t('calendar.jobs.required');
       return;
     }
-    const when =
-      editor.direction === 'at'
-        ? editor.anchor
-        : `${editor.anchor} ${editor.direction} ${editor.amount}${editor.unit}`;
-    const payload = {
-      id: editor.id || eventId,
-      when,
-      prompt: editor.prompt,
-      target: editor.target,
-      session: editor.session || null,
+    const fields = {
+      agent_id: editor.target,
+      prompt: editor.prompt.trim(),
+      event_time: eventTime,
     };
     busy = true;
     error = '';
     try {
-      if (editor.id) await updateCalendarAction(payload);
-      else await addCalendarAction(payload);
+      if (editor.id) {
+        await updateCronJob({
+          id: editor.id,
+          ...fields,
+          session_id: editor.session || null,
+        });
+      } else {
+        await createCronJob({
+          ...fields,
+          schedule_type: 'event',
+          event_id: eventId,
+          ...(editor.session ? { session_id: editor.session } : {}),
+        });
+      }
       editor = null;
       await onChanged();
     } catch (e) {
@@ -236,7 +254,7 @@
     busy = true;
     error = '';
     try {
-      await deleteCalendarAction(id);
+      await deleteCronJob(id);
       deleting = '';
       await onChanged();
     } catch (e) {
@@ -246,138 +264,124 @@
     }
   }
 
-  function timingLabel(when) {
-    const match = /^(start|end)(?:\s*([+-])\s*(\d+)([mhd]))?$/.exec(when);
-    if (!match) return when;
-    const anchor =
-      match[1] === 'start'
-        ? t('calendar.actions.start')
-        : t('calendar.actions.end');
-    if (!match[2]) return t('calendar.actions.atAnchor', { anchor });
-    const singular = Number(match[3]) === 1;
-    const unit = {
-      m: singular
-        ? t('calendar.actions.minute')
-        : t('calendar.actions.minutes'),
-      h: singular ? t('calendar.actions.hour') : t('calendar.actions.hours'),
-      d: singular ? t('calendar.actions.day') : t('calendar.actions.days'),
-    }[match[4]];
-    const amount = match[3];
-    return match[2] === '-'
-      ? t('calendar.actions.beforeAnchor', {
-          amount,
-          unit,
-          anchor,
-        })
-      : t('calendar.actions.afterAnchor', {
-          amount,
-          unit,
-          anchor,
-        });
-  }
-
-  function statusLabel(status) {
-    return tOr(`calendar.actions.status.${status}`, status);
-  }
-
-  function timestamp(value) {
+  // When the job is due for the shown occurrence: the time alone on the
+  // occurrence's own day, else with its date.
+  function dueText(job) {
+    const due = occurrence ? eventJobDueAt(job, occurrence) : null;
+    if (!due) return '';
+    const sameDay =
+      dayInZone(due) === dayInZone(new Date(occurrence.start_utc));
     return new Intl.DateTimeFormat(activeLocaleTag(), {
       timeZone,
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    }).format(new Date(value));
+      ...(sameDay ? {} : { weekday: 'short', day: 'numeric', month: 'short' }),
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(due);
+  }
+
+  function dayInZone(date) {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(date);
+  }
+
+  // The next Run and the last result, in the server zone.
+  function runText(job) {
+    const parts = [
+      job.next_fire_at
+        ? t('calendar.jobs.next', {
+            time: compactTimestamp(job.next_fire_at, timeZone),
+          })
+        : t('calendar.jobs.noNext'),
+    ];
+    if (job.last_outcome) {
+      const at = job.last_completed_at || job.last_fired_at;
+      parts.push(
+        at
+          ? t('calendar.jobs.lastAt', {
+              outcome: outcomeLabel(job.last_outcome),
+              time: compactTimestamp(at, timeZone),
+            })
+          : t('calendar.jobs.last', {
+              outcome: outcomeLabel(job.last_outcome),
+            }),
+      );
+    }
+    return parts.join(' · ');
   }
 </script>
 
-<section class="calendar-actions" aria-label={t('calendar.actions.heading')}>
-  <div class="calendar-actions-heading">
-    <h3>{t('calendar.actions.heading')}</h3>
-    <InfoHint text={t('calendar.actions.help')} />
+<section class="calendar-jobs" aria-label={t('calendar.jobs.heading')}>
+  <div class="calendar-jobs-heading">
+    <h3>{t('calendar.jobs.heading')}</h3>
+    <InfoHint text={t('calendar.jobs.help')} />
     <Button
       variant="secondary"
       disabled={busy || serverUnavailable || editor !== null}
-      onClick={() => begin()}>{t('calendar.actions.add')}</Button
+      onClick={() => begin()}>{t('calendar.jobs.add')}</Button
     >
   </div>
-  {#if recurring}
+  {#if occurrence?.recurring}
     <p class="calendar-detail-meta">
-      {t('calendar.actions.series')}
+      {t('calendar.jobs.series')}
     </p>
   {/if}
-  {#if eventActions.length === 0 && !editor}
+  {#if jobsError}
+    <Banner variant="error">{t('calendar.jobs.loadError')} {jobsError}</Banner>
+  {:else if shownJobs.length === 0 && !editor}
     <p class="calendar-detail-meta">
-      {t('calendar.actions.empty')}
+      {t('calendar.jobs.empty')}
     </p>
   {/if}
-  {#each eventActions as action (action.id)}
-    {@const execution = executions.find(
-      (item) =>
-        item.action_id === action.id &&
-        (!recurring || item.occurrence_start === occurrenceStart),
-    )}
-    <div class="calendar-action-row">
-      <div class="calendar-action-summary">
-        <strong>{timingLabel(action.when)}</strong>
-        <span
-          >{options.find((option) => option.value === action.target)?.label ??
-            action.target}</span
+  {#each shownJobs as job (job.id)}
+    <div class="calendar-job-row" data-testid={`calendar-job-${job.id}`}>
+      <div class="calendar-job-summary">
+        <strong
+          >{eventTimeLabel(job.event_edge, job.event_offset_minutes)}</strong
         >
-        {#if execution}<StatusChip
-            variant={execution.status === 'completed'
-              ? 'success'
-              : ['failed', 'interrupted', 'missed'].includes(execution.status)
-                ? 'warn'
-                : 'neutral'}>{statusLabel(execution.status)}</StatusChip
+        {#if dueText(job)}<span class="calendar-job-due">{dueText(job)}</span
           >{/if}
+        <span>{agentLabel(job.target)}</span>
+        <StatusChip variant={statusChipVariant(job)}
+          >{statusLabel(job.status)}</StatusChip
+        >
       </div>
-      <p class="calendar-action-prompt">{action.prompt}</p>
-      {#if execution}
-        <p class="calendar-detail-meta">
-          {t('calendar.actions.scheduled', {
-            time: timestamp(execution.scheduled_at),
-          })}
+      <p class="calendar-job-prompt">{job.prompt}</p>
+      <p class="calendar-detail-meta">{runText(job)}</p>
+      {#if job.last_error}
+        <p class="calendar-detail-meta calendar-job-error">
+          {t('calendar.jobs.error', { reason: job.last_error })}
         </p>
-        {#if ['pending', 'claimed', 'missed'].includes(execution.status)}
-          <p class="calendar-detail-meta">
-            {execution.expires_at
-              ? t('calendar.actions.expires', {
-                  time: timestamp(execution.expires_at),
-                })
-              : t('calendar.actions.expiresNever')}
-          </p>
-        {/if}
-        {#if execution.error}
-          <p class="calendar-detail-meta">
-            {t('calendar.actions.error', { reason: execution.error })}
-          </p>
-        {/if}
       {/if}
-      <div class="calendar-action-controls">
-        {#if execution?.session && execution?.run_id && onOpenSession}
+      <div class="calendar-job-controls">
+        {#if job.session_id && onOpenSession}
           <Button
             variant="secondary"
-            onClick={() => onOpenSession(execution.target, execution.session)}
-            >{t('calendar.actions.openSession')}</Button
+            onClick={() => onOpenSession(job.target, job.session_id)}
+            >{t('calendar.jobs.openSession')}</Button
           >
         {/if}
         <Button
           variant="secondary"
           disabled={busy || serverUnavailable || editor !== null}
-          onClick={() => begin(action)}>{t('common.edit')}</Button
+          onClick={() => begin(job)}>{t('common.edit')}</Button
         >
         <Button
           variant="danger"
           disabled={busy || serverUnavailable}
-          onClick={() => (deleting = action.id)}>{t('common.delete')}</Button
+          onClick={() => (deleting = job.id)}>{t('common.delete')}</Button
         >
       </div>
-      {#if deleting === action.id}
-        <div class="calendar-action-controls">
-          <span>{t('calendar.actions.deleteConfirm')}</span>
+      {#if deleting === job.id}
+        <div class="calendar-job-controls">
+          <span>{t('calendar.jobs.deleteConfirm')}</span>
           <Button
             variant="danger"
             disabled={busy}
-            onClick={() => remove(action.id)}>{t('common.delete')}</Button
+            onClick={() => remove(job.id)}>{t('common.delete')}</Button
           >
           <Button variant="secondary" onClick={() => (deleting = '')}
             >{t('common.cancel')}</Button
@@ -388,7 +392,7 @@
   {/each}
   {#if editor}
     <form
-      class="calendar-action-editor"
+      class="calendar-job-editor"
       onsubmit={(event) => {
         event.preventDefault();
         save();
@@ -396,15 +400,15 @@
     >
       <div class="calendar-form-row">
         <FormField
-          label={t('calendar.actions.agent')}
-          controlId="calendar-action-target"
+          label={t('calendar.jobs.agent')}
+          controlId="calendar-job-target"
         >
           <Dropdown
-            id="calendar-action-target"
+            id="calendar-job-target"
             value={editor.target}
             options={targetOptions}
-            placeholder={t('calendar.actions.chooseAgent')}
-            ariaLabel={t('calendar.actions.agent')}
+            placeholder={t('calendar.jobs.chooseAgent')}
+            ariaLabel={t('calendar.jobs.agent')}
             disabled={busy}
             onValueChange={(next) => {
               if (next === editor.target) return;
@@ -415,14 +419,14 @@
           />
         </FormField>
         <FormField
-          label={t('calendar.actions.session')}
-          controlId="calendar-action-session"
+          label={t('calendar.jobs.session')}
+          controlId="calendar-job-session"
         >
           <Dropdown
-            id="calendar-action-session"
+            id="calendar-job-session"
             value={editor.session}
             options={sessionOptions}
-            ariaLabel={t('calendar.actions.session')}
+            ariaLabel={t('calendar.jobs.session')}
             disabled={busy || sessionsLoading}
             onValueChange={(next) => (editor.session = next)}
           />
@@ -430,84 +434,83 @@
               variant="secondary"
               disabled={sessionsLoading}
               onClick={() => loadSessions(true)}
-              >{t('calendar.actions.moreSessions')}</Button
+              >{t('calendar.jobs.moreSessions')}</Button
             >{/if}
         </FormField>
       </div>
-      <div class="calendar-action-timing">
+      <div
+        class="calendar-job-timing"
+        class:calendar-job-timing--at={editor.event_direction === 'at'}
+      >
         <FormField
-          label={t('calendar.actions.timing')}
-          controlId="calendar-action-direction"
+          label={t('cron.eventTime.when')}
+          controlId="calendar-job-direction"
         >
           <Dropdown
-            id="calendar-action-direction"
-            value={editor.direction}
+            id="calendar-job-direction"
+            value={editor.event_direction}
             options={directionOptions}
-            ariaLabel={t('calendar.actions.timing')}
+            ariaLabel={t('cron.eventTime.when')}
             disabled={busy}
-            onValueChange={(next) => (editor.direction = next)}
+            onValueChange={(next) => (editor.event_direction = next)}
           />
         </FormField>
-        {#if editor.direction !== 'at'}
+        {#if editor.event_direction !== 'at'}
           <FormField
-            label={t('calendar.actions.amount')}
-            controlId="calendar-action-amount"
+            label={t('cron.eventTime.amount')}
+            controlId="calendar-job-amount"
             ><TextField
-              id="calendar-action-amount"
+              id="calendar-job-amount"
               type="number"
               min="1"
-              value={editor.amount}
-              onInput={(value) => (editor.amount = Number(value))}
+              value={editor.event_amount}
+              onInput={(value) => (editor.event_amount = value)}
             /></FormField
           >
           <FormField
-            label={t('calendar.actions.unit')}
-            controlId="calendar-action-unit"
+            label={t('cron.eventTime.unit')}
+            controlId="calendar-job-unit"
             ><Dropdown
-              id="calendar-action-unit"
-              value={editor.unit}
+              id="calendar-job-unit"
+              value={editor.event_unit}
               options={unitOptions}
-              ariaLabel={t('calendar.actions.unit')}
+              ariaLabel={t('cron.eventTime.unit')}
               disabled={busy}
-              onValueChange={(next) => (editor.unit = next)}
+              onValueChange={(next) => (editor.event_unit = next)}
             /></FormField
           >
         {/if}
         <FormField
-          label={t('calendar.actions.reference')}
-          controlId="calendar-action-anchor"
+          label={t('cron.eventTime.edge')}
+          controlId="calendar-job-edge"
           ><Dropdown
-            id="calendar-action-anchor"
-            value={editor.anchor}
-            options={anchorOptions}
-            ariaLabel={t('calendar.actions.reference')}
+            id="calendar-job-edge"
+            value={editor.event_edge}
+            options={edgeOptions}
+            ariaLabel={t('cron.eventTime.edge')}
             disabled={busy}
-            onValueChange={(next) => (editor.anchor = next)}
+            onValueChange={(next) => (editor.event_edge = next)}
           /></FormField
         >
       </div>
       <FormField
-        label={t('calendar.actions.instruction')}
-        controlId="calendar-action-prompt"
+        label={t('calendar.jobs.instruction')}
+        controlId="calendar-job-prompt"
         ><TextArea
-          id="calendar-action-prompt"
+          id="calendar-job-prompt"
           value={editor.prompt}
           onInput={(value) => (editor.prompt = value)}
           rows={4}
+          placeholder={t('calendar.jobs.instructionPlaceholder')}
         /></FormField
       >
-      <div class="calendar-action-controls">
+      <div class="calendar-job-controls">
         <Button
           variant="primary"
           disabled={busy || serverUnavailable}
           onClick={save}>{t('common.save')}</Button
-        ><Button
-          variant="secondary"
-          disabled={busy}
-          onClick={() => {
-            editor = null;
-            sessionRequest += 1;
-          }}>{t('common.cancel')}</Button
+        ><Button variant="secondary" disabled={busy} onClick={cancel}
+          >{t('common.cancel')}</Button
         >
       </div>
     </form>

@@ -1,4 +1,4 @@
-"""Calendar RPCs: the window projection, event mutations and event actions."""
+"""Calendar RPCs: the window projection and event mutations."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from core.automation.cron import CronOccurrence
-from core.calendar import CalendarService
+from core.calendar import BoundJob, CalendarService
 from server.events import ServerEventBus
 from tests.server.rpc_test_support import resource_changes, rpc_error, rpc_result
 
@@ -21,7 +21,10 @@ _CALENDAR_CHANGED = {"kind": "calendar"}
 _WEEKLY_STANDUP = {
     "title": "Standup",
     "start": "2026-08-31T09:00:00",
-    "rrule": {"freq": "weekly", "by_weekday": ["mo"]},
+    "end": "2026-08-31T09:30:00",
+    "description": "Status round.",
+    "location": "Hall",
+    "rrule": "FREQ=WEEKLY;BYDAY=MO",
 }
 
 
@@ -39,14 +42,6 @@ def state(tmp_path: Path) -> SimpleNamespace:
     )
 
 
-def _configure_actions(state: SimpleNamespace, *, session_exists: bool) -> CalendarService:
-    service: CalendarService = state.runtime.calendar_service
-    sessions = Mock(exists=Mock(return_value=session_exists))
-    sessions.run_async = AsyncMock(side_effect=lambda function, *args: function(*args))
-    service.actions.configure(Mock(), Mock(), sessions)
-    return service
-
-
 @pytest.mark.asyncio
 async def test_calendar_window_returns_event_and_cron_layers(state: SimpleNamespace) -> None:
     service = state.runtime.calendar_service
@@ -57,7 +52,15 @@ async def test_calendar_window_returns_event_and_cron_layers(state: SimpleNamesp
             name="Check mail",
             fire_at_utc=datetime(2026, 9, 3, 9, 0, tzinfo=UTC),
             schedule_type="cron",
-        )
+        ),
+        CronOccurrence(
+            job_id="job-2",
+            name="Prepare",
+            fire_at_utc=datetime(2026, 9, 7, 6, 30, tzinfo=UTC),
+            schedule_type="event",
+            event_id="evt_x",
+            occurrence_id="evt_x_20260907T0900",
+        ),
     ]
 
     window = await rpc_result(
@@ -65,7 +68,21 @@ async def test_calendar_window_returns_event_and_cron_layers(state: SimpleNamesp
     )
 
     [occurrence] = window["occurrences"]
-    assert occurrence["title"] == "Zahnarzt"
+    assert occurrence == {
+        "id": occurrence["event_id"],
+        "event_id": occurrence["event_id"],
+        "title": "Zahnarzt",
+        "description": None,
+        "location": None,
+        "all_day": False,
+        "recurring": False,
+        "start": "2026-09-03T15:00:00",
+        "end": "2026-09-03T16:00:00",
+        "start_utc": "2026-09-03T13:00:00+00:00",
+        "end_utc": "2026-09-03T14:00:00+00:00",
+        "original_start": None,
+        "overridden": False,
+    }
     assert len(window["events"]) == 1
     assert window["cron"] == [
         {
@@ -73,107 +90,112 @@ async def test_calendar_window_returns_event_and_cron_layers(state: SimpleNamesp
             "name": "Check mail",
             "fire_at": "2026-09-03T09:00:00+00:00",
             "schedule_type": "cron",
-        }
+            "event_id": None,
+            "occurrence_id": None,
+        },
+        # A job bound to an event names the occurrence it is due for.
+        {
+            "job_id": "job-2",
+            "name": "Prepare",
+            "fire_at": "2026-09-07T06:30:00+00:00",
+            "schedule_type": "event",
+            "event_id": "evt_x",
+            "occurrence_id": "evt_x_20260907T0900",
+        },
     ]
     assert window["system_timezone"] == service.system_timezone_name()
 
 
 @pytest.mark.asyncio
 async def test_calendar_event_create_update_delete_roundtrip(state: SimpleNamespace) -> None:
+    # Deleting an event deletes the cron jobs bound to it and reports them.
+    event_jobs = SimpleNamespace(
+        check_event_change=AsyncMock(),
+        event_deleted=AsyncMock(return_value=(BoundJob("cron_1", "Prepare"),)),
+    )
+    state.runtime.calendar_service.bind_event_jobs(event_jobs)
     created = await rpc_result(state, "calendar.create", **_WEEKLY_STANDUP)
     event_id = created["event"]["id"]
-    updated = await rpc_result(state, "calendar.update", id=event_id, title="Daily")
+    updated = await rpc_result(
+        state, "calendar.update", id=event_id, title="Daily", location=None, rrule="FREQ=DAILY"
+    )
     deleted = await rpc_result(state, "calendar.delete", id=event_id)
 
-    assert created["event"]["recurring"] is True
-    assert updated["event"]["title"] == "Daily"
-    assert deleted == {"id": event_id, "deleted": True}
+    event = created["event"]
+    assert (event["start"], event["end"], event["tz_name"]) == (
+        "2026-08-31T09:00:00",
+        "2026-08-31T09:30:00",
+        "Europe/Berlin",
+    )
+    assert (event["description"], event["location"], event["rrule"]) == (
+        "Status round.",
+        "Hall",
+        "FREQ=WEEKLY;BYDAY=MO",
+    )
+    assert (event["recurring"], event["all_day"], event["exdates"], event["overrides"]) == (
+        True,
+        False,
+        [],
+        {},
+    )
+    changed = updated["event"]
+    assert (changed["title"], changed["location"], changed["rrule"]) == (
+        "Daily",
+        None,
+        "FREQ=DAILY",
+    )
+    assert deleted == {
+        "id": event_id,
+        "deleted": True,
+        "cron_jobs": [{"id": "cron_1", "name": "Prepare"}],
+    }
     assert state.runtime.calendar_service.list_events() == []
     assert resource_changes(state) == [_CALENDAR_CHANGED] * 3
 
 
 @pytest.mark.asyncio
-async def test_calendar_add_exdate_excludes_one_occurrence_additively(
-    state: SimpleNamespace,
-) -> None:
+async def test_occurrence_id_changes_or_removes_one_occurrence(state: SimpleNamespace) -> None:
     created = await rpc_result(state, "calendar.create", **_WEEKLY_STANDUP)
     event_id = created["event"]["id"]
 
-    first = await rpc_result(
-        state, "calendar.add_exdate", id=event_id, occurrence_start="2026-09-14T09:00:00"
-    )
-    # A second exclusion keeps the first rather than replacing it, so clients need
-    # no read-modify-write.
-    second = await rpc_result(
-        state, "calendar.add_exdate", id=event_id, occurrence_start="2026-09-21T09:00:00"
-    )
-
-    assert first["event"]["exdates"] == ["2026-09-14T09:00:00"]
-    assert second["event"]["exdates"] == ["2026-09-14T09:00:00", "2026-09-21T09:00:00"]
-
-
-@pytest.mark.asyncio
-async def test_calendar_actions_roundtrip(state: SimpleNamespace) -> None:
-    service = _configure_actions(state, session_exists=True)
-    event = await rpc_result(state, "calendar.create", title="Meeting", start="2026-09-10T15:00")
-
-    created = await rpc_result(
+    moved = await rpc_result(
         state,
-        "calendar.add_action",
-        id=event["event"]["id"],
-        when="start - 1h",
-        prompt="prepare",
-        target="main",
-        session="chosen",
+        "calendar.update",
+        id=f"{event_id}_20260907T0900",
+        title="Planning",
+        start="2026-09-08T14:00:00",
     )
-    action_id = created["action"]["id"]
-    updated = await rpc_result(
-        state, "calendar.update_action", id=action_id, session=None, when="end"
+    removed = await rpc_result(state, "calendar.delete", id=f"{event_id}_20260914T0900")
+
+    occurrence = moved["occurrence"]
+    assert (occurrence["id"], occurrence["title"], occurrence["start"], occurrence["end"]) == (
+        f"{event_id}_20260907T0900",
+        "Planning",
+        "2026-09-08T14:00:00",
+        "2026-09-08T14:30:00",
     )
+    assert (occurrence["original_start"], occurrence["overridden"]) == (
+        "2026-09-07T09:00:00",
+        True,
+    )
+    assert moved["event"]["overrides"] == {
+        "2026-09-07T09:00:00": {
+            "title": "Planning",
+            "start": "2026-09-08T14:00:00",
+            "end": "2026-09-08T14:30:00",
+        }
+    }
+    assert removed["deleted"] is True
+    assert removed["event"]["exdates"] == ["2026-09-14T09:00:00"]
     window = await rpc_result(
-        state, "calendar.window", **{"from": "2026-09-10", "to": "2026-09-10"}
+        state, "calendar.window", **{"from": "2026-08-31", "to": "2026-09-21"}
     )
-    deleted = await rpc_result(state, "calendar.delete_action", id=action_id)
-
-    assert event["event"]["recurring"] is False
-    assert updated["action"]["session"] is None
-    assert updated["action"]["prompt"] == "prepare"
-    assert window["actions"][0]["id"] == action_id
-    assert window["executions"][0]["action_id"] == action_id
-    # Due after a single event, the execution can start however late.
-    assert window["executions"][0]["expires_at"] is None
-    assert deleted == {"id": action_id, "deleted": True}
-    assert service.actions.list_actions() == []
-
-
-@pytest.mark.asyncio
-async def test_calendar_update_that_would_revive_an_action_checks_it_under_the_reference_lock(
-    state: SimpleNamespace,
-) -> None:
-    service = _configure_actions(state, session_exists=True)
-    event = service.create_event(title="Old", start="2020-01-10T12:00")
-    action = await service.actions.add(
-        event.id, when="start", prompt="prepare", target="main", session="chosen"
-    )
-    _configure_actions(state, session_exists=False)
-
-    async with state.agent_delete_lock:
-        update = asyncio.create_task(
-            rpc_error(state, "calendar.update", id=event.id, start="2030-01-10T12:00")
-        )
-        for _ in range(5):
-            await asyncio.sleep(0)
-        assert not update.done()
-    error = await update
-
-    assert error["code"] == "domain_error"
-    assert error["message"] == (
-        "This event change would let an action run again whose target no longer exists: "
-        f"{action['id']} (Session chosen of main no longer exists). Change each action's "
-        "target or Session, or delete the action, first."
-    )
-    assert service.get_event(event.id) == event
-    assert resource_changes(state) == []
+    assert [item["start"] for item in window["occurrences"]] == [
+        "2026-08-31T09:00:00",
+        "2026-09-08T14:00:00",
+        "2026-09-21T09:00:00",
+    ]
+    assert resource_changes(state) == [_CALENDAR_CHANGED] * 3
 
 
 @pytest.mark.asyncio
@@ -182,9 +204,15 @@ async def test_calendar_update_that_would_revive_an_action_checks_it_under_the_r
     [
         (
             "calendar.create",
-            {"title": "X", "start": "2026-09-03", "rrule": {"freq": "hourly"}},
+            {"title": "X", "start": "2026-09-03", "rrule": "FREQ=HOURLY"},
             "domain_error",
-            "rrule.freq",
+            "FREQ must be",
+        ),
+        (
+            "calendar.create",
+            {"title": "X", "start": "2026-09-03", "description": 5},
+            "invalid_request",
+            "params.description",
         ),
         ("calendar.window", {}, "invalid_request", "from"),
         (
@@ -194,31 +222,24 @@ async def test_calendar_update_that_would_revive_an_action_checks_it_under_the_r
             "bogus",
         ),
         ("calendar.update", {"id": "missing", "title": "X"}, "domain_error", "not found"),
-        ("calendar.delete", {"id": "{single}", "title": "Y"}, "invalid_request", "title"),
-        # Only a recurring event has occurrences to exclude.
         (
-            "calendar.add_exdate",
-            {"id": "{single}", "occurrence_start": "2026-09-10T15:00:00"},
-            "domain_error",
-            "",
-        ),
-        (
-            "calendar.add_exdate",
-            {"id": "{single}", "occurrence_start": "2026-09-14T09:00:00", "bogus": 1},
+            "calendar.update",
+            {"id": "{series}_20260914T0900", "rrule": "FREQ=DAILY"},
             "invalid_request",
-            "bogus",
+            "params.rrule",
         ),
-        # An action's Session must belong to its target.
         (
-            "calendar.add_action",
-            {
-                "id": "{single}",
-                "when": "start",
-                "prompt": "prepare",
-                "target": "main",
-                "session": "other",
-            },
+            "calendar.update",
+            {"id": "{series}_20260915T0900", "title": "Y"},
             "domain_error",
+            "not found",
+        ),
+        ("calendar.delete", {"id": "{series}", "title": "Y"}, "invalid_request", "title"),
+        ("calendar.delete", {"id": "{series}_20260915T0900"}, "domain_error", "not found"),
+        (
+            "calendar.add_exdate",
+            {"id": "{series}", "occurrence_start": "2026-09-14T09:00:00"},
+            "method_not_found",
             "",
         ),
     ],
@@ -226,15 +247,17 @@ async def test_calendar_update_that_would_revive_an_action_checks_it_under_the_r
 async def test_calendar_refusals_change_nothing(
     state: SimpleNamespace, method: str, params: JsonObject, code: str, named: str
 ) -> None:
-    service = _configure_actions(state, session_exists=False)
-    single = service.create_event(title="X", start="2026-09-10T15:00:00")
+    service: CalendarService = state.runtime.calendar_service
+    series = service.create_event(title="X", start="2026-09-07T09:00:00", rrule="FREQ=WEEKLY")
     before = [event.to_dict() for event in service.list_events()]
-    params = {key: single.id if value == "{single}" else value for key, value in params.items()}
+    params = {
+        key: value.replace("{series}", series.id) if isinstance(value, str) else value
+        for key, value in params.items()
+    }
 
     error = await rpc_error(state, method, **params)
 
     assert error["code"] == code
     assert named in error["message"]
     assert [event.to_dict() for event in service.list_events()] == before
-    assert service.actions.list_actions() == []
     assert resource_changes(state) == []

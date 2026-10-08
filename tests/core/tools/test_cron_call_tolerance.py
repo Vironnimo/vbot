@@ -405,9 +405,10 @@ def test_list_with_job_fields_offers_list_or_create(tool: CronTool) -> None:
     message = tool.refused({"action": "list", "prompt": JOB_PROMPT, "schedule": "every 2h"})
 
     assert message == (
-        "cron was not run: list only shows jobs (optionally one job by id); it takes no prompt, "
-        'schedule. To show jobs, leave them out; to make a job, use create: {"action":"list"} '
-        f'or {{"action":"create","prompt":"{JOB_PROMPT}","schedule":"every 2h"}}'
+        "cron was not run: list only shows jobs (one job by id, or the jobs of an event_id); it "
+        "takes no prompt, schedule. To show jobs, leave them out; to make a job, use create: "
+        '{"action":"list"} or '
+        f'{{"action":"create","prompt":"{JOB_PROMPT}","schedule":"every 2h"}}'
     )
 
 

@@ -99,7 +99,7 @@ vbot doctor config [--data-dir <path>]
 Local validation with file/path diagnostics; no server needed. Doctor takes only `--data-dir`, no `--host`/`--port`. Run `doctor config` after any manual JSON edit.
 
 - `settings` checks `settings.json` only.
-- `config` checks every JSON document vBot keeps in the data directory: `settings.json`, Agent configs and the Agent order, Project files, Channel configs, Cron and Bootstrap jobs, Calendar events and actions, the Skill policy, Terminal groups and launch history, System Prompt layouts, OAuth token files, MCP connections, and attachment and speech metadata. It does not check the databases; `vbot data-store status` reports their health (`data-store.md`).
+- `config` checks every JSON document vBot keeps in the data directory: `settings.json`, Agent configs and the Agent order, Project files, Channel configs, Cron and Bootstrap jobs, Calendar events, the Skill policy, Terminal groups and launch history, System Prompt layouts, OAuth token files, MCP connections, and attachment and speech metadata. It does not check the databases; `vbot data-store status` reports their health (`data-store.md`).
 
 Reading the `doctor config` report:
 
