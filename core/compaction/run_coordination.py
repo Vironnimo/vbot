@@ -369,6 +369,7 @@ class CompactionRunCoordinator:
                 input_tokens=context_tokens_before,
             )
             run.terminal_payload_extras["session_usage"] = aggregate_session_usage(own_messages)
+            run.terminal_payload_extras["checkpoint_id"] = checkpoint.id
             return checkpoint
         except asyncio.CancelledError:
             run.emit(COMPACTION_ABORTED_EVENT, {"reason": "cancelled"})

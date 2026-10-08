@@ -131,11 +131,14 @@ async def test_stop_during_the_checkpoint_commit_reports_the_stored_checkpoint(
     monkeypatch.setattr(ChatSession, "commit_compaction", slow_commit)
     loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
 
-    run = await loop.start_compaction_run("coder", session.id)
+    reply = asyncio.create_task(loop.compact_session("coder", session.id))
     assert await asyncio.to_thread(writing.wait, 5)
+    run = runtime.chat_runs.active_run(agent_id="coder", session_id=session.id, project_id=None)
+    assert run is not None
     await runtime.chat_runs.cancel(run.id, reason="user")
     release.set()
 
+    assert await reply == "Context compacted."
     with pytest.raises(RunCancelledError):
         await run.wait()
     assert "compaction_checkpoint" in persisted_roles(session.load())
