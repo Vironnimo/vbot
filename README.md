@@ -41,7 +41,7 @@
 <tr>
 <td valign="top"><strong>Swarms</strong><br>Put a group of Agents on one goal. They split the work on a shared Board, keep a Wiki together and can each run on a different Model.</td>
 <td valign="top"><strong>Live voice</strong><br>Talk to the app. A realtime voice Model starts terminals, passes tasks to your Agents, checks their status and tells you when a Run is done.</td>
-<td valign="top"><strong>Work on their own</strong><br>Cron jobs, a calendar whose events can trigger Agent actions, a message Queue, Sub-Agents and recovery of interrupted Runs.</td>
+<td valign="top"><strong>Work on their own</strong><br>Cron jobs on a schedule or at calendar events, a message Queue, Sub-Agents and recovery of interrupted Runs.</td>
 </tr>
 <tr>
 <td valign="top"><strong>Projects</strong><br>Register a repository and work in it with your Agents, or use its existing Claude Code or OpenCode Agents and Skills in place.</td>
@@ -80,7 +80,7 @@ Give a Swarm a goal and a working directory. Every participant gets its own Sess
 
 ### Scheduled and background work
 
-Agents do not have to wait for you. Cron jobs run briefings and nightly checks, calendar events can start an Agent action at the right time, and interrupted Runs are recovered after a restart.
+Agents do not have to wait for you. Cron jobs run briefings and nightly checks or prepare for calendar events at the right time, and interrupted Runs are recovered after a restart.
 
 <p align="center">
   <img src=".github/assets/calendar.png" alt="The vBot calendar in agenda view with events and a recurring Agent action created by an Agent" width="880">

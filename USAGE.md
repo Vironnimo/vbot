@@ -430,7 +430,7 @@ vbot data-store config-backup restore <backup-id> --file settings.json --yes
 vbot data-store config-backup restore <backup-id> --all --yes
 ```
 
-`status` reports safe operational metadata per database, including the Session search index state, verified data snapshots, and every unacknowledged recovery incident without returning Session content; for a stopped local server it reads the data directory directly. Snapshot creation is an explicit backup, through the running server, of every canonical database and of the JSON configuration documents (settings, Agents, Projects, Channels, prompt layouts, Cron, Bootstrap and Calendar jobs, the Skill policy, Terminal state, MCP connections and OAuth tokens; attachment and speech metadata stay out, like the files they describe). A recovery incident remains visible until the exact incident is acknowledged; acknowledgement does not delete snapshots or quarantine evidence.
+`status` reports safe operational metadata per database, including the Session search index state, verified data snapshots, and every unacknowledged recovery incident without returning Session content; for a stopped local server it reads the data directory directly. Snapshot creation is an explicit backup, through the running server, of every canonical database and of the JSON configuration documents (settings, Agents, Projects, Channels, prompt layouts, Cron and Bootstrap jobs, Calendar events, the Skill policy, Terminal state, MCP connections and OAuth tokens; attachment and speech metadata stay out, like the files they describe). A recovery incident remains visible until the exact incident is acknowledged; acknowledgement does not delete snapshots or quarantine evidence.
 
 Restore is offline maintenance: it requires `--yes`, checks the snapshot first, stops the exact target server when it runs and starts it again afterwards, and must be rehearsed on a copied data directory first. Without a selector it restores every database in the snapshot; `--database` restores only the named ones; `--documents` restores the JSON documents as one set, alone or together with `--database`; `--all` restores the complete snapshot, moves databases registered after the snapshot to quarantine, and takes no other selector. Restored documents become exactly the snapshot's: documents created after it are removed, and every replaced or removed document is kept under `quarantine/json-documents/`. An interrupted restore keeps the server from starting until a restore is repeated and completes.
 
@@ -922,7 +922,7 @@ The selected service receives requested URLs and may charge for extraction. Free
 An installed vBot on Windows shows Windows notifications from its `vBot.exe` tray. Under **Settings → General → Desktop notifications**, switch each kind on or off; all are on by default:
 
 - **Run completed** and **Run failed**: an Agent Run in a Session finished or ended with an error.
-- **Automation failed**: a Cron job or Calendar action failed.
+- **Automation failed**: a Cron job failed.
 - **Update result**: an application update finished or failed.
 - **Server stopped**: the local vBot server stopped unexpectedly.
 
