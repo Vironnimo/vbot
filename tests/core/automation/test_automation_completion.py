@@ -721,11 +721,24 @@ async def test_results_ready_at_run_end_coalesce_and_later_ones_get_a_new_delive
     assert "finished later" in loop.messages[1]
 
 
+@pytest.mark.parametrize(
+    ("ending", "follow_up"),
+    [("answered", False), ("failed", True), ("user_cancelled", False)],
+)
 async def test_completion_delivery_joins_active_run_at_next_request_boundary(
-    tmp_path: Path,
+    tmp_path: Path, ending: str, follow_up: bool
 ) -> None:
     manager = ChatRunManager()
-    origin, release = await _active_origin(manager)
+    release = asyncio.Event()
+
+    async def executor(run: Run) -> str:
+        await release.wait()
+        if ending == "failed":
+            raise RuntimeError("the Provider failed before answering")
+        run.iteration_count += 1  # The Model answered the request with the results.
+        return "parent complete"
+
+    origin = await manager.start(_ADDRESS, executor)
     service, loop, session = _completion_service(tmp_path, manager)
     delivery = _submit(service, "bash:in-run", "finished during the active run", origin.id)
 
@@ -735,10 +748,27 @@ async def test_completion_delivery_joins_active_run_at_next_request_boundary(
     notes = _notes(session)
     assert len(notes) == 1
     assert "finished during the active run" in notes[0]
-    release.set()
-    await origin.wait()
-    await asyncio.sleep(0)
-    assert loop.messages == []
+    if ending == "user_cancelled":
+        await manager.cancel(origin.id, reason="user")
+    else:
+        release.set()
+    await asyncio.gather(origin.wait(), return_exceptions=True)
+    buckets = service._completion_delivery._buckets
+    for _ in range(100):
+        if _ADDRESS not in buckets:
+            break
+        await asyncio.sleep(0)
+
+    # A Run that ended before its Model read the results wakes the Session
+    # without storing them again; a user's Stop never does.
+    assert _ADDRESS not in buckets
+    assert len(_notes(session)) == 1
+    if follow_up:
+        [message] = loop.messages
+        assert automation_module.UNREAD_COMPLETION_TEXT in message
+        assert "finished during the active run" not in message
+    else:
+        assert loop.messages == []
 
 
 async def test_cancelled_pending_notice_does_not_start_empty_follow_up(

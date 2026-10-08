@@ -37,6 +37,8 @@ AUTOMATIC_COMPLETION_GUIDANCE = (
     "repeat work merely because this report arrived. Re-evaluate the original user goal "
     "and current system state before taking further action."
 )
+# Opens a follow-up Run for results a request already carried that the Model never answered.
+UNREAD_COMPLETION_TEXT = "Your previous turn ended before you read the results reported above."
 _SUPPRESSED_ORIGIN_LIMIT = 256
 # Backoff for a failed reminder append and for blocked follow-up Run admission.
 _COMPLETION_RETRY_INITIAL_SECONDS = 0.25
@@ -61,6 +63,17 @@ class _CompletionNotice:
     execution_owner: RunExecutionOwner | None = None
     # False: reach an active Run at its next boundary, but never start one.
     wake: bool = True
+    # Set when a request of ``boundary_run`` carried the notice: that Run's
+    # ``iteration_count`` then. The Model has read it once the count grew;
+    # until then a waking notice stays pending, so a Run that ends first
+    # still wakes the Session.
+    read_after: int | None = None
+
+    @property
+    def read(self) -> bool:
+        """Whether the Model answered a request that carried this notice."""
+        run, count = self.boundary_run, self.read_after
+        return run is not None and count is not None and run.iteration_count > count
 
 
 @dataclass
@@ -162,9 +175,10 @@ class _CompletionDeliveryCoordinator:
         bucket = self._buckets.get(address)
         if bucket is None:
             return False
-        notice = bucket.notices.pop(notice_id, None)
-        if notice is None:
+        notice = bucket.notices.get(notice_id)
+        if notice is None or notice.read_after is not None:
             return False
+        bucket.notices.pop(notice_id, None)
         if not notice.delivered.done():
             notice.delivered.cancel()
         return True
@@ -187,6 +201,7 @@ class _CompletionDeliveryCoordinator:
             if notice.boundary_run is run
             and not notice.suppress_run
             and notice.execution_owner == run.execution_owner
+            and notice.read_after is None
         ]
         if not pending:
             return False
@@ -205,7 +220,13 @@ class _CompletionDeliveryCoordinator:
                 exc_info=True,
             )
             return False
-        self._acknowledge(address, bucket, pending)
+        for notice in pending:
+            notice.read_after = run.iteration_count
+        self._acknowledge(address, bucket, [notice for notice in pending if not notice.wake])
+        # Waking notices stay pending until the Model answered this request.
+        for notice in pending:
+            if notice.wake:
+                self._confirm(address, notice)
         return True
 
     async def _deliver(
@@ -229,11 +250,14 @@ class _CompletionDeliveryCoordinator:
                             if notice.boundary_run is not boundary_run:
                                 continue
                             notice.suppress_run = True
-                    pending = [
-                        notice
-                        for notice in bucket.notices.values()
-                        if notice.boundary_run is boundary_run
-                    ]
+                    pending = self._drop_read(
+                        bucket,
+                        [
+                            notice
+                            for notice in bucket.notices.values()
+                            if notice.boundary_run is boundary_run
+                        ],
+                    )
                 else:
                     # One event-loop turn collects sibling completions that become
                     # ready together while the Session is already idle.
@@ -257,8 +281,7 @@ class _CompletionDeliveryCoordinator:
 
                 active_run = self._active_run(address)
                 if active_run is not None:
-                    for notice in pending:
-                        notice.boundary_run = active_run
+                    _join_run(pending, active_run)
                     continue
 
                 message = _completion_message(pending)
@@ -310,8 +333,7 @@ class _CompletionDeliveryCoordinator:
                     if active_run is not None:
                         # A draining Run can still take the results at its next
                         # request boundary while new admission stays blocked.
-                        for notice in pending:
-                            notice.boundary_run = active_run
+                        _join_run(pending, active_run)
                         continue
                     # A lifecycle guard holds admission and does not announce its
                     # end, so retry with a bounded backoff.
@@ -334,8 +356,7 @@ class _CompletionDeliveryCoordinator:
                     # that Run is active.
                     active_run = self._active_run(address)
                     if active_run is not None:
-                        for notice in pending:
-                            notice.boundary_run = active_run
+                        _join_run(pending, active_run)
                     else:
                         await asyncio.sleep(0)
                     continue
@@ -385,6 +406,10 @@ class _CompletionDeliveryCoordinator:
                     await _wait_for_terminal_run(run)
                 # If execution failed before the initiating note reached disk,
                 # retain the evidence without recursively starting another Run.
+                # Results already in the Session need nothing more.
+                self._acknowledge(
+                    address, bucket, [notice for notice in pending if notice.read_after is not None]
+                )
                 undelivered = [notice for notice in pending if not notice.delivered.done()]
                 if undelivered:
                     for notice in undelivered:
@@ -533,6 +558,11 @@ class _CompletionDeliveryCoordinator:
 
         async with sessions.write_lock(address):
             pending = self._still_pending(bucket, notices)
+            # A request already carried these; the Session holds them.
+            self._acknowledge(
+                address, bucket, [notice for notice in pending if notice.read_after is not None]
+            )
+            pending = self._still_pending(bucket, pending)
             if not pending:
                 return None
             try:
@@ -588,19 +618,38 @@ class _CompletionDeliveryCoordinator:
             if bucket.notices.get(notice.id) is not notice:
                 continue
             bucket.notices.pop(notice.id, None)
-            if notice.on_persisted is not None:
-                try:
-                    notice.on_persisted()
-                except Exception:
-                    _LOGGER.warning(
-                        "Completion persistence callback failed (agent=%s session=%s notice=%s)",
-                        address.agent_id,
-                        address.session_id,
-                        notice.id,
-                        exc_info=True,
-                    )
-            if not notice.delivered.done():
-                notice.delivered.set_result(None)
+            self._confirm(address, notice)
+
+    @staticmethod
+    def _confirm(address: SessionAddress, notice: _CompletionNotice) -> None:
+        """Tell the producer, once, that the notice is persisted."""
+        on_persisted, notice.on_persisted = notice.on_persisted, None
+        if on_persisted is not None:
+            try:
+                on_persisted()
+            except Exception:
+                _LOGGER.warning(
+                    "Completion persistence callback failed (agent=%s session=%s notice=%s)",
+                    address.agent_id,
+                    address.session_id,
+                    notice.id,
+                    exc_info=True,
+                )
+        if not notice.delivered.done():
+            notice.delivered.set_result(None)
+
+    @staticmethod
+    def _drop_read(
+        bucket: _CompletionBucket, notices: list[_CompletionNotice]
+    ) -> list[_CompletionNotice]:
+        """Drop the notices the Model read; return the others."""
+        unread: list[_CompletionNotice] = []
+        for notice in notices:
+            if not notice.read:
+                unread.append(notice)
+            elif bucket.notices.get(notice.id) is notice:
+                bucket.notices.pop(notice.id, None)
+        return unread
 
     def _acknowledgement_callback(
         self,
@@ -688,10 +737,28 @@ async def _wait_for_terminal_run(run: Run) -> None:
         return
 
 
-def _completion_message(notices: list[_CompletionNotice]) -> str:
-    sections = [AUTOMATIC_COMPLETION_GUIDANCE, "", "Results:"]
+def _join_run(notices: list[_CompletionNotice], run: Run) -> None:
+    """Hand *notices* to the active *run*'s next request boundary.
+
+    A notice already in the Session is in every request of a later Run, so
+    any answer of *run* counts as reading it.
+    """
     for notice in notices:
-        sections.extend(("", notice.body))
+        notice.boundary_run = run
+        if notice.read_after is not None:
+            notice.read_after = 0
+
+
+def _completion_message(notices: list[_CompletionNotice]) -> str:
+    """The message delivering *notices*; those already in the Session are referred to."""
+    sections = [AUTOMATIC_COMPLETION_GUIDANCE]
+    if any(notice.read_after is not None for notice in notices):
+        sections.extend(("", UNREAD_COMPLETION_TEXT))
+    unsent = [notice for notice in notices if notice.read_after is None]
+    if unsent:
+        sections.extend(("", "Results:"))
+        for notice in unsent:
+            sections.extend(("", notice.body))
     return "\n".join(sections)
 
 
@@ -796,7 +863,7 @@ class TriggerService:
 
     def has_execution_work(self, owner: RunExecutionOwner) -> bool:
         return any(
-            notice.execution_owner == owner
+            notice.execution_owner == owner and not notice.read
             for bucket in self._completion_delivery._buckets.values()
             for notice in bucket.notices.values()
         )
