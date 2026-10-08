@@ -49,6 +49,10 @@ TELEGRAM_CAPTION_LIMIT = 1024
 _TYPING_ACTION = "typing"
 _TYPING_REFRESH_SECONDS = 4.0
 _INBOUND_MEDIA_RETRY_INITIAL_SECONDS = 1.0
+# getFile answers only once Telegram's Bot API server holds the file, fetched from
+# the sender's data center first; for a fresh voice or video message that can take
+# longer than PTB's 5 s default read timeout, and every retry would hit it again.
+_INBOUND_FILE_READ_TIMEOUT_SECONDS = 30.0
 
 
 class TelegramTransport:
@@ -506,7 +510,9 @@ class TelegramTransport:
         # size here refuses an oversized file before download_as_bytearray pulls it into
         # memory. store() re-checks as a backstop for when Telegram omits the size.
         with _telegram_error_boundary(self._channel_id):
-            telegram_file = await bot.get_file(file_id)
+            telegram_file = await bot.get_file(
+                file_id, read_timeout=_INBOUND_FILE_READ_TIMEOUT_SECONDS
+            )
         reported_size = getattr(telegram_file, "file_size", None)
         attachment_store.ensure_within_limit(
             reported_size if isinstance(reported_size, int) else None

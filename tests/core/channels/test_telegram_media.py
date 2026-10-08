@@ -13,6 +13,7 @@ from telegram.error import NetworkError
 
 import core.channels._telegram_inbound as telegram_inbound
 from core.attachments import AttachmentStore
+from core.channels._telegram_transport import _INBOUND_FILE_READ_TIMEOUT_SECONDS
 from core.chat import MessageSender
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 
@@ -160,7 +161,10 @@ async def test_inbound_media_reaches_the_agent_as_a_stored_attachment(
     await adapter._handle_inbound_media(make_media_update(caption=" check this ", **media), None)
     await drain_chat_queue(adapter, 12345)
 
-    bot.get_file.assert_awaited_once_with(file_id)
+    # Telegram may answer getFile only after fetching a fresh upload, so it gets
+    # more than PTB's 5 s default read timeout.
+    bot.get_file.assert_awaited_once_with(file_id, read_timeout=_INBOUND_FILE_READ_TIMEOUT_SECONDS)
+    assert _INBOUND_FILE_READ_TIMEOUT_SECONDS > 5
     [[caption, block]] = _run_contents(trigger)
     assert caption == TextBlock(type="text", text="check this")
     assert isinstance(block, block_type)
@@ -268,7 +272,8 @@ async def test_an_addressed_reply_to_a_photo_brings_the_quoted_photo_along(
     await drain_chat_queue(adapter, -10001)
 
     # The quoted photo is only downloaded because the reply addresses the bot.
-    bot.get_file.assert_awaited_once_with("photo-juan-1")
+    bot.get_file.assert_awaited_once()
+    assert bot.get_file.await_args.args == ("photo-juan-1",)
     quoted_file.download_as_bytearray.assert_awaited_once()
     assert trigger.await_args is not None
     blocks = trigger.await_args.args[1]
