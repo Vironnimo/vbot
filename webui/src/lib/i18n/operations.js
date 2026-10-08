@@ -610,13 +610,18 @@ export default Object.freeze({
   'calendar.actions.afterAnchor': '{amount} {unit} after {anchor}',
   'calendar.actions.heading': 'Agent actions',
   'calendar.actions.help':
-    'Actions follow this event. Each execution gets a new Session unless you select an existing one. Preparations expire at event start, actions during the event at its end, later actions one hour after their scheduled time.',
+    'Actions follow this event. Each execution gets a new Session unless you select an existing one. An action vBot missed, for example while it was not running, starts late: one due before the event until the event starts, one during it until it ends, one after it until the next occurrence, or at any time after the last. A late start limit shortens this; 0 skips every missed start.',
   'calendar.actions.add': 'Add action',
   'calendar.actions.series':
     'These actions apply to every occurrence in the series.',
   'calendar.actions.empty': 'No agent actions attached.',
   'calendar.actions.scheduled': 'Scheduled: {time}',
   'calendar.actions.expires': 'Latest start: {time}',
+  'calendar.actions.expiresNever': 'Latest start: no limit',
+  'calendar.actions.maxDelay': 'Late start limit (minutes)',
+  'calendar.actions.maxDelayPlaceholder': 'Set by the event',
+  'calendar.actions.maxDelayInvalid':
+    'The late start limit must be a whole number of minutes from 0.',
   'calendar.actions.error': 'Could not start: {reason}',
   'calendar.actions.openSession': 'Open Session',
   'calendar.actions.deleteConfirm': 'Remove this action from the event?',

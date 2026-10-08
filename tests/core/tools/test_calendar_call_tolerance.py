@@ -451,6 +451,39 @@ class TestStandIns:
         )
 
     @pytest.mark.parametrize(
+        ("fields", "seconds"),
+        [
+            ({"grace_period": "10 minutes"}, 600),
+            ({"misfire_grace_time": 3600}, 3600),
+            ({"catch_up": False}, 0),
+            ({"max_delay": "none"}, None),
+        ],
+    )
+    def test_max_delay_spellings_set_the_limit(
+        self, tool: CalendarTool, fields: dict[str, Any], seconds: int | None
+    ) -> None:
+        event_id = tool.add_dentist()
+
+        tool.call({"action": "add_action", "id": event_id, "when": "end", "prompt": "p", **fields})
+
+        assert tool.actions()[0].get("max_delay_seconds") == seconds
+
+    def test_unreadable_max_delay_is_refused_with_its_form(self, tool: CalendarTool) -> None:
+        event_id = tool.add_dentist()
+        call = {"action": "add_action", "id": event_id, "when": "end", "prompt": "p"}
+
+        _, text = tool.call({**call, "max_delay": "soon"})
+
+        assert tool.actions() == []
+        assert text == (
+            'Error (invalid_arguments): calendar was not run: "max_delay" "soon" is not a '
+            'duration. max_delay takes a duration such as "30m", "2h" or "1d", "0m" to skip '
+            'every missed start, or "unlimited". Send: '
+            f'{{"action":"add_action","id":"{event_id}","when":"end","prompt":"p",'
+            '"max_delay":"<duration such as 2h>"}'
+        )
+
+    @pytest.mark.parametrize(
         ("field", "stand_in"), [("title", "<title>"), ("notes", "<the notes from this call>")]
     )
     def test_stand_in_event_text_is_refused_on_create_and_update(

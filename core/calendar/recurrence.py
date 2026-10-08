@@ -220,15 +220,15 @@ def expand_recurring_allday(
     return occurrences
 
 
-def recurring_timed_starts_from(
+def recurring_timed_next_start(
     *,
     start_local: datetime,
     tz: ZoneInfo,
     rrule_spec: dict[str, Any],
     exdates: frozenset[str],
     from_utc: datetime,
-) -> bool:
-    """Whether a recurring timed event has an occurrence starting at or after ``from_utc``.
+) -> datetime | None:
+    """The UTC start of a recurring timed event's first occurrence at or after ``from_utc``.
 
     Uses the start arithmetic and EXDATE matching of :func:`expand_recurring_timed`,
     so a series ended by its count, its until date or removed occurrences has none.
@@ -243,19 +243,19 @@ def recurring_timed_starts_from(
         if start_utc.astimezone(tz).replace(tzinfo=None).isoformat() in exdates:
             continue
         if start_utc >= from_utc:
-            return True
-    return False
+            return start_utc
+    return None
 
 
-def recurring_allday_starts_from(
+def recurring_allday_next_start(
     *,
     start_date: date,
     rrule_spec: dict[str, Any],
     exdates: frozenset[str],
     from_utc: datetime,
     system_tz: ZoneInfo,
-) -> bool:
-    """Whether a recurring all-day event has an occurrence starting at or after ``from_utc``.
+) -> datetime | None:
+    """The UTC start of a recurring all-day event's first occurrence at or after ``from_utc``.
 
     An all-day occurrence starts at midnight in the system time zone, as in
     :func:`expand_recurring_allday`.
@@ -268,8 +268,8 @@ def recurring_allday_starts_from(
             continue
         start_utc = datetime.combine(occurrence_date, time.min, tzinfo=system_tz).astimezone(UTC)
         if start_utc >= from_utc:
-            return True
-    return False
+            return start_utc
+    return None
 
 
 def _build_rrule(dtstart: datetime, spec: dict[str, Any]) -> rrule:

@@ -64,8 +64,8 @@ from core.calendar.recurrence import (
     expand_recurring_timed,
     normalize_rrule,
     parse_date_string,
-    recurring_allday_starts_from,
-    recurring_timed_starts_from,
+    recurring_allday_next_start,
+    recurring_timed_next_start,
     resolve_local_span,
 )
 from core.calendar.when import looks_like_date, parse_when
@@ -364,8 +364,8 @@ class CalendarService:
             event, window_start, window_end, self._timezone, MAX_OCCURRENCES_PER_EVENT
         )
 
-    def occurs_from(self, event: CalendarEvent, instant: datetime) -> bool:
-        """Whether ``event`` has an occurrence starting at or after ``instant``.
+    def next_start(self, event: CalendarEvent, instant: datetime) -> datetime | None:
+        """The UTC start of ``event``'s first occurrence at or after ``instant``, if any.
 
         Follows occurrence expansion: all-day occurrences start at midnight in
         the system time zone, and a series ends with its count, its until date
@@ -376,8 +376,9 @@ class CalendarService:
             start_date = parse_date_string(event.start_date, field_name="start_date")
             if event.rrule is None:
                 start = datetime.combine(start_date, time.min, tzinfo=self._timezone)
-                return start.astimezone(UTC) >= instant
-            return recurring_allday_starts_from(
+                start = start.astimezone(UTC)
+                return start if start >= instant else None
+            return recurring_allday_next_start(
                 start_date=start_date,
                 rrule_spec=event.rrule,
                 exdates=frozenset(event.exdates),
@@ -385,9 +386,10 @@ class CalendarService:
                 system_tz=self._timezone,
             )
         if event.rrule is None:
-            return self.event_span(event)[0] >= instant
+            start = self.event_span(event)[0]
+            return start if start >= instant else None
         assert event.start_local is not None and event.tz_name is not None
-        return recurring_timed_starts_from(
+        return recurring_timed_next_start(
             start_local=datetime.fromisoformat(event.start_local),
             tz=_resolve_zone(event.tz_name),
             rrule_spec=event.rrule,
