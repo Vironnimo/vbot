@@ -8,7 +8,7 @@ Endpoint + headers: `POST https://chatgpt.com/backend-api/codex/responses` with 
 
 ## Request shape
 
-Carrier model `gpt-5.5`, `stream: true` (mandatory), `store: false`, instructions `You are an image generation assistant.`, one user `input_text` asking the carrier to use the `image_generation` tool, and `tools: [{"type": "image_generation", ...}]`. Known-good carrier fallback from the probe is `gpt-5.4-mini`; current subscription carriers come from `/codex/models` via `model.refresh_db` and appear in `resources/models/openai.json` with `connections: ["subscription"]`. `gpt-5.5` itself left `/codex/models` on 2026-10-08; a text request with the slug still completed that day, so the carrier constant was kept, but if the backend rejects it, switch to a listed subscription Model.
+Carrier model `gpt-6-luna` (`_OPENAI_CODEX_IMAGE_CARRIER_MODEL`), `stream: true` (mandatory), `store: false`, instructions that ask for exactly one `image_generation` call that keeps the requested subject, and, if the call fails, one sentence with the reported reason instead of a retry (`_OPENAI_CODEX_IMAGE_INSTRUCTIONS`), one user `input_text`, and `tools: [{"type": "image_generation", ...}]`. The carrier must be a Model listed by `/codex/models` (`resources/models/openai.json` entries with `connections: ["subscription"]`); an unlisted slug can be withdrawn without notice. History: `gpt-5.5` was the carrier until it left `/codex/models` on 2026-10-08. The same day both `gpt-6-luna` and `gpt-5.6-luna` produced an image and, for a refused prompt, made one failed tool call followed by a one-sentence reason; `gpt-6-luna` was chosen as the cheapest and fastest listed Model.
 
 ## Tool options
 

@@ -33,7 +33,7 @@ _OPENAI_IMAGES_GENERATIONS_ENDPOINT = "/images/generations"
 _OPENAI_IMAGES_EDITS_ENDPOINT = "/images/edits"
 _DEFAULT_IMAGE_TIMEOUT = 120.0
 _OPENAI_CODEX_IMAGE_TIMEOUT = 300.0
-_OPENAI_CODEX_IMAGE_CARRIER_MODEL = "gpt-5.5"
+_OPENAI_CODEX_IMAGE_CARRIER_MODEL = "gpt-6-luna"
 # The carrier Model sits between vBot and the image tool. Left alone it retried
 # refused requests with its own rewritten prompt (a named film character became
 # an original look-alike) and the calling Agent never learned of it.
