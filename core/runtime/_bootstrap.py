@@ -712,6 +712,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._tools,
             runtime._calendar_service,
             reference_lock=runtime._automation_references.lock,
+            cron_service=runtime._cron_service,
         )
         register_shell_tool(
             runtime._tools,

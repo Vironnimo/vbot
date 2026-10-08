@@ -1,11 +1,11 @@
-"""Read durations written by Models, and the late-start limits ``cron`` and ``calendar`` ignore.
+"""Read durations written by Models, and the late-start limits ``cron`` ignores.
 
 Models limit how late a missed start can still happen under the names of
 schedulers they know (``max_delay``, APScheduler ``misfire_grace_time``,
 Kubernetes ``startingDeadlineSeconds``, Hermes ``catch_up_missed``, OpenClaw
-``skipMissedJobs``). Neither Tool takes such a limit: a missed start happens
-late and its Run is told how late it is. A call that sends one still executes,
-and its result says that the field has no effect.
+``skipMissedJobs``). ``cron`` takes no such limit: a missed start happens late
+and its Run is told how late it is. A call that sends one still executes, and
+its result says that the field has no effect.
 """
 
 from __future__ import annotations
@@ -45,6 +45,8 @@ _DURATION_WORDS = {
     "weeks": 604800,
 }
 _DURATION = re.compile(r"^(\d+)\s*([a-z]+)$")
+_DECIMAL_DURATION = re.compile(r"^(\d+\.\d+)\s*(h|hr|hrs|hours?|d|days?)$")
+_UNIT_MINUTES = {"m": 1, "h": 60, "d": 1440}
 _ISO_DURATION = re.compile(
     r"^p(?:(\d+)w)?(?:(\d+)d)?(?:t(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?)?$", re.IGNORECASE
 )
@@ -94,6 +96,23 @@ def duration_text(text: str) -> str | None:
         total = (((weeks * 7 + days) * 24 + hours) * 60 + minutes) * 60 + seconds
         return duration_from_seconds(total)
     return None
+
+
+def duration_minutes(value: Any) -> int | None:
+    """Whole positive minutes a length names: 90, "90", "1.5h", "PT1H30M" or "2 days"."""
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        return None
+    if isinstance(value, int | float):
+        return int(value) if value > 0 and float(value).is_integer() else None
+    text = value.strip().casefold()
+    if text.isdecimal():
+        return int(text) or None
+    decimal = _DECIMAL_DURATION.match(text)
+    if decimal is not None:
+        minutes = float(decimal.group(1)) * _UNIT_MINUTES[decimal.group(2)[0]]
+        return int(minutes) if minutes.is_integer() else None
+    canonical = duration_text(text)
+    return None if canonical is None else int(canonical[:-1]) * _UNIT_MINUTES[canonical[-1]]
 
 
 def duration_from_seconds(seconds: float) -> str | None:
@@ -146,6 +165,7 @@ __all__ = [
     "LATE_LIMITS_FIELD",
     "LATE_LIMITS_PARAMETER",
     "duration_from_seconds",
+    "duration_minutes",
     "duration_text",
     "take_late_limits",
     "with_late_limits_note",

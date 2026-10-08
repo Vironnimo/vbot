@@ -21,12 +21,18 @@ from core.automation.cron import (
 from core.projects import InvalidAgentAddressError, format_agent_address, parse_agent_address
 from core.tools._cron_arguments import (
     ENABLED_FIELD,
+    EVENT_REPEAT_REFUSAL,
+    EVENT_TIME_STAND_IN,
+    OMIT,
     REFUSAL_PREFIX,
     SELF_TARGET,
     UNADVERTISED_PARAMETERS,
     CronCallRefusedError,
+    ambiguous_event_time,
+    event_time_readings,
     normalize_cron_arguments,
     refusal,
+    render_call,
 )
 from core.tools._cron_timezone import zoned_schedule
 from core.tools._durations import LATE_LIMITS_FIELD, with_late_limits_note
@@ -46,15 +52,18 @@ from core.utils.logging import get_logger
 if TYPE_CHECKING:
     import asyncio
 
-    from core.automation.cron import CronJob, CronService
+    from core.automation.cron import CronJob, CronService, ParsedSchedule
 
 CRON_TOOL_NAME = "cron"
-CRON_TOOL_DESCRIPTION = "Schedule jobs that run an instruction later, once or repeatedly."
+CRON_TOOL_DESCRIPTION = (
+    "Schedule jobs that run an instruction later: once, repeatedly, or before, at or after a "
+    "calendar event."
+)
 
 CRON_ACTIONS = frozenset(("create", "list", "update", "delete", "enable", "disable"))
 
 _ID_ACTIONS = frozenset({"update", "delete", "enable", "disable"})
-_UPDATE_FIELDS = ("target", "name", "prompt", "schedule", "repeat", ENABLED_FIELD)
+_UPDATE_FIELDS = ("target", "name", "prompt", "schedule", "event_id", "repeat", ENABLED_FIELD)
 _SCHEDULE_FORMS = (
     'Use five cron fields in server time such as "0 9 * * 1-5" (weekdays at 09:00), '
     '"every 2h", "in 30m", or a local time such as "2030-01-01T09:00".'
@@ -112,6 +121,14 @@ CRON_TOOL_PARAMETERS: JsonObject = {
                 "When to run, in local time: five cron fields (minute hour day month "
                 "weekday), e.g. '0 9 * * 1-5' for weekdays at 09:00; 'every 30m', 'every 2h' "
                 "or 'every 1d'; or once with 'in 45m' or '2030-08-07T09:00'. Required on create."
+            ),
+        },
+        "event_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Calendar event to run the job at, for every occurrence. schedule is then start "
+                "or end, optionally +/- a duration, e.g. 'start - 30m'."
             ),
         },
         "repeat": {
@@ -242,7 +259,10 @@ async def _run_cron_action(
     except CronJobInPastError as error:
         return tool_failure("invalid_arguments", _past_message(action, arguments, error))
     except CronJobValidationError as error:
-        return tool_failure("invalid_arguments", _validation_message(action, arguments, error))
+        return tool_failure(
+            "invalid_arguments",
+            _validation_message(action, arguments, error, context.offers("calendar")),
+        )
     except CronServiceError as error:
         _LOGGER.warning("Cron service error for action=%s: %s", action, error)
         return tool_failure(
@@ -271,7 +291,7 @@ async def _handle_create(
 ) -> JsonObject:
     missing = [name for name in ("prompt", "schedule") if name not in arguments]
     if missing:
-        if "schedule" not in missing:
+        if "schedule" not in missing and "event_id" not in arguments:
             # Show the schedule the job would get: a server time zone drops out.
             with suppress(CronCallRefusedError):
                 arguments, _note = _server_time(cron_service, arguments)
@@ -299,6 +319,9 @@ async def _handle_create(
         interval_seconds=parsed.interval_seconds,
         interval_anchor_at=parsed.interval_anchor_at,
         run_at=parsed.run_at,
+        event_id=parsed.event_id,
+        event_edge=parsed.event_edge,
+        event_offset_minutes=parsed.event_offset_minutes,
         remaining_runs=repeat,
         session_id=None,
         status="paused" if paused else "active",
@@ -313,7 +336,9 @@ async def _handle_create(
 
 def _handle_list(cron_service: CronService, arguments: JsonObject) -> JsonObject:
     jobs = (
-        [cron_service.get_job(arguments["id"])] if "id" in arguments else cron_service.list_jobs()
+        [cron_service.get_job(arguments["id"])]
+        if "id" in arguments
+        else cron_service.list_jobs(event_id=arguments.get("event_id"))
     )
     zone = ZoneInfo(cron_service.system_timezone_name())
     data: JsonObject = {"jobs": len(jobs), "timezone": cron_service.system_timezone_name()}
@@ -331,8 +356,8 @@ async def _handle_update(
     if not any(name in arguments for name in _UPDATE_FIELDS):
         raise CronCallRefusedError(
             refusal(
-                "update needs a field to change: name, prompt, schedule, repeat, or target. To "
-                "pause or resume the job, use disable or enable.",
+                "update needs a field to change: name, prompt, schedule, event_id, repeat, or "
+                "target. To pause or resume the job, use disable or enable.",
                 arguments,
                 schedule=_SCHEDULE_STAND_IN,
             )
@@ -343,8 +368,8 @@ async def _handle_update(
     for name in ("name", "prompt"):
         if name in arguments:
             updates[name] = arguments[name]
-    if "schedule" in arguments:
-        parsed = _parse_schedule(cron_service, arguments)
+    if "schedule" in arguments or "event_id" in arguments:
+        parsed = _parse_schedule(cron_service, arguments, cron_service.get_job(job_id))
         updates.update(parsed.as_job_fields())
         if parsed.schedule_type == "once":
             # A one-time schedule fires once; an old repeat count does not carry over.
@@ -385,25 +410,88 @@ def _server_time(cron_service: CronService, arguments: JsonObject) -> tuple[Json
     return zoned_schedule(dict(arguments), server, datetime.now(UTC))
 
 
-def _parse_schedule(cron_service: CronService, arguments: JsonObject) -> Any:
-    schedule = arguments["schedule"]
+def _parse_schedule(
+    cron_service: CronService, arguments: JsonObject, job: CronJob | None = None
+) -> ParsedSchedule:
+    """The schedule a call sets; with an event_id, or for an event job, an event time."""
+    schedule = arguments.get("schedule")
+    event_id = arguments.get("event_id")
+    on_event = job is not None and job.schedule_type == "event"
+    if event_id is None and on_event and (schedule is None or event_time_readings(schedule)):
+        # The job stays at its event unless the new schedule is of another kind.
+        assert job is not None
+        event_id = job.event_id
+    if event_id is not None:
+        return _parse_event_time(cron_service, arguments, event_id, schedule, job)
+    # Without an event the call sent a schedule: create requires one, and update
+    # parses only when the call sends a schedule or an event_id.
+    text: str = arguments["schedule"]
     try:
-        return cron_service.parse_schedule(schedule)
+        return cron_service.parse_schedule(text)
     except CronJobInPastError:
         raise
     except CronJobValidationError as error:
+        if event_time_readings(text) == [" ".join(text.split())]:
+            # An event time such as "start - 30m" without the event it counts from.
+            raise CronCallRefusedError(
+                refusal(
+                    f'schedule "{schedule}" is a time at a calendar event; send its event_id.',
+                    arguments,
+                    event_id="<calendar event id>",
+                )
+            ) from error
         detail = str(error).rstrip(". ")
         raise CronCallRefusedError(
             f'cron was not run: schedule "{schedule}" is not valid ({detail}). {_SCHEDULE_FORMS}'
         ) from error
 
 
+def _parse_event_time(
+    cron_service: CronService,
+    arguments: JsonObject,
+    event_id: str,
+    schedule: str | None,
+    job: CronJob | None,
+) -> ParsedSchedule:
+    if schedule is None:
+        # A job moved to another event keeps its event time; another job runs at the start.
+        schedule = (
+            cron_service.format_schedule(job)
+            if job is not None and job.schedule_type == "event"
+            else "start"
+        )
+    readings = event_time_readings(schedule)
+    if len(readings) > 1:
+        choices = " or ".join(render_call(arguments, schedule=reading) for reading in readings)
+        text = ambiguous_event_time("schedule", schedule, readings)
+        raise CronCallRefusedError(f"{REFUSAL_PREFIX}{text} {choices}")
+    try:
+        return cron_service.parse_event_schedule(
+            event_id, readings[0] if len(readings) == 1 else schedule
+        )
+    except CronJobValidationError as error:
+        detail = str(error).rstrip(". ")
+        raise CronCallRefusedError(
+            refusal(
+                f'schedule "{schedule}" is not an event time: {detail}.',
+                arguments,
+                schedule=EVENT_TIME_STAND_IN,
+            )
+        ) from error
+
+
 def _missing_create_fields(missing: list[str], arguments: JsonObject) -> str:
-    stand_ins = {"prompt": "<instruction>", "schedule": _SCHEDULE_STAND_IN}
+    event = "event_id" in arguments
+    stand_ins = {
+        "prompt": "<instruction>",
+        "schedule": EVENT_TIME_STAND_IN if event else _SCHEDULE_STAND_IN,
+    }
     texts = []
     if "prompt" in missing:
         texts.append('"prompt", the complete instruction the Agent runs at each fire')
-    if "schedule" in missing:
+    if "schedule" in missing and event:
+        texts.append('"schedule", start or end of the event, optionally +/- a duration')
+    elif "schedule" in missing:
         texts.append(f'"schedule". {_SCHEDULE_FORMS}')
     return refusal(
         "create needs " + " and ".join(texts).rstrip(".") + ".",
@@ -423,8 +511,19 @@ def _past_message(action: str, arguments: JsonObject, error: CronJobInPastError)
     return refusal(f"{detail}.", arguments, schedule=_FUTURE_STAND_IN)
 
 
-def _validation_message(action: str, arguments: JsonObject, error: CronJobValidationError) -> str:
+def _validation_message(
+    action: str, arguments: JsonObject, error: CronJobValidationError, calendar_offered: bool
+) -> str:
     detail = str(error).rstrip(". ")
+    if detail.startswith("Calendar event not found"):
+        listing = " The calendar list shows events and their ids." if calendar_offered else ""
+        return f'cron was not run: no calendar event has id "{arguments.get("event_id")}".{listing}'
+    if detail.startswith("repeat is not available"):
+        # Only an update of a job bound to an event sends repeat without event_id.
+        others = [name for name in _UPDATE_FIELDS if name in arguments and name != "repeat"]
+        if others:
+            return refusal(EVENT_REPEAT_REFUSAL, arguments, repeat=OMIT)
+        return f"{REFUSAL_PREFIX}{EVENT_REPEAT_REFUSAL}"
     if "Completed or missed jobs" in detail:
         return (
             f"cron was not run: {detail}. The job has finished; create a new job instead, or "
@@ -448,14 +547,16 @@ def _job_fields(cron_service: CronService, job: CronJob, zone: ZoneInfo) -> Json
         "name": job.name,
         "status": job.status,
         "schedule": _schedule_text(cron_service, job, zone),
-        # A one-time schedule is its own next run.
-        "next_run": (
-            None
-            if job.schedule_type == "once"
-            else _local_time(cron_service.next_fire_at(job), zone)
-        ),
-        "target": format_agent_address(job.agent_id, job.project_id),
     }
+    if job.schedule_type == "event":
+        event = cron_service.bound_event(job)
+        data["event"] = job.event_id if event is None else f"{event.title} ({job.event_id})"
+    # A one-time schedule is its own next run.
+    if job.schedule_type != "once":
+        data["next_run"] = _local_time(cron_service.next_fire_at(job), zone)
+    if job.schedule_type == "event" and job.status == "active" and data["next_run"] is None:
+        data["next_run"] = "none; no occurrence of the event lies ahead"
+    data["target"] = format_agent_address(job.agent_id, job.project_id)
     if job.schedule_type != "once" and job.remaining_runs is not None:
         data["repeat"] = job.remaining_runs
     last_run = job.last_fired_at or job.last_attempt_at
@@ -516,10 +617,10 @@ def _cron_display_parts(raw_arguments: JsonObject) -> tuple[ToolDisplayPart, ...
     if not isinstance(action, str) or action not in CRON_ACTIONS:
         return ()
     parts = [ToolDisplayPart(action, truncate="never", tooltip="none")]
-    for field_name in ("name", "id", "target", "schedule"):
+    for field_name in ("name", "id", "target", "schedule", "event_id"):
         value = arguments.get(field_name)
         if isinstance(value, str) and value.strip():
-            kind = "identifier" if field_name in {"id", "target"} else "text"
+            kind = "identifier" if field_name in {"id", "target", "event_id"} else "text"
             truncate = "middle" if kind == "identifier" else "end"
             parts.append(ToolDisplayPart(value.strip(), kind=kind, truncate=truncate))
             break

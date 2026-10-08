@@ -16,8 +16,9 @@ from core.projects import (
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
 )
+from core.tools._cron_arguments import render_call
 from core.tools.cron import CRON_TOOL_NAME, CRON_TOOL_PARAMETERS
-from tests.core.tools.scheduling_tool_support import cron_tool
+from tests.core.tools.scheduling_tool_support import CronTool, cron_tool, scheduling_tools
 
 PROMPT = "Check the nightly build and summarize failures."
 BERLIN_TIME = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+0[12]:00"
@@ -38,6 +39,7 @@ def test_schema_advertises_only_the_canonical_fields() -> None:
         "name",
         "prompt",
         "schedule",
+        "event_id",
         "repeat",
     ]
     assert properties["action"]["enum"] == [
@@ -530,3 +532,172 @@ def test_target_choices_wait_for_the_reference_lock(tmp_path: Path, action: str)
 
     assert asyncio.run(while_a_removal_holds_the_lock()) == before
     assert jobs() != before
+
+
+# -- jobs at calendar events -----------------------------------------------------------------
+
+
+def _standup(tool: CronTool) -> str:
+    """Mondays 09:00-09:15 from 2030-01-07; return its id."""
+    return tool.calendar.create_event(
+        title="Standup", start="2030-01-07T09:00", end="2030-01-07T09:15", rrule="FREQ=WEEKLY"
+    ).id
+
+
+@pytest.mark.parametrize(
+    ("schedule", "edge", "offset", "next_run"),
+    [
+        ("start - 30m", "start", -30, "2030-01-07T08:30:00+01:00"),
+        ("start", "start", 0, "2030-01-07T09:00:00+01:00"),
+        ("end + 1h", "end", 60, "2030-01-07T10:15:00+01:00"),
+    ],
+)
+def test_event_job_runs_before_at_or_after_each_occurrence(
+    tmp_path: Path, schedule: str, edge: str, offset: int, next_run: str
+) -> None:
+    tool = cron_tool(tmp_path)
+    standup = _standup(tool)
+
+    job, text = tool.created(
+        {"action": "create", "event_id": standup, "prompt": PROMPT, "schedule": schedule}
+    )
+
+    assert (job.schedule_type, job.event_id, job.event_edge, job.event_offset_minutes) == (
+        "event",
+        standup,
+        edge,
+        offset,
+    )
+    assert job.remaining_runs is None
+    assert text.splitlines()[2:] == [
+        "status: active",
+        f"schedule: {schedule}",
+        f"event: Standup ({standup})",
+        f"next_run: {next_run}",
+        "target: agent-one",
+    ]
+
+
+def test_event_job_without_an_occurrence_ahead_says_so(tmp_path: Path) -> None:
+    tool = cron_tool(tmp_path)
+    past = tool.calendar.create_event(title="Old", start="2020-01-07T09:00").id
+
+    _job, text = tool.created(
+        {"action": "create", "event_id": past, "prompt": PROMPT, "schedule": "start"}
+    )
+
+    assert "next_run: none; no occurrence of the event lies ahead" in text
+
+
+def test_list_with_an_event_id_shows_the_jobs_at_that_event(tmp_path: Path) -> None:
+    tool = cron_tool(tmp_path)
+    standup = _standup(tool)
+    tool.add_job(name="Elsewhere")
+    tool.succeeded(
+        {
+            "action": "create",
+            "event_id": standup,
+            "name": "Agenda",
+            "prompt": PROMPT,
+            "schedule": "start",
+        }
+    )
+
+    envelope, text = tool.call({"action": "list", "event_id": standup})
+
+    assert envelope["data"]["jobs"] == 1
+    assert "name: Agenda" in text and "Elsewhere" not in text
+    display = tool.registry.display_for_call(
+        CRON_TOOL_NAME, {"action": "list", "event_id": standup}
+    )
+    assert [part["value"] for part in display["primary"]] == ["list", standup]
+
+
+@pytest.mark.parametrize("action", ["create", "update"])
+def test_event_job_refuses_repeat(tmp_path: Path, action: str) -> None:
+    tool = cron_tool(tmp_path)
+    standup = _standup(tool)
+    call = {"action": "create", "event_id": standup, "prompt": PROMPT, "schedule": "start"}
+    if action == "update":
+        job_id = tool.created(call)[0].id
+        call = {"action": "update", "id": job_id, "name": "Agenda"}
+
+    message = tool.refused({**call, "repeat": 3})
+
+    assert message == (
+        "cron was not run: a job at a calendar event runs at every occurrence of the event, so "
+        f"it takes no repeat. Nothing was changed. Send: {render_call(call)}"
+    )
+
+
+@pytest.mark.parametrize("calendar_offered", [True, False])
+def test_unknown_event_is_refused(tmp_path: Path, calendar_offered: bool) -> None:
+    tool = scheduling_tools(
+        tmp_path, offered=("calendar", "cron") if calendar_offered else ("cron",)
+    )[1]
+
+    message = tool.refused(
+        {"action": "create", "event_id": "evt_missing", "prompt": PROMPT, "schedule": "start"}
+    )
+
+    listing = " The calendar list shows events and their ids." if calendar_offered else ""
+    assert message == f'cron was not run: no calendar event has id "evt_missing".{listing}'
+
+
+@pytest.mark.parametrize(
+    ("call", "message"),
+    [
+        (
+            {"action": "create", "event_id": "{event}", "prompt": PROMPT},
+            'cron was not run: create needs "schedule", start or end of the event, optionally '
+            '+/- a duration. Send: {"action":"create","event_id":"{event}","prompt":"'
+            + PROMPT
+            + '","schedule":"<start or end, e.g. start - 30m>"}',
+        ),
+        (
+            {"action": "create", "event_id": "{event}", "prompt": PROMPT, "schedule": "lunch"},
+            'cron was not run: schedule "lunch" is not an event time: event time must be start '
+            "or end, optionally + or - a duration such as 'start - 30m'. Send: "
+            '{"action":"create","event_id":"{event}","prompt":"'
+            + PROMPT
+            + '","schedule":"<start or end, e.g. start - 30m>"}',
+        ),
+        (
+            {"action": "create", "prompt": PROMPT, "schedule": "start - 30m"},
+            'cron was not run: schedule "start - 30m" is a time at a calendar event; send its '
+            'event_id. Send: {"action":"create","event_id":"<calendar event id>","prompt":"'
+            + PROMPT
+            + '","schedule":"start - 30m"}',
+        ),
+    ],
+)
+def test_event_time_needs_its_event_and_an_edge(
+    tmp_path: Path, call: dict[str, Any], message: str
+) -> None:
+    tool = cron_tool(tmp_path)
+    standup = _standup(tool)
+    filled = {key: value.replace("{event}", standup) for key, value in call.items()}
+
+    assert tool.refused(filled) == message.replace("{event}", standup)
+
+
+def test_update_moves_an_event_job_between_times_events_and_schedules(tmp_path: Path) -> None:
+    tool = cron_tool(tmp_path)
+    standup = _standup(tool)
+    review = tool.calendar.create_event(title="Review", start="2030-01-08T14:00").id
+    job_id = tool.created(
+        {"action": "create", "event_id": standup, "prompt": PROMPT, "schedule": "end + 1h"}
+    )[0].id
+
+    def fields() -> tuple[Any, ...]:
+        job = tool.only_job()
+        return (job.schedule_type, job.event_id, job.event_edge, job.event_offset_minutes)
+
+    # Another event keeps the event time; a new event time keeps the event.
+    tool.succeeded({"action": "update", "id": job_id, "event_id": review})
+    assert fields() == ("event", review, "end", 60)
+    tool.succeeded({"action": "update", "id": job_id, "schedule": "start - 10m"})
+    assert fields() == ("event", review, "start", -10)
+    # A schedule of another kind ends the binding.
+    tool.succeeded({"action": "update", "id": job_id, "schedule": "every 2h"})
+    assert fields() == ("interval", None, None, None)

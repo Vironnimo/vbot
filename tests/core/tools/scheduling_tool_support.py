@@ -1,7 +1,9 @@
 """The scheduling Tools against real services, called through production dispatch as a Run calls.
 
-``cron_tool`` puts a real CronService behind the registered cron Tool and ``calendar_tool`` a
-real CalendarService behind the calendar Tool; ``clock_at`` fixes the time a module reads.
+``scheduling_tools`` registers the calendar and cron Tools in one registry over a
+CalendarService and a CronService bound to each other, as the Runtime does;
+``calendar_tool`` and ``cron_tool`` return one of them. ``clock_at`` fixes the time
+a module reads.
 """
 
 from __future__ import annotations
@@ -9,11 +11,10 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, tzinfo
+from datetime import datetime, tzinfo
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar, cast, override
-from zoneinfo import ZoneInfo
 
 from core.automation.cron import CronJob, CronService
 from core.calendar import CalendarEvent, CalendarService
@@ -26,8 +27,7 @@ from tests.core.tools.tools_test_support import dispatch_as_executor
 
 SERVER_ZONE = "Europe/Berlin"
 JOB_PROMPT = "Lint the wiki and report broken links."
-DENTIST_START = "2030-01-10T15:00"
-WEEKLY_MONDAY = "FREQ=WEEKLY;BYDAY=MO"
+BOTH_TOOLS = (CALENDAR_TOOL_NAME, CRON_TOOL_NAME)
 
 
 @dataclass
@@ -35,6 +35,8 @@ class _DispatchedTool:
     registry: ToolRegistry
     workspace: Path
     reference_lock: asyncio.Lock
+    # The Tools the Run offers the Agent; results name only these.
+    offered: tuple[str, ...]
 
     tool_name: ClassVar[str]
 
@@ -58,15 +60,22 @@ class _DispatchedTool:
             data_root=self.workspace,
             project_id=project_id,
         )
-        envelope = await dispatch_as_executor(self.registry, context, arguments)
+        envelope = await dispatch_as_executor(self.registry, context, arguments, self.offered)
         text = str(tool_result_text(json.dumps(envelope, ensure_ascii=False)))
         return envelope, text
+
+    def succeeded(self, arguments: Any) -> str:
+        """Dispatch a call that must succeed; return the text the Model reads."""
+        envelope, text = self.call(arguments)
+        assert envelope["ok"] is True, text
+        return text
 
 
 @dataclass
 class CronTool(_DispatchedTool):
     service: CronService
     trigger: SimpleNamespace
+    calendar: CalendarService
 
     tool_name: ClassVar[str] = CRON_TOOL_NAME
 
@@ -87,8 +96,7 @@ class CronTool(_DispatchedTool):
 
     def created(self, arguments: Any) -> tuple[CronJob, str]:
         """Dispatch a call that must succeed; return the only job and the text."""
-        envelope, text = self.call(arguments)
-        assert envelope["ok"] is True, text
+        text = self.succeeded(arguments)
         return self.only_job(), text
 
     def refused(self, arguments: Any) -> str:
@@ -106,6 +114,7 @@ class CronTool(_DispatchedTool):
 @dataclass
 class CalendarTool(_DispatchedTool):
     service: CalendarService
+    cron: CronService
 
     tool_name: ClassVar[str] = CALENDAR_TOOL_NAME
 
@@ -116,64 +125,53 @@ class CalendarTool(_DispatchedTool):
         [event] = self.events()
         return event
 
-    def add_dentist(self) -> str:
-        """Create the one-hour event "Dentist" at ``DENTIST_START``; return its id."""
-        return self.service.create_event(title="Dentist", start=DENTIST_START).id
+    def refused(self, arguments: Any) -> str:
+        """Dispatch a call that must fail without changing the calendar; return its message."""
+        before = [event.to_dict() for event in self.events()]
+        envelope, text = self.call(arguments)
+        assert envelope["ok"] is False, text
+        assert envelope["error"]["code"] == "invalid_arguments", text
+        assert [event.to_dict() for event in self.events()] == before
+        message = str(envelope["error"]["message"])
+        assert message.startswith("calendar was not run: "), message
+        return message
 
-    def add_weekly(self) -> str:
-        """Create the event "Weekly", Mondays at 09:00 from 2030-01-07; return its id."""
-        return self.service.create_event(
-            title="Weekly", start="2030-01-07T09:00", rrule=WEEKLY_MONDAY
-        ).id
+
+def scheduling_tools(
+    tmp_path: Path,
+    *,
+    tz: str = SERVER_ZONE,
+    agent_resolver: Any = None,
+    offered: tuple[str, ...] = BOTH_TOOLS,
+) -> tuple[CalendarTool, CronTool]:
+    """The calendar and cron Tools over bound services, registered as the Runtime does."""
+    calendar = CalendarService(tmp_path, tz=tz)
+    cron, trigger = make_service(tmp_path, agent_resolver=agent_resolver, tz=tz, calendar=calendar)
+    registry = ToolRegistry()
+    reference_lock = asyncio.Lock()
+    register_cron_tool(registry, cron, reference_lock=reference_lock)
+    register_calendar_tool(registry, calendar, reference_lock=reference_lock, cron_service=cron)
+    shared: dict[str, Any] = {
+        "registry": registry,
+        "workspace": tmp_path,
+        "reference_lock": reference_lock,
+        "offered": offered,
+    }
+    return (
+        CalendarTool(**shared, service=calendar, cron=cron),
+        CronTool(**shared, service=cron, trigger=trigger, calendar=calendar),
+    )
 
 
 def cron_tool(tmp_path: Path, *, tz: str = SERVER_ZONE, agent_resolver: Any = None) -> CronTool:
-    service, trigger = make_service(tmp_path, agent_resolver=agent_resolver, tz=tz)
-    registry = ToolRegistry()
-    reference_lock = asyncio.Lock()
-    register_cron_tool(registry, service, reference_lock=reference_lock)
-    return CronTool(
-        registry=registry,
-        workspace=tmp_path,
-        reference_lock=reference_lock,
-        service=service,
-        trigger=trigger,
-    )
+    return scheduling_tools(tmp_path, tz=tz, agent_resolver=agent_resolver)[1]
 
 
-def calendar_tool(tmp_path: Path, *, tz: str = SERVER_ZONE) -> CalendarTool:
-    service = CalendarService(tmp_path, tz=tz)
-    registry = ToolRegistry()
-    reference_lock = asyncio.Lock()
-    register_calendar_tool(registry, service, reference_lock=reference_lock)
-    return CalendarTool(
-        registry=registry, workspace=tmp_path, reference_lock=reference_lock, service=service
-    )
-
-
-def start_utc_of(event: CalendarEvent) -> str:
-    """A timed event's start instant in UTC, ISO 8601."""
-    assert event.tz_name is not None
-    return _instant(event.start, event.tz_name).isoformat()
-
-
-def minutes_of(event: CalendarEvent) -> int | None:
-    """A timed event's length in real minutes; None for an all-day event."""
-    if event.tz_name is None:
-        return None
-    length = _instant(event.end, event.tz_name) - _instant(event.start, event.tz_name)
-    return int(length.total_seconds() // 60)
-
-
-def days_of(event: CalendarEvent) -> int | None:
-    """An all-day event's length in days; None for a timed event."""
-    if event.tz_name is not None:
-        return None
-    return (date.fromisoformat(event.end) - date.fromisoformat(event.start)).days
-
-
-def _instant(local: str, zone: str) -> datetime:
-    return datetime.fromisoformat(local).replace(tzinfo=ZoneInfo(zone)).astimezone(UTC)
+def calendar_tool(
+    tmp_path: Path, *, tz: str = SERVER_ZONE, cron_offered: bool = True
+) -> CalendarTool:
+    offered = BOTH_TOOLS if cron_offered else (CALENDAR_TOOL_NAME,)
+    return scheduling_tools(tmp_path, tz=tz, offered=offered)[0]
 
 
 def clock_at(moment: datetime) -> type[datetime]:

@@ -987,24 +987,24 @@
    }
   },
   {
-   "name": "calendar: all-day create",
+   "name": "calendar: all-day end is exclusive",
    "tool": "calendar",
    "arguments": {
     "action": "create",
     "title": "Trip",
     "start": "2030-01-10",
-    "duration": 3
+    "end": "2030-01-13"
    },
    "expect": {
     "ok": true,
     "contains": [
      "start: 2030-01-10",
-     "days: 3"
+     "end: 2030-01-13 (last day 2030-01-12)"
     ]
    }
   },
   {
-   "name": "calendar: list a month",
+   "name": "calendar: list a window",
    "steps": [
     {
      "tool": "calendar",
@@ -1018,7 +1018,8 @@
      "tool": "calendar",
      "arguments": {
       "action": "list",
-      "when": "2031-03"
+      "time_min": "2031-03-01",
+      "time_max": "2031-04-01"
      }
     }
    ],
@@ -1045,8 +1046,9 @@
     {
      "tool": "calendar",
      "arguments": {
-      "action": "find_free",
-      "when": "2031-04-10",
+      "action": "find_free_time",
+      "time_min": "2031-04-10",
+      "time_max": "2031-04-11",
       "duration": 60
      }
     }
@@ -1061,62 +1063,69 @@
    }
   },
   {
-   "name": "calendar: add an Agent action before an event",
+   "name": "calendar: repeating event lists its occurrence ids",
    "steps": [
     {
      "tool": "calendar",
      "arguments": {
       "action": "create",
-      "title": "Dentist",
-      "start": "2030-01-10T15:00"
+      "title": "Standup",
+      "start": "2031-06-02T09:00",
+      "end": "2031-06-02T09:15",
+      "rrule": "FREQ=WEEKLY;BYDAY=MO,WE"
      }
     },
     {
      "tool": "calendar",
      "arguments": {
-      "action": "add_action",
-      "id": "$1.id",
-      "when": "start - 1h",
-      "prompt": "Remind the user to leave for the dentist."
+      "action": "list",
+      "time_min": "2031-06-01",
+      "time_max": "2031-06-08"
      }
     }
    ],
    "expect": {
     "ok": true,
     "contains": [
-     "when: start - 1h",
-     "next_due: 2030-01-10T14:00"
-    ],
-    "absent": [
-     "Remind the user"
+     "rrule: FREQ=WEEKLY;BYDAY=MO,WE",
+     "occurrences:",
+     "_20310602T0900 2031-06-02T09:00",
+     "_20310604T0900 2031-06-04T09:00"
     ]
    }
   },
   {
-   "name": "calendar: reminder phrasing becomes a relative time",
+   "name": "calendar: Google original start changes one occurrence",
    "steps": [
     {
      "tool": "calendar",
      "arguments": {
       "action": "create",
-      "title": "Dentist",
-      "start": "2030-01-10T15:00"
+      "title": "Yoga",
+      "start": "2031-07-01T18:00",
+      "rrule": "FREQ=WEEKLY"
      }
     },
     {
      "tool": "calendar",
      "arguments": {
-      "action": "add_reminder",
-      "event_id": "$1.id",
-      "when": "30 minutes before",
-      "prompt": "Leave now."
+      "action": "update",
+      "eventId": "$1.id",
+      "originalStartTime": {
+       "dateTime": "2031-07-08T18:00:00"
+      },
+      "start": {
+       "dateTime": "2031-07-08T19:00:00"
+      }
      }
     }
    ],
    "expect": {
     "ok": true,
     "contains": [
-     "when: start - 30m"
+     "_20310708T1800",
+     "start: 2031-07-08T19:00",
+     "end: 2031-07-08T20:00"
     ]
    }
   },
@@ -1135,12 +1144,12 @@
     "contains": [
      "title: Dentist",
      "end: 2030-01-10T15:45",
-     "notes: Bring the insurance card."
+     "description: Bring the insurance card."
     ]
    }
   },
   {
-   "name": "calendar: Google event object with dateTime and all-day end",
+   "name": "calendar: Google event object with all-day dates",
    "tool": "calendar",
    "arguments": {
     "summary": "Trip",
@@ -1155,24 +1164,27 @@
     "ok": true,
     "contains": [
      "start: 2030-01-10",
-     "days: 2"
+     "end: 2030-01-12 (last day 2030-01-11)"
     ]
    }
   },
   {
-   "name": "calendar: RRULE string",
+   "name": "calendar: Google recurrence list",
    "tool": "calendar",
    "arguments": {
     "action": "create",
     "title": "Standup",
     "start": "2030-01-07T09:00",
     "duration": 15,
-    "rrule": "FREQ=WEEKLY;BYDAY=MO,WE"
+    "recurrence": [
+     "RRULE:FREQ=WEEKLY;BYDAY=MO,WE"
+    ]
    },
    "expect": {
     "ok": true,
     "contains": [
-     "repeats: {\"freq\":\"weekly\",\"by_weekday\":[\"mo\",\"we\"]}"
+     "end: 2030-01-07T09:15",
+     "rrule: FREQ=WEEKLY;BYDAY=MO,WE"
     ]
    }
   },
@@ -1203,23 +1215,6 @@
    }
   },
   {
-   "name": "calendar: start in another time zone is converted",
-   "tool": "calendar",
-   "arguments": {
-    "action": "create",
-    "title": "Call",
-    "start": "2030-01-12T10:00",
-    "timezone": "America/New_York"
-   },
-   "expect": {
-    "ok": true,
-    "contains": [
-     "as America/New_York time",
-     "in the server time zone"
-    ]
-   }
-  },
-  {
    "name": "calendar: create without title names the corrected call",
    "tool": "calendar",
    "arguments": {
@@ -1230,41 +1225,29 @@
     "ok": false,
     "error_code": "invalid_arguments",
     "contains": [
-     "create needs \"title\"",
+     "create needs title.",
      "\"start\":\"2030-01-10T15:00\""
     ]
    }
   },
   {
-   "name": "calendar: delete by title names the event id",
-   "steps": [
-    {
-     "tool": "calendar",
-     "arguments": {
-      "action": "create",
-      "title": "Orthodontist",
-      "start": "2031-05-02T09:30"
-     }
-    },
-    {
-     "tool": "calendar",
-     "arguments": {
-      "action": "delete",
-      "title": "orthodontist"
-     }
-    }
-   ],
+   "name": "calendar: delete by title names the list call",
+   "tool": "calendar",
+   "arguments": {
+    "action": "delete",
+    "title": "orthodontist"
+   },
    "expect": {
     "ok": false,
     "error_code": "invalid_arguments",
     "contains": [
-     "delete needs the event \"id\"; \"Orthodontist\" at 2031-05-02T09:30 has id evt_",
-     "Send: {\"action\":\"delete\",\"id\":\"evt_"
+     "delete needs the event \"id\"; {\"action\":\"list\",\"query\":\"orthodontist\"} shows events and their ids",
+     "Send: {\"action\":\"delete\",\"id\":\"<event id from list>\"}"
     ]
    }
   },
   {
-   "name": "calendar: requested reminders are refused with add_action guidance",
+   "name": "calendar: requested reminders are refused with the cron call",
    "tool": "calendar",
    "arguments": {
     "action": "create",
@@ -1285,7 +1268,144 @@
     "error_code": "invalid_arguments",
     "contains": [
      "the calendar has no reminders",
-     "add_action"
+     "Then send to cron: {\"action\":\"create\",\"event_id\":\"<event id from the result>\",\"prompt\":\"<instruction>\",\"schedule\":\"start - 10m\"}"
+    ]
+   }
+  },
+  {
+   "name": "cron: job before a calendar event",
+   "steps": [
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "create",
+      "title": "Physio",
+      "start": "2031-08-04T15:00"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "create",
+      "event_id": "$1.id",
+      "name": "Leave for physio",
+      "prompt": "Remind the user to leave for physio.",
+      "schedule": "start - 30m"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "schedule: start - 30m",
+     "event: Physio (evt_",
+     "next_run: 2031-08-04T14:30"
+    ],
+    "absent": [
+     "Remind the user"
+    ]
+   }
+  },
+  {
+   "name": "cron: reminder offset spelling becomes the event time",
+   "steps": [
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "create",
+      "title": "Haircut",
+      "start": "2031-08-05T11:00"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "create",
+      "event_id": "$1.id",
+      "prompt": "Remind the user of the haircut.",
+      "minutes_before": 15
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "schedule: start - 15m"
+    ]
+   }
+  },
+  {
+   "name": "cron: unsigned event offset offers both readings",
+   "steps": [
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "create",
+      "title": "Call",
+      "start": "2031-08-06T11:00"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "create",
+      "event_id": "$1.id",
+      "prompt": "Prepare the call.",
+      "schedule": "30m"
+     }
+    }
+   ],
+   "expect": {
+    "ok": false,
+    "error_code": "invalid_arguments",
+    "contains": [
+     "does not say whether the job runs before or after the event's start",
+     "\"schedule\":\"start - 30m\"",
+     "\"schedule\":\"start + 30m\""
+    ]
+   }
+  },
+  {
+   "name": "calendar: list and delete show the bound cron job",
+   "steps": [
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "create",
+      "title": "Board meeting",
+      "start": "2031-09-03T10:00"
+     }
+    },
+    {
+     "tool": "cron",
+     "arguments": {
+      "action": "create",
+      "event_id": "$1.id",
+      "prompt": "Prepare the board notes.",
+      "schedule": "start - 1d"
+     }
+    },
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "list",
+      "time_min": "2031-09-01",
+      "time_max": "2031-09-08"
+     }
+    },
+    {
+     "tool": "calendar",
+     "arguments": {
+      "action": "delete",
+      "id": "$1.id"
+     }
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "contains": [
+     "status: deleted",
+     "deleted_cron_jobs: cron_"
     ]
    }
   }

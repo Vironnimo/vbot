@@ -17,8 +17,8 @@ from scripts.provider_probe.common import ProbeScenario, _probe_messages
 def _calendar_scenario(case_name: str) -> ProbeScenario:
     calendar_arguments: dict[str, dict[str, Any]] = {
         "list_default": {"action": "list"},
-        "list_when_week": {"action": "list", "when": "this week"},
-        "list_when_range": {"action": "list", "when": "2026-09-10..2026-09-14"},
+        "list_window": {"action": "list", "time_min": "2026-09-10", "time_max": "2026-09-15"},
+        "list_query": {"action": "list", "query": "dentist"},
         "create_timed": {
             "action": "create",
             "title": "Dentist",
@@ -28,26 +28,27 @@ def _calendar_scenario(case_name: str) -> ProbeScenario:
             "action": "create",
             "title": "Dentist",
             "start": "2026-09-10T15:00",
-            "duration": 45,
-            "notes": "Bring the insurance card.",
+            "end": "2026-09-10T15:45",
+            "location": "Dr. Weiss",
+            "description": "Bring the insurance card.",
         },
         "create_allday": {
             "action": "create",
             "title": "Trip",
             "start": "2026-09-14",
-            "duration": 3,
+            "end": "2026-09-17",
         },
         "create_recurring": {
             "action": "create",
             "title": "Standup",
             "start": "2026-08-31T09:00",
-            "rrule": {"freq": "weekly", "by_weekday": ["mo", "we"]},
+            "rrule": "FREQ=WEEKLY;BYDAY=MO,WE",
         },
         "create_recurring_count": {
             "action": "create",
             "title": "Focus block",
             "start": "2026-09-01T09:00",
-            "rrule": {"freq": "daily", "count": 10},
+            "rrule": "FREQ=DAILY;COUNT=10",
         },
         "update_fields": {
             "action": "update",
@@ -58,23 +59,25 @@ def _calendar_scenario(case_name: str) -> ProbeScenario:
         "update_stop_repeat": {
             "action": "update",
             "id": "event-123",
-            "rrule": None,
+            "rrule": "",
         },
-        "update_notes": {
+        "update_description": {
             "action": "update",
             "id": "event-123",
-            "notes": "Rescheduled by the practice.",
+            "description": "Rescheduled by the practice.",
+        },
+        "update_occurrence": {
+            "action": "update",
+            "id": "event-123_20260914T0900",
+            "start": "2026-09-14T10:00",
         },
         "delete_whole": {"action": "delete", "id": "event-123"},
-        "delete_occurrence": {
-            "action": "delete",
-            "id": "event-123",
-            "start": "2026-09-14T09:00:00",
-        },
-        "find_free_default": {"action": "find_free"},
-        "find_free_when": {
-            "action": "find_free",
-            "when": "next week",
+        "delete_occurrence": {"action": "delete", "id": "event-123_20260914T0900"},
+        "find_free_default": {"action": "find_free_time"},
+        "find_free_window": {
+            "action": "find_free_time",
+            "time_min": "2026-09-14",
+            "time_max": "2026-09-19",
             "duration": 60,
         },
     }
@@ -155,7 +158,14 @@ def _cron_scenario(case_name: str) -> ProbeScenario:
             "schedule": "0 10 * * 1",
             "repeat": 6,
         },
+        "create_event": {
+            "action": "create",
+            "event_id": "event-123",
+            "prompt": "Remind the user to leave for the dentist.",
+            "schedule": "start - 30m",
+        },
         "list": {"action": "list"},
+        "list_event": {"action": "list", "event_id": "event-123"},
         "update_target": {
             "action": "update",
             "id": "job-123",

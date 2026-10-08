@@ -153,8 +153,8 @@ CHANNEL_SEND_CASES = (
 
 CALENDAR_CASES = (
     "list_default",
-    "list_when_week",
-    "list_when_range",
+    "list_window",
+    "list_query",
     "create_timed",
     "create_timed_full",
     "create_allday",
@@ -162,11 +162,12 @@ CALENDAR_CASES = (
     "create_recurring_count",
     "update_fields",
     "update_stop_repeat",
-    "update_notes",
+    "update_description",
+    "update_occurrence",
     "delete_whole",
     "delete_occurrence",
     "find_free_default",
-    "find_free_when",
+    "find_free_window",
 )
 
 
@@ -180,7 +181,9 @@ CRON_CASES = (
     "create_repeat",
     "create_repeat_null",
     "create_all",
+    "create_event",
     "list",
+    "list_event",
     "update_target",
     "update_name",
     "update_prompt",

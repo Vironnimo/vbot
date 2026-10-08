@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -76,13 +77,17 @@ def register_read_file(registry: ToolRegistry) -> Tool:
 
 
 async def dispatch_as_executor(
-    registry: ToolRegistry, context: ToolContext, arguments: Any
+    registry: ToolRegistry,
+    context: ToolContext,
+    arguments: Any,
+    allowed_tools: Sequence[str] | None = None,
 ) -> JsonObject:
     """Dispatch ``context.tool_name`` as the Tool executor does.
 
-    An exception that ends the call becomes the failure the Model reads.
+    The Run allows ``allowed_tools``, by default only the called Tool. An exception
+    that ends the call becomes the failure the Model reads.
     """
     try:
-        return await registry.dispatch(context, arguments, [context.tool_name])
+        return await registry.dispatch(context, arguments, allowed_tools or [context.tool_name])
     except Exception as error:
         return tool_failure_for_exception(context.tool_name, error)
