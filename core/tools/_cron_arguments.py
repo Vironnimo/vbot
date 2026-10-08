@@ -33,6 +33,8 @@ from core.tools.contracts import ToolContract, ToolContractError
 
 TIMEZONE_FIELD = "timezone"
 ENABLED_FIELD = "enabled"
+MAX_DELAY_UNLIMITED = "unlimited"
+"""The canonical ``max_delay`` that removes a job's limit."""
 # Accepted so a requested time zone or paused state reaches the handler, which
 # converts, applies or refuses it. Never advertised.
 UNADVERTISED_PARAMETERS: dict[str, Any] = {
@@ -48,8 +50,8 @@ class CronCallRefusedError(ValueError):
 
 
 _REFUSAL_PREFIX = "cron was not run: "
-_CHANGE_FIELDS = ("target", "name", "prompt", "schedule", "repeat", ENABLED_FIELD)
-_CALL_ORDER = ("action", "id", "target", "name", "prompt", "schedule", "repeat")
+_CHANGE_FIELDS = ("target", "name", "prompt", "schedule", "repeat", "max_delay", ENABLED_FIELD)
+_CALL_ORDER = ("action", "id", "target", "name", "prompt", "schedule", "repeat", "max_delay")
 _LONG_PROMPT = 120
 _LONG_PROMPT_STAND_IN = "<the prompt from this call>"
 _TEMPLATE = re.compile(r"^\s*<[^<>]+>\s*$")
@@ -218,6 +220,36 @@ SELF_TARGET = "self"
 """The target that names the calling Agent; the handler resolves it."""
 _SELF_WORDS = frozenset({"self", "current", "default", "this", "me", "myself", "currentagent"})
 _REPEAT_UNLIMITED_WORDS = frozenset({"unlimited", "infinite", "infinity", "forever", "always"})
+# Spellings of the latest start of a missed fire: durations, and seconds as numbers.
+_MAX_DELAY_KEYS = frozenset(
+    {
+        "maxdelay",
+        "maxlateness",
+        "maxlate",
+        "latelimit",
+        "catchupwindow",
+        "catchupwithin",
+        "misfiregrace",
+        "gracetime",
+        "graceperiod",
+        "startingdeadline",
+    }
+)
+_MAX_DELAY_SECONDS_KEYS = frozenset(
+    {
+        "maxdelayseconds",
+        "misfiregracetime",
+        "misfiregraceseconds",
+        "startingdeadlineseconds",
+        "gracetimeseconds",
+        "graceperiodseconds",
+    }
+)
+# Hermes ``catch_up_missed`` and OpenClaw ``skipMissedJobs`` flags.
+_CATCH_UP_KEYS = frozenset({"catchup", "catchupmissed", "runmissed", "startwhenavailable"})
+_SKIP_MISSED_KEYS = frozenset({"skipmissed", "skipmissedjobs", "skipmissedruns"})
+_ZERO_DURATION = re.compile(r"^(?:0+\s*[a-z]*|pt?0+[a-z]?)$")
+_MAX_DELAY_STAND_IN = "<duration such as 2h>"
 _BOOLEAN_WORDS = {"true": True, "yes": True, "1": True, "false": False, "no": False, "0": False}
 
 _CRON_MACROS = {
@@ -322,6 +354,7 @@ def normalize_cron_arguments(contract: ToolContract, arguments: Any) -> Any:
     _read_recurrence(normalized, problems)
     _read_session(normalized, problems)
     _read_delivery(normalized, problems)
+    _read_max_delay(normalized, problems)
     _read_extras(normalized)
     _omit_placeholders(normalized, problems)
     _read_action(normalized, problems)
@@ -841,6 +874,70 @@ def _read_recurrence(arguments: dict[str, Any], problems: _Problems) -> None:
         )
 
 
+def _read_max_delay(arguments: dict[str, Any], problems: _Problems) -> None:
+    """Read how late a missed fire may start into one canonical ``max_delay``.
+
+    Canonical values are ``30m``, ``2h`` or ``1d``, ``0m`` (missed fires never
+    start) and ``unlimited``. A number names seconds only under a key that says so.
+    """
+    readings: list[str] = []
+    for key in list(arguments):
+        word = spelling(key)
+        if (
+            word
+            not in _MAX_DELAY_KEYS | _MAX_DELAY_SECONDS_KEYS | _CATCH_UP_KEYS | _SKIP_MISSED_KEYS
+        ):
+            continue
+        item = arguments.pop(key)
+        if item is None:
+            readings.append(MAX_DELAY_UNLIMITED)
+            continue
+        if is_placeholder(item):
+            continue
+        if word in _CATCH_UP_KEYS | _SKIP_MISSED_KEYS:
+            flag = _boolean(item)
+            if not isinstance(flag, bool):
+                problems.add(f'"{key}" must be true or false.')
+            elif flag == (word in _CATCH_UP_KEYS):
+                readings.append(MAX_DELAY_UNLIMITED)
+            else:
+                readings.append("0m")
+            continue
+        reading = _max_delay_text(item, seconds=word in _MAX_DELAY_SECONDS_KEYS)
+        if reading is None:
+            problems.add(
+                f'"{key}" {_json_value(item)} is not a duration. max_delay takes a duration such '
+                'as "30m", "2h" or "1d", "0m" to skip every missed fire, or "unlimited".',
+                max_delay=_MAX_DELAY_STAND_IN,
+            )
+            continue
+        readings.append(reading)
+    if len(set(readings)) > 1:
+        problems.add("it sets more than one max_delay; choose one.")
+    elif readings:
+        arguments["max_delay"] = readings[0]
+
+
+def _max_delay_text(value: Any, *, seconds: bool) -> str | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        if value == 0:
+            return "0m"
+        # A bare number names no unit.
+        return _duration_from_seconds(value) if seconds else None
+    if not isinstance(value, str):
+        return None
+    text = value.strip().casefold()
+    if spelling(text) in _REPEAT_UNLIMITED_WORDS:
+        return MAX_DELAY_UNLIMITED
+    if text.isdigit():
+        return _max_delay_text(int(text), seconds=seconds)
+    if _ZERO_DURATION.match(text.replace(" ", "")):
+        return "0m"
+    return _duration(text)
+
+
 def _read_session(arguments: dict[str, Any], problems: _Problems) -> None:
     for key in list(arguments):
         if spelling(key) not in _SESSION_KEYS:
@@ -1092,6 +1189,7 @@ def _boolean(value: Any) -> Any:
 __all__ = [
     "CLOCK_SCHEDULE",
     "ENABLED_FIELD",
+    "MAX_DELAY_UNLIMITED",
     "SELF_TARGET",
     "CronCallRefusedError",
     "OMIT",
