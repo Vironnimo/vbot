@@ -25,6 +25,7 @@ describe('cron form payloads and history projection', () => {
       interval_unit: 'minutes',
     });
     form.repeat = '3';
+    form.max_delay = '0';
 
     expect(buildCreateCronPayload(form)).toEqual({
       agent_id: 'main',
@@ -32,6 +33,7 @@ describe('cron form payloads and history projection', () => {
       schedule_type: 'interval',
       interval_seconds: 7200,
       repeat: 3,
+      max_delay_seconds: 0,
     });
   });
 
@@ -44,6 +46,7 @@ describe('cron form payloads and history projection', () => {
       schedule_type: 'interval',
       interval_seconds: 10800,
       remaining_runs: 2,
+      max_delay_seconds: 7200,
       status: 'active',
     };
 
@@ -55,14 +58,20 @@ describe('cron form payloads and history projection', () => {
     expect(form.interval_value).toBe('3');
     expect(form.interval_unit).toBe('hours');
     expect(form.repeat).toBe('2');
-    // An unchanged form keeps the finite count; clearing it sends an explicit
-    // null so the server drops the limit.
+    expect(form.max_delay).toBe('120');
+    // An unchanged form keeps the finite limits; clearing one sends an explicit
+    // null so the server drops it.
     expect(buildUpdateCronPayload(form)).toMatchObject({
       interval_seconds: 10800,
       repeat: 2,
+      max_delay_seconds: 7200,
     });
     form.repeat = '';
-    expect(buildUpdateCronPayload(form).repeat).toBeNull();
+    form.max_delay = '';
+    expect(buildUpdateCronPayload(form)).toMatchObject({
+      repeat: null,
+      max_delay_seconds: null,
+    });
   });
 
   it('shows persisted instants in the server timezone and sends them back without a per-job timezone', () => {

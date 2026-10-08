@@ -20,6 +20,8 @@ CRON_UPDATE_FLAGS = (
     "--every",
     "--at",
     "--repeat",
+    "--max-delay",
+    "--no-max-delay",
     "--session",
     "--clear-session",
     "--status",
@@ -155,6 +157,8 @@ def _format_job_row(job: object) -> str:
         remaining_runs = str(raw_remaining_runs)
     else:
         remaining_runs = "1" if job.get("schedule_type") == "once" else "unlimited"
+    raw_max_delay = job.get("max_delay_seconds")
+    max_delay = f"{raw_max_delay // 60}m" if isinstance(raw_max_delay, int) else "unlimited"
     next_fire_at = _string_or_default(job.get("next_fire_at"), "-")
     last_outcome = _string_or_default(job.get("last_outcome"), "-")
     prompt = _prompt_preview(job.get("prompt"))
@@ -166,6 +170,7 @@ def _format_job_row(job: object) -> str:
             f" status={status}",
             f" schedule={schedule}",
             f" remaining_runs={remaining_runs}",
+            f" max_delay={max_delay}",
             f" next_fire_at={next_fire_at}",
             f" session={job.get('session_id') or 'new'}",
             f" last_outcome={last_outcome}",

@@ -277,6 +277,12 @@ export function remainingRunsLabel(job) {
     : String(job?.remaining_runs ?? 0);
 }
 
+export function maxDelayLabel(job) {
+  return Number.isInteger(job?.max_delay_seconds)
+    ? t('cron.detail.maxDelayMinutes', { minutes: job.max_delay_seconds / 60 })
+    : t('cron.detail.noMaxDelay');
+}
+
 export function statusLabel(status) {
   if (status === CRON_STATUS_ACTIVE) {
     return t('cron.status.active');

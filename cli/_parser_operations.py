@@ -72,6 +72,15 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         metavar="<count>",
         help="Maximum future fires; recurring schedules are unlimited when omitted",
     )
+    create_parser.add_argument(
+        "--max-delay",
+        type=int,
+        metavar="<minutes>",
+        help=(
+            "Latest start of a fire missed while vBot was not running, in minutes after it was "
+            "due; 0 skips missed fires; unlimited when omitted"
+        ),
+    )
     _add_cron_session_argument(create_parser)
 
     update_parser = _add_command_parser(
@@ -93,6 +102,18 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         type=int,
         metavar="<count>",
         help="Replace the number of remaining fires",
+    )
+    max_delay_group = update_parser.add_mutually_exclusive_group()
+    max_delay_group.add_argument(
+        "--max-delay",
+        type=int,
+        metavar="<minutes>",
+        help="Latest start of a missed fire, in minutes after it was due; 0 skips missed fires",
+    )
+    max_delay_group.add_argument(
+        "--no-max-delay",
+        action="store_true",
+        help="Start the most recent missed fire however late",
     )
     session_group = update_parser.add_mutually_exclusive_group()
     session_group.add_argument(

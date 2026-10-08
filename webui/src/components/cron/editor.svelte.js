@@ -3,6 +3,7 @@ import {
   createCronFormValues,
   cronFormFingerprint,
   cronIntervalSeconds,
+  cronMaxDelaySeconds,
   CRON_FREQUENCY_CUSTOM,
   CRON_SCHEDULE_TYPE_CRON,
   CRON_SCHEDULE_TYPE_INTERVAL,
@@ -263,7 +264,14 @@ export function createCronEditor(context) {
         repeatValue > 0 &&
         (!isOnceSchedule || repeatValue === 1));
 
-    if (!hasCoreValues || !hasScheduleValue || !hasValidRepeat) {
+    const hasValidMaxDelay = !Number.isNaN(cronMaxDelaySeconds(formValues));
+
+    if (
+      !hasCoreValues ||
+      !hasScheduleValue ||
+      !hasValidRepeat ||
+      !hasValidMaxDelay
+    ) {
       formErrorMessage = t('cron.errors.missingRequired');
       return false;
     }
