@@ -3,6 +3,7 @@ import { t, tOr } from '$lib/i18n.js';
 import {
   getPendingAttachments,
   setPendingAttachments,
+  subscribePendingAttachments,
 } from '$lib/composerMemory.js';
 import {
   prepareSpeechTranscription,
@@ -24,7 +25,7 @@ export function createComposerMedia(context) {
   let nextPendingAttachmentId = 0;
 
   let pendingAttachments = $derived(
-    attachmentsForScope(attachmentScopeForDraftKey(context.draftKey)),
+    cachedAttachmentsForScope(attachmentScopeForDraftKey(context.draftKey)),
   );
 
   let isDragOver = $state(false);
@@ -88,7 +89,13 @@ export function createComposerMedia(context) {
 
   const attachmentScopeForDraftKey = (key) => key || EPHEMERAL_ATTACHMENT_SCOPE;
 
-  const attachmentsForScope = (scope) => pendingAttachmentsByScope[scope] ?? [];
+  const cachedAttachmentsForScope = (scope) =>
+    pendingAttachmentsByScope[scope] ?? [];
+
+  const attachmentsForScope = (scope) => {
+    if (scope !== EPHEMERAL_ATTACHMENT_SCOPE) hydratePendingAttachments(scope);
+    return cachedAttachmentsForScope(scope);
+  };
 
   const attachmentPreviewUrl = (attachmentId) =>
     `/api/attachments/${encodeURIComponent(attachmentId)}`;
@@ -100,15 +107,42 @@ export function createComposerMedia(context) {
 
   const hydratePendingAttachments = (key) => {
     const scope = attachmentScopeForDraftKey(key);
-    if (scope in pendingAttachmentsByScope || !key) {
-      return;
+    if (!key) return;
+    const current = cachedAttachmentsForScope(scope);
+    const stored = Object.fromEntries(
+      getPendingAttachments(key).map((attachment) => [
+        attachment.attachment_id,
+        attachment,
+      ]),
+    );
+    const restored = current.filter((attachment) => {
+      if (attachment.uploading) return true;
+      if (!Object.hasOwn(stored, attachment.attachment_id)) {
+        safeRevokeObjectUrl(attachment.preview_url);
+        return false;
+      }
+      const saved = stored[attachment.attachment_id];
+      // Keep identity: an admitted send removes its captured attachments by
+      // reference, and a still-mounted preview keeps its local object URL.
+      attachment.filename = saved.filename;
+      attachment.media_type = saved.media_type;
+      delete stored[attachment.attachment_id];
+      return true;
+    });
+    for (const attachment of Object.values(stored)) {
+      restored.push({
+        ...attachment,
+        local_id: nextAttachmentLocalId(),
+        preview_url: attachmentPreviewUrl(attachment.attachment_id),
+        uploading: false,
+      });
     }
-    const restored = getPendingAttachments(key).map((attachment) => ({
-      ...attachment,
-      local_id: nextAttachmentLocalId(),
-      preview_url: attachmentPreviewUrl(attachment.attachment_id),
-      uploading: false,
-    }));
+    if (
+      scope in pendingAttachmentsByScope &&
+      restored.length === current.length &&
+      restored.every((attachment, index) => attachment === current[index])
+    )
+      return;
     pendingAttachmentsByScope = {
       ...pendingAttachmentsByScope,
       [scope]: restored,
@@ -128,10 +162,19 @@ export function createComposerMedia(context) {
   };
 
   const updateAttachmentsForDraftKey = (key, update) => {
+    // Reconcile synchronously before writing, even when an upload settles
+    // before the next render after another tab removed a completed file.
     const scope = attachmentScopeForDraftKey(key);
     const current = attachmentsForScope(scope);
     setAttachmentsForDraftKey(key, update(current));
   };
+
+  const unsubscribeAttachments = subscribePendingAttachments(() => {
+    for (const scope of Object.keys(pendingAttachmentsByScope)) {
+      if (scope !== EPHEMERAL_ATTACHMENT_SCOPE)
+        hydratePendingAttachments(scope);
+    }
+  });
 
   // An attachment can move to another draft while it uploads (a first send
   // creates the Session its draft continues in); its upload follows it there.
@@ -461,6 +504,7 @@ export function createComposerMedia(context) {
   };
   function destroy() {
     destroyed = true;
+    unsubscribeAttachments();
     if (attachmentToastTimeoutId !== null) {
       clearTimeout(attachmentToastTimeoutId);
       attachmentToastTimeoutId = null;

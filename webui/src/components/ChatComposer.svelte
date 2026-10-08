@@ -160,7 +160,7 @@
         ? t('chat.sendUnavailableSending')
         : media.hasUploadingAttachments
           ? t('chat.sendUnavailableUploading')
-          : media.voiceBusy
+          : media.voiceBusy || media.isRecording
             ? t('chat.sendUnavailableVoice')
             : !content.trim() && media.pendingAttachments.length === 0
               ? t('chat.sendUnavailableEmpty')
@@ -374,6 +374,7 @@
     submitInFlight ||
     media.hasUploadingAttachments ||
     media.voiceBusy ||
+    media.isRecording ||
     (!snapshot.trimmedContent && snapshot.attachments.length === 0);
 
   const submit = async (snapshot = createSubmitSnapshot()) => {
@@ -382,7 +383,6 @@
     }
 
     submitInFlight = true;
-    media.cancelActiveRecording();
     try {
       const fileMentions =
         snapshot.mentionTokens.length === 0
@@ -589,30 +589,11 @@
     }
   };
 
-  // Up recalls history only when the caret sits on the first logical line, so a
-  // multi-line draft can still be navigated normally before the first line
-  // hands off to history ("keep going up").
-  const caretOnFirstLine = () => {
-    if (!inputElement) {
-      return true;
-    }
-    const start = inputElement.selectionStart ?? 0;
-    if (start !== (inputElement.selectionEnd ?? start)) {
-      return false;
-    }
-    return !content.slice(0, start).includes('\n');
-  };
-
-  const caretOnLastLine = () => {
-    if (!inputElement) {
-      return true;
-    }
-    const end = inputElement.selectionEnd ?? content.length;
-    if ((inputElement.selectionStart ?? end) !== end) {
-      return false;
-    }
-    return !content.slice(end).includes('\n');
-  };
+  // History starts beyond the text's ends, never within a logical line that
+  // may wrap onto several visible lines. A selection belongs to native editing.
+  const caretAt = (position) =>
+    inputElement?.selectionStart === position &&
+    inputElement?.selectionEnd === position;
 
   const applyNavSlot = (history) => {
     const slotText =
@@ -715,21 +696,24 @@
     }
 
     // Input history — only when a popup isn't already using the arrow keys.
-    // Up walks into older sent messages from the first line; Down walks back
-    // toward (and finally into) the live draft.
-    if (!autocompleteOpen) {
-      if (
-        event.key === 'ArrowUp' &&
-        caretOnFirstLine() &&
-        recallOlderMessage()
-      ) {
+    // Plain Up at the start recalls older messages; plain Down at the end
+    // returns toward the live draft. Modified arrows retain native navigation.
+    if (
+      !autocompleteOpen &&
+      !event.defaultPrevented &&
+      !event.shiftKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey
+    ) {
+      if (event.key === 'ArrowUp' && caretAt(0) && recallOlderMessage()) {
         event.preventDefault();
         return;
       }
       if (
         event.key === 'ArrowDown' &&
         historyCursor !== -1 &&
-        caretOnLastLine() &&
+        caretAt(content.length) &&
         recallNewerMessage()
       ) {
         event.preventDefault();

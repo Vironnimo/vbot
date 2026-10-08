@@ -3,6 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { t } from '../../lib/i18n.js';
 import {
+  flushComposerMemory,
+  getPendingAttachments,
+  setPendingAttachments,
+} from '../../lib/composerMemory.js';
+import {
   FLOATING_HOVER_CLOSE_DELAY_MS,
   HOVER_CARD_SHOW_DELAY_MS,
   TOOLTIP_SHOW_DELAY_MS,
@@ -24,6 +29,7 @@ import {
   uploadAttachment,
   uploaded,
 } from './ChatComposer.support.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 const attachments = () => document.body.querySelectorAll('.attachment-item');
 
@@ -246,7 +252,10 @@ describe('ChatComposer', () => {
           'ArrowDown',
           'ArrowDown',
         ].map((key) => {
-          pressKey(key, { keyup: false });
+          const input = composerInput();
+          const boundary = key === 'ArrowUp' ? 0 : input.value.length;
+          input.setSelectionRange(boundary, boundary);
+          expect(pressKey(key, { keyup: false }).defaultPrevented).toBe(true);
           return composerInput().value;
         });
         // Up holds at the oldest entry; Down past the newest restores the draft.
@@ -254,15 +263,73 @@ describe('ChatComposer', () => {
       },
     );
 
-    it('moves the caret instead of recalling when it is below the first line', () => {
-      pushHistory('agent', 'first');
-      composer.mount(sessionProps);
-      typeInComposer('line one\nline two', 12);
+    it.each([
+      ['inside the first line', 'line one\nline two', 4],
+      ['below an explicit line break', 'line one\nline two', 12],
+      [
+        'inside a wrapped paragraph',
+        'A paragraph that wraps. '.repeat(20).trimEnd(),
+        400,
+      ],
+    ])(
+      'keeps native cursor movement %s in drafts and recalled messages',
+      (_case, text, caret) => {
+        pushHistory('agent', text);
+        composer.mount(sessionProps);
+        typeInComposer(text, caret);
 
-      const event = pressKey('ArrowUp', { keyup: false });
-      expect(event.defaultPrevented).toBe(false);
-      expect(composerInput().value).toBe('line one\nline two');
-    });
+        expect(pressKey('ArrowUp', { keyup: false }).defaultPrevented).toBe(
+          false,
+        );
+        expect(composerInput().value).toBe(text);
+        composerInput().setSelectionRange(0, 0);
+        expect(pressKey('ArrowUp', { keyup: false }).defaultPrevented).toBe(
+          true,
+        );
+        composerInput().setSelectionRange(caret, caret);
+        expect(pressKey('ArrowDown', { keyup: false }).defaultPrevented).toBe(
+          false,
+        );
+        expect(composerInput().value).toBe(text);
+        expect(getDraft('agent::one')).toBe(text);
+      },
+    );
+
+    it.each([
+      ['a selection', null],
+      ['Shift', { shiftKey: true }],
+      ['Ctrl', { ctrlKey: true }],
+      ['Alt', { altKey: true }],
+      ['Meta', { metaKey: true }],
+      ['IME composition', { isComposing: true }],
+      ['legacy IME composition', { keyCode: 229 }],
+    ])(
+      'leaves history-boundary arrows with %s to the editor',
+      (_case, flags) => {
+        pushHistory('agent', 'sent message');
+        composer.mount(sessionProps);
+        typeInComposer('draft', 0);
+
+        for (const key of ['ArrowUp', 'ArrowDown']) {
+          if (key === 'ArrowDown') {
+            composerInput().setSelectionRange(0, 0);
+            pressKey('ArrowUp', { keyup: false });
+          }
+          const input = composerInput();
+          const value = input.value;
+          const boundary = key === 'ArrowUp' ? 0 : value.length;
+          input.setSelectionRange(
+            flags ? boundary : 0,
+            flags ? boundary : value.length,
+          );
+          expect(
+            pressKey(key, { keyup: false, ...flags }).defaultPrevented,
+          ).toBe(false);
+          expect(input.value).toBe(value);
+          expect(getDraft('agent::one')).toBe('draft');
+        }
+      },
+    );
   });
 
   describe('sending', () => {
@@ -541,5 +608,120 @@ describe('ChatComposer', () => {
         },
       ]);
     });
+
+    it.each([false, true])(
+      'drops remotely removed attachments while retaining the scoped upload (hidden: %s)',
+      async (hidden) => {
+        const firstKey = 'agent::first';
+        const oldFile = uploaded('old-file', 'old.pdf', 'application/pdf');
+        const newFile = uploaded('new-file', 'new.pdf', 'application/pdf');
+        setPendingAttachments(firstKey, [oldFile]);
+        flushComposerMemory();
+        const upload = deferred();
+        uploadAttachment.mockReturnValue(upload.promise);
+        const onSendMessage = vi.fn().mockResolvedValue(true);
+        const props = reactiveProps({ draftKey: firstKey, onSendMessage });
+        composer.mount(props);
+        await selectFilesFromPicker(
+          new File(['new'], 'new.pdf', { type: 'application/pdf' }),
+        );
+        if (hidden) {
+          props.draftKey = 'agent::second';
+          await settle();
+          expect(attachments()).toHaveLength(0);
+        }
+
+        const storageKey = 'vbot.composer.attachments.v1';
+        localStorage.setItem(storageKey, '{}');
+        window.dispatchEvent(
+          new StorageEvent('storage', {
+            key: storageKey,
+            newValue: '{}',
+            storageArea: localStorage,
+          }),
+        );
+        await settle();
+        if (!hidden) {
+          expect(
+            [...attachments()].map(
+              (item) => item.querySelector('.attachment-name').textContent,
+            ),
+          ).toEqual(['new.pdf']);
+          expect(buttonLabelled('chat.sendMessage').disabled).toBe(true);
+        }
+        upload.resolve(newFile);
+        await settle();
+        props.draftKey = firstKey;
+        await settle();
+        expect(
+          [...attachments()].map(
+            (item) => item.querySelector('.attachment-name').textContent,
+          ),
+        ).toEqual(['new.pdf']);
+        flushComposerMemory();
+        expect(JSON.parse(localStorage.getItem(storageKey))[firstKey]).toEqual(
+          getPendingAttachments(firstKey),
+        );
+        expect(
+          getPendingAttachments(firstKey).map((item) => item.attachment_id),
+        ).toEqual(['new-file']);
+        submitComposer();
+        await settle();
+        expect(onSendMessage).toHaveBeenCalledWith([
+          {
+            type: 'file',
+            attachment_id: 'new-file',
+            filename: 'new.pdf',
+            media_type: 'application/pdf',
+          },
+        ]);
+        expect(attachments()).toHaveLength(0);
+        expect(getPendingAttachments(firstKey)).toEqual([]);
+      },
+    );
+
+    it.each(['storage', 'same document'])(
+      'adopts %s additions in an empty scope and only clears the admitted attachment',
+      async (source) => {
+        const draftKey = 'agent::first';
+        const first = uploaded('first', 'first.pdf', 'application/pdf');
+        const second = uploaded('second', 'second.pdf', 'application/pdf');
+        const send = deferred();
+        composer.mount({ draftKey, onSendMessage: () => send.promise });
+        const adopt = (files) => {
+          if (source === 'same document')
+            setPendingAttachments(draftKey, files);
+          else {
+            const key = 'vbot.composer.attachments.v1';
+            const newValue = JSON.stringify({ [draftKey]: files });
+            localStorage.setItem(key, newValue);
+            window.dispatchEvent(
+              new StorageEvent('storage', {
+                key,
+                newValue,
+                storageArea: localStorage,
+              }),
+            );
+          }
+        };
+        adopt([first]);
+        await settle();
+        expect(attachments()).toHaveLength(1);
+        submitComposer();
+        adopt([first, second]);
+        await settle();
+        expect(attachments()).toHaveLength(2);
+        send.resolve(true);
+        await settle();
+        expect(
+          [...attachments()].map(
+            (item) => item.querySelector('.attachment-name').textContent,
+          ),
+        ).toEqual(['second.pdf']);
+        expect(
+          getPendingAttachments(draftKey).map((item) => item.attachment_id),
+        ).toEqual(['second']);
+      },
+    );
   });
 });
