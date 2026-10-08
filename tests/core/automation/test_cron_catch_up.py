@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -96,38 +97,30 @@ async def test_fires_missed_while_offline_start_once_late_with_a_notice(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("kind", "status"), [("cron", "active"), ("interval", "active"), ("once", "missed")]
-)
-async def test_fires_later_than_max_delay_are_skipped_and_reported(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clock: _Clock, kind: str, status: str
+async def test_a_stored_max_delay_no_longer_skips_a_missed_fire(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clock: _Clock
 ) -> None:
-    schedule, _earlier = _SCHEDULES[kind]
+    schedule, _earlier = _SCHEDULES["once"]
+    created, _trigger_service = make_service(tmp_path, tz=_ZONE)
+    job = await created.create_job(agent_id="agent-one", prompt="Wake me", **schedule)
+    # Earlier versions stored a limit that skipped every missed fire.
+    jobs_path = tmp_path / "cron" / "jobs.json"
+    document = json.loads(jobs_path.read_text(encoding="utf-8"))
+    document["jobs"][0]["max_delay_seconds"] = 0
+    jobs_path.write_text(json.dumps(document), encoding="utf-8")
     service, trigger_service = make_service(tmp_path, tz=_ZONE)
-    job = await service.create_job(
-        agent_id="agent-one", prompt="Wake me", max_delay_seconds=3600, **schedule
-    )
     clock.now = datetime(2026, 10, 8, 8, 12, tzinfo=UTC)
     _stop_at_next_wait(service, job.id, clock, monkeypatch)
 
-    await _run(service, job)
+    await _run(service, service.get_job(job.id))
 
-    trigger_service.trigger_run.assert_not_awaited()
-    skipped = service.get_job(job.id)
-    assert skipped.last_outcome == "missed"
-    assert skipped.last_error is not None
-    assert "max_delay of 1h" in skipped.last_error
-    assert skipped.max_delay_seconds == 3600
-    if kind != "once":
-        # Paused by the test once the scheduler waited for the next fire.
-        assert skipped.status == "paused"
-        assert skipped.covered_until == "2026-10-08T08:12:00+00:00"
-    else:
-        assert skipped.status == status
+    trigger_service.trigger_run.assert_awaited_once()
+    assert "starting late" in trigger_service.trigger_run.await_args.kwargs["context_note"]
+    assert service.get_job(job.id).status == "completed"
 
 
 @pytest.mark.asyncio
-async def test_a_fire_within_max_delay_still_starts(
+async def test_a_fire_up_to_a_minute_late_starts_without_a_notice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clock: _Clock
 ) -> None:
     service, trigger_service = make_service(tmp_path, tz=_ZONE)
@@ -136,9 +129,8 @@ async def test_a_fire_within_max_delay_still_starts(
         prompt="Wake me",
         schedule_type="cron",
         cron_expression="0 8 * * *",
-        max_delay_seconds=0,
     )
-    # Thirty seconds after 08:00 Berlin counts as on time, even with max_delay 0.
+    # Thirty seconds after 08:00 Berlin counts as on time.
     clock.now = datetime(2026, 10, 5, 6, 0, 30, tzinfo=UTC)
     _stop_at_next_wait(service, job.id, clock, monkeypatch)
 

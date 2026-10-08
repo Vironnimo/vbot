@@ -27,12 +27,6 @@ from core.tools._calendar_arguments import (
     render_call,
 )
 from core.tools._calendar_times import local_text, named_instant, server_zone, unknown_zone
-from core.tools._durations import (
-    MAX_DELAY_STAND_IN,
-    MAX_DELAY_UNLIMITED,
-    max_delay_seconds,
-    max_delay_text,
-)
 from core.tools._named_zones import named_zone
 from core.tools.tools import JsonObject, ToolContext, tool_success
 
@@ -73,7 +67,6 @@ async def handle_add_action(
         prompt=str(arguments["prompt"]),
         target=target,
         session=_session(arguments, context, target),
-        max_delay_seconds=_max_delay_seconds(arguments),
         actor="tool",
     )
     notes = [note, _unapplied_note("add_action", arguments, event)]
@@ -97,23 +90,20 @@ async def handle_update_action(
     if "session" in arguments:
         target = str(fields.get("target", current["target"]))
         fields["session"] = _session(arguments, context, target)
-    if "max_delay" in arguments:
-        fields["max_delay_seconds"] = _max_delay_seconds(arguments)
     if not fields:
         event_call = _event_update(arguments, event)
         if event_call is not None:
             raise CalendarCallRefusedError(
                 refusal(
-                    "update_action changes an action's when, prompt, target, session or "
-                    f"max_delay; the other fields belong to its event {event.title} "
-                    f"({event.id}). To change the event:",
+                    "update_action changes an action's when, prompt, target or session; the "
+                    f"other fields belong to its event {event.title} ({event.id}). To change "
+                    "the event:",
                     event_call,
                 )
             )
         raise CalendarCallRefusedError(
             refusal(
-                "update_action needs a field to change: when, prompt, target, session or "
-                "max_delay.",
+                "update_action needs a field to change: when, prompt, target or session.",
                 arguments,
                 when=STAND_INS["when"],
             )
@@ -273,18 +263,6 @@ def _session(arguments: JsonObject, context: ToolContext | None, target: str) ->
     return context.session_id
 
 
-def _max_delay_seconds(arguments: JsonObject) -> int | None:
-    """The action's ``max_delay_seconds`` for a canonical ``max_delay``; ``None`` is no limit."""
-    try:
-        return max_delay_seconds(
-            arguments.get("max_delay", MAX_DELAY_UNLIMITED), missed="missed start"
-        )
-    except ValueError as error:
-        raise CalendarCallRefusedError(
-            refusal(str(error), arguments, max_delay=MAX_DELAY_STAND_IN)
-        ) from error
-
-
 def _action_success(
     calendar_service: CalendarService,
     action: dict[str, Any],
@@ -299,8 +277,6 @@ def _action_success(
         "target": action["target"],
         "session": action.get("session") or "a fresh Session each time",
     }
-    if action.get("max_delay_seconds") is not None:
-        data["max_delay"] = max_delay_text(action["max_delay_seconds"])
     notes = [note] if note else []
     due = _next_due(calendar_service, action, event)
     if due is None:
@@ -340,8 +316,6 @@ def action_lines(action: dict[str, Any], rows: list[dict[str, Any]], zone: ZoneI
     session = action.get("session")
     where = f"in Session {session}" if session else "in a fresh Session"
     lines = [f"action {action['id']}: {action['when']}, runs {action['target']} {where}"]
-    if action.get("max_delay_seconds") is not None:
-        lines[0] += f", max_delay {max_delay_text(action['max_delay_seconds'])}"
     lines.append("  prompt: " + "\n    ".join(str(action["prompt"]).splitlines()))
     now = datetime.now(UTC)
     done: list[str] = []

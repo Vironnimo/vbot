@@ -122,29 +122,23 @@ async def test_edit_preserves_event_id_and_moves_actions(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("recurring", "when", "max_delay_seconds", "closes"),
+    ("recurring", "when", "closes"),
     [
         # The event starts in 30 minutes and lasts an hour.
-        pytest.param(False, "start - 1h", None, timedelta(minutes=30), id="before-start"),
-        pytest.param(False, "start", None, timedelta(minutes=90), id="during"),
-        pytest.param(False, "end + 30m", None, None, id="after-a-single-event"),
+        pytest.param(False, "start - 1h", timedelta(minutes=30), id="before-start"),
+        pytest.param(False, "start", timedelta(minutes=90), id="during"),
+        pytest.param(False, "end + 30m", None, id="after-a-single-event"),
         # The next daily occurrence replaces a follow-up of this one.
-        pytest.param(True, "end", None, timedelta(days=1, minutes=30), id="after-in-a-series"),
-        pytest.param(True, "end", 600, timedelta(minutes=100), id="max-delay"),
-        # Lateness within a minute is on time, even with a limit of zero.
-        pytest.param(False, "start", 0, timedelta(minutes=31), id="max-delay-zero"),
-        pytest.param(False, "start - 1h", 7200, timedelta(minutes=30), id="event-closes-sooner"),
+        pytest.param(True, "end", timedelta(days=1, minutes=30), id="after-in-a-series"),
     ],
 )
 async def test_windows_close_with_the_event_or_its_next_occurrence(
-    tmp_path, recurring, when, max_delay_seconds, closes
+    tmp_path, recurring, when, closes
 ):
     # Whole minutes: a series keeps its start to the second.
     now = datetime.now(UTC).replace(second=0, microsecond=0)
     service, event, _, now = setup(tmp_path, recurring=recurring, now=now)
-    await service.actions.add(
-        event.id, when=when, prompt="test", target="main", max_delay_seconds=max_delay_seconds
-    )
+    await service.actions.add(event.id, when=when, prompt="test", target="main")
     row = service.actions.project(window(service, now))[0]
     expires = row["expires_at"]
     assert (datetime.fromisoformat(expires) - now if expires else None) == closes
@@ -475,16 +469,17 @@ async def test_all_day_deadlines_respect_dst(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("recurring", "max_delay_seconds", "statuses"),
+    ("recurring", "stored_max_delay", "statuses"),
     [
         pytest.param(False, None, ["completed"], id="single-event"),
         # Each earlier follow-up closed when the next occurrence started.
         pytest.param(True, None, ["missed", "missed", "completed"], id="series"),
-        pytest.param(False, 3600, ["missed"], id="later-than-max-delay"),
+        # Earlier versions stored a limit that closed the window an hour after the due time.
+        pytest.param(False, 3600, ["completed"], id="stored-max-delay"),
     ],
 )
 async def test_a_follow_up_missed_while_vbot_was_off_starts_once_late(
-    tmp_path, monkeypatch, recurring, max_delay_seconds, statuses
+    tmp_path, monkeypatch, recurring, stored_max_delay, statuses
 ):
     now = datetime(2026, 10, 8, 8, 0, tzinfo=UTC)
     monkeypatch.setattr(actions_module, "_utc_now", lambda: now)
@@ -496,9 +491,15 @@ async def test_a_follow_up_missed_while_vbot_was_off_starts_once_late(
         when="end",
         prompt="Send the minutes",
         target="main",
-        max_delay_seconds=max_delay_seconds,
         now=first_start - timedelta(days=1),
     )
+    if stored_max_delay is not None:
+        path = tmp_path / "calendar" / "actions.json"
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["actions"][0]["max_delay_seconds"] = stored_max_delay
+        path.write_text(json.dumps(document), encoding="utf-8")
+        service = CalendarService(tmp_path, tz="Europe/Berlin")
+        service.actions.configure(trigger, Mock(), session_manager())
 
     await service.actions.tick(now)
     await drain(service)

@@ -254,7 +254,7 @@ describe('CronView', () => {
       document.querySelectorAll(
         '.cron-detail-scroll .s-group label.s-row-label',
       ).length,
-    ).toBe(8);
+    ).toBe(7);
   });
 
   it('shows the job named by the place and records job and new-job steps in it', async () => {
@@ -496,7 +496,6 @@ describe('CronView', () => {
       schedule_type: 'cron',
       cron_expression: '0 6 * * *',
       repeat: null,
-      max_delay_seconds: null,
       session_id: null,
     });
   });
@@ -625,7 +624,6 @@ describe('CronView', () => {
       schedule_type: 'once',
       run_at: storedRunAt,
       repeat: 1,
-      max_delay_seconds: null,
       session_id: 'session-preserve',
     });
   });

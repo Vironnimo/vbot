@@ -438,8 +438,6 @@ def _cron_create_fields_from_args(args: argparse.Namespace) -> dict[str, Any]:
         fields["run_at"] = args.at
     if args.repeat is not None:
         fields["repeat"] = args.repeat
-    if args.max_delay is not None:
-        fields["max_delay_seconds"] = args.max_delay * 60
     if args.session is not None:
         fields["session_id"] = args.session
     return fields
@@ -464,10 +462,6 @@ def _cron_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["run_at"] = args.at
     if args.repeat is not None:
         changes["repeat"] = args.repeat
-    if args.max_delay is not None:
-        changes["max_delay_seconds"] = args.max_delay * 60
-    if args.no_max_delay:
-        changes["max_delay_seconds"] = None
     if args.session is not None:
         changes["session_id"] = args.session
     if args.clear_session:

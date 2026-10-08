@@ -22,13 +22,8 @@ CREATED = {"agent_id": "assistant", "prompt": "Check the news", "name": "Morning
             id="recurring-in-session",
         ),
         pytest.param(
-            ("--every", "15", "--repeat", "3", "--max-delay", "120"),
-            {
-                "schedule_type": "interval",
-                "interval_seconds": 900,
-                "repeat": 3,
-                "max_delay_seconds": 7200,
-            },
+            ("--every", "15", "--repeat", "3"),
+            {"schedule_type": "interval", "interval_seconds": 900, "repeat": 3},
             id="interval-minutes",
         ),
         pytest.param(
@@ -131,7 +126,6 @@ def test_cron_list_prints_one_row_per_job(rpc: FakeRpc, run_cli: RunCli) -> None
                     "cron_expression": None,
                     "run_at": "2026-07-01T09:00:00+00:00",
                     "status": "paused",
-                    "max_delay_seconds": 0,
                     "next_fire_at": None,
                 },
             ]
@@ -144,11 +138,11 @@ def test_cron_list_prints_one_row_per_job(rpc: FakeRpc, run_cli: RunCli) -> None
     assert rpc.calls == [("cron.list", {})]
     assert out.splitlines()[1:] == [
         "- name=Morning news id=job-1 agent=assistant status=active "
-        "schedule=cron[0 9 * * *] remaining_runs=unlimited max_delay=unlimited "
+        "schedule=cron[0 9 * * *] remaining_runs=unlimited "
         "next_fire_at=2026-06-12T07:00:00+00:00 session=new last_outcome=- "
         "last_error=- prompt=Check the news",
         "- name=One-time audit id=job-2 agent=coder status=paused "
-        "schedule=once[2026-07-01T09:00:00+00:00] remaining_runs=1 max_delay=0m "
+        "schedule=once[2026-07-01T09:00:00+00:00] remaining_runs=1 "
         "next_fire_at=- session=new last_outcome=- last_error=- "
         "prompt=" + "A" * 57 + "...",
     ]
@@ -197,8 +191,6 @@ def test_cron_show_prints_exactly_the_complete_saved_job(
             id="schedule",
         ),
         pytest.param(("--status", "paused"), {"status": "paused"}, id="status"),
-        pytest.param(("--max-delay", "0"), {"max_delay_seconds": 0}, id="skip-missed"),
-        pytest.param(("--no-max-delay",), {"max_delay_seconds": None}, id="no-max-delay"),
     ],
 )
 def test_cron_update_sends_only_the_given_changes(
@@ -226,7 +218,6 @@ def test_cron_update_without_changes_names_every_option(rpc: FakeRpc, run_cli: R
         "--every",
         "--at",
         "--repeat",
-        "--max-delay",
         "--session",
         "--status",
     ):

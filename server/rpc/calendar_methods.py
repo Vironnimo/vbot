@@ -37,7 +37,7 @@ _CREATE_FIELDS = _EVENT_MUTATION_FIELDS
 _UPDATE_FIELDS = _EVENT_MUTATION_FIELDS | {"id"}
 _DELETE_FIELDS = frozenset({"id"})
 _ADD_EXDATE_FIELDS = frozenset({"id", "occurrence_start"})
-_ACTION_FIELDS = frozenset({"id", "when", "prompt", "target", "session", "max_delay_seconds"})
+_ACTION_FIELDS = frozenset({"id", "when", "prompt", "target", "session"})
 
 
 def _calendar_service(state: Any) -> CalendarService:
@@ -219,8 +219,6 @@ async def _calendar_add_action(state: Any, params: JsonObject) -> JsonObject:
                 prompt=_required_string(params, "prompt"),
                 target=_required_string(params, "target"),
                 session=_optional_string(params, "session"),
-                # The service validates the limit: whole minutes in seconds, or null.
-                max_delay_seconds=params.get("max_delay_seconds"),
                 actor="rpc",
             )
         except Exception as exc:
