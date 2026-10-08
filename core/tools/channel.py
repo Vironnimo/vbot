@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
 import json
 import re
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -58,6 +60,10 @@ if TYPE_CHECKING:
     from core.sessions import ChatSessionManager
 
 _LOGGER = get_logger("tools.channel")
+
+# How long a Run cancel lets a send that already started finish: the platform may
+# have accepted it, so the call still reports what happened and records the note.
+_SEND_CANCEL_GRACE_SECONDS = 10.0
 
 CHANNEL_SEND_TOOL_NAME = "channel_send"
 CHANNEL_SEND_TOOL_DESCRIPTION = (
@@ -352,11 +358,19 @@ async def _handle_channel_send_tool(
                 agent_id=context.agent_id,
                 session_id=context.session_id,
             )
-        await channel_service.send(
-            prepared.channel_id,
-            prepared.message,
-            platform_target,
-            **send_options,
+        await _finish_despite_run_cancel(
+            context,
+            channel_service.send(
+                prepared.channel_id,
+                prepared.message,
+                platform_target,
+                **send_options,
+            ),
+            grace_seconds=_SEND_CANCEL_GRACE_SECONDS,
+        )
+    except TimeoutError:
+        return _send_failure(
+            ChannelError("the Run was stopped while it was being sent", possibly_delivered=True)
         )
     except ToolContractError as error:
         return tool_failure("invalid_arguments", str(error))
@@ -367,15 +381,18 @@ async def _handle_channel_send_tool(
     except ChannelError as error:
         return _send_failure(error)
 
-    await _record_outbound_message_note(
-        channel_service,
-        chat_sessions,
-        prepared.channel_id,
-        platform_target,
-        thread_id=thread_id,
-        sender_agent_id=context.agent_id,
-        message=prepared.message,
-        files=prepared.files,
+    await _finish_despite_run_cancel(
+        context,
+        _record_outbound_message_note(
+            channel_service,
+            chat_sessions,
+            prepared.channel_id,
+            platform_target,
+            thread_id=thread_id,
+            sender_agent_id=context.agent_id,
+            message=prepared.message,
+            files=prepared.files,
+        ),
     )
     result: JsonObject = {
         "channel_id": prepared.channel_id,
@@ -384,6 +401,36 @@ async def _handle_channel_send_tool(
     if thread_id is not None:
         result["thread_id"] = thread_id
     return tool_success(result)
+
+
+async def _finish_despite_run_cancel[Result](
+    context: ToolContext, work: Awaitable[Result], *, grace_seconds: float | None = None
+) -> Result:
+    """Finish ``work`` although the Run is cancelled, so its effect gets its Tool Result.
+
+    Any other cancellation stops ``work`` at once. With ``grace_seconds``, a Run
+    cancel stops it after that many seconds and raises ``TimeoutError``.
+    """
+    task = asyncio.ensure_future(work)
+    deadline: float | None = None
+    try:
+        while True:
+            try:
+                if deadline is None:
+                    return await asyncio.shield(task)
+                async with asyncio.timeout_at(deadline):
+                    return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                if task.done():
+                    return task.result()
+                if not context.is_cancelled():
+                    raise
+                if grace_seconds is not None and deadline is None:
+                    deadline = asyncio.get_running_loop().time() + grace_seconds
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 def _send_failure(error: ChannelError) -> JsonObject:

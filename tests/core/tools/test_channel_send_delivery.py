@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import core.tools.channel as channel_tool_module
 from core.channels import ChannelError, ChannelNotFoundError
 from core.channels.adapter import ConversationFacts, RouteFacts
 from core.channels.telegram import TelegramChannelAdapter
@@ -169,6 +170,69 @@ def test_a_note_that_cannot_be_recorded_keeps_the_send_successful(
     assert delivered(envelope) == {"channel_id": "tg-main", "platform_target": "111"}
     assert tool.sent() == [("tg-main", "Task finished", "111", options())]
     assert "Could not record channel_send outbound note" in caplog.text
+
+
+@pytest.mark.parametrize("send_finishes", [True, False], ids=["send-finishes", "grace-expires"])
+@pytest.mark.asyncio
+async def test_a_run_cancel_lets_a_started_send_report_what_happened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, send_finishes: bool
+) -> None:
+    monkeypatch.setattr(channel_tool_module, "_SEND_CANCEL_GRACE_SECONDS", 0.05)
+    tool = channel_send(tmp_path)
+    sending = asyncio.Event()
+    release = asyncio.Event()
+
+    async def held_send(*_args: Any, **_kwargs: Any) -> None:
+        sending.set()
+        await release.wait()
+
+    tool.service.send.side_effect = held_send
+    run_cancelled = False
+    call = asyncio.create_task(
+        tool.dispatch({"message": "Task finished"}, cancellation_hook=lambda: run_cancelled)
+    )
+    await sending.wait()
+    run_cancelled = True
+    call.cancel()
+    if send_finishes:
+        release.set()
+
+    envelope = await call
+
+    if send_finishes:
+        assert delivered(envelope) == {"channel_id": "tg-main", "platform_target": "111"}
+        tool.sessions.get_or_create.return_value.add_note.assert_called_once_with(
+            f"{NOTE_HEAD}\n\nTask finished"
+        )
+    else:
+        assert refused(envelope, "delivery_unconfirmed") == (
+            "It is unknown how much of the message reached the chat: the Run was stopped "
+            "while it was being sent. Sending the same message again can show it twice."
+        )
+        tool.service.ensure_outbound_session.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_without_a_run_cancel_stops_the_send(tmp_path: Path) -> None:
+    tool = channel_send(tmp_path)
+    sending = asyncio.Event()
+    stopped = asyncio.Event()
+
+    async def held_send(*_args: Any, **_kwargs: Any) -> None:
+        sending.set()
+        try:
+            await asyncio.Future()
+        finally:
+            stopped.set()
+
+    tool.service.send.side_effect = held_send
+    call = asyncio.create_task(tool.dispatch({"message": "Task finished"}))
+    await sending.wait()
+    call.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await call
+    assert stopped.is_set()
 
 
 def _reply_target(chat: str) -> dict[str, Any]:
