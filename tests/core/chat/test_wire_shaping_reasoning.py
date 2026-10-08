@@ -384,6 +384,16 @@ def test_rebuilt_requests_restore_reasoning_only_for_live_in_run_turns() -> None
         ({"content": "<thinking>partial trace"}, None, "partial trace"),
         ({"content": "<think>only thoughts</think>"}, None, "only thoughts"),
         (
+            {"content": "Opened by the template.</think>[title=Greeting]"},
+            "[title=Greeting]",
+            "Opened by the template.",
+        ),
+        (
+            {"content": "<think>early</think>Text and </think> later.", "reasoning": "f"},
+            "Text and </think> later.",
+            "f\nearly",
+        ),
+        (
             {"content": "Wrap your answer in <think>tags</think> like this."},
             "Wrap your answer in <think>tags</think> like this.",
             None,
@@ -410,6 +420,8 @@ def test_rebuilt_requests_restore_reasoning_only_for_live_in_run_turns() -> None
         "appends-to-field-reasoning",
         "unclosed-leading-block",
         "thinking-only",
+        "closing-tag-without-opening",
+        "closing-tag-after-leading-block",
         "tag-inside-answer",
         "empty-block",
         "echoed-history-discarded",

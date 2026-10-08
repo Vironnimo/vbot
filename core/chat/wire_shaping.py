@@ -39,6 +39,7 @@ from core.chat.messages import (
     error_kind_llm_visible,
     usage_token_is_estimated,
 )
+from core.chat.streaming import split_inline_reasoning
 from core.providers.adapter import (
     TOOL_CALL_ARGUMENT_SEQUENCE_INDEX_FIELD,
     TOOL_CALL_ARGUMENT_SEQUENCE_LENGTH_FIELD,
@@ -1135,68 +1136,6 @@ def _sanitize_unpaired_surrogates(text: str) -> str:
 _UNPAIRED_SURROGATE_PATTERN = re.compile("[\ud800-\udfff]")
 
 
-# Inline reasoning tag names some Models emit at the start of their content
-# instead of using a dedicated reasoning field (observed behind Ollama).
-_INLINE_THINKING_TAG_NAMES = ("think", "thinking", "reasoning")
-# Request-only replay markup adapters inject into historical Assistant content.
-# Models may echo it; strip on ingest and never promote it to ``reasoning``.
-_DISCARD_LEADING_TAG_NAMES = ("reasoning_history",)
-
-
-def _split_leading_inline_thinking(content: str | None) -> tuple[str | None, str | None]:
-    """Split leading inline thinking markup out of assistant content.
-
-    Only blocks at the very start of the content are handled — the shape Models
-    actually emit — so literal tag text inside a normal answer survives
-    untouched. ``<think>`` / ``<thinking>`` / ``<reasoning>`` move into the
-    reasoning field; request-only ``<reasoning_history>`` wrappers are discarded
-    (adapters inject those on replay, and Models sometimes echo them). An
-    unclosed leading thinking block is treated as thinking up to the truncation
-    point; an unclosed history marker drops the remainder. Returns
-    ``(content, thinking)`` with ``None`` for absent parts; an empty thinking
-    block with no history markup changes nothing.
-    """
-
-    if not content:
-        return (content, None)
-    remaining = content
-    thinking_parts: list[str] = []
-    discarded_history = False
-    while True:
-        stripped = remaining.lstrip()
-        tag = next(
-            (
-                name
-                for name in (*_DISCARD_LEADING_TAG_NAMES, *_INLINE_THINKING_TAG_NAMES)
-                if stripped.startswith(f"<{name}>")
-            ),
-            None,
-        )
-        if tag is None:
-            break
-        is_history_markup = tag in _DISCARD_LEADING_TAG_NAMES
-        inner_start = len(remaining) - len(stripped) + len(tag) + 2
-        close_index = remaining.find(f"</{tag}>", inner_start)
-        if close_index == -1:
-            if is_history_markup:
-                discarded_history = True
-            else:
-                thinking_parts.append(remaining[inner_start:])
-            remaining = ""
-            break
-        if is_history_markup:
-            discarded_history = True
-        else:
-            thinking_parts.append(remaining[inner_start:close_index])
-        remaining = remaining[close_index + len(tag) + 3 :]
-    thinking = "\n".join(part for part in thinking_parts if part.strip())
-    if not thinking.strip():
-        if not discarded_history:
-            return (content, None)
-        return (remaining.strip() or None, None)
-    return (remaining.strip() or None, thinking)
-
-
 def _assistant_message_from_response(
     model: str,
     response: JsonObject,
@@ -1210,11 +1149,9 @@ def _assistant_message_from_response(
     tool_calls = _parse_response_tool_calls(response.get("tool_calls"))
     reasoning = _nullable_response_string(response, "reasoning")
     reasoning_meta = _response_reasoning_meta(response)
-    content, inline_thinking = _split_leading_inline_thinking(
-        _nullable_response_string(response, "content")
+    content, reasoning = split_inline_reasoning(
+        _nullable_response_string(response, "content"), reasoning
     )
-    if inline_thinking is not None:
-        reasoning = f"{reasoning}\n{inline_thinking}" if reasoning else inline_thinking
     return ChatMessage.assistant(
         model=model,
         content=_sanitize_unpaired_surrogates(content) if content else content,

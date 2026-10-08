@@ -342,8 +342,9 @@ async def test_reasoning_mandatory_endpoint_retries_with_default_effort(manager)
     assert (completed["usage"]["input_tokens"], completed["usage"]["output_tokens"]) == (50, 5)
 
 
-# The parser carries its own contract: it must pick exactly one unambiguous
-# title out of free-form Model output, so its cases are listed here directly.
+# The parser carries its own contract: it must pick one title out of free-form
+# Model output, so its cases are listed here directly. Reasoning arrives
+# already split from the content (``split_inline_reasoning``).
 @pytest.mark.parametrize(
     "response",
     [
@@ -364,7 +365,6 @@ async def test_reasoning_mandatory_endpoint_retries_with_default_effort(manager)
         {"content": "~~~plaintext\r\nSession naming audit\r\n~~~"},
         {"content": "Title:\nSession naming audit"},
         {"content": 'Titel:\n"Session naming audit"'},
-        {"content": "<think>Hidden\nanalysis</think>\n```\nSession naming audit\n```"},
         {"content": "```text\nTitle:\nSession naming audit\n```"},
         # One explicit block, with straight or typographic quotes.
         {"content": "[title=Session naming audit]"},
@@ -375,9 +375,12 @@ async def test_reasoning_mandatory_endpoint_retries_with_default_effort(manager)
         {"content": '"[title=Session naming audit]"'},
         {"content": "Explanation before.\n[title=Session naming audit]\nExplanation after."},
         {"content": "```text\n[title=Session naming audit]\n```"},
-        {"content": "<think>[title=Discarded draft]</think>[title=Session naming audit]"},
-        {"content": 'Draft: `[title="Session naming audit"]`</think>[title=Session naming audit]'},
         {"content": "[title=Session naming audit][title=Session naming audit]"},
+        # The first complete, non-empty block wins over later candidates.
+        {"content": "[title=Session naming audit]\n[title=Other candidate]"},
+        {"content": "[title=]\n[title=Session naming audit]"},
+        {"content": "[title=Session naming audit] [title=Unfinished"},
+        {"content": "[title=Session naming\naudit]"},
     ],
 )
 def test_generated_title_extracts_one_unambiguous_title(response: dict[str, Any]) -> None:
@@ -396,15 +399,11 @@ def test_generated_title_preserves_internal_quotes_and_counts_only_the_title() -
 @pytest.mark.parametrize(
     "response",
     [
-        # Invalid explicit blocks.
-        "[title=First][title=Second]",
+        # No complete, non-empty block.
         "[title=Unfinished",
-        "[title=First] [title=Unfinished",
-        "[title=Outer [title=Inner]]",
         "[title=Nested [brackets]]",
         "[title=]",
         '[title=""]',
-        "[title=First\nSecond]",
         "[title=" + "x" * (GENERATED_TITLE_MAX_CHARACTERS + 1) + "]",
         # Ambiguous, unfinished or empty plain text.
         "First candidate\nSecond candidate",
@@ -416,7 +415,6 @@ def test_generated_title_preserves_internal_quotes_and_counts_only_the_title() -
         "```\n```",
         "Title:\n",
         "",
-        "<think>The user is asking me to perform a naming audit",
         "x" * (GENERATED_TITLE_MAX_CHARACTERS + 1),
         # Descriptions of the request instead of a title.
         "The user is asking me to perform a session naming audit",
@@ -435,6 +433,8 @@ def test_generated_title_rejects_invalid_ambiguous_or_meta_output(response: str)
         ('Explanation\n[title="Session naming audit"]\nDone.', True),
         ("private-candidate-one\nprivate-candidate-two", False),
         ("<think>The user is asking me to perform a naming audit", False),
+        # Reasoning whose opening tag the chat template supplied, with candidates.
+        ('Maybe [title=Draft] or "Other".</think>[title=Session naming audit]', True),
     ],
 )
 async def test_title_validation_preserves_fallback_and_logs_without_content_or_trace(

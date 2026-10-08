@@ -56,12 +56,10 @@ TITLE_INPUT_HEAD_BYTES = 3 * 1024
 TITLE_INPUT_TAIL_BYTES = 2 * 1024
 TITLE_ATTACHMENT_METADATA_MAX_BYTES = 1024
 TITLE_OMISSION_MARKER = "\n\n[large middle section omitted]\n\n"
-_HIDDEN_REASONING_BLOCK_PATTERN = re.compile(
-    r"<(think|thinking|analysis|reasoning)>[\s\S]*?(?:</\1>|$)\s*",
-    re.IGNORECASE,
-)
 _TITLE_BLOCK_START = re.compile(r"\[\s*title\s*=", re.IGNORECASE)
 _TITLE_BLOCK = re.compile(r"\[\s*title\s*=([^\[\]]*)\]", re.IGNORECASE)
+# Quotation and Markdown characters Models wrap around a title.
+_TITLE_WRAPPERS = " \t\"'‘’“”„«»`*_#"
 _META_TITLE_PATTERNS = (
     re.compile(
         r"^(?:the\s+)?user\s+(?:is\s+)?(?:asking|asks|wants|requested|requests|needs)\b",
@@ -626,20 +624,17 @@ def _generated_title(response: dict[str, Any]) -> str:
     else:
         raise _InvalidGeneratedTitleError("Session title response did not include text content")
 
-    text = _HIDDEN_REASONING_BLOCK_PATTERN.sub("", text)
-    block_starts = list(_TITLE_BLOCK_START.finditer(text))
-    if block_starts:
-        blocks = list(_TITLE_BLOCK.finditer(text))
-        if len(block_starts) != len(blocks):
-            raise _InvalidGeneratedTitleError(
-                "Session title response contained an incomplete or nested title block"
-            )
-        candidates = {block.group(1).strip(" \t\"'‘’“”„«»`*_#") for block in blocks}
-        if any(len(candidate.splitlines()) > 1 for candidate in candidates):
-            raise _InvalidGeneratedTitleError("Session title block contained line breaks")
-        if len(candidates) != 1:
-            raise _InvalidGeneratedTitleError("Session title response contained conflicting titles")
-        text = candidates.pop()
+    # The response's Reasoning is already split from its content
+    # (``split_inline_reasoning``). The first complete title block wins,
+    # whatever surrounds it.
+    blocks = (
+        " ".join(block.group(1).split()).strip(_TITLE_WRAPPERS)
+        for block in _TITLE_BLOCK.finditer(text)
+    )
+    if (first_block := next((block for block in blocks if block), None)) is not None:
+        text = first_block
+    elif _TITLE_BLOCK_START.search(text):
+        raise _InvalidGeneratedTitleError("Session title response held no complete title block")
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     # Unwrap presentation only when the entire response contains one bounded
     # block. Never select one candidate from a multi-line answer.
@@ -655,8 +650,8 @@ def _generated_title(response: dict[str, Any]) -> str:
         raise _InvalidGeneratedTitleError("Session title response was not exactly one text line")
     line = lines[0]
     line = re.sub(r"^(?:title|titel)\s*:\s*", "", line, flags=re.IGNORECASE)
-    line = line.strip(" \t\"'‘’“”„«»`*_#")
-    line = " ".join(line.split()).rstrip(".!?:;").strip(" \t\"'‘’“”„«»`*_#")
+    line = line.strip(_TITLE_WRAPPERS)
+    line = " ".join(line.split()).rstrip(".!?:;").strip(_TITLE_WRAPPERS)
     if not line:
         raise _InvalidGeneratedTitleError("Session title response was empty")
     if any(pattern.search(line) for pattern in _META_TITLE_PATTERNS):
