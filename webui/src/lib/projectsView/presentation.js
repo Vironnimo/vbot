@@ -79,6 +79,7 @@ export function createProjectsState({ selectedProjectId = '' } = {}) {
     removePermanently: false,
     expandedMembers: {},
     overrideDrafts: {},
+    pendingOverrideReset: null,
     overrideBusyKey: '',
     toolCatalog: [],
     defaultProjectTools: [],

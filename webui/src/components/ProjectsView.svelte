@@ -80,9 +80,11 @@
       projectId: projectsState.selectedProjectId,
       project: pendingChanges,
       toolAccessOverrides: pendingToolAccessOverrides,
+      overrideReset: projectsState.pendingOverrideReset,
     }),
     hasChanges: () =>
       hasManageChanges(projectsController.pendingChanges()) ||
+      projectsState.pendingOverrideReset !== null ||
       projectsController.pendingOverrideChanges().length > 0,
     save: async () => {
       if (
@@ -152,7 +154,8 @@
     if (
       projectsState.editSaving ||
       (!hasManageChanges(pendingChanges) &&
-        pendingToolAccessOverrides.length === 0)
+        pendingToolAccessOverrides.length === 0 &&
+        !projectsState.pendingOverrideReset)
     )
       return;
 
@@ -209,6 +212,11 @@
     projectsController.scheduleToolAccessOverrideAutoSave(() =>
       projectAutosave.runSave(),
     );
+  }
+
+  function clearOverride(agentId, field) {
+    if (!projectsController.requestOverrideReset(agentId, field)) return false;
+    return projectAutosave.runSave('manual');
   }
 
   function removeOne(project) {
@@ -441,6 +449,7 @@
               {projectsController}
               {trackModelDropdownOpen}
               {updateToolAccessOverride}
+              {clearOverride}
               {navigateToExtensions}
             >
               {#snippet scanAction()}
