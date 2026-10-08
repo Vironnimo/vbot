@@ -37,6 +37,7 @@ _CREATE_FIELDS = _EVENT_MUTATION_FIELDS
 _UPDATE_FIELDS = _EVENT_MUTATION_FIELDS | {"id"}
 _DELETE_FIELDS = frozenset({"id"})
 _ADD_EXDATE_FIELDS = frozenset({"id", "occurrence_start"})
+_ACTION_FIELDS = frozenset({"id", "when", "prompt", "target", "session", "max_delay_seconds"})
 
 
 def _calendar_service(state: Any) -> CalendarService:
@@ -209,9 +210,7 @@ def _optional_string_list_value(value: Any, key: str) -> list[str] | None:
 
 
 async def _calendar_add_action(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(
-        params, frozenset({"id", "when", "prompt", "target", "session"}), "calendar.add_action"
-    )
+    _reject_unsupported(params, _ACTION_FIELDS, "calendar.add_action")
     async with _agent_reference_lock(state):
         try:
             result = await _calendar_service(state).actions.add(
@@ -220,6 +219,8 @@ async def _calendar_add_action(state: Any, params: JsonObject) -> JsonObject:
                 prompt=_required_string(params, "prompt"),
                 target=_required_string(params, "target"),
                 session=_optional_string(params, "session"),
+                # The service validates the limit: whole minutes in seconds, or null.
+                max_delay_seconds=params.get("max_delay_seconds"),
                 actor="rpc",
             )
         except Exception as exc:
@@ -228,9 +229,7 @@ async def _calendar_add_action(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _calendar_update_action(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(
-        params, frozenset({"id", "when", "prompt", "target", "session"}), "calendar.update_action"
-    )
+    _reject_unsupported(params, _ACTION_FIELDS, "calendar.update_action")
     async with _agent_reference_lock(state):
         try:
             result = await _calendar_service(state).actions.update(
