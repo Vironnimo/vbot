@@ -31,6 +31,7 @@ from core.sessions import SessionNotFoundError
 from core.tools import ToolAccess, ToolRegistry
 from core.utils.log_viewer import LogViewer
 from core.utils.paths import model_path
+from core.utils.tokens import estimate_tokens
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.methods import dispatch_rpc
 from server.rpc.operations_methods import (
@@ -252,11 +253,13 @@ def _preview_state(
     projects: Any = None,
     skills_for: Any = None,
     session_projects: dict[str, str | None] | None = None,
+    estimate_factor: float = 1.0,
 ) -> Any:
     """State whose resolver serves one Agent and fails like the real one otherwise.
 
     Every Project exists; ``session_projects`` names the Project each existing
-    Session works in.
+    Session works in; every Model's learned input estimate factor is
+    ``estimate_factor``.
     """
 
     def resolve_agent(
@@ -282,6 +285,7 @@ def _preview_state(
             ),
             "projects": projects if projects is not None else SimpleNamespace(),
             "skills_for": skills_for or (lambda _project, _agent=None: StubSkills()),
+            "usage_recorder": SimpleNamespace(input_estimate_factor=lambda _model: estimate_factor),
         },
     )
 
@@ -632,12 +636,18 @@ async def test_preview_includes_extension_block_and_token_estimates(tmp_path: Pa
         block_definitions=[extension_block],
         loaded_extensions=["greeter"],
     )
-    state = _preview_state(manager, agent, projects=SimpleNamespace(find_by_cwd=lambda _cwd: None))
+    state = _preview_state(
+        manager,
+        agent,
+        projects=SimpleNamespace(find_by_cwd=lambda _cwd: None),
+        estimate_factor=1.5,
+    )
 
     result = await _preview_prompt(state, {"agent_id": "coder"})
 
     assert "EXTENSION-BLOCK-MARKER" in result["text"]
-    assert result["tokens"] > 0
+    # Corrected by the Agent's Model factor, like every Context estimate.
+    assert result["tokens"] == round(estimate_tokens(result["text"])[0] * 1.5)
     # The provider tool-definition array is reported beside the prompt text.
     assert result["tool_count"] == 1
     assert result["tool_tokens"] > 0

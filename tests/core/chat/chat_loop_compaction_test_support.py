@@ -249,8 +249,7 @@ async def auto_compact(
         context.context_usage.observe(
             usage,
             request,
-            adapter=context.primary_target.adapter,
-            model_id=context.primary_target.model_id,
+            target=context.primary_target,
             tools=[],
             scope=context.prompt_cache_affinity_id,
         )

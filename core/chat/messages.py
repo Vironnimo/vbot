@@ -119,6 +119,12 @@ ERROR_KIND_LLM_VISIBLE: dict[str, bool] = {
 }
 
 
+# Usage field on Assistant steps and Compaction checkpoints: how their Context
+# was estimated (the Model's input estimate factor and, for steps, the measured
+# anchor), so later readers continue on the same basis (``core/chat/usage.py``).
+CONTEXT_ESTIMATION_FIELD = "context_estimation"
+
+
 @dataclass(frozen=True)
 class ToolCallRejection:
     """Why one canonical Provider Tool Call must not cross the dispatch boundary."""
@@ -635,8 +641,13 @@ class ChatMessage:
         *,
         context_tokens_before: int,
         context_tokens_after: int,
+        estimate_factor: float | None = None,
     ) -> ChatMessage:
-        """Stamp Chat-owned Context Usage onto a completed checkpoint."""
+        """Stamp Chat-owned Context Usage onto a completed checkpoint.
+
+        ``estimate_factor`` is the correction ``context_tokens_after`` used; later
+        readers estimate newer messages with it (``CONTEXT_ESTIMATION_FIELD``).
+        """
         if self.role != "compaction_checkpoint":
             raise ChatMessageValidationError(
                 "context token counts can only be stamped onto compaction checkpoints"
@@ -647,14 +658,14 @@ class ChatMessage:
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ChatMessageValidationError(f"{field_name} must be a non-negative integer")
-        stamped = replace(
-            self,
-            usage={
-                **(self.usage or {}),
-                "context_tokens_before": context_tokens_before,
-                "context_tokens_after": context_tokens_after,
-            },
-        )
+        usage = {
+            **(self.usage or {}),
+            "context_tokens_before": context_tokens_before,
+            "context_tokens_after": context_tokens_after,
+        }
+        if estimate_factor is not None:
+            usage[CONTEXT_ESTIMATION_FIELD] = {"factor": estimate_factor}
+        stamped = replace(self, usage=usage)
         stamped.validate()
         return stamped
 

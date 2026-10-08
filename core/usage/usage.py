@@ -271,13 +271,14 @@ class UsageRecorder:
         """
         return self._calibration.factor(model)
 
-    async def record_input_estimate(self, model: str, *, measured: int, estimated: int) -> None:
+    def record_input_estimate(self, model: str, *, measured: int, estimated: int) -> None:
         """Learn from one request: its Provider-measured input and local estimate.
 
         ``estimated`` must be the uncorrected local estimate of exactly the
         measured request. Tiny requests and implausible ratios are ignored.
+        Blocking (one small database write): call it off the Event Loop.
         """
-        await self.database.run_async(self._calibration.record, model, measured, estimated)
+        self._calibration.record(model, measured, estimated)
 
     async def _settle_save(
         self, call_id: str, usage: Mapping[str, Any] | None, status: str | None

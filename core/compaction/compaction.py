@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from core.chat import (
@@ -198,6 +197,9 @@ class CompactionContext:
     storage: Any
     estimate_tail_tokens: RequestTokenEstimator | None = None
     trigger: str = COMPACTION_TRIGGER_AUTO
+    # Corrects local estimates for the active Model (Chat's Context accounting),
+    # so every count here is in the same unit as the Session's Context.
+    estimate_factor: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -230,6 +232,7 @@ class _PreparedCompaction:
     strategy_id: str
     active_skill_names: tuple[str, ...]
     activation_result_names: tuple[tuple[str, str], ...]
+    estimate_factor: float = 1.0
 
 
 class CompactionStrategy(Protocol):
@@ -287,7 +290,9 @@ class SummarizationStrategy:
             user_quote=_summary_user_quote(head, tail_plan.retained_messages),
             compacted_token_count=(
                 context.previous_compacted_token_count
-                + _estimate_token_span(_summarized_messages(head, uncovered))
+                + _estimate_token_span(
+                    _summarized_messages(head, uncovered), context.estimate_factor
+                )
             ),
         )
 
@@ -329,7 +334,9 @@ class ContinuationStrategy:
             # checkpoint notes are already included in the cumulative count.
             compacted_token_count=(
                 context.previous_compacted_token_count
-                + _estimate_token_span(_summarized_messages(messages, uncovered))
+                + _estimate_token_span(
+                    _summarized_messages(messages, uncovered), context.estimate_factor
+                )
             ),
         )
 
@@ -389,6 +396,7 @@ class CompactionService:
         active_adapter: Any | None = None,
         active_model_id: str | None = None,
         minimum_reclaim_tokens: int = 0,
+        estimate_factor: float = 1.0,
     ) -> bool:
         """Return whether automatic Compaction has new Context worth a Model call.
 
@@ -411,7 +419,7 @@ class CompactionService:
             new_context = [
                 message for message in effective if not _is_compaction_checkpoint_note(message)
             ]
-            return bool(new_context) and _estimate_token_span(new_context) >= max(
+            return bool(new_context) and _estimate_token_span(new_context, estimate_factor) >= max(
                 minimum_reclaim_tokens, 1
             )
         try:
@@ -419,7 +427,9 @@ class CompactionService:
                 effective,
                 settings.tail_tokens,
                 request_messages=tuple(request_messages) if request_messages is not None else None,
-                estimate_tail_tokens=_tail_estimator(active_adapter, active_model_id),
+                estimate_tail_tokens=_tail_estimator(
+                    active_adapter, active_model_id, estimate_factor
+                ),
             )
         except CompactionError:
             return False
@@ -444,6 +454,7 @@ class CompactionService:
         active_tools: list[JsonObject] | None = None,
         active_thinking_effort: str | None = None,
         minimum_reclaim_tokens: int = 0,
+        estimate_factor: float = 1.0,
         summary_model_reference: str | None = None,
         active_model_reference: str | None = None,
         run_id: str | None = None,
@@ -464,7 +475,10 @@ class CompactionService:
                 instruction=instruction,
                 trigger=trigger,
                 request_messages=request_messages,
-                estimate_tail_tokens=_tail_estimator(active_adapter, active_model_id),
+                estimate_tail_tokens=_tail_estimator(
+                    active_adapter, active_model_id, estimate_factor
+                ),
+                estimate_factor=estimate_factor,
             )
             plan = prepared.plan
             response: JsonObject | None = None
@@ -559,6 +573,7 @@ class CompactionService:
         request_messages: list[JsonObject] | None,
         trigger: str = COMPACTION_TRIGGER_AUTO,
         estimate_tail_tokens: RequestTokenEstimator | None = None,
+        estimate_factor: float = 1.0,
     ) -> _PreparedCompaction:
         """Build and validate the sync Strategy plan inside the Compaction pool."""
         strategy = self._strategies.get(settings.strategy)
@@ -574,6 +589,7 @@ class CompactionService:
             storage=storage,
             estimate_tail_tokens=estimate_tail_tokens,
             trigger=trigger,
+            estimate_factor=estimate_factor,
         )
         plan = strategy.plan(context, settings)
         _validate_plan(plan)
@@ -589,6 +605,7 @@ class CompactionService:
             strategy_id=strategy.id,
             active_skill_names=active_skill_names,
             activation_result_names=activation_result_names,
+            estimate_factor=estimate_factor,
         )
 
 
@@ -644,9 +661,9 @@ def _finalize_compaction(
         )
         projection = _append_compaction_skill_guidance(projection, guidance)
     _validate_projection(projection)
-    reclaimed_tokens = _estimate_token_span(prepared.effective_messages) - _estimate_token_span(
-        projection
-    )
+    reclaimed_tokens = _estimate_token_span(
+        prepared.effective_messages, prepared.estimate_factor
+    ) - _estimate_token_span(projection, prepared.estimate_factor)
     if minimum_reclaim_tokens > 0 and reclaimed_tokens < minimum_reclaim_tokens:
         raise CompactionInsufficientReclaimError(
             "Compaction projection reclaimed "
@@ -723,10 +740,19 @@ def _append_compaction_skill_guidance(
     return guided
 
 
-def _tail_estimator(adapter: Any | None, model_id: str | None) -> RequestTokenEstimator | None:
-    if adapter is None or model_id is None:
-        return None
-    return partial(estimate_wire_request_input_tokens, adapter, model_id=model_id)
+def _tail_estimator(
+    adapter: Any | None, model_id: str | None, factor: float
+) -> RequestTokenEstimator:
+    """Count a Tail candidate as the active route serializes it, corrected for its Model."""
+
+    def estimate(request: Sequence[Mapping[str, Any]]) -> int:
+        if adapter is None or model_id is None:
+            return round(estimate_request_input_tokens(request)[0] * factor)
+        return round(
+            estimate_wire_request_input_tokens(adapter, request, model_id=model_id) * factor
+        )
+
+    return estimate
 
 
 def _plan_working_tail(
@@ -992,8 +1018,8 @@ def _can_start_tail(message: ChatMessage) -> bool:
     return message.role == "assistant" and (message.content is not None or bool(message.tool_calls))
 
 
-def _estimate_token_span(messages: list[ChatMessage]) -> int:
-    return sum(_estimate_message_tokens(message) for message in messages)
+def _estimate_token_span(messages: list[ChatMessage], factor: float = 1.0) -> int:
+    return round(sum(_estimate_message_tokens(message) for message in messages) * factor)
 
 
 def _estimate_message_tokens(message: ChatMessage) -> int:

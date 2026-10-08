@@ -819,6 +819,10 @@ async def create_run_execution_context(
             prompt_cache_affinity_id=prompt_cache_affinity_id,
             session_snapshot=session_snapshot,
             subagent_session=subagent_session,
+            # The Session's newest measurement still anchors this Run's Context.
+            context_usage=RequestContextUsage.resume(
+                session_snapshot.active_messages, dependencies.usage_recorder
+            ),
         )
         if project_id is None and temporary_source is None:
             loaded_project_id = latest_project_tool_context_id(session_snapshot.active_messages)

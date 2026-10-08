@@ -46,6 +46,7 @@ from core.chat.tool_dispatch import (
     _fail_tool_calls_without_dispatch,
 )
 from core.chat.usage import (
+    CONTEXT_ESTIMATION_FIELD,
     add_session_turn_usage,
     aggregate_session_usage,
 )
@@ -471,12 +472,10 @@ class AgenticProgression:
                 request_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
                     context.context_usage.project,
                     messages_for_request,
-                    adapter=target.adapter,
-                    model_id=target.model_id,
+                    target=target,
                     tools=tools,
                     scope=context.prompt_cache_affinity_id,
                     context_window=self._requests.resolve_context_window(agent, target),
-                    estimate_factor=self._requests.input_estimate_factor(target),
                 )
                 self._requests._raise_if_measured_context_exhausted(
                     context.session_snapshot.active_messages,
@@ -634,35 +633,29 @@ class AgenticProgression:
                     else []
                 )
                 assert isinstance(assistant_message.usage, dict)
-                calibration_sample = await _CHAT_TRANSFORM_WORKERS.run(
+                await _CHAT_TRANSFORM_WORKERS.run(
                     context.context_usage.observe,
                     assistant_message.usage,
                     messages_for_request,
-                    adapter=target.adapter,
-                    model_id=target.model_id,
+                    target=target,
                     tools=request_tools,
                     scope=context.prompt_cache_affinity_id,
                 )
-                if recorder is not None and calibration_sample is not None:
-                    measured_input, estimated_input = calibration_sample
-                    await recorder.record_input_estimate(
-                        target.model_reference,
-                        measured=measured_input,
-                        estimated=estimated_input,
-                    )
                 assistant_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
                     context.context_usage.project,
                     [*messages_for_request, *assistant_request_messages],
-                    adapter=target.adapter,
-                    model_id=target.model_id,
+                    target=target,
                     tools=request_tools,
                     scope=context.prompt_cache_affinity_id,
                     context_window=self._requests.resolve_context_window(agent, target),
-                    estimate_factor=self._requests.input_estimate_factor(target),
                 )
                 assistant_message = replace(
                     assistant_message,
-                    usage={**assistant_message.usage, "context_usage": assistant_context_usage},
+                    usage={
+                        **assistant_message.usage,
+                        "context_usage": assistant_context_usage,
+                        CONTEXT_ESTIMATION_FIELD: context.context_usage.estimation_record(target),
+                    },
                 )
                 return (
                     assistant_message,
@@ -1079,12 +1072,10 @@ class AgenticProgression:
             tool_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
                 context.context_usage.project,
                 continuation_request_messages,
-                adapter=target.adapter,
-                model_id=target.model_id,
+                target=target,
                 tools=tools,
                 scope=context.prompt_cache_affinity_id,
                 context_window=self._requests.resolve_context_window(context.agent, target),
-                estimate_factor=self._requests.input_estimate_factor(target),
             )
             run.terminal_payload_extras["context_usage"] = tool_context_usage
 

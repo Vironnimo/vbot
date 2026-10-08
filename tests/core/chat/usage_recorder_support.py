@@ -14,7 +14,7 @@ class RecordingUsageRecorder:
     def input_estimate_factor(self, model: str) -> float:
         return 1.0
 
-    async def record_input_estimate(self, model: str, *, measured: int, estimated: int) -> None:
+    def record_input_estimate(self, model: str, *, measured: int, estimated: int) -> None:
         self.input_estimates.append((model, measured, estimated))
 
     async def start(self, **context: Any) -> str:
