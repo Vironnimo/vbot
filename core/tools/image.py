@@ -94,7 +94,7 @@ IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION = (
 )
 IMAGE_GENERATION_TOOL_DESCRIPTION = (
     "Generate images from a text prompt, or edit local images, with the configured model and "
-    "save them as local files. Images passed as source_images are uploaded to the provider."
+    "save them as local files."
 )
 # Only Models that accept source images can edit; the text-only profile drops this.
 _EDIT_PROMPT_SENTENCE = " For edits, state both the changes and what must remain unchanged."

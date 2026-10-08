@@ -57,17 +57,9 @@ _VIDEO_DIRECTORY_NAME = "video-gen"
 _MUSIC_DIRECTORY_NAME = "music-gen"
 
 _BILLING = " Each call is billed by the provider."
-GENERATE_VIDEO_TEXT_ONLY_DESCRIPTION = (
+GENERATE_VIDEO_DESCRIPTION = (
     "Generate a video from a text prompt with the configured model and save it as a local file."
     + _BILLING
-)
-GENERATE_VIDEO_FIRST_FRAME_DESCRIPTION = (
-    GENERATE_VIDEO_TEXT_ONLY_DESCRIPTION + " An image passed as first_frame is uploaded to the "
-    "provider."
-)
-GENERATE_VIDEO_FRAME_RANGE_DESCRIPTION = (
-    GENERATE_VIDEO_TEXT_ONLY_DESCRIPTION + " Images passed as first_frame or last_frame are "
-    "uploaded to the provider."
 )
 # Only the profile of a Model that can generate audio adds this to the prompt text.
 _AUDIO_PROMPT_SENTENCE = (
@@ -140,13 +132,9 @@ GENERATE_VIDEO_PARAMETERS: JsonObject = {
     "required": ["prompt"],
 }
 
-GENERATE_MUSIC_TEXT_ONLY_DESCRIPTION = (
+GENERATE_MUSIC_DESCRIPTION = (
     "Generate a music track from a text prompt with the configured model and save it as a "
     "local file." + _BILLING
-)
-GENERATE_MUSIC_DESCRIPTION = (
-    GENERATE_MUSIC_TEXT_ONLY_DESCRIPTION + " Images passed as source_images are uploaded to the "
-    "provider."
 )
 GENERATE_MUSIC_PARAMETERS: JsonObject = {
     "type": "object",
@@ -268,18 +256,12 @@ def generate_video_parameters(profile: VideoProfile) -> JsonObject:
 def _video_profile_resolver(video_service: Any):
     def resolve(_context: ToolDefinitionProfileContext) -> ToolDefinitionProfile:
         profile = video_service.generation_profile()
-        if "last_frame" in profile.frame_images:
-            description = GENERATE_VIDEO_FRAME_RANGE_DESCRIPTION
-        elif "first_frame" in profile.frame_images:
-            description = GENERATE_VIDEO_FIRST_FRAME_DESCRIPTION
-        else:
-            description = GENERATE_VIDEO_TEXT_ONLY_DESCRIPTION
         choices = ";".join(
             f"{name}={','.join(values)}" for name, values in sorted(profile.call_choices.items())
         )
         return ToolDefinitionProfile(
             key=f"frames={','.join(profile.frame_images)};audio={profile.generate_audio};{choices}",
-            description=description,
+            description=GENERATE_VIDEO_DESCRIPTION,
             parameters=generate_video_parameters(profile),
         )
 
@@ -298,7 +280,7 @@ def _music_profile_resolver(music_service: Any):
         parameters["properties"].pop("source_images", None)
         return ToolDefinitionProfile(
             key="text-only",
-            description=GENERATE_MUSIC_TEXT_ONLY_DESCRIPTION,
+            description=GENERATE_MUSIC_DESCRIPTION,
             parameters=parameters,
         )
 
@@ -464,7 +446,7 @@ def register_generate_video_tool(registry: ToolRegistry, video_service: Any) -> 
 
     registry.register(
         GENERATE_VIDEO_TOOL_NAME,
-        GENERATE_VIDEO_TEXT_ONLY_DESCRIPTION,
+        GENERATE_VIDEO_DESCRIPTION,
         GENERATE_VIDEO_PARAMETERS,
         make_generate_video_handler(video_service),
         family="media",
