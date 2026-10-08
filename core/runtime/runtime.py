@@ -402,6 +402,7 @@ class Runtime:
         recorder = self.usage_recorder
         call_id = None
         usage = None
+        reported: dict[str, Any] = {}
         outcome = "failed"
         try:
             call_id = await recorder.start(
@@ -424,6 +425,7 @@ class Runtime:
                 temperature=request.get("temperature")
                 if request.get("temperature") is not None
                 else agent.temperature,
+                on_usage=reported.update,
                 **options,
                 **adapter.request_context_kwargs(
                     agent_id=context.agent_id,
@@ -439,7 +441,9 @@ class Runtime:
         finally:
             try:
                 if call_id is not None:
-                    await recorder.finish(call_id, usage, status=outcome)
+                    await recorder.finish(
+                        call_id, usage if usage is not None else reported or None, status=outcome
+                    )
             finally:
                 await adapter.aclose()
         return {"model": f"{provider_id}/{model_id}", **normalized}

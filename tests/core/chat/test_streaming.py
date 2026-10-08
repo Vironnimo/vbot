@@ -526,3 +526,23 @@ async def test_stream_model_response_falls_back_only_before_any_output(error: Ex
     assert handed_out == ["call_1"]
     assert [call["id"] for call in broken.value.response["tool_calls"]] == ["call_1"]
     assert (broken.value.cause, started.sent) == (error, 0)
+
+
+@pytest.mark.asyncio
+async def test_stream_model_response_reports_usage_before_a_break() -> None:
+    reported: list[JsonObject] = []
+
+    def observe(usage: JsonObject) -> None:
+        reported.append(usage)
+        raise RuntimeError("observer broke")  # Never ends the stream.
+
+    broken = _BreakingStreamAdapter(
+        [
+            {"type": "usage", "input_tokens": 9},
+            {"type": "usage", "input_tokens": 9, "output_tokens": 2},
+        ],
+        NetworkError("connection reset"),
+    )
+    with pytest.raises(NetworkError):
+        await streaming_module.stream_model_response(broken, [], model_id="m", on_usage=observe)
+    assert reported == [{"input_tokens": 9}, {"input_tokens": 9, "output_tokens": 2}]

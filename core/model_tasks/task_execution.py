@@ -158,7 +158,12 @@ class TaskUsage:
         await self._recorder.finish(call_id, task_usage(usage) or None)
 
     @asynccontextmanager
-    async def attempt(self) -> AsyncIterator[str]:
+    async def attempt(self, reported: Mapping[str, Any] | None = None) -> AsyncIterator[str]:
+        """Record one attempt; *reported* holds Usage the caller saw so far.
+
+        The attempt finishes with whatever *reported* holds when it ends, so a
+        failed or cancelled request keeps the consumption reported before it.
+        """
         call_id = await self.start()
         status: Literal["completed", "failed", "cancelled"] = "completed"
         try:
@@ -170,7 +175,7 @@ class TaskUsage:
             status = "failed"
             raise
         finally:
-            await self.finish(call_id, status=status)
+            await self.finish(call_id, usage=reported, status=status)
 
 
 def task_usage(usage: Any) -> JsonObject:

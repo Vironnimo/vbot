@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 from urllib.parse import quote
 
@@ -31,6 +31,9 @@ VIDEO_POLL_TIMEOUT_SECONDS = 20 * 60.0
 VIDEO_POLL_INTERVAL_SECONDS = 10.0
 _TERMINAL_FAILURE_STATUSES = frozenset({"failed", "cancelled", "expired"})
 
+#: Takes over the polling of a job whose caller was cancelled; see ``generate``.
+type CancelledJobHandler = Callable[[str, asyncio.Task[JsonObject]], None]
+
 
 class VideoJobUnfinishedError(ProviderOutcomeUnknownError):
     """A submitted Video job whose result vBot could not collect.
@@ -55,8 +58,18 @@ class ProviderVideoClient(ProviderTaskClient):
         options: JsonObject,
         frame_images: Sequence[tuple[str, ImageInput]] = (),
         poll_timeout: float = VIDEO_POLL_TIMEOUT_SECONDS,
-        poll_interval: float = VIDEO_POLL_INTERVAL_SECONDS,
+        poll_interval: float | None = None,
+        on_cancelled_job: CancelledJobHandler | None = None,
     ) -> VideoGenerationResult:
+        """Submit one job, wait for it, and download its video.
+
+        OpenRouter offers no way to cancel a submitted job: it keeps running and
+        is billed when it finishes. A cancellation while the job is polled
+        therefore hands the still-running poll to ``on_cancelled_job``, whose
+        owner can await it so the poll's reported cost reaches the Usage
+        observer; without a handler the poll stops with the caller.
+        """
+
         payload = _video_payload(
             self._model_id,
             prompt,
@@ -70,9 +83,28 @@ class ProviderVideoClient(ProviderTaskClient):
             parse=_parse_created_video_response,
             retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
         )
-        status_payload = await self._await_completion(
-            job_id, created, poll_timeout=poll_timeout, poll_interval=poll_interval
+        polling = asyncio.create_task(
+            self._await_completion(
+                job_id,
+                created,
+                poll_timeout=poll_timeout,
+                poll_interval=VIDEO_POLL_INTERVAL_SECONDS
+                if poll_interval is None
+                else poll_interval,
+            ),
+            name="video-job-poll",
         )
+        try:
+            status_payload = await asyncio.shield(polling)
+        except asyncio.CancelledError:
+            if polling.done():
+                if not polling.cancelled():
+                    polling.exception()  # the caller's cancellation wins
+            elif on_cancelled_job is not None:
+                on_cancelled_job(job_id, polling)
+            else:
+                polling.cancel()
+            raise
         safe_job_id = quote(job_id, safe="")
         try:
             content, media_type = await self.get_and_parse(

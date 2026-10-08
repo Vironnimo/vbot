@@ -41,7 +41,7 @@ At any level, including DEBUG and exception messages built by vBot:
 
 - credentials, token values, OAuth codes, Provider Account ids;
 - Prompt, Skill, Cron, Memory and Workspace file content; Model output; user message text; titles generated from them;
-- external conversation, chat, user, thread or Live call ids and platform display names (Channel platforms, Provider-assigned Live call or conversation ids), including ids derived from them. Provider-assigned Tool call ids are correlation ids within a stored Session and may be logged.
+- external conversation, chat, user, thread or Live call ids and platform display names (Channel platforms, Provider-assigned Live call or conversation ids), including ids derived from them. Provider-assigned Tool call ids are correlation ids within a stored Session and may be logged, and so may the id of a paid Provider job whose cost vBot could not record (a video job, `model_tasks/video.md`), since only it lets the charge be traced.
 
 Use the vBot-owned id of the same object instead (`core/utils/ids.py`). Channel-derived Session ids (`ch-<channel id>-<platform part>`, `channels.md`) are the one derived form a line may carry: every Session id is logged as usual, and the pipeline writes the platform part as a pseudonym (Constraints & Gotchas). Channel code itself still names only the Channel id and conversation kinds.
 

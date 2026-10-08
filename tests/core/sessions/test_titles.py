@@ -298,6 +298,7 @@ async def test_reasoning_mandatory_endpoint_retries_with_default_effort(manager)
         async def stream(self, messages: list[Any], **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
             if kwargs.get("thinking_effort") == "none":
                 self.requests.append({"messages": messages, **kwargs})
+                yield {"type": "usage", "input_tokens": 12, "output_tokens": 0}
                 raise ProviderError("Reasoning is mandatory for this endpoint.")
             async for delta in super().stream(messages, **kwargs):
                 yield delta
@@ -329,9 +330,11 @@ async def test_reasoning_mandatory_endpoint_retries_with_default_effort(manager)
     }
     assert _metadata(runtime)["auto_title"] == "Mandatory reasoning"
     assert adapter.closed is True
-    # Both attempts are accounted: the rejected one as failed, without usage.
+    # Both attempts are accounted: the rejected one as failed, with the Usage
+    # reported before it failed.
     failed, completed = recorder.calls
-    assert (failed["status"], failed["usage"]) == ("failed", {"usage_call_id": failed["id"]})
+    assert failed["status"] == "failed"
+    assert (failed["usage"]["input_tokens"], failed["usage"]["output_tokens"]) == (12, 0)
     assert completed["kind"] == "session_title"
     assert completed["model"] == "openrouter/stealth/ox-alpha"
     assert completed["connection_id"] == "openrouter:api-key"

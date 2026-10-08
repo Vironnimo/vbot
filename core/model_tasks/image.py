@@ -478,7 +478,8 @@ class ImageService:
             # imports this module.
             from core.chat.streaming import stream_model_response
 
-            async with accounting.attempt() as call_id:
+            reported: dict[str, Any] = {}
+            async with accounting.attempt(reported) as call_id:
                 normalized = await stream_model_response(
                     adapter,
                     [
@@ -487,6 +488,7 @@ class ImageService:
                     ],
                     model_id=target_ref.model_id,
                     tools=[],
+                    on_usage=reported.update,
                 )
                 usage = normalized.get("usage")
                 await accounting.update(call_id, usage)

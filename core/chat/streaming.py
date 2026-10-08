@@ -750,6 +750,7 @@ async def stream_model_response(
     *,
     model_id: str,
     on_tool_calls: Callable[[list[JsonObject]], None] | None = None,
+    on_usage: Callable[[JsonObject], None] | None = None,
     **request_options: Any,
 ) -> JsonObject:
     """Stream one Model request and return its completed, normalized response.
@@ -761,7 +762,11 @@ async def stream_model_response(
     still answers. ``on_tool_calls`` receives each Tool Call once the stream
     has moved past it, while the Model is still writing. A stream that breaks
     after that raises :class:`StreamBrokenAfterToolCallsError` with the output
-    so far instead of a replayable error. Stall guards follow
+    so far instead of a replayable error. ``on_usage`` receives the Usage
+    accumulated so far after each usage delta, so a caller can record what a
+    stream that later fails or is cancelled consumed; it must be cheap and
+    synchronous, and an exception it raises is logged without ending the
+    stream. Stall guards follow
     :func:`stream_stall_timeout`, so a local Provider's long prefill is not cut off.
 
     Only a Provider that declares this request cannot stream
@@ -781,6 +786,8 @@ async def stream_model_response(
             if delta.get("type") == "heartbeat":
                 continue
             accumulator.add_delta(delta)
+            if on_usage is not None and delta.get("type") == "usage":
+                _report_usage(on_usage, accumulator.usage or {})
             if on_tool_calls is not None and (completed := accumulator.take_completed_tool_calls()):
                 on_tool_calls(completed)
         if accumulator.finish_reason is None:
@@ -808,6 +815,14 @@ async def stream_model_response(
             ) from exc
         raise
     return accumulator.finalize_assistant_fields().to_response_dict()
+
+
+def _report_usage(on_usage: Callable[[JsonObject], None], usage: JsonObject) -> None:
+    """Hand *usage* to the caller's observer; its failure never ends the stream."""
+    try:
+        on_usage(usage)
+    except Exception:
+        _LOGGER.warning("Usage observer failed during a Model stream", exc_info=True)
 
 
 async def iter_with_chunk_timeout(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any, cast
 
@@ -14,7 +15,8 @@ from core.chat import ChatMessage
 from core.compaction import CompactionService
 from core.compaction.compaction import COMPACTION_REFERENCE_PREFIX, CompactionError
 from core.prompts.pinned_context import PINNED_SKILL_CATALOG_SLOT, pinned_skill_catalog
-from core.runs import COMPACTION_ABORTED_EVENT, Run
+from core.runs import COMPACTION_ABORTED_EVENT, COMPACTION_COMPLETED_EVENT, Run, RunCancelledError
+from core.sessions import ChatSession
 from tests.core.chat.chat_loop_compaction_test_support import (
     CompactOnceService,
     RecordingCompactionAdapter,
@@ -109,6 +111,40 @@ async def test_compact_session_commits_the_checkpoint_and_closes_the_adapter(
     ]
     assert checkpoint.projection is not None
     assert str(checkpoint.projection[0]["content"]).startswith("[compaction-summary]")
+
+
+@pytest.mark.asyncio
+async def test_stop_during_the_checkpoint_commit_reports_the_stored_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = compaction_runtime(tmp_path)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    service = StubCompactionService(should_auto=True, checkpoint=seed_tail(session))
+    writing, release = threading.Event(), threading.Event()
+    commit = ChatSession.commit_compaction
+
+    def slow_commit(self: ChatSession, *args: Any, **kwargs: Any) -> Any:
+        writing.set()
+        release.wait(5)
+        return commit(self, *args, **kwargs)
+
+    monkeypatch.setattr(ChatSession, "commit_compaction", slow_commit)
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, service))
+
+    reply = asyncio.create_task(loop.compact_session("coder", session.id))
+    assert await asyncio.to_thread(writing.wait, 5)
+    run = runtime.chat_runs.active_run(agent_id="coder", session_id=session.id, project_id=None)
+    assert run is not None
+    await runtime.chat_runs.cancel(run.id, reason="user")
+    release.set()
+
+    assert await reply == "Context compacted."
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+    assert "compaction_checkpoint" in persisted_roles(session.load())
+    events = [event.type for event in await runtime.timelines.events(run)]
+    assert COMPACTION_COMPLETED_EVENT in events
+    assert COMPACTION_ABORTED_EVENT not in events
 
 
 @pytest.mark.asyncio

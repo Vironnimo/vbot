@@ -44,6 +44,7 @@ from core.runs import (
     QueuedRunItem,
     Run,
     RunAdmission,
+    RunCancelledError,
     RunExecutor,
     RunKind,
     WaitingWorkAdmission,
@@ -487,6 +488,10 @@ class ChatLoop:
 
         try:
             await run.wait()
+        except RunCancelledError:
+            # A Stop during the commit leaves the checkpoint stored.
+            if "checkpoint_id" not in run.terminal_payload_extras:
+                return "Compaction cancelled."
         except Exception as exc:
             return f"Compaction failed: {exc}"
         return "Context compacted."

@@ -646,7 +646,9 @@ class Run:
         keeps late provider/tool results from becoming visible. The one deliberate
         escape is ``allow_after_cancel``: an executor may still publish an event
         that *finalizes output the user has already seen* (the chat loop's
-        preserved partial answer on cancel) — never new or late results.
+        preserved partial answer on cancel) or reports a result the cancel could
+        no longer stop from being stored (a committed Compaction checkpoint) —
+        never new or late results.
         """
         if self.status != RunStatus.RUNNING and event_type not in TERMINAL_EVENT_TYPES:
             return None
