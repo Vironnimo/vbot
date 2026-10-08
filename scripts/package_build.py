@@ -18,6 +18,7 @@ import subprocess
 import sys
 import zipfile
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -116,6 +117,10 @@ def _git(source: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+#: Concurrent readers for payload hashing, as the updater's ``packages.FILE_WORKERS``.
+HASH_WORKERS = 16
+
+
 def remove_bytecode_caches(root: Path) -> None:
     """Drop bytecode a build step wrote; packaged hosts never write or need it."""
     for directory in root.rglob("__pycache__"):
@@ -127,7 +132,7 @@ def remove_bytecode_caches(root: Path) -> None:
 
 
 def file_hashes(version_root: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
+    paths: dict[str, Path] = {}
     seen: set[str] = set()
     for base in (version_root / "app", version_root / "runtime"):
         for path in sorted(base.rglob("*"), key=lambda item: item.as_posix().casefold()):
@@ -140,9 +145,16 @@ def file_hashes(version_root: Path) -> dict[str, str]:
             if folded in seen:
                 raise BuildError(f"case-colliding payload path: {relative}")
             seen.add(folded)
-            with path.open("rb") as handle:
-                values[relative] = hashlib.file_digest(handle, "sha256").hexdigest()
-    return values
+            paths[relative] = path
+    # Windows scans every newly written file on its first open; sequential hashing
+    # of a fresh payload waits for those scans one by one.
+    with ThreadPoolExecutor(max_workers=HASH_WORKERS) as pool:
+        return dict(zip(paths, pool.map(_digest, paths.values()), strict=True))
+
+
+def _digest(path: Path) -> str:
+    with path.open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def write_manifest(
