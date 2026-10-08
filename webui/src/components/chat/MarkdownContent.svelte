@@ -18,6 +18,7 @@
     reasoning = false,
     caret = false,
     class: className = '',
+    contentId = undefined,
   } = $props();
 
   let container = $state();
@@ -147,7 +148,11 @@
   });
 </script>
 
-<div bind:this={container} class={className}>
+<div
+  bind:this={container}
+  class={className}
+  data-timeline-content-id={contentId}
+>
   <!-- eslint-disable-next-line svelte/no-at-html-tags -->
   {@html renderedDocument.html}
   {#if caret}<span class="streaming-caret" aria-hidden="true"></span>{/if}

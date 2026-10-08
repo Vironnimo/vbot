@@ -25,6 +25,10 @@
 import { trackInteractionHolds } from './chatScroll/interactionHolds.js';
 import { createLayoutModel } from './chatScroll/layoutModel.js';
 import { createTimelineWindow } from './chatScroll/timelineWindow.js';
+import {
+  captureReadingAnchor,
+  readingAnchorTop,
+} from './chatScroll/readingAnchor.js';
 
 const STICK_TO_BOTTOM_THRESHOLD_PX = 56;
 const LOAD_OLDER_THRESHOLD_PX = 48;
@@ -78,7 +82,9 @@ export function createChatScrollController(
   // moved yet: there is no reading position to protect, so content growth
   // neither follows nor corrects until the first real scroll event.
   let awaitingUserPosition = false;
-  let loadOlderInFlight = false;
+  // Each Session owns its pending page; a slow request must not block a
+  // different Session after navigation.
+  const loadingOlderSessions = new Set();
   let contentSyncQueued = false;
   let contentSyncFrame = null;
 
@@ -124,6 +130,7 @@ export function createChatScrollController(
       pinned: true,
       anchorId: '',
       anchorDelta: 0,
+      readingAnchor: null,
       fallbackTop: 0,
       fallbackScrollHeight: 0,
     };
@@ -232,7 +239,8 @@ export function createChatScrollController(
 
   function maybeRequestLoadOlder() {
     if (
-      loadOlderInFlight ||
+      destroyed ||
+      loadingOlderSessions.has(currentSessionId) ||
       container.scrollTop > LOAD_OLDER_THRESHOLD_PX ||
       !shouldLoadOlder()
     ) {
@@ -240,12 +248,12 @@ export function createChatScrollController(
     }
     const requestedSessionId = currentSessionId;
     const previousScrollHeight = container.scrollHeight;
-    loadOlderInFlight = true;
+    loadingOlderSessions.add(requestedSessionId);
     Promise.resolve(requestLoadOlder())
       .catch(() => {})
       .finally(() => {
-        loadOlderInFlight = false;
-        if (currentSessionId !== requestedSessionId) {
+        loadingOlderSessions.delete(requestedSessionId);
+        if (destroyed || currentSessionId !== requestedSessionId) {
           return;
         }
         // Prepended history grew the content above the reading position.
@@ -298,10 +306,16 @@ export function createChatScrollController(
     if (!anchor) {
       viewport.anchorId = '';
       viewport.anchorDelta = 0;
+      viewport.readingAnchor = null;
       return;
     }
     viewport.anchorId = anchor.dataset.timelineItemId ?? '';
     viewport.anchorDelta = anchor.offsetTop - container.scrollTop;
+    viewport.readingAnchor = captureReadingAnchor(anchor, {
+      ...containerRect,
+      top: containerRect.top,
+      bottom: containerBottom,
+    });
   }
 
   // Reading-mode stabilization: derive the position the viewport should hold
@@ -318,6 +332,19 @@ export function createChatScrollController(
     );
     if (!anchor) {
       return null;
+    }
+    const readingTop = readingAnchorTop(anchor, viewport.readingAnchor);
+    if (readingTop !== null) {
+      const top = Math.max(
+        0,
+        container.scrollTop +
+          readingTop -
+          container.getBoundingClientRect().top,
+      );
+      // Keep window aiming and the row fallback aligned with corrections
+      // inside the row, including when that paragraph later disappears.
+      viewport.anchorDelta = anchor.offsetTop - top;
+      return top;
     }
     return Math.max(0, anchor.offsetTop - viewport.anchorDelta);
   }
@@ -360,6 +387,9 @@ export function createChatScrollController(
   }
 
   function queueContentChanged() {
+    if (destroyed) {
+      return;
+    }
     if (typeof requestAnimationFrame !== 'function') {
       contentChanged();
       return;
@@ -484,13 +514,27 @@ export function createChatScrollController(
   // cancels a still-pending passive restore, because a user reaching for the
   // viewport wins over it.
   function noteUserInput({ upward = false } = {}) {
-    if (!upward) {
+    if (!upward || destroyed) {
+      return;
+    }
+    // At the top an upward gesture cannot move the viewport, so no scroll
+    // event will arrive to settle a released follow pin. A short timeline
+    // stays pinned; an overflowing one already has a reading position,
+    // even if its initial restore has not run yet.
+    if (container.scrollTop <= 0) {
+      if (!isNearBottom()) {
+        restorePending = false;
+        classifyUserScroll(container.scrollTop);
+      } else {
+        maybeRequestLoadOlder();
+      }
       return;
     }
     pendingUpwardInput = true;
     restorePending = false;
     const viewport = viewportFor(currentSessionId);
     if (!viewport.pinned) {
+      maybeRequestLoadOlder();
       return;
     }
     viewport.pinned = false;
@@ -735,6 +779,7 @@ export function createChatScrollController(
     resizeObserver?.disconnect();
     interactionHolds?.destroy();
     observedRows.clear();
+    loadingOlderSessions.clear();
     viewports.clear();
     layouts.clear();
   }
