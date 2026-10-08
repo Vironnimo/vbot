@@ -20,6 +20,7 @@ from typing import Any, NamedTuple, Protocol
 
 from core.database import Database, open_database
 from core.models.pricing import TokenPricing, nonnegative_amount, price_usage, project_cost
+from core.usage._calibration import InputEstimateCalibration
 from core.usage._schema import usage_database_spec
 from core.utils.ids import new_id
 from core.utils.timestamps import utc_now_timestamp
@@ -178,6 +179,7 @@ class UsageRecorder:
         self._import_lock = threading.Lock()
         try:
             self.database.write(self._interrupt_unfinished)
+            self._calibration = InputEstimateCalibration(self.database)
         except BaseException:
             self.database.close()
             raise
@@ -260,6 +262,22 @@ class UsageRecorder:
 
     async def update(self, call_id: str, usage: Mapping[str, Any] | None) -> dict[str, Any]:
         return await self._settle_save(call_id, usage, None)
+
+    def input_estimate_factor(self, model: str) -> float:
+        """Correction for local input estimates of ``model``; 1.0 without evidence.
+
+        Multiply an estimate of a request to ``model`` (``provider/model``, an
+        optional ``::`` Connection scope is ignored) by it. Cheap and lock-free.
+        """
+        return self._calibration.factor(model)
+
+    async def record_input_estimate(self, model: str, *, measured: int, estimated: int) -> None:
+        """Learn from one request: its Provider-measured input and local estimate.
+
+        ``estimated`` must be the uncorrected local estimate of exactly the
+        measured request. Tiny requests and implausible ratios are ignored.
+        """
+        await self.database.run_async(self._calibration.record, model, measured, estimated)
 
     async def _settle_save(
         self, call_id: str, usage: Mapping[str, Any] | None, status: str | None

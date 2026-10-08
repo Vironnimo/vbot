@@ -9,6 +9,13 @@ from typing import Any
 class RecordingUsageRecorder:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.input_estimates: list[tuple[str, int, int]] = []
+
+    def input_estimate_factor(self, model: str) -> float:
+        return 1.0
+
+    async def record_input_estimate(self, model: str, *, measured: int, estimated: int) -> None:
+        self.input_estimates.append((model, measured, estimated))
 
     async def start(self, **context: Any) -> str:
         call_id = f"usage-{len(self.calls) + 1}"

@@ -139,6 +139,9 @@ class ChatCompactionHost:
     def resolve_context_window(self, agent: Any, target: Any) -> int | None:
         return self._requests.resolve_context_window(agent, target)
 
+    def input_estimate_factor(self, target: Any) -> float:
+        return self._requests.input_estimate_factor(target)
+
     async def materialize_manual_request(
         self,
         run: Run,
