@@ -90,11 +90,10 @@ ANALYZE_IMAGE_TOOL_PARAMETERS: JsonObject = {
     "required": ["prompt", "images"],
 }
 IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION = (
-    "Generate images from a text prompt with the configured model and save them as local files."
+    "Generate images from a text prompt and save them as local files."
 )
 IMAGE_GENERATION_TOOL_DESCRIPTION = (
-    "Generate images from a text prompt, or edit local images, with the configured model and "
-    "save them as local files."
+    "Generate images from a text prompt, or edit local images, and save them as local files."
 )
 # Only Models that accept source images can edit; the text-only profile drops this.
 _EDIT_PROMPT_SENTENCE = " For edits, state both the changes and what must remain unchanged."

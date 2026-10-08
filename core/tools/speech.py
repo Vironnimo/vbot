@@ -28,8 +28,7 @@ from core.utils.paths import model_path
 
 TEXT_TO_SPEECH_TOOL_NAME = "text_to_speech"
 TEXT_TO_SPEECH_TOOL_DESCRIPTION = (
-    "Convert text to spoken audio using the configured model. The web chat plays the "
-    "returned audio artifact automatically."
+    "Convert text to spoken audio. The web chat plays the returned audio artifact automatically."
 )
 TEXT_TO_SPEECH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",

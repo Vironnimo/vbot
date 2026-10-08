@@ -24,8 +24,7 @@ Tool definitions, display metadata, result shaping, failure projection, and regi
 
 | Text | Reason |
 |---|---|
-| `Generate a video from a text prompt with the configured model and save it as a local file.` / `Generate a music track ...` | Names the outcome, a saved file, so the Agent reports the path instead of describing an unseen video or track. |
-| `Each call is billed by the provider.` | Hypothesis without Session evidence (no real call of either Tool up to 2026-10-04): nothing else tells the Agent that a call costs money, so it could generate variants nobody asked for. A black-box task that invites variants would confirm it. |
+| `Generate a video from a text prompt and save it as a local file.` / `Generate a music track ...` | Names the outcome, a saved file, so the Agent reports the path instead of describing an unseen video or track. |
 | `source_images` (music): `Local images to use as references for the track. ... Omit to generate from the prompt alone.` | Role and omit rule; the earlier `Optional ...` gave no decision. |
 | `prompt` (video): `The text prompt for the video. Be specific and concrete: name the subject and its appearance, the action and how it unfolds over the clip, the setting, the shot and camera movement (for example ...), lighting, mood, and the visual style (for example ...). Keep the action to what fits in the clip's length.` | Same pattern as the image prompt; adds what only video has: action over time, shot and camera movement, and a clip of a few seconds that cannot hold a whole story. |
 | `For a video with audio, describe the sound too: spoken lines in quotes with who says them, sound effects, and ambient sound or music.` | Audio Models render dialogue and sound from the prompt; without it Agents describe only the picture. `_AUDIO_PROMPT_SENTENCE`: only profiles with `generate_audio` carry it. |

@@ -86,7 +86,6 @@ def test_video_profile_only_exposes_configured_model_capabilities(
     assert set(properties) == {"prompt", "output_dir", *offered}
     for name, facts in offered.items():
         assert facts.items() <= properties[name].items()
-    assert "billed" in definition["description"]
     # No text mentions a field this Model does not offer.
     optional = {"duration", "aspect_ratio", "resolution", "generate_audio", "first_frame"}
     absent = (optional | {"last_frame"}) - set(offered)

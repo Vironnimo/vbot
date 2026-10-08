@@ -56,11 +56,7 @@ GENERATE_MUSIC_TOOL_NAME = "generate_music"
 _VIDEO_DIRECTORY_NAME = "video-gen"
 _MUSIC_DIRECTORY_NAME = "music-gen"
 
-_BILLING = " Each call is billed by the provider."
-GENERATE_VIDEO_DESCRIPTION = (
-    "Generate a video from a text prompt with the configured model and save it as a local file."
-    + _BILLING
-)
+GENERATE_VIDEO_DESCRIPTION = "Generate a video from a text prompt and save it as a local file."
 # Only the profile of a Model that can generate audio adds this to the prompt text.
 _AUDIO_PROMPT_SENTENCE = (
     " For a video with audio, describe the sound too: spoken lines in quotes with who says "
@@ -133,8 +129,7 @@ GENERATE_VIDEO_PARAMETERS: JsonObject = {
 }
 
 GENERATE_MUSIC_DESCRIPTION = (
-    "Generate a music track from a text prompt with the configured model and save it as a "
-    "local file." + _BILLING
+    "Generate a music track from a text prompt and save it as a local file."
 )
 GENERATE_MUSIC_PARAMETERS: JsonObject = {
     "type": "object",
