@@ -41,6 +41,7 @@ def test_definition_names_actions_time_zone_and_the_cron_alternative() -> None:
         "prompt",
         "target",
         "session",
+        "max_delay",
     }
 
 
@@ -563,6 +564,27 @@ class TestActions:
 
         [action] = tool.actions()
         assert (action["target"], action["session"]) == ("builder@project", "chosen")
+
+    def test_max_delay_is_set_shown_and_removed(self, tmp_path: Path) -> None:
+        tool = calendar_tool(tmp_path)
+        event = tool.service.create_event(title="Meeting", start="2030-01-01T12:00")
+        call = {"action": "add_action", "id": event.id, "when": "end", "prompt": "p"}
+
+        _, added = tool.call({**call, "max_delay": "2h"})
+        [action] = tool.actions()
+        _, listed = tool.call({"action": "list", "id": event.id})
+
+        assert action["max_delay_seconds"] == 7200
+        assert "max_delay: 2h" in added
+        assert f"action {action['id']}: end, runs agent-one in a fresh Session, max_delay 2h" in (
+            listed
+        )
+
+        _, changed = tool.call(
+            {"action": "update_action", "id": action["id"], "max_delay": "unlimited"}
+        )
+        assert tool.actions()[0]["max_delay_seconds"] is None
+        assert "max_delay" not in changed
 
     def test_unknown_field_is_refused_before_any_action_exists(self, tmp_path: Path) -> None:
         tool = calendar_tool(tmp_path)

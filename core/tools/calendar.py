@@ -180,6 +180,19 @@ CALENDAR_TOOL_PARAMETERS: JsonObject = {
                 "each time."
             ),
         },
+        "max_delay": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "How late an action that vBot missed, for example while the server was off, can "
+                "still start: a duration such as '30m' or '2h'; '0m' skips every missed start. "
+                "Without it, an action due before its event can start until the event starts, "
+                "one due during it until it ends, and one due after it until its next "
+                "occurrence, or however late after the last; max_delay only shortens this. Set "
+                "it only when the user asks for it or a late Run would be useless. On "
+                "update_action, 'unlimited' removes the limit."
+            ),
+        },
     },
     "required": ["action"],
 }

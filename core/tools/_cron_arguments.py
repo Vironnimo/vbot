@@ -22,6 +22,12 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+from core.tools._durations import (
+    MAX_DELAY_STAND_IN,
+    duration_from_seconds,
+    duration_text,
+    read_max_delay,
+)
 from core.tools.call_syntax import (
     PLACEHOLDER_WORDS,
     SpellingAliases,
@@ -33,8 +39,6 @@ from core.tools.contracts import ToolContract, ToolContractError
 
 TIMEZONE_FIELD = "timezone"
 ENABLED_FIELD = "enabled"
-MAX_DELAY_UNLIMITED = "unlimited"
-"""The canonical ``max_delay`` that removes a job's limit."""
 # Accepted so a requested time zone or paused state reaches the handler, which
 # converts, applies or refuses it. Never advertised.
 UNADVERTISED_PARAMETERS: dict[str, Any] = {
@@ -220,36 +224,6 @@ SELF_TARGET = "self"
 """The target that names the calling Agent; the handler resolves it."""
 _SELF_WORDS = frozenset({"self", "current", "default", "this", "me", "myself", "currentagent"})
 _REPEAT_UNLIMITED_WORDS = frozenset({"unlimited", "infinite", "infinity", "forever", "always"})
-# Spellings of the latest start of a missed fire: durations, and seconds as numbers.
-_MAX_DELAY_KEYS = frozenset(
-    {
-        "maxdelay",
-        "maxlateness",
-        "maxlate",
-        "latelimit",
-        "catchupwindow",
-        "catchupwithin",
-        "misfiregrace",
-        "gracetime",
-        "graceperiod",
-        "startingdeadline",
-    }
-)
-_MAX_DELAY_SECONDS_KEYS = frozenset(
-    {
-        "maxdelayseconds",
-        "misfiregracetime",
-        "misfiregraceseconds",
-        "startingdeadlineseconds",
-        "gracetimeseconds",
-        "graceperiodseconds",
-    }
-)
-# Hermes ``catch_up_missed`` and OpenClaw ``skipMissedJobs`` flags.
-_CATCH_UP_KEYS = frozenset({"catchup", "catchupmissed", "runmissed", "startwhenavailable"})
-_SKIP_MISSED_KEYS = frozenset({"skipmissed", "skipmissedjobs", "skipmissedruns"})
-_ZERO_DURATION = re.compile(r"^(?:0+\s*[a-z]*|pt?0+[a-z]?)$")
-_MAX_DELAY_STAND_IN = "<duration such as 2h>"
 _BOOLEAN_WORDS = {"true": True, "yes": True, "1": True, "false": False, "no": False, "0": False}
 
 _CRON_MACROS = {
@@ -261,34 +235,6 @@ _CRON_MACROS = {
     "@yearly": "0 0 1 1 *",
     "@annually": "0 0 1 1 *",
 }
-_DURATION_WORDS = {
-    "s": 1,
-    "sec": 1,
-    "secs": 1,
-    "second": 1,
-    "seconds": 1,
-    "m": 60,
-    "min": 60,
-    "mins": 60,
-    "minute": 60,
-    "minutes": 60,
-    "h": 3600,
-    "hr": 3600,
-    "hrs": 3600,
-    "hour": 3600,
-    "hours": 3600,
-    "d": 86400,
-    "day": 86400,
-    "days": 86400,
-    "w": 604800,
-    "wk": 604800,
-    "week": 604800,
-    "weeks": 604800,
-}
-_DURATION = re.compile(r"^(\d+)\s*([a-z]+)$")
-_ISO_DURATION = re.compile(
-    r"^p(?:(\d+)w)?(?:(\d+)d)?(?:t(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?)?$", re.IGNORECASE
-)
 _DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 CLOCK_SCHEDULE = re.compile(r"^at ([01]\d|2[0-3]):([0-5]\d)$")
 """A clock time without a date; the handler reads it as its next occurrence."""
@@ -354,7 +300,8 @@ def normalize_cron_arguments(contract: ToolContract, arguments: Any) -> Any:
     _read_recurrence(normalized, problems)
     _read_session(normalized, problems)
     _read_delivery(normalized, problems)
-    _read_max_delay(normalized, problems)
+    for text in read_max_delay(normalized, missed="missed fire"):
+        problems.add(text, max_delay=MAX_DELAY_STAND_IN)
     _read_extras(normalized)
     _omit_placeholders(normalized, problems)
     _read_action(normalized, problems)
@@ -633,7 +580,7 @@ def _keyed_schedule(
                 f'"{key}" {item} has no unit; write it like "{prefix} 30m" or "{prefix} 2h".'
             )
             return None
-        duration = _duration_from_seconds(item * unit)
+        duration = duration_from_seconds(item * unit)
         if duration is None:
             problems.add(f'"{key}" {item} is not a whole number of minutes.')
             return None
@@ -653,9 +600,9 @@ def _schedule_text(value: Any, hint: str | None, key: str, problems: _Problems) 
             return clock
     prefix, _space, rest = lowered.partition(" ")
     if prefix in {"in", "every"} and rest:
-        duration = _duration(rest)
+        duration = duration_text(rest)
         return f"{prefix} {duration}" if duration else text
-    duration = _duration(lowered)
+    duration = duration_text(lowered)
     if duration is not None:
         if hint == "once":
             return f"in {duration}"
@@ -694,33 +641,6 @@ def _schedule_type_mismatch(text: str, type_hint: str, problems: _Problems) -> N
             f'the schedule "{text}" is not a {type_hint} schedule; the schedule string alone '
             "decides the type."
         )
-
-
-def _duration(text: str) -> str | None:
-    """Return ``30m``, ``2h`` or ``1d`` for a duration such as ``30 minutes`` or ``PT2H``."""
-    text = text.strip().casefold()
-    match = _DURATION.match(text)
-    if match is not None:
-        size = _DURATION_WORDS.get(match.group(2))
-        if size is None:
-            return None
-        return _duration_from_seconds(int(match.group(1)) * size)
-    iso = _ISO_DURATION.match(text)
-    if iso is not None and any(iso.groups()):
-        weeks, days, hours, minutes, seconds = (int(part or 0) for part in iso.groups())
-        total = (((weeks * 7 + days) * 24 + hours) * 60 + minutes) * 60 + seconds
-        return _duration_from_seconds(total)
-    return None
-
-
-def _duration_from_seconds(seconds: float) -> str | None:
-    if seconds <= 0 or seconds % 60:
-        return None
-    minutes = int(seconds // 60)
-    for size, unit in ((1440, "d"), (60, "h")):
-        if minutes % size == 0:
-            return f"{minutes // size}{unit}"
-    return f"{minutes}m"
 
 
 def _moment_text(
@@ -872,70 +792,6 @@ def _read_recurrence(arguments: dict[str, Any], problems: _Problems) -> None:
             f'the schedule "{schedule}" fires once, but the call asks for a repeating job; '
             'use "every <duration>" or five cron fields.'
         )
-
-
-def _read_max_delay(arguments: dict[str, Any], problems: _Problems) -> None:
-    """Read how late a missed fire may start into one canonical ``max_delay``.
-
-    Canonical values are ``30m``, ``2h`` or ``1d``, ``0m`` (missed fires never
-    start) and ``unlimited``. A number names seconds only under a key that says so.
-    """
-    readings: list[str] = []
-    for key in list(arguments):
-        word = spelling(key)
-        if (
-            word
-            not in _MAX_DELAY_KEYS | _MAX_DELAY_SECONDS_KEYS | _CATCH_UP_KEYS | _SKIP_MISSED_KEYS
-        ):
-            continue
-        item = arguments.pop(key)
-        if item is None:
-            readings.append(MAX_DELAY_UNLIMITED)
-            continue
-        if is_placeholder(item):
-            continue
-        if word in _CATCH_UP_KEYS | _SKIP_MISSED_KEYS:
-            flag = _boolean(item)
-            if not isinstance(flag, bool):
-                problems.add(f'"{key}" must be true or false.')
-            elif flag == (word in _CATCH_UP_KEYS):
-                readings.append(MAX_DELAY_UNLIMITED)
-            else:
-                readings.append("0m")
-            continue
-        reading = _max_delay_text(item, seconds=word in _MAX_DELAY_SECONDS_KEYS)
-        if reading is None:
-            problems.add(
-                f'"{key}" {_json_value(item)} is not a duration. max_delay takes a duration such '
-                'as "30m", "2h" or "1d", "0m" to skip every missed fire, or "unlimited".',
-                max_delay=_MAX_DELAY_STAND_IN,
-            )
-            continue
-        readings.append(reading)
-    if len(set(readings)) > 1:
-        problems.add("it sets more than one max_delay; choose one.")
-    elif readings:
-        arguments["max_delay"] = readings[0]
-
-
-def _max_delay_text(value: Any, *, seconds: bool) -> str | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int | float):
-        if value == 0:
-            return "0m"
-        # A bare number names no unit.
-        return _duration_from_seconds(value) if seconds else None
-    if not isinstance(value, str):
-        return None
-    text = value.strip().casefold()
-    if spelling(text) in _REPEAT_UNLIMITED_WORDS:
-        return MAX_DELAY_UNLIMITED
-    if text.isdigit():
-        return _max_delay_text(int(text), seconds=seconds)
-    if _ZERO_DURATION.match(text.replace(" ", "")):
-        return "0m"
-    return _duration(text)
 
 
 def _read_session(arguments: dict[str, Any], problems: _Problems) -> None:
@@ -1189,7 +1045,6 @@ def _boolean(value: Any) -> Any:
 __all__ = [
     "CLOCK_SCHEDULE",
     "ENABLED_FIELD",
-    "MAX_DELAY_UNLIMITED",
     "SELF_TARGET",
     "CronCallRefusedError",
     "OMIT",

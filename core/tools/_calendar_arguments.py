@@ -24,6 +24,7 @@ from collections.abc import Mapping
 from datetime import date, datetime, time
 from typing import Any
 
+from core.tools._durations import MAX_DELAY_STAND_IN, read_max_delay
 from core.tools._named_zones import named_zone
 from core.tools.call_syntax import (
     SpellingAliases,
@@ -53,7 +54,7 @@ OMIT = object()
 """``render_call`` override that removes a field from the rendered call."""
 
 EVENT_FIELDS = ("title", "start", "duration", "rrule", "notes")
-ACTION_FIELDS = ("when", "prompt", "target", "session")
+ACTION_FIELDS = ("when", "prompt", "target", "session", "max_delay")
 LENGTH_FIELDS = ("duration", DURATION_MINUTES_FIELD, DURATION_DAYS_FIELD)
 _EXTRA_EVENT_FIELDS = (END_FIELD, LOCATION_FIELD, TIMEZONE_FIELD)
 # Fields that describe an event, including unadvertised spellings of its length and end.
@@ -96,6 +97,7 @@ _CALL_ORDER = (
     "prompt",
     "target",
     "session",
+    "max_delay",
 )
 _LONG_TEXT = 120
 _LONG_TEXT_STAND_INS = {
@@ -453,6 +455,9 @@ def normalize_calendar_arguments(contract: ToolContract, arguments: Any) -> Any:
     if hours is not None:
         _merge(normalized, DURATION_MINUTES_FIELD, hours, problems)
     _read_extras(normalized, problems)
+    unread_delays = read_max_delay(normalized, missed="missed start")
+    for text in unread_delays:
+        problems.add(text)
     _omit_placeholders(normalized)
     _read_action(normalized, problems)
     action = normalized.get("action")
@@ -466,6 +471,8 @@ def normalize_calendar_arguments(contract: ToolContract, arguments: Any) -> Any:
         _read_action_when(normalized, problems)
     _read_duration(normalized, problems)
     _check_fields(normalized, problems)
+    if unread_delays:
+        normalized["max_delay"] = MAX_DELAY_STAND_IN
     if problems.texts or problems.choice:
         known = set(contract.input_schema["properties"])
         for key in normalized:
