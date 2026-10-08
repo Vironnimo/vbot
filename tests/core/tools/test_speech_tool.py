@@ -1,4 +1,4 @@
-"""text_to_speech: the artifact it returns, other names for the text, and what refused or
+"""generate_speech: the artifact it returns, other names for the text, and what refused or
 failed calls say."""
 
 from __future__ import annotations
@@ -19,9 +19,9 @@ from core.model_tasks import (
 from core.providers.errors import ProviderAuthError
 from core.runs.run import RunExecutionOwner
 from core.tools.speech import (
-    TEXT_TO_SPEECH_TOOL_NAME,
-    TEXT_TO_SPEECH_TOOL_PARAMETERS,
-    register_text_to_speech_tool,
+    GENERATE_SPEECH_TOOL_NAME,
+    GENERATE_SPEECH_TOOL_PARAMETERS,
+    register_generate_speech_tool,
 )
 from core.tools.tools import ToolContext, ToolRegistry, tool_failure_for_exception
 from core.utils.paths import model_path
@@ -55,13 +55,13 @@ async def _speak(
     tmp_path: Path, arguments: dict[str, Any], service: _SpeechService, **context: Any
 ) -> dict[str, Any]:
     registry = ToolRegistry()
-    register_text_to_speech_tool(registry, service)
+    register_generate_speech_tool(registry, service)
     tool_context = ToolContext(
         agent_id="agent",
         session_id="session",
         run_id="run",
         tool_call_id="tool-call",
-        tool_name=TEXT_TO_SPEECH_TOOL_NAME,
+        tool_name=GENERATE_SPEECH_TOOL_NAME,
         tool_call_index=0,
         workspace=tmp_path,
         vbot_root=tmp_path,
@@ -70,7 +70,7 @@ async def _speak(
     try:
         return await registry.dispatch(replace(tool_context, **context), arguments)
     except Exception as error:
-        return tool_failure_for_exception(TEXT_TO_SPEECH_TOOL_NAME, error)
+        return tool_failure_for_exception(GENERATE_SPEECH_TOOL_NAME, error)
 
 
 @pytest.mark.asyncio
@@ -78,8 +78,8 @@ async def test_speech_is_returned_as_an_artifact_for_the_run(tmp_path: Path) -> 
     audio_path = tmp_path / "artifact-1.mp3"
     service = _SpeechService(audio_path)
     registry = ToolRegistry()
-    register_text_to_speech_tool(registry, service)
-    tool = registry.get(TEXT_TO_SPEECH_TOOL_NAME)
+    register_generate_speech_tool(registry, service)
+    tool = registry.get(GENERATE_SPEECH_TOOL_NAME)
 
     result = await _speak(
         tmp_path,
@@ -91,7 +91,7 @@ async def test_speech_is_returned_as_an_artifact_for_the_run(tmp_path: Path) -> 
         ),
     )
 
-    assert tool.parameters == TEXT_TO_SPEECH_TOOL_PARAMETERS
+    assert tool.parameters == GENERATE_SPEECH_TOOL_PARAMETERS
     assert "additionalProperties" not in tool.parameters
     assert tool.open_input_schema is True
     assert service.usage_context == TaskUsageContext(
@@ -137,9 +137,9 @@ def _auth_failure() -> SpeechExecutionError:
             None,
             {
                 "code": "invalid_arguments",
-                "message": "text_to_speech was not run:\n"
+                "message": "generate_speech was not run:\n"
                 '- "unexpected" is not a parameter.\n'
-                "text_to_speech parameters: text (required).",
+                "generate_speech parameters: text (required).",
             },
             id="unknown-argument",
         ),

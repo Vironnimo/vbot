@@ -26,11 +26,11 @@ from core.tools.tools import (
 )
 from core.utils.paths import model_path
 
-TEXT_TO_SPEECH_TOOL_NAME = "text_to_speech"
-TEXT_TO_SPEECH_TOOL_DESCRIPTION = (
+GENERATE_SPEECH_TOOL_NAME = "generate_speech"
+GENERATE_SPEECH_TOOL_DESCRIPTION = (
     "Convert text to spoken audio. The web chat plays the returned audio artifact automatically."
 )
-TEXT_TO_SPEECH_TOOL_PARAMETERS: JsonObject = {
+GENERATE_SPEECH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
         "text": {
@@ -42,9 +42,9 @@ TEXT_TO_SPEECH_TOOL_PARAMETERS: JsonObject = {
     "required": ["text"],
 }
 
-_TEXT_TO_SPEECH_CONTRACT = compile_tool_contract(
-    name=TEXT_TO_SPEECH_TOOL_NAME,
-    input_schema=TEXT_TO_SPEECH_TOOL_PARAMETERS,
+_GENERATE_SPEECH_CONTRACT = compile_tool_contract(
+    name=GENERATE_SPEECH_TOOL_NAME,
+    input_schema=GENERATE_SPEECH_TOOL_PARAMETERS,
     require_closed_input=False,
 )
 # Names other speech Tools use for the text to speak (OpenAI's speech API uses input).
@@ -52,9 +52,9 @@ _FIELD_ALIASES = SpellingAliases({"text": ("input", "content", "transcript")})
 _SETTING = "Text to speech"
 
 
-def _normalize_text_to_speech_arguments(arguments: Any) -> Any:
+def _normalize_generate_speech_arguments(arguments: Any) -> Any:
     return normalize_call_arguments(
-        _TEXT_TO_SPEECH_CONTRACT, arguments, field_aliases=_FIELD_ALIASES
+        _GENERATE_SPEECH_CONTRACT, arguments, field_aliases=_FIELD_ALIASES
     )
 
 
@@ -70,7 +70,7 @@ def _speech_failure(error: SpeechError) -> JsonObject:
     return tool_failure("speech_error", message, retryable=bool(getattr(error, "retryable", False)))
 
 
-def make_text_to_speech_handler(speech_service: Any):
+def make_generate_speech_handler(speech_service: Any):
     """Create a text-to-speech tool handler bound to the runtime speech service."""
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -113,17 +113,17 @@ def make_text_to_speech_handler(speech_service: Any):
     return handler
 
 
-def register_text_to_speech_tool(registry: ToolRegistry, speech_service: Any) -> None:
+def register_generate_speech_tool(registry: ToolRegistry, speech_service: Any) -> None:
     """Register the text-to-speech tool with a vBot tool registry."""
 
     registry.register(
-        TEXT_TO_SPEECH_TOOL_NAME,
-        TEXT_TO_SPEECH_TOOL_DESCRIPTION,
-        TEXT_TO_SPEECH_TOOL_PARAMETERS,
-        make_text_to_speech_handler(speech_service),
+        GENERATE_SPEECH_TOOL_NAME,
+        GENERATE_SPEECH_TOOL_DESCRIPTION,
+        GENERATE_SPEECH_TOOL_PARAMETERS,
+        make_generate_speech_handler(speech_service),
         family="media",
         open_input_schema=True,
-        argument_normalizer=_normalize_text_to_speech_arguments,
+        argument_normalizer=_normalize_generate_speech_arguments,
         result_schema={"type": "object", "required": ["artifact"]},
         display=ToolDisplay(
             primary_candidates=(ToolDisplayField("text", kind="text", quote=True),)

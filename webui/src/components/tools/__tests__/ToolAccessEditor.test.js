@@ -55,7 +55,7 @@ const tools = [
     ready: true,
   },
   {
-    name: 'image_generation',
+    name: 'generate_image',
     family: 'media',
     activation: 'configurable',
     ready: true,

@@ -101,9 +101,10 @@ from core.tools import (
     register_analyze_image_tool,
     register_apply_patch_tool,
     register_edit_tools,
+    register_generate_image_tool,
     register_generate_music_tool,
+    register_generate_speech_tool,
     register_generate_video_tool,
-    register_image_generation_tool,
     register_memory_tool,
     register_project_tool,
     register_read_tool,
@@ -112,7 +113,6 @@ from core.tools import (
     register_skill_manage_tool,
     register_skill_tool,
     register_terminal_tool,
-    register_text_to_speech_tool,
     register_web_fetch_tool,
     register_web_search_tool,
 )
@@ -364,12 +364,12 @@ def bootstrap(runtime: Runtime) -> None:
             runtime.resolve_environment_credential,
             runtime._storage.load_web_search_settings,
         )
-        register_text_to_speech_tool(runtime._tools, runtime._speech)
+        register_generate_speech_tool(runtime._tools, runtime._speech)
         register_classify_tool(runtime._tools, runtime._decisions)
         register_analyze_image_tool(
             runtime._tools, runtime._image, attachment_store=runtime._attachment_store
         )
-        register_image_generation_tool(runtime._tools, runtime._image)
+        register_generate_image_tool(runtime._tools, runtime._image)
         register_generate_video_tool(runtime._tools, runtime._video)
         register_generate_music_tool(runtime._tools, runtime._music)
         extension_dirs = _extra_extension_directories(runtime.logger, settings)

@@ -1,11 +1,11 @@
 # Speech Tool
 
-Built-in `text_to_speech` tool for creating speech artifacts through the central TTS task-model binding.
+Built-in `generate_speech` Tool for creating speech artifacts through the central TTS task-model binding.
 
 ## Interfaces
 
-- Tool name: `text_to_speech`
-- Registration: `register_text_to_speech_tool(registry, speech_service)`
+- Tool name: `generate_speech`
+- Registration: `register_generate_speech_tool(registry, speech_service)`
 - Model-facing schema: required `text` (string, `minLength: 1`) with no `additionalProperties` keyword; dispatch rejects unknown or malformed arguments. The Tool intentionally exposes only `text` - model, provider, voice, format, speed, and instructions come from Settings `model_tasks.text_to_speech`.
 - Dialects (owner argument normalizer, spelling-insensitive): `input` (the OpenAI speech API name), `content`, and `transcript` -> `text`; two different texts fail with the central conflict error.
 - Display: summary field `text`.

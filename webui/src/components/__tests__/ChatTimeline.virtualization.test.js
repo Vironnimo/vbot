@@ -262,7 +262,7 @@ describe('ChatTimeline virtualization', () => {
         tool_calls: [
           {
             id: 'call-speech',
-            name: 'text_to_speech',
+            name: 'generate_speech',
             arguments: { text: 'test-owned speech' },
           },
         ],
@@ -271,7 +271,7 @@ describe('ChatTimeline virtualization', () => {
         id: 'speech-result',
         role: 'tool',
         tool_call_id: 'call-speech',
-        name: 'text_to_speech',
+        name: 'generate_speech',
         content: JSON.stringify({
           ok: true,
           error: null,

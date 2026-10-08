@@ -26,7 +26,7 @@ from core.tools.apply_patch import APPLY_PATCH_TOOL_PARAMETERS
 from core.tools.calendar import CALENDAR_TOOL_PARAMETERS
 from core.tools.channel import CHANNEL_SEND_TOOL_PARAMETERS
 from core.tools.cron import CRON_TOOL_PARAMETERS
-from core.tools.image import ANALYZE_IMAGE_TOOL_PARAMETERS, IMAGE_GENERATION_TOOL_PARAMETERS
+from core.tools.image import ANALYZE_IMAGE_TOOL_PARAMETERS, GENERATE_IMAGE_TOOL_PARAMETERS
 from core.tools.memory import MEMORY_TOOL_PARAMETERS
 from core.tools.project import PROJECT_TOOL_PARAMETERS
 from core.tools.read import READ_TOOL_PARAMETERS
@@ -35,7 +35,7 @@ from core.tools.session_search import SESSION_SEARCH_TOOL_PARAMETERS
 from core.tools.shell import SHELL_TOOL_PARAMETERS
 from core.tools.skill import SKILL_TOOL_PARAMETERS
 from core.tools.skill_manage import SKILL_MANAGE_TOOL_PARAMETERS
-from core.tools.speech import TEXT_TO_SPEECH_TOOL_PARAMETERS
+from core.tools.speech import GENERATE_SPEECH_TOOL_PARAMETERS
 from core.tools.status import STATUS_TOOL_PARAMETERS
 from core.tools.subagent import SUBAGENT_TOOL_PARAMETERS
 from core.tools.tools import display_results, display_text, run_tool_worker
@@ -502,7 +502,7 @@ _BUILTIN_TOOL_SCHEMAS: dict[str, JsonObject] = {
     "calendar": CALENDAR_TOOL_PARAMETERS,
     "channel_send": CHANNEL_SEND_TOOL_PARAMETERS,
     "cron": CRON_TOOL_PARAMETERS,
-    "image_generation": IMAGE_GENERATION_TOOL_PARAMETERS,
+    "generate_image": GENERATE_IMAGE_TOOL_PARAMETERS,
     "memory": MEMORY_TOOL_PARAMETERS,
     "project": PROJECT_TOOL_PARAMETERS,
     "read": READ_TOOL_PARAMETERS,
@@ -512,7 +512,7 @@ _BUILTIN_TOOL_SCHEMAS: dict[str, JsonObject] = {
     "skill_manage": SKILL_MANAGE_TOOL_PARAMETERS,
     "status": STATUS_TOOL_PARAMETERS,
     "subagent": SUBAGENT_TOOL_PARAMETERS,
-    "text_to_speech": TEXT_TO_SPEECH_TOOL_PARAMETERS,
+    "generate_speech": GENERATE_SPEECH_TOOL_PARAMETERS,
     "web_fetch": WEB_FETCH_TOOL_PARAMETERS,
     "web_search": WEB_SEARCH_TOOL_PARAMETERS,
 }

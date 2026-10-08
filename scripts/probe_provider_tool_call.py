@@ -227,10 +227,10 @@ def _parser() -> argparse.ArgumentParser:
         help="Exact cron action and argument shape requested by the scenario.",
     )
     parser.add_argument(
-        "--image-generation-case",
+        "--generate-image-case",
         choices=IMAGE_GENERATION_CASES,
         default="full_default",
-        help="Exact image_generation profile and argument shape requested by the scenario.",
+        help="Exact generate_image profile and argument shape requested by the scenario.",
     )
     parser.add_argument(
         "--memory-case",
@@ -302,7 +302,7 @@ def _parser() -> argparse.ArgumentParser:
         "--speech-case",
         choices=TEXT_TO_SPEECH_CASES,
         default="plain",
-        help="Exact text_to_speech argument shape requested by the scenario.",
+        help="Exact generate_speech argument shape requested by the scenario.",
     )
     parser.add_argument(
         "--web-fetch-case",
@@ -534,8 +534,8 @@ async def _run(args: argparse.Namespace) -> int:
             "cron_case": args.cron_case if scenario.name == "cron" else None,
             "glob_case": args.glob_case if scenario.name == "glob" else None,
             "grep_case": args.grep_case if scenario.name == "grep" else None,
-            "image_generation_case": (
-                args.image_generation_case if scenario.name == "image_generation" else None
+            "generate_image_case": (
+                args.generate_image_case if scenario.name == "generate_image" else None
             ),
             "memory_case": args.memory_case if scenario.name == "memory" else None,
             "read_case": args.read_case if scenario.name == "read" else None,
@@ -548,7 +548,7 @@ async def _run(args: argparse.Namespace) -> int:
             ),
             "status_case": args.status_case if scenario.name == "status" else None,
             "subagent_case": args.subagent_case if scenario.name == "subagent" else None,
-            "speech_case": args.speech_case if scenario.name == "text_to_speech" else None,
+            "speech_case": args.speech_case if scenario.name == "generate_speech" else None,
             "web_fetch_case": (args.web_fetch_case if scenario.name == "web_fetch" else None),
             "web_search_case": (args.web_search_case if scenario.name == "web_search" else None),
             "request_messages": len(messages),

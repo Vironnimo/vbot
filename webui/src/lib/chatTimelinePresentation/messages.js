@@ -362,14 +362,14 @@ const speechResultForEvent = (event) =>
   event.payload?.result ?? messageFromEvent(event)?.content;
 
 export const isTextToSpeechResult = (event) =>
-  toolNameForEvent(event) === 'text_to_speech' &&
+  toolNameForEvent(event) === 'generate_speech' &&
   speechArtifactFromEnvelope(speechResultForEvent(event)) !== null;
 
 export const speechArtifactFromResult = (event) =>
   speechArtifactFromEnvelope(speechResultForEvent(event));
 
 export const isTextToSpeechTool = (tool) =>
-  toolNameForRunTool(tool) === 'text_to_speech' &&
+  toolNameForRunTool(tool) === 'generate_speech' &&
   speechArtifactFromEnvelope(tool.result) !== null;
 
 export const speechArtifactFromTool = (tool) =>

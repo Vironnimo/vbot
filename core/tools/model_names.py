@@ -167,8 +167,8 @@ _HARNESS_NAMES: dict[str, tuple[str, ...]] = {
         ),
         ("analyze_image",),
     ),
-    **dict.fromkeys(("generateimage", "createimage", "imagegen"), ("image_generation",)),
-    **dict.fromkeys(("tts", "speak"), ("text_to_speech",)),
+    **dict.fromkeys(("createimage", "imagegen"), ("generate_image",)),
+    **dict.fromkeys(("tts", "speak"), ("generate_speech",)),
 }
 
 

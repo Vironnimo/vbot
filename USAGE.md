@@ -748,7 +748,7 @@ Specialized bindings keep non-chat tasks independent from the Agent's primary Mo
 | `decision` | the `classify` Tool: typed answers about texts |
 | `image_generation` | image generation and editing, including source-image workflows when the target supports them |
 
-The `image_generation` Tool writes generated files into a caller-owned `image-gen/` directory. Identity Agents always use `<Workspace>/image-gen/`, also in Sessions that work in a Project; Project Config Agents use `<Project cwd>/image-gen/`. The Tool returns the absolute local paths, and Chat exposes referenced files through signed `/api/files/` URLs without keeping a second image copy in the data directory.
+The `generate_image` Tool writes generated files into a caller-owned `image-gen/` directory. Identity Agents always use `<Workspace>/image-gen/`, also in Sessions that work in a Project; Project Config Agents use `<Project cwd>/image-gen/`. The Tool returns the absolute local paths, and Chat exposes referenced files through signed `/api/files/` URLs without keeping a second image copy in the data directory.
 
 In Settings, the speech and Live voice Models are on the Voice page, the embedding Model under Memory → Conversation search, the image, video and music Models under Tools → Images, video & music, and the Decision model under Tools → Decision Model. Use Settings for target-specific option forms, or inspect and bind them through the CLI:
 
@@ -881,7 +881,7 @@ No voice-cloning input is exposed by this integration.
 After saving the binding and options, enter a short text and choose **Generate
 voice preview**. The first request loads the installed model, then generates audio. Live status and elapsed time remain
 visible; the audio player appears when the complete WAV is ready. The Agent's
-existing `text_to_speech` Tool uses the same saved engine and voice options.
+existing `generate_speech` Tool uses the same saved engine and voice options.
 Local requests accept up to 5,000 characters and split longer passages within
 that limit at sentence/word boundaries. STT and TTS models stay loaded independently;
 each model has its own **Unload from memory** button.

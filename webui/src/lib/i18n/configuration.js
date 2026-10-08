@@ -708,7 +708,7 @@ export default Object.freeze({
     'Transcribes what you say into the Chat or Terminal microphone and the commands spoken after a wake phrase. Audio attachments are also transcribed with it when the Agent’s Model cannot take audio.\n\nThe recording format is set under Transcription audio at the end of this page.',
   'settings.specializedModels.textToSpeech': 'Text to speech',
   'settings.specializedModels.textToSpeechHelp':
-    'Speaks text aloud when an Agent uses the text_to_speech Tool.',
+    'Speaks text aloud when an Agent uses the generate_speech Tool.',
   'settings.specializedModels.liveVoice': 'Live voice',
   'settings.specializedModels.liveVoiceModel': 'Voice model',
   'settings.specializedModels.liveVoiceDescription':
@@ -744,7 +744,7 @@ export default Object.freeze({
     'Used by the analyze_image Tool. Agents whose Model cannot see images can use it; Agents with vision only when it is enabled in their Tool settings.\n\nThe images are sent to this Model’s Provider.',
   'settings.specializedModels.imageGeneration': 'Image generation',
   'settings.specializedModels.imageGenerationHelp':
-    'Used by the image_generation Tool. Agents can also edit existing images when this Model accepts images as input.\n\nThe options below apply to every request; an Agent can set only the aspect ratio and resolution per request.',
+    'Used by the generate_image Tool. Agents can also edit existing images when this Model accepts images as input.\n\nThe options below apply to every request; an Agent can set only the aspect ratio and resolution per request.',
   'settings.specializedModels.videoGeneration': 'Video generation',
   'settings.specializedModels.videoGenerationHelp':
     'Used by the generate_video Tool.',

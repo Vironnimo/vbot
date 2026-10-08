@@ -368,16 +368,16 @@ function plannedToolResponse(prompt, results, offeredTools) {
   }
 
   if (prompt.includes("E2E_TOOL_MEDIA")) {
-    if (resultsFor(results, "text_to_speech").length === 0) {
+    if (resultsFor(results, "generate_speech").length === 0) {
       return {
-        calls: [toolCall("text_to_speech", { text: "E2E synthesized speech" })],
+        calls: [toolCall("generate_speech", { text: "E2E synthesized speech" })],
       };
     }
-    const imageResults = resultsFor(results, "image_generation");
+    const imageResults = resultsFor(results, "generate_image");
     if (imageResults.length === 0) {
       return {
         calls: [
-          toolCall("image_generation", {
+          toolCall("generate_image", {
             prompt: "A deterministic blue square on a white background",
           }),
         ],

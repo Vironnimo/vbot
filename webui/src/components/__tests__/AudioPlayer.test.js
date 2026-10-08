@@ -262,7 +262,7 @@ it.each(['run', 'event'])(
     };
     const toolCall = {
       id: 'call-speech',
-      name: 'text_to_speech',
+      name: 'generate_speech',
       arguments: { text: 'test-owned speech' },
     };
     const event = {
@@ -325,7 +325,7 @@ it('restores a paused player for a speech result read back from Session history'
         tool_calls: [
           {
             id: 'call-speech',
-            name: 'text_to_speech',
+            name: 'generate_speech',
             arguments: { text: 'test-owned speech' },
           },
         ],
@@ -334,7 +334,7 @@ it('restores a paused player for a speech result read back from Session history'
         id: 'tool-one',
         role: 'tool',
         tool_call_id: 'call-speech',
-        name: 'text_to_speech',
+        name: 'generate_speech',
         content: JSON.stringify(envelope),
       },
       { id: 'assistant-two', role: 'assistant', content: 'Spoken.' },
@@ -380,7 +380,7 @@ it('keeps speech playing when its finished Run is rebuilt from Session history',
   };
   const toolCall = {
     id: 'call-speech',
-    name: 'text_to_speech',
+    name: 'generate_speech',
     arguments: { text: 'test-owned speech' },
   };
   const messages = [

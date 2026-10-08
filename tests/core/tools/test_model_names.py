@@ -18,7 +18,7 @@ OFFERED = (
     "web_search",
     "subagent",
     "analyze_image",
-    "text_to_speech",
+    "generate_speech",
     "skill",
 )
 
@@ -52,7 +52,7 @@ def test_shell_tool_is_offered_under_the_host_shell_name() -> None:
         ("fetch", "web_fetch"),
         ("google_web_search", "web_search"),
         ("vision_analyze", "analyze_image"),
-        ("tts", "text_to_speech"),
+        ("tts", "generate_speech"),
         ("skills_list", "skill"),
         # One inserted, removed, replaced or swapped character.
         pytest.param(

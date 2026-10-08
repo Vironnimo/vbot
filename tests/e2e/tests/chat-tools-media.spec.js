@@ -17,7 +17,7 @@ test("speech and image Tools persist and serve fake Provider artifacts", async (
     finalText: "Generated media tools completed.",
   });
 
-  const speech = await expectToolSucceeded(page, chat, "text_to_speech");
+  const speech = await expectToolSucceeded(page, chat, "generate_speech");
   await openToolRow(speech);
   await expect(speech).toContainText("E2E synthesized speech");
   const audioPlayer = chat.getByRole("group", { name: "Speech audio" });
@@ -34,7 +34,7 @@ test("speech and image Tools persist and serve fake Provider artifacts", async (
   // MPEG-1 Layer III frame sync of the fake Provider's MP3 audio.
   expect([...audioBytes.subarray(0, 2)]).toEqual([0xff, 0xfb]);
 
-  const generation = await expectToolSucceeded(page, chat, "image_generation");
+  const generation = await expectToolSucceeded(page, chat, "generate_image");
   await openToolRow(generation);
   await expect(generation).toContainText(
     "A deterministic blue square on a white background",

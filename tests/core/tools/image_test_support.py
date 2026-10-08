@@ -1,4 +1,4 @@
-"""A recording image service and registered image Tools, for image_generation and
+"""A recording image service and registered image Tools, for generate_image and
 analyze_image tests.
 
 Calls run through ``registry.dispatch``; a call the contract refuses becomes the
@@ -16,9 +16,9 @@ from core.model_tasks import ImageUnderstandingRunContext
 from core.model_tasks.image_profile import ImageProfile
 from core.tools.image import (
     ANALYZE_IMAGE_TOOL_NAME,
-    IMAGE_GENERATION_TOOL_NAME,
+    GENERATE_IMAGE_TOOL_NAME,
     register_analyze_image_tool,
-    register_image_generation_tool,
+    register_generate_image_tool,
 )
 from core.tools.tools import ToolContext, ToolRegistry
 from tests.core.tools.tools_test_support import dispatch_as_executor
@@ -129,9 +129,9 @@ class ImageService:
 
 
 def image_registry(service: ImageService, *, attachment_store: Any = None) -> ToolRegistry:
-    """A registry holding image_generation and analyze_image for ``service``."""
+    """A registry holding generate_image and analyze_image for ``service``."""
     registry = ToolRegistry()
-    register_image_generation_tool(registry, service)
+    register_generate_image_tool(registry, service)
     register_analyze_image_tool(registry, service, attachment_store=attachment_store)
     return registry
 
@@ -139,10 +139,10 @@ def image_registry(service: ImageService, *, attachment_store: Any = None) -> To
 async def generate(
     root: Path, arguments: Any, service: ImageService, **context: Any
 ) -> dict[str, Any]:
-    """Dispatch one image_generation call from an Agent whose Workspace is ``root``."""
+    """Dispatch one generate_image call from an Agent whose Workspace is ``root``."""
     return await dispatch_as_executor(
         image_registry(service),
-        make_context(root, IMAGE_GENERATION_TOOL_NAME, **context),
+        make_context(root, GENERATE_IMAGE_TOOL_NAME, **context),
         arguments,
     )
 

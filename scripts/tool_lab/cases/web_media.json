@@ -162,14 +162,14 @@
    "expect": {"ok": false, "error_code": "not_an_image", "contains": ["images[1]"]}
   },
   {
-   "name": "image_generation: output_dir default is described",
-   "tool": "image_generation",
+   "name": "generate_image: output_dir default is described",
+   "tool": "generate_image",
    "arguments": {"prompt": "a red bicycle", "n": 2},
    "expect": {"ok": false}
   },
   {
-   "name": "text_to_speech: input alias",
-   "tool": "text_to_speech",
+   "name": "generate_speech: input alias",
+   "tool": "generate_speech",
    "arguments": {"input": "Hello there"},
    "expect": {"ok": false, "absent": ["was not run"]}
   }
