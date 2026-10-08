@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
 from functools import partial
@@ -148,6 +148,121 @@ class AgenticProgression:
             # The concrete Session lock never suppresses body exceptions and
             # needs no exception details to release its ContextVar ownership.
             await write_lock.__aexit__(None, None, None)
+
+    async def _persist_tool_results(
+        self,
+        context: _RunExecutionContext,
+        tool_dispatch_context: ToolDispatchContext,
+        assistant_message_id: str,
+        tool_messages: list[ChatMessage],
+    ) -> None:
+        """Persist a turn's Tool Results with the deferred Notes in one transaction."""
+        run = context.run
+        session = context.session
+        deferred_notes = session.take_deferred_notes()
+        session.assistant_message_id = assistant_message_id
+        batch_messages = [*tool_messages, *deferred_notes]
+        persist_started = time.perf_counter()
+        binding = context.request.temporary_binding
+        result_facts = tool_dispatch_context.with_result_payloads(tool_result_facts(tool_messages))
+        result_indexes = {
+            message.tool_call_id: index
+            for index, message in enumerate(batch_messages)
+            if message.role == "tool"
+        }
+        # A receipt counts only with its call's persisted Result; a call a Run
+        # cancel stopped has none.
+        owned_receipts = [
+            (result_indexes[tool_call_id], receipt_id, content_hash, effect_kind, "tool")
+            for (
+                tool_call_id,
+                receipt_id,
+                content_hash,
+                effect_kind,
+            ) in tool_dispatch_context.delivery_receipts
+            if tool_call_id in result_indexes
+        ]
+        if binding is not None and owned_receipts:
+            # The binding addresses this Run's own Session.
+            await context.session_snapshot.commit(
+                session,
+                partial(
+                    self._dependencies.sessions.append_messages_with_receipts_async,
+                    binding.address,
+                    generation_id=binding.generation_id,
+                    owner_name=binding.owner_name,
+                    messages=batch_messages,
+                    run_id=run.id,
+                    assistant_message_id=assistant_message_id,
+                    tool_results=result_facts,
+                    receipts=owned_receipts,
+                ),
+            )
+        else:
+            await context.session_snapshot.append(
+                session,
+                batch_messages,
+                tool_results=result_facts,
+            )
+        record_span(
+            "chat.persist",
+            persist_started,
+            track=session_track(run.agent_id, run.session_id, context.project_id),
+            name="persist tool results",
+            args={"run_id": run.id},
+        )
+        for tool_message in tool_messages:
+            assert tool_message.tool_call_id is not None
+            tool_dispatch_context.notify_result_persisted(tool_message.tool_call_id)
+            loaded_project_id = project_tool_context_id(tool_message)
+            if context.project_id is None and loaded_project_id is not None:
+                await self._requests._apply_project_skill_context(context, loaded_project_id)
+
+    async def _finish_tool_round(
+        self,
+        context: _RunExecutionContext,
+        tool_dispatch_context: ToolDispatchContext,
+        tool_round: ToolRound,
+        assistant_message_id: str,
+        remaining: Sequence[ToolCall] = (),
+    ) -> tuple[list[ChatMessage], list[JsonObject]] | None:
+        """Return the round's ordered Tool Results, or ``None`` after a Run cancel.
+
+        A Run cancel persists the Results of the calls that already finished.
+        """
+        try:
+            return await tool_round.finish(remaining)
+        except asyncio.CancelledError:
+            if not context.run.cancel_requested:
+                raise
+        await self._persist_cancelled_tool_round(
+            context, tool_dispatch_context, tool_round, assistant_message_id
+        )
+        return None
+
+    async def _persist_cancelled_tool_round(
+        self,
+        context: _RunExecutionContext,
+        tool_dispatch_context: ToolDispatchContext,
+        tool_round: ToolRound,
+        assistant_message_id: str,
+    ) -> None:
+        """After a Run cancel, persist the Results of the calls that finished.
+
+        The calls still running are stopped and keep no Result; the next request
+        repairs them as missing Results.
+        """
+
+        async def persist() -> None:
+            tool_messages, media_outputs = await tool_round.settle_cancelled()
+            if not tool_messages:
+                return
+            tool_messages, _ = await self._requests.store_tool_media(tool_messages, media_outputs)
+            await self._persist_tool_results(
+                context, tool_dispatch_context, assistant_message_id, tool_messages
+            )
+
+        await _finish_visible_boundary(persist(), context.run, True)
 
     async def _send_until_final(
         self,
@@ -780,10 +895,6 @@ class AgenticProgression:
                     # Input selected after this check starts the next Run.
                     break
 
-                if preserved_cancelled_output:
-                    # Cancel arrived while started Tool Calls ran. The turn is
-                    # durable; the next request repairs their missing results.
-                    return assistant_message
                 finalization_violation = context.tool_progress.finalization_reason is not None
                 finalization_request_reason: str | None = None
                 tool_iteration_limit = self._tool_iteration_limit(context)
@@ -795,6 +906,14 @@ class AgenticProgression:
 
                 session.begin_defer_notes()
                 try:
+                    if preserved_cancelled_output:
+                        # Cancel arrived while started Tool Calls ran. The turn
+                        # is durable; the calls that finished keep their results.
+                        if tool_round is not None:
+                            await self._persist_cancelled_tool_round(
+                                context, tool_dispatch_context, tool_round, assistant_message.id
+                            )
+                        return assistant_message
                     terminal_error = _terminal_outcome_error(
                         terminal_outcome,
                         has_tool_calls=True,
@@ -835,16 +954,28 @@ class AgenticProgression:
                             ):
                                 # Calls that arrived only with the end of the
                                 # response start now, after the started ones.
-                                tool_messages, media_outputs = await tool_round.finish(
-                                    assistant_message.tool_calls[len(started_tool_calls) :]
+                                finished = await self._finish_tool_round(
+                                    context,
+                                    tool_dispatch_context,
+                                    tool_round,
+                                    assistant_message.id,
+                                    assistant_message.tool_calls[len(started_tool_calls) :],
                                 )
+                                if finished is None:
+                                    return assistant_message
+                                tool_messages, media_outputs = finished
                     else:
                         # The terminal outcome forbids starting further calls.
                         # Calls that already started keep their real results.
                         tool_messages, media_outputs = [], []
                         if tool_round is not None and started_tool_calls:
                             context.tool_progress.iteration_count += 1
-                            tool_messages, media_outputs = await tool_round.finish()
+                            finished = await self._finish_tool_round(
+                                context, tool_dispatch_context, tool_round, assistant_message.id
+                            )
+                            if finished is None:
+                                return assistant_message
+                            tool_messages, media_outputs = finished
                         failure_code, failure_message = _terminal_tool_failure(terminal_outcome)
                         tool_messages.extend(
                             _fail_tool_calls_without_dispatch(
@@ -882,72 +1013,11 @@ class AgenticProgression:
                         # The stream broke after these calls started; the note
                         # follows their results.
                         session.add_note(recovery_note)
-                    deferred_notes = session.take_deferred_notes()
-                    session.assistant_message_id = assistant_message.id
-                    batch_messages = [*tool_messages, *deferred_notes]
-                    persist_started = time.perf_counter()
+                    await self._persist_tool_results(
+                        context, tool_dispatch_context, assistant_message.id, tool_messages
+                    )
                     binding = context.request.temporary_binding
                     extension_registry = self._dependencies.get_extension_registry()
-                    result_facts = tool_dispatch_context.with_result_payloads(
-                        tool_result_facts(tool_messages)
-                    )
-                    if binding is not None and tool_dispatch_context.delivery_receipts:
-                        # The binding addresses this Run's own Session.
-                        owned_receipts = [
-                            (
-                                next(
-                                    index
-                                    for index, message in enumerate(batch_messages)
-                                    if message.role == "tool"
-                                    and message.tool_call_id == tool_call_id
-                                ),
-                                receipt_id,
-                                content_hash,
-                                effect_kind,
-                                "tool",
-                            )
-                            for (
-                                tool_call_id,
-                                receipt_id,
-                                content_hash,
-                                effect_kind,
-                            ) in tool_dispatch_context.delivery_receipts
-                        ]
-                        await context.session_snapshot.commit(
-                            session,
-                            partial(
-                                self._dependencies.sessions.append_messages_with_receipts_async,
-                                binding.address,
-                                generation_id=binding.generation_id,
-                                owner_name=binding.owner_name,
-                                messages=batch_messages,
-                                run_id=run.id,
-                                assistant_message_id=assistant_message.id,
-                                tool_results=result_facts,
-                                receipts=owned_receipts,
-                            ),
-                        )
-                    else:
-                        await context.session_snapshot.append(
-                            session,
-                            batch_messages,
-                            tool_results=result_facts,
-                        )
-                    record_span(
-                        "chat.persist",
-                        persist_started,
-                        track=track,
-                        name="persist tool results",
-                        args=run_args,
-                    )
-                    for tool_message in tool_messages:
-                        assert tool_message.tool_call_id is not None
-                        tool_dispatch_context.notify_result_persisted(tool_message.tool_call_id)
-                        loaded_project_id = project_tool_context_id(tool_message)
-                        if project_id is None and loaded_project_id is not None:
-                            await self._requests._apply_project_skill_context(
-                                context, loaded_project_id
-                            )
                     if assistant_step.failure is not None:
                         raise assistant_step.failure
                     if terminal_error is not None:
@@ -1022,10 +1092,10 @@ class AgenticProgression:
                             return assistant_message
                     # Honored only after every sibling tool result is persisted, so
                     # this cooperative stop never itself dangles the assistant turn.
-                    # It is not a full persistence guarantee, though: the forceful
-                    # task.cancel() in Run.request_cancel (and a process kill) can
-                    # still interrupt the dispatch above with tool_calls left
-                    # unanswered on disk. That persisted state is not corruption —
+                    # The forceful task.cancel() in Run.request_cancel persists
+                    # only the calls that finished; those it stopped (and every
+                    # call after a process kill) stay unanswered on disk. That
+                    # persisted state is not corruption —
                     # request assembly repairs it via _repair_dangling_tool_calls,
                     # synthesizing the missing results before any provider sees it.
                     run.raise_if_cancelled()

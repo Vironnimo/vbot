@@ -492,9 +492,9 @@ class _EmittingToolRegistry(ToolRegistry):
             )
             # Return a completed result even when cancellation was requested so
             # a cooperatively terminating batch can still persist it. A forceful
-            # Run cancellation may stop the batch before Chat receives every
-            # sibling; the next Provider request repairs those missing Results
-            # from durable Session evidence instead.
+            # Run cancellation persists only the siblings that finished; the
+            # next Provider request repairs the missing Results from durable
+            # Session evidence instead.
             self._emit_result(
                 context,
                 events,
@@ -835,6 +835,27 @@ class ToolRound:
         """Start ``remaining``, wait for every call and return ordered Tool Results."""
         self.start(remaining)
         results = await self._batch.results()
+        return self._tool_results(list(zip(self._calls, results, strict=True)))
+
+    async def settle_cancelled(self) -> tuple[list[ChatMessage], list[JsonObject]]:
+        """Stop the unfinished calls and return the Results of those that finished.
+
+        After a Run cancel, a call that already finished keeps its real Result;
+        the calls that did not finish get none and are repaired as missing
+        Results in the next request.
+        """
+        results = await self._batch.settle()
+        return self._tool_results(
+            [
+                (tool_call, result)
+                for tool_call, result in zip(self._calls, results, strict=True)
+                if result is not None
+            ]
+        )
+
+    def _tool_results(
+        self, completed: list[tuple[ToolCall, JsonObject]]
+    ) -> tuple[list[ChatMessage], list[JsonObject]]:
         session = self._context.session
         for note in self._notes:
             session.add_note(note)
@@ -842,7 +863,7 @@ class ToolRound:
         tool_messages: list[ChatMessage] = []
         media_outputs: list[JsonObject] = []
         registry = self._registry
-        for tool_call, result in zip(self._calls, results, strict=True):
+        for tool_call, result in completed:
             tool_message = ChatMessage.tool(
                 tool_call_id=tool_call.id,
                 name=tool_call.name,

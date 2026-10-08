@@ -1040,6 +1040,17 @@ class ToolBatch:
                 task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
 
+    async def settle(self) -> list[JsonObject | None]:
+        """Cancel the unfinished calls; return each finished call's result in call order.
+
+        A call that was cancelled or raised has no result and yields ``None``.
+        """
+        await self.aclose()
+        return [
+            task.result() if not task.cancelled() and task.exception() is None else None
+            for task in self._tasks
+        ]
+
     async def _run(
         self,
         tool_call: ToolCall,

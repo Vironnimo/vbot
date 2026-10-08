@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Callable
 from copy import deepcopy
 from pathlib import Path
@@ -12,7 +13,7 @@ import pytest
 
 from core.chat._step_outcomes import TOOL_CALLS_STREAM_RECOVERY_NOTE
 from core.providers.errors import NetworkError
-from core.runs import TOOL_CALL_STARTED_EVENT
+from core.runs import TOOL_CALL_RESULT_EVENT, TOOL_CALL_STARTED_EVENT, RunCancelledError
 from core.tools import ToolContext, ToolRegistry, tool_success
 from tests.core.chat.chat_loop_streaming_test_support import SESSION_ID, answer
 from tests.core.chat.chat_loop_support import (
@@ -144,6 +145,36 @@ async def test_a_stream_break_after_a_started_tool_call_keeps_it_and_continues(
         message.get("role") == "tool" and message.get("tool_call_id") == "call_berlin"
         for message in continuation
     )
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_during_the_stream_keeps_the_results_of_finished_tool_calls(
+    tmp_path: Path,
+) -> None:
+    started: list[str] = []
+
+    async def tool_turn() -> AsyncIterator[JsonObject]:
+        yield _call("call_berlin", "Berlin")
+        yield {"type": "content_delta", "text": "Checking."}
+        # The Model is still writing when the user cancels.
+        await asyncio.Event().wait()
+        yield {"type": "finish", "reason": "tool_calls"}
+
+    runtime = _runtime(tmp_path, _ScriptedStreamAdapter(tool_turn), started)
+    runtime.chat_sessions.create("coder", session_id=SESSION_ID)
+    run = await build_chat_loop(runtime).start_run("coder", "Weather?", session_id=SESSION_ID)
+    await _until(lambda: any(event.type == TOOL_CALL_RESULT_EVENT for event in run.events))
+
+    run.request_cancel(reason="user")
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+
+    persisted = history(runtime)
+    tool_turn_message = next(message for message in persisted if message.tool_calls)
+    assert [call.id for call in tool_turn_message.tool_calls or []] == ["call_berlin"]
+    results = [message for message in persisted if message.role == "tool"]
+    assert [message.tool_call_id for message in results] == ["call_berlin"]
+    assert json.loads(str(results[0].content)) == tool_success({"city": "Berlin"})
 
 
 @pytest.mark.asyncio

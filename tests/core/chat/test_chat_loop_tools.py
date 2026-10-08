@@ -344,7 +344,7 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
 
 
 @pytest.mark.asyncio
-async def test_real_run_cancel_during_parallel_tools_repairs_the_next_request(
+async def test_real_run_cancel_during_parallel_tools_keeps_finished_results(
     tmp_path: Path,
 ) -> None:
     slow_started = asyncio.Event()
@@ -399,22 +399,26 @@ async def test_real_run_cancel_during_parallel_tools_repairs_the_next_request(
         ("cancel", cancelled_run.id),
         ("release", cancelled_run.id),
     ]
-    assert persisted_roles(after_cancel) == ["user", "assistant"]
+    # The finished call keeps its real Result; the cancelled one has none.
+    assert persisted_roles(after_cancel) == ["user", "assistant", "tool"]
+    assert tool_results([m for m in after_cancel if m.role == "tool"]) == [
+        tool_success({"probe": "fast"})
+    ]
     assert [m.status for m in after_cancel if m.role == "run_summary"] == ["cancelled"]
 
     recovered = await loop.send("coder", "Continue safely.", session_id="session-one")
 
     assert recovered.content == "Recovered on the next Run."
-    repaired_results = [
+    next_results = [
         message
         for message in runtime.adapter.requests[1]["messages"]
         if message.get("role") == "tool"
     ]
-    assert [message["tool_call_id"] for message in repaired_results] == ["call_fast", "call_slow"]
-    for message in repaired_results:
-        assert json.loads(message["content"])["error"]["code"] == "result_unavailable"
+    assert [message["tool_call_id"] for message in next_results] == ["call_fast", "call_slow"]
+    assert json.loads(next_results[0]["content"]) == tool_success({"probe": "fast"})
+    assert json.loads(next_results[1]["content"])["error"]["code"] == "result_unavailable"
     final_history = history(runtime)
-    assert persisted_roles(final_history) == ["user", "assistant", "user", "assistant"]
+    assert persisted_roles(final_history) == ["user", "assistant", "tool", "user", "assistant"]
     assert [m.status for m in final_history if m.role == "run_summary"] == [
         "cancelled",
         "completed",
