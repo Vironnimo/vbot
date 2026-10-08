@@ -140,6 +140,7 @@ class CompactionRunHost(Protocol):
 
     async def commit_checkpoint(
         self,
+        run: Run,
         session: ChatSession,
         checkpoint: ChatMessage,
         *,
@@ -346,13 +347,16 @@ class CompactionRunCoordinator:
                 active_target=request.active_target,
                 accounting=accounting,
             )
+            # A Stop during the commit still reports a stored checkpoint as completed.
             if not await self._host.commit_checkpoint(
+                run,
                 session,
                 checkpoint,
                 since=snapshot_cursor,
                 prompt_refresh=prompt_refresh,
                 request_state=projected_state,
             ):
+                run.raise_if_cancelled()
                 raise CompactionError("Session context changed during Compaction. Please retry.")
             messages.append(checkpoint)
             own_messages.append(checkpoint)
@@ -748,10 +752,9 @@ class CompactionRunCoordinator:
         if context_usage is not None:
             payload["context_usage"] = context_usage
         payload["duration_ms"] = checkpoint_usage["compaction_duration_ms"]
-        run.emit(
-            COMPACTION_COMPLETED_EVENT,
-            payload,
-        )
+        # The checkpoint is already stored: a Stop that arrived during its commit
+        # must not hide it.
+        run.emit(COMPACTION_COMPLETED_EVENT, payload, allow_after_cancel=True)
 
     def _load_compaction_settings(
         self,

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from core.agents import skill_subject_id
+from core.chat._boundaries import _finish_visible_boundary
 from core.chat._request_builder import (
     RequestBuilder,
     _finalize_compaction_checkpoint,
@@ -438,6 +439,7 @@ class ChatCompactionHost:
 
     async def commit_checkpoint(
         self,
+        run: Run,
         session: ChatSession,
         checkpoint: ChatMessage,
         *,
@@ -448,8 +450,30 @@ class ChatCompactionHost:
         """Commit a manual *checkpoint* and its prompt epoch while *since* is current.
 
         *request_state* is the projected post-Compaction request; its Tool pin
-        starts the new epoch.
+        starts the new epoch. A Stop of *run* while the commit runs waits for
+        its outcome, so a stored checkpoint is never reported as cancelled.
         """
+        return await _finish_visible_boundary(
+            self._commit_manual_checkpoint(
+                session,
+                checkpoint,
+                since=since,
+                prompt_refresh=prompt_refresh,
+                request_state=request_state,
+            ),
+            run,
+            True,
+        )
+
+    async def _commit_manual_checkpoint(
+        self,
+        session: ChatSession,
+        checkpoint: ChatMessage,
+        *,
+        since: SessionReadCursor,
+        prompt_refresh: object | None,
+        request_state: RequestState,
+    ) -> bool:
         refresh = cast(_CompactionPromptRefresh | None, prompt_refresh)
         async with self.sessions.write_lock(session.address):
             committed = await session.commit_compaction_async(
