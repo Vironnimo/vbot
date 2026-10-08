@@ -182,6 +182,18 @@ def _standard_flow(
 
 _OPENCODE = _standard_flow(opencode_oauth_config(), pending=PENDING_400)
 _OPENCODE["authorization_body"] = {"client_id": "opencode-cli"}
+# OpenCode answers with paths below its console server, as observed on 2026-10-08.
+_OPENCODE["authorization"] |= {
+    "verification_uri": "/console/device",
+    "verification_uri_complete": "/console/device?user_code=USER-CODE&client_id=opencode-cli",
+}
+_OPENCODE["session"] = DeviceFlowSession(
+    "device-code",
+    "USER-CODE",
+    "https://opencode.ai/console/console/device?user_code=USER-CODE&client_id=opencode-cli",
+    900,
+    5,
+)
 
 DEVICE_FLOWS = {
     "standard": {

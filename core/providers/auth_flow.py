@@ -71,6 +71,7 @@ MINIMAX_OAUTH_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:user_code"
 MINIMAX_DEFAULT_POLL_INTERVAL_MILLISECONDS = 2000
 MINIMAX_MINIMUM_POLL_INTERVAL_SECONDS = 2
 MILLISECONDS_PER_SECOND = 1000
+OPENCODE_DEVICE_CODE_PATH = "/auth/device/code"
 
 
 OnCompleteCallback = Callable[..., None | Awaitable[None]]
@@ -95,6 +96,16 @@ def _minimax_pkce_pair() -> tuple[str, str, str]:
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
     state = secrets.token_urlsafe(16)
     return verifier, challenge.decode().rstrip("="), state
+
+
+def _opencode_server_url(oauth_config: OAuthConfig) -> str:
+    """Return the OpenCode console server that relative device-flow paths extend.
+
+    OpenCode answers with paths such as ``/console/device?...``; its own client
+    appends them to the server URL below which ``/auth/device/code`` lives.
+    """
+
+    return oauth_config.device_auth_url.removesuffix(OPENCODE_DEVICE_CODE_PATH)
 
 
 @dataclass(frozen=True)
@@ -516,14 +527,17 @@ class DeviceFlowEngine:
                 interval=int(data.get("interval", DEFAULT_DEVICE_FLOW_INTERVAL_SECONDS)),
             )
 
+        verification_uri = (
+            data.get("verification_uri_complete")
+            or data.get("verification_uri")
+            or data["verification_url"]
+        )
+        if self._is_opencode_flow(oauth_config) and verification_uri.startswith("/"):
+            verification_uri = _opencode_server_url(oauth_config) + verification_uri
         return DeviceFlowSession(
             device_code=data["device_code"],
             user_code=data["user_code"],
-            verification_uri=(
-                data.get("verification_uri_complete")
-                or data.get("verification_uri")
-                or data["verification_url"]
-            ),
+            verification_uri=verification_uri,
             expires_in=int(data["expires_in"]),
             interval=int(data.get("interval", DEFAULT_DEVICE_FLOW_INTERVAL_SECONDS)),
         )

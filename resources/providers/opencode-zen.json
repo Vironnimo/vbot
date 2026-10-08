@@ -28,8 +28,8 @@
         "flow": "device",
         "device_flow": "opencode_oauth",
         "client_id": "opencode-cli",
-        "device_auth_url": "https://console.opencode.ai/auth/device/code",
-        "token_url": "https://console.opencode.ai/auth/device/token",
+        "device_auth_url": "https://opencode.ai/console/auth/device/code",
+        "token_url": "https://opencode.ai/console/auth/device/token",
         "scopes": []
       },
       "models_endpoint": "/models",

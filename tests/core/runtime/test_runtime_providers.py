@@ -154,8 +154,8 @@ def test_bundled_provider_configs_expose_their_connections(shared_runtime: Runti
     assert zen_oauth is not None
     assert zen_oauth.device_flow == "opencode_oauth"
     assert zen_oauth.client_id == "opencode-cli"
-    assert zen_oauth.device_auth_url == "https://console.opencode.ai/auth/device/code"
-    assert zen_oauth.token_url == "https://console.opencode.ai/auth/device/token"
+    assert zen_oauth.device_auth_url == "https://opencode.ai/console/auth/device/code"
+    assert zen_oauth.token_url == "https://opencode.ai/console/auth/device/token"
 
     # Local Ollama and direct Ollama Cloud are distinct Provider identities.
     local_config = providers.get("ollama")

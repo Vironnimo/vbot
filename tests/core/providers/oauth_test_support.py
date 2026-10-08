@@ -36,8 +36,8 @@ XAI_DEVICE_AUTH_URL = "https://auth.x.ai/oauth2/device/code"
 XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token"
 NOUS_DEVICE_AUTH_URL = "https://portal.nousresearch.com/api/oauth/device/code"
 NOUS_TOKEN_URL = "https://portal.nousresearch.com/api/oauth/token"
-OPENCODE_DEVICE_AUTH_URL = "https://console.opencode.ai/auth/device/code"
-OPENCODE_TOKEN_URL = "https://console.opencode.ai/auth/device/token"
+OPENCODE_DEVICE_AUTH_URL = "https://opencode.ai/console/auth/device/code"
+OPENCODE_TOKEN_URL = "https://opencode.ai/console/auth/device/token"
 
 
 def github_oauth_config(*, token_exchange: bool = False) -> OAuthConfig:
