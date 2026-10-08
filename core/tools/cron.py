@@ -49,13 +49,7 @@ if TYPE_CHECKING:
     from core.automation.cron import CronJob, CronService
 
 CRON_TOOL_NAME = "cron"
-CRON_TOOL_DESCRIPTION = (
-    "Schedule jobs that run an instruction later, once or repeatedly. Each fire starts a new "
-    "Run of the target Agent in a fresh Session with prompt as its only message: that Run sees "
-    "nothing of this conversation, and its reply stays in that Session without notifying "
-    "anyone. Times are in the server time zone, shown by list and by Runtime Environment when "
-    "present."
-)
+CRON_TOOL_DESCRIPTION = "Schedule jobs that run an instruction later, once or repeatedly."
 
 CRON_ACTIONS = frozenset(("create", "list", "update", "delete", "enable", "disable"))
 
@@ -98,38 +92,34 @@ CRON_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Agent that runs the job: agent or agent@project. Defaults to the current Agent."
+                "Agent that runs the job: agent or agent@project. Omit to use the current Agent."
             ),
         },
         "name": {
             "type": "string",
             "minLength": 1,
-            "description": "Short label. Derived from prompt when omitted on create.",
+            "description": "Short label. Omit to derive it from prompt.",
         },
         "prompt": {
             "type": "string",
             "minLength": 1,
-            "description": (
-                "Complete instruction for every fire. If the user should see the result, say "
-                "how to deliver it. Required on create."
-            ),
+            "description": ("Self-contained instruction for each run. Required on create."),
         },
         "schedule": {
             "type": "string",
             "minLength": 1,
             "description": (
-                "When to fire: five cron fields (minute hour day month weekday), e.g. "
-                "'0 9 * * 1-5' for weekdays at 09:00; 'every 30m', 'every 2h' or 'every 1d'; "
-                "or one fire with 'in 45m' or a local time such as '2030-08-07T09:00'. "
-                "Required on create."
+                "When to run, in local time: five cron fields (minute hour day month "
+                "weekday), e.g. '0 9 * * 1-5' for weekdays at 09:00; 'every 30m', 'every 2h' "
+                "or 'every 1d'; or once with 'in 45m' or '2030-08-07T09:00'. Required on create."
             ),
         },
         "repeat": {
             "type": ["integer", "null"],
             "minimum": 1,
             "description": (
-                "Remaining fires before the job completes. Omit for no limit; null on update "
-                "removes a limit. One-time schedules fire once."
+                "Number of runs before the job ends. Omit for no limit; null on update removes "
+                "a limit."
             ),
         },
     },

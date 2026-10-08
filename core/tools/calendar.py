@@ -168,7 +168,7 @@ CALENDAR_TOOL_PARAMETERS: JsonObject = {
         "target": {
             "type": "string",
             "description": (
-                "Agent that runs the action: agent or agent@project. Defaults to the current Agent."
+                "Agent that runs the action: agent or agent@project. Omit to use the current Agent."
             ),
         },
         "session": {
