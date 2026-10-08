@@ -135,7 +135,7 @@ A git-ignored checkout marker selects dev data `~/.vbot-dev`, port `8421`; the i
 
 **Release:** Read `.vorch/workflows/release-workflow.md` when the user requests a release.
 
-**Local deploy:** When the user asks to get the current state into their installed vBot ("deploy locally", "put main into my installation", "I want the latest version live"), run `python scripts/deploy_local.py` without pushing. It installs the committed HEAD of the checkout it runs from through the installation's own update (about 4-5 minutes; the server is down for about a minute, open Desktop windows need reopening) and refuses uncommitted changes, so commit first. A request to update the installation from GitHub instead means the installed `vbot update`.
+**Local deploy:** When the user wants the current state in their installed vBot, commit, then run `python scripts/deploy_local.py` (no push needed).
 
 **Push:** Read `.vorch/workflows/push-workflow.md` when the user asks to push, and push only that way (`python scripts/push.py`, never a plain `git push`). A push is finished only when the `main-build` CI run it starts is green.
 
