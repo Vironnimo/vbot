@@ -381,6 +381,8 @@ async def test_reasoning_mandatory_endpoint_retries_with_default_effort(manager)
         {"content": "[title=]\n[title=Session naming audit]"},
         {"content": "[title=Session naming audit] [title=Unfinished"},
         {"content": "[title=Session naming\naudit]"},
+        # The Model stopped right before the closing bracket.
+        {"content": "[title=Session naming audit"},
     ],
 )
 def test_generated_title_extracts_one_unambiguous_title(response: dict[str, Any]) -> None:
@@ -400,8 +402,8 @@ def test_generated_title_preserves_internal_quotes_and_counts_only_the_title() -
     "response",
     [
         # No complete, non-empty block.
-        "[title=Unfinished",
         "[title=Nested [brackets]]",
+        "[title=Unfinished\nmore text",
         "[title=]",
         '[title=""]',
         "[title=" + "x" * (GENERATED_TITLE_MAX_CHARACTERS + 1) + "]",

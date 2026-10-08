@@ -58,6 +58,7 @@ TITLE_ATTACHMENT_METADATA_MAX_BYTES = 1024
 TITLE_OMISSION_MARKER = "\n\n[large middle section omitted]\n\n"
 _TITLE_BLOCK_START = re.compile(r"\[\s*title\s*=", re.IGNORECASE)
 _TITLE_BLOCK = re.compile(r"\[\s*title\s*=([^\[\]]*)\]", re.IGNORECASE)
+_UNCLOSED_FINAL_TITLE_BLOCK = re.compile(r"\[\s*title\s*=([^\[\]\n]*)\s*\Z", re.IGNORECASE)
 # Quotation and Markdown characters Models wrap around a title.
 _TITLE_WRAPPERS = " \t\"'‘’“”„«»`*_#"
 _META_TITLE_PATTERNS = (
@@ -633,6 +634,11 @@ def _generated_title(response: dict[str, Any]) -> str:
     )
     if (first_block := next((block for block in blocks if block), None)) is not None:
         text = first_block
+    elif (unclosed := _UNCLOSED_FINAL_TITLE_BLOCK.search(text)) is not None and (
+        unclosed_title := unclosed.group(1).strip(_TITLE_WRAPPERS)
+    ):
+        # The Model stopped right before the closing bracket.
+        text = unclosed_title
     elif _TITLE_BLOCK_START.search(text):
         raise _InvalidGeneratedTitleError("Session title response held no complete title block")
     lines = [line.strip() for line in text.splitlines() if line.strip()]
