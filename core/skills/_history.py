@@ -106,9 +106,10 @@ class SkillReference:
     """Something outside a Skill's package that names the Skill.
 
     ``shared`` is the share with one receiver Agent (``id`` its Agent id,
-    ``name`` its name); ``bootstrap``, ``cron`` and ``calendar`` are an
-    automation of the owning Agent whose texts trigger the Skill (``id`` the job
-    or Calendar action id, ``name`` the job name or the event title).
+    ``name`` its name); ``bootstrap`` and ``cron`` are an automation of the
+    owning Agent whose texts trigger the Skill (``id`` the job id, ``name`` the
+    job name). ``calendar`` is the Calendar action of earlier vBot versions
+    (``id`` the action id, ``name`` the event title), kept readable as history.
     """
 
     kind: SkillReferenceKind

@@ -73,7 +73,6 @@ DURABLE_DOCUMENTS: Mapping[str, str] = MappingProxyType(
         "cron_jobs": "cron/jobs.json",
         "bootstrap_jobs": "bootstrap/jobs.json",
         "calendar_events": "calendar/events.json",
-        "calendar_actions": "calendar/actions.json",
         "skill_policy": "skills/policy.json",
         "terminal_launch_history": "terminals/launch-history.json",
         "terminal_groups": "terminals/groups.json",

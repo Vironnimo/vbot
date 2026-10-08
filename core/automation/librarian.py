@@ -14,7 +14,7 @@ A pass has two parts:
    ``librarian.archive_after_days`` is archived with the reason ``inactive``.
    Changes by background Runs do not keep a Skill. Use of a shared Skill by
    the Agents it is shared with counts as use. A Skill that a live Bootstrap
-   job, Cron job or Calendar action of the Agent triggers by name is kept: its
+   job or Cron job of the Agent triggers by name is kept: its
    use is recorded only when the automation runs, which can be rarer than the
    aging period.
 2. **Consolidation** (``librarian.consolidate``): when at least two Skills are

@@ -7,7 +7,6 @@ Lengths, time zones and action times: ``test_calendar_call_times.py``.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -29,7 +28,7 @@ def _refused(text: str) -> bool:
 class TestActionWords:
     @pytest.mark.parametrize(
         ("word", "expected"),
-        [("cancel", "deleted"), ("availability", "free:"), ("add_reminder", "next_due:")],
+        [("cancel", "deleted"), ("availability", "free:")],
     )
     def test_action_synonyms_run_the_named_action(
         self, tool: CalendarTool, word: str, expected: str
@@ -38,8 +37,6 @@ class TestActionWords:
         call: dict[str, Any] = {"action": word, "id": event_id}
         if word == "availability":
             call = {"action": word, "when": "2030-01-10", "duration": 30}
-        if word == "add_reminder":
-            call.update(when="start - 1h", prompt="Remind me.")
 
         _, text = tool.call(call)
 
@@ -306,81 +303,6 @@ class TestRepetition:
 
 
 class TestIds:
-    def test_delete_and_update_of_an_action_id_act_on_the_action(self, tool: CalendarTool) -> None:
-        event_id = tool.add_dentist()
-        first = asyncio.run(
-            tool.service.actions.add(event_id, when="start", prompt="a", target="agent-one")
-        )
-        second = asyncio.run(
-            tool.service.actions.add(event_id, when="end", prompt="b", target="agent-one")
-        )
-
-        tool.call({"action": "update", "id": first["id"], "prompt": "changed"})
-        tool.call({"action": "delete", "id": second["id"]})
-
-        assert [(action["id"], action["prompt"]) for action in tool.actions()] == [
-            (first["id"], "changed")
-        ]
-        assert len(tool.events()) == 1
-
-    def test_action_call_with_the_event_id_names_its_one_action(self, tool: CalendarTool) -> None:
-        event_id = tool.add_dentist()
-        action = asyncio.run(
-            tool.service.actions.add(event_id, when="start", prompt="a", target="agent-one")
-        )
-
-        _, text = tool.call({"action": "update_action", "id": event_id, "when": "end"})
-
-        assert tool.actions()[0]["when"] == "start"
-        assert text.endswith(
-            f'Send: {{"action":"update_action","id":"{action["id"]}","when":"end"}}'
-        )
-
-    def test_action_call_with_the_event_id_lists_several_actions(self, tool: CalendarTool) -> None:
-        event_id = tool.add_dentist()
-        first = asyncio.run(
-            tool.service.actions.add(event_id, when="start", prompt="a", target="agent-one")
-        )
-        second = asyncio.run(
-            tool.service.actions.add(event_id, when="end", prompt="b", target="agent-one")
-        )
-
-        _, text = tool.call({"action": "delete_action", "id": event_id})
-
-        assert len(tool.actions()) == 2
-        assert f'{{"action":"delete_action","id":"{first["id"]}"}} (start: a) or ' in text
-        assert f'{{"action":"delete_action","id":"{second["id"]}"}} (end: b)' in text
-
-    def test_action_call_on_an_event_without_actions_offers_add_action(
-        self, tool: CalendarTool
-    ) -> None:
-        event_id = tool.add_dentist()
-
-        _, text = tool.call({"action": "update_action", "id": event_id, "prompt": "p"})
-
-        assert tool.actions() == []
-        assert text.endswith(
-            f'{{"action":"add_action","id":"{event_id}","when":"<e.g. start - 1h>","prompt":"p"}}'
-        )
-
-    def test_event_call_with_an_action_id_names_the_event(self, tool: CalendarTool) -> None:
-        event_id = tool.add_dentist()
-        action = asyncio.run(
-            tool.service.actions.add(event_id, when="start", prompt="a", target="agent-one")
-        )
-
-        _, added = tool.call(
-            {"action": "add_action", "id": action["id"], "when": "end", "prompt": "b"}
-        )
-        _, updated = tool.call(
-            {"action": "update", "id": action["id"], "start": "2030-01-10T16:00"}
-        )
-
-        assert len(tool.actions()) == 1
-        assert tool.only_event().start_utc == "2030-01-10T14:00:00+00:00"
-        assert added.endswith(f'"id":"{event_id}","when":"end","prompt":"b"}}')
-        assert updated.endswith(f'"id":"{event_id}","start":"2030-01-10T16:00"}}')
-
     def test_missing_id_is_named_from_a_matching_title(self, tool: CalendarTool) -> None:
         event_id = tool.add_dentist()
 
@@ -388,17 +310,10 @@ class TestIds:
         _, updated = tool.call(
             {"action": "update", "title": "Dentist", "start": "2030-01-10T16:00"}
         )
-        _, partial = tool.call(
-            {"action": "add_action", "title": "Dent", "when": "start", "prompt": "p"}
-        )
 
         assert len(tool.events()) == 1
-        assert tool.actions() == []
         assert deleted.endswith(f'Send: {{"action":"delete","id":"{event_id}"}}')
         assert f'"id":"{event_id}","title":"Dentist","start":"2030-01-10T16:00"' in updated
-        assert partial.endswith(
-            f'Send: {{"action":"add_action","id":"{event_id}","when":"start","prompt":"p"}}'
-        )
 
     def test_missing_id_with_several_matching_titles_offers_each(self, tool: CalendarTool) -> None:
         first = tool.service.create_event(title="Gym", start="2030-01-10T08:00")
@@ -429,52 +344,6 @@ class TestIds:
 
 class TestStandIns:
     @pytest.mark.parametrize(
-        ("field", "stand_in", "wanted"),
-        [
-            ("prompt", "<instruction>", "Send the actual instruction the action's Run carries"),
-            ("prompt", "<the prompt from this call>", "Send the actual instruction"),
-            ("target", "<agent or agent@project>", "Send an existing Agent id"),
-        ],
-    )
-    def test_stand_in_action_field_is_refused(
-        self, tool: CalendarTool, field: str, stand_in: str, wanted: str
-    ) -> None:
-        event_id = tool.add_dentist()
-        call = {"action": "add_action", "id": event_id, "when": "start - 1h", "prompt": "p"}
-
-        _, text = tool.call({**call, field: stand_in})
-
-        assert tool.actions() == []
-        assert text.startswith(
-            f'Error (invalid_arguments): calendar was not run: {field} "{stand_in}" is a '
-            f"stand-in. {wanted}"
-        )
-
-    @pytest.mark.parametrize(
-        ("fields", "note"),
-        [
-            ({"grace_period": "10 minutes"}, '"grace_period" has no effect.'),
-            ({"catch_up": False}, '"catch_up" has no effect.'),
-            ({"max_delay": "none"}, None),
-        ],
-    )
-    def test_late_start_limits_have_no_effect_and_the_result_says_so(
-        self, tool: CalendarTool, fields: dict[str, Any], note: str | None
-    ) -> None:
-        event_id = tool.add_dentist()
-
-        envelope, text = tool.call(
-            {"action": "add_action", "id": event_id, "when": "end", "prompt": "p", **fields}
-        )
-
-        assert envelope["ok"] is True, text
-        assert "max_delay_seconds" not in tool.actions()[0]
-        if note is None:
-            assert "note" not in envelope["data"]
-        else:
-            assert envelope["data"]["note"].startswith(note)
-
-    @pytest.mark.parametrize(
         ("field", "stand_in"), [("title", "<title>"), ("notes", "<the notes from this call>")]
     )
     def test_stand_in_event_text_is_refused_on_create_and_update(
@@ -491,19 +360,6 @@ class TestStandIns:
         assert (event.title, event.notes) == ("Dentist", None)
         assert f'{field} "{stand_in}" is a stand-in.' in created
         assert f'{field} "{stand_in}" is a stand-in.' in updated
-
-    def test_placeholder_word_prompt_counts_as_missing(self, tool: CalendarTool) -> None:
-        event_id = tool.add_dentist()
-
-        _, text = tool.call(
-            {"action": "add_action", "id": event_id, "when": "start - 1h", "prompt": "TBD"}
-        )
-
-        assert tool.actions() == []
-        assert text.endswith(
-            f'Send: {{"action":"add_action","id":"{event_id}","when":"start - 1h",'
-            '"prompt":"<instruction>"}'
-        )
 
 
 class TestImpossibleValues:
@@ -527,37 +383,24 @@ class TestImpossibleValues:
                 {"action": "create", "title": "E", "start": "2030-01-10Z"},
                 "start must be a valid ISO 8601 datetime",
             ),
-            (
-                {"action": "add_action", "when": "2030-02-30", "prompt": "p"},
-                "when must be start or end",
-            ),
-            (
-                {"action": "add_action", "when": "start", "prompt": "p", "target": "a b"},
-                "target does not identify an agent",
-            ),
         ],
         ids=[
             "end-time",
             "all-day-end-time",
             "all-day-end-missing-date",
             "date-with-utc-marker",
-            "action-date",
-            "action-target",
         ],
     )
-    def test_value_naming_no_real_time_or_agent_is_refused(
+    def test_value_naming_no_real_time_is_refused(
         self, tool: CalendarTool, call: dict[str, Any], reason: str
     ) -> None:
         event_id = tool.add_dentist()
-        if call["action"] == "add_action":
-            call = {**call, "id": event_id}
 
         _, text = tool.call(call)
 
         assert _refused(text)
         assert reason in text
         assert [event.id for event in tool.events()] == [event_id]
-        assert tool.actions() == []
 
 
 class TestConflicts:
@@ -644,120 +487,3 @@ class TestConflicts:
         assert tool.events() == []
         assert "when, prompt belong to an action, which attaches to an existing event." in text
         assert text.endswith('{"action":"create","title":"X","start":"2030-01-10T15:00"}')
-
-    def test_update_with_an_instruction_offers_add_action(self, tool: CalendarTool) -> None:
-        event_id = tool.add_dentist()
-
-        _, alone = tool.call({"action": "update", "id": event_id, "prompt": "Remind me."})
-        _, mixed = tool.call(
-            {
-                "action": "update",
-                "id": event_id,
-                "prompt": "Remind me.",
-                "start": "2030-01-10T16:00",
-            }
-        )
-        _, relative = tool.call({"action": "update", "id": event_id, "when": "start - 1h"})
-
-        assert tool.actions() == []
-        assert tool.only_event().start_utc == "2030-01-10T14:00:00+00:00"
-        assert alone.endswith(
-            f'{{"action":"add_action","id":"{event_id}","when":"<e.g. start - 1h>",'
-            '"prompt":"Remind me."}'
-        )
-        assert mixed.endswith(f'{{"action":"update","id":"{event_id}","start":"2030-01-10T16:00"}}')
-        assert relative.endswith(
-            f'{{"action":"add_action","id":"{event_id}","when":"start - 1h",'
-            '"prompt":"<instruction>"}'
-        )
-
-    def test_add_action_names_event_fields_it_does_not_apply(self, tool: CalendarTool) -> None:
-        event_id = tool.add_dentist()
-
-        _, text = tool.call(
-            {
-                "action": "add_action",
-                "id": event_id,
-                "title": "Dentist appointment",
-                "notes": "Bring the card.",
-                "when": "start - 1h",
-                "prompt": "Remind me.",
-            }
-        )
-
-        event = tool.only_event()
-        assert (event.title, event.notes) == ("Dentist", None)
-        assert [item["when"] for item in tool.actions()] == ["start - 1h"]
-        assert (
-            "title, notes were not applied: add_action works on the action, not on its event. "
-            f'To change the event, send {{"action":"update","id":"{event_id}",'
-            '"title":"Dentist appointment","notes":"Bring the card."}.'
-        ) in text
-
-    def test_title_that_names_the_event_needs_no_note(self, tool: CalendarTool) -> None:
-        event_id = tool.add_dentist()
-
-        _, text = tool.call(
-            {
-                "action": "add_action",
-                "id": event_id,
-                "title": "dentist",
-                "when": "start - 1h",
-                "prompt": "Remind me.",
-            }
-        )
-
-        assert len(tool.actions()) == 1
-        assert "not applied" not in text
-
-    def test_update_action_with_only_event_fields_names_the_event_update(
-        self, tool: CalendarTool
-    ) -> None:
-        event_id = tool.add_dentist()
-        tool.call({"action": "add_action", "id": event_id, "when": "start", "prompt": "Go."})
-        [action] = tool.actions()
-
-        _, text = tool.call(
-            {
-                "action": "update_action",
-                "id": action["id"],
-                "start": "2030-01-10T16:00",
-                "when": "start - 1h",
-                "timezone": "Europe/London",
-            }
-        )
-        _, only_event = tool.call(
-            {"action": "update_action", "id": action["id"], "notes": "Bring the card."}
-        )
-
-        assert tool.only_event().start_utc == "2030-01-10T14:00:00+00:00"
-        assert [item["when"] for item in tool.actions()] == ["start - 1h"]
-        assert (
-            f'To change the event, send {{"action":"update","id":"{event_id}",'
-            '"start":"2030-01-10T16:00","timezone":"Europe/London"}.'
-        ) in text
-        assert _refused(only_event)
-        assert only_event.endswith(
-            f'To change the event: Send: {{"action":"update","id":"{event_id}",'
-            '"notes":"Bring the card."}'
-        )
-        assert tool.only_event().notes is None
-
-    def test_delete_action_with_changes_offers_delete_or_update(self, tool: CalendarTool) -> None:
-        event_id = tool.add_dentist()
-        tool.call({"action": "add_action", "id": event_id, "when": "start", "prompt": "Go."})
-        [action] = tool.actions()
-
-        _, changed = tool.call(
-            {"action": "delete_action", "id": action["id"], "when": "start - 1h"}
-        )
-        _, deleted = tool.call({"action": "delete_action", "id": action["id"], "notes": "Moved."})
-
-        assert _refused(changed)
-        assert changed.endswith(
-            f'{{"action":"delete_action","id":"{action["id"]}"}} or '
-            f'{{"action":"update_action","id":"{action["id"]}","when":"start - 1h"}}'
-        )
-        assert tool.actions() == []
-        assert tool.only_event().notes is None
-        assert "notes was not applied: delete_action works on the action" in deleted

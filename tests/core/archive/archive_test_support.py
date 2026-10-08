@@ -155,10 +155,6 @@ def world(tmp_path: Path, current_session_store_template: Path) -> Iterator[Arch
         team=_Team(),
     )
     nothing = SimpleNamespace(list_jobs=lambda: [])
-    calendar = SimpleNamespace(
-        actions=SimpleNamespace(list_actions=lambda: [], can_fire=lambda _action_id: True),
-        list_events=lambda: [],
-    )
 
     async def no_references(_agent_id: str) -> tuple[str, ...]:
         return ()
@@ -176,9 +172,7 @@ def world(tmp_path: Path, current_session_store_template: Path) -> Iterator[Arch
         projects=projects,
         agent_resolver=cast(Any, world.team),
         runs=world.runs,
-        automation=AutomationReferences(
-            bootstrap=cast(Any, nothing), cron=cast(Any, nothing), calendar=cast(Any, calendar)
-        ),
+        automation=AutomationReferences(bootstrap=cast(Any, nothing), cron=cast(Any, nothing)),
         terminals=cast(Any, _Terminals()),
         snapshot_barrier=barrier,
         agent_references=no_references,

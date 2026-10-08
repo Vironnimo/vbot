@@ -115,9 +115,6 @@ class CalendarTool(_DispatchedTool):
         [event] = self.events()
         return event
 
-    def actions(self) -> list[dict[str, Any]]:
-        return self.service.actions.list_actions()
-
     def add_dentist(self) -> str:
         """Create the one-hour event "Dentist" at ``DENTIST_START``; return its id."""
         return self.service.create_event(title="Dentist", start=DENTIST_START).id
@@ -147,7 +144,7 @@ def calendar_tool(tmp_path: Path, *, tz: str = SERVER_ZONE) -> CalendarTool:
     service = CalendarService(tmp_path, tz=tz)
     registry = ToolRegistry()
     reference_lock = asyncio.Lock()
-    register_calendar_tool(registry, service, reference_lock=reference_lock)
+    register_calendar_tool(registry, service)
     return CalendarTool(
         registry=registry, workspace=tmp_path, reference_lock=reference_lock, service=service
     )

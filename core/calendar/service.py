@@ -53,7 +53,6 @@ from core.calendar._time import (
     _utc_now,
     _utc_now_iso,
 )
-from core.calendar.actions import CalendarActions
 from core.calendar.errors import (
     CalendarEventNotFoundError,
     CalendarStorageError,
@@ -120,7 +119,6 @@ class CalendarService:
         self._storage_load_error: CalendarStorageError | None = None
         self._events_loaded = False
         self._changed_callbacks: set[Callable[[], None]] = set()
-        self.actions = CalendarActions(self, self._data_root)
 
     def add_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
         """Subscribe to persisted calendar changes and return an unsubscribe function."""
@@ -205,19 +203,10 @@ class CalendarService:
     async def update_event(
         self, event_id: str, *, actor: str = _DEFAULT_ACTOR, **fields: Any
     ) -> CalendarEvent:
-        """Update one event from the same input shapes as create; omitted fields keep.
-
-        A change that lets an action fire again first checks that action's target
-        (:meth:`CalendarActions.check_event_change`), off the Event Loop.
-        """
-        while True:
-            event, candidate, changed = self._event_update(event_id, fields)
-            if candidate is None:
-                return _clone_event(event)
-            await self.actions.check_event_change(event, candidate)
-            # The check may have waited; build the change again if the event moved on.
-            if self._events.get(event_id) is event:
-                break
+        """Update one event from the same input shapes as create; omitted fields keep."""
+        event, candidate, changed = self._event_update(event_id, fields)
+        if candidate is None:
+            return _clone_event(event)
         self._events[event_id] = candidate
         try:
             self._save_events()
@@ -359,7 +348,7 @@ class CalendarService:
     def event_occurrences(
         self, event: CalendarEvent, window_start: datetime, window_end: datetime
     ) -> list[EventOccurrence]:
-        """Expand one known event for action scheduling using canonical recurrence rules."""
+        """Expand one known event within a window using canonical recurrence rules."""
         return self._event_occurrences(
             event, window_start, window_end, self._timezone, MAX_OCCURRENCES_PER_EVENT
         )
@@ -916,16 +905,7 @@ class CalendarService:
             raise CalendarStorageError(f"Cannot write {self._events_path}: {error}") from error
 
     def _notify_changed(self) -> None:
-        self._notify_callbacks()
-
-    def _notify_action_changed(self) -> None:
-        """Publish execution progress without withdrawing action admission."""
-        self._notify_callbacks(exclude=self.actions._wake)
-
-    def _notify_callbacks(self, *, exclude: Callable[[], None] | None = None) -> None:
         for callback in tuple(self._changed_callbacks):
-            if callback == exclude:
-                continue
             try:
                 callback()
             except Exception as error:

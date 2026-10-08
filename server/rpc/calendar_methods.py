@@ -6,7 +6,6 @@ from typing import Any
 
 from core.calendar import CalendarService
 from server.events import RESOURCE_KIND_CALENDAR
-from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
@@ -37,7 +36,6 @@ _CREATE_FIELDS = _EVENT_MUTATION_FIELDS
 _UPDATE_FIELDS = _EVENT_MUTATION_FIELDS | {"id"}
 _DELETE_FIELDS = frozenset({"id"})
 _ADD_EXDATE_FIELDS = frozenset({"id", "occurrence_start"})
-_ACTION_FIELDS = frozenset({"id", "when", "prompt", "target", "session"})
 
 
 def _calendar_service(state: Any) -> CalendarService:
@@ -62,9 +60,6 @@ def _calendar_window(state: Any, params: JsonObject) -> JsonObject:
         "events": [_event_payload(event) for event in events],
         "cron": [_cron_occurrence_payload(occurrence) for occurrence in cron_occurrences],
         "system_timezone": service.system_timezone_name(),
-        "actions": service.actions.list_actions(),
-        "executions": service.actions.project(occurrences),
-        "action_error": service.actions.storage_error,
     }
 
 
@@ -119,13 +114,10 @@ async def _calendar_update(state: Any, params: JsonObject) -> JsonObject:
         updates["exdates"] = _optional_string_list_value(params.get("exdates"), "exdates")
     if "notes" in params:
         updates["notes"] = _optional_string(params, "notes")
-    # A moved event can let an action that no longer fires run again; its target
-    # check and the change must not interleave with a reference removal.
-    async with _agent_reference_lock(state):
-        try:
-            event = await service.update_event(event_id, actor="rpc", **updates)
-        except Exception as exc:
-            raise _map_expected_error(exc) from exc
+    try:
+        event = await service.update_event(event_id, actor="rpc", **updates)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CALENDAR)
     return {"event": _event_payload(event)}
 
@@ -209,47 +201,6 @@ def _optional_string_list_value(value: Any, key: str) -> list[str] | None:
     return value
 
 
-async def _calendar_add_action(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, _ACTION_FIELDS, "calendar.add_action")
-    async with _agent_reference_lock(state):
-        try:
-            result = await _calendar_service(state).actions.add(
-                _required_string(params, "id"),
-                when=_required_string(params, "when"),
-                prompt=_required_string(params, "prompt"),
-                target=_required_string(params, "target"),
-                session=_optional_string(params, "session"),
-                actor="rpc",
-            )
-        except Exception as exc:
-            raise _map_expected_error(exc) from exc
-    return {"action": result}
-
-
-async def _calendar_update_action(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, _ACTION_FIELDS, "calendar.update_action")
-    async with _agent_reference_lock(state):
-        try:
-            result = await _calendar_service(state).actions.update(
-                _required_string(params, "id"),
-                actor="rpc",
-                **{key: value for key, value in params.items() if key != "id"},
-            )
-        except Exception as exc:
-            raise _map_expected_error(exc) from exc
-    return {"action": result}
-
-
-async def _calendar_delete_action(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, _DELETE_FIELDS, "calendar.delete_action")
-    action_id = _required_string(params, "id")
-    try:
-        await _calendar_service(state).actions.delete(action_id, actor="rpc")
-    except Exception as exc:
-        raise _map_expected_error(exc) from exc
-    return {"id": action_id, "deleted": True}
-
-
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return calendar RPC handlers."""
 
@@ -259,7 +210,4 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "calendar.update": _calendar_update,
         "calendar.delete": _calendar_delete,
         "calendar.add_exdate": _calendar_add_exdate,
-        "calendar.add_action": _calendar_add_action,
-        "calendar.update_action": _calendar_update_action,
-        "calendar.delete_action": _calendar_delete_action,
     }

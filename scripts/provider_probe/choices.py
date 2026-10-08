@@ -152,15 +152,6 @@ CHANNEL_SEND_CASES = (
 
 
 CALENDAR_CASES = (
-    "add_action_default",
-    "add_action_target",
-    "add_action_session",
-    "add_action_at_end",
-    "update_action_time",
-    "update_action_prompt",
-    "update_action_target",
-    "update_action_session",
-    "delete_action",
     "list_default",
     "list_when_week",
     "list_when_range",

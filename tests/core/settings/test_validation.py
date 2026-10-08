@@ -123,10 +123,6 @@ _DATA_DIR_DOCUMENTS: dict[str, tuple[str, dict[str, object]]] = {
     "cron/jobs.json": ("[]", {"jobs": []}),
     "bootstrap/jobs.json": ("[]", {"jobs": []}),
     "calendar/events.json": ("[]", {"events": []}),
-    "calendar/actions.json": (
-        '{"actions": [], "executions": {}}',
-        {"actions": [], "executions": {}},
-    ),
     "skills/policy.json": ('{"version": 2}', {}),
     "terminals/launch-history.json": ('{"version": 1, "entries": []}', {"entries": []}),
     "terminals/groups.json": ('{"version": 1, "groups": []}', {"groups": []}),

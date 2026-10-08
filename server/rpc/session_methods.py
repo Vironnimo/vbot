@@ -182,7 +182,7 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     Decisions baked in: the session moves into an archive entry, not hard-deleted
     (#1, recoverable), unless ``permanent`` purges that entry right after the
     archive; deletion is refused while a run is active or queued on it
-    (#4) and while a Bootstrap job, Cron job or Calendar action pins it; the
+    (#4) and while a Bootstrap job or Cron job pins it; the
     response carries ``next_session_id`` for #2 navigation; and the removed
     session is dropped from the active recall index immediately (#6). Channel-
     bound and sub-agent sessions need no special handling — a channel session

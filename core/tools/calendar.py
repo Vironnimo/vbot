@@ -8,20 +8,12 @@ from functools import cache
 from typing import TYPE_CHECKING, Any
 
 from core.calendar.errors import (
-    CalendarActionTargetMissingError,
     CalendarEventNotFoundError,
     CalendarServiceError,
     CalendarStorageError,
     CalendarValidationError,
 )
 from core.calendar.service import FIND_FREE_MAX_RESULTS
-from core.tools._calendar_actions import (
-    action_lines,
-    find_action,
-    handle_add_action,
-    handle_delete_action,
-    handle_update_action,
-)
 from core.tools._calendar_arguments import (
     LOCATION_FIELD,
     OMIT,
@@ -30,7 +22,6 @@ from core.tools._calendar_arguments import (
     STAND_INS,
     TIMEZONE_FIELD,
     UNADVERTISED_PARAMETERS,
-    WHEN_STAND_IN,
     CalendarCallRefusedError,
     choice,
     is_date,
@@ -69,47 +60,22 @@ from core.tools.tools import (
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    import asyncio
-
     from core.calendar import CalendarEvent, CalendarService, EventOccurrence
 
 CALENDAR_TOOL_NAME = "calendar"
-CALENDAR_TOOL_DESCRIPTION = (
-    "Manage the user's calendar events and find free time. Attach actions to an event: "
-    "instructions an Agent carries out before, at or after it."
-)
+CALENDAR_TOOL_DESCRIPTION = "Manage the user's calendar events and find free time."
 
-CALENDAR_ACTIONS = frozenset(
-    (
-        "list",
-        "create",
-        "update",
-        "delete",
-        "find_free",
-        "add_action",
-        "update_action",
-        "delete_action",
-    )
-)
+CALENDAR_ACTIONS = frozenset(("list", "create", "update", "delete", "find_free"))
 
 CALENDAR_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
         "action": {
             "type": "string",
-            "enum": [
-                "list",
-                "create",
-                "update",
-                "delete",
-                "find_free",
-                "add_action",
-                "update_action",
-                "delete_action",
-            ],
+            "enum": ["list", "create", "update", "delete", "find_free"],
             "description": (
-                "list shows events with their ids and actions; find_free shows free time. "
-                "update and update_action change only the fields you send."
+                "list shows events with their ids; find_free shows free time. update changes "
+                "only the fields you send."
             ),
         },
         "when": {
@@ -118,17 +84,13 @@ CALENDAR_TOOL_PARAMETERS: JsonObject = {
             "description": (
                 "For list and find_free: today, tomorrow, this week, next week, this month, "
                 "next month, a date, a year-month (2030-01) or 'start..end'; defaults are this "
-                "month and the next 7 days. For actions: start or end, optionally +/- a "
-                "duration in m, h or d, e.g. 'start - 1h'."
+                "month and the next 7 days."
             ),
         },
         "id": {
             "type": "string",
             "minLength": 1,
-            "description": (
-                "Event id, or for update_action and delete_action the action id (act_...), "
-                "from list or an earlier result."
-            ),
+            "description": "Event id from list or an earlier result.",
         },
         "title": {
             "type": "string",
@@ -161,29 +123,11 @@ CALENDAR_TOOL_PARAMETERS: JsonObject = {
             ),
         },
         "notes": {"type": "string", "description": "Free text kept with the event."},
-        "prompt": {
-            "type": "string",
-            "description": "Instruction the action's Run carries out. Required for add_action.",
-        },
-        "target": {
-            "type": "string",
-            "description": (
-                "Agent that runs the action: agent or agent@project. Omit to use the current Agent."
-            ),
-        },
-        "session": {
-            "type": "string",
-            "description": (
-                "Session of the target Agent to run the action in. Omit for a fresh Session "
-                "each time."
-            ),
-        },
     },
     "required": ["action"],
 }
 
-_EVENT_ID_ACTIONS = frozenset({"update", "delete", "add_action"})
-_ACTION_ID_ACTIONS = frozenset({"update_action", "delete_action"})
+_EVENT_ID_ACTIONS = frozenset({"update", "delete"})
 _DEFAULT_FREE_MINUTES = 60
 _NEARBY = timedelta(days=7)
 _LISTED_OCCURRENCES = 8
@@ -199,9 +143,7 @@ _FIELD_WORDS = {
     "notes": "notes",
     "when": "when",
     "window": "when",
-    "prompt": "prompt",
 }
-_TARGET_GUIDANCE = 'Set "target" to an existing Agent id, or to agent@project for a Project member.'
 
 _LOGGER = get_logger("tools.calendar")
 
@@ -222,27 +164,11 @@ def _normalize_calendar_arguments(arguments: Any) -> Any:
     return normalize_calendar_arguments(_repair_contract(), arguments)
 
 
-# Actions that choose an action's target Agent and Session, or (update) can let
-# an action that no longer fires run again.
-_REFERENCE_ACTIONS = frozenset({"add_action", "update_action", "update"})
+def register_calendar_tool(registry: ToolRegistry, calendar_service: CalendarService) -> None:
+    """Register the calendar tool with a vBot tool registry."""
 
-
-def register_calendar_tool(
-    registry: ToolRegistry, calendar_service: CalendarService, *, reference_lock: asyncio.Lock
-) -> None:
-    """Register the calendar tool with a vBot tool registry.
-
-    ``reference_lock`` is the Agent reference lock (``AutomationReferences.lock``).
-    add_action, update_action and update hold it like the calendar RPCs, so an
-    action cannot select or revive a reference between a removal's reference
-    check and the removal.
-    """
-
-    async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        if arguments.get("action") in _REFERENCE_ACTIONS:
-            async with reference_lock:
-                return await _handle_calendar_tool(calendar_service, arguments, context)
-        return await _handle_calendar_tool(calendar_service, arguments, context)
+    async def handler(_context: ToolContext, arguments: JsonObject) -> JsonObject:
+        return await _handle_calendar_tool(calendar_service, arguments)
 
     registry.register(
         CALENDAR_TOOL_NAME,
@@ -262,28 +188,26 @@ def register_calendar_tool(
 
 
 async def _handle_calendar_tool(
-    calendar_service: CalendarService, arguments: JsonObject, context: ToolContext | None = None
+    calendar_service: CalendarService, arguments: JsonObject
 ) -> JsonObject:
     arguments = dict(arguments)
     late_limits = arguments.pop(LATE_LIMITS_FIELD, None)
-    result = await _run_calendar_action(calendar_service, arguments, context)
+    result = await _run_calendar_action(calendar_service, arguments)
     if late_limits:
         return with_late_limits_note(result, late_limits, REFUSAL_PREFIX)
     return result
 
 
 async def _run_calendar_action(
-    calendar_service: CalendarService, arguments: JsonObject, context: ToolContext | None
+    calendar_service: CalendarService, arguments: JsonObject
 ) -> JsonObject:
     action = arguments.get("action")
     if not isinstance(action, str) or action not in CALENDAR_ACTIONS:
         options = ", ".join(sorted(CALENDAR_ACTIONS))
         return tool_failure("invalid_arguments", f"action must be one of: {options}.")
     try:
-        if action in _EVENT_ID_ACTIONS | _ACTION_ID_ACTIONS and "id" not in arguments:
+        if action in _EVENT_ID_ACTIONS and "id" not in arguments:
             raise CalendarCallRefusedError(_missing_id(calendar_service, action, arguments))
-        if action in _EVENT_ID_ACTIONS | _ACTION_ID_ACTIONS:
-            _check_id_kind(calendar_service, action, arguments)
         if action == "list":
             return _handle_list(calendar_service, arguments)
         if action == "find_free":
@@ -292,28 +216,14 @@ async def _run_calendar_action(
             return _handle_create(calendar_service, arguments)
         if action == "update":
             return await _handle_update(calendar_service, arguments)
-        if action == "delete":
-            return _handle_delete(calendar_service, arguments)
-        if action == "add_action":
-            return await handle_add_action(calendar_service, arguments, context)
-        if action == "update_action":
-            return await handle_update_action(calendar_service, arguments, context)
-        return await handle_delete_action(calendar_service, arguments)
+        return _handle_delete(calendar_service, arguments)
     except CalendarCallRefusedError as error:
         return tool_failure("invalid_arguments", str(error))
-    except CalendarEventNotFoundError as error:
-        kind = "action" if "action not found" in str(error) else "event"
+    except CalendarEventNotFoundError:
         return tool_failure(
-            f"{kind}_not_found",
-            f'No {kind} has id "{arguments.get("id")}". {{"action":"list"}} shows events, their '
-            'actions and ids; add a when such as "next month" to look further ahead.',
-        )
-    except CalendarActionTargetMissingError as error:
-        return tool_failure(
-            "action_target_missing",
-            f"calendar was not run: this update would let {error.subject} run again whose "
-            f"target no longer exists: {error.listing}. Change each action's target or session "
-            "with update_action, or remove it with delete_action; then repeat this update.",
+            "event_not_found",
+            f'No event has id "{arguments.get("id")}". {{"action":"list"}} shows events and '
+            'their ids; add a when such as "next month" to look further ahead.',
         )
     except CalendarValidationError as error:
         return tool_failure("invalid_arguments", _validation_message(arguments, error))
@@ -331,14 +241,13 @@ async def _run_calendar_action(
 
 def _missing_id(calendar_service: CalendarService, action: str, arguments: JsonObject) -> str:
     """Name the call with the id: a title that matches one event supplies it."""
-    kind = "action" if action in _ACTION_ID_ACTIONS else "event"
     title = arguments.get("title")
-    if kind == "event" and isinstance(title, str):
+    if isinstance(title, str):
         wanted = title.strip().casefold()
         events = calendar_service.list_events()
         matches = [event for event in events if event.title.strip().casefold() == wanted]
         matches = matches or [event for event in events if wanted in event.title.casefold()]
-        # update may be renaming; delete and add_action only used the title to find the event.
+        # update may be renaming; delete only used the title to find the event.
         kept: dict[str, Any] = {} if action == "update" else {"title": OMIT}
         if len(matches) == 1:
             event = matches[0]
@@ -357,58 +266,11 @@ def _missing_id(calendar_service: CalendarService, action: str, arguments: JsonO
             ]
             return choice(f'{action} needs the event "id"; several events match "{title}":', calls)
     return refusal(
-        f'{action} needs the {kind} "id"; {{"action":"list"}} shows events, their actions and ids.',
+        f'{action} needs the event "id"; {{"action":"list"}} shows events and their ids.',
         arguments,
-        id=f"<{kind} id from list>",
+        id="<event id from list>",
         **({} if action == "update" else {"title": OMIT}),
     )
-
-
-def _check_id_kind(calendar_service: CalendarService, action: str, arguments: JsonObject) -> None:
-    """Refuse an event id where an action id belongs, or the reverse, naming the right call."""
-    item_id = str(arguments["id"])
-    if action in _ACTION_ID_ACTIONS and item_id.startswith("evt_"):
-        event = calendar_service.get_event(item_id)
-        actions = calendar_service.actions.list_actions(event.id)
-        text = f'{action} takes an action id (act_...); "{item_id}" is the event "{event.title}"'
-        if not actions:
-            if action == "delete_action":
-                raise CalendarCallRefusedError(
-                    f"calendar was not run: {text}, which has no actions to delete."
-                )
-            raise CalendarCallRefusedError(
-                refusal(
-                    f"{text}, which has no actions; add_action attaches one.",
-                    arguments,
-                    action="add_action",
-                    when=arguments.get("when", WHEN_STAND_IN),
-                )
-            )
-        if len(actions) == 1:
-            raise CalendarCallRefusedError(
-                refusal(
-                    f"{text}, whose one action is {actions[0]['id']}.",
-                    arguments,
-                    id=actions[0]["id"],
-                )
-            )
-        calls = [
-            render_call(arguments, id=item["id"]) + f" ({item['when']}: {_brief(item['prompt'])})"
-            for item in actions
-        ]
-        raise CalendarCallRefusedError(choice(f"{text}, which has several actions:", calls))
-    if action in _EVENT_ID_ACTIONS and item_id.startswith("act_"):
-        # delete and update of an action id were already read as delete_action/update_action.
-        current = find_action(calendar_service, item_id)
-        event = calendar_service.get_event(current["event_id"])
-        raise CalendarCallRefusedError(
-            refusal(
-                f'{action} takes an event id; "{item_id}" is an action of "{event.title}" '
-                f"({event.id}).",
-                arguments,
-                id=event.id,
-            )
-        )
 
 
 def _brief(text: str) -> str:
@@ -427,7 +289,7 @@ def _handle_list(calendar_service: CalendarService, arguments: JsonObject) -> Js
     item_id = arguments.get("id")
     if isinstance(item_id, str):
         # One event, shown even when none of its occurrences falls in the window.
-        chosen = _event_for_id(calendar_service, item_id)
+        chosen = calendar_service.get_event(item_id)
         events = {chosen.id: chosen}
         by_event[chosen.id] = []
     for occurrence in calendar_service.occurrences_in_window(window_start, window_end):
@@ -442,13 +304,7 @@ def _handle_list(calendar_service: CalendarService, arguments: JsonObject) -> Js
             if text in events[event_id].title.casefold()
             or text in (events[event_id].notes or "").casefold()
         }
-    actions: dict[str, list[dict[str, Any]]] = {}
-    for item in calendar_service.actions.list_actions():
-        actions.setdefault(item["event_id"], []).append(item)
     listed = [item for items in by_event.values() for item in items]
-    runs: dict[str, list[dict[str, Any]]] = {}
-    for row in calendar_service.actions.project(listed):
-        runs.setdefault(row["action_id"], []).append(row)
     data: JsonObject = {
         "events": len(by_event),
         "occurrences": len(listed),
@@ -457,24 +313,14 @@ def _handle_list(calendar_service: CalendarService, arguments: JsonObject) -> Js
     }
     if isinstance(query, str):
         data["matching"] = query
-    if calendar_service.actions.storage_error:
-        data["action_error"] = calendar_service.actions.storage_error
     if note:
         data["note"] = note
     if by_event:
         data["content"] = "\n\n".join(
-            _event_block(calendar_service, events[event_id], items, actions.get(event_id, []), runs)
+            _event_block(calendar_service, events[event_id], items)
             for event_id, items in by_event.items()
         )
     return tool_success(data)
-
-
-def _event_for_id(calendar_service: CalendarService, item_id: str) -> CalendarEvent:
-    """The event an id names: an event id, or an action id standing for its event."""
-    for item in calendar_service.actions.list_actions():
-        if item["id"] == item_id:
-            return calendar_service.get_event(item["event_id"])
-    return calendar_service.get_event(item_id)
 
 
 def _handle_find_free(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
@@ -514,20 +360,14 @@ def _event_block(
     calendar_service: CalendarService,
     event: CalendarEvent,
     occurrences: list[EventOccurrence],
-    actions: list[dict[str, Any]],
-    runs: dict[str, list[dict[str, Any]]],
 ) -> str:
-    zone = server_zone(calendar_service)
     fields = _event_fields(calendar_service, event)
-    fields.pop("actions", None)
     notes = fields.pop("notes", None)
     lines = [f"{key}: {value}" for key, value in fields.items()]
     if event.rrule is not None:
         lines.append(_occurrence_line(occurrences))
     if notes:
         lines.append("notes: " + "\n  ".join(str(notes).splitlines()))
-    for item in actions:
-        lines.extend(action_lines(item, runs.get(item["id"], []), zone))
     return "\n".join(lines)
 
 
@@ -612,16 +452,13 @@ async def _handle_update(calendar_service: CalendarService, arguments: JsonObjec
 def _handle_delete(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
     event = calendar_service.get_event(str(arguments["id"]))
     start = arguments.get("start")
-    removed_actions = len(calendar_service.actions.list_actions(event.id))
     if not isinstance(start, str):
         calendar_service.delete_event(event.id, actor="tool")
-        return _deleted(event, removed_actions, None)
+        return _deleted(event, None)
     occurrence = _occurrence_start(calendar_service, event, start, arguments)
     if event.rrule is None:
         calendar_service.delete_event(event.id, actor="tool")
-        return _deleted(
-            event, removed_actions, "The event does not repeat, so the whole event was deleted."
-        )
+        return _deleted(event, "The event does not repeat, so the whole event was deleted.")
     calendar_service.add_exdate(event.id, occurrence, actor="tool")
     return tool_success(
         {
@@ -633,10 +470,8 @@ def _handle_delete(calendar_service: CalendarService, arguments: JsonObject) -> 
     )
 
 
-def _deleted(event: CalendarEvent, removed_actions: int, note: str | None) -> JsonObject:
+def _deleted(event: CalendarEvent, note: str | None) -> JsonObject:
     data: JsonObject = {"id": event.id, "title": event.title, "status": "deleted"}
-    if removed_actions:
-        data["actions_removed"] = removed_actions
     if note:
         data["note"] = note
     return tool_success(data)
@@ -791,9 +626,6 @@ def _event_fields(calendar_service: CalendarService, event: CalendarEvent) -> Js
             data["removed_occurrences"] = ", ".join(minute_text(item) for item in event.exdates)
     if event.notes:
         data["notes"] = event.notes
-    actions = len(calendar_service.actions.list_actions(event.id))
-    if actions:
-        data["actions"] = actions
     return data
 
 
@@ -812,12 +644,6 @@ def _event_start(calendar_service: CalendarService, event: CalendarEvent) -> str
 
 def _validation_message(arguments: JsonObject, error: CalendarValidationError) -> str:
     detail = str(error).rstrip(". ")
-    if "target does not identify" in detail:
-        return refusal(f"{detail}. {_TARGET_GUIDANCE}", arguments, target=STAND_INS["target"])
-    if "session does not exist" in detail:
-        return refusal(
-            f"{detail}. Omit session for a fresh Session each time.", arguments, session=OMIT
-        )
     field = _FIELD_WORDS.get(detail.split(" ", 1)[0].split(".", 1)[0])
     if field is None and detail.startswith("cannot parse when"):
         field = "when"

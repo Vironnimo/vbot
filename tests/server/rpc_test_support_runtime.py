@@ -380,31 +380,8 @@ class StubChannelService:
         return ()
 
 
-class StubCalendarActions:
-    """Calendar action double listing ``actions``.
-
-    An action a test marks ``"spent": True`` can no longer fire, like one whose
-    one-time event has passed.
-    """
-
-    def __init__(self) -> None:
-        self.actions: list[dict[str, Any]] = []
-
-    def list_actions(self) -> list[dict[str, Any]]:
-        return [dict(action) for action in self.actions]
-
-    def can_fire(self, action_id: str) -> bool:
-        return not any(action["id"] == action_id and action.get("spent") for action in self.actions)
-
-    async def retarget_identity_async(self, _old_agent_id: str, _new_agent_id: str) -> int:
-        return 0
-
-
 class StubCalendarService:
-    """Calendar double without events whose actions a test arranges."""
-
-    def __init__(self) -> None:
-        self.actions = StubCalendarActions()
+    """Calendar double without events."""
 
     def list_events(self) -> list[Any]:
         return []
@@ -508,7 +485,6 @@ class StubRuntime:
         self.automation_references = AutomationReferences(
             bootstrap=cast(Any, self.bootstrap_service),
             cron=cast(Any, self.cron_service),
-            calendar=cast(Any, self.calendar_service),
         )
         self.channel_service: Any = StubChannelService()
         self.subagents: Any = SimpleNamespace(references_identity_agent=lambda _agent_id: False)
@@ -590,7 +566,6 @@ class StubRuntime:
             channels=cast(Any, self.channel_service),
             cron=cast(Any, self.cron_service),
             bootstrap=cast(Any, self.bootstrap_service),
-            calendar=cast(Any, self.calendar_service),
             snapshot_barrier=self.snapshot_barrier,
             terminals=cast(Any, self.terminal_manager),
         )

@@ -134,22 +134,19 @@ async def test_delete_session_pinned_by_automations_is_rejected() -> None:
         session_id="s1",
         status="active",
     )
+    bootstrap_job = SimpleNamespace(**{**vars(job), "id": "boot-1", "name": "Warm up"})
     state.runtime.cron_service.list_jobs = lambda: [job]
-    calendar = state.runtime.calendar_service
-    calendar.actions.list_actions = lambda: [
-        {"id": "act-1", "event_id": "evt-1", "target": "builder", "session": "s1"}
-    ]
-    calendar.list_events = lambda: [SimpleNamespace(id="evt-1", title="Weekly review")]
+    state.runtime.bootstrap_service.list_jobs = lambda: [bootstrap_job]
 
     error = await rpc_error(state, "session.delete", agent_id="builder", session_id="s1")
 
     # Which automations count is AutomationReferences' contract
     # (tests/core/automation/test_references.py); the RPC names each of them.
     assert error["code"] == "session_in_use"
-    assert error["message"] == "cannot delete Session referenced by calendar:act-1, cron:cron-1"
+    assert error["message"] == "cannot delete Session referenced by bootstrap:boot-1, cron:cron-1"
     assert error["data"] == {
         "references": [
-            {"kind": "calendar", "id": "act-1", "name": "Weekly review"},
+            {"kind": "bootstrap", "id": "boot-1", "name": "Warm up"},
             {"kind": "cron", "id": "cron-1", "name": "Daily report"},
         ]
     }

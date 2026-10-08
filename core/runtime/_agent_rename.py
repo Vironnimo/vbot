@@ -2,16 +2,16 @@
 
 The Agent store owns the rename record and the Agent-owned half of a rename: the
 Agent tree and config, its Sessions, Sub-Agent parent links, the roster order and
-delegation allow-lists (``AgentStore.rename``). Channels, Cron, Bootstrap and
-Calendar each hold references to the Agent id that their owners retarget. Runtime
-owns every one of these services, so it orders the two halves: the Agent-owned
-half first, so references always name an existing Agent, then the references,
-then the record is finished. The running Channel, Cron, Bootstrap and Calendar
-services keep their state on the Event Loop, so a live rename runs there: it
-reads and changes their references on the loop and runs each blocking step of
-the Agent store as its own call on the Session database's pool. No step holds a
-pool worker while it waits for the loop, because the reference steps need that
-same pool (Cron and Calendar check Sessions there).
+delegation allow-lists (``AgentStore.rename``). Channels, Cron and Bootstrap each
+hold references to the Agent id that their owners retarget. Runtime owns every
+one of these services, so it orders the two halves: the Agent-owned half first,
+so references always name an existing Agent, then the references, then the
+record is finished. The running Channel, Cron and Bootstrap services keep their
+state on the Event Loop, so a live rename runs there: it reads and changes their
+references on the loop and runs each blocking step of the Agent store as its own
+call on the Session database's pool. No step holds a pool worker while it waits
+for the loop, because the reference steps need that same pool (Cron checks
+Sessions there).
 
 Every step selects only what still names the id it replaces, so repeating a
 direction converges and reversing the ids reverts it. A failure reverts the whole
@@ -30,7 +30,6 @@ from core.agents import Agent, AgentRename, AgentStore
 from core.automation import BootstrapService, CronService
 from core.automation.bootstrap import TERMINAL_BOOTSTRAP_STATUSES
 from core.automation.cron import TERMINAL_CRON_JOB_STATUSES
-from core.calendar import CalendarService
 from core.channels import ChannelService
 from core.database import SnapshotBarrier
 from core.sessions import ChatSessionManager
@@ -50,7 +49,6 @@ class AgentRenameServices:
     channels: ChannelService
     cron: CronService
     bootstrap: BootstrapService
-    calendar: CalendarService
     snapshot_barrier: SnapshotBarrier
     # None while startup builds the owners; no Terminal Session survives a restart.
     terminals: TerminalManager | None
@@ -67,7 +65,6 @@ class AgentRenameOutcome:
     bootstrap_job_ids: tuple[str, ...]
     policy_agent_ids: tuple[str, ...]
     session_link_count: int
-    calendar_action_count: int
     terminal_count: int
 
 
@@ -76,7 +73,6 @@ class _References:
     channel_ids: tuple[str, ...]
     cron_job_ids: tuple[str, ...]
     bootstrap_job_ids: tuple[str, ...]
-    calendar_action_count: int
     terminal_count: int = 0
 
 
@@ -85,8 +81,8 @@ async def rename_identity_agent(
 ) -> AgentRenameOutcome:
     """Rename one Identity Agent and every reference to it as one recoverable change.
 
-    Runs on the Event Loop that owns the running Channel, Cron, Bootstrap and
-    Calendar services, whose references it reads and changes there; each blocking
+    Runs on the Event Loop that owns the running Channel, Cron and Bootstrap
+    services, whose references it reads and changes there; each blocking
     step of the Agent store is one call on the Session database's pool. The caller
     holds the Run admission guards of both ids. A failure reverts every change
     before it is raised, and a cancelled caller waits until the rename or its
@@ -100,14 +96,12 @@ async def rename_identity_agent(
 async def identity_agent_references(
     services: AgentRenameServices, agent_id: str
 ) -> tuple[str, ...]:
-    """Name the Channels, jobs and Calendar actions outside the Agent store that address an id.
+    """Name the Channels and jobs outside the Agent store that address an id.
 
     This is the selection a rename retargets, labelled ``channel:<id>``,
-    ``cron:<id>``, ``bootstrap:<id>`` and ``calendar:<action id>`` and sorted:
-    Channels that answer as the Identity Agent, its non-terminal identity Cron and
-    Bootstrap jobs, and the actions of live Calendar events that target it. Runs
-    on the Event Loop that owns the jobs and actions; the Channel configs are
-    read off it.
+    ``cron:<id>`` and ``bootstrap:<id>`` and sorted: Channels that answer as the
+    Identity Agent and its non-terminal identity Cron and Bootstrap jobs. Runs on
+    the Event Loop that owns the jobs; the Channel configs are read off it.
     """
     references = [
         f"channel:{channel.id}"
@@ -122,18 +116,13 @@ async def identity_agent_references(
         f"bootstrap:{job_id}"
         for job_id in _identity_job_ids(services.bootstrap, agent_id, TERMINAL_BOOTSTRAP_STATUSES)
     )
-    references.extend(
-        f"calendar:{action['id']}"
-        for action in services.calendar.actions.list_actions()
-        if action["target"] == agent_id
-    )
     return tuple(sorted(references))
 
 
 def complete_pending_rename(services: AgentRenameServices, rename: AgentRename) -> None:
     """Finish a rename whose Agent-owned half ``AgentStore.recover_rename`` completed.
 
-    Runs during startup, before Channels, Cron and Calendar start. References are
+    Runs during startup, before Channels and Cron start. References are
     retargeted in the record's direction; when that fails, the rename is reverted
     instead. A rename that reaches neither end keeps its record for the next start.
     """
@@ -199,19 +188,17 @@ async def _rename_and_retarget(
         bootstrap_job_ids=references.bootstrap_job_ids,
         policy_agent_ids=result.policy_agent_ids,
         session_link_count=result.session_link_count,
-        calendar_action_count=references.calendar_action_count,
         terminal_count=references.terminal_count,
     )
     _LOGGER.info(
         "Agent renamed (agent=%s new_agent=%s sessions=%s channels=%s cron=%s "
-        "bootstrap=%s calendar_actions=%s policies=%s session_links=%s terminals=%s)",
+        "bootstrap=%s policies=%s session_links=%s terminals=%s)",
         agent_id,
         new_agent_id,
         len(outcome.session_ids),
         len(outcome.channel_ids),
         len(outcome.cron_job_ids),
         len(outcome.bootstrap_job_ids),
-        outcome.calendar_action_count,
         len(outcome.policy_agent_ids),
         outcome.session_link_count,
         outcome.terminal_count,
@@ -254,7 +241,7 @@ def _finish(services: AgentRenameServices, rename: AgentRename) -> bool:
 
 
 def _retarget_references(services: AgentRenameServices, rename: AgentRename) -> _References:
-    """Point every Channel, Cron job, Bootstrap job and Calendar action at the target id.
+    """Point every Channel, Cron job and Bootstrap job at the target id.
 
     Only non-terminal jobs that target the Identity Agent itself move: completed
     history stays as it ran, and a Project-qualified job targets that Project's
@@ -273,7 +260,6 @@ def _retarget_references(services: AgentRenameServices, rename: AgentRename) -> 
         channel_ids=channel_ids,
         cron_job_ids=cron_job_ids,
         bootstrap_job_ids=bootstrap_job_ids,
-        calendar_action_count=services.calendar.actions.retarget_identity(source, target),
     )
 
 
@@ -300,9 +286,6 @@ async def _retarget_on_loop(services: AgentRenameServices, rename: AgentRename) 
         channel_ids=channel_ids,
         cron_job_ids=cron_job_ids,
         bootstrap_job_ids=bootstrap_job_ids,
-        calendar_action_count=await services.calendar.actions.retarget_identity_async(
-            source, target
-        ),
         terminal_count=terminal_count,
     )
 

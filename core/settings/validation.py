@@ -365,7 +365,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
         validate_cron_jobs_file,
         validate_librarian_state_file,
     )
-    from core.calendar import validate_calendar_actions_file, validate_calendar_events_file
+    from core.calendar import validate_calendar_events_file
     from core.channels import validate_channel_file
     from core.model_tasks.artifacts import validate_task_artifact_metadata_file
     from core.projects import validate_project_file
@@ -395,7 +395,6 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
         "cron_jobs": validate_cron_jobs_file,
         "bootstrap_jobs": validate_bootstrap_jobs_file,
         "calendar_events": validate_calendar_events_file,
-        "calendar_actions": validate_calendar_actions_file,
         "skill_policy": validate_skill_policy_file,
         "terminal_launch_history": validate_terminal_launch_history_file,
         "terminal_groups": validate_terminal_groups_file,

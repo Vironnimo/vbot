@@ -1,4 +1,4 @@
-"""Calendar RPCs: the window projection, event mutations and event actions."""
+"""Calendar RPCs: the window projection and event mutations."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import Mock
 
 import pytest
 
@@ -37,14 +37,6 @@ def state(tmp_path: Path) -> SimpleNamespace:
         event_bus=ServerEventBus(),
         agent_delete_lock=asyncio.Lock(),
     )
-
-
-def _configure_actions(state: SimpleNamespace, *, session_exists: bool) -> CalendarService:
-    service: CalendarService = state.runtime.calendar_service
-    sessions = Mock(exists=Mock(return_value=session_exists))
-    sessions.run_async = AsyncMock(side_effect=lambda function, *args: function(*args))
-    service.actions.configure(Mock(), Mock(), sessions)
-    return service
 
 
 @pytest.mark.asyncio
@@ -113,70 +105,6 @@ async def test_calendar_add_exdate_excludes_one_occurrence_additively(
 
 
 @pytest.mark.asyncio
-async def test_calendar_actions_roundtrip(state: SimpleNamespace) -> None:
-    service = _configure_actions(state, session_exists=True)
-    event = await rpc_result(state, "calendar.create", title="Meeting", start="2026-09-10T15:00")
-
-    created = await rpc_result(
-        state,
-        "calendar.add_action",
-        id=event["event"]["id"],
-        when="start - 1h",
-        prompt="prepare",
-        target="main",
-        session="chosen",
-    )
-    action_id = created["action"]["id"]
-    updated = await rpc_result(
-        state, "calendar.update_action", id=action_id, session=None, when="end"
-    )
-    window = await rpc_result(
-        state, "calendar.window", **{"from": "2026-09-10", "to": "2026-09-10"}
-    )
-    deleted = await rpc_result(state, "calendar.delete_action", id=action_id)
-
-    assert event["event"]["recurring"] is False
-    assert updated["action"]["session"] is None
-    assert updated["action"]["prompt"] == "prepare"
-    assert window["actions"][0]["id"] == action_id
-    assert window["executions"][0]["action_id"] == action_id
-    # Due after a single event, the execution can start however late.
-    assert window["executions"][0]["expires_at"] is None
-    assert deleted == {"id": action_id, "deleted": True}
-    assert service.actions.list_actions() == []
-
-
-@pytest.mark.asyncio
-async def test_calendar_update_that_would_revive_an_action_checks_it_under_the_reference_lock(
-    state: SimpleNamespace,
-) -> None:
-    service = _configure_actions(state, session_exists=True)
-    event = service.create_event(title="Old", start="2020-01-10T12:00")
-    action = await service.actions.add(
-        event.id, when="start", prompt="prepare", target="main", session="chosen"
-    )
-    _configure_actions(state, session_exists=False)
-
-    async with state.agent_delete_lock:
-        update = asyncio.create_task(
-            rpc_error(state, "calendar.update", id=event.id, start="2030-01-10T12:00")
-        )
-        for _ in range(5):
-            await asyncio.sleep(0)
-        assert not update.done()
-    error = await update
-
-    assert error["code"] == "domain_error"
-    assert error["message"] == (
-        "This event change would let an action run again whose target no longer exists: "
-        f"{action['id']} (Session chosen of main no longer exists). Change each action's "
-        "target or Session, or delete the action, first."
-    )
-    assert service.get_event(event.id) == event
-    assert resource_changes(state) == []
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method", "params", "code", "named"),
     [
@@ -208,25 +136,12 @@ async def test_calendar_update_that_would_revive_an_action_checks_it_under_the_r
             "invalid_request",
             "bogus",
         ),
-        # An action's Session must belong to its target.
-        (
-            "calendar.add_action",
-            {
-                "id": "{single}",
-                "when": "start",
-                "prompt": "prepare",
-                "target": "main",
-                "session": "other",
-            },
-            "domain_error",
-            "",
-        ),
     ],
 )
 async def test_calendar_refusals_change_nothing(
     state: SimpleNamespace, method: str, params: JsonObject, code: str, named: str
 ) -> None:
-    service = _configure_actions(state, session_exists=False)
+    service: CalendarService = state.runtime.calendar_service
     single = service.create_event(title="X", start="2026-09-10T15:00:00")
     before = [event.to_dict() for event in service.list_events()]
     params = {key: single.id if value == "{single}" else value for key, value in params.items()}
@@ -236,5 +151,4 @@ async def test_calendar_refusals_change_nothing(
     assert error["code"] == code
     assert named in error["message"]
     assert [event.to_dict() for event in service.list_events()] == before
-    assert service.actions.list_actions() == []
     assert resource_changes(state) == []

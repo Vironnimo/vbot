@@ -97,7 +97,6 @@ async def test_safe_startup_does_not_load_extensions_or_start_producers(
     for name in (
         "_start_channel_service",
         "_start_cron_service",
-        "_start_calendar_service",
         "_start_provider_usage_service",
         "_start_archive_retention",
         "_start_config_backups",
@@ -757,7 +756,6 @@ _ASYNC_SHUTDOWN = (
     "extension_databases.close",
     "channels.aclose",
     "cron.aclose",
-    "calendar_actions.aclose",
     "bootstrap.aclose",
     "archive_retention.aclose",
     "commands.shutdown_commands",
@@ -787,7 +785,6 @@ _SYNC_SHUTDOWN = (
     "extension_databases.close",
     "channels.stop",
     "cron.stop",
-    "calendar_actions.stop",
     "bootstrap.stop",
     "archive_retention.stop",
     "librarian.stop",
@@ -871,7 +868,6 @@ async def test_runtime_shutdown_runs_every_step_before_reporting_failures(
     runtime = Runtime(config)
     fakes: dict[str, object] = {
         "_extension_host_factory": SimpleNamespace(databases=service("extension_databases")),
-        "_calendar_service": SimpleNamespace(actions=service("calendar_actions")),
         "_storage": SimpleNamespace(temporary_files=service("temporary_files")),
     }
     for attribute, label in (

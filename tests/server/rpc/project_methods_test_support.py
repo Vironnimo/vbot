@@ -163,7 +163,6 @@ def _make_state(
     *,
     cron_jobs: list | None = None,
     bootstrap_jobs: list | None = None,
-    calendar_actions: list | None = None,
 ) -> SimpleNamespace:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -182,7 +181,6 @@ def _make_state(
     cron_service = SimpleNamespace(list_jobs=lambda: list(cron_jobs or []))
     bootstrap_service = SimpleNamespace(list_jobs=lambda: list(bootstrap_jobs or []))
     calendar_service = StubCalendarService()
-    calendar_service.actions.actions.extend(calendar_actions or [])
     runtime = SimpleNamespace(
         projects=projects,
         agents=agents,
@@ -197,7 +195,6 @@ def _make_state(
         automation_references=AutomationReferences(
             bootstrap=cast(Any, bootstrap_service),
             cron=cast(Any, cron_service),
-            calendar=cast(Any, calendar_service),
         ),
         skills=SimpleNamespace(list_all=lambda: []),
         # ``project.set_override``'s model gate reads ``runtime.models`` only for a pinned

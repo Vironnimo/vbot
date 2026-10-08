@@ -124,7 +124,6 @@ def _start_probe_runtime(runtime: Runtime) -> None:
     for hook_name in (
         "_start_channel_service",
         "_start_cron_service",
-        "_start_calendar_service",
         "_start_provider_usage_service",
     ):
         setattr(runtime, hook_name, _do_not_start)
