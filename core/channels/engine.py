@@ -56,6 +56,7 @@ from core.runs import (
     RUN_COMPLETED_EVENT,
     RUN_FAILED_EVENT,
     RUN_INTERRUPTED_EVENT,
+    USER_MESSAGE_EVENT,
     RunCancelledError,
     RunKind,
     WaitingWorkAdmission,
@@ -74,6 +75,7 @@ if TYPE_CHECKING:
 
 from ._conversation_access import ChannelAccessPolicy
 from ._conversation_content import (
+    _CANCELLED_REPLY,
     _FAILED_REPLY,
     _INTERRUPTED_REPLY,
     RunReply,
@@ -822,6 +824,9 @@ class ChannelConversationEngine:
                     waiting_work_admission=waiting_work_admission,
                 )
         except RunCancelledError:
+            # The queued turn was removed (for example from the WebUI Queue) or
+            # its Run was cancelled before it started.
+            await self._answer_admitted(pending, reply_plan, _CANCELLED_REPLY)
             return
         except Exception as error:
             _LOGGER.error(
@@ -831,10 +836,21 @@ class ChannelConversationEngine:
                 error,
                 exc_info=(type(error), error, error.__traceback__),
             )
-            await self._send_reply(reply_plan, _FAILED_REPLY)
+            await self._answer_admitted(pending, reply_plan, _FAILED_REPLY)
             return
 
         await self._relay_run(run, reply_plan, pending)
+
+    async def _answer_admitted(
+        self, pending: _PendingItem | None, reply_plan: ReplyPlanFacts, text: str
+    ) -> None:
+        """Send the reply an admitted item gets without a Run, in place of its owed record."""
+        reply_id: str | None = None
+        if pending is not None:
+            pending.taken = True
+            if await asyncio.shield(pending.recorded):
+                reply_id = pending.reply_id
+        await self._deliver((reply_id,), reply_plan, text)
 
     async def _relay_run(
         self, run: Run, reply_plan: ReplyPlanFacts, pending: _PendingItem | None = None
@@ -867,6 +883,8 @@ class ChannelConversationEngine:
             async for event in run.subscribe():
                 if event.type == ASSISTANT_OUTPUT_EVENT:
                     projection.observe_output(event.payload.get("message"))
+                elif event.type == USER_MESSAGE_EVENT:
+                    projection.observe_input()
                 elif event.type == COMPACTION_COMPLETED_EVENT:
                     projection.observe_compaction()
                 elif event.type == RUN_COMPLETED_EVENT:
@@ -907,6 +925,8 @@ class ChannelConversationEngine:
         for message in messages:
             if message.role == "assistant":
                 projection.observe_output(message.to_dict())
+            elif message.role == "user":
+                projection.observe_input()
             elif message.role == "compaction_checkpoint":
                 projection.observe_compaction()
             elif message.role == "run_summary" and message.run_id == run_id:
@@ -1115,12 +1135,7 @@ class ChannelConversationEngine:
                     for reply_id in claimed:
                         await self._update_pending(self._pending_replies.release_reply, reply_id)
                     continue
-                _LOGGER.error(
-                    "Channel reply lost after retries (channel=%s attempts=%s): %s",
-                    reply_plan.channel_id,
-                    getattr(error, "attempts_made", None),
-                    error,
-                )
+                _log_failed_reply(reply_plan, error)
             for reply_id in claimed:
                 await self._update_pending(self._pending_replies.settle_reply, reply_id)
             return
@@ -1149,12 +1164,7 @@ class ChannelConversationEngine:
         except asyncio.CancelledError:
             raise
         except Exception as error:
-            _LOGGER.error(
-                "Channel reply lost after retries (channel=%s attempts=%s): %s",
-                reply_plan.channel_id,
-                getattr(error, "attempts_made", None),
-                error,
-            )
+            _log_failed_reply(reply_plan, error)
 
     def _require_transport(self) -> ConversationTransport:
         transport = self._transport
@@ -1374,6 +1384,21 @@ class ChannelConversationEngine:
             await asyncio.gather(*tasks, return_exceptions=True)
         if self._recordings:
             await asyncio.gather(*self._recordings, return_exceptions=True)
+
+
+def _log_failed_reply(reply_plan: ReplyPlanFacts, error: Exception) -> None:
+    """Log a reply whose send failed for good, saying whether part of it reached the chat."""
+    if isinstance(error, ChannelError) and error.possibly_delivered:
+        message = "Channel reply incomplete: part of it may have reached the chat"
+    else:
+        message = "Channel reply lost after retries"
+    _LOGGER.error(
+        "%s (channel=%s attempts=%s): %s",
+        message,
+        reply_plan.channel_id,
+        getattr(error, "attempts_made", None),
+        error,
+    )
 
 
 __all__ = ["ChannelConversationEngine", "ConversationTransport"]

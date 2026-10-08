@@ -158,6 +158,13 @@ class RunReply:
         is_answer = not interrupted and not message.get("tool_calls")
         self._final_answer = extracted if is_answer and not self._interrupted_segments else None
 
+    def observe_input(self) -> None:
+        """Take a user input the Run received after it started (a steered message).
+
+        An answer given before it no longer answers the Run's latest input.
+        """
+        self._final_answer = None
+
     def observe_compaction(self) -> None:
         self._compaction_completed = True
 
@@ -171,7 +178,9 @@ class RunReply:
                 or _EMPTY_ASSISTANT_REPLY
             )
         if status == "failed":
-            return _FAILED_REPLY
+            # A failure after the complete answer (for example while recording the
+            # Run's end) does not take back the answer the chat is owed.
+            return self._final_answer or _FAILED_REPLY
         if status == "cancelled" and reason != "shutdown":
             return self._final_answer or _CANCELLED_REPLY
         # Interrupted, or stopped because vBot shut down: what the Run kept.
