@@ -2,7 +2,8 @@
 
 ``channels.db`` holds the durable Channel state that is not configuration:
 group access, conversation routing pointers, Run-button origin bindings,
-inbound receipts and the Telegram polling watermark. ``channel.json`` stays the
+inbound receipts, the replies a Channel still owes its conversations and the
+Telegram polling watermark. ``channel.json`` stays the
 configuration document. Every state table references the ``channels`` registry,
 so a Channel's rows exist only while it is registered and leave with it in one
 cascading delete. The registry records the platform whose ids the state holds,
@@ -86,6 +87,29 @@ CREATE TABLE channel_received (
 -- Reader: the FIFO prune after each recorded receipt (ChannelStateStore.record_received).
 CREATE INDEX channel_received_by_time
   ON channel_received (channel_id, received_at);
+
+-- One reply the Channel owes a conversation, kept until it was sent. Without
+-- run_id it answers an admitted inbound item that no Run took over yet; with
+-- run_id it carries that Run's answer (agent_id and session_id locate the Run's
+-- history). binding_id: the Run-button binding a tap claimed for the item.
+-- owner: the conversation engine that recorded the row; sending_at: set while a
+-- send is in flight, so a row an ended engine left there is never sent again.
+CREATE TABLE channel_pending_replies (
+  channel_id TEXT NOT NULL,
+  reply_id TEXT NOT NULL,
+  platform_target TEXT NOT NULL,
+  thread_id TEXT,
+  reply_to_message_id TEXT,
+  agent_id TEXT,
+  session_id TEXT,
+  run_id TEXT,
+  binding_id TEXT,
+  owner TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  sending_at TEXT,
+  PRIMARY KEY (channel_id, reply_id),
+  FOREIGN KEY (channel_id) REFERENCES channels (channel_id) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
 
 -- bot_id: the Telegram bot whose update ids the watermark counts; another
 -- bot's ids form an independent sequence. A NULL bot_id applies to no bot.

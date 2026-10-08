@@ -24,7 +24,12 @@ from core.channels.telegram import (
     split_telegram_message,
 )
 
-from .engine_test_support import QUEUE_DRAIN_TIMEOUT_SECONDS, HeldRuns, make_completed_run
+from .engine_test_support import (
+    QUEUE_DRAIN_TIMEOUT_SECONDS,
+    HeldRuns,
+    make_completed_run,
+    settle_replies,
+)
 from .telegram_test_support import (
     ManualClock,
     drain_chat_queue,
@@ -133,7 +138,7 @@ async def test_a_failed_chunk_is_retried_without_resending_delivered_chunks(
     bot.send_message.side_effect = send_message
     run = make_completed_run(output_text="".join(chunks))
 
-    await adapter.relay_run(
+    await adapter._engine.relay_run(
         run,
         ReplyPlanFacts(
             channel_id="tg-assistant",
@@ -142,6 +147,7 @@ async def test_a_failed_chunk_is_retried_without_resending_delivered_chunks(
             thread_id="17",
         ),
     )
+    await settle_replies(adapter._engine)
 
     # Four attempts per chunk; an exhausted chunk ends the reply rather than
     # re-sending the chunks Telegram already acknowledged.

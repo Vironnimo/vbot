@@ -114,6 +114,7 @@ async def test_a_crashing_adapter_restarts_with_capped_backoff_until_it_recovers
     recovered = BlockingAdapter()
     constructions = 0
     failed_seen: list[bool] = []
+    engines: list[object] = []
     hook_calls = 0
 
     def hook() -> None:
@@ -123,6 +124,7 @@ async def test_a_crashing_adapter_restarts_with_capped_backoff_until_it_recovers
     def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
         nonlocal constructions
         constructions += 1
+        engines.append(service._active_engine("tg-assistant"))
         if constructions > 1:
             failed_seen.append(service.is_failed("tg-assistant"))
         return CrashingAdapter() if constructions <= failures else recovered
@@ -147,6 +149,9 @@ async def test_a_crashing_adapter_restarts_with_capped_backoff_until_it_recovers
         assert service.has_enabled_channels() is True
         # The exponent is capped before conversion, even after years offline.
         assert original_delay(1025) == original_delay(1_000_000) == 30.0
+        # Every restarted adapter serves the same conversations: queued work and
+        # owed replies outlive the crashes.
+        assert all(engine is engines[0] for engine in engines)
 
         # The first connection logs once: a start, or after crashes one recovery
         # line with the restart count; stopping the Channel logs once more.
@@ -167,6 +172,9 @@ async def test_a_crashing_adapter_restarts_with_capped_backoff_until_it_recovers
         ]
         assert [record.levelno for record in warning_records] == [logging.WARNING] * warnings
         assert all(record.exc_info is not None for record in warning_records[:1])
+        # Stopping the Channel ends its conversations too.
+        with pytest.raises(ChannelNotFoundError):
+            service._active_engine("tg-assistant")
     finally:
         await service.aclose()
         service.close()

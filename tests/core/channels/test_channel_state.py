@@ -1,4 +1,5 @@
-"""Channel state in channels.db: registry, access, routing, bindings, receipts, polling."""
+"""Channel state in channels.db: registry, access, routing, bindings, receipts, owed
+replies, polling."""
 
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ import pytest
 
 import core.channels.state as state_module
 from core.channels import ChannelConfigError, ChannelError, ChannelNotFoundError
-from core.channels.adapter import RunButtonBinding
+from core.channels.adapter import PendingReply, ReplyPlanFacts, RouteFacts, RunButtonBinding
 from core.channels.state import ChannelStateStore
 from core.database import APPLICATION_IDS, DatabaseUnavailableError, write_bootstrap_marker
 from core.runtime.databases import canonical_database_specs
@@ -23,6 +24,7 @@ _STATE_TABLES = (
     "channel_conversations",
     "channel_run_buttons",
     "channel_received",
+    "channel_pending_replies",
     "channel_polling",
 )
 
@@ -57,6 +59,29 @@ def _binding(binding_id: str = "binding", *, thread_id: str | None = None) -> Ru
     )
 
 
+def _owed(
+    reply_id: str,
+    owner: str,
+    *,
+    channel_id: str = "tg",
+    created_at: str | None = None,
+    run_id: str | None = None,
+) -> PendingReply:
+    return PendingReply(
+        id=reply_id,
+        reply_plan=ReplyPlanFacts(
+            channel_id=channel_id,
+            platform_target="-100",
+            reply_to_message_id="9",
+            thread_id="7",
+        ),
+        owner=owner,
+        created_at=created_at or utc_now_timestamp(),
+        route=None if run_id is None else RouteFacts(agent_id="assistant", session_id="ses"),
+        run_id=run_id,
+    )
+
+
 def _row_counts(state: ChannelStateStore, channel_id: str) -> dict[str, int]:
     with state.database.read() as connection:
         return {
@@ -76,6 +101,7 @@ async def _fill(state: ChannelStateStore, channel_id: str) -> None:
     state.point_conversation(channel_id, f"ch-{channel_id}--100", "group", "ses_next")
     state.save_run_button_binding(channel_id, _binding())
     state.save_update_offset(channel_id, _BOT, 42)
+    state.owe_reply(channel_id, _owed("owed", "engine", channel_id=channel_id))
 
 
 def test_channels_db_is_a_canonical_database_of_the_data_directory(tmp_path: Path) -> None:
@@ -106,6 +132,8 @@ async def test_state_writes_for_an_unregistered_channel_are_refused(
         store.save_run_button_binding("gone", _binding())
     with pytest.raises(ChannelNotFoundError):
         store.save_update_offset("gone", _BOT, 7)
+    with pytest.raises(ChannelNotFoundError):
+        store.owe_reply("gone", _owed("owed", "engine", channel_id="gone"))
 
     assert _row_counts(store, "gone") == dict.fromkeys(_STATE_TABLES, 0)
 
@@ -450,6 +478,51 @@ def test_run_button_claims_check_target_and_thread_and_can_be_restored(
 
     store.discard_run_button_binding("tg", "binding")
     assert claim("-100", "7") == "missing"
+
+
+def test_owed_replies_are_sent_at_most_once_and_handed_on_by_owner(
+    store: ChannelStateStore,
+) -> None:
+    old = format_canonical_timestamp(
+        datetime.now(UTC) - timedelta(seconds=state_module.PENDING_REPLY_RETENTION_SECONDS + 60)
+    )
+    earlier = format_canonical_timestamp(datetime.now(UTC) - timedelta(minutes=5))
+    store.owe_reply("tg", _owed("mine", "current"))
+    store.owe_reply("tg", _owed("expired", "ended", created_at=old))
+    store.owe_reply("tg", _owed("in-flight", "ended"))
+    store.owe_reply("tg", _owed("answer", "ended", created_at=earlier))
+    store.owe_reply("tg", _owed("notice", "ended"))
+    # A Run's answer takes over the record of the work it answers.
+    store.owe_reply("tg", _owed("answer", "ended", run_id="run-1"))
+
+    # A claim succeeds once; a released claim can be taken again.
+    assert store.claim_reply("tg", "in-flight") is True
+    assert store.claim_reply("tg", "in-flight") is False
+    assert store.claim_reply("tg", "notice") is True
+    store.release_reply("tg", "notice")
+
+    replies, dropped = store.take_pending_replies("tg", "current")
+
+    # The current engine's own replies stay with it; a reply left mid-send or owed
+    # too long is dropped, never sent.
+    assert dropped == 2
+    assert [(reply.id, reply.run_id) for reply in replies] == [
+        ("answer", "run-1"),
+        ("notice", None),
+    ]
+    answer = replies[0]
+    assert answer.created_at == earlier
+    assert answer.route == RouteFacts(agent_id="assistant", session_id="ses")
+    assert answer.reply_plan == ReplyPlanFacts(
+        channel_id="tg", platform_target="-100", reply_to_message_id="9", thread_id="7"
+    )
+
+    store.settle_reply("tg", "answer")
+    assert store.claim_reply("tg", "answer") is False
+    assert [reply.id for reply in store.take_pending_replies("tg", "next")[0]] == [
+        "mine",
+        "notice",
+    ]
 
 
 @pytest.mark.asyncio

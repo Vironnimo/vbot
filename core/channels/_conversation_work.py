@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from core.channels.adapter import (
@@ -64,6 +65,20 @@ class ConversationTransport(Protocol):
         """Extract caption text from one raw platform message for gating checks."""
 
 
+@dataclass(slots=True)
+class _PendingItem:
+    """The durable reply an admitted item is owed until a Run takes it over.
+
+    ``recorded`` resolves to whether the record was written; ``taken`` turns true
+    once a Run's answer replaced the item's notice.
+    """
+
+    reply_id: str
+    created_at: str
+    recorded: asyncio.Task[bool] = field(repr=False)
+    taken: bool = False
+
+
 # Ordinary queued work resolves its Session when the conversation worker processes
 # it, so messages behind /new follow the new anchor. Origin-bound button prompts
 # are the exception: their explicit route must survive later navigation.
@@ -76,6 +91,7 @@ class _QueuedInboundMessage:
     raw_message: Any | None = None
     admission: WaitingWorkAdmission | None = None
     observed_context: tuple[_QueuedObservedMessage, ...] = ()
+    pending: _PendingItem | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -83,6 +99,7 @@ class _QueuedPreparedCommand:
     conversation: ConversationFacts
     command: PreparedCommand
     admission: WaitingWorkAdmission | None = None
+    pending: _PendingItem | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -96,6 +113,7 @@ class _QueuedInboundMedia:
     companion_text: str | None = None
     admission: WaitingWorkAdmission | None = None
     observed_context: tuple[_QueuedObservedMessage, ...] = ()
+    pending: _PendingItem | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -104,6 +122,7 @@ class _QueuedObservedMessage:
     note: str
     admission: WaitingWorkAdmission | None = None
     following_notes: tuple[str, ...] = ()
+    pending: _PendingItem | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -113,6 +132,9 @@ class _QueuedInternalPrompt:
     admission: WaitingWorkAdmission | None = None
     # Bound button taps retain their origin while ordinary ingress follows navigation.
     route: RouteFacts | None = None
+    # The Run-button binding a bound tap claimed; restored when no Run took it over.
+    binding_id: str | None = None
+    pending: _PendingItem | None = None
 
 
 _QueuedWork = (

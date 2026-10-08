@@ -10,21 +10,18 @@ from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 from importlib import import_module
 from itertools import batched
-from typing import TYPE_CHECKING, Any, override
+from typing import Any, override
 
 from core.attachments import AttachmentStore
 from core.channels._message_chunks import split_message
 from core.channels.adapter import (
-    ChannelAccessRegistry,
     ChannelAdapter,
     ConversationFacts,
-    ConversationPointerStore,
     DeliveryProgress,
     DeniedChatFacts,
     DeniedChatLog,
     FileData,
     QuotedMessageFacts,
-    ReplyPlanFacts,
     RouteFacts,
     content_blocks_for_attachment,
 )
@@ -34,12 +31,6 @@ from core.chat.content_blocks import ContentBlock, TextBlock
 from core.extensions import InteractionButton
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
-
-if TYPE_CHECKING:
-    from core.automation.automation import TriggerService
-    from core.chat.commands import CommandDispatcher
-    from core.runs import Run
-    from core.sessions import ChatSessionManager
 
 _LOGGER = get_logger("channels.discord")
 
@@ -64,27 +55,13 @@ class DiscordChannelAdapter(ChannelAdapter):
     def __init__(
         self,
         config: ChannelConfig,
-        trigger_service: TriggerService,
-        chat_sessions: ChatSessionManager,
+        engine: ChannelConversationEngine,
         credential_resolver: Callable[[str], str],
         attachment_store: AttachmentStore | None = None,
-        *,
-        command_dispatcher: CommandDispatcher,
-        conversation_pointers: ConversationPointerStore,
-        access_registry: ChannelAccessRegistry | None = None,
     ) -> None:
         self._config = config
         self._attachment_store = attachment_store
-        self._command_dispatcher = command_dispatcher
-        self._engine = ChannelConversationEngine(
-            config,
-            trigger_service,
-            chat_sessions,
-            self,
-            command_dispatcher=command_dispatcher,
-            conversation_pointers=conversation_pointers,
-            access_registry=access_registry,
-        )
+        self._engine = engine
 
         token = credential_resolver(config.token_env_var)
         if not isinstance(token, str) or not token.strip():
@@ -108,6 +85,7 @@ class DiscordChannelAdapter(ChannelAdapter):
         """Connect to Discord's Gateway and process messages until stopped."""
         if self._client is not None:
             raise ChannelError(f"Discord channel is already running: {self._config.id}")
+        self._engine.attach(self)
 
         discord = _load_discord()
         intents = discord.Intents.default()
@@ -135,14 +113,13 @@ class DiscordChannelAdapter(ChannelAdapter):
 
     @override
     async def stop(self) -> None:
-        """Stop engine workers and close the Discord Gateway connection."""
+        """Stop inbound handling and close the Discord Gateway connection."""
         self._stopping = True
         inbound_tasks = tuple(self._inbound_tasks)
         for task in inbound_tasks:
             task.cancel()
         if inbound_tasks:
             await asyncio.gather(*inbound_tasks, return_exceptions=True)
-        await self._engine.stop()
         self._message_locks.clear()
         self._backfilled_message_ids.clear()
         self._known_conversations.clear()
@@ -183,11 +160,6 @@ class DiscordChannelAdapter(ChannelAdapter):
         target = await self._resolve_target(platform_target)
         await self._send_payloads(target, message, list(files or []))
         self._backfilled_message_ids.pop(platform_target, None)
-
-    @override
-    async def relay_run(self, run: Run, reply_plan: ReplyPlanFacts) -> None:
-        """Relay one background Run through the composed conversation engine."""
-        await self._engine.relay_run(run, reply_plan)
 
     @override
     async def ensure_outbound_session(
@@ -388,7 +360,7 @@ class DiscordChannelAdapter(ChannelAdapter):
             return False
         if self._config.response_mode != "mention" or self._config.observe_unaddressed:
             return False
-        if content is not None and self._command_dispatcher.prepare(content) is not None:
+        if content is not None and self._engine.is_command(content):
             return False
         return self._engine.should_respond(conversation, (content,))
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -16,7 +17,12 @@ from core.sessions import CHANNEL_MESSAGE_NOTE_PREFIX
 
 if TYPE_CHECKING:
     from core.extensions.interactions import InteractionEvent
-    from core.runs import RunEvent
+
+_FAILED_REPLY = "Sorry, I couldn't complete that request. Please try again."
+_CANCELLED_REPLY = "Sorry, this request was cancelled before completion."
+_INTERRUPTED_REPLY = "Sorry, this request was interrupted before it could finish."
+_EMPTY_ASSISTANT_REPLY = "I finished processing your message, but no reply text was produced."
+_COMPACTED_REPLY = "Context compacted."
 
 _UNSUPPORTED_FILE_REPLY = "Sorry, this file type isn't supported yet."
 
@@ -120,44 +126,69 @@ def _sender_tag(sender: MessageSender) -> str:
     )
 
 
-def _extract_assistant_output(event: RunEvent, *, preserve_whitespace: bool = False) -> str | None:
-    payload = event.payload
-    if not isinstance(payload, dict):
-        return None
+class RunReply:
+    """The one reply a Run's chat gets, from the Run's Assistant output and outcome.
 
-    message = payload.get("message")
-    if not isinstance(message, dict):
-        return None
+    A live relay feeds the Run's events; a reply resumed after its engine ended
+    feeds the entries the Run left in its Session history. Both settle on the
+    same text.
+    """
 
+    def __init__(self) -> None:
+        self._assistant_text: str | None = None
+        # The latest output while it is a complete answer: a Run stopped after it
+        # (for example during post-answer Compaction) still delivers it.
+        self._final_answer: str | None = None
+        self._interrupted_segments: list[str] = []
+        self._compaction_completed = False
+
+    def observe_output(self, message: object) -> None:
+        """Take one Assistant message, as an output event or a history entry carries it."""
+        if not isinstance(message, Mapping):
+            return
+        interrupted = message.get("interrupted") is True
+        extracted = _message_text(
+            message, preserve_whitespace=interrupted or bool(self._interrupted_segments)
+        )
+        if extracted is not None:
+            if interrupted or self._interrupted_segments:
+                self._interrupted_segments.append(extracted)
+            else:
+                self._assistant_text = extracted
+        is_answer = not interrupted and not message.get("tool_calls")
+        self._final_answer = extracted if is_answer and not self._interrupted_segments else None
+
+    def observe_compaction(self) -> None:
+        self._compaction_completed = True
+
+    def settle(self, status: str, reason: str | None = None) -> str:
+        """Return the reply for the Run's terminal ``status`` and cancellation ``reason``."""
+        if status == "completed":
+            return (
+                self._partial_answer()
+                or self._assistant_text
+                or (_COMPACTED_REPLY if self._compaction_completed else None)
+                or _EMPTY_ASSISTANT_REPLY
+            )
+        if status == "failed":
+            return _FAILED_REPLY
+        if status == "cancelled" and reason != "shutdown":
+            return self._final_answer or _CANCELLED_REPLY
+        # Interrupted, or stopped because vBot shut down: what the Run kept.
+        return self._partial_answer() or self._assistant_text or _INTERRUPTED_REPLY
+
+    def _partial_answer(self) -> str | None:
+        # These are consecutive fragments of one visible answer across internal
+        # Model boundaries. Preserve their bytes instead of inventing separators;
+        # the continuation Model owns any required whitespace or Markdown break.
+        return "".join(self._interrupted_segments) if self._interrupted_segments else None
+
+
+def _message_text(message: Mapping[str, object], *, preserve_whitespace: bool) -> str | None:
     content = message.get("content")
-    if not isinstance(content, str):
-        return None
-
-    if not content.strip():
+    if not isinstance(content, str) or not content.strip():
         return None
     return content if preserve_whitespace else content.strip()
-
-
-def _assistant_output_interrupted(event: RunEvent) -> bool:
-    message = event.payload.get("message")
-    return isinstance(message, dict) and message.get("interrupted") is True
-
-
-def _assistant_output_is_answer(event: RunEvent) -> bool:
-    """Whether this Assistant output is a complete answer: neither interrupted nor calling Tools."""
-    message = event.payload.get("message")
-    return (
-        isinstance(message, dict)
-        and message.get("interrupted") is not True
-        and not message.get("tool_calls")
-    )
-
-
-def _combined_interrupted_output(segments: list[str]) -> str | None:
-    # These are consecutive fragments of one visible answer across internal
-    # Model boundaries. Preserve their bytes instead of inventing separators;
-    # the continuation Model owns any required whitespace or Markdown break.
-    return "".join(segments) if segments else None
 
 
 def _media_failure_reply(error: Exception) -> str:

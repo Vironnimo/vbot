@@ -19,16 +19,13 @@ import httpx
 from core.attachments import AttachmentStore
 from core.channels._message_chunks import split_message
 from core.channels.adapter import (
-    ChannelAccessRegistry,
     ChannelAdapter,
     ConversationFacts,
-    ConversationPointerStore,
     DeniedChatFacts,
     DeniedChatLog,
     FileData,
     QuotedMessageFacts,
     ReceivedMessageStore,
-    ReplyPlanFacts,
     RouteFacts,
     content_blocks_for_attachment,
 )
@@ -57,15 +54,11 @@ class NetworkChannelAdapter(ChannelAdapter):
     def __init__(
         self,
         config: ChannelConfig,
-        trigger_service: Any,
-        chat_sessions: Any,
+        engine: ChannelConversationEngine,
         credential_resolver: Callable[[str], str],
         attachment_store: AttachmentStore | None = None,
         *,
-        command_dispatcher: Any,
-        conversation_pointers: ConversationPointerStore,
         received_messages: ReceivedMessageStore,
-        access_registry: ChannelAccessRegistry | None = None,
         state_dir: Path,
     ) -> None:
         self._config = config
@@ -73,15 +66,7 @@ class NetworkChannelAdapter(ChannelAdapter):
         self._credential_resolver = credential_resolver
         self._state_dir = state_dir
         self._received = received_messages
-        self._engine = ChannelConversationEngine(
-            config,
-            trigger_service,
-            chat_sessions,
-            self,
-            command_dispatcher=command_dispatcher,
-            conversation_pointers=conversation_pointers,
-            access_registry=access_registry,
-        )
+        self._engine = engine
         self._http_client: httpx.AsyncClient | None = None
         self._socket: Any = None
         self._connected = False
@@ -103,6 +88,7 @@ class NetworkChannelAdapter(ChannelAdapter):
 
     @override
     async def start(self) -> None:
+        self._engine.attach(self)
         try:
             await self._listen()
             raise ChannelError(f"{self.platform_display_name} connection closed", retryable=True)
@@ -141,7 +127,6 @@ class NetworkChannelAdapter(ChannelAdapter):
     @override
     async def stop(self) -> None:
         self._connected = False
-        await self._engine.stop()
         if self._socket is not None:
             await self._socket.close()
             self._socket = None
@@ -155,10 +140,6 @@ class NetworkChannelAdapter(ChannelAdapter):
     @override
     def denied_chats(self) -> list[DeniedChatFacts]:
         return self._denied.entries()
-
-    @override
-    async def relay_run(self, run: Any, reply_plan: ReplyPlanFacts) -> None:
-        await self._engine.relay_run(run, reply_plan)
 
     def remember(self, facts: ConversationFacts) -> None:
         self._conversations[facts.chat_id] = facts

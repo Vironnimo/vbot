@@ -15,6 +15,7 @@ from weakref import WeakValueDictionary
 from core.channels import ChannelConfig
 from core.channels.adapter import (
     ChannelAccessRegistry,
+    ChannelAdapter,
     ConversationFacts,
     QuotedMessageFacts,
     RunButtonBindingRegistry,
@@ -323,12 +324,14 @@ def make_trigger_service(
     waiting_work_manager: ChatRunManager | None = None,
     compact_session: AsyncMock | None = None,
     has_active_run: Mock | None = None,
+    running_run: Run | None = None,
 ) -> SimpleNamespace:
     """Build the trigger service double a Channel engine runs on.
 
     With ``waiting_work_manager``, admissions are real and the triggered Run takes
     its admission over, as in production; otherwise every reservation succeeds.
     ``reserve_waiting_work`` is a Mock, so a test can assert nothing was admitted.
+    ``running_run`` is the Run this process still runs, whatever id is asked for.
     """
 
     async def trigger_with_admission(*args: Any, **kwargs: Any) -> Any:
@@ -361,7 +364,60 @@ def make_trigger_service(
         has_active_run=has_active_run or Mock(return_value=False),
         reserve_waiting_work=Mock(side_effect=reserve_waiting_work),
         release_waiting_work=release_waiting_work,
+        running_run=Mock(return_value=running_run),
     )
+
+
+def make_channel_engine(
+    data_dir: Path,
+    config: ChannelConfig,
+    trigger_service: object,
+    chat_sessions: ChatSessionManager,
+    *,
+    command_dispatcher: object | None = None,
+    run_button_binding_registry: RunButtonBindingRegistry | None = None,
+    access_registry: ChannelAccessRegistry | None = None,
+) -> ChannelConversationEngine:
+    """Build a Channel's engine on the data directory's Channel state, as the service does."""
+    state = channel_state(data_dir, config.id)
+    return ChannelConversationEngine(
+        config,
+        cast(Any, trigger_service),
+        cast(Any, chat_sessions),
+        command_dispatcher=cast(Any, command_dispatcher or make_command_dispatcher()),
+        conversation_pointers=state,
+        pending_replies=state,
+        run_button_binding_registry=run_button_binding_registry,
+        access_registry=access_registry
+        or cast(ChannelAccessRegistry, MemoryChannelAccessRegistry([])),
+    )
+
+
+def connect(engine: ChannelConversationEngine, transport: object) -> None:
+    """Attach and connect a transport, as the Channel service does once its adapter connects."""
+    engine.attach(cast(Any, transport))
+    engine.set_connected(True)
+
+
+_ENGINE_ENDING_TYPES: dict[type[Any], type[Any]] = {}
+
+
+def ending_engine_on_stop[Adapter: ChannelAdapter](adapter_type: type[Adapter]) -> type[Adapter]:
+    """Return ``adapter_type`` whose stop also ends its engine.
+
+    In production the Channel service ends the engine after the adapter stopped;
+    adapter tests have no service, so their adapters do it.
+    """
+    subclass = _ENGINE_ENDING_TYPES.get(adapter_type)
+    if subclass is None:
+
+        async def stop(self: Any) -> None:
+            await adapter_type.stop(self)
+            await self._engine.stop()
+
+        subclass = type(adapter_type.__name__, (adapter_type,), {"stop": stop})
+        _ENGINE_ENDING_TYPES[adapter_type] = subclass
+    return cast(type[Adapter], subclass)
 
 
 def make_engine(
@@ -380,6 +436,7 @@ def make_engine(
     waiting_work_manager: ChatRunManager | None = None,
     run_button_binding_registry: RunButtonBindingRegistry | None = None,
     access_registry: ChannelAccessRegistry | None = None,
+    running_run: Run | None = None,
 ) -> tuple[ChannelConversationEngine, ChatSessionManager, AsyncMock, FakeTransport]:
     """Build an engine on real Sessions and the data directory's Channel state.
 
@@ -395,21 +452,20 @@ def make_engine(
         waiting_work_manager=waiting_work_manager,
         compact_session=compact_session,
         has_active_run=has_active_run,
+        running_run=running_run,
     )
     resolved_transport = transport or FakeTransport()
-    resolved_dispatcher = command_dispatcher or make_command_dispatcher()
-    engine = ChannelConversationEngine(
+    engine = make_channel_engine(
+        tmp_path,
         make_config(
             dm_scope=dm_scope,
             response_mode=response_mode,
             mention_patterns=mention_patterns,
             observe_unaddressed=observe_unaddressed,
         ),
-        cast(Any, trigger_service),
-        cast(Any, chat_sessions),
-        cast(Any, resolved_transport),
-        command_dispatcher=cast(Any, resolved_dispatcher),
-        conversation_pointers=channel_state(tmp_path),
+        trigger_service,
+        chat_sessions,
+        command_dispatcher=command_dispatcher,
         run_button_binding_registry=run_button_binding_registry,
         access_registry=access_registry
         or cast(
@@ -417,7 +473,17 @@ def make_engine(
             MemoryChannelAccessRegistry(list(admin_user_ids or [])),
         ),
     )
+    connect(engine, resolved_transport)
     return engine, chat_sessions, trigger_mock, resolved_transport
+
+
+async def settle_replies(engine: ChannelConversationEngine) -> None:
+    """Wait until the replies the engine sends on its own, such as background relays, finished."""
+    while pending := [task for task in engine._tasks if not task.done()]:
+        await asyncio.wait_for(
+            asyncio.gather(*pending, return_exceptions=True),
+            timeout=QUEUE_DRAIN_TIMEOUT_SECONDS,
+        )
 
 
 async def drain(engine: ChannelConversationEngine, platform_target: int | str) -> None:

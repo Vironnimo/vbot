@@ -1053,6 +1053,12 @@ class TriggerService:
             is not None
         )
 
+    def running_run(self, run_id: str) -> Run | None:
+        """Return the Run *run_id* while it runs; None once it ended or when it is unknown."""
+        if not self._chat_run_manager.is_running(run_id):
+            return None
+        return self._chat_run_manager.get(run_id)
+
     async def compact_session(
         self,
         agent_id: str,

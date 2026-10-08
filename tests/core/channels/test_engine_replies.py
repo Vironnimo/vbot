@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import core.channels._conversation_content as content_module
 import core.channels.engine as engine_module
 from core.channels import ChannelError
 from core.runs import ASSISTANT_OUTPUT_EVENT, Run
@@ -56,10 +57,10 @@ def _cancelled_after(*messages: dict[str, Any]) -> Callable[[], Run]:
     ("make_run", "reply"),
     [
         (lambda: make_completed_run(output_text="final reply"), "final reply"),
-        (make_empty_completed_run, engine_module._EMPTY_ASSISTANT_REPLY),
+        (make_empty_completed_run, content_module._EMPTY_ASSISTANT_REPLY),
         # The failure text stays internal.
         (lambda: make_failed_run(message="boom"), engine_module._FAILED_REPLY),
-        (make_cancelled_run, engine_module._CANCELLED_REPLY),
+        (make_cancelled_run, content_module._CANCELLED_REPLY),
         # Stop after a complete answer (post-answer Compaction) delivers that answer.
         (_cancelled_after({"content": "final reply"}), "final reply"),
         # Text before Tool calls or an interrupted partial is no answer.
@@ -68,11 +69,11 @@ def _cancelled_after(*messages: dict[str, Any]) -> Callable[[], Run]:
                 {"content": "final reply"},
                 {"content": "let me check", "tool_calls": [{"id": "call-1"}]},
             ),
-            engine_module._CANCELLED_REPLY,
+            content_module._CANCELLED_REPLY,
         ),
         (
             _cancelled_after({"content": "partial", "interrupted": True}),
-            engine_module._CANCELLED_REPLY,
+            content_module._CANCELLED_REPLY,
         ),
         (lambda: make_interrupted_run(output_text="preserved partial"), "preserved partial"),
         # A recovered Run forwards partial and continuation without added text.
