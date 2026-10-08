@@ -244,8 +244,17 @@ class NetworkChannelAdapter(ChannelAdapter):
             possibly_delivered=write and status >= 500,
         )
 
-    async def request(self, method: str, url: str, **kwargs: Any) -> Any:
-        write = method != "GET"
+    async def request(
+        self, method: str, url: str, *, write: bool | None = None, **kwargs: Any
+    ) -> Any:
+        """Send one platform API request and return its JSON answer.
+
+        ``write`` says whether the request can change what the chat shows; it
+        defaults to every method but GET. A write that failed in transit may have
+        taken effect, so it is never retried; a read is.
+        """
+        if write is None:
+            write = method != "GET"
         try:
             response = await self._http.request(method, url, **kwargs)
             self.check_response(response, write=write)

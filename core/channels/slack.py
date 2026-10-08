@@ -14,6 +14,12 @@ from core.channels.adapter import ConversationFacts, DeliveryProgress, FileData
 from core.channels.config import ChannelError
 from core.utils.tls import shared_ssl_context
 
+# Web API methods that only read, sent as POST like every Slack method: a failed
+# one cannot have changed the chat, so it is retried.
+_READ_METHODS = frozenset(
+    {"auth.test", "apps.connections.open", "conversations.info", "files.info"}
+)
+
 
 class SlackChannelAdapter(NetworkChannelAdapter):
     platform = "slack"
@@ -30,6 +36,7 @@ class SlackChannelAdapter(NetworkChannelAdapter):
         result = await self.request(
             "POST",
             f"https://slack.com/api/{method}",
+            write=method not in _READ_METHODS,
             json=payload,
             headers={"Authorization": f"Bearer {self._app_token if app_token else self._token}"},
         )
@@ -172,7 +179,7 @@ class SlackChannelAdapter(NetworkChannelAdapter):
         buttons: Any = None,
     ) -> None:
         self.check_send(message, files, buttons)
-        self.remember(await self.target_facts(platform_target))
+        self.remember(await self._send_operation(self.target_facts, platform_target))
         with DeliveryProgress() as progress:
             for chunk in self.message_chunks(message):
                 payload: dict[str, Any] = {
