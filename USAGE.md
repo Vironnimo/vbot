@@ -1034,11 +1034,12 @@ Connection handshakes, routing, file APIs, access rejection, WhatsApp self-chat/
 
 ## Cron
 
-Cron schedules one-time or recurring Agent Runs. Names default from the prompt when omitted and need not be unique; the generated job id is the identity. A job may target an Identity Agent or `agent@project`, use an existing Session, or create a fresh Session each time it fires.
+Cron schedules one-time or recurring Agent Runs, or a Run at every occurrence of a calendar event. Names default from the prompt when omitted and need not be unique; the generated job id is the identity. A job may target an Identity Agent or `agent@project`, use an existing Session, or create a fresh Session each time it fires.
 
 ```bash
 vbot cron create assistant --name "Morning priorities" --prompt "Summarize today's priorities" --cron "0 9 * * *"
 vbot cron create reviewer@my-project --name "Repository review" --prompt "Review the repository status" --every 60 --repeat 3
+vbot cron create assistant --name "Standup prep" --prompt "Prepare my notes for the standup" --event EVENT_ID --event-time "start - 30m"
 vbot cron list
 vbot cron show JOB_ID
 vbot cron update JOB_ID --status paused
@@ -1047,7 +1048,7 @@ vbot cron disable JOB_ID
 vbot cron delete JOB_ID
 ```
 
-Recurring expressions contain exactly five fields and have a minimum cadence of one minute. On create, omitting `--session` gives each fire a fresh Session. On update, omission preserves the target; `--clear-session` restores fresh Sessions. Use `show` to read the full prompt before replacing it. `--every` takes whole minutes; `--repeat` limits future fires. A fire missed while vBot was not running (server off, computer asleep) starts once when vBot runs again, for the most recent missed time; earlier missed times do not run separately, and the Run is told when it was due. Invalid individual job records are skipped and preserved for repair; a malformed Cron store disables scheduling and blocks mutations rather than overwriting the source.
+Recurring expressions contain exactly five fields and have a minimum cadence of one minute. On create, omitting `--session` gives each fire a fresh Session. On update, omission preserves the target; `--clear-session` restores fresh Sessions. Use `show` to read the full prompt before replacing it. `--every` takes whole minutes; `--repeat` limits future fires. A fire missed while vBot was not running (server off, computer asleep) starts once when vBot runs again, for the most recent missed time; earlier missed times do not run separately, and the Run is told when it was due. `--event` binds the job to a calendar event: it runs once at every occurrence, at `--event-time` (`start` or `end`, optionally `+` or `-` up to 31 days such as `30m`, `2h` or `1d`; default `start`), follows moved occurrences and skips removed ones, and is deleted with its event. The Run receives the event's title, time, location and description with the prompt. An occurrence missed while vBot was not running still starts late while it is relevant: until the event starts when the job was due before it, until it ends when due during it, and otherwise until the next occurrence starts. Invalid individual job records are skipped and preserved for repair; a malformed Cron store disables scheduling and blocks mutations rather than overwriting the source.
 
 ## Bootstrap
 

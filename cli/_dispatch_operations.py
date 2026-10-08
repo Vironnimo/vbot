@@ -349,6 +349,12 @@ def dispatch_cron_command(
     if args.command == "show":
         return cron_show(instance, args.id)
     if args.command == "create":
+        if args.event_time is not None and args.event is None:
+            return CommandResult(
+                ok=False,
+                message="--event-time needs --event <event-id>",
+                instance=instance,
+            )
         return create_cron_fn(instance, _cron_create_fields_from_args(args))
     if args.command == "update":
         return update_cron_fn(instance, args.id, _cron_changes_from_args(args))
@@ -433,6 +439,11 @@ def _cron_create_fields_from_args(args: argparse.Namespace) -> dict[str, Any]:
     elif args.every is not None:
         fields["schedule_type"] = "interval"
         fields["interval_seconds"] = args.every * 60
+    elif args.event is not None:
+        fields["schedule_type"] = "event"
+        fields["event_id"] = args.event
+        if args.event_time is not None:
+            fields["event_time"] = args.event_time
     else:
         fields["schedule_type"] = "once"
         fields["run_at"] = args.at
@@ -460,6 +471,11 @@ def _cron_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
     elif args.at is not None:
         changes["schedule_type"] = "once"
         changes["run_at"] = args.at
+    elif args.event is not None:
+        changes["schedule_type"] = "event"
+        changes["event_id"] = args.event
+    if args.event_time is not None:
+        changes["event_time"] = args.event_time
     if args.repeat is not None:
         changes["repeat"] = args.repeat
     if args.session is not None:

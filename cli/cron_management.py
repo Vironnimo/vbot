@@ -19,6 +19,8 @@ CRON_UPDATE_FLAGS = (
     "--cron",
     "--every",
     "--at",
+    "--event",
+    "--event-time",
     "--repeat",
     "--session",
     "--clear-session",
@@ -192,6 +194,9 @@ def _format_schedule(job: Mapping[str, Any]) -> str:
         return f"interval[{_string_or_default(job.get('schedule'), '?')}]"
     if schedule_type == "once":
         return f"once[{_string_or_default(job.get('run_at'), '?')}]"
+    if schedule_type == "event":
+        event_id = _string_or_default(job.get("event_id"), "?")
+        return f"event[{event_id} {_string_or_default(job.get('schedule'), '?')}]"
     return "?"
 
 
