@@ -785,7 +785,7 @@ async def stream_model_response(
                 continue
             accumulator.add_delta(delta)
             if on_usage is not None and delta.get("type") == "usage":
-                on_usage(accumulator.usage or {})
+                _report_usage(on_usage, accumulator.usage or {})
             if on_tool_calls is not None and (completed := accumulator.take_completed_tool_calls()):
                 on_tool_calls(completed)
         if accumulator.finish_reason is None:
@@ -813,6 +813,14 @@ async def stream_model_response(
             ) from exc
         raise
     return accumulator.finalize_assistant_fields().to_response_dict()
+
+
+def _report_usage(on_usage: Callable[[JsonObject], None], usage: JsonObject) -> None:
+    """Hand *usage* to the caller's observer; its failure never ends the stream."""
+    try:
+        on_usage(usage)
+    except Exception:
+        _LOGGER.warning("Usage observer failed during a Model stream", exc_info=True)
 
 
 async def iter_with_chunk_timeout(
