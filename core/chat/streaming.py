@@ -764,7 +764,9 @@ async def stream_model_response(
     after that raises :class:`StreamBrokenAfterToolCallsError` with the output
     so far instead of a replayable error. ``on_usage`` receives the Usage
     accumulated so far after each usage delta, so a caller can record what a
-    stream that later fails or is cancelled consumed. Stall guards follow
+    stream that later fails or is cancelled consumed; it must be cheap and
+    synchronous, and an exception it raises is logged without ending the
+    stream. Stall guards follow
     :func:`stream_stall_timeout`, so a local Provider's long prefill is not cut off.
 
     Only a Provider that declares this request cannot stream
