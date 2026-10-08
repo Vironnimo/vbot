@@ -163,14 +163,17 @@ export function createSkillActions(context) {
   async function saveEdit() {
     if (!editing) return;
     const target = editing;
+    const content = editContent;
     await run(
       async () => {
         await updateSkill({
           scope: target.scope,
           name: target.name,
-          content: editContent,
+          content,
         });
-        closeEditModal();
+        // The response saved this snapshot, not text entered while it ran or
+        // a different editing visit to the same package.
+        if (editing === target && editContent === content) closeEditModal();
       },
       () => t('settings.skills.contentSaveError'),
       () => t('settings.skills.saved'),
