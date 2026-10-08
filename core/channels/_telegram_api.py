@@ -10,6 +10,8 @@ from datetime import timedelta
 from importlib import import_module
 from typing import Any
 
+import httpx
+
 from core.channels.config import ChannelError
 from core.extensions import (
     InteractionButton,
@@ -22,6 +24,9 @@ _LOGGER = get_logger("channels.telegram")
 # user id: Telegram's descriptions and PTB's "unknown parameters" suffix are server
 # text vBot cannot enumerate, and no id may reach a message vBot logs.
 _EXTERNAL_ID_PATTERN = re.compile(r"-?\d{6,}")
+
+# httpx failures raised before a request reached Telegram, so a write can repeat.
+_UNSENT_REQUEST_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
 
 
 class _TelegramInteractionResponder:
@@ -249,21 +254,24 @@ def _load_telegram_error() -> Any:
 
 
 @contextlib.contextmanager
-def _telegram_error_boundary(channel_id: str) -> Iterator[None]:
+def _telegram_error_boundary(channel_id: str, *, write: bool = False) -> Iterator[None]:
     """Translate python-telegram-bot API errors into ChannelError at the adapter boundary.
 
     PTB raises ``telegram.error.TelegramError`` (e.g. ``BadRequest``) when the Bot API rejects
     a request. Channel ingress, ``channel_send``, and the engine relay handle the ChannelError
     family, so an unwrapped PTB error would surface as an unexpected exception instead of a
-    clean failure. Transient transport faults (network errors, flood-control ``RetryAfter``)
-    are marked retryable so downloads and reply delivery can retry them.
+    clean failure. Transient faults are marked retryable so downloads and reply delivery can
+    retry them; for a ``write`` only those after which Telegram cannot have posted anything
+    (see ``_classify_telegram_error``).
     """
     telegram_error = _load_telegram_error()
     try:
         yield
     except telegram_error.TelegramError as error:
         text = _loggable_telegram_error_text(telegram_error, error)
-        channel_error = _classify_telegram_error(channel_id, telegram_error, error, text)
+        channel_error = _classify_telegram_error(
+            channel_id, telegram_error, error, text, write=write
+        )
         if text == str(error):
             raise channel_error from error
         # A traceback prints the cause's own text, which names what ``text`` left out.
@@ -288,8 +296,16 @@ def _classify_telegram_error(
     telegram_error_module: Any,
     error: Any,
     text: str,
+    *,
+    write: bool = False,
 ) -> ChannelError:
-    """Translate one PTB TelegramError into a retry-classified ChannelError."""
+    """Translate one PTB TelegramError into a retry-classified ChannelError.
+
+    A read retries every transport fault. A write retries only flood control and
+    a connection that never opened: after a timeout, a dropped connection or a
+    server error Telegram may already have posted the message, and a repeat
+    would duplicate it.
+    """
     channel_error = ChannelError(
         f"Telegram request failed (channel={channel_id} error_type={type(error).__name__}): {text}"
     )
@@ -300,8 +316,8 @@ def _classify_telegram_error(
         return channel_error
     network_error = getattr(telegram_error_module, "NetworkError", None)
     if network_error is not None and isinstance(error, network_error):
-        # Covers TimedOut as well - both are transient transport faults.
-        channel_error.retryable = True
+        # Covers TimedOut as well; PTB chains the httpx error it translated.
+        channel_error.retryable = not write or isinstance(error.__cause__, _UNSENT_REQUEST_ERRORS)
     retry_after = getattr(error, "retry_after", None)
     if isinstance(retry_after, timedelta):
         retry_after = retry_after.total_seconds()

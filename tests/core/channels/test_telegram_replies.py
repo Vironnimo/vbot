@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 import telegram
 from telegram.error import BadRequest, ChatMigrated, NetworkError, RetryAfter, TimedOut
@@ -34,6 +35,13 @@ from .telegram_test_support import (
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
 _GROUP_SESSION = "ch-tg-assistant--10001"
+
+
+def _unsent_failure() -> NetworkError:
+    """A PTB failure translated from an httpx connection that never opened."""
+    error = NetworkError("httpx.ConnectError: connection refused")
+    error.__cause__ = httpx.ConnectError("connection refused")
+    return error
 
 
 @pytest.mark.asyncio
@@ -120,7 +128,7 @@ async def test_a_failed_chunk_is_retried_without_resending_delivered_chunks(
         payloads.append(payload)
         failed_before = sum(1 for sent in payloads if sent["text"] == chunks[1]) > 1
         if payload["text"] == chunks[1] and (exhausted or not failed_before):
-            raise NetworkError("connection reset")
+            raise _unsent_failure()
 
     bot.send_message.side_effect = send_message
     run = make_completed_run(output_text="".join(chunks))
@@ -152,12 +160,24 @@ async def test_a_failed_chunk_is_retried_without_resending_delivered_chunks(
     [
         # BadRequest also subclasses NetworkError, yet a rejected request never retries.
         (lambda: BadRequest("Message caption is too long"), False, 1, [], None),
-        (lambda: TimedOut("read timeout"), False, 4, [None] * 3, None),
+        # Telegram may have posted the message before the timeout or the dropped
+        # connection, so a repeat could duplicate it.
+        (lambda: TimedOut("read timeout"), False, 1, [], None),
+        (lambda: NetworkError("server disconnected"), False, 1, [], None),
+        # A connection that never opened sent nothing.
+        (_unsent_failure, False, 4, [None] * 3, None),
         (lambda: RetryAfter(retry_after=7), False, 4, [7.0] * 3, 7.0),
         # python-telegram-bot reports the flood wait as a timedelta in this mode.
         (lambda: RetryAfter(retry_after=7), True, 4, [7.0] * 3, 7.0),
     ],
-    ids=["bad-request", "timed-out", "flood-wait-seconds", "flood-wait-timedelta"],
+    ids=[
+        "bad-request",
+        "timed-out",
+        "disconnected",
+        "connect-failed",
+        "flood-wait-seconds",
+        "flood-wait-timedelta",
+    ],
 )
 async def test_send_errors_are_retried_by_their_telegram_classification(
     tmp_path: Path,

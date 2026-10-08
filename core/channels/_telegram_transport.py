@@ -90,7 +90,7 @@ class TelegramTransport:
                 raise ChannelConfigError(
                     "interactive buttons cannot be combined with file attachments"
                 )
-            with _telegram_error_boundary(self._channel_id):
+            with _telegram_error_boundary(self._channel_id, write=True):
                 await self._send_with_files(
                     bot,
                     chat_id,
@@ -136,7 +136,7 @@ class TelegramTransport:
                 payload["reply_parameters"] = reply_parameters
 
             async def send_chunk(payload: dict[str, Any] = payload) -> None:
-                with _telegram_error_boundary(self._channel_id):
+                with _telegram_error_boundary(self._channel_id, write=True):
                     await bot.send_message(**payload)
 
             try:
