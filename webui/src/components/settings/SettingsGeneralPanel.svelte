@@ -64,12 +64,17 @@
   );
   let baselineKeepAwake = untrack(() => keepAwakeValue);
   let baselineTimezone = untrack(() => timezoneValue);
+  let savingField = null;
   $effect(() => {
     const nextKeepAwake = settings?.general?.keep_awake === true;
     const nextTimezone = settings?.general?.timezone ?? 'UTC';
     untrack(() => {
-      if (keepAwakeValue === baselineKeepAwake) keepAwakeValue = nextKeepAwake;
-      if (timezoneValue === baselineTimezone) timezoneValue = nextTimezone;
+      // A revert to the old baseline is still a newer choice while its write
+      // runs. Refreshes may update the baseline, but cannot consume that edit.
+      if (savingField !== 'keep_awake' && keepAwakeValue === baselineKeepAwake)
+        keepAwakeValue = nextKeepAwake;
+      if (savingField !== 'timezone' && timezoneValue === baselineTimezone)
+        timezoneValue = nextTimezone;
       baselineKeepAwake = nextKeepAwake;
       baselineTimezone = nextTimezone;
     });
@@ -86,17 +91,27 @@
     save: async () => {
       onError('');
       saving = true;
+      const field = page === 'preferences' ? 'timezone' : 'keep_awake';
+      const submitted = field === 'timezone' ? timezoneValue : keepAwakeValue;
+      savingField = field;
       try {
-        const server =
-          page === 'preferences'
-            ? { timezone: timezoneValue }
-            : { keep_awake: keepAwakeValue };
-        onCommit(await updateSettings({ server }));
+        const next = await updateSettings({ server: { [field]: submitted } });
+        // Reconcile against the value sent, before the committed snapshot
+        // reaches the refresh effect or the participant checks its next pass.
+        if (field === 'timezone') {
+          baselineTimezone = next?.general?.timezone ?? 'UTC';
+          if (timezoneValue === submitted) timezoneValue = baselineTimezone;
+        } else {
+          baselineKeepAwake = next?.general?.keep_awake === true;
+          if (keepAwakeValue === submitted) keepAwakeValue = baselineKeepAwake;
+        }
+        onCommit(next);
         return true;
       } catch (error) {
         onError(`${t('settings.saveError')} ${error.message}`);
         return false;
       } finally {
+        savingField = null;
         saving = false;
       }
     },
