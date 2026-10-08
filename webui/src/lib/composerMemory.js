@@ -37,7 +37,10 @@ let histories = readStore(HISTORY_STORAGE_KEY) ?? {};
 let attachments = readStore(ATTACHMENTS_STORAGE_KEY) ?? {};
 // Keys this tab set or removed since its last persist, oldest edit first.
 const dirtyDrafts = new Set();
-const dirtyAttachments = new Set();
+const attachmentListeners = new Set();
+// Only additions and explicit removals belong to this tab. An unchanged file
+// in a dirty Session must not return after another tab removed or sent it.
+let pendingAttachmentChanges = [];
 // Messages this tab sent since its last persist, merged per push so every
 // tab's sends survive in the shared per-agent history.
 let pendingHistoryPushes = [];
@@ -106,12 +109,14 @@ function persistNow() {
   if (dirtyDrafts.size > 0) {
     drafts = persistKeyedChanges(DRAFTS_STORAGE_KEY, drafts, dirtyDrafts);
   }
-  if (dirtyAttachments.size > 0) {
-    attachments = persistKeyedChanges(
-      ATTACHMENTS_STORAGE_KEY,
-      attachments,
-      dirtyAttachments,
+  if (pendingAttachmentChanges.length > 0) {
+    attachments = withPendingAttachments(
+      readStore(ATTACHMENTS_STORAGE_KEY) ?? attachments,
     );
+    pruneOldest(attachments, MAX_DRAFT_SESSIONS);
+    pendingAttachmentChanges = [];
+    writeStore(ATTACHMENTS_STORAGE_KEY, attachments);
+    notifyPendingAttachments();
   }
   if (pendingHistoryPushes.length > 0 || pendingHistoryRenames.length > 0) {
     const stored = readStore(HISTORY_STORAGE_KEY) ?? histories;
@@ -160,6 +165,33 @@ function withPendingHistory(base) {
   return merged;
 }
 
+function withPendingAttachments(base) {
+  let merged = { ...base };
+  for (const change of pendingAttachmentChanges) {
+    if (change.fromAgent) {
+      merged = withRenamedSessionKeys(merged, change.fromAgent, change.toAgent);
+      continue;
+    }
+    const { sessionKey, removed, added } = change;
+    const current = Array.isArray(merged[sessionKey])
+      ? merged[sessionKey].filter(isStoredAttachment)
+      : [];
+    const next = current.filter(
+      (attachment) => !removed.includes(attachment.attachment_id),
+    );
+    for (const attachment of added) {
+      const index = next.findIndex(
+        (entry) => entry.attachment_id === attachment.attachment_id,
+      );
+      if (index < 0) next.push(attachment);
+      else next[index] = attachment;
+    }
+    delete merged[sessionKey];
+    if (next.length > 0) merged[sessionKey] = next;
+  }
+  return merged;
+}
+
 function markChanged(dirty, key) {
   dirty.delete(key);
   dirty.add(key);
@@ -182,11 +214,14 @@ function adoptOtherTabWrites() {
       }
     }
     if (adoptAll || event.key === ATTACHMENTS_STORAGE_KEY) {
-      const external = adoptAll
-        ? readStore(ATTACHMENTS_STORAGE_KEY)
-        : parseStore(event.newValue);
+      // Events can lag behind a newer local persist. Read current storage so
+      // an older removal notification cannot erase a just-completed upload.
+      const external =
+        readStore(ATTACHMENTS_STORAGE_KEY) ??
+        (adoptAll ? null : parseStore(event.newValue));
       if (external) {
-        attachments = withLocalChanges(external, attachments, dirtyAttachments);
+        attachments = withPendingAttachments(external);
+        notifyPendingAttachments();
       }
     }
     if (adoptAll || event.key === HISTORY_STORAGE_KEY) {
@@ -265,6 +300,17 @@ export function getPendingAttachments(sessionKey) {
     .map((attachment) => ({ ...attachment }));
 }
 
+// Mounted composers keep upload progress locally, but completed attachments
+// follow this shared store, including removals and sends in another tab.
+export function subscribePendingAttachments(listener) {
+  attachmentListeners.add(listener);
+  return () => attachmentListeners.delete(listener);
+}
+
+function notifyPendingAttachments() {
+  for (const listener of attachmentListeners) listener();
+}
+
 export function setPendingAttachments(sessionKey, values) {
   if (!sessionKey) {
     return;
@@ -272,17 +318,35 @@ export function setPendingAttachments(sessionKey, values) {
   const next = Array.isArray(values)
     ? values.filter(isStoredAttachment).map(toStoredAttachment)
     : [];
-  if (next.length === 0) {
-    if (!(sessionKey in attachments)) {
-      return;
-    }
-    delete attachments[sessionKey];
-  } else {
-    attachments[sessionKey] = next;
+  const previous = getPendingAttachments(sessionKey).map(toStoredAttachment);
+  if (JSON.stringify(next) === JSON.stringify(previous)) {
+    return;
   }
-  markChanged(dirtyAttachments, sessionKey);
+  pendingAttachmentChanges.push({
+    sessionKey,
+    removed: previous
+      .filter(
+        (attachment) =>
+          !next.some(
+            (entry) => entry.attachment_id === attachment.attachment_id,
+          ),
+      )
+      .map((attachment) => attachment.attachment_id),
+    added: next.filter(
+      (attachment) =>
+        !previous.some(
+          (entry) => JSON.stringify(entry) === JSON.stringify(attachment),
+        ),
+    ),
+  });
+  // A storage event can arrive after this local operation. Merge against what
+  // the other tab already wrote, without copying our stale unchanged files.
+  attachments = withPendingAttachments(
+    readStore(ATTACHMENTS_STORAGE_KEY) ?? attachments,
+  );
   pruneOldest(attachments, MAX_DRAFT_SESSIONS);
   schedulePersist();
+  notifyPendingAttachments();
 }
 
 function isStoredAttachment(attachment) {
@@ -368,19 +432,19 @@ export function renameComposerAgent(oldAgentId, newAgentId) {
   if (!oldAgentId || !newAgentId || oldAgentId === newAgentId) {
     return;
   }
-  drafts = withRenamedSessionKeys(drafts, dirtyDrafts, oldAgentId, newAgentId);
-  attachments = withRenamedSessionKeys(
-    attachments,
-    dirtyAttachments,
-    oldAgentId,
-    newAgentId,
-  );
+  drafts = withRenamedSessionKeys(drafts, oldAgentId, newAgentId, dirtyDrafts);
+  attachments = withRenamedSessionKeys(attachments, oldAgentId, newAgentId);
+  pendingAttachmentChanges.push({
+    fromAgent: oldAgentId,
+    toAgent: newAgentId,
+  });
+  notifyPendingAttachments();
   histories = withRenamedHistory(histories, oldAgentId, newAgentId);
   pendingHistoryRenames.push({ from: oldAgentId, to: newAgentId });
   schedulePersist();
 }
 
-function withRenamedSessionKeys(store, dirty, oldAgentId, newAgentId) {
+function withRenamedSessionKeys(store, oldAgentId, newAgentId, dirty) {
   const prefix = `${oldAgentId}::`;
   const renamed = {};
   for (const [key, value] of Object.entries(store)) {
@@ -390,8 +454,10 @@ function withRenamedSessionKeys(store, dirty, oldAgentId, newAgentId) {
     }
     const newKey = `${newAgentId}::${key.slice(prefix.length)}`;
     renamed[newKey] = value;
-    markChanged(dirty, key);
-    markChanged(dirty, newKey);
+    if (dirty) {
+      markChanged(dirty, key);
+      markChanged(dirty, newKey);
+    }
   }
   return renamed;
 }
@@ -418,7 +484,7 @@ export function resetComposerMemory() {
   histories = {};
   attachments = {};
   dirtyDrafts.clear();
-  dirtyAttachments.clear();
+  pendingAttachmentChanges = [];
   pendingHistoryPushes = [];
   pendingHistoryRenames = [];
   if (persistTimer !== null) {
@@ -428,4 +494,5 @@ export function resetComposerMemory() {
   writeStore(DRAFTS_STORAGE_KEY, drafts);
   writeStore(HISTORY_STORAGE_KEY, histories);
   writeStore(ATTACHMENTS_STORAGE_KEY, attachments);
+  notifyPendingAttachments();
 }

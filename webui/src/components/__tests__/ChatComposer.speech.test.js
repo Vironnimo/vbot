@@ -3,14 +3,18 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   buttonLabelled,
+  chooseSuggestion,
   composerInput,
   createAudioRecorder,
   deferred,
+  modelCatalogFixture,
   prepareSpeechTranscription,
+  pressKey,
   settle,
   setupChatComposerSuite,
   submitComposer,
   transcribeSpeech,
+  typeInComposer,
 } from './ChatComposer.support.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
@@ -57,33 +61,88 @@ async function record() {
 describe('ChatComposer speech input', () => {
   const composer = setupChatComposerSuite();
 
-  it('transcribes a recording and marks the sent text with its speech origin', async () => {
+  it('keeps the draft unsent until recording and transcription finish, then sends the speech origin', async () => {
     const onSendMessage = vi.fn().mockResolvedValue(true);
-    createAudioRecorder.mockResolvedValue(recorderFixture());
-    transcribeSpeech.mockResolvedValue({ text: 'hello world' });
+    const permission = deferred();
+    const recorder = recorderFixture();
+    createAudioRecorder.mockReturnValue(permission.promise);
+    const transcription = holdTranscription();
     composer.mount({ onSendMessage });
+    typeInComposer('Typed introduction');
+
+    const expectSubmissionBlocked = async () => {
+      const send = buttonLabelled('chat.sendMessage');
+      expect(send.disabled).toBe(true);
+      send.click();
+      pressKey('Enter');
+      submitComposer();
+      await settle();
+      expect(onSendMessage).not.toHaveBeenCalled();
+      expect(recorder.cancel).not.toHaveBeenCalled();
+      expect(composerInput().value).toBe('Typed introduction');
+    };
 
     startButton().click();
     await settle();
+    await expectSubmissionBlocked();
+    permission.resolve(recorder);
+    await settle();
     // The server may load its speech model while the user speaks.
     expect(prepareSpeechTranscription).toHaveBeenCalledOnce();
+    await expectSubmissionBlocked();
+    expect(stopButton().disabled).toBe(false);
     stopButton().click();
     await settle(3);
+    await expectSubmissionBlocked();
 
     expect(transcribeSpeech).toHaveBeenCalledWith(expect.any(Blob), {
       filename: 'recording.webm',
       signal: expect.any(AbortSignal),
       onProgress: expect.any(Function),
     });
-    expect(composerInput().value).toBe('hello world');
+    transcription.complete({ text: 'hello world' });
+    await settle();
+    expect(composerInput().value).toBe('Typed introduction\nhello world');
     await vi.waitFor(() =>
       expect(document.querySelector('.composer-voice-status')).toBeNull(),
     );
+    expect(buttonLabelled('chat.sendMessage').disabled).toBe(false);
     submitComposer();
-    expect(onSendMessage).toHaveBeenCalledWith('hello world', {
-      inputOrigin: 'speech_transcription',
-    });
+    expect(onSendMessage).toHaveBeenCalledWith(
+      'Typed introduction\nhello world',
+      { inputOrigin: 'speech_transcription' },
+    );
   });
+
+  it.each([
+    ['command', 'skill', '/stat'],
+    ['model', 'model', '/model '],
+  ])(
+    'does not submit an immediate %s selection while recording',
+    async (_case, kind, text) => {
+      const onSendMessage = vi.fn().mockResolvedValue(true);
+      const recorder = recorderFixture();
+      createAudioRecorder.mockResolvedValue(recorder);
+      composer.mount({
+        onSendMessage,
+        availableSkills: [
+          { name: 'status', type: 'command', argument: 'none' },
+        ],
+        onLoadModelCatalog: vi.fn().mockResolvedValue(modelCatalogFixture()),
+      });
+      startButton().click();
+      await settle();
+      typeInComposer(text);
+      await settle(3);
+
+      await chooseSuggestion(kind);
+
+      expect(onSendMessage).not.toHaveBeenCalled();
+      expect(recorder.cancel).not.toHaveBeenCalled();
+      expect(composerInput().value).toBe(text);
+      expect(stopButton().disabled).toBe(false);
+    },
+  );
 
   it.each([
     ['completion', false],

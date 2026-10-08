@@ -170,6 +170,7 @@ describe('composerMemory attachments', () => {
 describe('composerMemory across browser tabs', () => {
   const DRAFTS = 'vbot.composer.drafts.v1';
   const HISTORY = 'vbot.composer.history.v1';
+  const ATTACHMENTS = 'vbot.composer.attachments.v1';
 
   // Each module instance stands for one tab sharing the origin's storage.
   async function openTab() {
@@ -181,15 +182,61 @@ describe('composerMemory across browser tabs', () => {
     return JSON.parse(localStorage.getItem(DRAFTS));
   }
 
-  function announceStorageWrite(key) {
+  function announceStorageWrite(key, newValue = localStorage.getItem(key)) {
     window.dispatchEvent(
       new StorageEvent('storage', {
         key,
-        newValue: localStorage.getItem(key),
+        newValue,
         storageArea: localStorage,
       }),
     );
   }
+
+  it.each([
+    'before removal',
+    'before storage event',
+    'after storage event',
+    'before delayed storage event',
+  ])(
+    'merges a completed upload %s without restoring a remotely sent attachment',
+    async (completion) => {
+      const tab = await openTab();
+      const key = 'alpha::s1';
+      const first = {
+        attachment_id: 'first',
+        filename: 'first.pdf',
+        media_type: 'application/pdf',
+      };
+      const second = {
+        attachment_id: 'second',
+        filename: 'second.pdf',
+        media_type: 'application/pdf',
+      };
+      tab.setPendingAttachments(key, [first]);
+      tab.flushComposerMemory();
+      const finishUpload = () =>
+        tab.setPendingAttachments(key, [
+          ...tab.getPendingAttachments(key),
+          second,
+        ]);
+      if (completion === 'before removal') finishUpload();
+      localStorage.setItem(ATTACHMENTS, '{}');
+      if (
+        completion === 'before storage event' ||
+        completion === 'before delayed storage event'
+      )
+        finishUpload();
+      if (completion === 'before delayed storage event')
+        tab.flushComposerMemory();
+      announceStorageWrite(ATTACHMENTS, '{}');
+      if (completion === 'after storage event') finishUpload();
+      expect(tab.getPendingAttachments(key)).toEqual([second]);
+      tab.flushComposerMemory();
+      expect(JSON.parse(localStorage.getItem(ATTACHMENTS))).toEqual({
+        [key]: [second],
+      });
+    },
+  );
 
   it("keeps the other tab's drafts and history when persisting", async () => {
     const tabA = await openTab();
@@ -248,20 +295,40 @@ describe('composerMemory across browser tabs', () => {
     expect(tabB.getDraft('alpha::local')).toBe('still typing here');
   });
 
-  it("moves a renamed Agent's drafts and history in every tab", async () => {
+  it("moves a renamed Agent's composer memory in every tab", async () => {
     localStorage.setItem(HISTORY, JSON.stringify({ gamma: ['former gamma'] }));
     const tabA = await openTab();
     const tabB = await openTab();
+    const remoteAttachment = {
+      attachment_id: 'remote',
+      filename: 'remote.pdf',
+      media_type: 'application/pdf',
+    };
+    const localAttachment = {
+      ...remoteAttachment,
+      attachment_id: 'local',
+      filename: 'local.pdf',
+    };
+    // The rename also reaches stored attachments whose event has not arrived.
+    localStorage.setItem(
+      ATTACHMENTS,
+      JSON.stringify({ 'alpha::s1': [remoteAttachment] }),
+    );
     tabA.setDraft('alpha::s1', 'draft in tab A');
     tabA.pushHistory('alpha', 'sent as alpha');
     tabA.flushComposerMemory();
     tabB.setDraft('alpha::~draft-0', 'unsaved draft in tab B');
     tabB.setDraft('beta::s1', 'other Agent');
+    tabB.setPendingAttachments('alpha::~draft-0', [localAttachment]);
 
     // Every open tab hears of the rename and applies it.
     for (const tab of [tabA, tabB]) {
       tab.renameComposerAgent('alpha', 'gamma');
       tab.flushComposerMemory();
+      expect(tab.getPendingAttachments('gamma::s1')).toEqual([
+        remoteAttachment,
+      ]);
+      expect(tab.getPendingAttachments('alpha::s1')).toEqual([]);
     }
 
     expect(storedDrafts()).toEqual({
@@ -274,6 +341,25 @@ describe('composerMemory across browser tabs', () => {
     });
     expect(tabB.getDraft('gamma::~draft-0')).toBe('unsaved draft in tab B');
     expect(tabA.getHistory('gamma')).toEqual(['sent as alpha', 'former gamma']);
+    expect(JSON.parse(localStorage.getItem(ATTACHMENTS))).toEqual({
+      'gamma::s1': [remoteAttachment],
+      'gamma::~draft-0': [localAttachment],
+    });
+
+    // An empty rename must finish too, before the old id is reused later.
+    tabA.renameComposerAgent('empty', 'renamed');
+    tabA.flushComposerMemory();
+    tabB.setPendingAttachments('empty::reused', [remoteAttachment]);
+    tabB.flushComposerMemory();
+    tabA.setPendingAttachments('beta::unrelated', [localAttachment]);
+    tabA.flushComposerMemory();
+    expect(tabA.getPendingAttachments('empty::reused')).toEqual([
+      remoteAttachment,
+    ]);
+    expect(tabA.getPendingAttachments('renamed::reused')).toEqual([]);
+    expect(
+      JSON.parse(localStorage.getItem(ATTACHMENTS))['empty::reused'],
+    ).toEqual([remoteAttachment]);
   });
 
   it('keeps the merged store bounded to the newest sessions', async () => {
