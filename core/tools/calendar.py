@@ -73,8 +73,8 @@ if TYPE_CHECKING:
 
 CALENDAR_TOOL_NAME = "calendar"
 CALENDAR_TOOL_DESCRIPTION = (
-    "The user's calendar: events, free time, and actions, instructions an Agent carries out "
-    "before, at or after an event."
+    "Manage the user's calendar events and find free time. Attach actions to an event: "
+    "instructions an Agent carries out before, at or after it."
 )
 
 CALENDAR_ACTIONS = frozenset(
