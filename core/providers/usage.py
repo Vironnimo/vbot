@@ -30,8 +30,9 @@ from core.providers._http_shared import classify_http_status
 from core.providers._usage_parsers import (
     _parse_copilot_usage,
     _parse_minimax_usage,
-    _parse_ollama_usage,
+    _parse_ollama_balance,
     _parse_openai_usage,
+    _parse_opencode_go_usage,
     _parse_openrouter_usage,
     clamp_percent,
 )
@@ -40,10 +41,12 @@ from core.providers._usage_types import (
     COPILOT_USAGE_URL,
     MINIMAX_USAGE_CONNECTION,
     MINIMAX_USAGE_PATH,
+    OLLAMA_BALANCE_PATH,
     OLLAMA_USAGE_CONNECTION,
-    OLLAMA_USAGE_PATH,
     OPENAI_USAGE_CONNECTION,
     OPENAI_USAGE_PATH,
+    OPENCODE_GO_USAGE_CONNECTION,
+    OPENCODE_GO_USAGE_PATH,
     OPENROUTER_CREDITS_PATH,
     OPENROUTER_KEY_PATH,
     OPENROUTER_USAGE_CONNECTION,
@@ -89,10 +92,12 @@ __all__ = [
     "HttpxUsageTransport",
     "MINIMAX_USAGE_CONNECTION",
     "MINIMAX_USAGE_PATH",
+    "OLLAMA_BALANCE_PATH",
     "OLLAMA_USAGE_CONNECTION",
-    "OLLAMA_USAGE_PATH",
     "OPENAI_USAGE_CONNECTION",
     "OPENAI_USAGE_PATH",
+    "OPENCODE_GO_USAGE_CONNECTION",
+    "OPENCODE_GO_USAGE_PATH",
     "OPENROUTER_CREDITS_PATH",
     "OPENROUTER_KEY_PATH",
     "OPENROUTER_USAGE_CONNECTION",
@@ -117,6 +122,11 @@ DEFAULT_USAGE_CACHE_TTL_SECONDS = 10.0
 DEFAULT_USAGE_ERROR_CACHE_TTL_SECONDS = 60.0
 
 DEFAULT_USAGE_HISTORY_INTERVAL_SECONDS = 60 * 60
+
+# Provider-imposed polling floors for successful snapshots. Ollama allows ten
+# usage requests per minute per user across all keys and devices and asks for
+# one per minute.
+_MIN_CACHE_TTL_SECONDS: dict[str, float] = {OLLAMA_USAGE_CONNECTION: 60.0}
 
 
 class HttpxUsageTransport:
@@ -149,6 +159,7 @@ _SUPPORTED_CONNECTIONS: tuple[_SupportedConnection, ...] = (
     _SupportedConnection("ollama-cloud", "api-key"),
     _SupportedConnection("minimax", "api-key"),
     _SupportedConnection("openrouter", "api-key"),
+    _SupportedConnection("opencode-go", "api-key"),
 )
 
 _Fetcher = Callable[[_SupportedConnection], Awaitable[ProviderUsageSnapshot]]
@@ -196,6 +207,7 @@ class ProviderUsageService:
             OLLAMA_USAGE_CONNECTION: self._fetch_ollama,
             MINIMAX_USAGE_CONNECTION: self._fetch_minimax,
             OPENROUTER_USAGE_CONNECTION: self._fetch_openrouter,
+            OPENCODE_GO_USAGE_CONNECTION: self._fetch_opencode_go,
         }
 
     def start(self) -> None:
@@ -385,7 +397,7 @@ class ProviderUsageService:
             if cached is not None:
                 return cached
             snapshot = await self._run_fetcher(connection)
-            self._store_cache(connection.target_id, snapshot)
+            self._store_cache(connection, snapshot)
             return snapshot
 
     async def _run_fetcher(self, connection: _SupportedConnection) -> ProviderUsageSnapshot:
@@ -420,8 +432,8 @@ class ProviderUsageService:
             return connection.provider_id
         return name if isinstance(name, str) and name else connection.provider_id
 
-    def _cached_snapshot(self, connection_id: str) -> ProviderUsageSnapshot | None:
-        entry = self._cache.get(connection_id)
+    def _cached_snapshot(self, target_id: str) -> ProviderUsageSnapshot | None:
+        entry = self._cache.get(target_id)
         if entry is None:
             return None
         stored_at, ttl, snapshot = entry
@@ -429,9 +441,14 @@ class ProviderUsageService:
             return None
         return snapshot
 
-    def _store_cache(self, connection_id: str, snapshot: ProviderUsageSnapshot) -> None:
-        ttl = self._error_cache_ttl if snapshot.error else self._cache_ttl
-        self._cache[connection_id] = (self._monotonic(), ttl, snapshot)
+    def _store_cache(
+        self, connection: _SupportedConnection, snapshot: ProviderUsageSnapshot
+    ) -> None:
+        if snapshot.error:
+            ttl = self._error_cache_ttl
+        else:
+            ttl = max(self._cache_ttl, _MIN_CACHE_TTL_SECONDS.get(connection.connection_id, 0.0))
+        self._cache[connection.target_id] = (self._monotonic(), ttl, snapshot)
 
     # ------------------------------------------------------------------
     # Per-provider fetchers
@@ -516,9 +533,33 @@ class ProviderUsageService:
 
         token_getter = self._runtime.get_connection_token_getter(connection.ref)
         token = await token_getter()
-        headers = {connection_config.auth.header: f"{connection_config.auth.prefix}{token}"}
-        body = await self._get_json(_join_url(base_url, OLLAMA_USAGE_PATH), headers)
-        return _parse_ollama_usage(
+        headers = {
+            connection_config.auth.header: f"{connection_config.auth.prefix}{token}",
+            "Accept": "application/json",
+        }
+        # The endpoint refuses any query parameter.
+        body = await self._get_json(_join_url(base_url, OLLAMA_BALANCE_PATH), headers)
+        return _parse_ollama_balance(
+            connection.connection_id,
+            self._display_name(connection),
+            body,
+            account=connection.account_id,
+        )
+
+    async def _fetch_opencode_go(self, connection: _SupportedConnection) -> ProviderUsageSnapshot:
+        provider = self._runtime.providers.get(connection.provider_id)
+        connection_config = provider.get_connection(connection.local_connection_id)
+        base_url = connection_config.base_url or provider.base_url
+
+        token_getter = self._runtime.get_connection_token_getter(connection.ref)
+        token = await token_getter()
+        headers = {
+            **(provider.extra_headers or {}),
+            connection_config.auth.header: f"{connection_config.auth.prefix}{token}",
+            "Accept": "application/json",
+        }
+        body = await self._get_json(_join_url(base_url, OPENCODE_GO_USAGE_PATH), headers)
+        return _parse_opencode_go_usage(
             connection.connection_id,
             self._display_name(connection),
             body,

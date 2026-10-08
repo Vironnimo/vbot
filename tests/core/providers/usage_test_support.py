@@ -176,6 +176,14 @@ PROVIDER_CONFIGS: dict[str, ProviderConfig] = {
         base_url="https://openrouter.ai/api/v1",
         connections=[_api_key_connection("OPENROUTER_API_KEY")],
     ),
+    "opencode-go": ProviderConfig(
+        id="opencode-go",
+        name="OpenCode Go",
+        adapter="opencode_go",
+        base_url="https://opencode.ai/zen/go/v1",
+        connections=[_api_key_connection("OPENCODE_API_KEY")],
+        extra_headers={"User-Agent": "vBot"},
+    ),
 }
 
 USAGE_CONNECTIONS = {
@@ -184,6 +192,7 @@ USAGE_CONNECTIONS = {
     "ollama-cloud": "ollama-cloud:api-key",
     "minimax": "minimax:api-key",
     "openrouter": "openrouter:api-key",
+    "opencode-go": "opencode-go:api-key",
 }
 
 
@@ -200,6 +209,7 @@ def usage_runtime(*provider_ids: str, usable: bool = True) -> FakeRuntime:
         tokens={
             "ollama-cloud:api-key:default": "ollama-secret",
             "openrouter:api-key:default": "or-secret",
+            "opencode-go:api-key:default": "go-secret",
         },
         extras={
             "openai:subscription": {"chatgpt_account_id": "acct-123"},
@@ -241,29 +251,22 @@ COPILOT_BODY: dict[str, Any] = {
     },
 }
 
-# Live-verified Ollama Cloud shape.
+# Live-verified Ollama Cloud ``/api/balance`` shape of the older session/weekly plans.
 OLLAMA_BODY: dict[str, Any] = {
-    "activity": {
-        "cost": "0.00000",
-        "models": [],
-        "period": {"type": "last_4_weeks"},
+    "included": {
+        "session": {"remaining_percent": 99.47, "resets_at": "2026-10-08T14:00:00Z"},
+        "weekly": {"remaining_percent": 94.38, "resets_at": "2026-10-12T00:00:00Z"},
     },
-    "limits": {
-        "session": {
-            "models": [
-                {"name": "gemma4:31b", "request_count": 6},
-                {"name": "minimax-m3", "request_count": 3},
-            ],
-            "usage": 0.019,
-        },
-        "weekly": {
-            "models": [
-                {"name": "gemma4:31b", "request_count": 9},
-                {"name": "minimax-m3", "request_count": 5},
-            ],
-            "usage": 0.007,
-        },
-    },
+    "purchased": {"balance_usd": 0},
+}
+
+# Live-verified OpenCode Go ``/usage`` shape (undocumented endpoint).
+OPENCODE_GO_BODY: dict[str, Any] = {
+    "usage": {
+        "rolling": {"status": "ok", "percent": 0, "resetsAt": "2026-10-08T13:30:41.000Z"},
+        "weekly": {"status": "ok", "percent": 1, "resetsAt": "2026-10-12T00:00:00.000Z"},
+        "monthly": {"status": "ok", "percent": 41, "resetsAt": "2026-10-30T17:56:11.000Z"},
+    }
 }
 
 MINIMAX_BODY: dict[str, Any] = {
@@ -299,7 +302,8 @@ OPENROUTER_KEY_BODY: dict[str, Any] = {
 USAGE_RESPONSES: dict[str, FakeResponse] = {
     "wham/usage": FakeResponse(payload=OPENAI_BODY),
     "copilot_internal/user": FakeResponse(payload=COPILOT_BODY),
-    "api/usage": FakeResponse(payload=OLLAMA_BODY),
+    "api/balance": FakeResponse(payload=OLLAMA_BODY),
+    "go/v1/usage": FakeResponse(payload=OPENCODE_GO_BODY),
     "token_plan/remains": FakeResponse(payload=MINIMAX_BODY),
     "/credits": FakeResponse(payload=OPENROUTER_CREDITS_BODY),
     "/key": FakeResponse(payload=OPENROUTER_KEY_BODY),

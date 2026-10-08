@@ -25,17 +25,21 @@ MINIMAX_USAGE_CONNECTION = "minimax:api-key"
 
 OPENROUTER_USAGE_CONNECTION = "openrouter:api-key"
 
+OPENCODE_GO_USAGE_CONNECTION = "opencode-go:api-key"
+
 OPENAI_USAGE_PATH = "/wham/usage"
 
 COPILOT_USAGE_URL = "https://api.github.com/copilot_internal/user"
 
-OLLAMA_USAGE_PATH = "/api/usage"
+OLLAMA_BALANCE_PATH = "/api/balance"
 
 MINIMAX_USAGE_PATH = "/token_plan/remains"
 
 OPENROUTER_CREDITS_PATH = "/credits"
 
 OPENROUTER_KEY_PATH = "/key"
+
+OPENCODE_GO_USAGE_PATH = "/usage"
 
 _MINIMAX_TOTAL_KEYS = ("current_interval_total_count", "total_count", "total")
 
@@ -54,7 +58,7 @@ _MINIMAX_CHAT_MODEL_PREFIX = "minimax-m"
 
 _WEEK_SECONDS = 7 * 24 * 3600
 
-_OLLAMA_SESSION_SECONDS = 5 * 3600
+_FIVE_HOUR_SECONDS = 5 * 3600
 
 _DAY_SECONDS = 24 * 3600
 
@@ -99,15 +103,20 @@ class UsageWindow:
 
 @dataclass(frozen=True)
 class UsageCredits:
-    """Structured subscription-credit state when a Provider exposes it."""
+    """Structured subscription-credit state when a Provider exposes it.
+
+    ``unit`` names the balance's currency (``"USD"``) when the Provider states
+    one; ``None`` means the Provider's own credit unit.
+    """
 
     enabled: bool
     balance: float | None = None
+    unit: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Return the JSON-serializable credit projection."""
 
-        return {"enabled": self.enabled, "balance": self.balance}
+        return {"enabled": self.enabled, "balance": self.balance, "unit": self.unit}
 
 
 @dataclass(frozen=True)

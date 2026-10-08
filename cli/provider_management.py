@@ -668,6 +668,9 @@ def _format_usage_report(generated_at: object, providers: Sequence[object]) -> s
         display_name = _string_or_default(provider.get("display_name"), connection)
         plan = _string_or_default(provider.get("plan"), "-")
         lines.append(f"- {display_name} ({connection})  plan: {plan}")
+        credits_line = _format_usage_credits(provider.get("credits"))
+        if credits_line is not None:
+            lines.append(credits_line)
         error = provider.get("error")
         if isinstance(error, str) and error:
             lines.append(f"  error: {error}")
@@ -693,7 +696,32 @@ def _format_usage_window(window: object) -> str:
         used_text = "?"
         remaining_text = "?"
     reset_at = _string_or_default(window.get("reset_at"), "-")
-    return f"  - {label}: used={used_text} remaining={remaining_text} reset_at={reset_at}"
+    line = f"  - {label}: used={used_text} remaining={remaining_text} reset_at={reset_at}"
+    unit = _string_or_default(window.get("unit"), "units")
+    used_units = _usage_number(window.get("used_units"))
+    total_units = _usage_number(window.get("total_units"))
+    if used_units is not None and total_units is not None:
+        line += f" units={used_units:g}/{total_units:g} {unit}"
+    elif used_units is not None:
+        line += f" units={used_units:g} {unit}"
+    return line
+
+
+def _format_usage_credits(credits: object) -> str | None:
+    if not isinstance(credits, dict) or credits.get("enabled") is not True:
+        return None
+    balance = _usage_number(credits.get("balance"))
+    if balance is None:
+        return "  credits: available"
+    unit = _string_or_default(credits.get("unit"), "credits")
+    amount = f"{balance:.2f}" if unit == "USD" else f"{balance:g}"
+    return f"  credits: {amount} {unit}"
+
+
+def _usage_number(value: object) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return None
 
 
 def _filter_connections(

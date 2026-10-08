@@ -10,12 +10,12 @@ from typing import Any
 from core.providers._usage_types import (
     _DAY_SECONDS,
     _EPOCH_MILLISECONDS_THRESHOLD,
+    _FIVE_HOUR_SECONDS,
     _MINIMAX_CHAT_MODEL_PREFIX,
     _MINIMAX_PLAN_KEYS,
     _MINIMAX_REMAINING_KEYS,
     _MINIMAX_RESET_KEYS,
     _MINIMAX_TOTAL_KEYS,
-    _OLLAMA_SESSION_SECONDS,
     _PRIMARY_FALLBACK_LABEL,
     _RATIO_PERCENT_DECIMAL_PLACES,
     _SECONDARY_FALLBACK_LABEL,
@@ -151,26 +151,123 @@ def _copilot_plan(body: Any) -> str | None:
     return plan.strip() if isinstance(plan, str) and plan.strip() else None
 
 
-def _parse_ollama_usage(
+def _parse_ollama_balance(
     connection_id: str,
     display_name: str,
     body: Any,
     *,
     account: str = DEFAULT_ACCOUNT_ID,
 ) -> ProviderUsageSnapshot:
-    limits = body.get("limits") if isinstance(body, Mapping) else None
-    if not isinstance(limits, Mapping):
+    """Project Ollama's documented ``/api/balance`` answer.
+
+    ``included`` holds either the older plans' session and weekly limits
+    (remaining percentages with reset times) or the monthly included credits
+    of the current plans; the shape, not a plan name, selects the branch.
+    """
+
+    included = body.get("included") if isinstance(body, Mapping) else None
+    if not isinstance(included, Mapping):
+        raise UsageFetchError("Unsupported response shape")
+
+    windows: list[UsageWindow] = []
+    if "session" in included or "weekly" in included:
+        for key, label, window_seconds in (
+            ("session", "5h", _FIVE_HOUR_SECONDS),
+            ("weekly", "Week", _WEEK_SECONDS),
+        ):
+            raw = included.get(key)
+            if raw is None:
+                continue
+            window = _ollama_limit_window(raw, label, window_seconds)
+            if window is None:
+                raise UsageFetchError("Unsupported response shape")
+            windows.append(window)
+    else:
+        window = _ollama_credit_window(included)
+        if window is None:
+            raise UsageFetchError("Unsupported response shape")
+        windows.append(window)
+
+    if not windows:
+        raise UsageFetchError("Unsupported response shape")
+    return ProviderUsageSnapshot(
+        connection=connection_id,
+        account=account,
+        display_name=display_name,
+        windows=windows,
+        credits=_ollama_purchased_credits(body),
+    )
+
+
+def _ollama_limit_window(raw: Any, label: str, window_seconds: int) -> UsageWindow | None:
+    if not isinstance(raw, Mapping):
+        return None
+    remaining_percent = _as_number(raw.get("remaining_percent"))
+    if remaining_percent is None:
+        return None
+    return UsageWindow(
+        label=label,
+        used_percent=clamp_percent(round(100.0 - remaining_percent, _RATIO_PERCENT_DECIMAL_PLACES)),
+        reset_at=_date_to_iso(raw.get("resets_at")),
+        window_seconds=window_seconds,
+    )
+
+
+def _ollama_credit_window(included: Mapping[str, Any]) -> UsageWindow | None:
+    balance = _as_number(included.get("balance_usd"))
+    allowance = _as_number(included.get("allowance_usd"))
+    if balance is None or allowance is None or allowance <= 0:
+        return None
+    period = included.get("period")
+    used = max(0.0, allowance - balance)
+    # The period follows the subscription's monthly schedule, so its length
+    # varies; a fixed duration would split the history series every month.
+    return UsageWindow(
+        label="Month",
+        used_percent=clamp_percent(round(used / allowance * 100.0, _RATIO_PERCENT_DECIMAL_PLACES)),
+        reset_at=_date_to_iso(period.get("until")) if isinstance(period, Mapping) else None,
+        used_units=used,
+        remaining_units=max(0.0, balance),
+        total_units=allowance,
+        unit="USD",
+    )
+
+
+def _ollama_purchased_credits(body: Mapping[str, Any]) -> UsageCredits | None:
+    purchased = body.get("purchased")
+    balance = _as_number(purchased.get("balance_usd")) if isinstance(purchased, Mapping) else None
+    if balance is None:
+        return None
+    return UsageCredits(enabled=balance > 0, balance=balance, unit="USD")
+
+
+def _parse_opencode_go_usage(
+    connection_id: str,
+    display_name: str,
+    body: Any,
+    *,
+    account: str = DEFAULT_ACCOUNT_ID,
+) -> ProviderUsageSnapshot:
+    """Project OpenCode Go's ``/usage`` answer (undocumented; strict).
+
+    Each window's ``percent`` is cost-weighted across Models, so it carries no
+    request or money units. The month follows the subscription anniversary.
+    """
+
+    usage = body.get("usage") if isinstance(body, Mapping) else None
+    if not isinstance(usage, Mapping):
         raise UsageFetchError("Unsupported response shape")
 
     windows: list[UsageWindow] = []
     for key, label, window_seconds in (
-        ("session", "5h", _OLLAMA_SESSION_SECONDS),
+        ("rolling", "5h", _FIVE_HOUR_SECONDS),
         ("weekly", "Week", _WEEK_SECONDS),
+        ("monthly", "Month", None),
     ):
-        raw = limits.get(key)
+        raw = usage.get(key)
         if raw is None:
             continue
-        window = _ollama_window(raw, label, window_seconds)
+        window = _opencode_go_window(raw, label, window_seconds)
         if window is None:
             raise UsageFetchError("Unsupported response shape")
         windows.append(window)
@@ -185,38 +282,21 @@ def _parse_ollama_usage(
     )
 
 
-def _ollama_window(raw: Any, label: str, window_seconds: int) -> UsageWindow | None:
+def _opencode_go_window(raw: Any, label: str, window_seconds: int | None) -> UsageWindow | None:
     if not isinstance(raw, Mapping):
         return None
-    usage_ratio = _as_number(raw.get("usage"))
-    if usage_ratio is None:
+    percent = _as_number(raw.get("percent"))
+    reset_at = _date_to_iso(raw.get("resetsAt"))
+    if percent is None or reset_at is None:
         return None
-    request_count = _ollama_request_count(raw.get("models"))
+    if raw.get("status") == "rate-limited":
+        percent = 100.0
     return UsageWindow(
         label=label,
-        used_percent=clamp_percent(round(usage_ratio * 100.0, _RATIO_PERCENT_DECIMAL_PLACES)),
+        used_percent=clamp_percent(percent),
+        reset_at=reset_at,
         window_seconds=window_seconds,
-        used_units=request_count,
-        unit="requests" if request_count is not None else None,
     )
-
-
-def _ollama_request_count(models: Any) -> float | None:
-    """Sum complete per-Model counts without treating them as quota units."""
-
-    if not isinstance(models, list):
-        return None
-    total = 0
-    for model in models:
-        if not isinstance(model, Mapping):
-            return None
-        request_count = model.get("request_count")
-        if isinstance(request_count, bool) or not isinstance(request_count, int):
-            return None
-        if request_count < 0:
-            return None
-        total += request_count
-    return float(total)
 
 
 def _parse_minimax_usage(
@@ -315,7 +395,7 @@ def _parse_openrouter_usage(
         _as_number(credits_data.get("total_usage")) if isinstance(credits_data, Mapping) else None
     )
     credits = (
-        UsageCredits(enabled=True, balance=total_credits - total_usage)
+        UsageCredits(enabled=True, balance=total_credits - total_usage, unit="USD")
         if total_credits is not None and total_usage is not None
         else None
     )

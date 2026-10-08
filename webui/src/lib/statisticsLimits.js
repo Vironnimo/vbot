@@ -4,7 +4,7 @@
 // local Statistics report sections live in statisticsView.js.
 
 import { t } from './i18n.js';
-import { formatDateTime } from './statisticsView.js';
+import { formatCost, formatDateTime, formatInteger } from './statisticsView.js';
 import { formatAbsoluteTime, formatMoment } from './timeText.js';
 
 export const USAGE_HISTORY_RANGES = Object.freeze(['24h', '7d', '30d', 'all']);
@@ -280,6 +280,61 @@ export function formatUsageDelta(value, locale = 'en') {
   return `${sign}${new Intl.NumberFormat(locale, {
     maximumFractionDigits: 1,
   }).format(value)} pp`;
+}
+
+// A Provider amount in its unit: USD as money with cents, any other unit
+// (requests, interactions, Provider credits) as a whole number.
+export function formatUsageAmount(value, unit, locale = 'en') {
+  return unit === 'USD'
+    ? formatCost(value, locale)
+    : formatInteger(value, locale);
+}
+
+// The unit line under a usage window, or null when the window has no units.
+// Money amounts carry their currency, so they need no unit word.
+export function usageWindowUnitsText(window, locale = 'en') {
+  if (window?.unlimited) {
+    return t('statistics.limits.unlimited');
+  }
+  const unit = window?.unit ?? null;
+  const money = unit === 'USD';
+  const amount = (value) => formatUsageAmount(value, unit, locale);
+  const unitLabel = unit ?? t('statistics.limits.units');
+  if (window?.remaining_units != null && window?.total_units != null) {
+    const remaining = amount(window.remaining_units);
+    const total = amount(window.total_units);
+    return money
+      ? t('statistics.limits.remainingAmount', { remaining, total })
+      : t('statistics.limits.remainingUnits', {
+          remaining,
+          total,
+          unit: unitLabel,
+        });
+  }
+  if (window?.used_units != null) {
+    const used = amount(window.used_units);
+    return money
+      ? t('statistics.limits.usedAmount', { used })
+      : t('statistics.limits.usedUnits', { used, unit: unitLabel });
+  }
+  return null;
+}
+
+// The credit label of a Provider card, or null when credits are off.
+export function usageCreditsText(credits, locale = 'en') {
+  if (!credits?.enabled) {
+    return null;
+  }
+  if (credits.balance == null) {
+    return t('statistics.limits.creditsAvailable');
+  }
+  return credits.unit
+    ? t('statistics.limits.balance', {
+        balance: formatUsageAmount(credits.balance, credits.unit, locale),
+      })
+    : t('statistics.limits.credits', {
+        balance: formatInteger(credits.balance, locale),
+      });
 }
 
 // Build a relative ("3h 12m") + absolute reset-time model for a usage window.

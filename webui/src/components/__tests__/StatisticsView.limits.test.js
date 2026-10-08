@@ -55,36 +55,25 @@ describe('StatisticsView', () => {
     );
   });
 
-  it('shows Ollama Cloud quota percentages and labels request counts as observed', async () => {
-    const ollamaUsage = makeUsageReport({
+  it('shows reset times and money amounts with their currency', async () => {
+    const usage = makeUsageReport({
       providers: [
         {
           connection: 'ollama-cloud:api-key',
           account: 'default',
           display_name: 'Ollama Cloud',
           plan: null,
-          credits: null,
+          credits: { enabled: true, balance: 4.5, unit: 'USD' },
           windows: [
             {
-              label: '5h',
-              used_percent: 1.9,
-              reset_at: null,
-              window_seconds: 18000,
-              used_units: 9,
-              remaining_units: null,
-              total_units: null,
-              unit: 'requests',
-              unlimited: null,
-            },
-            {
-              label: 'Week',
-              used_percent: 0.7,
-              reset_at: null,
-              window_seconds: 604800,
-              used_units: 14,
-              remaining_units: null,
-              total_units: null,
-              unit: 'requests',
+              label: 'Month',
+              used_percent: 25,
+              reset_at: '2099-11-01T00:00:00+00:00',
+              window_seconds: null,
+              used_units: 5,
+              remaining_units: 15.25,
+              total_units: 20,
+              unit: 'USD',
               unlimited: null,
             },
           ],
@@ -92,7 +81,7 @@ describe('StatisticsView', () => {
         },
       ],
     });
-    rpcMock.mockImplementation(routedRpc(ollamaUsage));
+    rpcMock.mockImplementation(routedRpc(usage));
 
     suite.mountedComponent = mount(StatisticsView, { target: document.body });
     await waitForOverview();
@@ -101,14 +90,15 @@ describe('StatisticsView', () => {
       document.body.textContent.includes('Ollama Cloud'),
     );
 
-    const fills = document.querySelectorAll('.stats-limit-window__fill');
-    expect(fills).toHaveLength(2);
-    expect(fills[0].getAttribute('style')).toContain('1.9%');
-    expect(fills[1].getAttribute('style')).toContain('0.7%');
-    const units = document.querySelectorAll('.stats-limit-window__units');
-    expect(units[0].textContent).toContain('9');
-    expect(units[1].textContent).toContain('14');
-    expect(document.querySelector('.stats-limit-window__reset')).toBeNull();
+    const fill = document.querySelector('.stats-limit-window__fill');
+    expect(fill.getAttribute('style')).toContain('25%');
+    expect(document.querySelector('.stats-limit-window__reset')).not.toBeNull();
+    const units = document.querySelector('.stats-limit-window__units');
+    expect(units.textContent).toContain('$15.25');
+    expect(units.textContent).toContain('$20.00');
+    expect(
+      document.querySelector('.stats-limit-card__credits').textContent,
+    ).toContain('$4.50');
   });
 
   it('refreshes provider usage every ten seconds only while Limits is visible', async () => {

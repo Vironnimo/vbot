@@ -90,7 +90,7 @@ _OPENROUTER_CAP_WINDOW = UsageWindow(
     total_units=100.0,
     unit="USD",
 )
-_OPENROUTER_CREDITS = UsageCredits(enabled=True, balance=37.5)
+_OPENROUTER_CREDITS = UsageCredits(enabled=True, balance=37.5, unit="USD")
 
 
 @pytest.mark.parametrize(
@@ -172,7 +172,12 @@ _OPENROUTER_CREDITS = UsageCredits(enabled=True, balance=37.5)
         ),
         pytest.param(
             "ollama-cloud",
-            [("https://ollama.com/api/usage", {"Authorization": "Bearer ollama-secret"})],
+            [
+                (
+                    "https://ollama.com/api/balance",
+                    {"Authorization": "Bearer ollama-secret", "Accept": "application/json"},
+                )
+            ],
             ProviderUsageSnapshot(
                 connection="ollama-cloud:api-key",
                 account="default",
@@ -180,19 +185,18 @@ _OPENROUTER_CREDITS = UsageCredits(enabled=True, balance=37.5)
                 windows=[
                     UsageWindow(
                         label="5h",
-                        used_percent=1.9,
+                        used_percent=0.53,
+                        reset_at="2026-10-08T14:00:00+00:00",
                         window_seconds=18_000,
-                        used_units=9.0,
-                        unit="requests",
                     ),
                     UsageWindow(
                         label="Week",
-                        used_percent=0.7,
+                        used_percent=5.62,
+                        reset_at="2026-10-12T00:00:00+00:00",
                         window_seconds=604_800,
-                        used_units=14.0,
-                        unit="requests",
                     ),
                 ],
+                credits=UsageCredits(enabled=False, balance=0.0, unit="USD"),
             ),
             id="ollama-cloud",
         ),
@@ -240,6 +244,42 @@ _OPENROUTER_CREDITS = UsageCredits(enabled=True, balance=37.5)
                 credits=_OPENROUTER_CREDITS,
             ),
             id="openrouter",
+        ),
+        pytest.param(
+            "opencode-go",
+            [
+                (
+                    "https://opencode.ai/zen/go/v1/usage",
+                    {
+                        "User-Agent": "vBot",
+                        "Authorization": "Bearer go-secret",
+                        "Accept": "application/json",
+                    },
+                )
+            ],
+            ProviderUsageSnapshot(
+                connection="opencode-go:api-key",
+                account="default",
+                display_name="OpenCode Go",
+                windows=[
+                    UsageWindow(
+                        label="5h",
+                        used_percent=0.0,
+                        reset_at="2026-10-08T13:30:41+00:00",
+                        window_seconds=18_000,
+                    ),
+                    UsageWindow(
+                        label="Week",
+                        used_percent=1.0,
+                        reset_at="2026-10-12T00:00:00+00:00",
+                        window_seconds=604_800,
+                    ),
+                    UsageWindow(
+                        label="Month", used_percent=41.0, reset_at="2026-10-30T17:56:11+00:00"
+                    ),
+                ],
+            ),
+            id="opencode-go",
         ),
     ],
 )
@@ -350,31 +390,96 @@ _UNSUPPORTED_SHAPE = {"windows": [], "error": "Unsupported response shape"}
             None,
             id="copilot-no-quota-snapshots",
         ),
+        # The activity-history shape ``/api/usage`` returns since 2026-10-07.
         pytest.param(
             "ollama-cloud",
-            FakeResponse(payload={"unexpected": True}),
+            FakeResponse(payload={"range": "7d", "totals": {"request_count": 3}, "buckets": []}),
             _UNSUPPORTED_SHAPE,
-            id="ollama-no-limits-object",
-        ),
-        pytest.param(
-            "ollama-cloud",
-            FakeResponse(payload={"limits": {}}),
-            _UNSUPPORTED_SHAPE,
-            id="ollama-no-limit-windows",
-        ),
-        pytest.param(
-            "ollama-cloud",
-            FakeResponse(payload={"limits": {"session": {"usage": "0.1"}}}),
-            _UNSUPPORTED_SHAPE,
-            id="ollama-non-numeric-usage",
+            id="ollama-no-included-object",
         ),
         pytest.param(
             "ollama-cloud",
             FakeResponse(
-                payload={"limits": {"session": {"usage": 0.25, "models": {"unexpected": True}}}}
+                payload={"included": {"session": {"remaining_percent": "75", "resets_at": None}}}
             ),
-            {"windows": [UsageWindow(label="5h", used_percent=25.0, window_seconds=18_000)]},
-            id="ollama-changed-request-breakdown-keeps-percent",
+            _UNSUPPORTED_SHAPE,
+            id="ollama-non-numeric-remaining",
+        ),
+        # Documented monthly-credit plans; not live-verified.
+        pytest.param(
+            "ollama-cloud",
+            FakeResponse(
+                payload={
+                    "included": {
+                        "balance_usd": 15.0,
+                        "allowance_usd": 20.0,
+                        "period": {
+                            "from": "2026-10-01T00:00:00Z",
+                            "until": "2026-11-01T00:00:00Z",
+                        },
+                    },
+                    "purchased": {"balance_usd": 4.5},
+                }
+            ),
+            {
+                "windows": [
+                    UsageWindow(
+                        label="Month",
+                        used_percent=25.0,
+                        reset_at="2026-11-01T00:00:00+00:00",
+                        used_units=5.0,
+                        remaining_units=15.0,
+                        total_units=20.0,
+                        unit="USD",
+                    )
+                ],
+                "credits": UsageCredits(enabled=True, balance=4.5, unit="USD"),
+            },
+            id="ollama-monthly-credits-and-purchased-balance",
+        ),
+        pytest.param(
+            "ollama-cloud",
+            FakeResponse(payload={"included": {"balance_usd": 1.0, "allowance_usd": 0}}),
+            _UNSUPPORTED_SHAPE,
+            id="ollama-credits-without-allowance",
+        ),
+        pytest.param(
+            "opencode-go",
+            FakeResponse(
+                payload={
+                    "usage": {
+                        "rolling": {
+                            "status": "rate-limited",
+                            "percent": 99.5,
+                            "resetsAt": "2026-10-08T13:30:41.000Z",
+                        }
+                    }
+                }
+            ),
+            {
+                "windows": [
+                    UsageWindow(
+                        label="5h",
+                        used_percent=100.0,
+                        reset_at="2026-10-08T13:30:41+00:00",
+                        window_seconds=18_000,
+                    )
+                ]
+            },
+            id="opencode-go-rate-limited-window",
+        ),
+        pytest.param(
+            "opencode-go",
+            FakeResponse(payload={"usage": {"weekly": {"status": "ok", "percent": 1}}}),
+            _UNSUPPORTED_SHAPE,
+            id="opencode-go-window-without-reset",
+        ),
+        # A key without a Go subscription (403 EntitlementError, from source).
+        pytest.param(
+            "opencode-go",
+            FakeResponse(status_code=403),
+            {"error": "HTTP 403"},
+            id="opencode-go-without-subscription",
         ),
         pytest.param(
             "minimax",
@@ -584,20 +689,29 @@ async def test_report_probes_only_the_requested_connections() -> None:
 
 
 @pytest.mark.parametrize(
-    ("response", "ttl"),
+    ("provider_id", "response", "ttl"),
     [
-        pytest.param(FakeResponse(payload=OLLAMA_BODY), 10.0, id="success-for-ten-seconds"),
-        pytest.param(FakeResponse(status_code=429), 60.0, id="error-for-sixty-seconds"),
+        pytest.param(
+            "openai", FakeResponse(payload=OPENAI_BODY), 10.0, id="success-for-ten-seconds"
+        ),
+        # Ollama asks for at most one usage request per minute.
+        pytest.param(
+            "ollama-cloud",
+            FakeResponse(payload=OLLAMA_BODY),
+            60.0,
+            id="ollama-success-for-sixty-seconds",
+        ),
+        pytest.param("openai", FakeResponse(status_code=429), 60.0, id="error-for-sixty-seconds"),
     ],
 )
 @pytest.mark.asyncio
 async def test_report_caches_each_snapshot_until_its_ttl(
-    response: FakeResponse, ttl: float
+    provider_id: str, response: FakeResponse, ttl: float
 ) -> None:
     transport = FakeTransport(response)
     now = 1000.0
     service = ProviderUsageService(
-        usage_runtime("ollama-cloud"), transport=transport, monotonic=lambda: now
+        usage_runtime(provider_id), transport=transport, monotonic=lambda: now
     )
 
     first = await service.report()

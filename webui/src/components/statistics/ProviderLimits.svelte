@@ -8,11 +8,12 @@
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import { formatMoment } from '$lib/timeText.js';
-  import { formatInteger } from '$lib/statisticsView.js';
   import {
     clampUsagePercent,
     formatResetAt,
+    usageCreditsText,
     usageSeverity,
+    usageWindowUnitsText,
   } from '$lib/statisticsLimits.js';
 
   let { active = false } = $props();
@@ -108,6 +109,7 @@
   {@const percent = clampUsagePercent(window.used_percent)}
   {@const severity = usageSeverity(window.used_percent)}
   {@const reset = formatResetAt(window.reset_at, locale)}
+  {@const units = usageWindowUnitsText(window, locale)}
   <li class="stats-limit-window">
     <div class="stats-limit-window__head">
       <span class="stats-limit-window__label">{window.label}</span>
@@ -138,30 +140,14 @@
           : reset.absolute}
       </span>
     {/if}
-    {#if window.unlimited}
-      <span class="stats-limit-window__units">
-        {t('statistics.limits.unlimited')}
-      </span>
-    {:else if window.remaining_units != null && window.total_units != null}
-      <span class="stats-limit-window__units">
-        {t('statistics.limits.remainingUnits', {
-          remaining: formatInteger(window.remaining_units, locale),
-          total: formatInteger(window.total_units, locale),
-          unit: window.unit ?? t('statistics.limits.units'),
-        })}
-      </span>
-    {:else if window.used_units != null}
-      <span class="stats-limit-window__units">
-        {t('statistics.limits.observedUnits', {
-          used: formatInteger(window.used_units, locale),
-          unit: window.unit ?? t('statistics.limits.units'),
-        })}
-      </span>
+    {#if units}
+      <span class="stats-limit-window__units">{units}</span>
     {/if}
   </li>
 {/snippet}
 
 {#snippet limitCard(snapshot)}
+  {@const credits = usageCreditsText(snapshot.credits, locale)}
   <div class="stats-limit-card">
     <div class="stats-limit-card__head">
       <div>
@@ -172,16 +158,8 @@
         {#if snapshot.plan}
           <span class="stats-limit-card__plan">{snapshot.plan}</span>
         {/if}
-        {#if snapshot.credits?.enabled && snapshot.credits.balance != null}
-          <span class="stats-limit-card__credits">
-            {t('statistics.limits.credits', {
-              balance: formatInteger(snapshot.credits.balance, locale),
-            })}
-          </span>
-        {:else if snapshot.credits?.enabled}
-          <span class="stats-limit-card__credits">
-            {t('statistics.limits.creditsAvailable')}
-          </span>
+        {#if credits}
+          <span class="stats-limit-card__credits">{credits}</span>
         {/if}
       </div>
     </div>
