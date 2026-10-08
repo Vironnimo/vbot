@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import cast
 from zoneinfo import ZoneInfo
 
-from croniter import croniter  # type: ignore[import-untyped]
+from croniter import CroniterBadDateError, croniter  # type: ignore[import-untyped]
 
 from core.automation._cron_jobs import (
     CRON_EXPRESSION_FIELD_COUNT,
@@ -81,6 +82,119 @@ def parse_schedule(
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone)
     return ParsedSchedule(schedule_type="once", run_at=parsed.astimezone(UTC).isoformat())
+
+
+# Earlier missed fires are counted up to this many; a count at the cap means "at least".
+MAX_COUNTED_MISSED_FIRES = 100
+
+
+@dataclass(frozen=True, slots=True)
+class OwedFire:
+    """The most recent fire of a job that came due without starting a Run."""
+
+    due_at: datetime
+    """The UTC instant the fire was due."""
+    earlier_missed: int = 0
+    """Earlier owed fires it replaces, counted up to ``MAX_COUNTED_MISSED_FIRES``."""
+    first_due_at: datetime | None = None
+    """The UTC instant the first of those earlier fires was due."""
+
+
+def owed_fire(timezone: ZoneInfo, now: datetime, job: CronJob) -> OwedFire | None:
+    """Return the most recent fire due at or before ``now`` that no Run covers yet.
+
+    Fires due at or before :func:`covered_until` are not owed: the job was
+    created, activated, rescheduled, attempted or completed after them, or they
+    were skipped. Several owed fires collapse into the most recent one.
+    """
+    if job.status != "active" or job.remaining_runs == 0:
+        return None
+    now_utc = _as_utc(now)
+    if job.schedule_type == "once":
+        run_at = _parse_run_at_utc(timezone, job)
+        return OwedFire(due_at=run_at) if run_at <= now_utc else None
+    after = covered_until(job)
+    if job.schedule_type == "interval":
+        return _owed_interval_fire(job, after, now_utc)
+    if job.cron_expression is None:
+        return None
+    return _owed_cron_fire(timezone, job.cron_expression, after, now_utc)
+
+
+def covered_until(job: CronJob) -> datetime:
+    """The latest instant through which a recurring job owes no fire."""
+    instants = [
+        _parse_utc_timestamp(value, field_name=field_name)
+        for field_name, value in (
+            ("created_at", job.created_at),
+            ("covered_until", job.covered_until),
+            ("last_attempt_at", job.last_attempt_at),
+            ("last_completed_at", job.last_completed_at),
+        )
+        if value is not None
+    ]
+    return max(instants)
+
+
+def _owed_interval_fire(job: CronJob, after: datetime, now_utc: datetime) -> OwedFire | None:
+    if job.interval_seconds is None or job.interval_anchor_at is None:
+        return None
+    anchor = _parse_utc_timestamp(job.interval_anchor_at, field_name="interval_anchor_at")
+    period = job.interval_seconds
+    if now_utc < anchor:
+        return None
+    latest = int((now_utc - anchor).total_seconds() // period)
+    due_at = anchor + timedelta(seconds=latest * period)
+    if due_at <= after:
+        return None
+    # Ticks are anchor + k * period; the first owed one follows ``after``.
+    first = 0 if after < anchor else int((after - anchor).total_seconds() // period) + 1
+    if first == latest:
+        return OwedFire(due_at=due_at)
+    return OwedFire(
+        due_at=due_at,
+        earlier_missed=min(latest - first, MAX_COUNTED_MISSED_FIRES),
+        first_due_at=anchor + timedelta(seconds=first * period),
+    )
+
+
+def _owed_cron_fire(
+    timezone: ZoneInfo, expression: str, after: datetime, now_utc: datetime
+) -> OwedFire | None:
+    due_at = _previous_cron_fire_utc(timezone, expression, now_utc)
+    if due_at is None or due_at <= after:
+        return None
+    first = _next_cron_fire_local(timezone, expression, after.astimezone(timezone))
+    if first.astimezone(UTC) >= due_at:
+        return OwedFire(due_at=due_at)
+    earlier = 1
+    cursor = _next_cron_fire_local(timezone, expression, first)
+    while cursor.astimezone(UTC) < due_at and earlier < MAX_COUNTED_MISSED_FIRES:
+        earlier += 1
+        cursor = _next_cron_fire_local(timezone, expression, cursor)
+    return OwedFire(due_at=due_at, earlier_missed=earlier, first_due_at=first.astimezone(UTC))
+
+
+def _previous_cron_fire_utc(
+    timezone: ZoneInfo, expression: str, reference_utc: datetime
+) -> datetime | None:
+    """Return the latest cron fire at or before ``reference_utc``, stepping wall-clock time.
+
+    The mirror of :func:`_next_cron_fire_local`: a fire inside a spring-forward
+    gap resolves to the shifted instant the live scheduler fires at. ``None``
+    when croniter finds no earlier fire within its search horizon.
+    """
+    # get_prev excludes its start; one microsecond later includes an exact tick.
+    wall_clock = reference_utc.astimezone(timezone).replace(tzinfo=None) + timedelta(microseconds=1)
+    schedule = croniter(expression, wall_clock)
+    try:
+        while True:
+            previous_local = cast(datetime, schedule.get_prev(datetime)).replace(tzinfo=timezone)
+            previous_utc = previous_local.astimezone(UTC)
+            if previous_utc <= reference_utc:
+                return previous_utc
+    except CroniterBadDateError:
+        return None
 
 
 def format_schedule(job: CronJob) -> str:

@@ -10,6 +10,7 @@
     sessionSummary,
     lastResultSupport,
     remainingRunsLabel,
+    maxDelayLabel,
     scheduleRowDetails,
     statusLabel,
     statusChipVariant,
@@ -691,6 +692,10 @@
                       <dd>{remainingRunsLabel(editor.selectedJob)}</dd>
                     </div>
                     <div>
+                      <dt>{t('cron.detail.maxDelay')}</dt>
+                      <dd>{maxDelayLabel(editor.selectedJob)}</dd>
+                    </div>
+                    <div>
                       <dt>{t('cron.detail.scheduleId')}</dt>
                       <dd class="cron-execution-grid__id">
                         {editor.selectedJob.id}
@@ -701,7 +706,13 @@
               </div>
 
               {#if editor.selectedJob.last_error}
-                <Banner variant="error" role="status">
+                <!-- A skipped missed fire is reported, not failed. -->
+                <Banner
+                  variant={editor.selectedJob.last_outcome === 'missed'
+                    ? 'warn'
+                    : 'error'}
+                  role="status"
+                >
                   {editor.selectedJob.last_error}
                 </Banner>
               {/if}
@@ -1056,6 +1067,30 @@
                       </div>
                     </div>
                   {/if}
+
+                  <div class="s-row s-row--compact">
+                    <div class="s-row-info">
+                      <label class="s-row-label" for="cron-job-max-delay">
+                        {t('cron.form.maxDelay')}
+                      </label>
+                      <div class="s-row-desc">
+                        {t('cron.form.maxDelayHelp')}
+                      </div>
+                    </div>
+                    <div class="s-row-control s-row-control--number">
+                      <TextField
+                        id="cron-job-max-delay"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={editor.formValues.max_delay}
+                        placeholder={t('cron.form.maxDelayPlaceholder')}
+                        disabled={editor.isCreating && editor.submittingForm}
+                        onInput={(next) =>
+                          editor.updateFormField('max_delay', next)}
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
             </section>

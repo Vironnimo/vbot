@@ -65,6 +65,7 @@ from core.automation._cron_jobs import (
     ScheduleType,
     _as_utc,
     _derive_cron_job_name,
+    _format_duration,
     _load_cron_jobs_payload,
     _parse_iso_datetime,
     _resolve_timezone,
@@ -105,6 +106,7 @@ __all__ = [
     "validate_cron_jobs_data",
     "validate_cron_jobs_file",
     "CronService",
+    "format_max_delay",
 ]
 
 
@@ -115,6 +117,18 @@ _POST_FIRE_SAVE_MAX_ATTEMPTS = 3
 _POST_FIRE_SAVE_RETRY_SECONDS = 5.0
 
 _ONCE_FIRE_CLAIMS_DIR_NAME = "once-fire-claims"
+
+# A fire that starts at most this late counts as on time: no late notice, and
+# ``max_delay_seconds`` does not apply. Wall-clock waits recheck every minute.
+_ON_TIME_SECONDS = 60
+
+_SCHEDULE_FIELDS = (
+    "schedule_type",
+    "cron_expression",
+    "interval_seconds",
+    "interval_anchor_at",
+    "run_at",
+)
 
 
 _LOGGER = get_logger("automation.cron")
@@ -192,6 +206,7 @@ class CronService:
         session_id: str | None = None,
         status: CronJobStatus = "active",
         project_id: str | None = None,
+        max_delay_seconds: int | None = None,
         actor: str = _DEFAULT_ACTOR,
     ) -> CronJob:
         """Create and persist a new cron job.
@@ -223,6 +238,7 @@ class CronService:
                 last_fired_at=None,
                 created_at=_timing._utc_now_iso(),
                 project_id=project_id,
+                max_delay_seconds=max_delay_seconds,
             )
             self._validate_job(job, validate_references=False)
             await self._validate_references_async(job)
@@ -469,6 +485,12 @@ class CronService:
             candidate.consecutive_failures = 0
             if candidate.remaining_runs == 0:
                 candidate.remaining_runs = 1
+        if candidate.status == "active" and (
+            job.status != "active"
+            or any(getattr(job, name) != getattr(candidate, name) for name in _SCHEDULE_FIELDS)
+        ):
+            # Fires due while the job was inactive or on its earlier schedule are not owed.
+            candidate.covered_until = _timing._utc_now_iso()
 
         changed_fields = sorted(
             field_name
@@ -546,7 +568,6 @@ class CronService:
             return
         self._jobs_loaded = True
         self._started = True
-        reference_time = _timing._utc_now()
         needs_save = False
         once_claims_to_remove: list[str] = []
         held_job_ids: set[str] = set()
@@ -585,17 +606,6 @@ class CronService:
                 if job.last_outcome is None:
                     job.last_outcome = "unknown"
                     job.last_error = "vBot restarted after the final Run was admitted"
-                needs_save = True
-                continue
-            if job.schedule_type == "once" and self._is_missed_once_job(job, reference_time):
-                _LOGGER.warning(
-                    "Marking missed once job as missed (id=%s run_at=%s)",
-                    job.id,
-                    job.run_at,
-                )
-                job.status = "missed"
-                job.last_outcome = "missed"
-                job.last_error = "Scheduled time passed while vBot was offline"
                 needs_save = True
                 continue
 
@@ -727,15 +737,13 @@ class CronService:
         self._cancel_job_task(job.id)
 
         task: asyncio.Task[None]
-        if job.schedule_type == "cron":
-            task = asyncio.create_task(self._run_cron_job(job), name=f"cron-job:{job.id}:cron")
-        elif job.schedule_type == "interval":
-            task = asyncio.create_task(
-                self._run_interval_job(job),
-                name=f"cron-job:{job.id}:interval",
-            )
-        else:
+        if job.schedule_type == "once":
             task = asyncio.create_task(self._run_once_job(job), name=f"cron-job:{job.id}:once")
+        else:
+            task = asyncio.create_task(
+                self._run_recurring_job(job, job.schedule_type),
+                name=f"cron-job:{job.id}:{job.schedule_type}",
+            )
 
         self._job_tasks[job.id] = task
 
@@ -753,55 +761,59 @@ class CronService:
         if task is not None and not task.done():
             task.cancel()
 
-    async def _run_cron_job(self, job: CronJob) -> None:
-        """Schedule repeated fires from croniter and call TriggerService."""
+    async def _run_recurring_job(self, job: CronJob, schedule_type: ScheduleType) -> None:
+        """Fire a cron or interval job at each due instant, catching up missed fires.
+
+        A fire that came due while vBot did not run the job (offline, asleep)
+        starts once, late, for the most recent due instant, unless the job's
+        ``max_delay_seconds`` forbids it. Due instants that pass while the
+        job's own Run is still running are skipped.
+        """
         while True:
             current = self._jobs.get(job.id)
-            if current is None or current.status != "active" or current.schedule_type != "cron":
+            if (
+                current is None
+                or current.status != "active"
+                or current.schedule_type != schedule_type
+            ):
                 return
-
-            if current.cron_expression is None:
+            if schedule_type == "cron" and current.cron_expression is None:
                 raise CronJobValidationError(
                     f"Cron job {current.id} is missing cron_expression while active"
                 )
 
-            next_fire_at = self.next_fire_at(current)
-            if next_fire_at is None:
-                return
-            reached_fire_time = await _timing._sleep_until_utc(
-                _parse_iso_datetime(next_fire_at, field_name="next_fire_at", allow_naive=False),
-                wake_event=self._timezone_changed,
-            )
-            if not reached_fire_time:
+            owed = _schedule.owed_fire(self._timezone, _timing._utc_now(), current)
+            if owed is None:
+                next_fire_at = self.next_fire_at(current)
+                if next_fire_at is None:
+                    return
+                due_at = _parse_iso_datetime(
+                    next_fire_at, field_name="next_fire_at", allow_naive=False
+                )
+                # Only wall-clock cron schedules move when the timezone changes.
+                reached = await _timing._sleep_until_utc(
+                    due_at,
+                    wake_event=self._timezone_changed if schedule_type == "cron" else None,
+                )
+                if not reached:
+                    continue
+                current = self._jobs.get(job.id)
+                if (
+                    current is None
+                    or current.status != "active"
+                    or current.schedule_type != schedule_type
+                ):
+                    return
+                # After a long sleep of the computer, later due instants may have passed too.
+                owed = _schedule.owed_fire(
+                    self._timezone, _timing._utc_now(), current
+                ) or _schedule.OwedFire(due_at=due_at)
+
+            late = self._late_fire(owed)
+            if late is not None and _exceeds_max_delay(current, late):
+                await self._skip_missed_fire(current.id, late)
                 continue
-
-            latest = self._jobs.get(job.id)
-            if latest is None or latest.status != "active" or latest.schedule_type != "cron":
-                return
-
-            await self._trigger_job_run(latest)
-            if job.id in self._pending_restarts:
-                return
-
-    async def _run_interval_job(self, job: CronJob) -> None:
-        """Schedule native fixed intervals from their persisted cadence anchor."""
-        while True:
-            current = self._jobs.get(job.id)
-            if current is None or current.status != "active" or current.schedule_type != "interval":
-                return
-
-            next_fire_at = self.next_fire_at(current)
-            if next_fire_at is None:
-                return
-            await _timing._sleep_until_utc(
-                _parse_iso_datetime(next_fire_at, field_name="next_fire_at", allow_naive=False)
-            )
-
-            latest = self._jobs.get(job.id)
-            if latest is None or latest.status != "active" or latest.schedule_type != "interval":
-                return
-
-            await self._trigger_job_run(latest)
+            await self._trigger_job_run(current, late=late)
             if job.id in self._pending_restarts:
                 return
 
@@ -815,6 +827,7 @@ class CronService:
         deleted, leaving every trigger attempt to fail).
         """
         failed_fire_attempts = 0
+        late: _LateFire | None = None
         while True:
             current = self._jobs.get(job.id)
             if current is None or current.status != "active" or current.schedule_type != "once":
@@ -826,6 +839,12 @@ class CronService:
             latest = self._jobs.get(job.id)
             if latest is None or latest.status != "active" or latest.schedule_type != "once":
                 return
+            if failed_fire_attempts == 0:
+                # Retries of a failed fire keep the first attempt's decision.
+                late = self._late_fire(_schedule.OwedFire(due_at=run_at_utc))
+                if late is not None and _exceeds_max_delay(latest, late):
+                    await self._skip_missed_fire(latest.id, late)
+                    return
 
             claimed_at = _timing._utc_now_iso()
             try:
@@ -847,7 +866,7 @@ class CronService:
             if job.id in self._pending_restarts:
                 await self._remove_claim(job.id)
                 return
-            succeeded = await self._trigger_job_run(latest)
+            succeeded = await self._trigger_job_run(latest, late=late)
             if job.id in self._pending_restarts:
                 await self._remove_claim(job.id)
                 return
@@ -929,7 +948,37 @@ class CronService:
         await self._save_jobs_after_fire(job_id)
         await self._remove_claim(job_id)
 
-    async def _trigger_job_run(self, job: CronJob) -> bool:
+    def _late_fire(self, owed: _schedule.OwedFire) -> _LateFire | None:
+        """Describe a fire that starts after it was due; ``None`` when it is on time."""
+        now = _timing._utc_now()
+        if (now - owed.due_at).total_seconds() <= _ON_TIME_SECONDS and not owed.earlier_missed:
+            return None
+        return _LateFire(owed=owed, noticed_at=now, timezone=self._timezone)
+
+    async def _skip_missed_fire(self, job_id: str, late: _LateFire) -> None:
+        """Record missed fires that the job's ``max_delay_seconds`` does not let start."""
+        job = self._jobs.get(job_id)
+        if job is None:
+            return
+        max_delay_seconds = job.max_delay_seconds or 0
+        job.covered_until = late.noticed_at.isoformat()
+        job.last_outcome = "missed"
+        job.last_error = _truncate_error(late.skip_reason(max_delay_seconds))
+        if job.schedule_type == "once":
+            job.status = "missed"
+        self._jobs[job_id] = job
+        _LOGGER.info(
+            "Cron job skipped a missed fire (job=%s due_at=%s late_by=%ds earlier_missed=%d "
+            "max_delay=%ds)",
+            job_id,
+            late.owed.due_at.isoformat(),
+            late.late_by_seconds,
+            late.owed.earlier_missed,
+            max_delay_seconds,
+        )
+        await self._persist_after_fire(job_id)
+
+    async def _trigger_job_run(self, job: CronJob, *, late: _LateFire | None = None) -> bool:
         self._executing_jobs.add(job.id)
         try:
             async with self._run_slots:
@@ -947,11 +996,23 @@ class CronService:
                 if latest is None or latest.status != "active" or job.id in self._pending_restarts:
                     return False
                 _LOGGER.info(
-                    "Cron job fired (job=%s agent=%s session=%s%s)",
+                    "Cron job fired (job=%s agent=%s session=%s%s%s)",
                     latest.id,
                     latest.agent_id,
                     latest.session_id,
                     f" project={latest.project_id}" if latest.project_id else "",
+                    (
+                        f" late_by={late.late_by_seconds}s"
+                        f" earlier_missed={late.owed.earlier_missed}"
+                        if late is not None
+                        else ""
+                    ),
+                )
+                # Omitted for an on-time fire, so its call shape stays unchanged.
+                note: dict[str, Any] = (
+                    {"context_note": late.notice(latest.id, _timing._utc_now())}
+                    if late is not None
+                    else {}
                 )
                 run: Any | None = None
                 try:
@@ -962,6 +1023,7 @@ class CronService:
                         project_id=latest.project_id,
                         run_kind=RunKind.CRON,
                         contributes_to_agent_activity=False,
+                        **note,
                     )
                     latest = self._jobs.get(job.id)
                     if latest is None:
@@ -1308,11 +1370,6 @@ class CronService:
             f"in the configured timezone {self._timezone}. Choose a future time"
         )
 
-    def _is_missed_once_job(self, job: CronJob, reference_time_utc: datetime) -> bool:
-        if job.schedule_type != "once":
-            return False
-        return _schedule._parse_run_at_utc(self._timezone, job) < reference_time_utc
-
     @staticmethod
     def _clone_job(job: CronJob) -> CronJob:
         return CronJob.from_dict(job.to_dict())
@@ -1371,3 +1428,83 @@ def _log_fire_save_failure(job_id: str, error: CronStorageError) -> None:
         error,
         exc_info=(type(error), error, error.__traceback__),
     )
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _LateFire:
+    """A fire that starts after its due instant, or after earlier fires were missed."""
+
+    owed: _schedule.OwedFire
+    noticed_at: datetime
+    timezone: ZoneInfo
+
+    @property
+    def late_by_seconds(self) -> int:
+        return max(int((self.noticed_at - self.owed.due_at).total_seconds()), 0)
+
+    def notice(self, job_id: str, starting_at: datetime) -> str:
+        """The note before the Run's input that tells the Agent which fires it replaces."""
+        due = self._local(self.owed.due_at)
+        if self.late_by_seconds > _ON_TIME_SECONDS:
+            sentences = [
+                f"Cron job {job_id} was due at {due} and is starting late, at "
+                f"{self._local(starting_at)}."
+            ]
+        else:
+            sentences = [f"Cron job {job_id} is starting at its due time, {due}."]
+        earlier = self.owed.earlier_missed
+        first = self.owed.first_due_at
+        if earlier == 1 and first is not None:
+            sentences.append(
+                f"The earlier due time {self._local(first)} was missed and will not run separately."
+            )
+        elif earlier and first is not None:
+            count = (
+                f"At least {earlier}" if earlier >= _schedule.MAX_COUNTED_MISSED_FIRES else earlier
+            )
+            sentences.append(
+                f"{count} earlier due times, the first at {self._local(first)}, were missed and "
+                "will not run separately."
+            )
+        sentences.append(
+            f"vBot did not run the job at {'those times' if earlier else 'the due time'}, for "
+            "example because the server was off or the computer was asleep."
+        )
+        sentences.append(
+            "Carry out the instruction that follows now, and adapt any part of it that depends "
+            "on when it runs, such as a greeting, a deadline that has passed, or the period it "
+            "covers."
+        )
+        return " ".join(sentences)
+
+    def skip_reason(self, max_delay_seconds: int) -> str:
+        """Why the missed fire did not start, for the job's ``last_error``."""
+        due = f"the fire due at {self._local(self.owed.due_at)}"
+        earlier = self.owed.earlier_missed
+        if earlier:
+            count = (
+                f"at least {earlier}"
+                if earlier >= _schedule.MAX_COUNTED_MISSED_FIRES
+                else str(earlier)
+            )
+            due += f" and {count} earlier {'one' if earlier == 1 else 'ones'}"
+        if max_delay_seconds == 0:
+            return f"vBot missed {due} and skipped it: the job's max_delay is 0m."
+        return (
+            f"vBot missed {due} and skipped it: at {self._local(self.noticed_at)} it was more "
+            f"than the job's max_delay of {format_max_delay(max_delay_seconds)} late."
+        )
+
+    def _local(self, instant: datetime) -> str:
+        return instant.astimezone(self.timezone).replace(microsecond=0).isoformat()
+
+
+def _exceeds_max_delay(job: CronJob, late: _LateFire) -> bool:
+    return job.max_delay_seconds is not None and late.late_by_seconds > max(
+        job.max_delay_seconds, _ON_TIME_SECONDS
+    )
+
+
+def format_max_delay(seconds: int) -> str:
+    """Spell a maximum delay as the duration the cron Tool accepts, such as ``2h`` or ``0m``."""
+    return "0m" if seconds == 0 else _format_duration(seconds)

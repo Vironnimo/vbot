@@ -33,6 +33,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
         "interval_seconds",
         "run_at",
         "repeat",
+        "max_delay_seconds",
         "session_id",
     }
     _reject_unsupported(params, supported_fields, "cron.create")
@@ -55,6 +56,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
     interval_seconds = _optional_positive_integer(params, "interval_seconds")
     run_at = _optional_string(params, "run_at")
     repeat = _optional_positive_integer(params, "repeat")
+    max_delay_seconds = _optional_max_delay_seconds(params)
     session_id = _optional_string(params, "session_id")
 
     if schedule_type == "cron":
@@ -100,6 +102,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
                 remaining_runs=repeat,
                 session_id=session_id,
                 project_id=project_id,
+                max_delay_seconds=max_delay_seconds,
                 actor="rpc",
             )
     except Exception as exc:
@@ -133,6 +136,7 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
         "interval_seconds",
         "run_at",
         "repeat",
+        "max_delay_seconds",
         "session_id",
         "status",
     }
@@ -180,6 +184,8 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
                 "params.repeat cannot be null when params.schedule_type is 'once'",
             )
         updates["remaining_runs"] = repeat
+    if "max_delay_seconds" in params:
+        updates["max_delay_seconds"] = _optional_max_delay_seconds(params)
     if "session_id" in params:
         updates["session_id"] = _optional_string(params, "session_id")
     if "status" in params:
@@ -233,6 +239,19 @@ async def _cron_disable(state: Any, params: JsonObject) -> JsonObject:
     return _cron_job_response(state.runtime.cron_service, job)
 
 
+def _optional_max_delay_seconds(params: JsonObject) -> int | None:
+    """How late a missed fire may start, in whole minutes as seconds; ``None`` is no limit."""
+    value = params.get("max_delay_seconds")
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0 or value % 60:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.max_delay_seconds must be a non-negative multiple of 60, or null",
+        )
+    return value
+
+
 def _cron_job_response(cron_service: Any, job: Any) -> JsonObject:
     return {
         "id": job.id,
@@ -250,6 +269,7 @@ def _cron_job_response(cron_service: Any, job: Any) -> JsonObject:
         "interval_anchor_at": job.interval_anchor_at,
         "run_at": job.run_at,
         "remaining_runs": job.remaining_runs,
+        "max_delay_seconds": job.max_delay_seconds,
         "session_id": job.session_id,
         "status": job.status,
         "last_fired_at": job.last_fired_at,

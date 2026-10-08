@@ -36,21 +36,19 @@ _ASYNC_COORDINATION_TIMEOUT_SECONDS = 10.0
 
 
 @pytest.mark.asyncio
-async def test_start_creates_active_tasks_and_records_missed_once_jobs(
+async def test_start_creates_tasks_for_active_jobs_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Arrange
     service, trigger_service = make_service(tmp_path)
-    with monkeypatch.context() as earlier:
-        # Created while its time was still ahead; it passed while vBot was offline.
-        earlier.setattr(cron_timing, "_utc_now", lambda: datetime.now(UTC) - timedelta(hours=1))
-        missed = await service.create_job(
-            agent_id="agent-one",
-            prompt="Missed once",
-            schedule_type="once",
-            run_at=(datetime.now(UTC) - timedelta(minutes=1)).isoformat(),
-        )
+    paused = await service.create_job(
+        agent_id="agent-one",
+        prompt="Paused cron",
+        schedule_type="cron",
+        cron_expression="* * * * *",
+        status="paused",
+    )
     active_cron = await service.create_job(
         agent_id="agent-two",
         prompt="Cron active",
@@ -58,13 +56,13 @@ async def test_start_creates_active_tasks_and_records_missed_once_jobs(
         cron_expression="* * * * *",
     )
 
-    async def hold_cron_task(_job: cron_module.CronJob) -> None:
+    async def hold_cron_task(_job: cron_module.CronJob, _schedule_type: str) -> None:
         try:
             await asyncio.Future()
         except asyncio.CancelledError:
             raise
 
-    monkeypatch.setattr(service, "_run_cron_job", hold_cron_task)
+    monkeypatch.setattr(service, "_run_recurring_job", hold_cron_task)
 
     # Act
     service.start()
@@ -72,9 +70,7 @@ async def test_start_creates_active_tasks_and_records_missed_once_jobs(
 
     # Assert
     assert active_cron.id in service._job_tasks
-    assert missed.id not in service._job_tasks
-    assert service.get_job(missed.id).status == "missed"
-    assert service.get_job(missed.id).last_outcome == "missed"
+    assert paused.id not in service._job_tasks
     trigger_service.trigger_run.assert_not_called()
 
     service.stop()
@@ -96,7 +92,7 @@ async def test_cron_service_aclose_awaits_cancelled_job_tasks(
     started = asyncio.Event()
     cancelled = asyncio.Event()
 
-    async def hold_cron_task(_job: cron_module.CronJob) -> None:
+    async def hold_cron_task(_job: cron_module.CronJob, _schedule_type: str) -> None:
         started.set()
         try:
             await asyncio.Future()
@@ -104,7 +100,7 @@ async def test_cron_service_aclose_awaits_cancelled_job_tasks(
             cancelled.set()
             raise
 
-    monkeypatch.setattr(service, "_run_cron_job", hold_cron_task)
+    monkeypatch.setattr(service, "_run_recurring_job", hold_cron_task)
 
     service.start()
     await asyncio.wait_for(started.wait(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
@@ -134,7 +130,7 @@ async def test_unexpected_scheduler_task_failure_restarts_active_recurring_job(
     attempts = 0
     restarted = asyncio.Event()
 
-    async def fail_scheduler_task(_job: object) -> None:
+    async def fail_scheduler_task(_job: object, _schedule_type: str) -> None:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -142,7 +138,7 @@ async def test_unexpected_scheduler_task_failure_restarts_active_recurring_job(
         restarted.set()
         await asyncio.Future()
 
-    monkeypatch.setattr(service, "_run_cron_job", fail_scheduler_task)
+    monkeypatch.setattr(service, "_run_recurring_job", fail_scheduler_task)
 
     with caplog.at_level(logging.ERROR, logger="vbot.automation.cron"):
         service.start()

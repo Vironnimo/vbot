@@ -501,6 +501,9 @@ export default Object.freeze({
   'cron.detail.lastRun': 'Last Run',
   'cron.detail.remainingRuns': 'Remaining Runs',
   'cron.detail.unlimited': 'Unlimited',
+  'cron.detail.maxDelay': 'Late start limit',
+  'cron.detail.noMaxDelay': 'None, missed fires start late',
+  'cron.detail.maxDelayMinutes': '{minutes} min',
   'cron.sections.task': 'Task',
   'cron.sections.taskSubtitle':
     'What the Agent should do when this schedule fires.',
@@ -555,6 +558,10 @@ export default Object.freeze({
     'Exactly five space-separated fields: minute, hour, day of month, month, weekday. The minimum cadence is one minute; seconds are not supported.\n\nExample: 0 9 * * 1-5 runs at 09:00 on weekdays. * matches any value; ranges (1-5) and lists (1,3,5) work in every field.',
   'cron.form.repeat': 'Repeat limit',
   'cron.form.repeatPlaceholder': 'Unlimited',
+  'cron.form.maxDelay': 'Late start limit (minutes)',
+  'cron.form.maxDelayPlaceholder': 'No limit',
+  'cron.form.maxDelayHelp':
+    'A fire missed while vBot was not running starts once, late, when vBot is back. Set a limit to skip it when it is more than this many minutes late; 0 skips every missed fire.',
   'cron.deleteConfirmTitle': 'Delete Scheduled Run',
   'cron.deleteConfirm': 'Delete {name} permanently? It will no longer run.',
   'cron.menu.label': 'Actions for {name}',
@@ -570,7 +577,7 @@ export default Object.freeze({
   'cron.errors.delete': 'Cron job could not be deleted.',
   'cron.errors.toggle': 'Cron job status could not be updated.',
   'cron.errors.missingRequired':
-    'Agent, prompt, and a complete schedule are required: a time, at least one day for weekly schedules, and a valid day, minute, or interval. The repeat limit must be a positive whole number.',
+    'Agent, prompt, and a complete schedule are required: a time, at least one day for weekly schedules, and a valid day, minute, or interval. The repeat limit must be a positive whole number, and the late start limit a whole number of minutes.',
   'cron.messages.created': 'Cron job created.',
   'cron.messages.deleted': 'Cron job deleted.',
   'cron.messages.enabled': 'Cron job enabled.',

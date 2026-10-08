@@ -31,7 +31,16 @@ def _error(envelope: dict[str, Any]) -> dict[str, Any]:
 def test_schema_advertises_only_the_canonical_fields() -> None:
     properties = cast(dict[str, Any], CRON_TOOL_PARAMETERS["properties"])
     # Accepted time zone and paused-state spellings are never advertised.
-    assert list(properties) == ["action", "id", "target", "name", "prompt", "schedule", "repeat"]
+    assert list(properties) == [
+        "action",
+        "id",
+        "target",
+        "name",
+        "prompt",
+        "schedule",
+        "repeat",
+        "max_delay",
+    ]
     assert properties["action"]["enum"] == [
         "create",
         "list",
@@ -250,6 +259,24 @@ def test_update_with_null_repeat_removes_the_limit(tmp_path: Path) -> None:
     tool.call({"action": "update", "id": created["data"]["id"], "repeat": None})
 
     assert tool.only_job().remaining_runs is None
+
+
+def test_max_delay_is_set_shown_and_removed(tmp_path: Path) -> None:
+    tool = cron_tool(tmp_path)
+    created, text = tool.call(
+        {"action": "create", "prompt": PROMPT, "schedule": "0 7 * * *", "max_delay": "2h"}
+    )
+    job_id = created["data"]["id"]
+    assert tool.only_job().max_delay_seconds == 7200
+    assert "max_delay: 2h" in text
+
+    _envelope, text = tool.call({"action": "update", "id": job_id, "max_delay": "0m"})
+    assert tool.only_job().max_delay_seconds == 0
+    assert "max_delay: 0m" in text
+
+    _envelope, text = tool.call({"action": "update", "id": job_id, "max_delay": "unlimited"})
+    assert tool.only_job().max_delay_seconds is None
+    assert "max_delay" not in text
 
 
 def test_update_to_a_one_time_schedule_fires_once(tmp_path: Path) -> None:

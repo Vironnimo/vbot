@@ -288,6 +288,7 @@ class ChatLoop:
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
+        context_note: str | None = None,
     ) -> Run:
         """Validate a target, create its Session, and start one Run.
 
@@ -305,7 +306,7 @@ class ChatLoop:
         Agent's Workspace, or by default the Agent's default Project; a Project
         Agent's Session works in its address Project and takes no other. The
         server-facing :meth:`start_run` contract still requires an explicitly
-        existing Session.
+        existing Session. ``context_note`` is as in :meth:`start_run`.
         """
         return await self._start_run(
             agent_id,
@@ -329,6 +330,7 @@ class ChatLoop:
             input_persisted_hook=input_persisted_hook,
             run_kind=run_kind,
             contributes_to_agent_activity=contributes_to_agent_activity,
+            context_note=context_note,
         )
 
     async def queue_run(
@@ -349,11 +351,13 @@ class ChatLoop:
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
+        context_note: str | None = None,
     ) -> QueuedRunItem:
         """Queue one chat run for a busy session or start it immediately when idle.
 
         ``project_id`` scopes the session/run to a project anchor; ``None`` keeps
-        today's identity behavior. ``max_tool_iterations`` is as in :meth:`start_run`.
+        today's identity behavior. ``max_tool_iterations`` and ``context_note``
+        are as in :meth:`start_run`.
         """
         _validate_run_tool_iteration_limit(max_tool_iterations)
         await self._reject_owner_managed_session(project_id, agent_id, session_id)
@@ -379,6 +383,7 @@ class ChatLoop:
             tool_denial_resolver=tool_denial_resolver,
             max_tool_iterations=max_tool_iterations,
             input_persisted_hook=input_persisted_hook,
+            context_note=context_note,
         )
         return await manager.enqueue(
             SessionAddress(project_id=project_id, agent_id=agent_id, session_id=session.id),

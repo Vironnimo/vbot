@@ -40,6 +40,7 @@ _CREATE_DEFAULTS: JsonObject = {
     "remaining_runs": None,
     "session_id": None,
     "project_id": None,
+    "max_delay_seconds": None,
     "actor": "rpc",
 }
 
@@ -76,6 +77,7 @@ def _cron_job(**changes: Any) -> SimpleNamespace:
         "interval_anchor_at": None,
         "run_at": None,
         "remaining_runs": None,
+        "max_delay_seconds": None,
         "session_id": "session-1",
         "status": "active",
         "last_fired_at": None,
@@ -218,6 +220,7 @@ async def test_bootstrap_list_projects_each_job() -> None:
                 "schedule_type": "interval",
                 "interval_seconds": 7200,
                 "repeat": 3,
+                "max_delay_seconds": 0,
             },
             _cron_job(
                 name="Check status",
@@ -226,14 +229,16 @@ async def test_bootstrap_list_projects_each_job() -> None:
                 interval_seconds=7200,
                 interval_anchor_at="2026-07-28T12:00:00+00:00",
                 remaining_runs=3,
+                max_delay_seconds=0,
             ),
             {
                 "agent_id": "main",
                 "schedule_type": "interval",
                 "interval_seconds": 7200,
                 "remaining_runs": 3,
+                "max_delay_seconds": 0,
             },
-            {"schedule": "every 2h", "remaining_runs": 3},
+            {"schedule": "every 2h", "remaining_runs": 3, "max_delay_seconds": 0},
             id="interval-repeat-unnamed",
         ),
         pytest.param(
@@ -285,6 +290,7 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
             last_completed_at="2026-05-14T09:56:00+00:00",
             last_run_id="run-1",
             last_outcome="success",
+            max_delay_seconds=7200,
         )
     ]
     cron_service.system_timezone_name.return_value = "Europe/Berlin"
@@ -309,6 +315,7 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
                 "interval_anchor_at": None,
                 "run_at": None,
                 "remaining_runs": None,
+                "max_delay_seconds": 7200,
                 "session_id": "session-1",
                 "status": "active",
                 "last_fired_at": "2026-05-14T09:55:00+00:00",
@@ -343,6 +350,7 @@ async def test_cron_list_projects_each_job_with_its_next_fire_time() -> None:
         ),
         # A recurring job may clear its repeat count.
         pytest.param({"repeat": None}, {"remaining_runs": None}, id="clear-repeat"),
+        pytest.param({"max_delay_seconds": None}, {"max_delay_seconds": None}, id="no-max-delay"),
         # Re-targeting re-parses the address, so a bare target clears the Project.
         pytest.param({"agent_id": "main"}, {"agent_id": "main", "project_id": None}, id="retarget"),
     ],
@@ -411,6 +419,9 @@ async def test_cron_job_actions_address_one_job(
                 "repeat": None,
             },
         ),
+        # A late-start limit is whole minutes, as seconds.
+        ("cron.update", {"id": "job-1", "max_delay_seconds": 90}),
+        ("cron.update", {"id": "job-1", "max_delay_seconds": -60}),
         ("cron.list", {"extra": True}),
         ("bootstrap.list", {"extra": True}),
         ("cron.update", {"prompt": "missing id"}),

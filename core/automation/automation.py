@@ -699,9 +699,12 @@ def _optional_run_kwargs(
     callback: Callable[[], None] | None,
     contributes_to_agent_activity: bool,
     run_kind: RunKind,
+    context_note: str | None = None,
 ) -> dict[str, Any]:
     """Project non-default Run options onto the ChatLoop call."""
     options: dict[str, Any] = {}
+    if context_note is not None:
+        options["context_note"] = context_note
     if callback is not None:
         options["input_persisted_hook"] = callback
     if not contributes_to_agent_activity:
@@ -846,6 +849,7 @@ class TriggerService:
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
+        context_note: str | None = None,
     ) -> Run:
         """Start a run immediately, or queue it until the target session is idle.
 
@@ -854,6 +858,8 @@ class TriggerService:
         scopes the Run to the project (cwd = repo, project files in the prompt).
         ``max_tool_iterations`` narrows the Run's dispatched Tool-iteration limit
         (``ChatLoop.start_run``); ``None`` keeps the loop's limit.
+        ``context_note`` is stored as a note right before the message, for
+        context the Model reads with it.
         """
         tool_kwargs = _optional_tool_kwargs(
             tool_restriction,
@@ -874,6 +880,7 @@ class TriggerService:
                             input_persisted_hook,
                             contributes_to_agent_activity,
                             run_kind,
+                            context_note,
                         ),
                     )
                 return await self._chat_loop.start_run_in_new_session(
@@ -887,6 +894,7 @@ class TriggerService:
                         input_persisted_hook,
                         contributes_to_agent_activity,
                         run_kind,
+                        context_note,
                     ),
                 )
             finally:
@@ -907,6 +915,7 @@ class TriggerService:
                         input_persisted_hook,
                         contributes_to_agent_activity,
                         run_kind,
+                        context_note,
                     ),
                 )
             else:
@@ -922,6 +931,7 @@ class TriggerService:
                         input_persisted_hook,
                         contributes_to_agent_activity,
                         run_kind,
+                        context_note,
                     ),
                 )
         except ActiveRunError:
@@ -940,6 +950,7 @@ class TriggerService:
                                 input_persisted_hook,
                                 contributes_to_agent_activity,
                                 run_kind,
+                                context_note,
                             ),
                         )
                     else:
@@ -956,6 +967,7 @@ class TriggerService:
                                 input_persisted_hook,
                                 contributes_to_agent_activity,
                                 run_kind,
+                                context_note,
                             ),
                         )
                 else:
@@ -972,6 +984,7 @@ class TriggerService:
                                 input_persisted_hook,
                                 contributes_to_agent_activity,
                                 run_kind,
+                                context_note,
                             ),
                         )
                     else:
@@ -988,6 +1001,7 @@ class TriggerService:
                                 input_persisted_hook,
                                 contributes_to_agent_activity,
                                 run_kind,
+                                context_note,
                             ),
                         )
                 try:
