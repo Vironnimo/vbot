@@ -55,7 +55,12 @@
 
   let policy = $derived(normalizeToolAccess(value));
   let loading = $derived(normalizeToolLoading(toolLoading));
-  let onDemand = $derived(toolLoadingEditable && loading?.on_demand === true);
+  // Without any Tool access the switch has no effect, so it is hidden; the
+  // stored `toolLoading` stays and applies again once Tools are allowed.
+  let showToolLoading = $derived(
+    toolLoadingEditable && policy.mode !== TOOL_ACCESS_MODE_NONE,
+  );
+  let onDemand = $derived(showToolLoading && loading?.on_demand === true);
   let loadingLocked = $derived(disabled || toolLoadingDisabled);
   let completeCatalog = $derived(catalogWithStoredTools());
   let catalogItems = $derived(
@@ -190,7 +195,7 @@
 </script>
 
 <div class="tool-access-editor" bind:this={editorRoot}>
-  {#if toolLoadingEditable}
+  {#if showToolLoading}
     <div class="s-group tool-loading-group">
       <div class="s-row s-row--compact">
         <div class="s-row-info">
