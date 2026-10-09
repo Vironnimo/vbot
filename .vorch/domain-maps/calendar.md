@@ -55,7 +55,7 @@ New event ids use `evt_` plus 12 lowercase base32 characters, with collision che
 - The application zone is injected at construction (`CalendarService(data_root, tz=...)`) from `server.timezone`, defaults to the host zone when the setting is absent, and changes live through `set_timezone`; tests pass `tz="Europe/Berlin"` explicitly for determinism. Never call `tzlocal` per operation. A time with an offset names its instant and is converted into the event's zone (the server zone for a new event).
 - Window bounds are inclusive days: a date bound selects its whole local day (`to` includes that day).
 - `when` range parsing preserves ISO timezone designators and checks bound order in UTC after local-time resolution; a spring-gap range cannot silently produce an inverted UTC window (`test_when.py`).
-- All-day overlap uses local-midnight UTC instants against the half-open query window, including windows wholly inside one day. Free-slot cursors round up again after each busy interval.
+- All-day overlap uses local-midnight UTC instants against the half-open query window, including windows wholly inside one day. Free-slot cursors round up again after each busy interval. Free-slot search checks every overlapping occurrence in its bounded window; the per-event list limit never truncates its busy intervals.
 
 ## External Dependencies
 

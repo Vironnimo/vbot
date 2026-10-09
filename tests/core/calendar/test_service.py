@@ -588,6 +588,19 @@ class TestFindFreeSlots:
             (datetime(2026, 9, 3, 11, 30, tzinfo=UTC), window_end)
         ]
 
+    def test_free_time_search_checks_occurrences_beyond_the_list_limit(
+        self, service: CalendarService
+    ) -> None:
+        service.create_event(
+            title="Occupied every hour",
+            start="2030-01-01T00:00",
+            rrule="FREQ=DAILY;BYHOUR=" + ",".join(str(hour) for hour in range(24)),
+        )
+        start, end = service.parse_window("2030-01-01", "2030-01-31")
+
+        assert len(service.occurrences_in_window(start, end)) == 500
+        assert service.find_free_slots(start, end, 60, now_utc=start) == []
+
     @pytest.mark.parametrize(
         ("reference_now", "first_start"),
         [

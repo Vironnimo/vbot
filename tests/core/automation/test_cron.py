@@ -312,8 +312,23 @@ async def test_invalid_job_is_skipped_and_preserved_when_valid_jobs_change(
     invalid_job = {"id": "broken", "schedule_type": "daily"}
     unnamed_job = {**valid_job, "id": "unnamed"}
     del unnamed_job["name"]
+    invalid_progress = [
+        {**valid_job, "id": f"progress-{index}", "event_progress": progress}
+        for index, progress in enumerate(
+            [
+                {"occurrence_ids": ["evt-occurrence"]},
+                {"due_at": "2030-01-10T08:00:00+00:00", "occurrence_ids": []},
+                {"due_at": "2030-01-10T08:00:00+00:00", "occurrence_ids": [3]},
+            ]
+        )
+    ]
     jobs_path.write_text(
-        json.dumps({"format_version": 1, "jobs": [valid_job, invalid_job, unnamed_job]}),
+        json.dumps(
+            {
+                "format_version": 1,
+                "jobs": [valid_job, invalid_job, unnamed_job, *invalid_progress],
+            }
+        ),
         encoding="utf-8",
     )
     service, _trigger_service = make_service(tmp_path)
@@ -334,7 +349,8 @@ async def test_invalid_job_is_skipped_and_preserved_when_valid_jobs_change(
     persisted = json.loads(jobs_path.read_text(encoding="utf-8"))["jobs"]
     assert invalid_job in persisted
     assert unnamed_job in persisted
-    assert len(persisted) == 4
+    assert all(job in persisted for job in invalid_progress)
+    assert len(persisted) == 4 + len(invalid_progress)
 
 
 @pytest.mark.asyncio
@@ -392,6 +408,11 @@ async def test_unreadable_jobs_file_disables_cron_without_overwriting_it(
 async def test_unknown_fields_are_kept_when_jobs_are_saved(tmp_path: Path) -> None:
     jobs_path = tmp_path / "cron" / "jobs.json"
     jobs_path.parent.mkdir(parents=True)
+    progress = {
+        "due_at": "2030-01-10T08:00:00+00:00",
+        "occurrence_ids": ["evt-occurrence"],
+        "future_progress": {"kept": True},
+    }
     jobs_path.write_text(
         json.dumps(
             {
@@ -406,6 +427,7 @@ async def test_unknown_fields_are_kept_when_jobs_are_saved(tmp_path: Path) -> No
                         "schedule_type": "cron",
                         "cron_expression": "0 9 * * *",
                         "timezone": "Europe/Paris",
+                        "event_progress": progress,
                     }
                 ],
             }
@@ -424,6 +446,7 @@ async def test_unknown_fields_are_kept_when_jobs_are_saved(tmp_path: Path) -> No
     assert persisted["future_setting"] == {"kept": True}
     assert persisted["jobs"][0]["prompt"] == "Changed schedule"
     assert persisted["jobs"][0]["timezone"] == "Europe/Paris"
+    assert persisted["jobs"][0]["event_progress"] == progress
 
 
 @pytest.mark.asyncio

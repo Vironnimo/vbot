@@ -612,6 +612,7 @@ class CronService:
         ):
             # Fires due while the job was inactive or on its earlier schedule are not owed.
             candidate.covered_until = _timing._utc_now_iso()
+            candidate.event_progress = None
 
         changed_fields = sorted(
             field_name
@@ -970,6 +971,9 @@ class CronService:
                     late=self._late_fire(_schedule.OwedFire(due_at=owed.due_at)),
                     event_due=owed,
                 )
+                # An event edit during admission may move an open occurrence
+                # before the last scan, including after a withdrawn claim.
+                settled = None
                 if job.id in self._pending_restarts:
                     return
                 continue
@@ -1131,6 +1135,75 @@ class CronService:
             return None
         return _LateFire(owed=owed, noticed_at=now, timezone=self._timezone)
 
+    def _owed_event_now(self, job: CronJob) -> _events.EventDue | None:
+        """Re-read an event job's next owed occurrence at the current wall clock."""
+        event = self._bound_event(job)
+        if event is None or self._calendar is None:
+            return None
+        return _events.owed_occurrence(self._calendar, event, job, _timing._utc_now())
+
+    async def _prepare_event_fire(self, job: CronJob) -> tuple[CronJob, _events.EventDue] | None:
+        """Claim a current occurrence, withdrawing it if it changes while the claim saves.
+
+        The caller already holds a Run slot. The selection made before waiting
+        for that slot may have moved, disappeared or expired. A persisted claim
+        still precedes admission, but a withdrawn claim restores the previous
+        cursor, including any other occurrences already consumed at that time.
+        """
+        due = self._owed_event_now(job)
+        if due is None:
+            return None
+        before = self._clone_job(job)
+        job.last_attempt_at = _timing._utc_now_iso()
+        job.last_error = None
+        _events.consume(job, due)
+        claimed = self._clone_job(job)
+        ready: tuple[CronJob, _events.EventDue] | None = None
+        saved = False
+        try:
+            saved = await settle_before_cancelling(self._save_jobs_after_fire(job.id))
+            latest = self._jobs.get(job.id)
+            if (
+                saved
+                and latest is not None
+                and latest.status == "active"
+                and job.id not in self._pending_restarts
+                and all(getattr(latest, name) == getattr(before, name) for name in _SCHEDULE_FIELDS)
+            ):
+                unclaimed = self._clone_job(latest)
+                unclaimed.covered_until = before.covered_until
+                unclaimed.event_progress = before.event_progress
+                current = self._owed_event_now(unclaimed)
+                if (
+                    current is not None
+                    and current.occurrence.id == due.occurrence.id
+                    and current.due_at == due.due_at
+                ):
+                    # Text or location edits keep the firing but refresh its context.
+                    ready = latest, current
+        finally:
+            if ready is None:
+                await settle_before_cancelling(self._withdraw_event_fire(before, claimed))
+        if not saved:
+            # A failed claim must neither start a Run nor spin on the same owed occurrence.
+            await _timing._sleep(_POST_FIRE_SAVE_RETRY_SECONDS)
+        return ready
+
+    async def _withdraw_event_fire(self, before: CronJob, claimed: CronJob) -> None:
+        """Take back only this unadmitted claim, preserving any newer scheduling edit."""
+        latest = self._jobs.get(before.id)
+        if latest is None or (latest.covered_until, latest.event_progress) != (
+            claimed.covered_until,
+            claimed.event_progress,
+        ):
+            return
+        latest.covered_until = before.covered_until
+        latest.event_progress = before.event_progress
+        if latest.last_attempt_at == claimed.last_attempt_at:
+            latest.last_attempt_at = before.last_attempt_at
+            latest.last_error = before.last_error
+        await self._persist_after_fire(latest.id)
+
     async def _trigger_job_run(
         self,
         job: CronJob,
@@ -1145,15 +1218,17 @@ class CronService:
                 if latest is None or latest.status != "active" or job.id in self._pending_restarts:
                     return False
 
-                latest.last_attempt_at = _timing._utc_now_iso()
-                latest.last_error = None
                 if event_due is not None:
-                    # The occurrence is used now, even when its Run cannot start.
-                    latest.covered_until = max(
-                        _events.coverage(latest), event_due.due_at
-                    ).isoformat()
-                self._jobs[latest.id] = latest
-                await self._save_jobs_after_fire(latest.id)
+                    prepared = await self._prepare_event_fire(latest)
+                    if prepared is None:
+                        return False
+                    latest, event_due = prepared
+                    late = self._late_fire(_schedule.OwedFire(due_at=event_due.due_at))
+                else:
+                    latest.last_attempt_at = _timing._utc_now_iso()
+                    latest.last_error = None
+                    self._jobs[latest.id] = latest
+                    await self._save_jobs_after_fire(latest.id)
                 # Before admission begins, a scheduling edit withdraws this fire;
                 # the replacement task must wait for the new schedule.
                 latest = self._jobs.get(job.id)
