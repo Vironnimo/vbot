@@ -54,6 +54,7 @@ def _agent(tool_loading: Any, **fields: Any) -> SimpleNamespace:
             ),
             set(),
         ),
+        (_agent({"on_demand": True}, tool_access=ToolAccess(mode="none")), set()),
         # A temporary Agent has no setting.
         (SimpleNamespace(tool_access=ToolAccess()), set()),
     ],
@@ -65,6 +66,7 @@ def _agent(tool_loading: Any, **fields: Any) -> SimpleNamespace:
         "no-setting",
         "built-in-agent",
         "fixed-tool-set",
+        "tool-access-none",
         "temporary-agent",
     ],
 )

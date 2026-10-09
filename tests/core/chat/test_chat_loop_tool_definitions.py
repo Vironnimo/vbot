@@ -809,7 +809,30 @@ async def test_on_demand_tools_are_listed_in_the_system_prompt_and_loaded_when_n
 
 
 @pytest.mark.asyncio
-async def test_a_tool_enabled_mid_session_is_announced_for_loading(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("allowed_tools", "pinned", "announced"),
+    [
+        (
+            ["read", "search", "fetch", "extra"],
+            ["read", "load_tools"],
+            [("on_demand", "extra"), ("loaded", "extra")],
+        ),
+        # Nothing was on demand when the epoch started: load_tools arrives with the first Tool
+        # to load.
+        (
+            ["read", "extra"],
+            ["read"],
+            [("added", "load_tools"), ("on_demand", "extra"), ("loaded", "extra")],
+        ),
+    ],
+    ids=["load-tools-listed", "first-on-demand-tool"],
+)
+async def test_a_tool_enabled_mid_session_is_announced_for_loading(
+    tmp_path: Path,
+    allowed_tools: list[str],
+    pinned: list[str],
+    announced: list[tuple[str, str]],
+) -> None:
     tools, dispatched = _on_demand_tools()
     runtime = tool_runtime(
         tmp_path,
@@ -820,7 +843,7 @@ async def test_a_tool_enabled_mid_session_is_announced_for_loading(tmp_path: Pat
             tool_turn(("use", "extra")),
             final("done"),
         ],
-        allowed_tools=["read", "search", "fetch", "extra"],
+        allowed_tools=allowed_tools,
         tool_loading=_ON_DEMAND,
     )
     loop = build_chat_loop(runtime)
@@ -830,8 +853,9 @@ async def test_a_tool_enabled_mid_session_is_announced_for_loading(tmp_path: Pat
     await loop.send("coder", "Use the new Tool", session_id="session-one")
 
     requests = runtime.adapter.requests
+    assert [tool["name"] for tool in _tools_sent(runtime)[0]] == pinned
     assert dispatched == ["extra"]
-    assert _announced(runtime) == [("on_demand", "extra"), ("loaded", "extra")]
+    assert _announced(runtime) == announced
     assert _reminders(requests[1]).count("Tool extra is now available") == 1
     assert (
         "Tool extra is now available: Extra Tool. Load its definition with `load_tools` "

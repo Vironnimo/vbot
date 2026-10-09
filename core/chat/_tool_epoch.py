@@ -291,11 +291,15 @@ class ToolEpochPin:
 
         The On-demand Tools stay out of the Tool list, except those in *keep*
         (the Tools the Agent called in the epoch a Compaction ended).
+        ``load_tools`` is listed only while at least one Tool stays out.
         """
 
         left_out = {name for name in catalog.on_demand if name not in keep}
         offered = [
-            definition for definition in catalog.offered if definition["name"] not in left_out
+            definition
+            for definition in catalog.offered
+            if definition["name"] not in left_out
+            and (left_out or definition["name"] != LOAD_TOOLS_TOOL_NAME)
         ]
         names = {str(definition["name"]) for definition in offered}
         return cls(
@@ -548,12 +552,17 @@ class ToolEpochView:
         it on demand: then it is added with its definition. A Tool that becomes
         usable as an On-demand Tool is announced by name and summary
         (``on_demand``), for the Model to load.
+
+        ``load_tools`` is added only to an epoch that lists or announces an
+        On-demand Tool, ahead of the first ``on_demand`` change that needs it;
+        once known it is removed only when no usable Tool is on demand.
         """
 
         known = self._known
         pinned = set(self.pin.names)
         names = list(dict.fromkeys([*known, *catalog.offered_by_name]))
         planned: list[ToolChange] = []
+        loader: list[ToolChange] = []
         for name in names:
             current = known.get(name)
             offered = catalog.offered_by_name.get(name)
@@ -573,9 +582,10 @@ class ToolEpochView:
                 continue
             if offered is None:
                 continue
+            additions = loader if name == LOAD_TOOLS_TOOL_NAME else planned
             if name in pinned:
                 assert current is not None
-                planned.append(
+                additions.append(
                     ToolChange(
                         change="added",
                         tool=name,
@@ -587,7 +597,7 @@ class ToolEpochView:
                     )
                 )
                 if changed := self._changed(name, current, offered, source, catalog, pinned=True):
-                    planned.append(changed)
+                    additions.append(changed)
                 continue
             if name in catalog.on_demand:
                 planned.append(
@@ -599,8 +609,20 @@ class ToolEpochView:
                     )
                 )
                 continue
-            planned.append(self._added(name, offered, source, unlisted_tool_calls))
+            additions.append(self._added(name, offered, source, unlisted_tool_calls))
+        announced = [index for index, change in enumerate(planned) if change.change == "on_demand"]
+        if loader and (announced or self._lists_on_demand_tools):
+            at = announced[0] if announced else len(planned)
+            planned[at:at] = loader
         return tuple(planned)
+
+    @cached_property
+    def _lists_on_demand_tools(self) -> bool:
+        """Whether this epoch's System Prompt or notes named an On-demand Tool."""
+
+        return bool(self.pin.on_demand) or any(
+            change.change == "on_demand" for change in self.changes
+        )
 
     def _added(
         self, name: str, offered: JsonObject, source: str | None, unlisted_tool_calls: bool

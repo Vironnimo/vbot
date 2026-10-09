@@ -91,7 +91,7 @@ from core.tools import (
     offer_edit_dialect,
     tool_is_ready,
 )
-from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME, on_demand_tool_entries
+from core.tools.on_demand import LOAD_TOOLS_TOOL_NAME, on_demand_tool_entries, on_demand_tools
 from core.tools.terminal import project_terminal_tool_definitions
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
@@ -872,6 +872,17 @@ class RequestBuilder:
                 session_tool_grants=session_tool_grants,
             )
         )
+        # load_tools is offered while a Tool is there to load, and usable while
+        # any usable Tool is on demand: readiness and route gates alone never
+        # remove it from a prompt epoch that knows it.
+        if not on_demand:
+            offered = [
+                definition
+                for definition in offered
+                if definition.get("name") != LOAD_TOOLS_TOOL_NAME
+            ]
+        if not on_demand_tools(agent, usable, session_tool_grants=session_tool_grants):
+            usable.discard(LOAD_TOOLS_TOOL_NAME)
         return LiveToolCatalog(
             usable=frozenset(usable),
             offered=tuple(offered),
