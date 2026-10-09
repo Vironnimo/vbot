@@ -44,9 +44,9 @@ export function createSessionSettings(context) {
   let rowRevision = $state(0);
   let lastInvalidationId = null;
   let requestedRowKey = '';
-  // Counts override writes as they start and end: a row read that overlaps
-  // one may predate it, so its answer is dropped.
-  let overrideWrites = 0;
+  // Count writes per addressed Session as they start and end. Only a read
+  // of that same Session can predate the write; other Sessions stay independent.
+  const overrideWrites = {};
   // Session key -> the id of its latest override write.
   const latestWrite = {};
 
@@ -235,14 +235,17 @@ export function createSessionSettings(context) {
   });
 
   async function loadRow(requestKey, shown) {
-    const writesAtStart = overrideWrites;
+    const writesAtStart = overrideWrites[shown.key] ?? 0;
     try {
       const result = await context.chatController.getSession(
         shown.agentAddress,
         shown.sessionId,
       );
       // A newer read, or an override write meanwhile, decides instead.
-      if (requestKey !== requestedRowKey || writesAtStart !== overrideWrites) {
+      if (
+        requestKey !== requestedRowKey ||
+        writesAtStart !== (overrideWrites[shown.key] ?? 0)
+      ) {
         return;
       }
       const session = result?.session;
@@ -276,7 +279,7 @@ export function createSessionSettings(context) {
     );
     const writeId = (latestWrite[key] ?? 0) + 1;
     latestWrite[key] = writeId;
-    overrideWrites += 1;
+    overrideWrites[key] = (overrideWrites[key] ?? 0) + 1;
     pending = { ...pending, [key]: { ...(pending[key] ?? {}), ...request } };
     try {
       const result = await context.chatController.setSessionAgentOverrides(
@@ -313,7 +316,7 @@ export function createSessionSettings(context) {
         key,
       );
     } finally {
-      overrideWrites += 1;
+      overrideWrites[key] = (overrideWrites[key] ?? 0) + 1;
     }
   }
 
@@ -357,11 +360,13 @@ export function createSessionSettings(context) {
     drafts = renameAgentInKeys(drafts, oldAgentId, newAgentId);
     rows = renameAgentInKeys(rows, oldAgentId, newAgentId);
     pending = renameAgentInKeys(pending, oldAgentId, newAgentId);
-    for (const key of Object.keys(latestWrite)) {
-      const renamed = renameAgentInKey(key, oldAgentId, newAgentId);
-      if (renamed !== key) {
-        latestWrite[renamed] = latestWrite[key];
-        delete latestWrite[key];
+    for (const writes of [latestWrite, overrideWrites]) {
+      for (const key of Object.keys(writes)) {
+        const renamed = renameAgentInKey(key, oldAgentId, newAgentId);
+        if (renamed !== key) {
+          writes[renamed] = writes[key];
+          delete writes[key];
+        }
       }
     }
   }

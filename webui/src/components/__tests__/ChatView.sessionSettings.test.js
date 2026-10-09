@@ -272,6 +272,59 @@ describe('ChatView Session settings', () => {
   });
 
   describe('existing Session', () => {
+    it.each(['success', 'error'])(
+      'loads another Session while an earlier override write finishes with %s',
+      async (outcome) => {
+        const writing = Promise.withResolvers();
+        const reading = Promise.withResolvers();
+        getSessionMock.mockImplementation((_agentId, sessionId) =>
+          sessionId === 'session-2'
+            ? reading.promise
+            : Promise.resolve({
+                session: {
+                  id: 'session-1',
+                  working_project_id: 'vbot',
+                  agent_overrides: { model: SONNET },
+                },
+              }),
+        );
+        const base = settingsRpcMock();
+        rpcMock.mockImplementation((method, params) =>
+          method === 'session.set_agent_overrides'
+            ? writing.promise
+            : base(method, params),
+        );
+        const props = reactiveProps({ projects: PROJECTS });
+        await chat.mountChat(props);
+        await waitForCondition(() => pickerText('Model') === SONNET_NAME);
+        await choose('Model', MINI);
+        expect(rpcCalls('session.set_agent_overrides')).toHaveLength(1);
+
+        props.pendingSessionNavigation = {
+          agentId: 'alpha',
+          sessionId: 'session-2',
+          requestId: 1,
+        };
+        await waitForCondition(() =>
+          getSessionMock.mock.calls.some(([, id]) => id === 'session-2'),
+        );
+        if (outcome === 'success')
+          writing.resolve({ agent_overrides: { model: MINI } });
+        else writing.reject(new Error('override-failed-sentinel'));
+        await settle();
+        reading.resolve({
+          session: {
+            id: 'session-2',
+            working_project_id: 'docs',
+            agent_overrides: { model: R1, thinking_effort: 'max' },
+          },
+        });
+        await waitForCondition(() => pickerText('Model') === R1);
+        expect(readOnlyProject().textContent.trim()).toBe('Docs');
+        expect(pickerText('Thinking effort')).toBe('max');
+      },
+    );
+
     it('writes Model and effort changes at once and offers the levels of the effective Model', async () => {
       getSessionMock.mockResolvedValue({
         session: {
