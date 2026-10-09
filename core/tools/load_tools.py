@@ -33,8 +33,8 @@ from core.tools.tools import (
 )
 
 LOAD_TOOLS_DESCRIPTION = (
-    'Load the full definitions of Tools listed under "Tools Loaded on Demand" in your '
-    "instructions, so you can call them. Pass every Tool the current task needs in one call."
+    "Load the full definitions of Tools that your instructions list as loadable on demand, "
+    "so you can call them. Pass every Tool the current task needs in one call."
 )
 LOAD_TOOLS_PARAMETERS: JsonObject = {
     "type": "object",
