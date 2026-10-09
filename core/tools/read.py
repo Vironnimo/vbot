@@ -542,6 +542,10 @@ def register_read_tool(
             file_state,
             speech_max_size_bytes=speech_max_size_bytes,
         ),
+        summary=(
+            "Read a file or directory, view an image, or get the text of a PDF, Office, audio or "
+            "notebook file."
+        ),
         family="files",
         result_schema={"type": "object", "required": ["content"]},
         display=ToolDisplay(parts_builder=_display_parts, fact_builder=_read_line_range_facts),

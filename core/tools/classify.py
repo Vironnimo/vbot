@@ -132,6 +132,10 @@ def register_classify_tool(registry: ToolRegistry, service: DecisionService) -> 
         CLASSIFY_DESCRIPTION,
         CLASSIFY_PARAMETERS,
         handler,
+        summary=(
+            "Let a fast separate model label, filter or sort many texts by your yes/no, choice or "
+            "scale questions."
+        ),
         family="execution",
         open_input_schema=True,
         argument_normalizer=_normalize_classify_arguments,

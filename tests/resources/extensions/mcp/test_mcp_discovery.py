@@ -53,6 +53,7 @@ async def test_connection_description_lists_remote_tool_names_through_disconnect
     service, registry, runner, calls = context_service
     before = _definitions(registry)
     assert before[0]["description"] == f"MCP connection example. {_USAGE} Tools: inspect"
+    assert registry.get("mcp_example").summary == "MCP connection example."
     runner.catalog["server_info"] = {"name": "blender-mcp", "title": "Blender"}
     runner.catalog["tools"].extend(
         {
@@ -71,6 +72,8 @@ async def test_connection_description_lists_remote_tool_names_through_disconnect
     assert after[0]["parameters"] == before[0]["parameters"]
     heading, listing = after[0]["description"].split(" Tools: ", 1)
     assert heading == f"MCP connection example: Blender. {_USAGE}"
+    # Listed on demand, the connection shows only the heading, not its Tool names.
+    assert registry.get("mcp_example").summary == "MCP connection example: Blender."
     *shown, more = listing.split(", ")
     names = [tool["name"] for tool in runner.catalog["tools"]]
     assert shown == names[: len(shown)]

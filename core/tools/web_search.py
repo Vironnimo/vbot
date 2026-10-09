@@ -582,7 +582,10 @@ def register_web_search_tool(
         WEB_SEARCH_TOOL_DESCRIPTION,
         WEB_SEARCH_TOOL_PARAMETERS,
         _handler,
-        summary="Search the web and get results with title, URL and a short description.",
+        summary=(
+            "Search the web for current information; results have title, URL and a short "
+            "description."
+        ),
         family="web",
         open_input_schema=True,
         unadvertised_parameters=_UNADVERTISED_PARAMETERS,

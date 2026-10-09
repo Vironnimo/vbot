@@ -254,6 +254,7 @@ class MCPService:
             {
                 "name": parent,
                 "description": self.catalogs.description(runner.id, about),
+                "summary": self.catalogs.summary(runner.id, about),
                 "parameters": MCP_PARAMETERS,
                 "handler": self._handler(runner.id),
                 "ready": lambda: bool(self.connections.get(runner.id, {}).get("enabled")),

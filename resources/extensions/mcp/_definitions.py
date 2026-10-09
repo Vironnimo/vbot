@@ -42,6 +42,9 @@ MCP_MORE_NAMES = "... and {count} more"
 MCP_DESCRIPTION_MORE_TOOLS = MCP_MORE_NAMES + "; search lists all."
 # Characters of the server title and of the Tool name list the description shows.
 DESCRIPTION_TITLE_CHARACTERS = 80
+# Characters of the summary that lists the connection Tool while it is loaded on
+# demand; the Tool registry's limit for summaries.
+SUMMARY_CHARACTERS = 200
 DESCRIPTION_TOOLS_CHARACTERS = 3000
 
 # The detail of a Tool-change announcement when the connection's Tool names changed.

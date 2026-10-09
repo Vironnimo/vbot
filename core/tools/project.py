@@ -235,6 +235,10 @@ def register_project_tool(
         offload_tool_handler(
             make_project_handler(projects, get_renderer, list_project_skills, file_state)
         ),
+        summary=(
+            "Load a registered Project's instructions, path and Skills into this Session before "
+            "you work in it."
+        ),
         constraints=("identity_agent",),
         open_input_schema=True,
         argument_normalizer=_normalize_project_arguments,

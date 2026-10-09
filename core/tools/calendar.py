@@ -185,6 +185,7 @@ def register_calendar_tool(
         CALENDAR_TOOL_DESCRIPTION,
         CALENDAR_TOOL_PARAMETERS,
         handler,
+        summary="Read, add, change or delete the user's calendar events, and find free time.",
         open_input_schema=True,
         argument_normalizer=_normalize_calendar_arguments,
         unadvertised_parameters=UNADVERTISED_PARAMETERS,

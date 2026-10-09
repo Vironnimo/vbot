@@ -49,5 +49,5 @@ Display: one identifier part listing the requested Model-facing names. Tests: `t
 | Block `You can also use the Tools listed below, but their definitions are not in your Tool list.` | Says the listed Tools are usable, so the Agent does not treat them as unavailable. |
 | Block ``Before you call one of them for the first time, load its definition with `load_tools`.`` | The required next action, and only once per Tool. |
 | Block `Load all Tools a task needs in one call.` | Keeps extra Model turns low. |
-| Block entries `- <name>: <summary>` | The Model-facing name to call and one sentence to decide whether the task needs the Tool. |
+| Block entries `- <name>: <summary>` | The Model-facing name to call and one sentence to decide whether the task needs the Tool. The sentence is the Tool's own `summary` (`tools.md` -> Conventions), because a description's opening sentence assumes the Agent already has the Tool and often omits when to use it. |
 | `on_demand` note ``Tool <name> is now available: <summary> Load its definition with `load_tools` before you call it.`` | A Tool enabled mid-epoch is not in the pinned block; the note gives the same facts and next action. |

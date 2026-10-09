@@ -1384,6 +1384,10 @@ def register_terminal_tool(
         TERMINAL_TOOL_DESCRIPTION,
         TERMINAL_TOOL_PARAMETERS,
         make_terminal_handler(terminal_manager, projects),
+        summary=(
+            "Start and drive interactive programs that wait for typed input, such as REPLs, TUIs "
+            "and coding-agent CLIs."
+        ),
         family="execution",
         open_input_schema=True,
         unadvertised_parameters=TERMINAL_UNADVERTISED_PARAMETERS,
