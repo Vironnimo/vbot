@@ -52,10 +52,6 @@ from core.chat.messages import MessageSender, ReplySurface
 from core.runs import (
     ASSISTANT_OUTPUT_EVENT,
     COMPACTION_COMPLETED_EVENT,
-    RUN_CANCELLED_EVENT,
-    RUN_COMPLETED_EVENT,
-    RUN_FAILED_EVENT,
-    RUN_INTERRUPTED_EVENT,
     USER_MESSAGE_EVENT,
     RunCancelledError,
     RunKind,
@@ -876,8 +872,8 @@ class ChannelConversationEngine:
                 run.id,
             )
 
-    async def _await_run_reply(self, run: Run, reply_plan: ReplyPlanFacts) -> str | None:
-        """Follow the Run to its end and return the reply its chat gets."""
+    async def _await_run_reply(self, run: Run, reply_plan: ReplyPlanFacts) -> str:
+        """Follow the Run to its end, then project its complete durable history."""
         projection = RunReply()
         async with self._activity(reply_plan):
             async for event in run.subscribe():
@@ -887,25 +883,31 @@ class ChannelConversationEngine:
                     projection.observe_input()
                 elif event.type == COMPACTION_COMPLETED_EVENT:
                     projection.observe_compaction()
-                elif event.type == RUN_COMPLETED_EVENT:
-                    return projection.settle("completed")
-                elif event.type == RUN_FAILED_EVENT:
-                    return projection.settle("failed")
-                elif event.type == RUN_CANCELLED_EVENT:
-                    reason = event.payload.get("reason")
-                    return projection.settle(
-                        "cancelled", reason if isinstance(reason, str) else None
-                    )
-                elif event.type == RUN_INTERRUPTED_EVENT:
-                    return projection.settle("interrupted")
-        return None
+            # Replay is bounded, and a lagging subscription may end before the
+            # Run does. Neither can decide which parts of its answer survived.
+            with contextlib.suppress(Exception):
+                await run.wait()
+        status, reason = run.status.value, run.cancel_reason
+        return await self._history_reply(
+            RouteFacts(agent_id=run.agent_id, session_id=run.session_id),
+            run.id,
+            fallback=projection.settle(status, reason),
+            status=status,
+            reason=reason,
+        )
 
-    async def _history_reply(self, reply: PendingReply) -> str:
-        """Project the reply of a Run that ended outside this engine from its Session history."""
-        route = reply.route
-        run_id = reply.run_id
+    async def _history_reply(
+        self,
+        route: RouteFacts | None,
+        run_id: str | None,
+        *,
+        fallback: str = _INTERRUPTED_REPLY,
+        status: str = "interrupted",
+        reason: str | None = None,
+    ) -> str:
+        """Project exact Run history; observed live output is the unavailable-history fallback."""
         if route is None or run_id is None:
-            return _INTERRUPTED_REPLY
+            return fallback
         try:
             session = await self._chat_sessions.get_async(
                 _session_address(route.agent_id, route.session_id)
@@ -918,10 +920,12 @@ class ChannelConversationEngine:
                 run_id,
                 error,
             )
-            return _INTERRUPTED_REPLY
+            return fallback
+        if not messages:
+            # A standalone in-memory Run has no Session history. A storage
+            # failure may also have prevented any of its output from persisting.
+            return fallback
         projection = RunReply()
-        status: str | None = None
-        reason: str | None = None
         for message in messages:
             if message.role == "assistant":
                 projection.observe_output(message.to_dict())
@@ -930,9 +934,10 @@ class ChannelConversationEngine:
             elif message.role == "compaction_checkpoint":
                 projection.observe_compaction()
             elif message.role == "run_summary" and message.run_id == run_id:
-                status, reason = message.status, message.completion_reason
-        # A Run without its summary entry never finished in this history.
-        return projection.settle(status or "interrupted", reason)
+                status, reason = message.status or status, message.completion_reason
+        # Without a summary use the known live outcome, or interruption when
+        # the process that ran it is gone.
+        return projection.settle(status, reason)
 
     # -- Owed replies -----------------------------------------------------------------
 
@@ -1033,7 +1038,7 @@ class ChannelConversationEngine:
         text = (
             await self._await_run_reply(run, reply.reply_plan)
             if run is not None
-            else await self._history_reply(reply)
+            else await self._history_reply(reply.route, reply.run_id)
         )
         await self._deliver((reply.id,), reply.reply_plan, text)
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
@@ -15,7 +17,8 @@ from core.channels.adapter import RunButtonBinding, bound_run_callback_data
 from core.channels.engine import ChannelConversationEngine
 from core.chat import ChatMessage
 from core.extensions import InteractionButton, InteractionEvent
-from core.runs import ASSISTANT_OUTPUT_EVENT, Run
+from core.runs import ASSISTANT_OUTPUT_DELTA_EVENT, ASSISTANT_OUTPUT_EVENT, Run
+from core.runs.run import DEFAULT_RUN_EVENT_RETENTION_LIMIT
 from core.sessions import ChatSessionManager, SessionAddress
 from core.sessions._types import SessionRunCompletion
 from core.utils.timestamps import utc_now_timestamp
@@ -39,13 +42,19 @@ _ADDRESS = SessionAddress(project_id=None, agent_id="assistant", session_id=SESS
 class _Runs:
     """Trigger double: every Run stays running until the test ends it."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, event_retention_limit: int = DEFAULT_RUN_EVENT_RETENTION_LIMIT) -> None:
         self.runs: list[Run] = []
         self.trigger = AsyncMock(side_effect=self._start)
         self.started = asyncio.Event()
+        self._event_retention_limit = event_retention_limit
 
     async def _start(self, agent_id: str, _content: Any, session_id: str, **_kwargs: Any) -> Run:
-        run = Run(run_id=f"run-{len(self.runs)}", agent_id=agent_id, session_id=session_id)
+        run = Run(
+            run_id=f"run-{len(self.runs)}",
+            agent_id=agent_id,
+            session_id=session_id,
+            event_retention_limit=self._event_retention_limit,
+        )
         self.runs.append(run)
         self.started.set()
         return run
@@ -156,21 +165,56 @@ async def test_a_run_answer_an_ended_engine_owed_is_sent_once_from_session_histo
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("ends_before_subscription", [False, True], ids=["running", "ended"])
 async def test_a_run_still_running_when_its_engine_ended_is_relayed_by_the_next(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ends_before_subscription: bool
 ) -> None:
-    runs = _Runs()
-    engine, _sessions, _trigger, _first = make_engine(tmp_path, trigger_run=runs.trigger)
+    runs = _Runs(event_retention_limit=4)
+    engine, sessions, _trigger, first = make_engine(tmp_path, trigger_run=runs.trigger)
     await engine.handle_inbound_text(make_conversation(), "hello")
     await asyncio.wait_for(runs.started.wait(), timeout=5)
     await engine.stop()
+    run = runs.runs[0]
+    sessions.get(_ADDRESS).start_run(run.id)
+    _record_history(sessions, run.id, "preserved partial", None)
+    run.emit(
+        ASSISTANT_OUTPUT_EVENT,
+        {"message": {"content": "preserved partial", "interrupted": True}},
+    )
+    # The next engine's replay begins after the preserved answer fragment.
+    for _ in range(5):
+        run.emit(ASSISTANT_OUTPUT_DELTA_EVENT, {"content_delta": "x"})
 
-    engine, _sessions, _trigger, transport = make_engine(tmp_path, running_run=runs.runs[0])
+    def finish() -> None:
+        _record_history(sessions, run.id, " continuation", "completed")
+        _answer(run, " continuation")
+
+    transport = FakeTransport()
+    if ends_before_subscription:
+
+        @contextlib.asynccontextmanager
+        async def activity(_target: str, _thread: str | None = None) -> AsyncIterator[None]:
+            # The Run was still running at lookup, but finished while the
+            # transport established its activity indicator, before subscribe.
+            finish()
+            yield
+
+        monkeypatch.setattr(transport, "activity_indicator", activity)
+
+    engine, _sessions, _trigger, transport = make_engine(
+        tmp_path, running_run=run, transport=transport
+    )
     engine.start()
-    _answer(runs.runs[0], "answer")
+    if not ends_before_subscription:
+        async with asyncio.timeout(5):
+            while run.subscriber_count == 0:
+                await asyncio.sleep(0)
+        finish()
     await settle_replies(engine)
 
-    assert transport.sent == [("12345", "answer")]
+    assert first.sent == []
+    assert transport.sent == [("12345", "preserved partial continuation")]
+    assert channel_state(tmp_path).take_pending_replies("tg-assistant", "later") == ([], 0)
     await engine.stop()
 
 
