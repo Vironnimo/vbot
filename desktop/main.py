@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, Protocol, override
 
 import httpx
 
-from desktop import _windows, restart
+from desktop import _http, _windows, restart
 from desktop.settings import (
     config_dir,
     read_window_size,
@@ -358,7 +358,9 @@ def probe_target(
 
     if get is not None:
         return _probe_target(target, lambda url: get(url, timeout=timeout, trust_env=False))
-    with httpx.Client(timeout=timeout, trust_env=False) as client:
+    with httpx.Client(
+        timeout=timeout, trust_env=False, verify=_http.shared_ssl_context()
+    ) as client:
         return _probe_target(target, client.get)
 
 
@@ -518,6 +520,7 @@ def _run_desktop(
     from desktop.speech.cues import CuePlayer
     from desktop.speech.microphone import MicrophoneService
 
+    _http.prewarm_outbound_http()
     webview = webview_module if webview_module is not None else load_webview()
 
     controller = ConnectionController(settings_file=settings_file, probe=probe)

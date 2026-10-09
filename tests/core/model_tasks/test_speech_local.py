@@ -234,9 +234,23 @@ async def test_digital_silence_and_invalid_audio(monkeypatch: pytest.MonkeyPatch
         await executor.aclose()
 
 
-def test_long_audio_chunks_cover_every_sample_once_and_use_quiet_boundary() -> None:
-    samples = np.full(65 * 16_000, 1000, dtype=np.int16)
+@pytest.mark.parametrize("frame_samples", [None, 320, 479_999, 1_000_013])
+def test_long_audio_chunks_cover_every_sample_once_and_use_quiet_boundary(
+    frame_samples: int | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from core.model_tasks import speech_local
+
+    samples = (1000 + np.arange(65 * 16_000) % 100).astype(np.int16)
     samples[29 * 16_000 + 640 : 29 * 16_000 + 960] = 0
+    if frame_samples is not None:
+        decoded = samples.astype(np.float32) / 32768
+
+        def frames(_audio: bytes, **_options: Any) -> Generator[Any]:
+            for start in range(0, len(decoded), frame_samples):
+                values = decoded[start : start + frame_samples]
+                yield SimpleNamespace(to_ndarray=lambda values=values: values.reshape(1, -1))
+
+        monkeypatch.setattr(speech_local, "iter_decoded_frames", frames)
     chunks = list(_audio_chunks(wav(samples)))
     assert len(chunks) == 3
     assert len(chunks[0][1]) == 29 * 16_000 + 960

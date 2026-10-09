@@ -40,6 +40,8 @@ from typing import Any, Self
 
 import httpx
 
+from desktop._http import shared_ssl_context
+
 logger = logging.getLogger("vbot.desktop.speech.server_client")
 
 RPC_TIMEOUT_SECONDS = 10.0
@@ -138,6 +140,7 @@ class SpeechServerClient:
         self._http = httpx.AsyncClient(
             transport=transport,
             trust_env=False,
+            verify=shared_ssl_context(),
             limits=httpx.Limits(max_keepalive_connections=0),
         )
         self._budget_lock = threading.Lock()

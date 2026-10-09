@@ -160,6 +160,7 @@ def launch_seams(monkeypatch: pytest.MonkeyPatch) -> LaunchSeams:
     """Keep Desktop navigation expectations deterministic and the host untouched."""
 
     seams = LaunchSeams()
+    monkeypatch.setattr(desktop_main._http, "prewarm_outbound_http", lambda: None)
     monkeypatch.setattr(desktop_connection, "uuid4", lambda: _FixedUuid())
     monkeypatch.setattr(desktop_main._windows, "primary_scale", lambda: 1.0)
     monkeypatch.setattr(desktop_main._windows, "bind_window_dpi", lambda *_: None)
@@ -696,6 +697,7 @@ def test_probe_reuses_one_unproxied_client_and_closes_it(
     class ProbeClient(httpx.Client):
         def __init__(self, **kwargs: Any) -> None:
             assert kwargs["trust_env"] is False
+            assert kwargs["verify"] is desktop_main._http.shared_ssl_context()
             super().__init__(transport=httpx.MockTransport(respond), **kwargs)
             clients.append(self)
 
@@ -991,6 +993,12 @@ def test_voice_starts_after_the_window_is_shown_and_follows_its_server(
     fake_webview = FakeWebview()
     events: list[str] = []
     created_for: list[str] = []
+    warmups: list[int] = []
+    monkeypatch.setattr(
+        desktop_main._http,
+        "prewarm_outbound_http",
+        lambda: warmups.append(len(fake_webview.created_windows)),
+    )
 
     def window_shown_first() -> None:
         assert len(fake_webview.created_windows) == 1
@@ -1009,6 +1017,7 @@ def test_voice_starts_after_the_window_is_shown_and_follows_its_server(
     _launch(tmp_path, argv, webview=fake_webview, settings=saved)
 
     assert created_for == [server_url]
+    assert warmups == [0]
     assert events == ["voice.start", "voice.close"]
     # Every successful in-window connect retargets Voice and dictation.
     assert voice.server_urls == ([server_url] if server_url else [])
