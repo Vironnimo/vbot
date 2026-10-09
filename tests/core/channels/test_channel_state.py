@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+import core.channels._state_schema as schema_module
 import core.channels.state as state_module
 from core.channels import ChannelConfigError, ChannelError, ChannelNotFoundError
 from core.channels.adapter import PendingReply, ReplyPlanFacts, RouteFacts, RunButtonBinding
@@ -473,11 +475,13 @@ def test_run_button_claims_check_target_and_thread_and_can_be_restored(
     assert claim("-100", "7") == "claimed"
     assert claim("-100", "7") == "consumed"
 
-    store.restore_run_button_binding("tg", "binding")
+    assert store.restore_run_button_binding("tg", "binding") is True
+    assert store.restore_run_button_binding("tg", "binding") is True
     assert claim("-100", "7") == "claimed"
 
     store.discard_run_button_binding("tg", "binding")
     assert claim("-100", "7") == "missing"
+    assert store.restore_run_button_binding("tg", "binding") is False
 
 
 def test_owed_replies_are_sent_at_most_once_and_handed_on_by_owner(
@@ -491,7 +495,11 @@ def test_owed_replies_are_sent_at_most_once_and_handed_on_by_owner(
     store.owe_reply("tg", _owed("expired", "ended", created_at=old))
     store.owe_reply("tg", _owed("in-flight", "ended"))
     store.owe_reply("tg", _owed("answer", "ended", created_at=earlier))
-    store.owe_reply("tg", _owed("notice", "ended"))
+    keyboard = {
+        "buttons": [[{"label": "Retry", "data": "run:done", "future_button_field": 1}]],
+        "future_keyboard_field": {"keep": True},
+    }
+    store.owe_reply("tg", replace(_owed("notice", "ended"), retry_keyboard=keyboard))
     # A Run's answer takes over the record of the work it answers.
     store.owe_reply("tg", _owed("answer", "ended", run_id="run-1"))
 
@@ -511,6 +519,10 @@ def test_owed_replies_are_sent_at_most_once_and_handed_on_by_owner(
         ("notice", None),
     ]
     answer = replies[0]
+    assert answer.retry_keyboard is None
+    assert replies[1].retry_keyboard == keyboard
+    store.owe_reply("tg", replies[1])
+    assert store.take_pending_replies("tg", "current")[0][1].retry_keyboard == keyboard
     assert answer.created_at == earlier
     assert answer.route == RouteFacts(agent_id="assistant", session_id="ses")
     assert answer.reply_plan == ReplyPlanFacts(
@@ -523,6 +535,40 @@ def test_owed_replies_are_sent_at_most_once_and_handed_on_by_owner(
         "mine",
         "notice",
     ]
+
+
+def test_owed_replies_open_additively_from_a_database_without_retry_keyboards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pending = _owed("legacy", "ended")
+    with monkeypatch.context() as legacy:
+        legacy.setattr(
+            schema_module,
+            "SCHEMA_SQL",
+            schema_module.SCHEMA_SQL.replace("  retry_keyboard_json TEXT,\n", ""),
+        )
+        state = _open(tmp_path)
+        try:
+            state.reset("tg", "telegram")
+            state.database.write(
+                lambda connection: connection.execute(
+                    "INSERT INTO channel_pending_replies "
+                    "(channel_id, reply_id, platform_target, thread_id, reply_to_message_id, "
+                    "owner, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    ("tg", pending.id, "-100", "7", "9", pending.owner, pending.created_at),
+                )
+            )
+        finally:
+            state.close()
+
+    state = _open(tmp_path)
+    try:
+        assert state.take_pending_replies("tg", "next") == ([pending], 0)
+        keyboard = {"buttons": [[{"label": "Retry", "data": "run:done"}]]}
+        state.owe_reply("tg", replace(pending, retry_keyboard=keyboard))
+        assert state.take_pending_replies("tg", "next")[0][0].retry_keyboard == keyboard
+    finally:
+        state.close()
 
 
 @pytest.mark.asyncio

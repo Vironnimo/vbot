@@ -538,18 +538,19 @@ class ChannelStateStore:
 
         return self._database.write(claim)
 
-    def restore_run_button_binding(self, channel_id: str, binding_id: str) -> None:
-        """Make a claimed binding retryable when its Run was not admitted."""
+    def restore_run_button_binding(self, channel_id: str, binding_id: str) -> bool:
+        """Make a binding retryable when no Run took it; False when it no longer exists."""
         normalized_id = _normalize_channel_id(channel_id)
 
-        def restore(connection: sqlite3.Connection) -> None:
-            connection.execute(
+        def restore(connection: sqlite3.Connection) -> bool:
+            restored = connection.execute(
                 "UPDATE channel_run_buttons SET consumed_at = NULL "
-                "WHERE channel_id = ? AND binding_id = ? AND consumed_at IS NOT NULL",
+                "WHERE channel_id = ? AND binding_id = ?",
                 (normalized_id, binding_id),
-            )
+            ).rowcount
+            return restored == 1
 
-        self._database.write(restore)
+        return self._database.write(restore)
 
     # -- Inbound receipts -----------------------------------------------------------
 
@@ -600,13 +601,14 @@ class ChannelStateStore:
             connection.execute(
                 "INSERT INTO channel_pending_replies (channel_id, reply_id, platform_target, "
                 "thread_id, reply_to_message_id, agent_id, session_id, run_id, binding_id, "
-                "owner, created_at, sending_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL) "
+                "owner, created_at, sending_at, retry_keyboard_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?) "
                 "ON CONFLICT (channel_id, reply_id) DO UPDATE SET "
                 "platform_target = excluded.platform_target, thread_id = excluded.thread_id, "
                 "reply_to_message_id = excluded.reply_to_message_id, "
                 "agent_id = excluded.agent_id, session_id = excluded.session_id, "
                 "run_id = excluded.run_id, binding_id = excluded.binding_id, "
-                "owner = excluded.owner",
+                "owner = excluded.owner, retry_keyboard_json = excluded.retry_keyboard_json",
                 (
                     normalized_id,
                     reply.id,
@@ -619,6 +621,11 @@ class ChannelStateStore:
                     reply.binding_id,
                     reply.owner,
                     reply.created_at,
+                    (
+                        json.dumps(reply.retry_keyboard, ensure_ascii=False)
+                        if reply.retry_keyboard is not None
+                        else None
+                    ),
                 ),
             )
 
@@ -684,7 +691,8 @@ class ChannelStateStore:
             ).rowcount
             rows = connection.execute(
                 "SELECT reply_id, platform_target, thread_id, reply_to_message_id, agent_id, "
-                "session_id, run_id, binding_id, owner, created_at FROM channel_pending_replies "
+                "session_id, run_id, binding_id, owner, created_at, retry_keyboard_json "
+                "FROM channel_pending_replies "
                 "WHERE channel_id = ? AND owner != ? ORDER BY created_at, reply_id",
                 (normalized_id, owner),
             ).fetchall()
@@ -745,6 +753,7 @@ def _pending_reply(channel_id: str, row: tuple[Any, ...]) -> PendingReply:
         binding_id,
         owner,
         created_at,
+        retry_keyboard_json,
     ) = row
     return PendingReply(
         id=str(reply_id),
@@ -763,6 +772,7 @@ def _pending_reply(channel_id: str, row: tuple[Any, ...]) -> PendingReply:
         ),
         run_id=run_id,
         binding_id=binding_id,
+        retry_keyboard=json.loads(retry_keyboard_json) if retry_keyboard_json is not None else None,
     )
 
 

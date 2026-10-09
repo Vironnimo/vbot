@@ -115,6 +115,7 @@ class NetworkChannelAdapter(ChannelAdapter):
         *,
         reply_to_message_id: str | None = None,
         thread_id: str | None = None,
+        buttons: Any = None,
     ) -> None:
         raise NotImplementedError
 

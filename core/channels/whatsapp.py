@@ -197,8 +197,9 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
         *,
         reply_to_message_id: str | None = None,
         thread_id: str | None = None,
+        buttons: Any = None,
     ) -> None:
-        await self.send(text, platform_target, thread_id=thread_id)
+        await self.send(text, platform_target, thread_id=thread_id, buttons=buttons)
 
     @override
     async def send(

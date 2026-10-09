@@ -92,6 +92,8 @@ CREATE INDEX channel_received_by_time
 -- run_id it answers an admitted inbound item that no Run took over yet; with
 -- run_id it carries that Run's answer (agent_id and session_id locate the Run's
 -- history). binding_id: the Run-button binding a tap claimed for the item.
+-- retry_keyboard_json: optional open payload with the accepted tap's wire buttons;
+-- cleared when a Run takes over, kept intact when an older reader rewrites it.
 -- owner: the conversation engine that recorded the row; sending_at: set while a
 -- send is in flight, so a row an ended engine left there is never sent again.
 CREATE TABLE channel_pending_replies (
@@ -107,6 +109,7 @@ CREATE TABLE channel_pending_replies (
   owner TEXT NOT NULL,
   created_at TEXT NOT NULL,
   sending_at TEXT,
+  retry_keyboard_json TEXT,
   PRIMARY KEY (channel_id, reply_id),
   FOREIGN KEY (channel_id) REFERENCES channels (channel_id) ON DELETE CASCADE
 ) STRICT, WITHOUT ROWID;
