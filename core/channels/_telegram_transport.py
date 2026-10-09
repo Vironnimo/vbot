@@ -322,11 +322,12 @@ class TelegramTransport:
         *,
         reply_to_message_id: str | None = None,
         thread_id: str | None = None,
+        buttons: list[list[InteractionButton]] | None = None,
     ) -> None:
         """Deliver one outbound text reply (engine transport callback)."""
         reply_parameters = self._build_reply_parameters(reply_to_message_id)
         if reply_parameters is None:
-            await self.send(text, platform_target, thread_id=thread_id)
+            await self.send(text, platform_target, thread_id=thread_id, buttons=buttons)
             return
 
         bot = self._require_bot()
@@ -343,6 +344,7 @@ class TelegramTransport:
                 normalized_message,
                 message_thread_id=message_thread_id,
                 reply_parameters=reply_parameters,
+                reply_markup=_buttons_to_markup(buttons) if buttons else None,
             )
 
     def _build_reply_parameters(self, reply_to_message_id: str | None) -> Any | None:

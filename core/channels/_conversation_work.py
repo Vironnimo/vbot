@@ -17,6 +17,7 @@ from core.chat.commands import (
     PreparedCommand,
 )
 from core.chat.content_blocks import ContentBlock
+from core.extensions import InteractionButton
 from core.runs import (
     WaitingWorkAdmission,
 )
@@ -41,6 +42,7 @@ class ConversationTransport(Protocol):
         *,
         reply_to_message_id: str | None = None,
         thread_id: str | None = None,
+        buttons: list[list[InteractionButton]] | None = None,
     ) -> None:
         """Deliver one outbound text reply, optionally referencing a message/thread."""
 
@@ -134,6 +136,7 @@ class _QueuedInternalPrompt:
     route: RouteFacts | None = None
     # The Run-button binding a bound tap claimed; restored when no Run took it over.
     binding_id: str | None = None
+    retry_keyboard: dict[str, Any] | None = None
     pending: _PendingItem | None = None
 
 

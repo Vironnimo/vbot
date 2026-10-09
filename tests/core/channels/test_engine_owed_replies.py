@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -33,6 +35,7 @@ from .engine_test_support import (
     make_engine,
     settle_replies,
 )
+from .telegram_test_support import make_adapter, make_callback_update
 
 pytestmark = pytest.mark.usefixtures("current_format_data_directory")
 
@@ -219,50 +222,131 @@ async def test_a_run_still_running_when_its_engine_ended_is_relayed_by_the_next(
 
 
 @pytest.mark.asyncio
-async def test_work_an_ended_engine_never_answered_gets_one_notice_and_taps_work_again(
-    tmp_path: Path,
+@pytest.mark.parametrize("restoration", ["restored", "missing", "failed", "older_record"])
+async def test_work_an_ended_engine_never_answered_gets_notices_and_usable_tap_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, restoration: str
 ) -> None:
     storage = channel_state(tmp_path)
     runs = _Runs()
-    engine, sessions, _trigger, _first = make_engine(
-        tmp_path, trigger_run=runs.trigger, run_button_binding_registry=storage
+    adapter, sessions, _trigger, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-100],
+        response_mode="all",
+        admin_user_ids=["50"],
+        trigger_run=runs.trigger,
+        run_button_binding_registry=storage,
     )
-    sessions.create("assistant", session_id="origin")
-    storage.save_run_button_binding(
-        "tg-assistant",
-        RunButtonBinding(
-            id="binding",
-            platform_target="12345",
-            thread_id=None,
-            origin_session_id="origin",
-            original_button_data=("run:done",),
-            created_at=utc_now_timestamp(),
-        ),
-    )
-    data = bound_run_callback_data("binding", 0)
-    await engine.handle_inbound_text(make_conversation(), "first")
+    engine = adapter._engine
+    conversation = make_conversation(chat_id=-100, kind="group", thread_id="7")
+    await engine.handle_inbound_text(conversation, "first")
     await asyncio.wait_for(runs.started.wait(), timeout=5)
-    # Both wait behind the running first message when the engine ends.
-    await engine.handle_inbound_text(make_conversation(), "second")
-    tap = InteractionEvent(
-        platform="telegram",
-        channel_id="tg-assistant",
-        chat_id="12345",
-        user_id="50",
-        message_id="777",
-        data=data,
-        buttons=((InteractionButton(label="Done", data=data),),),
+    # All wait behind the running first message when the engine ends. Each tap
+    # must keep its own origin, reply reference and topic in the same chat.
+    await engine.handle_inbound_text(conversation, "second")
+    taps = []
+    for binding_id, thread_id, message_id in [("binding", "7", "777"), ("other", "8", "888")]:
+        sessions.create("assistant", session_id=binding_id)
+        storage.save_run_button_binding(
+            "tg-assistant",
+            RunButtonBinding(
+                id=binding_id,
+                platform_target="-100",
+                thread_id=thread_id,
+                origin_session_id=binding_id,
+                original_button_data=("run:done",),
+                created_at=utc_now_timestamp(),
+            ),
+        )
+        data = bound_run_callback_data(binding_id, 0)
+        tap = InteractionEvent(
+            platform="telegram",
+            channel_id="tg-assistant",
+            chat_id="-100",
+            user_id="50",
+            message_id=message_id,
+            thread_id=thread_id,
+            data=data,
+            buttons=((InteractionButton(label="Done", data=data),),),
+        )
+        tap_conversation = replace(conversation, message_id=message_id, thread_id=thread_id)
+        taps.append((tap_conversation, tap))
+        update = make_callback_update(
+            chat_id=-100,
+            message_id=int(message_id),
+            data=data,
+            inline_keyboard=[[SimpleNamespace(text="Done", callback_data=data)]],
+        )
+        update.effective_message.message_thread_id = int(thread_id)
+        update.effective_message.is_topic_message = True
+        await adapter._handle_callback_query(update, None)
+        # A duplicate tap closes the original keyboard too, but may not lose the
+        # accepted tap's durable retry context.
+        await adapter._handle_callback_query(update, None)
+        assert bot.edit_message_reply_markup.await_args.kwargs["reply_markup"] is None
+        assert await engine.trigger_interaction_reply(tap_conversation, tap) == "already_handled"
+    await adapter.stop()
+
+    if restoration == "missing":
+        storage.discard_run_button_binding("tg-assistant", "binding")
+    elif restoration == "failed":
+        restore = storage.restore_run_button_binding
+
+        def fail_restore(channel_id: str, binding_id: str) -> bool:
+            if binding_id == "binding":
+                raise RuntimeError("binding restore unavailable")
+            return restore(channel_id, binding_id)
+
+        monkeypatch.setattr(storage, "restore_run_button_binding", fail_restore)
+    elif restoration == "older_record":
+        for pending in storage.take_pending_replies("tg-assistant", "inspector")[0]:
+            if pending.binding_id == "binding":
+                storage.owe_reply("tg-assistant", replace(pending, retry_keyboard=None))
+
+    resumed_runs = _Runs()
+    _next, _sessions, transport = await _next_engine(
+        tmp_path,
+        run_button_binding_registry=storage,
+        admin_user_ids=["50"],
+        trigger_run=resumed_runs.trigger,
     )
-    assert await engine.trigger_interaction_reply(make_conversation(), tap) == "enqueued"
-    await engine.stop()
 
-    _next, _sessions, transport = await _next_engine(tmp_path, run_button_binding_registry=storage)
-
-    notice = f"{engine_module._UNANSWERED_MESSAGE_REPLY} {engine_module._UNANSWERED_TAP_REPLY}"
+    retry_available = restoration == "restored"
+    tap_notice = (
+        engine_module._UNANSWERED_TAP_ONLY_REPLY
+        if retry_available
+        else engine_module._UNANSWERED_TAP_UNAVAILABLE_REPLY
+    )
     assert sorted(transport.sent) == sorted(
-        [("12345", content_module._INTERRUPTED_REPLY), ("12345", notice)]
+        [
+            ("-100", content_module._INTERRUPTED_REPLY),
+            ("-100", engine_module._UNANSWERED_MESSAGE_REPLY),
+            ("-100", tap_notice),
+            ("-100", engine_module._UNANSWERED_TAP_ONLY_REPLY),
+        ]
     )
-    claim = storage.claim_run_button_binding(
-        "tg-assistant", "binding", platform_target="12345", thread_id=None
-    )
-    assert claim.status == "claimed"
+    retry_targets = {
+        thread_id: (reply_to, buttons)
+        for thread_id, reply_to, buttons in zip(
+            transport.sent_thread_ids,
+            transport.sent_reply_targets,
+            transport.sent_buttons,
+            strict=True,
+        )
+        if buttons is not None
+    }
+    available_taps = taps if retry_available else taps[1:]
+    assert retry_targets == {
+        tap.thread_id: (tap.message_id, [list(tap.buttons[0])]) for _, tap in available_taps
+    }
+    for tap_conversation, tap in available_taps:
+        # The reissued wire keyboard admits exactly one new tap to the origin.
+        assert await _next.trigger_interaction_reply(tap_conversation, tap) == "enqueued"
+        assert await _next.trigger_interaction_reply(tap_conversation, tap) == "already_handled"
+        await asyncio.wait_for(resumed_runs.started.wait(), timeout=5)
+        expected_origin = "binding" if tap.thread_id == "7" else "other"
+        assert resumed_runs.runs[-1].session_id == expected_origin
+        _answer(resumed_runs.runs[-1], "done")
+        await drain(_next, -100)
+        resumed_runs.started.clear()
+    await _next.stop()

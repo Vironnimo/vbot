@@ -64,7 +64,7 @@ class RunButtonBindingRegistry(Protocol):
         thread_id: str | None,
     ) -> RunButtonClaim: ...
 
-    def restore_run_button_binding(self, channel_id: str, binding_id: str) -> None: ...
+    def restore_run_button_binding(self, channel_id: str, binding_id: str) -> bool: ...
 
     async def run_async[Result](
         self, function: Callable[..., Result], *arguments: Any, **keyword_arguments: Any
@@ -179,6 +179,9 @@ class PendingReply:
     route: RouteFacts | None = None
     run_id: str | None = None
     binding_id: str | None = None
+    # Accepted tap's wire keyboard, reissued if no Run took over. Keep unknown
+    # payload fields when this durable record is read and written again.
+    retry_keyboard: dict[str, Any] | None = None
 
 
 class PendingReplyStore(Protocol):

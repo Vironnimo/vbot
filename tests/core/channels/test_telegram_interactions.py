@@ -54,18 +54,26 @@ class _RecordingDispatcher:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ["send", "reply", "unreferenced_reply"])
 async def test_buttons_ride_on_the_last_chunk_of_a_split_message(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str
 ) -> None:
     adapter, _sessions, _trigger, bot = make_adapter(
         tmp_path, monkeypatch, allowed_chat_ids=[12345]
     )
 
-    await adapter.send(
-        "x" * (TELEGRAM_MESSAGE_LIMIT * 2 + 9),
-        "12345",
-        buttons=[[InteractionButton(label="Milk ⬜", data="chk:milk")]],
-    )
+    text = "x" * (TELEGRAM_MESSAGE_LIMIT * 2 + 9)
+    buttons = [[InteractionButton(label="Milk ⬜", data="chk:milk")]]
+    if entry == "send":
+        await adapter.send(text, "12345", buttons=buttons, thread_id="42")
+    else:
+        await adapter._transport.send_text(
+            "12345",
+            text,
+            buttons=buttons,
+            thread_id="42",
+            reply_to_message_id="777" if entry == "reply" else None,
+        )
 
     chunks = [sent.kwargs for sent in bot.send_message.await_args_list]
     assert [len(chunk["text"]) for chunk in chunks] == [
@@ -74,6 +82,10 @@ async def test_buttons_ride_on_the_last_chunk_of_a_split_message(
         9,
     ]
     assert ["reply_markup" in chunk for chunk in chunks] == [False, False, True]
+    assert [chunk["message_thread_id"] for chunk in chunks] == [42, 42, 42]
+    assert ["reply_parameters" in chunk for chunk in chunks] == (
+        [True, False, False] if entry == "reply" else [False, False, False]
+    )
     [[button]] = chunks[-1]["reply_markup"].inline_keyboard
     assert (button.text, button.callback_data) == ("Milk ⬜", "chk:milk")
     await adapter.stop()

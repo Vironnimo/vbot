@@ -192,12 +192,15 @@ class DiscordChannelAdapter(ChannelAdapter):
         *,
         reply_to_message_id: str | None = None,
         thread_id: str | None = None,
+        buttons: list[list[InteractionButton]] | None = None,
     ) -> None:
         """Deliver one engine reply, referencing the triggering group message.
 
         ``thread_id`` is transport parity only and ignored: Discord threads are their
         own channels, addressed directly as the ``platform_target``.
         """
+        if buttons is not None:
+            raise ChannelError("buttons are not supported on Discord channels")
         target = await self._resolve_target(platform_target)
         reference = self._reply_reference(target, reply_to_message_id)
         await self._send_payloads(target, text, [], reference=reference)

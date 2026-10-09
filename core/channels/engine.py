@@ -65,7 +65,7 @@ from core.utils.timestamps import utc_now_timestamp
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
     from core.channels.config import ChannelConfig
-    from core.extensions.interactions import InteractionEvent
+    from core.extensions.interactions import InteractionButton, InteractionEvent
     from core.runs import Run
     from core.sessions import ChatSessionManager
 
@@ -77,8 +77,10 @@ from ._conversation_content import (
     RunReply,
     _format_interaction_note,
     _format_observed_message,
+    _interaction_retry_keyboard,
     _media_failure_reply,
     _restore_bound_interaction_event,
+    _retry_buttons,
     _sender_tag,
 )
 from ._conversation_routing import ChannelSessionRouting, _session_address
@@ -102,9 +104,11 @@ _UNANSWERED_MESSAGE_REPLY = (
 _UNANSWERED_MESSAGES_REPLY = (
     "Sorry, I was interrupted before I could answer your last messages. Please send them again."
 )
-_UNANSWERED_TAP_REPLY = "If you tapped a button, please tap it again."
 _UNANSWERED_TAP_ONLY_REPLY = (
     "Sorry, I was interrupted before I could act on your button tap. Please tap it again."
+)
+_UNANSWERED_TAP_UNAVAILABLE_REPLY = (
+    "Sorry, I was interrupted before I could act on your button tap. Please send the request again."
 )
 _BUSY_REPLY = "I'm busy with earlier messages. Please try again shortly."
 _QUOTED_MESSAGE_PREFIX = "[quoted-message]"
@@ -389,10 +393,17 @@ class ChannelConversationEngine:
 
         parsed_binding = parse_bound_run_callback_data(event.data)
         if parsed_binding is None:
-            enqueued = await self.trigger_internal_reply(
-                conversation, _format_interaction_note(conversation, event)
-            )
-            return "enqueued" if enqueued else "busy"
+            if self._enqueue_chat_work(
+                conversation.chat_id,
+                _QueuedInternalPrompt(
+                    conversation=conversation,
+                    prompt=_format_interaction_note(conversation, event),
+                    retry_keyboard=_interaction_retry_keyboard(event),
+                ),
+            ):
+                return "enqueued"
+            await self._reject_overflow(conversation)
+            return "busy"
 
         registry = self._run_button_binding_registry
         if registry is None:
@@ -477,6 +488,7 @@ class ChannelConversationEngine:
                             session_id=origin_session_id,
                         ),
                         binding_id=claim.binding.id,
+                        retry_keyboard=_interaction_retry_keyboard(event),
                     ),
                 )
                 if admitted:
@@ -949,6 +961,9 @@ class ChannelConversationEngine:
             owner=self._owner,
             created_at=utc_now_timestamp(),
             binding_id=queued.binding_id if isinstance(queued, _QueuedInternalPrompt) else None,
+            retry_keyboard=(
+                queued.retry_keyboard if isinstance(queued, _QueuedInternalPrompt) else None
+            ),
         )
         recorded = asyncio.create_task(
             self._owe(reply), name=f"channel:{self._config.id}:owe-reply"
@@ -1043,14 +1058,17 @@ class ChannelConversationEngine:
         await self._deliver((reply.id,), reply.reply_plan, text)
 
     async def _resume_unanswered(self, replies: list[PendingReply]) -> None:
-        """Ask a conversation once to resend the work an ended engine never answered."""
-        taps = [reply for reply in replies if reply.binding_id is not None]
+        """Reissue each interrupted tap's keyboard; group ordinary messages into one notice."""
+        messages = []
         registry = self._run_button_binding_registry
-        if registry is not None:
-            for reply in taps:
-                # The claimed button works again for the requested tap.
+        for reply in replies:
+            if reply.binding_id is None and reply.retry_keyboard is None:
+                messages.append(reply)
+                continue
+            restored = reply.binding_id is None
+            if registry is not None and reply.binding_id is not None:
                 try:
-                    await registry.run_async(
+                    restored = await registry.run_async(
                         registry.restore_run_button_binding, self._config.id, reply.binding_id
                     )
                 except Exception as error:
@@ -1059,14 +1077,16 @@ class ChannelConversationEngine:
                         self._config.id,
                         error,
                     )
-        messages = len(replies) - len(taps)
-        if messages == 0:
-            text = _UNANSWERED_TAP_ONLY_REPLY
-        else:
-            text = _UNANSWERED_MESSAGE_REPLY if messages == 1 else _UNANSWERED_MESSAGES_REPLY
-            if taps:
-                text = f"{text} {_UNANSWERED_TAP_REPLY}"
-        await self._deliver(tuple(reply.id for reply in replies), replies[-1].reply_plan, text)
+            buttons = _retry_buttons(reply.retry_keyboard, reply.binding_id) if restored else None
+            # Telegram removed the accepted keyboard. Releasing its binding alone
+            # cannot make it usable; each retry message carries its own keyboard.
+            text = _UNANSWERED_TAP_ONLY_REPLY if buttons else _UNANSWERED_TAP_UNAVAILABLE_REPLY
+            await self._deliver((reply.id,), reply.reply_plan, text, buttons=buttons)
+        if messages:
+            text = _UNANSWERED_MESSAGE_REPLY if len(messages) == 1 else _UNANSWERED_MESSAGES_REPLY
+            await self._deliver(
+                tuple(reply.id for reply in messages), messages[-1].reply_plan, text
+            )
 
     async def _update_pending(self, update: Any, reply_id: str) -> bool:
         try:
@@ -1105,7 +1125,12 @@ class ChannelConversationEngine:
     # -- Sending ----------------------------------------------------------------------
 
     async def _deliver(
-        self, reply_ids: tuple[str | None, ...], reply_plan: ReplyPlanFacts, text: str | None
+        self,
+        reply_ids: tuple[str | None, ...],
+        reply_plan: ReplyPlanFacts,
+        text: str | None,
+        *,
+        buttons: list[list[InteractionButton]] | None = None,
     ) -> None:
         """Send one reply at most once over the connected transport, then forget it.
 
@@ -1125,12 +1150,17 @@ class ChannelConversationEngine:
             if claimed is None:
                 return
             try:
+                send_kwargs: dict[str, Any] = {
+                    "reply_to_message_id": reply_plan.reply_to_message_id,
+                    "thread_id": reply_plan.thread_id,
+                }
+                if buttons is not None:
+                    send_kwargs["buttons"] = buttons
                 await retry_async(
                     transport.send_text,
                     reply_plan.platform_target,
                     text,
-                    reply_to_message_id=reply_plan.reply_to_message_id,
-                    thread_id=reply_plan.thread_id,
+                    **send_kwargs,
                 )
             except asyncio.CancelledError:
                 raise

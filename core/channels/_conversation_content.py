@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from core.attachments import AttachmentTooLargeError, AttachmentTypeNotAllowedError
 from core.channels.adapter import (
@@ -13,6 +13,7 @@ from core.channels.adapter import (
     parse_bound_run_callback_data,
 )
 from core.chat.messages import MessageSender
+from core.extensions import InteractionButton
 from core.sessions import CHANNEL_MESSAGE_NOTE_PREFIX
 
 if TYPE_CHECKING:
@@ -112,6 +113,44 @@ def _tapped_button_label(event: InteractionEvent) -> str:
             if button.data == event.data:
                 return button.label
     return event.data
+
+
+def _interaction_retry_keyboard(event: InteractionEvent) -> dict[str, Any]:
+    """Keep the accepted tap's wire keyboard for a usable retry after interruption."""
+    return {
+        "buttons": [
+            [{"label": button.label, "data": button.data} for button in row]
+            for row in event.buttons
+        ]
+    }
+
+
+def _retry_buttons(
+    keyboard: dict[str, Any] | None, binding_id: str | None
+) -> list[list[InteractionButton]] | None:
+    """Read known keyboard fields while leaving its durable open payload intact."""
+    if not isinstance(keyboard, dict) or not isinstance(rows := keyboard.get("buttons"), list):
+        return None
+    buttons: list[list[InteractionButton]] = []
+    has_run_button = False
+    for row in rows:
+        if not isinstance(row, list) or not row:
+            return None
+        converted = []
+        for button in row:
+            if not isinstance(button, dict):
+                return None
+            label, data = button.get("label"), button.get("data")
+            if not isinstance(label, str) or not isinstance(data, str) or not label or not data:
+                return None
+            if data.startswith("run:"):
+                parsed = parse_bound_run_callback_data(data)
+                if binding_id is not None and (parsed is None or parsed[0] != binding_id):
+                    return None
+                has_run_button = True
+            converted.append(InteractionButton(label=label, data=data))
+        buttons.append(converted)
+    return buttons if has_run_button else None
 
 
 def _sanitize_sender_tag_part(value: str) -> str:

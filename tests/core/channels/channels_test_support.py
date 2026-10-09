@@ -126,9 +126,11 @@ class BlockingAdapter(ChannelAdapter):
         *,
         reply_to_message_id: str | None = None,
         thread_id: str | None = None,
+        buttons: list[list[InteractionButton]] | None = None,
     ) -> None:
         del reply_to_message_id
         self.replies.append((platform_target, thread_id, text))
+        self.sent_buttons.append(buttons)
 
     def activity_indicator(
         self, platform_target: str, thread_id: str | None = None

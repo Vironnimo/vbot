@@ -33,6 +33,7 @@ from core.chat.commands import (
 from core.chat.content_blocks import ContentBlock
 from core.chat.messages import GroupRole
 from core.database import write_bootstrap_marker
+from core.extensions import InteractionButton
 from core.runs import (
     ASSISTANT_OUTPUT_EVENT,
     ChatRunManager,
@@ -123,6 +124,7 @@ class FakeTransport:
         self.sent: list[tuple[str, str]] = []
         self.sent_reply_targets: list[str | None] = []
         self.sent_thread_ids: list[str | None] = []
+        self.sent_buttons: list[list[list[InteractionButton]] | None] = []
         self.activity_targets: list[str] = []
         self.activity_thread_ids: list[str | None] = []
         self._media_builder = media_builder
@@ -135,10 +137,12 @@ class FakeTransport:
         *,
         reply_to_message_id: str | None = None,
         thread_id: str | None = None,
+        buttons: list[list[InteractionButton]] | None = None,
     ) -> None:
         self.sent.append((platform_target, text))
         self.sent_reply_targets.append(reply_to_message_id)
         self.sent_thread_ids.append(thread_id)
+        self.sent_buttons.append(buttons)
 
     @contextlib.asynccontextmanager
     async def activity_indicator(
