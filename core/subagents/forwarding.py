@@ -303,7 +303,7 @@ async def _turn_outcome(runtime: RuntimeServices, run: Run) -> tuple[str, str]:
         message = await run.wait()
     except RunCancelledError:
         persisted = await _persisted_answer(runtime, run)
-        if persisted is not None and _is_complete_answer(persisted):
+        if persisted is not None and await _stopped_after_final_answer(runtime, run):
             # Stop arrived after the final answer, for example during the
             # Compaction that follows it: the turn's answer is whole.
             return "completed", _message_text(persisted) or FORWARDED_NO_ANSWER_TEXT
@@ -339,9 +339,26 @@ async def _persisted_answer(runtime: RuntimeServices, run: Run) -> ChatMessage |
     return None
 
 
-def _is_complete_answer(message: ChatMessage) -> bool:
-    """Whether *message* is a final answer the Model finished: no Tool calls, not interrupted."""
-    return not message.interrupted and not message.tool_calls
+async def _stopped_after_final_answer(runtime: RuntimeServices, run: Run) -> bool:
+    """Whether the Run stopped with a final answer as its last progression.
+
+    The last text answer may precede steered input or a textless Tool/Reasoning
+    turn. Notes and a checkpoint after the answer do not start further work.
+    """
+    try:
+        session = await runtime.chat_sessions.get_async(_run_address(run))
+        messages = await session.load_run_messages_async(run.id)
+    except Exception:
+        return False
+    for message in reversed(messages):
+        if message.role in {"user", "assistant", "tool", "error"}:
+            return (
+                message.role == "assistant"
+                and bool(_message_text(message))
+                and not message.interrupted
+                and not message.tool_calls
+            )
+    return False
 
 
 def _answer_text(message: ChatMessage | None) -> str | None:
