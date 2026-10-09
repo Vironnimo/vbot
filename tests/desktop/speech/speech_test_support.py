@@ -50,11 +50,23 @@ class Overflow:
 class FakeInputStream:
     """One blocking input stream of :class:`FakeSoundDevice`."""
 
-    def __init__(self, sd: FakeSoundDevice, *, samplerate: int, dtype: str, device: int) -> None:
+    def __init__(
+        self,
+        sd: FakeSoundDevice,
+        *,
+        samplerate: int,
+        dtype: str,
+        device: int,
+        blocksize: int,
+        latency: str,
+    ) -> None:
         self.sd = sd
         self.samplerate = samplerate
         self.dtype = dtype
         self.device = device
+        self.blocksize = blocksize
+        self.requested_latency = latency
+        self.latency = 0.01
         self.started = False
         self.closed = False
 
@@ -63,6 +75,9 @@ class FakeInputStream:
         return self.sd.read_available
 
     def start(self) -> None:
+        if self.sd.start_errors:
+            self.sd.log("start_failed")
+            raise self.sd.start_errors.pop(0)
         self.started = True
 
     def stop(self) -> None:
@@ -110,6 +125,8 @@ class FakeSoundDevice:
         self.pace = pace
         self.read_available = 0
         self.open_failures = 0
+        self.open_attempts: list[int] = []
+        self.start_errors: list[BaseException] = []
         self.streams: list[FakeInputStream] = []
         self.events: list[str] = []
         self._lock = threading.Lock()
@@ -131,14 +148,29 @@ class FakeSoundDevice:
             raise ValueError("Invalid sample rate or format")
 
     def InputStream(  # noqa: N802 - mirrors sounddevice.InputStream
-        self, *, samplerate: int, channels: int, dtype: str, blocksize: int, device: int
+        self,
+        *,
+        samplerate: int,
+        channels: int,
+        dtype: str,
+        blocksize: int,
+        device: int,
+        latency: str,
     ) -> FakeInputStream:
         with self._lock:
+            self.open_attempts.append(device)
             if self.open_failures > 0:
                 self.open_failures -= 1
                 self.events.append("open_failed")
                 raise OSError("Device unavailable")
-            stream = FakeInputStream(self, samplerate=samplerate, dtype=dtype, device=device)
+            stream = FakeInputStream(
+                self,
+                samplerate=samplerate,
+                dtype=dtype,
+                device=device,
+                blocksize=blocksize,
+                latency=latency,
+            )
             self.streams.append(stream)
             self.events.append("stream.open")
         return stream

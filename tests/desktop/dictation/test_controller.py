@@ -68,7 +68,14 @@ class FakeMicrophone(FakeSoundDevice):
 
     @override
     def InputStream(  # noqa: N802 - mirrors sounddevice.InputStream
-        self, *, samplerate: int, channels: int, dtype: str, blocksize: int, device: int
+        self,
+        *,
+        samplerate: int,
+        channels: int,
+        dtype: str,
+        blocksize: int,
+        device: int,
+        latency: str,
     ) -> FakeInputStream:
         assert self.can_open.wait(5)
         return super().InputStream(
@@ -77,6 +84,7 @@ class FakeMicrophone(FakeSoundDevice):
             dtype=dtype,
             blocksize=blocksize,
             device=device,
+            latency=latency,
         )
 
 
