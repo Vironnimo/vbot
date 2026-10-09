@@ -1149,6 +1149,7 @@ def register_shell_tool(
         SHELL_TOOL_DESCRIPTION,
         SHELL_TOOL_PARAMETERS,
         tool,
+        summary="Run shell commands.",
         family="execution",
         open_input_schema=True,
         unadvertised_parameters=SHELL_UNADVERTISED_PARAMETERS,

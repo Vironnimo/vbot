@@ -583,6 +583,7 @@ def register_skill_tool(
         SKILL_TOOL_DESCRIPTION,
         SKILL_TOOL_PARAMETERS,
         make_skill_handler(resolve_registry, refresh_skills, resolve_archived, resolve_protection),
+        summary="Load a Skill or read its files.",
         argument_normalizer=_normalize_skill_arguments,
         unadvertised_parameters=_SKILL_UNADVERTISED_PARAMETERS,
         family="skills",

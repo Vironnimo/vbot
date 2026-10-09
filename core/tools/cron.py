@@ -187,10 +187,7 @@ def register_cron_tool(
         CRON_TOOL_DESCRIPTION,
         CRON_TOOL_PARAMETERS,
         handler,
-        summary=(
-            "Schedule an instruction to run later, once or repeatedly or around a calendar event, "
-            "and manage such jobs."
-        ),
+        summary="Schedule an instruction to run later or around a calendar event.",
         open_input_schema=True,
         argument_normalizer=_normalize_cron_arguments,
         unadvertised_parameters=UNADVERTISED_PARAMETERS,

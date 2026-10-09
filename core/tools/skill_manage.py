@@ -1378,7 +1378,7 @@ def register_skill_manage_tool(
         SKILL_MANAGE_TOOL_DESCRIPTION,
         SKILL_MANAGE_TOOL_PARAMETERS,
         offloaded_handler,
-        summary="Create, change or delete your own Skills and their files, or fix a global Skill.",
+        summary="Create, change or delete Skills.",
         family="skills",
         constraints=("identity_agent",),
         open_input_schema=True,

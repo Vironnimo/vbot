@@ -153,7 +153,7 @@ def register_generate_speech_tool(registry: ToolRegistry, speech_service: Any) -
         GENERATE_SPEECH_TOOL_DESCRIPTION,
         GENERATE_SPEECH_TOOL_PARAMETERS,
         make_generate_speech_handler(speech_service),
-        summary="Convert text to spoken audio that the user can play in the chat.",
+        summary="Convert text to spoken audio.",
         family="media",
         open_input_schema=True,
         argument_normalizer=_normalize_generate_speech_arguments,

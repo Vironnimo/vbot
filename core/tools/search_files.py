@@ -1079,6 +1079,7 @@ def register_search_files_tool(registry: ToolRegistry) -> None:
         SEARCH_FILES_TOOL_DESCRIPTION,
         SEARCH_FILES_TOOL_PARAMETERS,
         _search_files_async,
+        summary="Search file contents or find files by name.",
         family="files",
         result_schema={"type": "object", "required": ["content"]},
         display=ToolDisplay(parts_builder=_display_parts, detail_builder=_display_details),

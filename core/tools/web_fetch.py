@@ -763,7 +763,7 @@ def register_web_fetch_tool(
             credential_resolver=credential_resolver,
             settings_loader=settings_loader,
         ),
-        summary="Read a web page or online file (HTML, PDF, Office, image) from its URL.",
+        summary="Read a web page or online file.",
         family="web",
         result_schema={"type": "object", "required": ["content"]},
         display=ToolDisplay(parts_builder=_display_parts, detail_builder=_display_details),

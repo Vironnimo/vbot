@@ -75,20 +75,9 @@ CANONICAL_REGISTERED_TOOLS = sorted(
     + COMPUTER_USE_TOOLS
 )
 
-# Tools whose description opens with a sentence short and clear enough to list
-# them while they are loaded on demand. Every other Tool an Agent can load on
-# demand declares a summary.
-FIRST_SENTENCE_SUMMARY_TOOLS = {
-    "apply_patch",
-    "bash",
-    "edit",
-    "generate_image",
-    "generate_music",
-    "generate_video",
-    "search_files",
-    "skill",
-    "write",
-}
+# Tools whose description opens with a sentence as short as a summary. Every
+# other Tool an Agent can load on demand declares a summary.
+FIRST_SENTENCE_SUMMARY_TOOLS = {"apply_patch", "edit", "write"}
 
 BUNDLED_SKILLS = [
     "coding-agents",

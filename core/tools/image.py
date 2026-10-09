@@ -334,10 +334,7 @@ def register_analyze_image_tool(
         ANALYZE_IMAGE_TOOL_DESCRIPTION,
         ANALYZE_IMAGE_TOOL_PARAMETERS,
         make_analyze_image_handler(image_service, attachment_store),
-        summary=(
-            "Describe images or answer questions about them, from local files or URLs, with a "
-            "separate image model."
-        ),
+        summary="Analyze images with a separate image model.",
         family="media",
         constraints=("image_fallback_route",),
         open_input_schema=True,
@@ -445,6 +442,7 @@ def register_generate_image_tool(registry: ToolRegistry, image_service: Any) -> 
         GENERATE_IMAGE_TOOL_DESCRIPTION,
         GENERATE_IMAGE_TOOL_PARAMETERS,
         make_generate_image_handler(image_service),
+        summary="Generate images.",
         family="media",
         open_input_schema=True,
         argument_normalizer=_normalize_generate_image_arguments,
