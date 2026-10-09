@@ -75,7 +75,7 @@ _NO_EFFECTS: dict[str, Any] = {
     "recall_reloads": 0,
     "keep_awake_reloads": 0,
     "timezone_reloads": 0,
-    "speech_preloads": 0,
+    "speech_preloads": [],
     "embedding_binding_changes": 0,
     "retention_changes": 0,
     "commands_changed": False,
@@ -165,13 +165,19 @@ def _extensions(*disabled: str, config: dict[str, Any] | None = None) -> dict[st
         pytest.param(
             {}, {"timezone": "America/New_York"}, (), {"timezone_reloads": 1}, id="timezone"
         ),
-        # A new speech-to-text binding may ask for its local model to preload.
+        # A changed speech binding may ask for its local model to preload; an
+        # unchanged one is not loaded again.
         pytest.param(
-            {},
             {"model_tasks": {"speech_to_text": {"target": "local/parakeet"}}},
+            {
+                "model_tasks": {
+                    "speech_to_text": {"target": "local/parakeet"},
+                    "text_to_speech": {"target": "local/chatterbox"},
+                }
+            },
             (),
-            {"speech_preloads": 1},
-            id="speech-to-text-binding",
+            {"speech_preloads": [["text_to_speech"]]},
+            id="speech-binding",
         ),
         # A new embedding binding is indexed for without waiting for the backoff.
         pytest.param(
@@ -225,7 +231,7 @@ def test_settings_changes_refresh_only_their_live_services(
         "recall_reloads": recall_reload.call_count,
         "keep_awake_reloads": keep_awake_reload.call_count,
         "timezone_reloads": timezone_reload.call_count,
-        "speech_preloads": speech_preload.call_count,
+        "speech_preloads": [list(call.args[0]) for call in speech_preload.call_args_list],
         "embedding_binding_changes": binding_change.call_count,
         "retention_changes": retention_change.call_count,
         "commands_changed": effects.commands_changed,

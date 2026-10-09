@@ -46,7 +46,11 @@ Runtime passes one `LocalSpeechExecutor`
 and its target registry to SpeechService and TaskModelService. Built-in STT targets are
 `local/qwen3-asr-1.7b` and `local/qwen3-asr-0.6b` (language/context options),
 `local/parakeet` (NVIDIA TDT v3), and `local/nemotron3.5-asr` (NVIDIA Nemotron 3.5
-ASR Streaming 0.6B, automatic or explicit language). One target is one Model; there is
+ASR Streaming 0.6B, automatic or explicit language). The Qwen and Nemotron `language`
+option is a select: `""` (Automatic) plus the codes that engine's processor accepts,
+labelled with English names from `_LANGUAGE_NAMES` (Qwen: the codes of its forced-language
+prompt; Nemotron: prompt dictionary keys of the locales it emits, a bare code where the
+dictionary maps one, the other regional variant by its locale, e.g. `en` (US) and `en-GB`). One target is one Model; there is
 no `model` option. Descriptor `metadata` is `{license, download_bytes}` for install UIs.
 All use native Transformers under the optional
 `local-speech` extra. Configuration does not load weights; first non-silent use does,
@@ -72,18 +76,19 @@ release refuses a busy engine immediately and keeps the installed Model files. C
 `test_speech_local.py` checks independent residency, busy TTS during STT release,
 cancellation, no-op release and loading again.
 
-Preloading avoids the cold load on the first transcription (tens of seconds for a
-packaged engine). Every local STT engine has the boolean option `preload`
-("Load at server start", `PRELOAD_OPTION`, default off). It is not a load option,
-so toggling it never reloads and turning it off unloads nothing.
-`SpeechService.preload_configured()` starts a background load of the bound engine
-when the option is on; the server lifespan calls it after startup (not in a safe
-startup mode) and `Runtime.apply_settings_change` calls it when the
-`model_tasks.speech_to_text` binding changed. `SpeechService.prepare_transcription()`
+Preloading avoids the cold load on the first transcription or synthesis (tens of
+seconds for a packaged engine). Every local STT and TTS engine has the boolean option
+`preload` ("Load at server start", `PRELOAD_OPTION`, default off). It is not a load
+option, so toggling it never reloads and turning it off unloads nothing.
+`SpeechService.preload_configured(task_types)` starts a background load of each bound
+engine whose option is on; the server lifespan calls it for both bindings after startup
+(not in a safe startup mode) and `Runtime.apply_settings_change` for each of
+`model_tasks.speech_to_text` and `text_to_speech` whose binding changed.
+`SpeechService.prepare_transcription()`
 starts the same load regardless of the option and returns at once with `loaded`,
 `loading`, `not_local` (Provider binding) or `unavailable`. Both use
-`LocalSpeechExecutor.prepare(local_id, options)` (Event Loop only): the load runs on
-the engine's worker, so a transcription arriving meanwhile queues behind it and
+`LocalSpeechExecutor.prepare(local_id, options)` (Event Loop only, STT or TTS): the load
+runs on the engine's worker, so a request arriving meanwhile queues behind it and
 reuses the model; a pending load with the same load identity is not started
 twice; failures are logged and left for the next transcription to report.
 Shutdown cancels a preload that has not started and kills every worker child the
@@ -92,7 +97,8 @@ request fails as closed. An in-process load or inference (development checkout) 
 and delays shutdown until it finishes. The real load, including a managed
 child's, logs one INFO line with the engine and load seconds after it completes
 (its start only at DEBUG). Coverage: `test_speech_local.py` (prepare states, dedupe, waiting
-transcription, failed preload, shutdown during a managed preload), `test_speech.py`,
+transcription, failed preload, shutdown during a managed preload, every engine offers
+`preload`), `test_speech_tts.py` (preload reused by synthesis), `test_speech.py`,
 `test_runtime_settings.py`, `tests/server/test_app.py`.
 
 PyAV decodes canonical audio into mono float32 at 16 kHz. Chunks are at most 30
@@ -215,15 +221,17 @@ before restoring the pinned source without dependencies. This avoids resolving t
 requirements from an already installed, same-version source distribution.
 
 `speech_worker.py` starts without importing vBot, loads SDKs only inside its
-child environment (every speech environment runs it, Chatterbox's on Python 3.13,
+child environment (a `{"load": true, "options"}` request loads the model and answers
+`{"loaded": true}`; `_TtsEngine` construction returns only after it, like
+`_ManagedSttEngine`) (every speech environment runs it, Chatterbox's on Python 3.13,
 so it keeps to 3.13 syntax and standard library, which ruff and the commit hook check:
 PROJECT.md -> Development -> Python version), reports `loading`/`synthesizing` phases and writes
 mono PCM16 WAV to a parent-owned temporary path. The parent retains one process per TTS target
 while that target's load options (`device`) match, bounds requests to 5,000 characters / 64 MiB output,
 and owns timeouts and whole-process-tree cleanup (Windows launchers have child
 interpreters): `_TtsEngine` and `_ManagedSttEngine` share `_WorkerProcess`, so a TTS
-child that has not answered within `_SYNTHESIS_DEADLINE_S` (1800 s, its load plus the
-text) is ended like an STT child (deadline, cancellation grace, shutdown above), and the
+child that has not loaded within `_LOAD_DEADLINE_S` or answered a request within
+`_SYNTHESIS_DEADLINE_S` (1800 s) is ended like an STT child (deadline, cancellation grace, shutdown above), and the
 request fails with `LocalSpeechExecutionError`. Sentence/word chunking bounds each generation context. No voice
 cloning input is exposed. The child loads only from the `model_path` it receives
 (the installed Model directory) and disables Hub networking for SDK loading and

@@ -196,12 +196,15 @@ async def test_synthesis_substitution_cache_voice_changes_and_stt_switch():
     )
     executor = LocalSpeechExecutor(engines=[entry])
     try:
+        # A preload loads the engine the first synthesis then reuses.
+        assert executor.prepare("custom", {}) == "loading"
         for voice in ("one", "two"):
             result = await executor.synthesize(
                 "custom", "hello", options={"voice": voice}, progress=SpeechProgress()
             )
             assert result.audio == b"audio"
         assert factory.call_count == 1
+        assert executor.prepare("custom", {}) == "loaded"
         with pytest.raises(LocalSpeechError):
             await executor.transcribe(
                 "custom", b"audio", filename="a.wav", media_type="audio/wav", options={}
@@ -358,27 +361,34 @@ def test_process_adapter_keeps_audio_and_text_off_arguments_and_cleans_up(tmp_pa
     if sys.platform != "win32":
         monkeypatch.setattr("os.killpg", kill_tree)
     process = Mock()
-    process.stdout.readline.side_effect = ['{"phase":"loading"}\n', '{"done":true}\n']
+    process.stdout.readline.side_effect = [
+        '{"phase":"loading"}\n',
+        '{"loaded":true}\n',
+        '{"phase":"synthesizing"}\n',
+        '{"done":true}\n',
+    ]
     process.poll.return_value = None
 
     def write(line):
         request = json.loads(line)
-        Path(request["output"]).write_bytes(output.getvalue())
+        if "output" in request:
+            Path(request["output"]).write_bytes(output.getvalue())
 
     process.stdin.write.side_effect = write
     popen = Mock(return_value=process)
     monkeypatch.setattr(speech_local.subprocess, "Popen", popen)
     setup = LocalSpeechSetup(engine="qwen3-tts", directory=tmp_path)
-    engine = _TtsEngine(setup, _WaitingWorkers(), {"model_path": "installed"})
     token = _PROGRESS.set(SpeechProgress())
+    engine = _TtsEngine(setup, _WaitingWorkers(), {"model_path": "installed"})
     try:
+        # Construction returns once the worker loaded the installed model.
+        load = json.loads(process.stdin.write.call_args.args[0])
+        assert load == {"load": True, "options": {"model_path": "installed"}}
+        assert _PROGRESS.get().snapshot()["phase"] == "loading"
         result = engine.synthesize("private test text", {})
         assert result.audio == output.getvalue()
         assert "private test text" not in str(popen.call_args)
-        request = json.loads(process.stdin.write.call_args.args[0])
-        # The installed model reaches the worker with every request.
-        assert request["options"]["model_path"] == "installed"
-        assert _PROGRESS.get().snapshot()["phase"] == "loading"
+        assert _PROGRESS.get().snapshot()["phase"] == "synthesizing"
         assert not Path(json.loads(process.stdin.write.call_args.args[0])["output"]).exists()
     finally:
         _PROGRESS.reset(token)
@@ -404,11 +414,18 @@ async def test_tts_worker_that_stops_answering_is_ended(tmp_path, monkeypatch, e
     monkeypatch.setattr("core.utils.processes.windows_taskkill_tree", kill_tree)
     if sys.platform != "win32":
         monkeypatch.setattr("os.killpg", kill_tree)
-    # The child takes the request and never answers; only killing it ends its output.
+    # The child loads, takes the request and never answers; only killing it ends its output.
     process = Mock()
     process.poll.side_effect = lambda: 0 if killed.is_set() else None
-    process.stdin.write.side_effect = lambda _line: asked.set()
-    process.stdout.readline.side_effect = lambda _size: "" if killed.wait(10) else "{}"
+    process.stdin.write.side_effect = lambda line: '"text"' in line and asked.set()
+    loaded = iter(['{"loaded":true}\n'])
+
+    def readline(_size):
+        if (line := next(loaded, None)) is not None:
+            return line
+        return "" if killed.wait(10) else "{}"
+
+    process.stdout.readline.side_effect = readline
     monkeypatch.setattr(speech_local.subprocess, "Popen", Mock(return_value=process))
     setup = LocalSpeechSetup(engine="qwen3-tts", directory=tmp_path)
     entry = SpeechEngineDefinition(

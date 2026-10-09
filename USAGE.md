@@ -801,10 +801,11 @@ In **Settings → Voice → Speech models → Speech to text**, select
 **Qwen3 ASR 1.7B (local)**, **Qwen3 ASR 0.6B (local)**, **Parakeet TDT v3 (local)**, or
 **Nemotron 3.5 ASR Streaming 0.6B (local)**; searching for **local** finds
 all four. Expand its options to choose device, precision,
-or a model directory. Qwen accepts
-an optional language and vocabulary/context hint. Parakeet detects language
-automatically. Nemotron accepts an empty language for automatic detection or a
-code such as `de` / `de-DE` for German. Its native streaming engine reuses
+or a model directory. Qwen and Nemotron offer a **Language** list: **Automatic**
+detects the language in each recording, or choose one of the languages the model
+supports (Nemotron also tells regional variants such as English (US) and English (UK)
+apart). Qwen also accepts a vocabulary/context hint. Parakeet detects language
+automatically. Nemotron's native streaming engine reuses
 computed context inside each recording segment; the current Chat still returns
 the complete transcript after submission. You can also select a Model through the CLI
 (the earlier ids `local/qwen3-asr` and `local/qwen3-tts` no longer exist; choose a Model again if one was saved):
@@ -879,7 +880,10 @@ expressiveness and guidance controls and the upstream built-in voice/watermark.
 No voice-cloning input is exposed by this integration.
 
 After saving the binding and options, enter a short text and choose **Generate
-voice preview**. The first request loads the installed model, then generates audio. Live status and elapsed time remain
+voice preview**. The first request loads the installed model, then generates audio;
+turn on **Load at server start** in the engine's options to have it loaded in the
+background after the server starts and whenever you change this binding, as for speech
+recognition. Live status and elapsed time remain
 visible; the audio player appears when the complete WAV is ready. The Agent's
 existing `generate_speech` Tool uses the same saved engine and voice options.
 Local requests accept up to 5,000 characters and split longer passages within

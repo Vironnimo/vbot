@@ -6,6 +6,7 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from core.model_tasks.constants import TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH
 from core.runtime._recall import text_embedding_binding
 from core.settings.normalizers import normalize_debug_settings
 from core.utils.logging import get_logger
@@ -14,6 +15,7 @@ if TYPE_CHECKING:
     from core.runtime.runtime import Runtime
 
 _LOGGER = get_logger("runtime.settings")
+_SPEECH_TASKS = (TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH)
 
 
 @dataclass(frozen=True)
@@ -72,8 +74,13 @@ async def apply_settings_change(
         runtime.reload_keep_awake()
     if previous.get("timezone") != current.get("timezone"):
         runtime.reload_timezone()
-    if _speech_to_text_binding(previous) != _speech_to_text_binding(current):
-        runtime.speech.preload_configured()
+    changed_speech = [
+        task_type
+        for task_type in _SPEECH_TASKS
+        if _binding(previous, task_type) != _binding(current, task_type)
+    ]
+    if changed_speech:
+        runtime.speech.preload_configured(changed_speech)
     debug_enabled = _debug_enabled(current)
     if _debug_enabled(previous) != debug_enabled:
         # Provider traffic capture is a privacy-relevant mode an operator must see.
@@ -90,9 +97,9 @@ def _debug_enabled(settings: Mapping[str, Any]) -> bool:
     return bool(normalize_debug_settings(settings.get("debug"))["enabled"])
 
 
-def _speech_to_text_binding(settings: Mapping[str, Any]) -> Any:
+def _binding(settings: Mapping[str, Any], task_type: str) -> Any:
     model_tasks = settings.get("model_tasks")
-    return model_tasks.get("speech_to_text") if isinstance(model_tasks, dict) else None
+    return model_tasks.get(task_type) if isinstance(model_tasks, dict) else None
 
 
 def _disabled_names(settings: Mapping[str, Any]) -> set[str]:

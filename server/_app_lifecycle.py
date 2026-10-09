@@ -132,7 +132,7 @@ def _start_statistics_warmup(state: Any) -> asyncio.Task[None]:
 
 
 def _start_speech_preload(runtime: Any) -> None:
-    """Start loading a local STT model whose binding asks to be loaded at startup."""
+    """Start loading the local speech models whose bindings ask to be loaded at startup."""
     runtime.speech.preload_configured()
 
 
