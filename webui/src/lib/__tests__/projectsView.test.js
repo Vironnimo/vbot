@@ -723,7 +723,7 @@ describe('Projects controller Team overrides', () => {
           temperature: 0.3,
           top_p: 0.8,
           thinking_effort: 'low',
-          tool_loading: { on_demand: true, always_loaded: ['read'] },
+          tool_loading: { on_demand: false, always_loaded: ['read'] },
         },
         effective: {
           model: { value: 'openai/gpt-mini', source: 'override' },
@@ -757,7 +757,8 @@ describe('Projects controller Team overrides', () => {
       thinking_effort: 'low',
       compaction_policy: null,
       tool_access: { mode: 'all' },
-      tool_loading: { on_demand: true, always_loaded: ['read'] },
+      // Switched off, the override keeps its Always loaded list.
+      tool_loading: { on_demand: false, always_loaded: ['read'] },
     });
     expect(controller.overrideDraft('planner')).toEqual({
       model: 'openai/gpt-5.2',
@@ -778,7 +779,12 @@ describe('Projects controller Team overrides', () => {
     ['temperature', '', null],
     ['top_p', 'abc', null],
     ['tool_loading', { on_demand: true }, { on_demand: true }],
-    ['tool_loading', { on_demand: false, always_loaded: ['read'] }, null],
+    [
+      'tool_loading',
+      { on_demand: false, always_loaded: ['read'] },
+      { on_demand: false, always_loaded: ['read'] },
+    ],
+    ['tool_loading', { on_demand: false }, null],
   ])('sets the %s override typed as %j to %j', async (field, draft, sent) => {
     const setOverride = vi.fn().mockResolvedValue({ scan });
     const { controller } = await loadedController({}, { setOverride });
@@ -795,10 +801,11 @@ describe('Projects controller Team overrides', () => {
     }
   });
 
-  // An emptied sampling box and On-demand Tools switched off mean no override.
+  // An emptied sampling box and On-demand Tools switched off without an
+  // Always loaded list mean no override.
   it.each([
     ['temperature', ''],
-    ['tool_loading', { on_demand: false, always_loaded: ['read'] }],
+    ['tool_loading', { on_demand: false }],
   ])('clears the %s override saved as %j', async (field, draft) => {
     const setOverride = vi.fn().mockResolvedValue({ scan });
     const clearOverride = vi.fn().mockResolvedValue({ scan });

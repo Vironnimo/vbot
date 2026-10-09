@@ -15,7 +15,7 @@ import {
 import { scheduleAutosave } from '../autosave.js';
 import { t } from '../i18n.js';
 import { shouldApplyReloadNow } from '../resourceInvalidation.js';
-import { normalizeToolAccess } from '../toolAccess.js';
+import { normalizeToolAccess, normalizeToolLoading } from '../toolAccess.js';
 import {
   emptyScanSkills,
   createProjectEditForm,
@@ -28,7 +28,6 @@ import {
   normalizeProjects,
   projectTeam,
   seedTeamOverrideDraft,
-  teamToolLoadingDraft,
   normalizeOverrideNumber,
   normalizeScanReport,
 } from './presentation.js';
@@ -626,7 +625,7 @@ export function createProjectsController({
       ...state.overrideDrafts,
       [agentId]: {
         ...overrideDraft(agentId),
-        [field]: field === 'tool_loading' ? teamToolLoadingDraft(value) : value,
+        [field]: field === 'tool_loading' ? normalizeToolLoading(value) : value,
       },
     };
     state.editError = '';
@@ -673,7 +672,7 @@ export function createProjectsController({
       return normalizeToolAccess(draft.tool_access);
     }
     if (field === 'tool_loading') {
-      return teamToolLoadingDraft(draft.tool_loading);
+      return normalizeToolLoading(draft.tool_loading);
     }
     return draft.thinking_effort;
   }
@@ -696,7 +695,7 @@ export function createProjectsController({
       return draft.tool_access !== null;
     }
     if (field === 'tool_loading') {
-      return teamToolLoadingDraft(draft.tool_loading) !== null;
+      return normalizeToolLoading(draft.tool_loading) !== null;
     }
     return typeof draft.thinking_effort === 'string';
   }
@@ -759,12 +758,13 @@ export function createProjectsController({
     return true;
   }
 
-  // An emptied sampling box and On-demand Tools switched off mean "no
-  // override": saving them clears the override.
+  // An emptied sampling box and On-demand Tools switched off without an
+  // explicit Always loaded list mean "no override": saving them clears the
+  // override. Switched off with a list, the override keeps the list.
   function isClearedOverrideDraft(agentId, field) {
     const draft = overrideDraft(agentId);
     if (field === 'tool_loading') {
-      return teamToolLoadingDraft(draft.tool_loading) === null;
+      return normalizeToolLoading(draft.tool_loading) === null;
     }
     return (
       (field === 'temperature' || field === 'top_p') &&

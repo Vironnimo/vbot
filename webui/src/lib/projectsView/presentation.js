@@ -723,16 +723,9 @@ export function seedTeamOverrideDraft(member) {
     tool_access: isPlainObject(overrides.tool_access)
       ? normalizeToolAccess(overrides.tool_access)
       : normalizeToolAccess(effective.tool_access?.value),
-    tool_loading: teamToolLoadingDraft(overrides.tool_loading),
+    // Like the Agent's own value: null while off without an explicit list.
+    tool_loading: normalizeToolLoading(overrides.tool_loading),
   };
-}
-
-// A Team member's On-demand Tools draft. Without an override the switch is
-// off, so the draft holds an override only while the switch is on; null
-// (switched off) clears the override.
-export function teamToolLoadingDraft(value) {
-  const loading = normalizeToolLoading(value);
-  return loading?.on_demand ? loading : null;
 }
 
 // A sampling override value (temperature, top_p) for the payload: a
