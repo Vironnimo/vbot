@@ -89,6 +89,7 @@ from core.tools.availability import (
     normalize_tool_access,
 )
 from core.tools.live import LIVE_TOOL_NAMES
+from core.tools.on_demand import TOOL_LOADING_FIELDS, normalize_tool_loading
 from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.timestamps import utc_now_timestamp
 
@@ -150,6 +151,7 @@ _AGENT_CONFIG_FIELDS = frozenset(
         "temperature",
         "thinking_effort",
         "tool_access",
+        "tool_loading",
         "top_p",
         "updated_at",
         "workspace",
@@ -172,11 +174,13 @@ AGENT_ORDER_FORMAT_VERSION = 1
 AGENT_RENAME_FORMAT_VERSION = 1
 
 TOOL_ACCESS_SHAPE = json_object(TOOL_ACCESS_FIELDS)
+TOOL_LOADING_SHAPE = json_object(TOOL_LOADING_FIELDS)
 AGENT_SHAPE = json_document(
     _AGENT_CONFIG_FIELDS,
     {
         "compaction_policy": COMPACTION_POLICY_SHAPE,
         "tool_access": TOOL_ACCESS_SHAPE,
+        "tool_loading": TOOL_LOADING_SHAPE,
         "tools": json_map(
             OPAQUE,
             known={
@@ -322,6 +326,8 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
             normalize_tool_access(strip_unknown_fields(tool_access, TOOL_ACCESS_SHAPE))
         except ValueError as error:
             add_error(diagnostics, "$.tool_access", str(error))
+    if data.get("tool_loading") is not None:
+        validate_tool_loading_diagnostics(diagnostics, "$.tool_loading", data["tool_loading"])
     if data.get("allowed_skills") is not None:
         validate_string_list(diagnostics, "$.allowed_skills", data["allowed_skills"])
     excluded_skills = data.get("excluded_skills")
@@ -422,6 +428,26 @@ def _validate_agent_tools_diagnostics(diagnostics: list[JsonDiagnostic], tools: 
             "$.tools.subagent.allowed_agents",
             subagent["allowed_agents"],
         )
+
+
+def validate_tool_loading_diagnostics(
+    diagnostics: list[JsonDiagnostic], path: str, value: Any
+) -> None:
+    """Report a stored ``tool_loading`` object that cannot load; unknown fields only warn."""
+    warn_unknown_fields(diagnostics, path, value, TOOL_LOADING_SHAPE, label="tool_loading field")
+    try:
+        normalize_tool_loading(strip_unknown_fields(value, TOOL_LOADING_SHAPE))
+    except ValueError as error:
+        add_error(diagnostics, path, str(error))
+
+
+def _validate_tool_loading(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    try:
+        return normalize_tool_loading(value)
+    except ValueError as error:
+        raise AgentError(str(error)) from error
 
 
 def _validate_agent_config_id(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
@@ -681,6 +707,7 @@ def _agent_from_dict(
             if isinstance(data.get("compaction_policy"), dict)
             else None
         ),
+        tool_loading=_validate_tool_loading(data.get("tool_loading")),
         librarian_enabled=(
             DEFAULT_LIBRARIAN_ENABLED if librarian_enabled is None else bool(librarian_enabled)
         ),
@@ -709,6 +736,7 @@ def _with_builtin_capabilities(agent: Agent) -> Agent:
         librarian_enabled=False,
         root_project_id=None,
         tools={},
+        tool_loading=None,
     )
 
 
@@ -732,6 +760,8 @@ def _agent_document(agent: Agent, *, workspace: str) -> JsonObject:
         persisted.pop("excluded_skills")
     if persisted["top_p"] is None:
         persisted.pop("top_p")
+    if persisted["tool_loading"] is None:
+        persisted.pop("tool_loading")
     if persisted["builtin"] is None:
         persisted.pop("builtin")
     persisted.pop("skill_agent_id")

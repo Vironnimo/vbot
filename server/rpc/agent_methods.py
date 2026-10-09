@@ -32,6 +32,7 @@ from core.tools.availability import (
     normalize_env_keys,
     normalize_tool_access,
 )
+from core.tools.on_demand import normalize_tool_loading
 from core.utils.logging import get_logger
 from server.events import (
     RESOURCE_KIND_AGENTS,
@@ -377,6 +378,7 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
         "tools",
         "custom_system_prompt_enabled",
         "compaction_policy",
+        "tool_loading",
         "librarian_enabled",
     }
     if not for_create:
@@ -549,6 +551,13 @@ def _validate_agent_field(key: str, value: Any) -> Any:
 
             return normalize_compaction_policy(value)
         except Exception as exc:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    if key == "tool_loading":
+        if value is None:
+            return None
+        try:
+            return normalize_tool_loading(value)
+        except ValueError as exc:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     raise RpcError(RPC_ERROR_INVALID_REQUEST, f"unsupported agent field: {key}")
 

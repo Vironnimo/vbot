@@ -111,6 +111,7 @@ class ExtensionAPI:
         parameters: dict[str, Any],
         handler: Callable[..., Any],
         *,
+        summary: str | None = None,
         internal: bool = False,
         catalog_visible: bool = True,
         requires_opt_in: bool = False,
@@ -139,7 +140,10 @@ class ExtensionAPI:
         the provider tool definitions, and the tool picker until it is ready
         (e.g. once the extension's credential is set). ``None`` means always
         ready. ``readiness_hint`` is optional English text explaining that
-        precondition, surfaced by the ``tool.list`` RPC.
+        precondition, surfaced by the ``tool.list`` RPC. ``summary`` is an
+        optional one-sentence, Model-facing text that lists the Tool where its
+        full definition is not shown (an Agent loading Tools on demand); without
+        it, the description's first sentence is used.
         """
         self._declarations.tools.append(
             ToolDeclaration(
@@ -147,6 +151,7 @@ class ExtensionAPI:
                 description=description,
                 parameters=parameters,
                 handler=handler,
+                summary=summary,
                 internal=internal,
                 catalog_visible=catalog_visible,
                 requires_opt_in=requires_opt_in,

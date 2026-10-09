@@ -111,6 +111,19 @@ class LiveToolHosts:
         return self._hosts.get(session_id)
 
 
+# Agent-facing: one-line summaries for Tools whose description's first sentence
+# is too long to list them by.
+_SUMMARIES = {
+    TOOL_OVERVIEW: (
+        "Show what is going on in vBot: Agents, Projects, running and recently finished "
+        "Sessions, and coding Terminals."
+    ),
+    TOOL_VBOT_REQUEST: (
+        "Hand one request to vBot, which operates the app for the user; its result arrives "
+        "later as this Tool's output."
+    ),
+}
+
 # A Live Tool row shows what the call acts on, else the task or text it passes on.
 _LIVE_TOOL_DISPLAY = ToolDisplay(
     primary_candidates=(
@@ -132,6 +145,7 @@ def register_live_tools(registry: ToolRegistry, hosts: LiveToolHosts) -> None:
             definition["description"],
             definition["parameters"],
             _live_tool_handler(hosts),
+            summary=_SUMMARIES.get(definition["name"]),
             family=LIVE_TOOL_FAMILY,
             display=_LIVE_TOOL_DISPLAY,
             result_schema={"type": "object"},
@@ -147,6 +161,7 @@ def register_live_tools(registry: ToolRegistry, hosts: LiveToolHosts) -> None:
         request["description"],
         request["parameters"],
         _vbot_request_handler(hosts),
+        summary=_SUMMARIES[TOOL_VBOT_REQUEST],
         family=LIVE_TOOL_FAMILY,
         display=ToolDisplay(primary_candidates=(ToolDisplayField("request", quote=True),)),
         result_schema={"type": "object", "required": ["content"]},

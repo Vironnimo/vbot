@@ -131,11 +131,12 @@ async def test_handler_context_without_run_hooks_uses_the_workspace_and_ignores_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("name", "allowed_tools", "model_name", "expected"),
+    ("name", "allowed_tools", "listed", "model_name", "expected"),
     [
         pytest.param(
             "missing_tool",
             ["read_file", "hidden"],
+            None,
             None,
             tool_failure(
                 "tool_not_found",
@@ -146,6 +147,7 @@ async def test_handler_context_without_run_hooks_uses_the_workspace_and_ignores_
         pytest.param(
             "missing_tool",
             ["read_file", "denied"],
+            ("read_file",),
             None,
             tool_failure(
                 "tool_not_found",
@@ -155,7 +157,20 @@ async def test_handler_context_without_run_hooks_uses_the_workspace_and_ignores_
         ),
         pytest.param(
             "missing_tool",
+            ["read_file", "denied", "loader", "lazy"],
+            ("read_file", "loader", "lazy"),
+            None,
+            tool_failure(
+                "tool_not_found",
+                "Unknown Tool: missing_tool. "
+                "Call one of the available Tools instead: lazy, loader, read_file.",
+            ),
+            id="unknown-names-listed-internal-and-on-demand-tools",
+        ),
+        pytest.param(
+            "missing_tool",
             [],
+            None,
             None,
             tool_failure(
                 "tool_not_found", "Unknown Tool: missing_tool. No Tools are available in this Run."
@@ -166,12 +181,14 @@ async def test_handler_context_without_run_hooks_uses_the_workspace_and_ignores_
             "read_file",
             [],
             None,
+            None,
             tool_failure("tool_not_allowed", "Tool not allowed: read_file."),
             id="not-allowed",
         ),
         pytest.param(
             "read_file",
             [],
+            None,
             "host_read",
             tool_failure("tool_not_allowed", "Tool not allowed: host_read."),
             id="not-allowed-under-its-model-name",
@@ -182,6 +199,7 @@ async def test_unknown_or_disallowed_tool_becomes_a_failed_result(
     monkeypatch: pytest.MonkeyPatch,
     name: str,
     allowed_tools: list[str],
+    listed: tuple[str, ...] | None,
     model_name: str | None,
     expected: JsonObject,
 ) -> None:
@@ -193,11 +211,17 @@ async def test_unknown_or_disallowed_tool_becomes_a_failed_result(
         "hidden", "Deferred Tool.", {"type": "object"}, lambda _c, _a: {}, deferred=True
     )
     registry.register("denied", "Not allowed.", {"type": "object"}, lambda _c, _a: {})
+    registry.register("loader", "Internal.", {"type": "object"}, lambda _c, _a: {}, internal=True)
+    registry.register("lazy", "On demand.", {"type": "object"}, lambda _c, _a: {})
 
     # A request that lists Tools (its input contracts) names only those; "denied" is
-    # allowed but was not listed in the request.
-    listed = {"input_contracts": {"read_file": registry.get("read_file").contract}}
-    config = listed if "denied" in allowed_tools else {}
+    # allowed but was not listed in the request. An internal Tool counts once the
+    # request lists it, and an On-demand Tool ("lazy") counts as callable before it
+    # is loaded.
+    config: dict[str, Any] = {}
+    if listed is not None:
+        config["input_contracts"] = {tool: registry.get(tool).contract for tool in listed}
+        config["loadable_tools"] = {tool: {"name": tool} for tool in listed if tool == "lazy"}
     result = await _run_one(
         registry, name, {"path": "SOUL.md"}, allowed_tools=allowed_tools, **config
     )

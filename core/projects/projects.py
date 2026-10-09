@@ -118,9 +118,18 @@ def project_tool_configurability_reason(
 
 
 # The optional fields a per-agent override may carry. Each maps to the top tier of
-# the matching config-agent resolver chain (model / temperature / top_p / thinking effort).
+# the matching config-agent resolver chain (model / temperature / top_p / thinking effort);
+# ``tool_loading`` has no chain: without an override the Agent has no On-demand Tools.
 OVERRIDE_FIELDS: frozenset[str] = frozenset(
-    {"model", "temperature", "top_p", "thinking_effort", "compaction_policy", "tool_access"}
+    {
+        "model",
+        "temperature",
+        "top_p",
+        "thinking_effort",
+        "compaction_policy",
+        "tool_access",
+        "tool_loading",
+    }
 )
 
 _PROJECT_CONFIG_FIELDS = frozenset(
@@ -152,10 +161,11 @@ PROJECT_FORMAT_VERSION = 1
 def project_shape() -> JsonShape:
     """Return the modeled fields of ``project.json``.
 
-    Built on first use because the Tools-owned ``tool_access`` fields are imported
-    lazily (see :func:`_normalize_tool_access_policy`).
+    Built on first use because the Tools-owned ``tool_access`` and ``tool_loading``
+    fields are imported lazily (see :func:`_normalize_tool_access_policy`).
     """
     from core.tools.availability import TOOL_ACCESS_FIELDS
+    from core.tools.on_demand import TOOL_LOADING_FIELDS
 
     return json_document(
         _PROJECT_CONFIG_FIELDS,
@@ -170,6 +180,7 @@ def project_shape() -> JsonShape:
                     {
                         "compaction_policy": COMPACTION_POLICY_SHAPE,
                         "tool_access": json_object(TOOL_ACCESS_FIELDS),
+                        "tool_loading": json_object(TOOL_LOADING_FIELDS),
                     },
                 ),
                 drop_empty=True,
@@ -400,6 +411,11 @@ def _validate_one_override_schema(
             _normalize_tool_access_policy(override["tool_access"])
         except ValueError as error:
             add_error(diagnostics, child_path(path, "tool_access"), str(error))
+    if "tool_loading" in override:
+        try:
+            _normalize_tool_loading(override["tool_loading"])
+        except ValueError as error:
+            add_error(diagnostics, child_path(path, "tool_loading"), str(error))
 
 
 def _validate_override_ceiling_diagnostics(
@@ -833,6 +849,11 @@ def _validate_override(agent_id: str, override: Any) -> dict[str, Any]:
         except ValueError as exc:
             raise ProjectError(str(exc)) from exc
         validated["tool_access"] = policy.to_dict()
+    if "tool_loading" in override:
+        try:
+            validated["tool_loading"] = _normalize_tool_loading(override["tool_loading"])
+        except ValueError as exc:
+            raise ProjectError(f"overrides[{agent_id!r}].{exc}") from exc
     return validated
 
 
@@ -930,3 +951,11 @@ def _normalize_tool_access_policy(value: Any) -> Any:
     from core.tools.availability import normalize_tool_access
 
     return normalize_tool_access(value)
+
+
+def _normalize_tool_loading(value: Any) -> dict[str, Any]:
+    """Import the Tools-owned ``tool_loading`` validator lazily to avoid package cycles."""
+
+    from core.tools.on_demand import normalize_tool_loading
+
+    return normalize_tool_loading(value)

@@ -135,9 +135,9 @@ def normalize_tool_access(value: ToolAccess | Mapping[str, Any] | None) -> ToolA
     if mode != TOOL_ACCESS_MODE_SELECTED and has_allowed:
         raise ValueError("tool_access.allowed is only valid when mode is selected")
 
-    allowed = _normalize_tool_name_list(value.get("allowed", ()), "tool_access.allowed")
-    denied = _normalize_tool_name_list(value.get("denied", ()), "tool_access.denied")
-    granted = _normalize_tool_name_list(value.get("granted", ()), "tool_access.granted")
+    allowed = normalize_tool_name_list(value.get("allowed", ()), "tool_access.allowed")
+    denied = normalize_tool_name_list(value.get("denied", ()), "tool_access.denied")
+    granted = normalize_tool_name_list(value.get("granted", ()), "tool_access.granted")
     overlap = sorted(set(allowed) & set(denied))
     if overlap:
         names = ", ".join(overlap)
@@ -218,7 +218,8 @@ def resolve_tool_access(
     )
 
 
-def _normalize_tool_name_list(value: Any, field_name: str) -> tuple[str, ...]:
+def normalize_tool_name_list(value: Any, field_name: str) -> tuple[str, ...]:
+    """Validate a list of Tool names: unique, non-blank strings without the wildcard."""
     if not isinstance(value, (list, tuple)) or not all(isinstance(item, str) for item in value):
         raise ValueError(f"{field_name} must be a list of strings")
     names = tuple(dict.fromkeys(value))

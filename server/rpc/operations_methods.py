@@ -11,6 +11,7 @@ from core.projects import (
     runtime_agent_body,
 )
 from core.prompts import ProjectPromptContext, PromptError, SystemPromptManager
+from core.tools.on_demand import on_demand_tools
 from core.utils.log_viewer import LogViewer
 from core.utils.logging import get_logger
 from core.utils.tokens import estimate_json_tokens, estimate_tokens
@@ -329,8 +330,11 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(exc) from exc
     # The provider tool-definition array occupies model context alongside the
     # prompt text but is not part of it — report it separately so the preview
-    # reflects the request's real prompt-side footprint.
+    # reflects the request's real prompt-side footprint. An On-demand Tool is
+    # not in that array (the prompt text lists it), so only listed Tools count.
     tool_definitions = await prompt_manager.provider_tool_definitions_async(agent)
+    left_out = on_demand_tools(agent, (str(definition["name"]) for definition in tool_definitions))
+    listed = [definition for definition in tool_definitions if definition["name"] not in left_out]
 
     def estimate_preview() -> tuple[int, bool, int, list[JsonObject]]:
         # Corrected like every Context estimate: local count times the learned
@@ -343,10 +347,14 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
             return round(count * factor)
 
         token_count, estimated = estimate_tokens(text)
-        tool_tokens = estimate_json_tokens(tool_definitions)[0] if tool_definitions else 0
+        tool_tokens = estimate_json_tokens(listed)[0] if listed else 0
         tools = (
             [
-                {"definition": definition, "tokens": corrected(estimate_json_tokens(definition)[0])}
+                {
+                    "definition": definition,
+                    "tokens": corrected(estimate_json_tokens(definition)[0]),
+                    **({"on_demand": True} if definition["name"] in left_out else {}),
+                }
                 for definition in tool_definitions
             ]
             if include_tools
@@ -359,7 +367,7 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
         "text": text,
         "tokens": token_count,
         "tool_tokens": tool_tokens,
-        "tool_count": len(tool_definitions),
+        "tool_count": len(listed),
         "estimated": estimated,
     }
     if include_tools:

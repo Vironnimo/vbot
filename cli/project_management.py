@@ -469,7 +469,7 @@ def _coerce_override_value(field: str, raw_value: str) -> object:
             return float(raw_value)
         except ValueError as exc:
             raise ValueError(f"{field} override must be a number") from exc
-    if field in {"compaction_policy", "tool_access"}:
+    if field in {"compaction_policy", "tool_access", "tool_loading"}:
         try:
             value = json.loads(raw_value)
         except json.JSONDecodeError as exc:

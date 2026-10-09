@@ -146,6 +146,8 @@ class TemporaryAgent:
     created_at: str = ""
     updated_at: str = ""
     compaction_policy: dict[str, Any] | None = None
+    # A temporary Agent has no On-demand Tools.
+    tool_loading: dict[str, Any] | None = None
 
 
 class TemporaryAgentRegistry:

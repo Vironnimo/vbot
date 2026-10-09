@@ -13,6 +13,7 @@ from core.prompts.blocks import BlockDefinition, LayoutEntry
 from core.subagents import SubAgentPromptTarget
 from core.tools import ToolRegistry, model_names, tool_success
 from core.tools.file_state import FileReadState
+from core.tools.load_tools import register_load_tools_tool
 from core.tools.project import register_project_tool
 from core.tools.shell import register_shell_tool
 from core.tools.subagent import register_subagent_tools
@@ -426,3 +427,65 @@ def test_session_grant_drives_provider_and_enabled_live_tool_list(
     assert "session_board" not in preview_prompt
     assert [definition["name"] for definition in live_definitions] == ["session_board"]
     assert "- session_board: Post to the Session board." in live_prompt
+
+
+def test_on_demand_tools_are_listed_in_their_block_instead_of_the_tool_list(
+    workspace: Path, tmp_path: Path
+) -> None:
+    registry = ToolRegistry()
+    prompt_blocks = ToolPromptBlockRegistry()
+    register_load_tools_tool(registry, prompt_blocks)
+    for name, description in (
+        ("read", "Read a file."),
+        ("zip", "Pack files. Keeps modes."),
+        ("fetch", "Fetch a page."),
+    ):
+        registry.register(
+            name, description, {"type": "object"}, lambda _context, _args: tool_success({})
+        )
+    zip_guidance = BlockDefinition(id="tool:zip", owner="tool:zip", default_text="Zip guidance.")
+    manager = _manager(
+        tmp_path,
+        tools=registry,
+        block_store=_TOOLS_LIST_ON,
+        block_definitions=[*prompt_blocks.block_definitions(), zip_guidance],
+    )
+    agent = replace(
+        _agent(workspace, allowed_tools=["read", "zip", "fetch"]),
+        tool_loading={"on_demand": True, "always_loaded": ["read"]},
+    )
+
+    definitions = manager.provider_tool_definitions(agent)
+    live = manager.build_system_prompt(agent)
+
+    # The Run pins from every definition; load_tools joins them while the switch is on.
+    assert sorted(str(definition["name"]) for definition in definitions) == [
+        "fetch",
+        "load_tools",
+        "read",
+        "zip",
+    ]
+    assert "## Tools Loaded on Demand\n\n" in live
+    assert "in one call.\n\n- fetch: Fetch a page.\n- zip: Pack files." in live
+    # The Tool list block shows only what the Tool list keeps; Tool blocks still render.
+    assert "- read: Read a file." in live
+    assert "Keeps modes" not in live
+    assert "Zip guidance." in live
+
+    # A pinned epoch lists its pinned entries; with none left the block renders nothing.
+    kept = [
+        definition for definition in definitions if definition["name"] in ("read", "load_tools")
+    ]
+    pinned = manager.build_system_prompt(
+        agent, effective_tool_definitions=kept, on_demand_tools=(("zip", "Pack files."),)
+    )
+    assert "\n- zip: Pack files." in pinned
+    assert "fetch" not in pinned
+    assert "Zip guidance." in pinned
+    empty = manager.build_system_prompt(agent, effective_tool_definitions=kept, on_demand_tools=())
+    assert "## Tools Loaded on Demand" not in empty
+
+    switched_off = manager.build_system_prompt(replace(agent, tool_loading={"on_demand": False}))
+    assert "## Tools Loaded on Demand" not in switched_off
+    assert "load_tools" not in switched_off
+    assert "- zip: Pack files. Keeps modes." in switched_off

@@ -29,6 +29,7 @@ from core.tools._tool_context import (
     ToolEmitHook,
     ToolExecutionConfig,
     ToolHandler,
+    ToolLoadHook,
     ToolNoteHook,
     ToolResultPayloadHook,
     ToolResultPersistedCallback,
@@ -51,6 +52,7 @@ from core.tools._tool_definitions import (
     ToolNotFoundError,
     ToolReadinessPredicate,
     tool_is_ready,
+    tool_summary,
 )
 from core.tools._tool_display import (
     DEFAULT_TOOL_DISPLAY_MAX_CHARACTERS,
@@ -218,6 +220,7 @@ class ToolRegistry:
         parameters: JsonObject,
         handler: ToolHandler,
         *,
+        summary: str | None = None,
         internal: bool = False,
         deferred: bool = False,
         session_scoped: bool = False,
@@ -254,6 +257,8 @@ class ToolRegistry:
         extension (``None`` for a built-in), set at extension-tool apply time.
         ``definition_change_note`` lets a Tool announce a change of its
         description to a Session that already knows it (see :class:`Tool`).
+        ``summary`` is the optional one-sentence, Model-facing text that lists
+        the Tool where its full definition is not shown (:func:`tool_summary`).
         """
         family_definition = None
         if family is not None:
@@ -278,6 +283,7 @@ class ToolRegistry:
             parameters=parameters,
             handler=handler,
             result_schema=result_schema,
+            summary=summary,
             internal=internal,
             deferred=deferred,
             session_scoped=session_scoped,
@@ -634,14 +640,22 @@ class ToolRegistry:
     def _unknown_tool_message(
         self, context: ToolContext, allowed_tools: Sequence[str] | None
     ) -> str:
-        """Name the Tools this caller can use instead of an unknown one."""
+        """Name the Tools this caller can use instead of an unknown one.
+
+        These are the Tools the Model was shown and the On-demand Tools it can
+        load; an internal Tool counts only when the Model request listed it.
+        """
         available = [
             model_tool_name(tool.name)
-            for tool in self.list_tools(allowed_tools, ready_only=True)
+            for tool in self.list_tools(allowed_tools, include_internal=True, ready_only=True)
             if not tool.deferred
             and (not tool.session_scoped or tool.name in context.session_tool_grants)
             and (not tool.requires_opt_in or tool.name in (allowed_tools or ()))
-            and context.offers(tool.name)
+            and (
+                context.offers(tool.name)
+                or (tool.name in context.loadable_tools and context.can_call(tool.name))
+            )
+            and (not tool.internal or tool.name in (context.offered_tools or ()))
         ]
         if not available:
             return f"Unknown Tool: {context.tool_name}. No Tools are available in this Run."
@@ -787,7 +801,9 @@ class ToolPromptBlockRegistry:
     """
 
     def __init__(self) -> None:
-        self._declarations: dict[str, tuple[str | None, Callable[..., Any] | None, str | None]] = {}
+        self._declarations: dict[
+            str, tuple[str | None, Callable[..., Any] | None, str | None, str | None]
+        ] = {}
 
     def register(
         self,
@@ -796,11 +812,15 @@ class ToolPromptBlockRegistry:
         default_text: str | None = None,
         render: Callable[..., Any] | None = None,
         owner: str | None = None,
+        requires_generated: str | None = None,
     ) -> None:
         """Declare a prompt block for *tool_name* (exactly one text / render).
 
         *owner* gates the block on another owner than ``tool:<tool_name>``, such
         as ``builtin:<kind>`` for guidance only one built-in Agent gets.
+        *requires_generated* names the ``{generated:NAME}`` producer a static
+        block lists: the block renders nothing while that producer renders
+        nothing (``BlockDefinition.requires_generated``).
 
         *render* returns the block's text, or a ``core.prompts.RenderedBlock``
         that also names the catalog the text lists. Chat pins a dynamic block's
@@ -822,7 +842,7 @@ class ToolPromptBlockRegistry:
                 tool_name,
             )
             return
-        self._declarations[tool_name] = (default_text, render, owner)
+        self._declarations[tool_name] = (default_text, render, owner, requires_generated)
 
     def block_definitions(self) -> list[Any]:
         """Return the declared blocks as ``core.prompts.BlockDefinition`` objects.
@@ -834,13 +854,14 @@ class ToolPromptBlockRegistry:
         from core.prompts import BlockDefinition
 
         definitions: list[Any] = []
-        for tool_name, (default_text, render, owner) in self._declarations.items():
+        for tool_name, (default_text, render, owner, required) in self._declarations.items():
             definitions.append(
                 BlockDefinition(
                     id=f"tool:{tool_name}",
                     owner=owner or f"tool:{tool_name}",
                     default_text=default_text,
                     render=render,
+                    requires_generated=required,
                 )
             )
         return definitions
@@ -949,7 +970,14 @@ class ToolExecutor:
                 tool_settings=config.tool_settings,
                 session_tool_grants=config.session_tool_grants,
                 input_contract=config.input_contracts.get(tool_call.name),
-                offered_tools=frozenset(config.input_contracts) or None,
+                # On-demand Tools have contracts before the Model was shown them.
+                offered_tools=(
+                    frozenset(config.input_contracts).difference(config.loadable_tools)
+                    if config.input_contracts
+                    else None
+                ),
+                loadable_tools=config.loadable_tools,
+                tool_load_hook=config.tool_load_registrar,
                 change_tracker=config.change_tracker,
             )
             return await self._dispatch_with_envelope(context, tool_call, config.allowed_tools)
@@ -1120,6 +1148,7 @@ __all__ = [
     "ToolExecutionConfig",
     "ToolExecutor",
     "ToolHandler",
+    "ToolLoadHook",
     "ToolNoteHook",
     "ToolNotAllowedError",
     "ToolNotFoundError",
@@ -1133,6 +1162,7 @@ __all__ = [
     "tool_failure",
     "tool_failure_for_exception",
     "tool_is_ready",
+    "tool_summary",
     "tool_success",
     "ToolCallCancelCheck",
     "ToolCallCancelRegistrar",

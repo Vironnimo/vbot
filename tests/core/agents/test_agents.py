@@ -318,6 +318,7 @@ def test_the_librarian_keeps_its_id_and_existence_and_changes_only_model_setting
     for operation in (
         lambda: store.update(LIBRARIAN_AGENT_ID, name="Curator"),
         lambda: store.update(LIBRARIAN_AGENT_ID, tool_access={"mode": "all"}),
+        lambda: store.update(LIBRARIAN_AGENT_ID, tool_loading={"on_demand": True}),
         lambda: store.rename(LIBRARIAN_AGENT_ID, "curator"),
         lambda: store.archive_files(LIBRARIAN_AGENT_ID, store.data_dir / "payload").__enter__(),
     ):
@@ -429,6 +430,23 @@ def test_tool_access_round_trips_and_updates_keep_tool_settings(
     assert persisted(store, "coder")["tools"] == subagent
 
 
+def test_tool_loading_persists_as_given_and_clears(store: AgentStore) -> None:
+    store.create("coder", "Coder", tool_loading={"on_demand": True})
+
+    # Without always_loaded the default set applies; nothing else is written.
+    assert store.get("coder").tool_loading == {"on_demand": True}
+    assert persisted(store, "coder")["tool_loading"] == {"on_demand": True}
+
+    # An explicit list, also an empty one, and unregistered Tool names stay as given.
+    for always_loaded in ([], ["read", "mcp_future_tool"]):
+        value = {"on_demand": True, "always_loaded": always_loaded}
+        assert store.update("coder", tool_loading=value).tool_loading == value
+        assert persisted(store, "coder")["tool_loading"] == value
+
+    assert store.update("coder", tool_loading=None).tool_loading is None
+    assert "tool_loading" not in persisted(store, "coder")
+
+
 def test_workspace_inside_data_dir_persists_relative_and_follows_a_moved_data_dir(
     tmp_path: Path, template_dir: Path
 ) -> None:
@@ -491,6 +509,19 @@ def test_workspace_inside_data_dir_persists_relative_and_follows_a_moved_data_di
             "yes",
             "custom_system_prompt_enabled must be a boolean",
         ),
+        ("tool_loading", {"always_loaded": []}, "tool_loading.on_demand is required"),
+        ("tool_loading", {"on_demand": "yes"}, "tool_loading.on_demand must be a boolean"),
+        (
+            "tool_loading",
+            {"on_demand": True, "always_loaded": ["read", "read"]},
+            "tool_loading.always_loaded must not contain duplicate names",
+        ),
+        (
+            "tool_loading",
+            {"on_demand": True, "always_loaded": ["*"]},
+            "tool_loading.always_loaded cannot contain '*'",
+        ),
+        ("tool_loading", {"on_demand": True, "lazy": True}, "unsupported tool_loading fields"),
     ],
 )
 def test_create_rejects_invalid_mutable_fields(
@@ -659,6 +690,7 @@ def test_agent_update_keeps_unknown_fields_of_every_modeled_level(store: AgentSt
             "strategy": {"type": "continuation"},
             "future_policy": 6,
         },
+        tool_loading={"on_demand": True, "future_loading": 7},
     )
 
     loaded = store.get("coder")
@@ -667,6 +699,7 @@ def test_agent_update_keeps_unknown_fields_of_every_modeled_level(store: AgentSt
     assert loaded.tools["bash"] == {"allowed_env": ["HOME"]}
     assert loaded.compaction_policy is not None
     assert "future_policy" not in loaded.compaction_policy
+    assert loaded.tool_loading == {"on_demand": True}
     rewritten = persisted(store, "coder")
     assert rewritten["format_version"] == 1
     assert rewritten["name"] == "Renamed"
@@ -678,6 +711,7 @@ def test_agent_update_keeps_unknown_fields_of_every_modeled_level(store: AgentSt
     assert rewritten["tools"]["custom"] == {"anything": 4}
     assert rewritten["compaction_policy"]["future_policy"] == 6
     assert rewritten["compaction_policy"]["trigger"]["future_trigger"] == 5
+    assert rewritten["tool_loading"] == {"on_demand": True, "future_loading": 7}
 
 
 def test_agent_written_by_a_newer_vbot_is_refused_and_left_unchanged(store: AgentStore) -> None:

@@ -130,6 +130,8 @@ class Agent:
     custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED
     memory_prompt_mode: MemoryPromptMode = DEFAULT_MEMORY_PROMPT_MODE
     compaction_policy: dict[str, Any] | None = None
+    # On-demand Tools (``core.tools.on_demand``): ``None`` leaves them off.
+    tool_loading: dict[str, Any] | None = None
     # Whether Librarian passes curate this Agent's own Skills; ``librarian.enabled``
     # still switches scheduled passes off for every Agent.
     librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED

@@ -20,6 +20,7 @@ from core.tools import (
     ToolRegistry,
     model_names,
     tool_success,
+    tool_summary,
 )
 from tests.core.tools.tools_test_support import (
     READ_FILE_SCHEMA,
@@ -81,6 +82,8 @@ def _file_tools() -> ToolRegistry:
         ({"display": object()}, "Tool display must be a ToolDisplay instance"),
         ({"ready": "nope"}, "Tool ready predicate must be callable"),
         ({"definition_change_note": "nope"}, "definition_change_note must be callable"),
+        ({"summary": "  "}, "Tool summary must be a non-empty string or None"),
+        ({"summary": "x" * 201}, "Tool summary must be at most 200 characters"),
         ({"activation": "mystery"}, "Unsupported Tool activation: mystery"),
         ({"activation": "follows"}, "A followed Tool requires activation_source"),
         ({"activation_source": "read"}, "activation_source is only valid for a followed Tool"),
@@ -226,6 +229,35 @@ def test_definitions_expose_only_copies_of_name_description_and_schema() -> None
     assert registry.prompt_definitions(["read_file"]) == [
         {"name": "read_file", "description": "Read a UTF-8 text file from the workspace."}
     ]
+
+
+@pytest.mark.parametrize(
+    ("summary", "description", "expected"),
+    [
+        pytest.param(
+            "Read one file.", "Read a file. Long details.", "Read one file.", id="declared"
+        ),
+        pytest.param(None, "Read a file. Long details.", "Read a file.", id="first-sentence"),
+        pytest.param(None, "Read a file\nwith details.", "Read a file", id="first-line"),
+        pytest.param(None, "Read  a\tfile v1.2 fast", "Read a file v1.2 fast", id="whole"),
+        pytest.param(None, "word " * 60, ("word " * 40)[:199] + "…", id="capped"),
+    ],
+)
+def test_summary_lists_a_tool_by_its_declared_text_or_first_sentence(
+    summary: str | None, description: str, expected: str
+) -> None:
+    registry = ToolRegistry()
+    tool = registry.register(
+        name="read_file",
+        description=description,
+        parameters=READ_FILE_SCHEMA,
+        handler=read_file_handler,
+        summary=summary,
+    )
+
+    assert tool_summary(tool) == expected
+    # A resolved description (Definition Profile) summarizes like the registered one.
+    assert tool_summary(tool, description) == expected
 
 
 def test_configuration_profile_is_stable_and_shared_by_provider_and_prompt() -> None:

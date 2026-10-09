@@ -44,6 +44,7 @@ def _all_optional_fields_null() -> dict[str, Any]:
             "root_project_id",
             "tools",
             "compaction_policy",
+            "tool_loading",
             "current_session_id",
         ]
     )
@@ -88,6 +89,10 @@ def test_validate_agent_data_accepts_a_document_that_names_only_its_id(
         ),
         ({"librarian_enabled": "no"}, ("$.librarian_enabled", "must be a boolean")),
         (
+            {"tool_loading": {"on_demand": True, "always_loaded": ["read", ""]}},
+            ("$.tool_loading", "tool_loading.always_loaded must not contain empty names"),
+        ),
+        (
             {"memory_prompt_mode": "sometimes"},
             ("$.memory_prompt_mode", "must be one of: agent, agent_user, off"),
         ),
@@ -130,6 +135,7 @@ def test_validate_agent_data_accepts_a_document_that_names_only_its_id(
         "bash-env-key",
         "custom-prompt-toggle",
         "librarian-switch",
+        "tool-loading-entry",
         "memory-mode",
         "non-finite-temperature",
         "temperature-range",

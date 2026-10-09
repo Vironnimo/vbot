@@ -15,6 +15,7 @@ from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.runs import ChatRunManager
 from core.sessions import SessionAddress, SessionNotFoundError
 from core.tools import ToolRegistry, tool_success
+from core.tools.load_tools import register_load_tools_tool
 from server.rpc.catalog_methods import _list_commands, _list_files, _list_tools
 from server.rpc.errors import RpcError
 from tests.server.rpc.chat_methods_test_support import _InlineSessionPool
@@ -577,21 +578,19 @@ async def test_tool_list_returns_public_tools_sorted_with_their_full_projection(
 ) -> None:
     state = make_state(tmp_path, StubAdapter())
     registry = state.runtime.tools
-    for name, description in (("z_tool", "Last tool"), ("a_tool", "First tool")):
+    for name, description in (
+        ("z_tool", "Last tool"),
+        ("a_tool", "First tool"),
+        ("read", "Read a file"),
+    ):
         registry.register(
             name,
             description,
             {"type": "object", "properties": {}, "additionalProperties": False},
             lambda _context, _arguments: tool_success({}),
         )
-    # The internal Skill loader is not a user-selectable Tool.
-    registry.register(
-        "skill",
-        "Load skills",
-        {"type": "object", "properties": {}, "additionalProperties": False},
-        lambda _context, _arguments: tool_success({}),
-        internal=True,
-    )
+    # The internal load_tools Tool is not user-selectable.
+    register_load_tools_tool(registry)
 
     result = await rpc_result(state, "tool.list")
 
@@ -614,8 +613,14 @@ async def test_tool_list_returns_public_tools_sorted_with_their_full_projection(
                 "parallel_safe": True,
                 "project_configurable": True,
                 "project_configurability_reason": None,
+                # On-demand Tools keep it in the Tool list by default.
+                "loaded_by_default": name == "read",
             }
-            for name, description in (("a_tool", "First tool"), ("z_tool", "Last tool"))
+            for name, description in (
+                ("a_tool", "First tool"),
+                ("read", "Read a file"),
+                ("z_tool", "Last tool"),
+            )
         ],
         "default_project_tools": list(PROJECT_DEFAULT_ALLOWED_TOOLS),
     }
