@@ -438,6 +438,33 @@ describe('ToolAccessEditor', () => {
       },
     );
 
+    // The stored value stays for when Tools are allowed again.
+    it('hides the switch and pins without Tool access and keeps the stored value', async () => {
+      const onChange = vi.fn();
+      const onToolLoadingChange = vi.fn();
+      const props = {
+        toolLoadingEditable: true,
+        toolLoading: { on_demand: true, always_loaded: ['read'] },
+        onChange,
+        onToolLoadingChange,
+      };
+      mountLoading(props);
+      expect(loadingSwitch()).toBeTruthy();
+      buttonWithText(t('toolAccess.deselectAll')).click();
+      expect(onChange).toHaveBeenLastCalledWith({ mode: 'none' });
+
+      await unmount(mountedComponent);
+      mountLoading({ ...props, value: { mode: 'none' } });
+      expect(loadingSwitch()).toBeNull();
+      expect(pins()).toEqual([]);
+      toolChip('read').click();
+      expect(onChange.mock.calls.at(-1)[0]).toMatchObject({
+        mode: 'selected',
+        allowed: ['read'],
+      });
+      expect(onToolLoadingChange).not.toHaveBeenCalled();
+    });
+
     it('shows the default set and writes the explicit list on the first change', () => {
       const onToolLoadingChange = vi.fn();
       mountLoading({
