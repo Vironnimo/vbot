@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,7 +14,13 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from core.automation import _cron_timing as cron_timing
-from core.automation.cron import CronJob, CronJobValidationError, CronOccurrence, CronService
+from core.automation.cron import (
+    CronJob,
+    CronJobValidationError,
+    CronOccurrence,
+    CronService,
+    CronStorageError,
+)
 from core.calendar import BoundJob, CalendarService, EventJobTargetMissingError
 from core.projects import ResolutionAgentNotFoundError
 from core.runs import RunKind
@@ -257,6 +264,213 @@ async def test_a_calendar_change_wakes_the_job_to_follow_a_moved_event(
     assert woken == [True]
     assert waits[:2] == [_local("2030-01-10T15:00"), _local("2030-01-10T17:00")]
     assert _event_times(services) == ["2030-01-10T17:00 to 2030-01-10T18:00 (Europe/Berlin)"]
+
+
+def _park_idle_scheduler(monkeypatch: pytest.MonkeyPatch) -> asyncio.Event:
+    """Observe that all currently owed work settled, without advancing the clock."""
+    parked = asyncio.Event()
+
+    async def wait(_target: datetime, **_kwargs: Any) -> bool:
+        parked.set()
+        await asyncio.Future()
+        return False
+
+    monkeypatch.setattr(cron_timing, "_sleep_until_utc", wait)
+    return parked
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["slot", "claim_save"])
+@pytest.mark.parametrize("change", ["remove", "later", "earlier", "expire", "context", "late"])
+async def test_event_admission_rechecks_the_occurrence_after_waiting(
+    services: _Services, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str, change: str
+) -> None:
+    event = services.calendar.create_event(**_DAILY)
+    job = await _event_job(services, event.id)
+    occurrence_id = f"{event.id}_20300110T0900"
+    parked = _park_idle_scheduler(monkeypatch)
+    saving, release = asyncio.Event(), asyncio.Event()
+    save = services.cron._save_jobs_after_fire
+    first = True
+
+    async def held_save(job_id: str) -> bool:
+        nonlocal first
+        result = await save(job_id)
+        if first:
+            first = False
+            saving.set()
+            await release.wait()
+        return result
+
+    if phase == "slot":
+        for _ in range(4):
+            await services.cron._run_slots.acquire()
+    else:
+        monkeypatch.setattr(services.cron, "_save_jobs_after_fire", held_save)
+    services.clock.now = _local("2030-01-10T09:00")
+    services.cron.start()
+    try:
+        if phase == "slot":
+            await asyncio.sleep(0)
+            assert job.id in services.cron._executing_jobs
+        else:
+            await saving.wait()
+        if change == "remove":
+            await services.calendar.delete_occurrence(occurrence_id)
+        elif change in ("later", "earlier"):
+            start = "2030-01-10T11:00" if change == "later" else "2030-01-10T08:45"
+            await services.calendar.update_occurrence(occurrence_id, start=start)
+        elif change == "context":
+            await services.calendar.update_occurrence(occurrence_id, location="New room")
+        else:
+            services.clock.now = _local(
+                "2030-01-10T11:00" if change == "expire" else "2030-01-10T09:05"
+            )
+        if phase == "slot":
+            services.cron._run_slots.release()
+        release.set()
+        await parked.wait()
+
+        if change in ("remove", "later", "expire"):
+            services.trigger.trigger_run.assert_not_awaited()
+            # A withdrawn selection is not persisted as an attempted Run.
+            stored = make_service(tmp_path, tz=_ZONE)[0].get_job(job.id)
+            assert (stored.covered_until, stored.event_progress, stored.last_attempt_at) == (
+                None,
+                None,
+                None,
+            )
+        else:
+            services.trigger.trigger_run.assert_awaited_once()
+            [note] = _notes(services)
+            if change == "earlier":
+                assert "2030-01-10T08:45" in note
+            elif change == "context":
+                assert "Location: New room" in note
+            else:
+                assert "2030-01-10T09:05" in note
+    finally:
+        release.set()
+        await services.cron.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restart", [False, True])
+async def test_equal_time_occurrences_each_run_once_with_durable_progress(
+    services: _Services, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, restart: bool
+) -> None:
+    event = services.calendar.create_event(**(_DAILY | {"rrule": "FREQ=DAILY;COUNT=2"}))
+    job = await _event_job(services, event.id)
+    await services.calendar.update_occurrence(f"{event.id}_20300111T0900", start="2030-01-10T09:00")
+    parked = _park_idle_scheduler(monkeypatch)
+    admitted, finish = asyncio.Event(), asyncio.Event()
+
+    async def wait_first_run() -> None:
+        admitted.set()
+        await finish.wait()
+
+    services.trigger.trigger_run.return_value = SimpleNamespace(id="run-first", wait=wait_first_run)
+    services.clock.now = _local("2030-01-10T09:00")
+    services.cron.start()
+    try:
+        await admitted.wait()
+        first_notes = _notes(services)
+        if restart:
+            await services.cron.aclose()
+            services.cron, services.trigger = make_service(
+                tmp_path, tz=_ZONE, calendar=services.calendar
+            )
+            services.cron.start()
+        else:
+            services.trigger.trigger_run.return_value = SimpleNamespace(id="run-second")
+            finish.set()
+        await parked.wait()
+        notes = first_notes + _notes(services) if restart else _notes(services)
+        assert len(notes) == 2
+        assert f"occurrence {event.id}_20300110T0900" in notes[0]
+        assert f"occurrence {event.id}_20300111T0900" in notes[1]
+        stored = make_service(tmp_path, tz=_ZONE, calendar=services.calendar)[0].get_job(job.id)
+        assert stored.event_progress is not None
+        assert stored.event_progress.occurrence_ids == (
+            f"{event.id}_20300110T0900",
+            f"{event.id}_20300111T0900",
+        )
+        assert services.cron.can_fire(stored) is False
+    finally:
+        finish.set()
+        await services.cron.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("progress", ["absent", "matching", "older"])
+async def test_saved_coverage_reopens_only_occurrences_with_matching_progress(
+    services: _Services, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, progress: str
+) -> None:
+    event = services.calendar.create_event(**(_DAILY | {"rrule": "FREQ=DAILY;COUNT=2"}))
+    job = await _event_job(services, event.id)
+    await services.calendar.update_occurrence(f"{event.id}_20300111T0900", start="2030-01-10T09:00")
+    path = tmp_path / "cron" / "jobs.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    [saved] = data["jobs"]
+    saved["covered_until"] = _local("2030-01-10T09:00").isoformat()
+    saved.pop("event_progress", None)
+    if progress != "absent":
+        saved["event_progress"] = {
+            "due_at": _local(
+                "2030-01-10T09:00" if progress == "matching" else "2030-01-09T09:00"
+            ).isoformat(),
+            "occurrence_ids": [f"{event.id}_20300110T0900"],
+        }
+    path.write_text(json.dumps(data), encoding="utf-8")
+    services.clock.now = _local("2030-01-10T09:00")
+    parked = _park_idle_scheduler(monkeypatch)
+    services.cron.start()
+    try:
+        await parked.wait()
+        assert services.trigger.trigger_run.await_count == (1 if progress == "matching" else 0)
+        assert services.cron.can_fire(services.cron.get_job(job.id)) is False
+    finally:
+        await services.cron.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_event_claim_leaves_its_occurrences_owed_and_retries_once_saved(
+    services: _Services, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    event = services.calendar.create_event(**(_DAILY | {"rrule": "FREQ=DAILY;COUNT=2"}))
+    job = await _event_job(services, event.id)
+    await services.calendar.update_occurrence(f"{event.id}_20300111T0900", start="2030-01-10T09:00")
+    write = services.cron._write_jobs
+    failed = False
+
+    def fail_first_claim(jobs: list[Any]) -> None:
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise CronStorageError("temporary write failure")
+        write(jobs)
+
+    delays: list[float] = []
+
+    async def retry_delay(delay: float) -> None:
+        delays.append(delay)
+        services.trigger.trigger_run.assert_not_awaited()
+        stored = make_service(tmp_path, tz=_ZONE, calendar=services.calendar)[0].get_job(job.id)
+        assert (stored.covered_until, stored.event_progress) == (None, None)
+        assert services.cron.can_fire(stored)
+
+    monkeypatch.setattr(services.cron, "_write_jobs", fail_first_claim)
+    monkeypatch.setattr(cron_timing, "_sleep", retry_delay)
+    parked = _park_idle_scheduler(monkeypatch)
+    services.clock.now = _local("2030-01-10T09:00")
+    services.cron.start()
+    try:
+        await parked.wait()
+        assert len(delays) == 1
+        assert services.trigger.trigger_run.await_count == 2
+        assert services.cron.can_fire(services.cron.get_job(job.id)) is False
+    finally:
+        await services.cron.aclose()
 
 
 @pytest.mark.asyncio

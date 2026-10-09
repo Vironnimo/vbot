@@ -24,6 +24,7 @@ from core.automation._cron_jobs import (
     CronJob,
     CronJobValidationError,
     EventEdge,
+    EventProgress,
     _parse_utc_timestamp,
 )
 
@@ -99,10 +100,11 @@ def format_event_time(edge: str | None, offset_minutes: int | None) -> str:
 
 
 def coverage(job: CronJob) -> datetime:
-    """The instant through which an event job owes no occurrence.
+    """The boundary before which an event job owes no occurrence.
 
     Its creation, activation or schedule change, or the due time of the last
-    occurrence it started a Run for.
+    occurrence it started a Run for. The boundary itself is covered too,
+    except for unconsumed ids in matching ``event_progress``.
     """
     instants = [_parse_utc_timestamp(job.created_at, field_name="created_at")]
     if job.covered_until is not None:
@@ -120,15 +122,40 @@ def owed_occurrence(
 ) -> EventDue | None:
     """The earliest occurrence due at or before ``now`` that the job owes a Run.
 
-    It came due after :func:`coverage` (and after ``after``, an instant through
-    which nothing is owed) and can still start late.
+    It came due after :func:`coverage`, or exactly there with a still-unconsumed
+    id, and can still start late. ``after`` covers its whole boundary.
     """
     floor = coverage(job) if after is None else max(coverage(job), after)
-    for occurrence, due_at in _dues_between(calendar, event, job, floor, now):
+    consumed = _consumed_at(job, floor)
+    # A settled scan covers its whole boundary; a fire covers only its own id.
+    include_boundary = consumed is not None and (after is None or after < floor)
+    scan_after = floor - timedelta(microseconds=1) if include_boundary else floor
+    for occurrence, due_at in _dues_between(calendar, event, job, scan_after, now):
+        if due_at == floor and consumed is not None and occurrence.id in consumed:
+            continue
         closes_at = _closes_at(calendar, event, occurrence, due_at)
         if closes_at is None or closes_at > now:
             return _event_due(calendar, event, occurrence, due_at)
     return None
+
+
+def consume(job: CronJob, due: EventDue) -> None:
+    """Record one occurrence without consuming other ids due at the same time."""
+    consumed = _consumed_at(job, due.due_at) or ()
+    stamp = due.due_at.isoformat()
+    job.covered_until = stamp
+    job.event_progress = EventProgress(due_at=stamp, occurrence_ids=(*consumed, due.occurrence.id))
+
+
+def _consumed_at(job: CronJob, instant: datetime) -> tuple[str, ...] | None:
+    progress = job.event_progress
+    if (
+        progress is None
+        or coverage(job) != instant
+        or _parse_utc_timestamp(progress.due_at, field_name="event_progress.due_at") != instant
+    ):
+        return None
+    return progress.occurrence_ids
 
 
 def next_due(
@@ -207,7 +234,7 @@ def _dues_between(
         due_at = _due_at(job, occurrence)
         if after < due_at <= until:
             found.append((occurrence, due_at))
-    found.sort(key=lambda item: (item[1], item[0].start_utc))
+    found.sort(key=lambda item: (item[1], item[0].start_utc, item[0].id))
     return found
 
 

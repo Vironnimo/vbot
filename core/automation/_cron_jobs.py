@@ -123,6 +123,7 @@ _MUTABLE_FIELDS = frozenset(
 _CRON_JOB_FIELDS = _MUTABLE_FIELDS | {
     "consecutive_failures",
     "covered_until",
+    "event_progress",
     "created_at",
     "id",
     "last_attempt_at",
@@ -135,7 +136,10 @@ _CRON_JOB_FIELDS = _MUTABLE_FIELDS | {
 
 CRON_JOBS_FORMAT_VERSION = 1
 
-CRON_JOB_SHAPE = json_object(_CRON_JOB_FIELDS)
+_EVENT_PROGRESS_FIELDS = frozenset(("due_at", "occurrence_ids"))
+CRON_JOB_SHAPE = json_object(
+    _CRON_JOB_FIELDS, {"event_progress": json_object(_EVENT_PROGRESS_FIELDS)}
+)
 
 CRON_JOBS_SHAPE = json_document({"jobs"}, {"jobs": json_list(CRON_JOB_SHAPE, key="id")})
 
@@ -377,6 +381,20 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], item_path: str, i
     validate_non_empty_string(
         diagnostics, f"{item_path}.created_at", item.get("created_at"), required=False
     )
+    progress = item.get("event_progress")
+    if progress is not None:
+        try:
+            EventProgress.from_dict(progress)
+        except CronJobValidationError as error:
+            add_error(diagnostics, f"{item_path}.event_progress", str(error))
+        if isinstance(progress, dict):
+            warn_unknown_keys(
+                diagnostics,
+                f"{item_path}.event_progress",
+                progress,
+                _EVENT_PROGRESS_FIELDS,
+                "event progress field",
+            )
 
 
 def _validate_cron_agent_id(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
@@ -450,7 +468,9 @@ class CronJob:
     ``event_id``, ``event_offset_minutes`` before (negative) or after its
     ``event_edge``. Its occurrences are owed one by one, so its
     ``covered_until`` is the due time of the last occurrence it fired for (or
-    its activation), not its last attempt.
+    its activation), not its last attempt. Optional ``event_progress`` names
+    consumed occurrences at that exact due time; without matching progress,
+    coverage includes every occurrence at its boundary as in earlier files.
     """
 
     id: str
@@ -478,6 +498,7 @@ class CronJob:
     last_error: str | None = None
     consecutive_failures: int = 0
     covered_until: str | None = None
+    event_progress: EventProgress | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize one CronJob to a JSON-compatible payload."""
@@ -507,6 +528,9 @@ class CronJob:
             "last_error": self.last_error,
             "consecutive_failures": self.consecutive_failures,
             "covered_until": self.covered_until,
+            "event_progress": (
+                None if self.event_progress is None else self.event_progress.to_dict()
+            ),
         }
 
     @classmethod
@@ -544,7 +568,46 @@ class CronJob:
             last_error=payload.get("last_error"),
             consecutive_failures=int(payload.get("consecutive_failures") or 0),
             covered_until=payload.get("covered_until"),
+            event_progress=(
+                None
+                if payload.get("event_progress") is None
+                else EventProgress.from_dict(payload["event_progress"])
+            ),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class EventProgress:
+    """Consumed occurrence ids at one event job's coverage boundary.
+
+    The timestamp binds the ids to their due time even if an older writer
+    preserves this unknown field while advancing ``covered_until``.
+    """
+
+    due_at: str
+    occurrence_ids: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"due_at": self.due_at, "occurrence_ids": list(self.occurrence_ids)}
+
+    @classmethod
+    def from_dict(cls, value: Any) -> EventProgress:
+        if not isinstance(value, dict):
+            raise CronJobValidationError("event_progress must be an object or null")
+        due_at = value.get("due_at")
+        if not isinstance(due_at, str):
+            raise CronJobValidationError("event_progress.due_at must be a UTC timestamp")
+        _parse_utc_timestamp(due_at, field_name="event_progress.due_at")
+        ids = value.get("occurrence_ids")
+        if (
+            not isinstance(ids, list)
+            or not ids
+            or any(not isinstance(item, str) or not item for item in ids)
+        ):
+            raise CronJobValidationError(
+                "event_progress.occurrence_ids must be a non-empty list of occurrence ids"
+            )
+        return cls(due_at=due_at, occurrence_ids=tuple(dict.fromkeys(ids)))
 
 
 def _derive_cron_job_name(prompt: object) -> str:
