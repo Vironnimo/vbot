@@ -706,7 +706,17 @@ describe('Skills manager', () => {
       expect(document.querySelector('[role="dialog"]')).toBeNull();
     },
   );
-  it('creates in the selected Agent scope and retains draft content during inventory refresh', async () => {
+  it('creates in the selected Agent scope, freezes pending inputs and retains failed drafts', async () => {
+    let finishCreate;
+    let failCreate;
+    rpcMock.mockImplementation((method, params) =>
+      method === 'skill.create'
+        ? new Promise((resolve, reject) => {
+            finishCreate = resolve;
+            failCreate = reject;
+          })
+        : Promise.resolve(defaultRpc(method, params)),
+    );
     await render();
     collection('Main');
     await addMenuItem('Create skill…');
@@ -720,6 +730,34 @@ describe('Skills manager', () => {
     expect(calls('skill.inventory')).toHaveLength(callsBefore + 1);
     expect(dialog.querySelector('textarea').value).toBe('draft-sentinel');
     click(button('Create skill', dialog));
+    const fields = [
+      dialog.querySelector('#create-scope'),
+      dialog.querySelector('#new-skill-name'),
+      dialog.querySelector('#new-skill-description'),
+      dialog.querySelector('#new-skill-content'),
+    ];
+    expect(fields.map((field) => field.disabled)).toEqual([
+      true,
+      true,
+      true,
+      true,
+    ]);
+    failCreate(new Error('create-failed-sentinel'));
+    await settle();
+    expect(document.querySelector('[role="dialog"]')).toBe(dialog);
+    expect(fields.map((field) => field.disabled)).toEqual([
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(fields.slice(1).map((field) => field.value)).toEqual([
+      'new-sentinel',
+      'Use for: reports',
+      'draft-sentinel',
+    ]);
+    click(button('Create skill', dialog));
+    finishCreate({});
     await settle();
     expect(rpcMock).toHaveBeenCalledWith('skill.create', {
       scope: 'agent:main',
@@ -727,6 +765,8 @@ describe('Skills manager', () => {
       content:
         '---\nname: "new-sentinel"\ndescription: "Use for: reports"\n---\n\ndraft-sentinel',
     });
+    expect(calls('skill.create')).toHaveLength(2);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it('saves an Agent skill selection immediately from its collection', async () => {

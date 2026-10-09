@@ -34,6 +34,7 @@
           </label>
           <Dropdown
             id="create-scope"
+            disabled={actions.busy}
             value={actions.createScope}
             options={actions.scopeOptions}
             ariaLabel={t('skills.createScopeLabel')}
@@ -51,6 +52,7 @@
           </label>
           <TextField
             id="new-skill-name"
+            disabled={actions.busy}
             value={actions.newName}
             onInput={(next) => (actions.newName = next)}
             placeholder={t('settings.skills.namePlaceholder')}
@@ -63,6 +65,7 @@
           </label>
           <TextField
             id="new-skill-description"
+            disabled={actions.busy}
             value={actions.newDescription}
             onInput={(value) => (actions.newDescription = value)}
             placeholder={t('skills.descriptionPlaceholder')}
@@ -74,6 +77,7 @@
           </label>
           <TextArea
             id="new-skill-content"
+            disabled={actions.busy}
             rows="12"
             value={actions.newContent}
             onInput={(value) => (actions.newContent = value)}
