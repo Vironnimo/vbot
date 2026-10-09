@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.models.pricing import TokenPricing
 from core.statistics._projection import (
@@ -16,26 +16,28 @@ from core.statistics._projection import (
 
 PricingLookup = Callable[[str], TokenPricing | None]
 
+if TYPE_CHECKING:
+    from core.statistics._rollups import RollupChanges
+
 _PRICING_BATCH = 1000
 
 
 # Every call table with the records table that carries its calls' Run ids.
 _CALL_TABLES = (("stat_calls", "stat_records"), ("stat_usage_calls", "stat_usage_records"))
 
-# One repriced call's owner: its Session key (or ledger unit key) and Run id.
-PricedCall = tuple[int, str | None]
-
 
 def refresh_retrospective_costs(
-    connection: sqlite3.Connection, pricing_lookup: PricingLookup | None
-) -> dict[str, set[PricedCall]]:
+    connection: sqlite3.Connection, pricing_lookup: PricingLookup | None, changes: RollupChanges
+) -> None:
     """Price calls without a cost snapshot under the current catalog pricing.
 
     Both call tables share one fingerprint per Model, so a Model's calls are
     always priced alike. Unchanged pricing only prices calls ingested since the
     last reconcile; changed pricing reprices that Model's calls everywhere. An
-    unchanged index with unchanged pricing performs no write. Returns, per call
-    table, the owners of the calls whose projected cost changed.
+    unchanged index with unchanged pricing performs no write. Changed calls
+    mark their Run and retain their old ledger contribution before repricing.
+    A changed catalog fingerprint can reprice many calls, so its ledger units
+    use the whole-unit path instead of staging a before-image per call.
     """
     fingerprints = {
         str(model): str(fingerprint)
@@ -52,7 +54,6 @@ def refresh_retrospective_costs(
         }
         for table, _records in _CALL_TABLES
     }
-    touched: dict[str, set[PricedCall]] = {table: set() for table, _records in _CALL_TABLES}
     # Every priced Model keeps a fingerprint, so these are all Models with
     # retrospective calls, found without scanning the priced ones.
     for model in sorted(set(fingerprints).union(*unpriced.values())):
@@ -61,20 +62,20 @@ def refresh_retrospective_costs(
         changed = fingerprints.get(model) != fingerprint
         for table, records in _CALL_TABLES:
             if changed or model in unpriced[table]:
-                touched[table] |= _price_calls(
+                _price_calls(
                     connection,
                     model,
                     pricing,
                     only_unpriced=not changed,
                     table=table,
                     records=records,
+                    changes=changes,
                 )
         if changed:
             connection.execute(
                 "INSERT OR REPLACE INTO stat_pricing (model_key, fingerprint) VALUES (?, ?)",
                 (model, fingerprint),
             )
-    return touched
 
 
 def prune_pricing(connection: sqlite3.Connection) -> None:
@@ -97,7 +98,8 @@ def _price_calls(
     only_unpriced: bool,
     table: str,
     records: str,
-) -> set[PricedCall]:
+    changes: RollupChanges,
+) -> None:
     condition = " AND c.priced = 0" if only_unpriced else ""
     cursor = connection.execute(
         f"""
@@ -111,7 +113,6 @@ def _price_calls(
         """,
         (model,),
     )
-    touched: set[PricedCall] = set()
     updates: list[tuple[Any, ...]] = []
     for row in cursor.fetchall():
         cost = PricingInputs(
@@ -130,13 +131,19 @@ def _price_calls(
         if row[3] and serialized == row[4]:
             continue
         source, amount = cost_source_class(cost)
+        if table == "stat_usage_calls":
+            if only_unpriced:
+                changes.usage_record(connection, int(row[1]))
+            else:
+                changes.units.add(int(row[0]))
+            changes.usage_call(int(row[0]), row[2])
+        elif row[2]:
+            changes.session_runs(int(row[0]), (row[2],))
         updates.append((amount, source, serialized, row[0], row[1]))
-        touched.add((int(row[0]), row[2]))
         if len(updates) >= _PRICING_BATCH:
             _write_prices(connection, updates, table=table)
             updates = []
     _write_prices(connection, updates, table=table)
-    return touched
 
 
 def _write_prices(

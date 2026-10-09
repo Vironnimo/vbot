@@ -1,11 +1,12 @@
 """Aggregate tier: per-Run rows and hourly usage and Tool cubes over the facts.
 
-The fact tables stay the source of truth. Reconcile records the units its
-changes touch in :class:`RollupChanges`; :func:`maintain_rollups` then deletes
-the touched units' aggregate rows and recomputes them from the facts in the
-same write transaction, so a reader never sees aggregates that disagree with
-the facts. A full rebuild is the same code with every unit touched, and
-incremental maintenance yields exactly the rows a full rebuild yields.
+The fact tables stay the source of truth. Reconcile records changed units,
+validated Session tails and the original contributions of changed requests in
+:class:`RollupChanges`. Maintenance adds tail contributions and request deltas;
+replaced Sessions and affected Runs are recomputed. Everything happens in the
+same write transaction, so readers see matching facts and aggregates. A full
+rebuild uses the same aggregation expressions over every unit; incremental
+maintenance yields exactly those rows.
 
 Units and their tables:
 
@@ -48,172 +49,10 @@ from typing import Any
 
 from core.runs import UNATTENDED_RUN_KINDS
 from core.statistics._projection import MICROSECONDS_PER_HOUR
+from core.statistics._rollup_schema import ROLLUP_SCHEMA as ROLLUP_SCHEMA
+from core.statistics._rollup_schema import ROLLUP_TABLES
 
-ROLLUP_SCHEMA = """
-CREATE TABLE agg_runs (
-    session_key INTEGER NOT NULL,
-    run_id TEXT NOT NULL,
-    origin TEXT NOT NULL,
-    run_kind TEXT NOT NULL,
-    status TEXT NOT NULL,
-    completion_reason TEXT,
-    start_instant INTEGER NOT NULL,
-    end_instant INTEGER,
-    duration_ms INTEGER,
-    iterations INTEGER,
-    model_steps INTEGER NOT NULL,
-    visible_messages INTEGER NOT NULL,
-    user_messages INTEGER NOT NULL,
-    first_visible_ms INTEGER,
-    tool_calls INTEGER NOT NULL,
-    tool_rejected INTEGER NOT NULL,
-    tool_ms INTEGER NOT NULL,
-    compactions INTEGER NOT NULL,
-    errors INTEGER NOT NULL,
-    calls INTEGER NOT NULL,
-    failed_calls INTEGER NOT NULL,
-    input_tokens INTEGER NOT NULL,
-    estimated_input_tokens INTEGER NOT NULL,
-    output_tokens INTEGER NOT NULL,
-    estimated_output_tokens INTEGER NOT NULL,
-    reasoning_tokens INTEGER NOT NULL,
-    cache_read_tokens INTEGER NOT NULL,
-    cache_write_tokens INTEGER NOT NULL,
-    reported_nusd INTEGER NOT NULL,
-    estimated_nusd INTEGER NOT NULL,
-    unpriced_calls INTEGER NOT NULL,
-    primary_model TEXT,
-    models TEXT NOT NULL,
-    kinds TEXT NOT NULL,
-    changed_files INTEGER,
-    lines_added INTEGER,
-    lines_removed INTEGER,
-    PRIMARY KEY (session_key, run_id)
-) WITHOUT ROWID;
-CREATE INDEX agg_runs_start ON agg_runs(start_instant);
-CREATE INDEX agg_runs_origin ON agg_runs(origin, start_instant);
-CREATE TABLE agg_run_models (
-    session_key INTEGER NOT NULL,
-    run_id TEXT NOT NULL,
-    model_key TEXT NOT NULL,
-    calls INTEGER NOT NULL,
-    failed_calls INTEGER NOT NULL,
-    input_tokens INTEGER NOT NULL,
-    estimated_input_tokens INTEGER NOT NULL,
-    output_tokens INTEGER NOT NULL,
-    estimated_output_tokens INTEGER NOT NULL,
-    reasoning_tokens INTEGER NOT NULL,
-    cache_read_tokens INTEGER NOT NULL,
-    cache_write_tokens INTEGER NOT NULL,
-    unreported_calls INTEGER NOT NULL,
-    reported_nusd INTEGER NOT NULL,
-    reported_calls INTEGER NOT NULL,
-    estimated_nusd INTEGER NOT NULL,
-    estimated_calls INTEGER NOT NULL,
-    unpriced_calls INTEGER NOT NULL,
-    retrospective_calls INTEGER NOT NULL,
-    uncached_nusd INTEGER NOT NULL,
-    uncached_calls INTEGER NOT NULL,
-    estimated_token_calls INTEGER NOT NULL,
-    PRIMARY KEY (session_key, run_id, model_key)
-) WITHOUT ROWID;
-CREATE TABLE agg_usage (
-    hour INTEGER NOT NULL,
-    unit_key INTEGER NOT NULL,
-    origin TEXT NOT NULL,
-    model_key TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    status TEXT NOT NULL,
-    calls INTEGER NOT NULL,
-    input_tokens INTEGER NOT NULL,
-    estimated_input_tokens INTEGER NOT NULL,
-    output_tokens INTEGER NOT NULL,
-    estimated_output_tokens INTEGER NOT NULL,
-    reasoning_tokens INTEGER NOT NULL,
-    cache_read_tokens INTEGER NOT NULL,
-    cache_write_tokens INTEGER NOT NULL,
-    unreported_calls INTEGER NOT NULL,
-    reported_nusd INTEGER NOT NULL,
-    reported_calls INTEGER NOT NULL,
-    estimated_nusd INTEGER NOT NULL,
-    estimated_calls INTEGER NOT NULL,
-    unpriced_calls INTEGER NOT NULL,
-    retrospective_calls INTEGER NOT NULL,
-    uncached_nusd INTEGER NOT NULL,
-    uncached_calls INTEGER NOT NULL,
-    estimated_token_calls INTEGER NOT NULL,
-    PRIMARY KEY (hour, unit_key, origin, model_key, kind, status)
-) WITHOUT ROWID;
-CREATE INDEX agg_usage_unit ON agg_usage(unit_key);
-CREATE TABLE agg_tools (
-    hour INTEGER NOT NULL,
-    session_key INTEGER NOT NULL,
-    origin TEXT NOT NULL,
-    name TEXT NOT NULL,
-    calls INTEGER NOT NULL,
-    accepted INTEGER NOT NULL,
-    rejected INTEGER NOT NULL,
-    unknown INTEGER NOT NULL,
-    duration_calls INTEGER NOT NULL,
-    duration_ms INTEGER NOT NULL,
-    max_ms INTEGER,
-    PRIMARY KEY (hour, session_key, origin, name)
-) WITHOUT ROWID;
-CREATE INDEX agg_tools_session ON agg_tools(session_key);
-CREATE TABLE agg_tool_latency (
-    hour INTEGER NOT NULL,
-    session_key INTEGER NOT NULL,
-    origin TEXT NOT NULL,
-    name TEXT NOT NULL,
-    bucket INTEGER NOT NULL,
-    count INTEGER NOT NULL,
-    PRIMARY KEY (hour, session_key, origin, name, bucket)
-) WITHOUT ROWID;
-CREATE INDEX agg_tool_latency_session ON agg_tool_latency(session_key);
-CREATE TABLE agg_records (
-    hour INTEGER NOT NULL,
-    session_key INTEGER NOT NULL,
-    role TEXT NOT NULL,
-    records INTEGER NOT NULL,
-    visible_steps INTEGER NOT NULL,
-    PRIMARY KEY (hour, session_key, role)
-) WITHOUT ROWID;
-CREATE INDEX agg_records_session ON agg_records(session_key);
-CREATE TABLE agg_cache (
-    hour INTEGER NOT NULL,
-    session_key INTEGER NOT NULL,
-    turns INTEGER NOT NULL,
-    input_tokens INTEGER NOT NULL,
-    cache_read_tokens INTEGER NOT NULL,
-    cache_write_tokens INTEGER NOT NULL,
-    evaluated_turns INTEGER NOT NULL,
-    suspected_turns INTEGER NOT NULL,
-    last_instant INTEGER NOT NULL,
-    PRIMARY KEY (hour, session_key)
-) WITHOUT ROWID;
-CREATE INDEX agg_cache_session ON agg_cache(session_key);
-CREATE TABLE agg_cache_breaks (
-    session_key INTEGER NOT NULL,
-    seq INTEGER NOT NULL,
-    instant INTEGER NOT NULL,
-    model_key TEXT NOT NULL,
-    previous_input_tokens INTEGER NOT NULL,
-    cache_read_tokens INTEGER NOT NULL,
-    PRIMARY KEY (session_key, seq)
-) WITHOUT ROWID;
-"""
-
-ROLLUP_TABLES = (
-    "agg_runs",
-    "agg_run_models",
-    "agg_usage",
-    "agg_tools",
-    "agg_tool_latency",
-    "agg_records",
-    "agg_cache",
-    "agg_cache_breaks",
-)
-# Aggregates recomputed whole per Session from its own records.
+# Session cubes: additive on validated tails, recomputed after replacement.
 _SESSION_CUBES = ("agg_tools", "agg_tool_latency", "agg_records", "agg_cache", "agg_cache_breaks")
 
 ORIGINS = (
@@ -237,12 +76,14 @@ class RollupChanges:
 
     ``rebuild`` recomputes every aggregate. ``sessions`` recompute a Session's
     Runs and per-Session cubes whole (also after its removal);
-    ``fact_sessions`` recompute only the cubes of a Session whose records grew
-    or whose Run identities changed; ``addresses`` recompute the
-    ledger units at a Session address, whose requests take their origin from
-    that Session. ``runs`` are ``(session_key, run_id)``; ``units`` are ledger
-    unit keys; ``unit_runs`` are ``(unit_key, run_id)`` of changed requests,
-    which recompute the Run at that unit's address.
+    ``fact_sessions`` recompute the cubes when historical Tool origins changed;
+    ``appends`` adds only the tail beginning at its first sequence.
+    ``addresses`` recompute the ledger units at a Session address, whose requests
+    take their origin from that Session. ``runs`` are ``(session_key, run_id)``;
+    ``units`` are ledger unit keys; ``unit_runs`` are ``(unit_key, run_id)`` of changed requests,
+    which recompute the Run at that unit's address. Changed requests stage their
+    original contributions once, before mutation; maintenance adds their final
+    difference unless their whole unit is already being recomputed.
     """
 
     rebuild: bool = False
@@ -250,8 +91,10 @@ class RollupChanges:
     addresses: set[SessionKey] = field(default_factory=set)
     runs: set[tuple[int, str]] = field(default_factory=set)
     fact_sessions: set[int] = field(default_factory=set)
+    appends: dict[int, int] = field(default_factory=dict)
     units: set[int] = field(default_factory=set)
     unit_runs: set[tuple[int, str]] = field(default_factory=set)
+    usage_changed: bool = False
 
     def session(self, session_key: int, address: SessionKey) -> None:
         """A Session's facts were replaced, added or removed, or its flags changed."""
@@ -263,19 +106,73 @@ class RollupChanges:
 
     def usage_call(self, unit_key: int, run_id: str | None) -> None:
         """A ledger request of ``unit_key`` and ``run_id`` was added, changed or moved away."""
-        self.units.add(unit_key)
         if run_id:
             self.unit_runs.add((unit_key, run_id))
 
-    def repriced(
+    def run_origins(
         self,
-        session_calls: Iterable[tuple[int, str | None]],
-        usage_calls: Iterable[tuple[int, str | None]],
+        connection: sqlite3.Connection,
+        session_key: int,
+        address: SessionKey,
+        run_ids: Iterable[str],
+        first_seq: int,
     ) -> None:
-        """Calls whose projected cost changed, by Session or unit key and Run id."""
-        self.runs.update((key, run_id) for key, run_id in session_calls if run_id)
-        for unit_key, run_id in usage_calls:
-            self.usage_call(unit_key, run_id)
+        """Retain old origins before Run identities change.
+
+        A newly admitted Run usually has no indexed contributions yet. Older
+        requests can precede admission, however, and gain the Run's origin.
+        Only historical Tools require a Session cube rebuild; records and cache
+        judgements never depend on a Run identity.
+        """
+        if self.rebuild:
+            return
+        for run_id in run_ids:
+            if connection.execute(
+                "SELECT 1 FROM stat_records WHERE session_key = ? AND run_id = ? "
+                "AND seq < ? AND role = 'tool' LIMIT 1",
+                (session_key, run_id, first_seq),
+            ).fetchone():
+                self.fact_sessions.add(session_key)
+            for (seq,) in connection.execute(
+                "SELECT r.seq FROM stat_usage_units u CROSS JOIN stat_usage_records r "
+                "ON r.session_key = u.session_key WHERE u.project_id = ? "
+                "AND u.agent_id = ? AND u.session_id = ? AND r.run_id = ?",
+                (*address, run_id),
+            ):
+                self.usage_record(connection, int(seq))
+
+    def usage_record(self, connection: sqlite3.Connection, seq: int) -> None:
+        """Retain the original contribution before a call changes, including pricing.
+
+        A new request has its record but no call yet, and stages an empty marker.
+        Repeated ledger pages and later repricing keep the first contribution.
+        Temp storage keeps catch-up pages bounded instead of retaining all calls
+        in Python. A full rebuild needs no old contributions.
+        """
+        if self.rebuild:
+            return
+        if not self.usage_changed:
+            connection.execute("DROP TABLE IF EXISTS temp.rollup_usage_before")
+            connection.execute(
+                "CREATE TEMP TABLE rollup_usage_before AS SELECT "
+                f"NULL AS seq, {_USAGE_COLUMNS} FROM agg_usage WHERE 0"
+            )
+            connection.execute(
+                "CREATE UNIQUE INDEX temp.rollup_usage_before_seq ON rollup_usage_before(seq)"
+            )
+            self.usage_changed = True
+        if connection.execute(
+            "SELECT 1 FROM temp.rollup_usage_before WHERE seq = ?", (seq,)
+        ).fetchone():
+            return
+        connection.execute(
+            f"INSERT INTO temp.rollup_usage_before (seq, {_USAGE_COLUMNS}) "
+            + _usage_select("stat_usage_records r", "r.seq = ?", sequence=True),
+            (seq,),
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO temp.rollup_usage_before (seq) VALUES (?)", (seq,)
+        )
 
     def touched(self) -> bool:
         return self.rebuild or any(
@@ -284,8 +181,10 @@ class RollupChanges:
                 self.addresses,
                 self.runs,
                 self.fact_sessions,
+                self.appends,
                 self.units,
                 self.unit_runs,
+                self.usage_changed,
             )
         )
 
@@ -295,6 +194,7 @@ _WORK_TABLES = {
     "rollup_sessions": "session_key INTEGER",
     "rollup_runs": "session_key INTEGER, run_id TEXT",
     "rollup_fact_sessions": "session_key INTEGER",
+    "rollup_appends": "session_key INTEGER, first_seq INTEGER",
     "rollup_units": "unit_key INTEGER",
     "rollup_addresses": "project_id TEXT, agent_id TEXT, session_id TEXT",
     "rollup_unit_runs": "unit_key INTEGER, run_id TEXT",
@@ -327,6 +227,13 @@ def maintain_rollups(connection: sqlite3.Connection, changes: RollupChanges) -> 
     _recompute_records(connection)
     _recompute_cache(connection)
     _recompute_usage(connection)
+    _recompute_tools(connection, append=True)
+    _recompute_records(connection, append=True)
+    _recompute_cache(connection, append=True)
+    if changes.usage_changed:
+        if not changes.rebuild:
+            _apply_usage_deltas(connection)
+        connection.execute("DROP TABLE temp.rollup_usage_before")
     for name in _WORK_TABLES:
         connection.execute(f"DROP TABLE temp.{name}")
 
@@ -347,6 +254,14 @@ def _collect(connection: sqlite3.Connection, changes: RollupChanges) -> None:
     insert("rollup_sessions", ((key,) for key in changes.sessions))
     insert("rollup_runs", changes.runs)
     insert("rollup_fact_sessions", ((key,) for key in changes.sessions | changes.fact_sessions))
+    insert(
+        "rollup_appends",
+        (
+            (key, first)
+            for key, first in changes.appends.items()
+            if key not in changes.sessions and key not in changes.fact_sessions
+        ),
+    )
     insert("rollup_units", ((key,) for key in changes.units))
     insert("rollup_addresses", changes.addresses)
     insert("rollup_unit_runs", changes.unit_runs)
@@ -557,6 +472,8 @@ _MEASURE_SQL = {
     ),
 }
 _USAGE_CUBE_MEASURES = tuple(name for name in USAGE_MEASURES if name != "failed_calls")
+_USAGE_KEYS = "hour, unit_key, origin, model_key, kind, status"
+_USAGE_COLUMNS = f"{_USAGE_KEYS}, {', '.join(_USAGE_CUBE_MEASURES)}"
 # A per-Model and purpose row of a Run: key, run id, Model, has Model, purpose,
 # first use, then ``USAGE_MEASURES``.
 _MODEL_KEY, _HAS_MODEL, _PURPOSE, _FIRST_USE, _MEASURES = 2, 3, 4, 5, 6
@@ -740,17 +657,49 @@ def _run_model_rows(key: tuple[int, str], models: list[tuple[Any, ...]]) -> list
     return [(*key, model, *sums) for model, sums in sorted(by_model.items())]
 
 
-def _recompute_tools(connection: sqlite3.Connection) -> None:
+def _fact_source(table: str, *, append: bool) -> str:
+    source = "temp.rollup_appends d" if append else "temp.rollup_fact_sessions d"
+    return f"{source} CROSS JOIN {table} r ON r.session_key = d.session_key" + (
+        " AND r.seq >= d.first_seq" if append else ""
+    )
+
+
+def _additive_update(table: str, keys: str, sums: str, *, maxima: str = "") -> str:
+    assignments = [f"{name} = {table}.{name} + excluded.{name}" for name in sums.split(", ")]
+    for name in maxima.split(", ") if maxima else ():
+        assignments.append(
+            f"{name} = CASE WHEN {table}.{name} IS NULL THEN excluded.{name} "
+            f"WHEN excluded.{name} IS NULL THEN {table}.{name} "
+            f"ELSE MAX({table}.{name}, excluded.{name}) END"
+        )
+    return f" ON CONFLICT ({keys}) DO UPDATE SET {', '.join(assignments)}"
+
+
+def _recompute_tools(connection: sqlite3.Connection, *, append: bool = False) -> None:
     origin = (
         f"CASE WHEN rr.run_id IS NOT NULL THEN {run_origin_sql('s', 'rr.run_kind')} "
         f"ELSE {session_origin_sql('s')} END"
     )
-    source = """
-        FROM temp.rollup_fact_sessions d
+    source = f"""
+        FROM {_fact_source("stat_tools", append=append)}
         CROSS JOIN stat_sessions s ON s.session_key = d.session_key
-        CROSS JOIN stat_tools r ON r.session_key = d.session_key
         LEFT JOIN stat_run_records rr ON rr.session_key = r.session_key AND rr.run_id = r.run_id
     """
+    tools_update = (
+        _additive_update(
+            "agg_tools",
+            "hour, session_key, origin, name",
+            "calls, accepted, rejected, unknown, duration_calls, duration_ms",
+            maxima="max_ms",
+        )
+        if append
+        else ""
+    )
+    latency_update = (
+        _additive_update("agg_tool_latency", "hour, session_key, origin, name, bucket", "count")
+        if append
+        else ""
+    )
     connection.execute(
         f"""
         INSERT INTO agg_tools (
@@ -762,6 +711,7 @@ def _recompute_tools(connection: sqlite3.Connection) -> None:
             COUNT(r.duration_ms), COALESCE(SUM(r.duration_ms), 0), MAX(r.duration_ms)
         {source}
         GROUP BY hour, r.session_key, origin, r.name
+        {tools_update}
         """
     )
     connection.execute(
@@ -772,35 +722,68 @@ def _recompute_tools(connection: sqlite3.Connection) -> None:
         {source}
         WHERE r.latency_bucket IS NOT NULL
         GROUP BY hour, r.session_key, origin, r.name, r.latency_bucket
+        {latency_update}
         """
     )
 
 
-def _recompute_records(connection: sqlite3.Connection) -> None:
+def _recompute_records(connection: sqlite3.Connection, *, append: bool = False) -> None:
     """Records by hour and role; ``visible_steps`` are visible chat Model steps."""
+    update = (
+        _additive_update("agg_records", "hour, session_key, role", "records, visible_steps")
+        if append
+        else ""
+    )
     connection.execute(
         f"""
         INSERT INTO agg_records (hour, session_key, role, records, visible_steps)
         SELECT {_HOUR} AS hour, r.session_key, r.role, COUNT(*), COUNT(c.seq)
-        FROM temp.rollup_fact_sessions d
-        CROSS JOIN stat_records r ON r.session_key = d.session_key
+        FROM {_fact_source("stat_records", append=append)}
         LEFT JOIN stat_calls c ON c.session_key = r.session_key AND c.seq = r.seq
             AND c.kind = 0 AND c.visible = 1
         GROUP BY hour, r.session_key, r.role
+        {update}
         """
     )
 
 
-def _recompute_cache(connection: sqlite3.Connection) -> None:
-    connection.execute("DROP TABLE IF EXISTS temp.rollup_cache_turns")
-    connection.execute(
-        "CREATE TEMP TABLE rollup_cache_turns AS "
-        + judged_cache_turns_sql(
-            "temp.rollup_fact_sessions d "
-            "CROSS JOIN stat_records r ON r.session_key = d.session_key",
-            "1",
-            "r.session_key",
+def _recompute_cache(connection: sqlite3.Connection, *, append: bool = False) -> None:
+    source = (
+        "temp.rollup_fact_sessions d CROSS JOIN stat_records r ON r.session_key = d.session_key"
+    )
+    if append:
+        # Include exactly the preceding cache-relevant record, even when it is
+        # a reset (checkpoint, takeover or Assistant without Usage). Timestamps
+        # need not be ordered and its hour may precede the appended tail's hour.
+        source = """temp.rollup_appends d CROSS JOIN stat_records r
+            ON r.session_key = d.session_key AND r.seq >= COALESCE((
+                SELECT MAX(p.seq) FROM stat_records p
+                WHERE p.session_key = d.session_key AND p.seq < d.first_seq
+                    AND p.role IN ('assistant', 'compaction_checkpoint', 'agent_takeover')
+            ), d.first_seq)"""
+    judged = judged_cache_turns_sql(source, "1", "r.session_key")
+    if append:
+        columns = (
+            "unit, seq, timestamp, instant, model_key, input_tokens, cache_read_tokens, "
+            "cache_write_tokens, previous_input_tokens, evaluated, incident"
         )
+        judged = (
+            f"SELECT {', '.join('t.' + name for name in columns.split(', '))} "
+            f"FROM ({judged}) t JOIN temp.rollup_appends d ON d.session_key = t.unit "
+            "WHERE t.seq >= d.first_seq"
+        )
+    connection.execute("DROP TABLE IF EXISTS temp.rollup_cache_turns")
+    connection.execute("CREATE TEMP TABLE rollup_cache_turns AS " + judged)
+    update = (
+        _additive_update(
+            "agg_cache",
+            "hour, session_key",
+            "turns, input_tokens, cache_read_tokens, cache_write_tokens, "
+            "evaluated_turns, suspected_turns",
+            maxima="last_instant",
+        )
+        if append
+        else ""
     )
     connection.execute(
         f"""
@@ -813,6 +796,7 @@ def _recompute_cache(connection: sqlite3.Connection) -> None:
             SUM(t.evaluated), SUM(t.incident), MAX(t.instant)
         FROM temp.rollup_cache_turns t
         GROUP BY hour, t.unit
+        {update}
         """
     )
     connection.execute(
@@ -828,23 +812,58 @@ def _recompute_cache(connection: sqlite3.Connection) -> None:
     connection.execute("DROP TABLE temp.rollup_cache_turns")
 
 
-def _recompute_usage(connection: sqlite3.Connection) -> None:
-    connection.execute(
-        f"""
-        INSERT INTO agg_usage (
-            hour, unit_key, origin, model_key, kind, status, {", ".join(_USAGE_CUBE_MEASURES)}
-        )
-        SELECT {_HOUR} AS hour, r.session_key,
+def _usage_select(source: str, where: str, *, sequence: bool = False) -> str:
+    return f"""
+        SELECT {"r.seq, " if sequence else ""}{_HOUR} AS hour, r.session_key,
             {USAGE_ORIGIN_SQL} AS origin,
             c.model_key, c.purpose, r.status,
             {", ".join(_MEASURE_SQL[name] for name in _USAGE_CUBE_MEASURES)}
-        FROM temp.rollup_units d
-        CROSS JOIN stat_usage_units u ON u.session_key = d.unit_key
-        CROSS JOIN stat_usage_records r ON r.session_key = d.unit_key
+        FROM {source}
+        CROSS JOIN stat_usage_units u ON u.session_key = r.session_key
         CROSS JOIN stat_usage_calls c ON c.session_key = r.session_key AND c.seq = r.seq
         LEFT JOIN stat_sessions s ON s.project_id = u.project_id AND s.agent_id = u.agent_id
             AND s.session_id = u.session_id
         LEFT JOIN stat_run_records rr ON rr.session_key = s.session_key AND rr.run_id = r.run_id
-        GROUP BY hour, r.session_key, origin, c.model_key, c.purpose, r.status
-        """
+        WHERE {where}
+        GROUP BY {"r.seq, " if sequence else ""}hour, r.session_key, origin,
+            c.model_key, c.purpose, r.status
+    """
+
+
+def _recompute_usage(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        f"INSERT INTO agg_usage ({_USAGE_COLUMNS}) "
+        + _usage_select(
+            "temp.rollup_units d CROSS JOIN stat_usage_records r ON r.session_key = d.unit_key",
+            "1",
+        )
     )
+
+
+def _apply_usage_deltas(connection: sqlite3.Connection) -> None:
+    """Subtract original calls and add their final, repriced versions in exact integers."""
+    connection.execute("DROP TABLE IF EXISTS temp.rollup_usage_deltas")
+    connection.execute(
+        f"CREATE TEMP TABLE rollup_usage_deltas AS SELECT {_USAGE_KEYS}, "
+        + ", ".join(f"-{name} AS {name}" for name in _USAGE_CUBE_MEASURES)
+        + " FROM temp.rollup_usage_before b WHERE b.unit_key IS NOT NULL "
+        "AND NOT EXISTS (SELECT 1 FROM temp.rollup_units d WHERE d.unit_key = b.unit_key)"
+    )
+    connection.execute(
+        f"INSERT INTO temp.rollup_usage_deltas ({_USAGE_COLUMNS}) "
+        + _usage_select(
+            "temp.rollup_usage_before b CROSS JOIN stat_usage_records r ON r.seq = b.seq",
+            "NOT EXISTS (SELECT 1 FROM temp.rollup_units d WHERE d.unit_key = r.session_key)",
+        )
+    )
+    connection.execute(
+        f"INSERT INTO agg_usage ({_USAGE_COLUMNS}) SELECT {_USAGE_KEYS}, "
+        + ", ".join(f"SUM({name})" for name in _USAGE_CUBE_MEASURES)
+        + f" FROM temp.rollup_usage_deltas GROUP BY {_USAGE_KEYS}"
+        + _additive_update("agg_usage", _USAGE_KEYS, ", ".join(_USAGE_CUBE_MEASURES))
+    )
+    connection.execute(
+        f"DELETE FROM agg_usage WHERE ({_USAGE_KEYS}) IN "
+        f"(SELECT {_USAGE_KEYS} FROM temp.rollup_usage_deltas) AND calls = 0"
+    )
+    connection.execute("DROP TABLE temp.rollup_usage_deltas")

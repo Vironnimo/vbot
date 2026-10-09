@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -18,8 +20,9 @@ from core.sessions import ChatSessionManager, SessionAddress
 from core.statistics._projection import datetime_instant
 from core.statistics.index import IndexView, StatisticsIndex, StatisticsScope
 from core.tools import tool_failure, tool_success
-from core.usage import UsageRecorder
-from tests.core.sessions.history_fixtures import seed_history
+from core.usage import UsagePage, UsageRecorder
+from core.utils.timestamps import format_canonical_timestamp
+from tests.core.sessions.history_fixtures import append_tool_fixture, seed_history
 from tests.core.statistics.statistics_test_support import (
     BASE,
     _admit,
@@ -29,6 +32,7 @@ from tests.core.statistics.statistics_test_support import (
     _run_summary,
     _tool,
 )
+from tests.core.usage.usage_test_support import read_ledger
 
 Row = dict[str, Any]
 Rows = dict[str, list[Row]]
@@ -223,6 +227,36 @@ async def test_incremental_maintenance_equals_a_full_rebuild(
     )
     check()
 
+    # Pure tails, without admitting another Run: the predecessor can be in an
+    # earlier hour, a skipped Assistant, or a reset boundary. None is counted twice.
+    alpha.append(ChatMessage.note("note only", timestamp=_at(3598)))
+    check()
+    alpha.append(_assistant(model="chat/m", at=_at(3599), usage={"input_tokens": 5000}))
+    check()
+    alpha.append(
+        _assistant(
+            model="chat/m", at=_at(3601), usage={"input_tokens": 5100, "cache_read_tokens": 100}
+        )
+    )
+    check()
+    for boundary in (
+        _assistant(model="chat/m", at=_at(3602)),
+        _compaction(at=_at(3604), before=5000, after=100),
+        ChatMessage.agent_takeover(from_address="previous", to_address="main", timestamp=_at(3606)),
+    ):
+        alpha.append(boundary)
+        check()
+        alpha.append(_assistant(model="chat/m", at=_at(3607), usage={"input_tokens": 5200}))
+        check()
+    for offset, duration in enumerate((None, 120, None, 250)):
+        message = _tool(
+            name="tail", at=_at(3610 + offset), envelope=tool_success({}), duration_ms=duration or 0
+        )
+        append_tool_fixture(
+            alpha, replace(message, timing=None if duration is None else message.timing)
+        )
+        check()
+
     # Appends to a Session, a new Session whose requests were recorded before
     # it was indexed, and a call that starts now and finishes later.
     _admit(manager, alpha.address, "a2", "cron")
@@ -247,6 +281,8 @@ async def test_incremental_maintenance_equals_a_full_rebuild(
         model="chat/m", kind="chat", agent_id="main", session_id="alpha", run_id="a2"
     )
     check()
+    await ledger.update(pending, {"input_tokens": 75, "input_tokens_estimated": True})
+    check()
     await ledger.finish(pending, {"input_tokens": 50, "output_tokens": 2, "reported_cost_usd": 0.1})
     check()
 
@@ -255,8 +291,11 @@ async def test_incremental_maintenance_equals_a_full_rebuild(
     check()
 
     # A history edit rebuilds a Session's facts from its start.
+    question = ChatMessage.user("editable after takeover", timestamp=_at(3700))
+    alpha.append(question)
+    check()
     manager.get(alpha.address).apply_edit(
-        question.id, [ChatMessage.user("edited", timestamp=_at(1))]
+        question.id, [ChatMessage.user("edited", timestamp=_at(3700))]
     )
     check()
 
@@ -278,6 +317,85 @@ async def test_incremental_maintenance_equals_a_full_rebuild(
         "subagent",
         "user",
     }
+
+
+@pytest.mark.asyncio
+async def test_paged_revisions_and_new_run_origins_equal_a_full_rebuild(
+    tmp_path: Path,
+    manager: ChatSessionManager,
+    index: StatisticsIndex,
+    ledger: UsageRecorder,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the first old and final new contribution survive one reconcile."""
+    alpha = manager.create("main", session_id="alpha")
+    beta = manager.create("main", session_id="beta")
+    prices: Prices = {"chat/m": TokenPricing.from_cost({"input": 1}, source="t")}
+    await _call(ledger, {"input_tokens": 5000}, address=alpha.address, run_id="future")
+    revision, (old,) = read_ledger(ledger)
+    _rollups(index, manager, ledger, prices)
+
+    # This already indexed request acquires its newly visible Run's origin.
+    # Its ledger revision changes again in the same reconcile.
+    _admit(manager, alpha.address, "future", "cron")
+    alpha.for_run("future").append(ChatMessage.note("admitted", timestamp=_at(1)))
+    manager.set_metadata(beta.address, {"is_subagent_session": True})
+    fresh = replace(old, id="fresh", run_id=None, revision=revision + 1)
+    middle = replace(old, session_id="beta", run_id=None, revision=revision + 2)
+    final_old = replace(
+        old,
+        model="chat/changed",
+        kind="session_title",
+        status="failed",
+        timestamp=format_canonical_timestamp(_at(3601)),
+        usage={"input_tokens": 3, "reported_cost_usd": 1.6e-9},
+        revision=revision + 4,
+    )
+    final_fresh = replace(
+        fresh,
+        session_id="beta",
+        run_id="next",
+        usage={"input_tokens": 7, "output_tokens": 2},
+        revision=revision + 5,
+    )
+
+    def pages(after: int = 0) -> Iterator[UsagePage]:
+        if after == revision:
+            yield UsagePage(revision + 2, (fresh, middle))
+            yield UsagePage(revision + 3, (replace(fresh, session_id="middle"),))
+            yield UsagePage(revision + 5, (final_old, final_fresh))
+        else:
+            yield UsagePage(revision + 5, (final_old, final_fresh) if after == 0 else ())
+
+    monkeypatch.setattr(ledger, "read_since", pages)
+    incremental = _rollups(index, manager, ledger, prices)
+    rebuilt = StatisticsIndex(tmp_path / "rebuilt")
+    try:
+        assert incremental == _rollups(rebuilt, manager, ledger, prices)
+    finally:
+        rebuilt.close()
+    assert {row["origin"] for row in incremental["agg_usage"]} == {"automation", "subagent"}
+    assert sum(row["calls"] for row in incremental["agg_usage"]) == 2
+    assert all(row["calls"] > 0 for row in incremental["agg_usage"])
+    assert _rollups(index, manager, ledger, prices) == incremental
+
+    # A later Run admission stages an old contribution from the higher unit
+    # key, but a concurrent ledger rewind replaces all units. The rebuild must
+    # discard that staged delta, even though the old unit no longer exists.
+    _admit(manager, beta.address, "next", "cron")
+    beta.for_run("next").append(ChatMessage.note("admitted", timestamp=_at(2)))
+    monkeypatch.setattr(
+        ledger,
+        "read_since",
+        lambda _after=0: iter([UsagePage(1, (replace(final_old, revision=1),))]),
+    )
+    incremental = _rollups(index, manager, ledger, prices)
+    rebuilt = StatisticsIndex(tmp_path / "rewound")
+    try:
+        assert incremental == _rollups(rebuilt, manager, ledger, prices)
+    finally:
+        rebuilt.close()
+    assert sum(row["calls"] for row in incremental["agg_usage"]) == 1
 
 
 @pytest.mark.asyncio

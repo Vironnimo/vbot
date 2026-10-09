@@ -164,6 +164,7 @@ def _project_calls(
         ).fetchone()
         if prior_call is not None:
             # An updated call may have moved to another unit or Run.
+            changes.usage_record(connection, int(prior_call[1]))
             changes.usage_call(int(prior_call[0]), prior_call[2])
             connection.execute(
                 "DELETE FROM stat_usage_calls WHERE session_key = ? AND seq = ?",
@@ -189,6 +190,8 @@ def _project_calls(
                 ),
             ).fetchone()[0]
         )
+        if prior_call is None:
+            changes.usage_record(connection, sequence)
         rows = ProjectedRows(unit_key)
         rows.add_usage_call(
             sequence,
