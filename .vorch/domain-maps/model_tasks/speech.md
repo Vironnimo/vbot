@@ -158,6 +158,9 @@ transcription, failed preload, shutdown during a managed preload, every engine o
 
 PyAV decodes the original recording once into mono float32 at 16 kHz. Chunks are at most 30
 seconds, cut near a quiet point in the last second, with no discarded samples.
+Decoded frames fill a fixed-size chunk buffer; only the unconsumed tail moves to
+the next buffer, so small frames do not repeatedly copy the accumulated recording.
+Yielded sample arrays stay unchanged while later chunks are assembled.
 Exact digital silence skips inference. Result segment times are chunk bounds,
 not word alignment. Engines never download: they load only from a local directory,
 with remote code disabled and `local_files_only`. The executor passes the target's

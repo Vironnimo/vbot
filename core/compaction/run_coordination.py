@@ -11,6 +11,7 @@ from core.chat import RequestState, checkpoint_ordinal, has_unconsumed_skill_act
 from core.chat.messages import JsonObject
 from core.chat.usage import (
     ContextTarget,
+    RequestContextEstimate,
     RequestContextUsage,
     aggregate_session_usage,
     checkpoint_context_usage,
@@ -408,6 +409,7 @@ class CompactionRunCoordinator:
         usage: JsonObject | None,
         *,
         continuation_request_messages: list[JsonObject] | None = None,
+        request_estimate: RequestContextEstimate | None = None,
         allow_continuation: bool = False,
         continue_same_run: bool = True,
     ) -> RequestState:
@@ -448,14 +450,21 @@ class CompactionRunCoordinator:
 
         current_request_messages = continuation_request_messages or messages
         accounting = getattr(context, "context_usage", None) or RequestContextUsage()
-        effective_context_usage = await self._host.run_transform(
-            accounting.project,
-            current_request_messages,
-            target=target,
-            tools=tools,
-            scope=context.prompt_cache_affinity_id,
-            context_window=context_window,
-        )
+        if request_estimate is not None:
+            # Chat supplies this only with the exact completed continuation.
+            # Calibration and the measurement anchor remain live at this boundary.
+            effective_context_usage = accounting.project_prepared(
+                request_estimate, context_window=context_window
+            )
+        else:
+            effective_context_usage = await self._host.run_transform(
+                accounting.project,
+                current_request_messages,
+                target=target,
+                tools=tools,
+                scope=context.prompt_cache_affinity_id,
+                context_window=context_window,
+            )
         input_tokens = int(effective_context_usage["tokens"])
         run.terminal_payload_extras["context_usage"] = effective_context_usage
 

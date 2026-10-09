@@ -175,7 +175,15 @@ describe('renderMarkdown()', () => {
     expect(second).toBe(first);
     expect(second).toContain('<strong>bold</strong>');
     expect(renderSpy).toHaveBeenCalledTimes(1);
-    renderSpy.mockRestore();
+
+    // Streaming drafts never enter or evict the finished-document cache,
+    // including the rendered prefix preceding an unfinished code fence.
+    const saved = renderMarkdownDocument(source);
+    for (let index = 0; index < 350; index += 1) {
+      renderMarkdownStreaming(`Draft ${index}\n\n${'text '.repeat(index % 5)}`);
+      renderMarkdownStreaming(`Prefix ${index}\n\n\`\`\`js\ncode`);
+    }
+    expect(renderMarkdownDocument(source)).toBe(saved);
 
     for (let index = 0; index < 350; index += 1) {
       renderMarkdown(`cache-filler-${index}\n\ncontent ${index}`);
@@ -183,6 +191,19 @@ describe('renderMarkdown()', () => {
     expect(renderMarkdown('# After eviction')).toContain(
       '<h1>After eviction</h1>',
     );
+
+    // A small number of large finished documents also evicts old text. An
+    // oversized document remains correct without displacing useful entries.
+    renderSpy.mockImplementation((text) => `<p>${text}</p>`);
+    const large = 'x'.repeat(600_000);
+    const firstLarge = renderMarkdownDocument(`first ${large}`);
+    renderMarkdownDocument(`second ${large}`);
+    renderMarkdownDocument(`third ${large}`);
+    expect(renderMarkdownDocument(`first ${large}`)).not.toBe(firstLarge);
+    const small = renderMarkdownDocument('keep this finished text');
+    expect(renderMarkdown('y'.repeat(2_000_000))).toHaveLength(2_000_007);
+    expect(renderMarkdownDocument('keep this finished text')).toBe(small);
+    renderSpy.mockRestore();
   });
 });
 

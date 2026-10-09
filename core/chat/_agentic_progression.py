@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from core.chat._boundaries import _finish_visible_boundary
 from core.chat._queued_input import persist_steering_input, rebuild_after_steering
+from core.chat._request_history import _prepare_request_context, _prepare_tool_context
 from core.chat._run_state import RequestState, _AssistantStep
 from core.chat._step_outcomes import (
     MAX_IDENTICAL_FAILED_TOOL_CALLS,
@@ -25,6 +26,7 @@ from core.chat._step_outcomes import (
     TOOL_ITERATION_LIMIT_FAILURE_MESSAGE,
     _combined_interrupted_result,
     _offered_tool_calls,
+    _prepare_assistant_context,
     _prepare_completed_assistant,
     _terminal_outcome_error,
     _terminal_tool_failure,
@@ -47,17 +49,15 @@ from core.chat.tool_dispatch import (
     _fail_tool_calls_without_dispatch,
 )
 from core.chat.usage import (
-    CONTEXT_ESTIMATION_FIELD,
+    RequestContextEstimate,
     add_session_turn_usage,
     aggregate_session_usage,
 )
 from core.chat.wire_shaping import (
-    _assistant_continuation_dict,
     _message_to_request_dict,
     _notes_to_request_messages,
     _parse_response_tool_calls,
     extend_request_with_notes,
-    limit_request_images,
 )
 from core.debug import DebugContext
 from core.extensions import HookContext, SessionRequestContext
@@ -485,12 +485,15 @@ class AgenticProgression:
                     async with self._dependencies.sessions.write_lock(session_address):
                         await context.session_snapshot.flush_deferred_notes(session)
 
-            messages_for_request = await _CHAT_TRANSFORM_WORKERS.run(
-                limit_request_images,
+            messages_for_request, request_estimate = await _CHAT_TRANSFORM_WORKERS.run(
+                _prepare_request_context,
                 messages_for_request,
                 budget=context.image_budget,
                 image_limit=target.max_request_images,
-                remember=True,
+                accounting=context.context_usage,
+                target=target,
+                tools=tools,
+                scope=context.prompt_cache_affinity_id,
             )
 
             # The next ordinal is derived from the canonical completed count.
@@ -603,12 +606,8 @@ class AgenticProgression:
 
             while True:
                 run.raise_if_cancelled()
-                request_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
-                    context.context_usage.project,
-                    messages_for_request,
-                    target=target,
-                    tools=tools,
-                    scope=context.prompt_cache_affinity_id,
+                request_context_usage = context.context_usage.project_prepared(
+                    request_estimate,
                     context_window=self._requests.resolve_context_window(agent, target),
                 )
                 self._requests._raise_if_measured_context_exhausted(
@@ -660,6 +659,13 @@ class AgenticProgression:
                     if smaller == messages_for_request:
                         raise
                     messages_for_request = smaller
+                    request_estimate = await _CHAT_TRANSFORM_WORKERS.run(
+                        context.context_usage.prepare,
+                        messages_for_request,
+                        target=target,
+                        tools=tools,
+                        scope=context.prompt_cache_affinity_id,
+                    )
                     continue
                 except RunInterruptedError as exc:
                     if exc.result is None and interruption_chain:
@@ -705,12 +711,15 @@ class AgenticProgression:
                 messages_for_request: list[JsonObject] = messages_for_request,
                 output_cwd: Path | None = output_cwd,
                 request_context_usage: JsonObject = request_context_usage,
+                request_estimate: RequestContextEstimate = request_estimate,
                 assistant_step: _AssistantStep = assistant_step,
                 request_tools: list[JsonObject] = tools,
                 offered_tool_names: list[str] = offered_tool_names,
                 removed_tool_names: frozenset[str] = removed_tool_names,
                 started_tool_calls: list[ToolCall] = started_tool_calls,
-            ) -> tuple[ChatMessage, JsonObject, list[JsonObject], JsonObject]:
+            ) -> tuple[
+                ChatMessage, JsonObject, list[JsonObject], JsonObject, RequestContextEstimate
+            ]:
                 if (
                     not assistant_message.interrupted
                     and _terminal_outcome_error(
@@ -751,51 +760,17 @@ class AgenticProgression:
                         assistant_message,
                         usage=await recorder.update(call_id, assistant_message.usage),
                     )
-                assistant_request_message = await _CHAT_TRANSFORM_WORKERS.run(
-                    _assistant_continuation_dict,
+                return await _CHAT_TRANSFORM_WORKERS.run(
+                    _prepare_assistant_context,
                     assistant_message,
-                    replay_policy=replay_policy,
-                )
-                # An interrupted Reasoning-only boundary becomes empty once its
-                # native Reasoning is stripped. Never send an empty Assistant entry.
-                assistant_request_messages: list[JsonObject] = (
-                    [assistant_request_message]
-                    if any(
-                        assistant_request_message.get(field)
-                        for field in ("content", "tool_calls", "reasoning", "reasoning_meta")
-                    )
-                    else []
-                )
-                assert isinstance(assistant_message.usage, dict)
-                await _CHAT_TRANSFORM_WORKERS.run(
-                    context.context_usage.observe,
-                    assistant_message.usage,
                     messages_for_request,
-                    target=target,
-                    tools=request_tools,
-                    scope=context.prompt_cache_affinity_id,
-                )
-                assistant_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
-                    context.context_usage.project,
-                    [*messages_for_request, *assistant_request_messages],
+                    request_estimate,
+                    replay_policy=replay_policy,
+                    accounting=context.context_usage,
                     target=target,
                     tools=request_tools,
                     scope=context.prompt_cache_affinity_id,
                     context_window=self._requests.resolve_context_window(agent, target),
-                )
-                assistant_message = replace(
-                    assistant_message,
-                    usage={
-                        **assistant_message.usage,
-                        "context_usage": assistant_context_usage,
-                        CONTEXT_ESTIMATION_FIELD: context.context_usage.estimation_record(target),
-                    },
-                )
-                return (
-                    assistant_message,
-                    assistant_request_message,
-                    assistant_request_messages,
-                    assistant_context_usage,
                 )
 
             (
@@ -803,6 +778,7 @@ class AgenticProgression:
                 assistant_request_message,
                 assistant_request_messages,
                 assistant_context_usage,
+                assistant_context_estimate,
             ) = await _finish_visible_boundary(
                 prepare_boundary(assistant_message), run, preserve_after_cancel
             )
@@ -1163,26 +1139,24 @@ class AgenticProgression:
 
             # Bound the live request view as well, before Compaction estimates or
             # another Tool cycle. Canonical artifacts remain available to reopen.
-            messages[:] = await _CHAT_TRANSFORM_WORKERS.run(
-                limit_request_images,
+            (
+                limited_messages,
+                continuation_request_messages,
+                tool_context_estimate,
+            ) = await _CHAT_TRANSFORM_WORKERS.run(
+                _prepare_tool_context,
                 messages,
-                budget=context.image_budget,
-                image_limit=target.max_request_images,
-                remember=True,
-            )
-            continuation_request_messages = await _CHAT_TRANSFORM_WORKERS.run(
-                limit_request_images,
                 [*messages_for_request, assistant_request_message, *tool_request_messages],
                 budget=context.image_budget,
                 image_limit=target.max_request_images,
-                remember=True,
-            )
-            tool_context_usage = await _CHAT_TRANSFORM_WORKERS.run(
-                context.context_usage.project,
-                continuation_request_messages,
+                accounting=context.context_usage,
                 target=target,
                 tools=tools,
                 scope=context.prompt_cache_affinity_id,
+            )
+            messages[:] = limited_messages
+            tool_context_usage = context.context_usage.project_prepared(
+                tool_context_estimate,
                 context_window=self._requests.resolve_context_window(context.agent, target),
             )
             run.terminal_payload_extras["context_usage"] = tool_context_usage
@@ -1206,6 +1180,7 @@ class AgenticProgression:
                     target,
                     usage=assistant_message.usage,
                     continuation_request_messages=continuation_request_messages,
+                    request_estimate=tool_context_estimate,
                     allow_continuation=True,
                 )
                 context.request_state = compacted_state
@@ -1223,6 +1198,9 @@ class AgenticProgression:
                         *messages_for_request,
                         assistant_request_message,
                     ],
+                    request_estimate=(
+                        assistant_context_estimate if assistant_request_messages else None
+                    ),
                     continue_same_run=False,
                 )
             except asyncio.CancelledError:

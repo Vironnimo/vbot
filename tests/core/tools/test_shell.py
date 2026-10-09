@@ -9,6 +9,7 @@ import json
 import re
 import shutil
 import sys
+import threading
 from collections.abc import AsyncIterator, Callable
 from datetime import timedelta
 from pathlib import Path
@@ -20,6 +21,7 @@ import pytest_asyncio
 
 from core.projects import ProjectNotFoundError
 from core.storage.temp_files import TemporaryFileManager
+from core.tools import shell as shell_module
 from core.tools import terminal_manager
 from core.tools._terminal_process_tree import ProgramExit, RunningProcess
 from core.tools.model_names import SHELL_MODEL_NAME
@@ -282,6 +284,38 @@ async def test_leniently_read_arguments_run_with_a_note(shell: Shell) -> None:
         "PATH is not a granted credential, so the command sees the value it inherits; "
         "env_keys is only for granted credentials.",
     ]
+
+
+@pytest.mark.asyncio
+async def test_each_shell_start_resolves_its_fresh_environment_off_loop(
+    shell: Shell, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loop_thread = threading.get_ident()
+    prepared: list[int] = []
+    resolved: list[tuple[int, str | None]] = []
+    paths = iter(("first-path", "changed-path"))
+
+    def environment(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+        prepared.append(threading.get_ident())
+        return {"PATH": next(paths)}
+
+    def executable(_name: str, *, path: str | None = None) -> str:
+        resolved.append((threading.get_ident(), path))
+        return str(shell.tmp_path / str(path) / "fixture-shell")
+
+    monkeypatch.setattr(shell_module, "command_environment", environment)
+    monkeypatch.setattr(shell_module.shutil, "which", executable)
+    for path in ("first-path", "changed-path"):
+        result = data(await shell.call({"command": "build", "mode": "background"}))
+        argv, _cwd, env, _rows, _columns = shell.factory.calls[-1]
+        assert argv[0] == str(shell.tmp_path / path / "fixture-shell")
+        assert env["PATH"] == path
+        shell.trees[-1].shell_exits(0)
+        await shell.manager.wait_finished(result["terminal_id"])
+
+    assert [path for _thread, path in resolved] == ["first-path", "changed-path"]
+    assert prepared == [thread for thread, _path in resolved]
+    assert all(thread != loop_thread for thread in prepared)
 
 
 @pytest.mark.asyncio

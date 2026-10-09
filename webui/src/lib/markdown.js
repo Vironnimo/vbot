@@ -53,37 +53,67 @@ md.renderer.rules['link_open'] = (tokens, idx, options, env, self) => {
   return defaultLinkOpenRender(tokens, idx, options, env, self);
 };
 
-// Rendering is pure for a given source string, so we memoize results. The chat
-// timeline rebuilds every visible item on each streaming flush (~30x/second),
-// which would otherwise re-parse the Markdown of every finished message on every
-// tick. The cache turns those into O(1) lookups; only the one actively
-// streaming block (whose source keeps changing) misses and re-parses. The cache
-// is bounded with least-recently-used eviction so it cannot grow without limit.
+// Only finished text belongs in the shared cache. A growing answer has a new
+// source at every flush; retaining those prefixes keeps hundreds of obsolete
+// documents alive. Mounted MarkdownContent instances own their current render.
+// Bound both entry count and retained UTF-16 text bytes, including source keys,
+// so a few very large finished messages cannot monopolize either cache.
 const RENDER_CACHE_LIMIT = 300;
-const renderCache = new Map();
-const linkifiedTextCache = new Map();
+const RENDER_CACHE_BYTES = 4 * 1024 * 1024;
+const renderCache = createTextCache();
+const linkifiedTextCache = createTextCache();
+
+function createTextCache() {
+  const entries = new Map();
+  let bytes = 0;
+  return {
+    get(key) {
+      const entry = entries.get(key);
+      if (!entry) return undefined;
+      entries.delete(key);
+      entries.set(key, entry);
+      return entry.value;
+    },
+    set(key, value, textLength) {
+      const size = 2 * (key.length + textLength);
+      if (size > RENDER_CACHE_BYTES) return;
+      bytes -= entries.get(key)?.size ?? 0;
+      entries.delete(key);
+      entries.set(key, { value, size });
+      bytes += size;
+      while (entries.size > RENDER_CACHE_LIMIT || bytes > RENDER_CACHE_BYTES) {
+        const oldest = entries.keys().next().value;
+        bytes -= entries.get(oldest).size;
+        entries.delete(oldest);
+      }
+    },
+  };
+}
 
 function cachedRenderDocument(src, plainLanguageLabel) {
   const cacheKey = `${plainLanguageLabel}\u0000${src}`;
   const cached = renderCache.get(cacheKey);
-  if (cached !== undefined) {
-    // Refresh recency: move the entry to the end of the insertion order.
-    renderCache.delete(cacheKey);
-    renderCache.set(cacheKey, cached);
-    return cached;
-  }
+  if (cached !== undefined) return cached;
 
+  const document = renderDocument(src, plainLanguageLabel);
+  renderCache.set(
+    cacheKey,
+    document,
+    document.html.length +
+      document.codeBlocks.reduce(
+        (length, block) => length + block.text.length,
+        0,
+      ),
+  );
+  return document;
+}
+
+function renderDocument(src, plainLanguageLabel) {
   const codeBlocks = [];
-  const document = {
+  return {
     html: md.render(src, { codeBlocks, plainLanguageLabel }),
     codeBlocks,
   };
-  renderCache.set(cacheKey, document);
-  if (renderCache.size > RENDER_CACHE_LIMIT) {
-    const oldestKey = renderCache.keys().next().value;
-    renderCache.delete(oldestKey);
-  }
-  return document;
 }
 
 function escapeHtml(value) {
@@ -189,11 +219,7 @@ export function linkifiedTextSegments(src) {
   if (!src) return [];
 
   const cached = linkifiedTextCache.get(src);
-  if (cached !== undefined) {
-    linkifiedTextCache.delete(src);
-    linkifiedTextCache.set(src, cached);
-    return cached;
-  }
+  if (cached !== undefined) return cached;
 
   const codeRanges = plainTextCodeRanges(src);
   const matches = (md.linkify.match(src) ?? []).filter(
@@ -217,11 +243,15 @@ export function linkifiedTextSegments(src) {
     segments.push({ text: src.slice(cursor), href: null });
   }
 
-  linkifiedTextCache.set(src, segments);
-  if (linkifiedTextCache.size > RENDER_CACHE_LIMIT) {
-    const oldestKey = linkifiedTextCache.keys().next().value;
-    linkifiedTextCache.delete(oldestKey);
-  }
+  linkifiedTextCache.set(
+    src,
+    segments,
+    segments.reduce(
+      (length, segment) =>
+        length + segment.text.length + (segment.href?.length ?? 0),
+      0,
+    ),
+  );
   return segments;
 }
 
@@ -266,7 +296,7 @@ export function renderMarkdownStreamingDocument(
 
   const openFenceIndex = lastUnclosedFenceIndex(src);
   if (openFenceIndex === -1) {
-    return renderMarkdownDocument(src, { plainLanguageLabel });
+    return renderDocument(src, plainLanguageLabel);
   }
 
   const prefix = src.slice(0, openFenceIndex);
@@ -281,7 +311,7 @@ export function renderMarkdownStreamingDocument(
   const codeContent =
     firstNewlineIndex === -1 ? '' : fenceBlock.slice(firstNewlineIndex + 1);
   const prefixDocument = prefix
-    ? renderMarkdownDocument(prefix, { plainLanguageLabel })
+    ? renderDocument(prefix, plainLanguageLabel)
     : { html: '', codeBlocks: [] };
   const codeBlocks = [
     ...prefixDocument.codeBlocks,

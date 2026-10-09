@@ -77,6 +77,12 @@
   // Disclosure and pending-action state lives in the timeline's view state,
   // so it survives this Run being unmounted and mounted again.
   const viewState = timelineViewState();
+  let revealedWorkingGroups = $state({});
+
+  function setWorkingGroupOpen(id, open) {
+    if (open) revealedWorkingGroups[id] = true;
+    viewState.setOpen(id, open);
+  }
 
   let runDisplayGroups = $derived(
     groupRunChildren(visibleRunChildren(item), chatWorkingMode),
@@ -416,6 +422,7 @@
             </summary>
             <ToolDetails
               tool={child}
+              open={viewState.isOpen(toolDisclosureKey(child))}
               toolName={toolNameForRunTool(child)}
               args={toolArguments(child)}
               output={child.output}
@@ -512,6 +519,7 @@
             </summary>
             <ToolDetails
               tool={child}
+              open={viewState.isOpen(toolDisclosureKey(child))}
               toolName={toolNameForRunTool(child)}
               args={toolArguments(child)}
               output={child.output}
@@ -633,6 +641,7 @@
             </summary>
             <ToolDetails
               tool={child}
+              open={viewState.isOpen(toolDisclosureKey(child))}
               toolName={toolNameForRunTool(child)}
               args={toolArguments(child)}
               output={child.output}
@@ -705,7 +714,7 @@
           class="working-block"
           open={groupOpen}
           ontoggle={(event) =>
-            viewState.setOpen(group.id, event.currentTarget.open)}
+            setWorkingGroupOpen(group.id, event.currentTarget.open)}
         >
           <summary
             class="working-block__summary"
@@ -732,7 +741,11 @@
           </summary>
           <div class="working-block__body">
             {#each group.children as child (child.id)}
-              {@render runChild(child)}
+              {#if groupOpen || revealedWorkingGroups[group.id] || isTextToSpeechTool(child)}
+                <!-- Fresh speech starts even in a never-opened Working group.
+                     Its keyed row stays mounted when that group opens. -->
+                {@render runChild(child)}
+              {/if}
             {/each}
           </div>
         </details>

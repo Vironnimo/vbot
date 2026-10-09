@@ -1,6 +1,7 @@
 import {
   mergeTimelineItems,
   createAssistantRunItem,
+  batchAssistantRunUpdates,
   syncAssistantRunCollections,
   RUN_HISTORY_CONTENT_ROLES,
 } from './model.js';
@@ -12,6 +13,8 @@ import {
 } from './history.js';
 import { appendLiveRunEvent } from './live.js';
 import { settleUnfinishedTools, appendSteeringMessage } from './runChildren.js';
+
+const mergedRunsBySession = new WeakMap();
 
 // Completeness is an explicit database read fact from the same History snapshot.
 export function runProjectionPersistedInHistory(runs, runId) {
@@ -43,6 +46,10 @@ export function reconcileTimeline(
   historyItemReuse = null,
 ) {
   const messages = sessionState.messages ?? [];
+  if (liveItems.length === 0) {
+    mergedRunsBySession.delete(sessionState);
+    return historyTimelineItems(messages, historyItemReuse);
+  }
   const retired = new Set(
     liveItems
       .filter(
@@ -72,9 +79,29 @@ export function reconcileTimeline(
     owned.get(runId).push(message);
   }
   const mergedRuns = new Map();
+  let cache = mergedRunsBySession.get(sessionState);
+  if (!cache) {
+    cache = new Map();
+    mergedRunsBySession.set(sessionState, cache);
+  }
+  for (const runId of cache.keys()) {
+    if (!owned.has(runId)) cache.delete(runId);
+  }
   for (const [runId, rows] of owned) {
     const liveRun = runs.get(runId);
-    mergedRuns.set(runId, mergeRun(rows, liveRun));
+    const previous = cache.get(runId);
+    const sameHistory =
+      previous?.messages.length === rows.length &&
+      rows.every((message, index) => message === previous.messages[index]);
+    const historyRun = sameHistory
+      ? previous.historyRun
+      : historyForLiveRun(rows, liveRun);
+    const result =
+      sameHistory && previous.liveRun === liveRun
+        ? previous.result
+        : mergeRun(rows, liveRun, historyRun, previous?.result);
+    cache.set(runId, { messages: rows, liveRun, historyRun, result });
+    mergedRuns.set(runId, result);
   }
 
   // Preserve canonical record order. A live overlay replaces precisely its
@@ -137,7 +164,7 @@ function itemRunId(item) {
   return item.runId ?? item.liveErrorRunId ?? item.event?.run_id;
 }
 
-function mergeRun(messages, liveRun) {
+function historyForLiveRun(messages, liveRun) {
   // History-built children get their own id namespace: live and History rows
   // derive ids independently, so sharing the Run id prefix could collide.
   const historyRun = createAssistantRunItem({
@@ -146,23 +173,29 @@ function mergeRun(messages, liveRun) {
     source: 'history',
   });
   const firstUser = messages.find((message) => message.role === 'user');
-  for (const message of messages) {
-    if (message.role === 'user' && message !== firstUser)
-      appendSteeringMessage(historyRun, message);
-    else if (message.role === 'assistant')
-      appendHistoryAssistantMessage(historyRun, message);
-    else if (message.role === 'tool')
-      appendHistoryToolResult(historyRun, message);
-    else if (message.role === 'model_fallback')
-      appendHistoryModelFallback(historyRun, message);
-    else if (message.role === 'compaction_checkpoint')
-      appendLiveRunEvent(historyRun, {
-        type: 'compaction_completed',
-        sequence: historyRun.items.length,
-        timestamp: message.timestamp,
-        payload: { message },
-      });
-  }
+  batchAssistantRunUpdates(historyRun, () => {
+    for (const message of messages) {
+      if (message.role === 'user' && message !== firstUser)
+        appendSteeringMessage(historyRun, message);
+      else if (message.role === 'assistant')
+        appendHistoryAssistantMessage(historyRun, message);
+      else if (message.role === 'tool')
+        appendHistoryToolResult(historyRun, message);
+      else if (message.role === 'model_fallback')
+        appendHistoryModelFallback(historyRun, message);
+      else if (message.role === 'compaction_checkpoint')
+        appendLiveRunEvent(historyRun, {
+          type: 'compaction_completed',
+          sequence: historyRun.items.length,
+          timestamp: message.timestamp,
+          payload: { message },
+        });
+    }
+  });
+  return historyRun;
+}
+
+function mergeRun(messages, liveRun, historyRun, previous) {
   const items = [...historyRun.items];
   const toolMessages = new Map(
     messages
@@ -216,6 +249,19 @@ function mergeRun(messages, liveRun) {
   if (liveRun.terminalEvent) {
     settleUnfinishedTools(result, liveRun.status, liveRun.terminalEvent);
   }
+  // Merging History is allowed to change a child's canonical fields without
+  // forcing every unaffected sibling to update on the next streaming flush.
+  const previousChildren = new Map(
+    (previous?.items ?? []).map((item) => [item.id, item]),
+  );
+  result.items = result.items.map((item) => {
+    const prior = previousChildren.get(item.id);
+    return prior &&
+      Object.keys(item).length === Object.keys(prior).length &&
+      Object.keys(item).every((key) => item[key] === prior[key])
+      ? prior
+      : item;
+  });
   syncAssistantRunCollections(result);
   return result;
 }

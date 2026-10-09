@@ -74,6 +74,15 @@ def test_client_ignores_environment_proxies(
 ) -> None:
     monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:9")
     monkeypatch.setenv("ALL_PROXY", "http://proxy.invalid:9")
+    context = server_client_module.shared_ssl_context()
+    client_type = httpx.AsyncClient
+
+    def create_client(**options: Any) -> httpx.AsyncClient:
+        assert options["verify"] is context
+        assert options["limits"].max_keepalive_connections == 0
+        return client_type(**options)
+
+    monkeypatch.setattr(server_client_module.httpx, "AsyncClient", create_client)
 
     with SpeechServerClient(f" {SERVER}/ ", cancel=cancel) as client:
         assert client.server_url == SERVER

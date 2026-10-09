@@ -468,18 +468,22 @@ class ShellTool:
         self, context: ToolContext, call: _ShellCall, handoff: UpdateHandoffGrant | None
     ) -> str:
         credentials = {name: self._resolve_credential(name) for name in call.credential_names}
-        environment = await asyncio.to_thread(
-            command_environment,
-            RunIdentity(
-                context.agent_id,
-                context.session_id,
-                context.project_id,
-                handoff.token if handoff is not None else None,
-            ),
-            variables=call.variables,
-            credentials=credentials,
-        )
-        argv = _shell_argv(call.command, environment)
+
+        def prepare() -> tuple[dict[str, str], list[str]]:
+            environment = command_environment(
+                RunIdentity(
+                    context.agent_id,
+                    context.session_id,
+                    context.project_id,
+                    handoff.token if handoff is not None else None,
+                ),
+                variables=call.variables,
+                credentials=credentials,
+            )
+            # PATH lookup probes the filesystem and uses this call's fresh environment.
+            return environment, _shell_argv(call.command, environment)
+
+        environment, argv = await asyncio.to_thread(prepare)
         # The delivery names only Tools offered now; it outlives this context.
         offered = frozenset(
             name for name in (*HINT_TOOL_NAMES, _TERMINAL_TOOL) if context.offers(name)

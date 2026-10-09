@@ -510,6 +510,7 @@
           </summary>
           <ToolDetails
             tool={eventToolRow}
+            open={viewState.isOpen(disclosureKey('tool'))}
             toolName={toolNameForEvent(item.event)}
             args={toolCallFromEvent(item.event)?.arguments}
             result={toolResultValueForEvent(item.event)}

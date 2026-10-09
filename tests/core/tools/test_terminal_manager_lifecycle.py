@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import queue
 import sys
 import threading
@@ -16,6 +17,7 @@ import pytest
 import core.tools.terminal_backend as terminal_backend
 import core.tools.terminal_manager as terminal_module
 from core.runs import RunExecutionOwner
+from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
 from core.tools.terminal_manager import (
     TerminalAlreadyAttachedError,
     TerminalCapacityError,
@@ -31,6 +33,7 @@ from tests.core.tools.terminal_manager_helpers import (
     AdapterFactory,
     FakeClock,
     FakeTerminalAdapter,
+    FakeTree,
     PendingTriggerService,
     establish_delivered_baseline,
     eventually,
@@ -259,33 +262,100 @@ async def test_waiting_reader_does_not_block_input_resize_or_stop(
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("terminate_directly")
-async def test_cancelled_start_waits_for_child_cleanup(tmp_path: Path) -> None:
-    entered = threading.Event()
+@pytest.mark.parametrize("kind", ["terminal", "command"])
+@pytest.mark.parametrize("paused_at", ["process", "log"])
+async def test_cancelled_start_waits_for_child_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, paused_at: str
+) -> None:
+    loop = asyncio.get_running_loop()
+    loop_thread = threading.get_ident()
+    entered = asyncio.Event()
     release = threading.Event()
     adapter = FakeTerminalAdapter()
+    tree = FakeTree()
+    tree.adapter = adapter
+    log_paths: list[Path] = []
+
+    def pause() -> None:
+        assert threading.get_ident() != loop_thread
+        loop.call_soon_threadsafe(entered.set)
+        release.wait()
+
+    class TemporaryFiles(TemporaryFileManager):
+        @override
+        def create(self, category: str, suffix: str) -> TemporaryFileLease:
+            assert threading.get_ident() != loop_thread
+            lease = super().create(category, suffix)
+            log_paths.append(lease.path)
+            if paused_at == "log":
+                pause()
+            return lease
 
     def factory(*_args: Any, **_kwargs: Any) -> FakeTerminalAdapter:
-        entered.set()
-        assert release.wait(5)
+        if paused_at == "process":
+            pause()
         return adapter
 
-    manager = _manager(factory)
-    task = asyncio.create_task(spawn(manager, tmp_path))
+    temporary_files = TemporaryFiles(tmp_path)
+    manager = TerminalManager(
+        adapter_factory=factory,
+        render_host=TerminalRenderHost.in_process(),
+        temporary_files=temporary_files,
+        process_tracker=lambda _pid: tree,
+        sweep_interval_seconds=3600,
+    )
+    monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_PER_SESSION", 1)
+    monkeypatch.setattr(terminal_module, "TERMINAL_MAX_LIVE_COMMANDS", 1)
+
+    async def start() -> Any:
+        if kind == "terminal":
+            return await spawn(manager, tmp_path)
+        return await manager.spawn_command(
+            owner(),
+            ["fixture-shell"],
+            command="build",
+            description=None,
+            cwd=tmp_path,
+            env={},
+            timeout_seconds=None,
+            formatter=lambda _report: "finished",
+            origin_run_id="run-a",
+        )
+
+    task = asyncio.create_task(start())
+    waiting = asyncio.create_task(entered.wait())
     try:
-        await eventually(entered.is_set)
-        task.cancel()
-        await asyncio.sleep(0)
-        task.cancel()
-        await asyncio.sleep(0)
+        done, _pending = await asyncio.wait({task, waiting}, return_when=asyncio.FIRST_COMPLETED)
+        if task in done:
+            await task
+        assert waiting in done
+        # The loop can serve another start while filesystem/process work is blocked;
+        # the pending start still owns its capacity and its temporary file.
+        with pytest.raises(TerminalCapacityError):
+            await start()
+        assert len(log_paths) == 1
+        for _ in range(2):
+            task.cancel()
+            checkpoint = loop.create_future()
+            loop.call_soon(checkpoint.set_result, None)
+            await checkpoint
         assert not task.done()
         release.set()
         with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(task, 1)
+            await task
         assert not adapter.alive
+        assert adapter.closed
         assert all(info.state == "exited" for info in manager.list_terminals())
+        # Ending the lease releases the retained log for ordinary cleanup, with no
+        # file handle left open (which would prevent deletion on Windows).
+        for path in log_paths:
+            os.utime(path, (0, 0))
+        temporary_files.sweep()
+        assert not any(path.exists() for path in log_paths)
     finally:
         release.set()
-        await asyncio.gather(task, return_exceptions=True)
+        waiting.cancel()
+        await asyncio.gather(task, waiting, return_exceptions=True)
         await manager.aclose()
 
 

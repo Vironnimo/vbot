@@ -12,6 +12,9 @@ import {
   TERMINAL_RUN_EVENTS,
   isStreamingDeltaEvent,
   createAssistantRunItem,
+  copyAssistantRunItem,
+  writableRunChild,
+  batchAssistantRunUpdates,
   syncAssistantRunCollections,
   CHAT_STATUS_RUNNING,
   CHAT_STATUS_COMPLETED,
@@ -151,25 +154,88 @@ function liveTimelineEntryItems(entry, projectionCache) {
 }
 
 function projectedLiveAssistantRunItem(entry, projectionCache) {
-  const cacheable =
-    Boolean(projectionCache) &&
-    entry.events.some((event) => TERMINAL_RUN_EVENTS.has(event?.type)) &&
-    !entry.events.some((event) => isStreamingDeltaEvent(event?.type));
-  if (cacheable) {
-    const cached = projectionCache.get(entry.runKey);
-    if (cached && cached.eventCount === entry.events.length) {
-      return cached.assistantRun;
-    }
-  }
+  const cached = projectionCache?.get(entry.runKey);
+  const ordered = [...entry.events].sort(compareRunEvents);
+  // Compressed streaming events grow in place. Snapshot those small payloads
+  // so a later flush cannot silently mutate an already rendered projection.
+  const inputs = ordered.map((event, index) => {
+    const previous = cached?.inputs[index];
+    if (sameProjectionEvent(event, previous)) return previous;
+    return mutableProjectionEvent(event)
+      ? { ...event, payload: { ...event.payload } }
+      : event;
+  });
+  const common = commonPrefixLength(inputs, cached?.inputs ?? []);
+  if (cached && common === inputs.length && common === cached.inputs.length)
+    return cached.assistantRun;
 
-  const assistantRun = buildLiveAssistantRunItem(entry.runKey, entry.events);
-  if (cacheable) {
-    projectionCache.set(entry.runKey, {
-      eventCount: entry.events.length,
-      assistantRun,
-    });
-  }
+  // A Tool boundary closes the preceding streaming phase. Keep one prefix,
+  // extending it when another boundary arrives, and replay only the current
+  // phase. A late/replaced/removed event before it invalidates that prefix.
+  const prefixLength = inputs.findLastIndex(isProjectionBoundary) + 1;
+  const canExtend =
+    cached &&
+    common >= cached.prefixLength &&
+    prefixLength >= cached.prefixLength;
+  const prefix = canExtend
+    ? prefixLength === cached.prefixLength
+      ? cached.prefix
+      : copyAssistantRunItem(cached.prefix)
+    : emptyLiveAssistantRun(entry.runKey, inputs);
+  appendProjectionEvents(
+    prefix,
+    inputs.slice(canExtend ? cached.prefixLength : 0, prefixLength),
+  );
+  const assistantRun = copyAssistantRunItem(prefix);
+  appendProjectionEvents(assistantRun, inputs.slice(prefixLength));
+  assistantRun.events = inputs;
+  projectionCache?.set(entry.runKey, {
+    inputs,
+    prefix,
+    prefixLength,
+    assistantRun,
+  });
   return assistantRun;
+}
+
+function mutableProjectionEvent(event) {
+  return (
+    isStreamingDeltaEvent(event?.type) ||
+    event?.type === RUN_EVENT_TOOL_CALL_OUTPUT
+  );
+}
+
+function sameProjectionEvent(event, previous) {
+  if (!previous) return false;
+  if (!mutableProjectionEvent(event)) return event === previous;
+  return (
+    Object.keys(event).length === Object.keys(previous).length &&
+    Object.keys(event).every(
+      (key) => key === 'payload' || event[key] === previous[key],
+    ) &&
+    Object.keys(event.payload ?? {}).length ===
+      Object.keys(previous.payload ?? {}).length &&
+    Object.keys(event.payload ?? {}).every(
+      (key) => event.payload[key] === previous.payload[key],
+    )
+  );
+}
+
+function commonPrefixLength(left, right) {
+  let index = 0;
+  while (
+    index < left.length &&
+    index < right.length &&
+    left[index] === right[index]
+  )
+    index += 1;
+  return index;
+}
+
+function isProjectionBoundary(event) {
+  return (
+    event.type === 'tool_call_started' || event.type === 'tool_call_result'
+  );
 }
 
 function createStandaloneRunEventItem(event) {
@@ -180,25 +246,23 @@ function createStandaloneRunEventItem(event) {
   };
 }
 
-function buildLiveAssistantRunItem(runKey, events) {
-  const orderedEvents = [...events].sort(compareRunEvents);
-  const firstEvent = orderedEvents[0] ?? {};
+function emptyLiveAssistantRun(runKey, events) {
+  const firstEvent = events[0] ?? {};
   const runId = firstEvent.run_id ?? runKey;
-  const assistantRun = createAssistantRunItem({
+  return createAssistantRunItem({
     id: `assistant-run-${runKey}`,
     runId,
     source: 'live',
     sequence: firstEvent.sequence ?? 0,
     timestamp: firstEvent.timestamp,
   });
-  assistantRun.events = orderedEvents;
+}
 
-  for (const event of orderedEvents) {
-    appendLiveRunEvent(assistantRun, event);
-  }
-
-  syncAssistantRunCollections(assistantRun);
-  return assistantRun;
+function appendProjectionEvents(assistantRun, events) {
+  if (events.length === 0) return;
+  batchAssistantRunUpdates(assistantRun, () => {
+    for (const event of events) appendLiveRunEvent(assistantRun, event);
+  });
 }
 
 export function appendLiveRunEvent(assistantRun, event) {
@@ -262,9 +326,12 @@ export function appendLiveRunEvent(assistantRun, event) {
     );
     if (runningIndex >= 0) {
       if (event.payload?.reason === 'failed') {
-        const item = assistantRun.items[runningIndex];
+        const item = writableRunChild(
+          assistantRun,
+          assistantRun.items[runningIndex],
+        );
         item.status = 'failed';
-        item.events.push(event);
+        item.events = [...item.events, event];
       } else {
         assistantRun.items.splice(runningIndex, 1);
       }
@@ -307,7 +374,7 @@ export function appendLiveRunEvent(assistantRun, event) {
       events: [...(runningItem?.events ?? []), event],
     };
     if (runningItem) {
-      Object.assign(runningItem, completedItem);
+      Object.assign(writableRunChild(assistantRun, runningItem), completedItem);
     } else {
       assistantRun.items.push(completedItem);
     }

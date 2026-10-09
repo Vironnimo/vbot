@@ -9,6 +9,7 @@ from typing import Any, override
 
 import pytest
 
+from core.extensions import ExtensionRegistry
 from core.models.pricing import TokenPricing
 from core.providers.errors import NetworkError, ProviderError
 from core.runs import RunCancelledError
@@ -162,9 +163,13 @@ async def test_completed_answer_saves_a_price_snapshot_with_its_usage(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("with_tool", [False, True], ids=["answer", "after-tool-results"])
+@pytest.mark.parametrize(
+    ("with_tool", "with_hook"),
+    [(False, False), (True, False), (True, True)],
+    ids=["answer", "after-tool-results", "changing-context-hook"],
+)
 async def test_missing_usage_is_estimated_from_the_sent_request_and_answer(
-    tmp_path: Path, with_tool: bool
+    tmp_path: Path, with_tool: bool, with_hook: bool
 ) -> None:
     if with_tool:
         adapter = _weather_adapter()
@@ -172,6 +177,17 @@ async def test_missing_usage_is_estimated_from_the_sent_request_and_answer(
     else:
         adapter = _adapter()
         runtime = _runtime(tmp_path, adapter)
+
+    if with_hook:
+        runtime.extensions = ExtensionRegistry()
+        hook_calls = 0
+
+        def change_context(_context: Any, *, messages: list[JsonObject]) -> list[JsonObject]:
+            nonlocal hook_calls
+            hook_calls += 1
+            return [*messages, {"role": "user", "content": "request-only " * (hook_calls * 20)}]
+
+        runtime.extensions.install_handler("request-context", "context", change_context)
 
     answer = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
@@ -190,6 +206,25 @@ async def test_missing_usage_is_estimated_from_the_sent_request_and_answer(
     }
     for usage in (answer.usage, _saved_answer(runtime).usage, _run_completed(runtime)["usage"]):
         assert _counters(usage) == expected
+    # Every saved Assistant snapshot counts the exact request, including a hook's
+    # latest replacement and the previous Tool results, then its replayed answer.
+    saved_steps = [message for message in history(runtime) if message.role == "assistant"]
+    assert len(saved_steps) == len(adapter.requests)
+    for step, sent in zip(saved_steps, adapter.requests, strict=True):
+        assert step.usage is not None
+        replay: JsonObject = {"role": "assistant", "content": step.content}
+        if step.tool_calls:
+            replay["tool_calls"] = [call.to_dict() for call in step.tool_calls]
+        assert (
+            step.usage["input_tokens"]
+            == estimate_request_input_tokens(sent["messages"], sent["kwargs"]["tools"])[0]
+        )
+        assert (
+            step.usage["context_usage"]["tokens"]
+            == estimate_request_input_tokens([*sent["messages"], replay], sent["kwargs"]["tools"])[
+                0
+            ]
+        )
 
 
 @pytest.mark.asyncio

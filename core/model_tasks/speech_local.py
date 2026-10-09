@@ -1415,7 +1415,8 @@ def _audio_chunks(
     """Decode original audio once into bounded mono 16 kHz inference chunks."""
     import numpy as np
 
-    pending = np.empty(0, dtype=np.float32)
+    pending = np.empty(_CHUNK_SAMPLES, dtype=np.float32)
+    filled = 0
     offset = 0
     with closing(
         iter_decoded_frames(
@@ -1423,8 +1424,16 @@ def _audio_chunks(
         )
     ) as frames:
         for frame in frames:
-            pending = np.concatenate((pending, frame.to_ndarray().reshape(-1)))
-            while len(pending) >= _CHUNK_SAMPLES:
+            samples = frame.to_ndarray().reshape(-1)
+            while len(samples):
+                if check_cancel is not None:
+                    check_cancel()
+                count = min(len(samples), _CHUNK_SAMPLES - filled)
+                pending[filled : filled + count] = samples[:count]
+                filled += count
+                samples = samples[count:]
+                if filled < _CHUNK_SAMPLES:
+                    continue
                 # Prefer a quiet boundary in the final second. Every sample is
                 # retained exactly once, including speech with no useful pause.
                 window = 320
@@ -1433,9 +1442,14 @@ def _audio_chunks(
                 cut = _CHUNK_SAMPLES - _SAMPLE_RATE + (quietest + 1) * window
                 yield offset, pending[:cut]
                 offset += cut
-                pending = pending[cut:]
-        if len(pending):
-            yield offset, pending
+                # Yielded arrays must remain stable. Copy only the unconsumed
+                # tail into a fresh bounded buffer, never the growing prefix.
+                remainder = pending[cut:filled]
+                pending = np.empty(_CHUNK_SAMPLES, dtype=np.float32)
+                filled = len(remainder)
+                pending[:filled] = remainder
+        if filled:
+            yield offset, pending[:filled]
 
 
 class _TransformersEngine:

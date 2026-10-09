@@ -11,6 +11,7 @@ import {
   detailText,
   flushSync,
   occurrences,
+  openDisclosures,
   reportedMultiStepMessages,
   runChildren,
   setupChatTimelineSuite,
@@ -21,6 +22,7 @@ import {
 } from './ChatTimeline.support.js';
 import { loadHistory, startRun } from '../../lib/chatState.js';
 import { t } from '../../lib/i18n.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 // Match the canonical identity supplied by chat.history, including sparse
 // replay.
@@ -126,6 +128,7 @@ describe('ChatTimeline Runs', () => {
     const sessionState = timelineSession();
     appendEvents(sessionState, 'run-order', events);
     timeline.render(sessionState);
+    openDisclosures('.reasoning-block');
 
     expect(
       runChildren().map((child) => [
@@ -182,6 +185,7 @@ describe('ChatTimeline Runs', () => {
       const sessionState = timelineSession();
       fill(sessionState);
       timeline.render(sessionState);
+      openDisclosures('.reasoning-block');
 
       expect(document.querySelectorAll('.assistant-run')).toHaveLength(1);
       expect(document.querySelectorAll('.reasoning-block')).toHaveLength(3);
@@ -242,6 +246,7 @@ describe('ChatTimeline Runs', () => {
       };
       if (sessionStatus) sessionState.status = sessionStatus;
       timeline.render(sessionState);
+      openDisclosures('.reasoning-block');
 
       expect(document.querySelectorAll('.assistant-run')).toHaveLength(1);
       expect(document.querySelectorAll('.streaming-caret')).toHaveLength(0);
@@ -335,6 +340,7 @@ describe('ChatTimeline Runs', () => {
     timeline.render(sessionState);
 
     expect(document.querySelectorAll('.assistant-run')).toHaveLength(1);
+    openDisclosures('.reasoning-block');
     expect(document.body.textContent).toContain('Need to read it.');
     expect(document.querySelector('.te-fn').textContent).toBe('read');
     expect(occurrences('The file says A.')).toBe(1);
@@ -735,6 +741,7 @@ describe('ChatTimeline Runs', () => {
     ]);
     timeline.render(sessionState);
 
+    openDisclosures('.tool-event');
     expect(detailText('chat.toolDetailLabel.command')).toBe('printf hello');
     const outputRows = Array.from(document.querySelectorAll('.teb-row')).filter(
       (row) =>
@@ -777,6 +784,7 @@ describe('ChatTimeline Runs', () => {
     ]);
     timeline.render(sessionState);
 
+    openDisclosures('.tool-event');
     expect(detailRow('chat.toolDetailLabel.output').textContent).toContain(
       'hello',
     );
@@ -796,10 +804,79 @@ describe('ChatTimeline Runs', () => {
       }),
     ]);
     timeline.render(sessionState);
+    openDisclosures('.tool-event');
 
     expect(
       detailRow('chat.toolResultLabel').querySelector('.teb-code').textContent,
     ).toContain('hello from history');
+  });
+
+  it('updates a mounted Run through growing deltas and Tool completion while retaining earlier rows', () => {
+    const props = reactiveProps({
+      sessionState: timelineSession(),
+      agentName: 'Alpha',
+    });
+    const { sessionState } = props;
+    startRun(sessionState, { run_id: 'run-stream', status: 'running' });
+    appendEvents(sessionState, 'run-stream', [
+      { type: 'run_started', payload: {} },
+      toolStarted('read', 'read', { path: 'notes' }),
+      toolResult('read', 'read', { ok: true, data: { content: 'saved' } }),
+    ]);
+    timeline.mount(props);
+    openDisclosures('.tool-event');
+    const firstTool = document.querySelector('.tool-event');
+    const firstBody = firstTool.querySelector('.tool-event-body');
+    appendEvents(
+      sessionState,
+      'run-stream',
+      [{ type: 'assistant_output_delta', payload: { content_delta: 'First' } }],
+      4,
+    );
+    flushSync();
+    expect(document.querySelector('.msg-markdown').textContent).toContain(
+      'First',
+    );
+    appendEvents(
+      sessionState,
+      'run-stream',
+      [
+        {
+          type: 'assistant_output_delta',
+          payload: { content_delta: ' answer' },
+        },
+        toolStarted('bash', 'bash', { command: 'echo done' }),
+      ],
+      5,
+    );
+    flushSync();
+    expect(document.querySelector('.msg-markdown').textContent).toContain(
+      'First answer',
+    );
+    openDisclosures('.tool-event');
+    const lastTool = document.querySelectorAll('.tool-event')[1];
+    expect(
+      lastTool.querySelector('.te-dot').classList.contains('running'),
+    ).toBe(true);
+    appendEvents(
+      sessionState,
+      'run-stream',
+      [
+        toolResult('bash', 'bash', {
+          ok: true,
+          data: { output: 'finished output' },
+        }),
+      ],
+      7,
+    );
+    flushSync();
+    expect(lastTool.querySelector('.te-dot').classList.contains('done')).toBe(
+      true,
+    );
+    expect(lastTool.textContent).toContain('finished output');
+    expect(document.querySelector('.tool-event')).toBe(firstTool);
+    expect(firstTool.querySelector('.tool-event-body')).toBe(firstBody);
+    expect(firstTool.open).toBe(true);
   });
 
   it('renders a stable-sized Thinking chevron and only rotates it when expanded', () => {

@@ -9,12 +9,14 @@ from pathlib import Path
 from typing import Any
 
 from core.chat.messages import (
+    CONTEXT_ESTIMATION_FIELD,
     ChatMessage,
     JsonObject,
     ToolCall,
 )
 from core.chat.output_files import resolve_assistant_file_references
-from core.chat.wire_shaping import _complete_usage_with_estimates
+from core.chat.usage import ContextTarget, RequestContextEstimate, RequestContextUsage
+from core.chat.wire_shaping import _assistant_continuation_dict, _complete_usage_with_estimates
 from core.models.pricing import TokenPricing, price_usage
 from core.providers.adapter import (
     TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
@@ -23,6 +25,7 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
     TerminalOutcome,
 )
+from core.providers.reasoning import ReasoningReplayPolicy
 from core.sessions import ToolResultFacts
 from core.tools import ToolNotFoundError, called_tool_name
 from core.utils.errors import ProviderError
@@ -93,6 +96,54 @@ def _prepare_completed_assistant(
         completed, usage={**(completed.usage or {}), "cost": price_usage(completed.usage, pricing)}
     )
     return _with_assistant_output_files(completed, cwd=output_cwd)
+
+
+def _prepare_assistant_context(
+    assistant: ChatMessage,
+    request_messages: list[JsonObject],
+    request_estimate: RequestContextEstimate,
+    *,
+    replay_policy: ReasoningReplayPolicy,
+    accounting: RequestContextUsage,
+    target: ContextTarget,
+    tools: list[JsonObject],
+    scope: str,
+    context_window: int | None,
+) -> tuple[ChatMessage, JsonObject, list[JsonObject], JsonObject, RequestContextEstimate]:
+    """Record measured input and project the Assistant continuation off the Event Loop.
+
+    Usage normalization and its durable recorder update precede this boundary.
+    Calibration writes, replay shaping and the new request count stay together.
+    """
+    request_message = _assistant_continuation_dict(assistant, replay_policy=replay_policy)
+    # Interrupted Reasoning can disappear during replay; do not send an empty entry.
+    request_delta = (
+        [request_message]
+        if any(
+            request_message.get(field)
+            for field in ("content", "tool_calls", "reasoning", "reasoning_meta")
+        )
+        else []
+    )
+    assert isinstance(assistant.usage, dict)
+    accounting.observe_prepared(assistant.usage, request_estimate)
+    continuation_estimate = (
+        accounting.prepare(
+            [*request_messages, *request_delta], target=target, tools=tools, scope=scope
+        )
+        if request_delta
+        else request_estimate
+    )
+    usage = accounting.project_prepared(continuation_estimate, context_window=context_window)
+    assistant = replace(
+        assistant,
+        usage={
+            **assistant.usage,
+            "context_usage": usage,
+            CONTEXT_ESTIMATION_FIELD: accounting.estimation_record(target),
+        },
+    )
+    return assistant, request_message, request_delta, usage, continuation_estimate
 
 
 def _with_offered_tool_names(

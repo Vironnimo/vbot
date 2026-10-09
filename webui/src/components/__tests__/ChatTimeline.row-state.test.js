@@ -39,12 +39,12 @@ function expand(selector) {
 function rowState() {
   return {
     working: document.querySelector('.working-block').open,
-    reasoning: document.querySelector('.reasoning-block').open,
-    tool: document.querySelector('.run-tool-event').open,
+    reasoning: document.querySelector('.reasoning-block')?.open ?? false,
+    tool: document.querySelector('.run-tool-event')?.open ?? false,
     cancelling:
       document
         .querySelector('[data-cancel="tool"]')
-        .getAttribute('aria-busy') === 'true',
+        ?.getAttribute('aria-busy') === 'true',
   };
 }
 

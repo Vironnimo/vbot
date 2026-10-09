@@ -97,6 +97,14 @@ export function flushSync() {
   return svelteFlushSync();
 }
 
+export function openDisclosures(selector) {
+  for (const disclosure of document.querySelectorAll(selector)) {
+    disclosure.open = true;
+    disclosure.dispatchEvent(new Event('toggle'));
+  }
+  flushSync();
+}
+
 export function tick() {
   return svelteTick();
 }

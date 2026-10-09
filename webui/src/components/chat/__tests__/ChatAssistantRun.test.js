@@ -23,6 +23,13 @@ function toolDot() {
   return document.querySelector('.tool-event-line .te-dot');
 }
 
+function setDisclosureOpen(selector, open = true) {
+  const details = document.querySelector(selector);
+  details.open = open;
+  details.dispatchEvent(new Event('toggle'));
+  flushSync();
+}
+
 function detailRow(key) {
   return Array.from(document.querySelectorAll('.teb-row')).find(
     (row) => row.querySelector('.teb-label')?.textContent === t(key),
@@ -259,6 +266,7 @@ describe('ChatAssistantRun', () => {
         }),
       });
 
+      setDisclosureOpen('.tool-event');
       const argsRow = detailRow('chat.toolArgs');
       expect(argsRow.querySelector('.teb-field-key').textContent).toBe(
         'command',
@@ -278,6 +286,8 @@ describe('ChatAssistantRun', () => {
       const details = document.querySelector('.tool-event');
       const summary = details.querySelector('.tool-event-line');
       const summaryMarkup = summary.innerHTML;
+      expect(details.querySelector('.tool-event-body')).toBeNull();
+      setDisclosureOpen('.tool-event');
       const body = details.querySelector('.tool-event-body');
       expect(body.classList.contains('tool-event-details')).toBe(true);
       expect(body.querySelectorAll('.teb-section')).toHaveLength(2);
@@ -285,13 +295,14 @@ describe('ChatAssistantRun', () => {
         body.querySelector('.teb-section .teb-field-key').textContent,
       ).toBe('command');
 
-      summary.click();
-      flushSync();
-
       expect(details.open).toBe(true);
       expect(summary.innerHTML).toBe(summaryMarkup);
       expect(summary.textContent).not.toContain(t('chat.toolArgs'));
       expect(summary.textContent).not.toContain(t('chat.toolResultLabel'));
+      setDisclosureOpen('.tool-event', false);
+      expect(details.querySelector('.tool-event-body')).toBe(body);
+      setDisclosureOpen('.tool-event');
+      expect(details.querySelector('.tool-event-body')).toBe(body);
     });
   });
 
@@ -320,6 +331,7 @@ describe('ChatAssistantRun', () => {
     it('copies Thinking through its independent action', async () => {
       const writeText = stubClipboard();
       run.mount({
+        isReasoningOpen: () => true,
         item: assistantRun({
           items: [reasoningItem('**Plan**\n\n<!-- -->\n\nInspect the state.')],
         }),
@@ -350,6 +362,7 @@ describe('ChatAssistantRun', () => {
         }),
       });
 
+      setDisclosureOpen('.tool-event');
       detailRow('chat.toolArgs').querySelector('.tool-detail-copy').click();
       await flushAsync();
 
@@ -383,8 +396,20 @@ describe('ChatAssistantRun', () => {
           '.working-block__activity, .working-block__dot, .working-block__time',
         ),
       ).toBeNull();
+      expect(
+        block.querySelectorAll('.reasoning-block, .tool-event'),
+      ).toHaveLength(0);
+      setDisclosureOpen('.working-block');
+      const child = block.querySelector('.tool-event');
+      setDisclosureOpen('.tool-event');
+      const body = child.querySelector('.tool-event-body');
       expect(block.querySelectorAll('.reasoning-block')).toHaveLength(1);
       expect(block.querySelectorAll('.tool-event')).toHaveLength(1);
+      setDisclosureOpen('.working-block', false);
+      setDisclosureOpen('.working-block');
+      expect(block.querySelector('.tool-event')).toBe(child);
+      expect(child.open).toBe(true);
+      expect(child.querySelector('.tool-event-body')).toBe(body);
     });
 
     it.each([
@@ -660,6 +685,7 @@ describe('ChatAssistantRun', () => {
       ).toBe(time());
       // The row keeps showing its own result; the final one reaches the
       // Agent as a new message.
+      setDisclosureOpen('.tool-event');
       expect(detailRow('chat.toolResultLabel').textContent).toContain(
         'VITE ready in 830ms',
       );
