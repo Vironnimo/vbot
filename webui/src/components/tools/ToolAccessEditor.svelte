@@ -24,6 +24,7 @@
     toolIsConfigurable,
     toolLoadingUsesDefaultSet,
   } from '$lib/toolAccess.js';
+  import { tick } from 'svelte';
   import { t } from '$lib/i18n.js';
 
   const noop = () => {};
@@ -148,6 +149,16 @@
       : state;
   }
 
+  let editorRoot = $state();
+
+  // The reset button disappears once the default set applies again, so focus
+  // moves to the switch instead of dropping to the page.
+  async function resetAlwaysLoaded() {
+    onToolLoadingChange(resetAlwaysLoadedTools(loading));
+    await tick();
+    editorRoot?.querySelector('[data-tool-loading-switch]')?.focus();
+  }
+
   function toolNotes(tool) {
     const notes = [];
     if (tool.activation === 'follows') {
@@ -178,7 +189,7 @@
   }
 </script>
 
-<div class="tool-access-editor">
+<div class="tool-access-editor" bind:this={editorRoot}>
   {#if toolLoadingEditable}
     <div class="s-group tool-loading-group">
       <div class="s-row s-row--compact">
@@ -217,8 +228,7 @@
                 variant="tertiary"
                 disabled={loadingLocked}
                 tooltip={t('toolAccess.alwaysLoaded.resetHint')}
-                onClick={() =>
-                  onToolLoadingChange(resetAlwaysLoadedTools(loading))}
+                onClick={resetAlwaysLoaded}
                 >{t('toolAccess.alwaysLoaded.reset')}</Button
               >
             {/if}
