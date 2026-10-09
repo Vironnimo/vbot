@@ -363,6 +363,13 @@ explicitly reads Inbox; the retained wake boundary does not permit automatic
 delivery during later Model requests of that Run. All-mode delivery still reaches
 the next Model request while running (`test_swarm_wakes.py`).
 
+Automatic delivery scans pending post ids, sequence, author kind and route without
+loading their bodies. It retains at most `batch_messages` eligible candidates,
+then loads their complete posts and applies the existing delivered-character
+budget in the same transaction. A held narrowed wake loads no post bodies.
+The partial `delivery_batches_pending_participant` index finds an unacknowledged
+automatic batch without scanning retained acknowledged batches.
+
 Store delivery entries retain the Swarm-wide post sequence, UTC creation time,
 author identity, discussion id/title, reply target, addressed participants
 (`recipients_json`; posts saved before addressing hold only explicit pings) and
@@ -781,7 +788,8 @@ Discussion Post pages and the page's reads after a post number likewise select
 Swarm's Posts by sequence. Every index in
 `SCHEMA_SQL` names its reader in the comment above it.
 The regression fixture checks
-bounded SQLite work with 12 peers and 22,000 delivered recipient rows
+bounded SQLite work with 12 peers, 22,000 delivered recipient rows and 2,000
+acknowledged delivery batches
 (`test_swarm_store_delivery.py`). A separate Wiki test verifies concurrent edits
 to 12 independent passages from the same observed revision without lost changes
 (`test_swarm_wiki.py`); this does not measure Model collaboration quality.
