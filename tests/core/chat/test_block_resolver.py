@@ -82,7 +82,7 @@ PDF_NOTE = "[File: report.pdf (application/pdf) — Path: {path}]"
         "pdf-on-a-wire-without-pdf",
     ],
 )
-def test_attachment_goes_native_on_model_and_wire_support_in_every_turn(
+def test_attachment_goes_native_on_model_and_wire_support(
     tmp_path: Path,
     filename: str,
     payload: bytes,
@@ -94,12 +94,7 @@ def test_attachment_goes_native_on_model_and_wire_support_in_every_turn(
 ) -> None:
     store = AttachmentStore(tmp_path)
     record = store.store(filename, payload)
-    # An earlier turn renders exactly like the current one, so the request prefix
-    # stays byte-identical from Run to Run.
-    messages = [
-        attachment_message(record, block_type=block_type, message_id=message_id)
-        for message_id in (EARLIER, CURRENT)
-    ]
+    messages = [attachment_message(record, block_type=block_type)]
     persisted = deepcopy(messages)
 
     resolved = resolve(
@@ -122,7 +117,7 @@ def test_attachment_goes_native_on_model_and_wire_support_in_every_turn(
     )
     # A native block always rides with its path note, so the Agent keeps a file handle.
     expected = [*([native_block] if native else []), path_note(record, note)]
-    assert [message["content"] for message in resolved] == [expected, expected]
+    assert [message["content"] for message in resolved] == [expected]
     assert messages == persisted
 
 
@@ -228,16 +223,15 @@ def test_text_blocks_keep_their_order_and_string_content_passes_through(tmp_path
     ]
 
 
-@pytest.mark.parametrize("message_id", [CURRENT, EARLIER])
 def test_text_attachment_renders_like_the_read_tool_and_drops_a_persisted_full_copy(
-    tmp_path: Path, message_id: str
+    tmp_path: Path,
 ) -> None:
     # Older Sessions stored the complete text right after the file block; every request
     # replaces it with the read Tool's bounded rendering. Other following text stays.
     store = AttachmentStore(tmp_path)
     source = b"".join(f"line {index}\n".encode() for index in range(1, 2_500))
     record = store.store("notes.txt", source)
-    message = attachment_message(record, block_type="file", message_id=message_id)
+    message = attachment_message(record, block_type="file")
     message["content"] += [
         {"type": "text", "text": source.decode("utf-8")},
         {"type": "text", "text": "Please review."},
@@ -287,7 +281,6 @@ async def test_attachment_reads_run_off_the_event_loop(
     resolving = asyncio.create_task(
         resolver.resolve_messages(
             messages,
-            current_user_message_id=CURRENT,
             input_modalities=frozenset({"text", "pdf"}),
             wire_media_types=frozenset({"application/pdf"}),
         )

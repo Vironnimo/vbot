@@ -248,6 +248,11 @@ class RunExecution:
                 prompt_block_change = await self._requests.plan_prompt_block_change(context)
                 if prompt_block_change is not None:
                     session.add_note(prompt_block_change)
+                # Speech-to-text runs before the Session lock and persists with
+                # the message, so history shows what a voice message said.
+                user_content = request.content
+                if not internal and not request.input_already_persisted and user_content:
+                    user_content = await self._requests.transcribe_user_audio(user_content)
                 async with self._dependencies.sessions.write_lock(session_address):
                     # Another admitted Run may have appended while this Run was
                     # queued for the Session lock. Refresh before assigning image
@@ -276,7 +281,7 @@ class RunExecution:
                     elif request.input_already_persisted:
                         persisted_messages = session.take_deferred_notes()
                     else:
-                        if request.content is None:
+                        if user_content is None:
                             raise ChatError("content is required for non-retry runs")
                         if request.context_note:
                             session.add_note(request.context_note)
@@ -292,7 +297,7 @@ class RunExecution:
                         )
                         user_message = ChatMessage.user(
                             _assign_session_image_references(
-                                request.content,
+                                user_content,
                                 context.session_snapshot.active_messages,
                             ),
                             sender=request.sender,
@@ -358,7 +363,7 @@ class RunExecution:
                         session_id=run.session_id,
                         project_id=project_id,
                         agent=agent,
-                        content=cast(str | list[ContentBlock], request.content),
+                        content=cast(str | list[ContentBlock], user_content),
                         run_id=run.id,
                     )
                 if isinstance(request.content, str):

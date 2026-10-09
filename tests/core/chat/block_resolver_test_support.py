@@ -17,8 +17,7 @@ TEXT_IMAGE_AUDIO = frozenset({"text", "image", "audio"})
 IMAGE_WIRE = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
 IMAGE_AUDIO_WIRE = IMAGE_WIRE | frozenset({"audio/wav", "audio/mpeg"})
 
-# The resolver treats the message with this id as the current turn; every other
-# user message is an earlier turn.
+# Ids of a later and an earlier user turn; every turn resolves the same way.
 CURRENT = "user-current"
 EARLIER = "user-earlier"
 
@@ -60,7 +59,6 @@ def resolve(
     return asyncio.run(
         resolver.resolve_messages(
             messages,
-            current_user_message_id=CURRENT,
             input_modalities=input_modalities,
             wire_media_types=wire_media_types,
         )

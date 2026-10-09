@@ -557,6 +557,9 @@ def _title_source_parts(content: str | list[ContentBlock]) -> tuple[str, list[st
             text_parts.append(block.text)
         elif isinstance(block, (MediaBlock, FileBlock)):
             attachments.append(f"- {block.filename} ({block.media_type})")
+            # What a voice message said is the user's request.
+            if isinstance(block, MediaBlock) and block.transcription is not None:
+                text_parts.append(block.transcription)
         elif isinstance(block, FileMentionBlock):
             filename = _mentioned_filename(block.path)
             size = f", {block.size_bytes} bytes" if block.size_bytes is not None else ""

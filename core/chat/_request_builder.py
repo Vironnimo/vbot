@@ -33,7 +33,7 @@ from core.chat._tool_epoch import (
 )
 from core.chat._workers import _CHAT_TRANSFORM_WORKERS
 from core.chat.block_resolver import ContentBlockResolver
-from core.chat.content_blocks import MediaBlock, content_block_to_dict
+from core.chat.content_blocks import ContentBlock, MediaBlock, content_block_to_dict
 from core.chat.errors import ChatError
 from core.chat.events import _close_adapter
 from core.chat.messages import (
@@ -612,7 +612,6 @@ class RequestBuilder:
         if current_user_message is not None:
             request_messages = await self._attachment_resolver.resolve_messages(
                 request_messages,
-                current_user_message_id=current_user_message.id,
                 input_modalities=effective_input_modalities,
                 wire_media_types=inputs.wire_media_types,
                 max_image_bytes=inputs.max_image_bytes,
@@ -1024,6 +1023,14 @@ class RequestBuilder:
         finally:
             await _close_adapter(target.adapter)
 
+    async def transcribe_user_audio(
+        self, content: str | list[ContentBlock]
+    ) -> str | list[ContentBlock]:
+        """Give incoming audio its speech-to-text before the user message persists."""
+        if self._attachment_resolver is None:
+            return content
+        return await self._attachment_resolver.transcribe_audio(content)
+
     async def store_tool_media(
         self, tool_messages: list[ChatMessage], media_outputs: list[JsonObject]
     ) -> tuple[list[ChatMessage], list[JsonObject]]:
@@ -1122,7 +1129,6 @@ class RequestBuilder:
                         "content": content_blocks,
                     }
                 ],
-                current_user_message_id=transient_message_id,
                 input_modalities=input_modalities,
                 wire_media_types=wire_media_types,
                 max_image_bytes=max_image_bytes,

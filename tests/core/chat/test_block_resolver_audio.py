@@ -1,7 +1,8 @@
-"""ContentBlockResolver audio: native delivery, speech-to-text degradation and path notes."""
+"""ContentBlockResolver audio: speech-to-text before persistence, then native or text delivery."""
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,10 +11,9 @@ import pytest
 
 from core.attachments import AttachmentStore
 from core.chat.block_resolver import ContentBlockResolver
+from core.chat.content_blocks import MediaBlock, TextBlock
 from core.model_tasks import SpeechExecutionError
 from tests.core.chat.block_resolver_test_support import (
-    CURRENT,
-    EARLIER,
     IMAGE_AUDIO_WIRE,
     IMAGE_WIRE,
     TEXT_IMAGE,
@@ -58,181 +58,138 @@ def _transcript(filename: str, media_type: str, text: str) -> str:
 
 
 @pytest.mark.parametrize(
-    (
-        "filename",
-        "message_id",
-        "modalities",
-        "wire",
-        "stt",
-        "cached",
-        "expected",
-        "called",
-        "stored",
-    ),
+    ("stt", "cached", "carried", "expected", "called"),
     [
-        (
-            "clip.wav",
-            CURRENT,
-            TEXT_IMAGE_AUDIO,
-            IMAGE_AUDIO_WIRE,
-            "unused",
-            None,
-            [NATIVE, "[Audio: clip.wav (audio/wav) — Path: {path}]"],
-            False,
-            None,
-        ),
-        (
-            "voice.ogg",
-            CURRENT,
-            TEXT_IMAGE,
-            IMAGE_AUDIO_WIRE,
-            "hallo welt",
-            None,
-            [
-                _transcript("voice.ogg", "audio/ogg", "hallo welt"),
-                "[Audio: voice.ogg (audio/ogg) — Path: {path}]",
-            ],
-            True,
-            "hallo welt",
-        ),
-        # The model accepts audio, but the wire cannot carry it: never emit unencodable audio.
-        (
-            "clip.wav",
-            CURRENT,
-            TEXT_IMAGE_AUDIO,
-            IMAGE_WIRE,
-            "from stt",
-            None,
-            [
-                _transcript("clip.wav", "audio/wav", "from stt"),
-                "[Audio: clip.wav (audio/wav) — Path: {path}]",
-            ],
-            True,
-            "from stt",
-        ),
-        (
-            "voice.ogg",
-            CURRENT,
-            TEXT_IMAGE,
-            IMAGE_AUDIO_WIRE,
-            None,
-            None,
-            ["[Audio: voice.ogg (audio/ogg) — " + NO_STT + "Path: {path}]"],
-            False,
-            None,
-        ),
-        (
-            "voice.ogg",
-            CURRENT,
-            TEXT_IMAGE,
-            IMAGE_AUDIO_WIRE,
-            FAILED,
-            None,
-            ["[Audio: voice.ogg (audio/ogg) — " + STT_FAILED + "Path: {path}]"],
-            True,
-            None,
-        ),
-        (
-            "voice.ogg",
-            CURRENT,
-            TEXT_IMAGE,
-            IMAGE_AUDIO_WIRE,
-            "   ",
-            None,
-            ["[Audio: voice.ogg (audio/ogg) — " + STT_FAILED + "Path: {path}]"],
-            True,
-            None,
-        ),
-        # A cached transcription wins over native delivery and a new speech-to-text call.
-        (
-            "clip.wav",
-            CURRENT,
-            TEXT_IMAGE_AUDIO,
-            IMAGE_AUDIO_WIRE,
-            "unused",
-            "cached words",
-            [
-                _transcript("clip.wav", "audio/wav", "cached words"),
-                "[Audio: clip.wav (audio/wav) — Path: {path}]",
-            ],
-            False,
-            "cached words",
-        ),
-        (
-            "voice.ogg",
-            EARLIER,
-            TEXT_IMAGE,
-            IMAGE_AUDIO_WIRE,
-            "unused",
-            "what was said",
-            [
-                _transcript("voice.ogg", "audio/ogg", "what was said"),
-                "[Audio: voice.ogg (audio/ogg) — Path: {path}]",
-            ],
-            False,
-            "what was said",
-        ),
-        (
-            "clip.wav",
-            EARLIER,
-            TEXT_IMAGE_AUDIO,
-            IMAGE_AUDIO_WIRE,
-            "unused",
-            None,
-            [NATIVE, "[Audio: clip.wav (audio/wav) — Path: {path}]"],
-            False,
-            None,
-        ),
-        # Speech-to-text runs only on the audio's own turn, never again per request.
-        (
-            "voice.ogg",
-            EARLIER,
-            TEXT_IMAGE,
-            IMAGE_AUDIO_WIRE,
-            "unused",
-            None,
-            ["[Audio: voice.ogg (audio/ogg) — " + STT_FAILED + "Path: {path}]"],
-            False,
-            None,
-        ),
+        ("hallo welt", None, None, "hallo welt", True),
+        (None, None, None, None, False),
+        (FAILED, None, None, None, True),
+        ("   ", None, None, None, True),
+        # An attachment transcribed before reuses its text without a new call.
+        ("unused", "cached words", None, "cached words", False),
+        # A block that already carries a transcription keeps it.
+        ("unused", None, "edited words", "edited words", False),
     ],
     ids=[
-        "native",
-        "transcribed-without-audio-modality",
-        "transcribed-on-a-wire-without-audio",
+        "transcribed",
         "no-speech-to-text",
         "speech-to-text-fails",
         "speech-to-text-empty",
-        "cached-transcription",
-        "earlier-with-transcription",
-        "earlier-native",
-        "earlier-not-transcribed-again",
+        "cached-on-the-attachment",
+        "carried-by-the-block",
     ],
 )
-def test_audio_is_native_transcribed_or_a_path_note(
+def test_incoming_audio_blocks_carry_their_transcription(
     tmp_path: Path,
-    filename: str,
-    message_id: str,
-    modalities: frozenset[str],
-    wire: frozenset[str],
     stt: str | None,
     cached: str | None,
-    expected: list[str],
+    carried: str | None,
+    expected: str | None,
     called: bool,
-    stored: str | None,
 ) -> None:
-    # Missing or failing speech-to-text never aborts the Run: the Agent keeps the path.
+    # Missing or failing speech-to-text never refuses the input: the block stays as it was.
     store = AttachmentStore(tmp_path)
-    payload = WAV_BYTES if filename.endswith(".wav") else OGG_BYTES
-    record = store.store(filename, payload)
+    record = store.store("voice.ogg", OGG_BYTES)
+    image = store.store("photo.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
     if cached is not None:
         store.set_transcription(record.id, cached)
     transcriber = _StubTranscriber(stt) if stt is not None else None
     resolver = ContentBlockResolver(store, transcriber=transcriber)
+    text = TextBlock("text", "Listen:")
+    picture = MediaBlock("media", image.id, image.filename, image.media_type)
+    audio = MediaBlock(
+        "media", record.id, record.filename, record.media_type, transcription=carried
+    )
+
+    content = asyncio.run(resolver.transcribe_audio([text, picture, audio]))
+
+    assert content == [text, picture, MediaBlock(**{**vars(audio), "transcription": expected})]
+    assert asyncio.run(resolver.transcribe_audio("plain text")) == "plain text"
+    if transcriber is not None:
+        assert transcriber.calls == ([(record.filename, record.media_type)] if called else [])
+    # A new transcription is cached on the attachment, so a re-sent block reuses it.
+    assert store.get(record.id).transcription == (cached or (expected if called else None))
+
+
+@pytest.mark.parametrize(
+    ("filename", "modalities", "wire", "transcription", "stt", "expected"),
+    [
+        (
+            "clip.wav",
+            TEXT_IMAGE_AUDIO,
+            IMAGE_AUDIO_WIRE,
+            None,
+            True,
+            [NATIVE, "[Audio: clip.wav (audio/wav) — Path: {path}]"],
+        ),
+        # The transcription the message carries wins over native delivery.
+        (
+            "clip.wav",
+            TEXT_IMAGE_AUDIO,
+            IMAGE_AUDIO_WIRE,
+            "what was said",
+            True,
+            [
+                _transcript("clip.wav", "audio/wav", "what was said"),
+                "[Audio: clip.wav (audio/wav) — Path: {path}]",
+            ],
+        ),
+        (
+            "voice.ogg",
+            TEXT_IMAGE,
+            IMAGE_AUDIO_WIRE,
+            "hallo welt",
+            True,
+            [
+                _transcript("voice.ogg", "audio/ogg", "hallo welt"),
+                "[Audio: voice.ogg (audio/ogg) — Path: {path}]",
+            ],
+        ),
+        # The model accepts audio, but the wire cannot carry it: never emit unencodable audio.
+        (
+            "clip.wav",
+            TEXT_IMAGE_AUDIO,
+            IMAGE_WIRE,
+            None,
+            True,
+            ["[Audio: clip.wav (audio/wav) — " + STT_FAILED + "Path: {path}]"],
+        ),
+        (
+            "voice.ogg",
+            TEXT_IMAGE,
+            IMAGE_AUDIO_WIRE,
+            None,
+            False,
+            ["[Audio: voice.ogg (audio/ogg) — " + NO_STT + "Path: {path}]"],
+        ),
+    ],
+    ids=[
+        "native",
+        "transcription-wins",
+        "transcription-without-audio-modality",
+        "untranscribed-on-a-wire-without-audio",
+        "untranscribed-without-speech-to-text",
+    ],
+)
+def test_audio_request_renders_its_transcription_native_audio_or_a_path_note(
+    tmp_path: Path,
+    filename: str,
+    modalities: frozenset[str],
+    wire: frozenset[str],
+    transcription: str | None,
+    stt: bool,
+    expected: list[str],
+) -> None:
+    # Building a request never runs speech-to-text: it ran before the message persisted.
+    store = AttachmentStore(tmp_path)
+    payload = WAV_BYTES if filename.endswith(".wav") else OGG_BYTES
+    record = store.store(filename, payload)
+    transcriber = _StubTranscriber("unused") if stt else None
+    resolver = ContentBlockResolver(store, transcriber=transcriber)
+    fields = {"transcription": transcription} if transcription is not None else {}
 
     resolved = resolve(
         resolver,
-        [attachment_message(record, message_id=message_id)],
+        [attachment_message(record, **fields)],
         input_modalities=modalities,
         wire_media_types=wire,
     )
@@ -246,23 +203,20 @@ def test_audio_is_native_transcribed_or_a_path_note(
         native if text == NATIVE else path_note(record, text) for text in expected
     ]
     if transcriber is not None:
-        assert transcriber.calls == ([(filename, record.media_type)] if called else [])
-    # A new transcription is cached on the attachment for later turns.
-    assert store.get(record.id).transcription == stored
+        assert transcriber.calls == []
 
 
-def test_current_audio_with_unreadable_metadata_degrades_to_an_unavailable_note(
+def test_audio_with_unreadable_metadata_degrades_to_an_unavailable_note(
     tmp_path: Path,
 ) -> None:
     store = AttachmentStore(tmp_path)
     record = store.store("gone.wav", WAV_BYTES)
     store.delete(record.id)
+    resolver = ContentBlockResolver(store, transcriber=_StubTranscriber("unused"))
+    audio = MediaBlock("media", record.id, record.filename, record.media_type)
 
-    resolved = resolve(
-        ContentBlockResolver(store),
-        [attachment_message(record)],
-        input_modalities=TEXT_IMAGE_AUDIO,
-    )
+    assert asyncio.run(resolver.transcribe_audio([audio])) == [audio]
+    resolved = resolve(resolver, [attachment_message(record)], input_modalities=TEXT_IMAGE_AUDIO)
 
     assert resolved[0]["content"] == [
         {"type": "text", "text": "[Audio: gone.wav (audio/wav) — file no longer available]"}

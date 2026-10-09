@@ -40,6 +40,22 @@ class TestContentBlocks:
                 },
             ),
             (
+                MediaBlock(
+                    type="media",
+                    attachment_id="att_789",
+                    filename="voice.ogg",
+                    media_type="audio/ogg",
+                    transcription="hallo welt",
+                ),
+                {
+                    "type": "media",
+                    "attachment_id": "att_789",
+                    "filename": "voice.ogg",
+                    "media_type": "audio/ogg",
+                    "transcription": "hallo welt",
+                },
+            ),
+            (
                 FileBlock(
                     type="file",
                     attachment_id="att_456",
@@ -114,6 +130,13 @@ class TestContentBlocks:
                 "image_reference": 0,
             },
             {
+                "type": "media",
+                "attachment_id": "att_1",
+                "filename": "a.ogg",
+                "media_type": "audio/ogg",
+                "transcription": " ",
+            },
+            {
                 "type": "file_mention",
                 "path": "a.py",
                 "status": "inlined",
@@ -131,6 +154,7 @@ class TestContentBlocks:
             "inlined-without-text",
             "degraded-with-text",
             "non-positive-image-reference",
+            "blank-transcription",
             "non-integer-size",
         ],
     )

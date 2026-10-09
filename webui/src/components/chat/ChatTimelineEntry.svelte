@@ -10,6 +10,7 @@
     attachmentFilename,
     attachmentPreviewLabel,
     attachmentUrlForBlock,
+    audioTranscription,
     fileMentionDetails,
     fileMentionStatusLabel,
     errorMessagePresentation,
@@ -21,6 +22,7 @@
     isFailedToolEvent,
     isFileContentBlock,
     isFileMentionContentBlock,
+    isAudioMediaContentBlock,
     isImageMediaContentBlock,
     imageReferenceLabel,
     isMediaContentBlock,
@@ -158,6 +160,9 @@
         if (isFileMentionContentBlock(block)) {
           return [formatMentionToken(block.path)];
         }
+        if (isAudioMediaContentBlock(block) && audioTranscription(block)) {
+          return [audioTranscription(block)];
+        }
         return [];
       })
       .join('\n\n');
@@ -232,6 +237,24 @@
           >
         </div>
       </div>
+    {/if}
+  {:else if isAudioMediaContentBlock(block) && attachmentUrlForBlock(block)}
+    {@const audioUrl = attachmentUrlForBlock(block)}
+    {@const transcription = audioTranscription(block)}
+    <div class="inline-voice">
+      <AudioPlayer src={audioUrl} ariaLabel={attachmentFilename(block)} />
+      <div class="inline-voice-file">
+        <a
+          href={audioUrl}
+          download={attachmentFilename(block)}
+          use:tooltip={{ text: attachmentFilename(block), whenTruncated: true }}
+          >{attachmentFilename(block)}</a
+        >{#if transcription}
+          · {t('chat.attachment.transcription')}{/if}
+      </div>
+    </div>
+    {#if transcription}
+      {@render userText(transcription, `user-transcription-${blockIndex}`)}
     {/if}
   {:else if isFileContentBlock(block) || isMediaContentBlock(block)}
     {@const fileUrl = attachmentUrlForBlock(block)}

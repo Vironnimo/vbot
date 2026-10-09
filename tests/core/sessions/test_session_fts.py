@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage
+from core.chat.content_blocks import MediaBlock
 from core.chat.messages import ToolCall
 from core.database import data_store_status
 from core.runs import RunKind
@@ -249,7 +250,11 @@ def test_only_conversation_text_is_indexed_and_a_foreign_index_version_rebuilds(
     assistant = ChatMessage.assistant(
         model="model", content=None, reasoning="reasonneedle", tool_calls=[call]
     )
-    session.append_many([ChatMessage.user("visible question"), assistant])
+    # What a voice message said is conversation text.
+    voice = ChatMessage.user(
+        [MediaBlock("media", "att_voice", "voice.ogg", "audio/ogg", transcription="voiceneedle")]
+    )
+    session.append_many([ChatMessage.user("visible question"), voice, assistant])
     sessions.close()
     with closing(sqlite3.connect(tmp_path / "sessions.db")) as connection, connection:
         generation = _meta(connection, FTS_GENERATION_KEY)
@@ -276,11 +281,12 @@ def test_only_conversation_text_is_indexed_and_a_foreign_index_version_rebuilds(
         assert stored == str(FTS_STORAGE_VERSION)
         assert generation is not None and rebuilt_generation not in {None, generation}
         # Reasoning and Tool calls are not conversation text; the entry stays out.
-        assert searchable == [("user", 1), ("assistant", 0)]
+        assert searchable == [("user", 1), ("user", 1), ("assistant", 0)]
         for query in ("reasonneedle", "argneedle"):
             assert sessions.search_messages(query, project_id=None, agent_id="agent").hits == ()
-        hits = sessions.search_messages("visible", project_id=None, agent_id="agent").hits
-        assert [hit.role for hit in hits] == ["user"]
+        for query in ("visible", "voiceneedle"):
+            hits = sessions.search_messages(query, project_id=None, agent_id="agent").hits
+            assert [hit.role for hit in hits] == ["user"]
     finally:
         sessions.close()
 

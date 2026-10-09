@@ -215,6 +215,14 @@ export const isImageMediaContentBlock = (block) =>
   isMediaContentBlock(block) &&
   trimmedString(block.media_type).startsWith('image/');
 
+export const isAudioMediaContentBlock = (block) =>
+  isMediaContentBlock(block) &&
+  trimmedString(block.media_type).startsWith('audio/');
+
+// What a voice message said: speech-to-text stores it with the message.
+export const audioTranscription = (block) =>
+  trimmedString(block?.transcription);
+
 export const isFileContentBlock = (block) =>
   isPlainObject(block) &&
   block.type === 'file' &&

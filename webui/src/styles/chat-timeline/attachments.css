@@ -296,3 +296,33 @@ a.inline-attachment:focus-visible {
 .tool-image-preview img[hidden] + .image-unavailable {
   display: flex;
 }
+
+/* A voice message in a user turn: its player and file name; what it said
+   follows as user text. */
+.inline-voice {
+  display: grid;
+  gap: 4px;
+  width: min(30rem, 100%);
+  min-width: 0;
+}
+
+.inline-voice-file {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inline-voice-file a {
+  color: var(--text-lo);
+  text-decoration: none;
+}
+
+.inline-voice-file a:hover,
+.inline-voice-file a:focus-visible {
+  color: var(--text-hi);
+  text-decoration: underline;
+}
