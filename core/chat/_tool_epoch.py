@@ -551,7 +551,9 @@ class ToolEpochView:
         reaches the Model when it is loaded), unless the Agent stopped loading
         it on demand: then it is added with its definition. A Tool that becomes
         usable as an On-demand Tool is announced by name and summary
-        (``on_demand``), for the Model to load.
+        (``on_demand``), for the Model to load, unless the Model already got
+        its definition in this epoch: then it is added with its definition
+        again, so a route that lists announced Tools keeps listing it.
 
         ``load_tools`` is added only to an epoch that lists or announces an
         On-demand Tool, ahead of the first ``on_demand`` change that needs it;
@@ -599,7 +601,7 @@ class ToolEpochView:
                 if changed := self._changed(name, current, offered, source, catalog, pinned=True):
                     additions.append(changed)
                 continue
-            if name in catalog.on_demand:
+            if name in catalog.on_demand and (current is None or current.definition is None):
                 planned.append(
                     ToolChange(
                         change="on_demand",

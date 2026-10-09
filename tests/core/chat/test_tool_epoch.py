@@ -242,6 +242,19 @@ def test_on_demand_tools_are_known_by_name_until_a_silent_load_records_the_defin
     assert view.request_tools(list_announced=True) == [read, search]
     assert _plan(view, catalog) == []
 
+    # Removed and enabled again: the loaded Tool returns with its definition, so a route that
+    # lists announced Tools keeps listing it; the Tool known by name only is announced for
+    # loading again.
+    view = view.with_changes(view.plan(_catalog(read), unlisted_tool_calls=False))
+    assert view.allowed_names == ("read",)
+    assert _plan(view, catalog, unlisted=False) == [
+        ("on_demand", "fetch", False, False),
+        ("added", "search", True, False),
+    ]
+    view = view.with_changes(view.plan(catalog, unlisted_tool_calls=False))
+    assert view.loadable_names == ("fetch",)
+    assert view.request_tools(list_announced=True) == [read, search]
+
 
 def test_a_tool_enabled_mid_epoch_is_announced_for_loading_when_the_agent_loads_it_on_demand() -> (
     None
