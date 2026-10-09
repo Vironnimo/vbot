@@ -23,6 +23,7 @@ def agent_payload(agent_id: str = "coder") -> dict[str, Any]:
         "custom_system_prompt_enabled": False,
         "librarian_enabled": True,
         "tool_access": {"mode": "all"},
+        "tool_loading": {"on_demand": True},
         "allowed_skills": ["debugging"],
         "excluded_skills": ["pdf"],
         "current_session_id": "session-one",
@@ -69,6 +70,7 @@ def test_agent_show_prints_every_agent_field(rpc: FakeRpc, run_cli: RunCli) -> N
         "custom_system_prompt_enabled: no",
         "librarian_enabled: yes",
         'tool_access: {"mode":"all"}',
+        'tool_loading: {"on_demand":true}',
         "allowed_skills: debugging",
         "excluded_skills: pdf",
         "current_session_id: session-one",
@@ -257,6 +259,16 @@ def test_agent_create_confirms_the_saved_agent(
             {"tool_access": {"mode": "selected", "allowed": []}},
             id="explicit-empty-selection",
         ),
+        pytest.param(
+            ("--tools-on-demand", "on", "--always-loaded", "read", "bash"),
+            {"tool_loading": {"on_demand": True, "always_loaded": ["read", "bash"]}},
+            id="tools-on-demand",
+        ),
+        pytest.param(
+            ("--tools-on-demand", "off"),
+            {"tool_loading": None},
+            id="tools-on-demand-removed",
+        ),
     ],
 )  # fmt: skip
 def test_agent_update_sends_only_the_given_changes(
@@ -303,6 +315,11 @@ def test_agent_update_sends_only_the_given_changes(
             ("--tool-deny", "memory"),
             ("require --tool-access-mode",),
             id="tool-names-without-mode",
+        ),
+        pytest.param(
+            ("--always-loaded",),
+            ("--always-loaded requires --tools-on-demand",),
+            id="always-loaded-without-switch",
         ),
     ],
 )

@@ -130,6 +130,21 @@ async def test_tool_access_override_replaces_the_repository_policy_until_cleared
 
 
 @pytest.mark.asyncio
+async def test_tool_loading_override_is_stored_as_given_until_cleared(tmp_path: Path) -> None:
+    state = await _vbot_state(tmp_path)
+    override = {"project_id": "vbot", "agent_id": "builder", "field": "tool_loading"}
+    # Switched off, the chosen always-loaded Tools stay for later.
+    value = {"on_demand": False, "always_loaded": ["read"]}
+
+    overridden = _member(await rpc_result(state, "project.set_override", **override, value=value))
+    cleared = _member(await rpc_result(state, "project.clear_override", **override))
+
+    assert overridden["overrides"] == {"tool_loading": value}
+    assert state.runtime.projects.get("vbot").overrides == {}
+    assert cleared["overrides"] is None
+
+
+@pytest.mark.asyncio
 async def test_clearing_an_absent_override_is_a_no_op(tmp_path: Path) -> None:
     state = await _vbot_state(tmp_path)
 
@@ -190,6 +205,12 @@ _OVERRIDE = {"project_id": "vbot", "agent_id": "builder"}
                 {"mode": "selected", "allowed": ["missing_tool"]},
                 {"mode": "all", "granted": ["computer"]},
             )
+        ),
+        (
+            "project.set_override",
+            {**_OVERRIDE, "field": "tool_loading", "value": {"always_loaded": ["read"]}},
+            "invalid_request",
+            "tool_loading.on_demand is required",
         ),
         ("project.clear_override", {**_OVERRIDE, "field": "nope"}, "invalid_request", ""),
         (

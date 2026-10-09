@@ -24,6 +24,10 @@ Domain vocabulary. The core Tool term lives in `.vorch/GLOSSARY.md`.
 **Definition:** A model-facing description + input schema selected from stable persisted configuration for an Agent, keyed by an immutable profile key; unchanged configuration must reproduce byte-identical provider definitions, transient state must never select a different profile.
 **Not:** The canonical contract, a per-Run schema, readiness, or an execution-time fallback.
 
+### On-demand Tool
+**Definition:** A Tool an Agent may use whose definition its Tool list leaves out while the Agent's `tool_loading` switch is on (`agent.md` -> Data Model): the System Prompt lists it by name and summary, and the Agent loads its definition with `load_tools` before the first call (`tools/load_tools.md`). `core/tools/on_demand.py::on_demand_tools` is the one classification Chat, `prompt.preview` and `scripts/tool_lab` share: every Tool except `load_tools`, the Session's granted Tools and the always-loaded Tools (the default set, or `always_loaded`; the file edit Tools count as one). Built-in Agents, fixed Tool sets and temporary Agents have none.
+**Not:** A permission or a deferred Tool (`deferred=True`): an On-demand Tool is allowed and callable, only its definition is not shown until loaded.
+
 ## Contracts
 
 - **Agent-facing purpose, clarity and cost:** Design around the intended user task, not preservation of the current interface. Definitions must teach a complete action and observable result; first-use guidance cannot be replaced by expected error recovery. Minimize unnecessary context and round trips across the whole workflow, including redesign and testing. Deterministic contract tests and Provider conformance are distinct from black-box task evaluations. Audits verify useful outcomes beyond `ok` and report before/after token costs; detailed design rules live in `tools/designing-agent-tools.md`, the review procedure, evidence rules and instruments (`scripts/tool_lab`) in `.vorch/workflows/tool-review-workflow.md`.

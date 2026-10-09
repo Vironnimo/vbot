@@ -317,13 +317,22 @@ async def test_agent_list_reports_the_effective_context_window(
             ["pdf", "xlsx"],
             id="all-skills-except",
         ),
+        pytest.param(
+            {"tool_loading": {"on_demand": False, "always_loaded": ["read"]}},
+            "tool_loading",
+            {"on_demand": False, "always_loaded": ["read"]},
+            id="tool-loading",
+        ),
+        pytest.param({"tool_loading": None}, "tool_loading", None, id="tool-loading-removed"),
     ],
 )
 async def test_agent_update_applies_a_mutable_field(
     tmp_path: Path, params: JsonObject, field: str, expected: Any
 ) -> None:
     state = make_state(tmp_path, StubAdapter())
-    state.runtime.agents.update("coder", name="Coder", temperature=0.9)
+    state.runtime.agents.update(
+        "coder", name="Coder", temperature=0.9, tool_loading={"on_demand": True}
+    )
 
     updated = await rpc_result(state, "agent.update", id="coder", **params)
     stored = await rpc_result(state, "agent.get", id="coder")
@@ -383,6 +392,12 @@ async def test_workspace_is_set_by_update_only(tmp_path: Path) -> None:
             "custom_system_prompt_enabled",
         ),
         ("agent.update", {"id": "coder", "librarian_enabled": None}, "librarian_enabled"),
+        ("agent.create", {"id": "writer", "tool_loading": {"on_demand": 1}}, "on_demand"),
+        (
+            "agent.update",
+            {"id": "coder", "tool_loading": {"on_demand": True, "always_loaded": "read"}},
+            "tool_loading.always_loaded",
+        ),
         ("agent.reorder", {"agent_ids": ["coder", "coder"], "expected_revision": 1}, ""),
     ],
 )

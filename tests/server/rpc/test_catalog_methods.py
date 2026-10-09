@@ -577,17 +577,21 @@ async def test_tool_list_returns_public_tools_sorted_with_their_full_projection(
 ) -> None:
     state = make_state(tmp_path, StubAdapter())
     registry = state.runtime.tools
-    for name, description in (("z_tool", "Last tool"), ("a_tool", "First tool")):
+    for name, description in (
+        ("z_tool", "Last tool"),
+        ("a_tool", "First tool"),
+        ("read", "Read a file"),
+    ):
         registry.register(
             name,
             description,
             {"type": "object", "properties": {}, "additionalProperties": False},
             lambda _context, _arguments: tool_success({}),
         )
-    # The internal Skill loader is not a user-selectable Tool.
+    # Internal Tools such as the On-demand Tool loader are not user-selectable.
     registry.register(
-        "skill",
-        "Load skills",
+        "load_tools",
+        "Load Tools",
         {"type": "object", "properties": {}, "additionalProperties": False},
         lambda _context, _arguments: tool_success({}),
         internal=True,
@@ -614,8 +618,14 @@ async def test_tool_list_returns_public_tools_sorted_with_their_full_projection(
                 "parallel_safe": True,
                 "project_configurable": True,
                 "project_configurability_reason": None,
+                # On-demand Tools keep it in the Tool list by default.
+                "loaded_by_default": name == "read",
             }
-            for name, description in (("a_tool", "First tool"), ("z_tool", "Last tool"))
+            for name, description in (
+                ("a_tool", "First tool"),
+                ("read", "Read a file"),
+                ("z_tool", "Last tool"),
+            )
         ],
         "default_project_tools": list(PROJECT_DEFAULT_ALLOWED_TOOLS),
     }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import re
 from collections.abc import Callable, Mapping
 from typing import Any, cast
@@ -219,6 +220,8 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         "effective_compaction_policy": effective_compaction_policy(
             None, agent_policy, _global_compaction_policy_loader(state)
         ),
+        # On-demand Tools: ``None`` while they are off.
+        "tool_loading": _tool_loading_payload(agent),
         # ``None`` while the Agent has no current Session (a new conversation).
         "current_session_id": agent.current_session_id or None,
         "context_window": _resolve_context_window(state, agent.model),
@@ -232,6 +235,11 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         "created_at": agent.created_at,
         "updated_at": agent.updated_at,
     }
+
+
+def _tool_loading_payload(agent: Any) -> JsonObject | None:
+    tool_loading = getattr(agent, "tool_loading", None)
+    return copy.deepcopy(tool_loading) if isinstance(tool_loading, dict) else None
 
 
 def _agent_raw_config(state: Any, agent_id: str) -> JsonObject:

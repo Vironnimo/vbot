@@ -82,8 +82,11 @@ def test_build_project_keeps_every_explicit_field_through_a_round_trip(tmp_path:
                     "mode": "selected",
                     "allowed": ["read"],
                     "denied": ["session_read"],
-                }
+                },
+                # Switched off, the chosen always-loaded Tools stay for later.
+                "tool_loading": {"on_demand": False, "always_loaded": ["read"]},
             },
+            "coder": {"tool_loading": {"on_demand": True}},
             # An entry holding only fields this vBot does not model loads as ``{}``.
             "future": {},
         },
@@ -280,6 +283,14 @@ def test_explicit_empty_tool_whitelist_is_kept(tmp_path: Path) -> None:
             "Tool Whitelist: bash",
             id="override-tool-outside-ceiling",
         ),
+        pytest.param(
+            "vbot",
+            None,
+            {"overrides": {"coder": {"tool_loading": {"always_loaded": ["read"]}}}},
+            ProjectError,
+            "overrides['coder'].tool_loading.on_demand is required",
+            id="override-tool-loading",
+        ),
     ],
 )
 def test_build_project_rejects_invalid_fields(
@@ -297,7 +308,15 @@ def test_build_project_rejects_invalid_fields(
 def test_override_fields_constant_contains_all_overridable_fields() -> None:
     assert (
         frozenset(
-            {"model", "temperature", "top_p", "thinking_effort", "compaction_policy", "tool_access"}
+            {
+                "model",
+                "temperature",
+                "top_p",
+                "thinking_effort",
+                "compaction_policy",
+                "tool_access",
+                "tool_loading",
+            }
         )
         == OVERRIDE_FIELDS
     )

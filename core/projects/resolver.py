@@ -821,6 +821,7 @@ class AgentResolver:
             project.overrides.get(agent_id, {}).get("compaction_policy"),
             project_id=project_id,
             resolved_top_p=resolved_top_p,
+            tool_loading=project.overrides.get(agent_id, {}).get("tool_loading"),
         )
         return replace(
             result,

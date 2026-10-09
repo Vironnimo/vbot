@@ -86,6 +86,11 @@ def _agent_tool_access_args_error(args: argparse.Namespace) -> str | None:
         return "--tool-allow and --tool-deny require --tool-access-mode"
     if allowed is not None and mode != "selected":
         return "--tool-allow is valid only with --tool-access-mode selected"
+    if (
+        getattr(args, "tools_on_demand", None) is None
+        and getattr(args, "always_loaded", None) is not None
+    ):
+        return "--always-loaded requires --tools-on-demand"
     return None
 
 
@@ -134,6 +139,16 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         if args.tool_deny is not None:
             tool_access["denied"] = list(args.tool_deny)
         changes["tool_access"] = tool_access
+    tools_on_demand = getattr(args, "tools_on_demand", None)
+    if tools_on_demand is not None:
+        always_loaded = getattr(args, "always_loaded", None)
+        if tools_on_demand == "off" and always_loaded is None:
+            changes["tool_loading"] = None
+        else:
+            tool_loading: dict[str, Any] = {"on_demand": tools_on_demand == "on"}
+            if always_loaded is not None:
+                tool_loading["always_loaded"] = list(always_loaded)
+            changes["tool_loading"] = tool_loading
     if args.allowed_skills is not None:
         changes["allowed_skills"] = list(args.allowed_skills)
     if args.excluded_skills is not None:

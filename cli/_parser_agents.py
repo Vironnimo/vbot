@@ -197,6 +197,23 @@ def _add_agent_change_arguments(
         help="Requires --tool-access-mode; omitted or empty clears denials in the replacement",
     )
     parser.add_argument(
+        "--tools-on-demand",
+        choices=("on", "off"),
+        help=(
+            "Replace the On-demand Tools setting: on keeps only the always-loaded Tools in "
+            "the Tool list and lets the agent load the others when it needs them"
+        ),
+    )
+    parser.add_argument(
+        "--always-loaded",
+        nargs="*",
+        metavar="<tool>",
+        help=(
+            "Requires --tools-on-demand; the Tools that stay in the Tool list (empty for "
+            "none); omitted keeps the default set"
+        ),
+    )
+    parser.add_argument(
         "--allowed-skills",
         nargs="*",
         help=(
@@ -443,13 +460,14 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
             "thinking_effort",
             "compaction_policy",
             "tool_access",
+            "tool_loading",
         ),
         help="Override field",
     )
     set_override_parser.add_argument(
         "value",
         metavar="<value>",
-        help="Field value; compaction_policy and tool_access take a JSON object",
+        help="Field value; compaction_policy, tool_access and tool_loading take a JSON object",
     )
 
     clear_override_parser = _add_command_parser(
@@ -469,6 +487,7 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
             "thinking_effort",
             "compaction_policy",
             "tool_access",
+            "tool_loading",
         ),
         help="Override field to clear",
     )

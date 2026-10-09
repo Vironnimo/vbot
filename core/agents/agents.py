@@ -48,6 +48,7 @@ from core.agents._config import (
     _validate_temperature,
     _validate_thinking_effort,
     _validate_tool_access,
+    _validate_tool_loading,
     _validate_top_p,
     _validated_agent_data,
     _with_builtin_capabilities,
@@ -320,6 +321,7 @@ class AgentStore:
         tools: Mapping[str, Any] | None = None,
         custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
         compaction_policy: dict[str, Any] | None = None,
+        tool_loading: Mapping[str, Any] | None = None,
         librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED,
     ) -> Agent:
         """Create and persist a new Agent and its Workspace; it has no Session yet.
@@ -344,6 +346,7 @@ class AgentStore:
             tools=tools,
             custom_system_prompt_enabled=custom_system_prompt_enabled,
             compaction_policy=compaction_policy,
+            tool_loading=tool_loading,
             librarian_enabled=librarian_enabled,
         )
 
@@ -366,6 +369,7 @@ class AgentStore:
         tools: Mapping[str, Any] | None = None,
         custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
         compaction_policy: dict[str, Any] | None = None,
+        tool_loading: Mapping[str, Any] | None = None,
         librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED,
     ) -> Agent:
         """:meth:`create` past the reserved-id rules; ``builtin`` marks a built-in Agent."""
@@ -404,6 +408,7 @@ class AgentStore:
                 if compaction_policy is not None
                 else None
             )
+            validated_tool_loading = _validate_tool_loading(tool_loading)
             now = utc_now_timestamp()
             workspace_value = workspace
             if workspace_value is None or (
@@ -431,6 +436,7 @@ class AgentStore:
                 tools=validated_tools,
                 custom_system_prompt_enabled=validated_custom_system_prompt_enabled,
                 compaction_policy=validated_compaction_policy,
+                tool_loading=validated_tool_loading,
                 librarian_enabled=validated_librarian_enabled,
                 created_at=now,
                 updated_at=now,
@@ -863,6 +869,8 @@ class AgentStore:
                 changes["compaction_policy"] = (
                     normalize_compaction_policy(policy) if policy is not None else None
                 )
+            if "tool_loading" in changes:
+                changes["tool_loading"] = _validate_tool_loading(changes["tool_loading"])
             if changes.get("current_session_id"):
                 self._validate_current_session(agent_id, changes["current_session_id"])
 

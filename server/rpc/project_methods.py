@@ -54,6 +54,7 @@ from core.settings import (
     validate_top_p,
 )
 from core.tools.availability import normalize_tool_access
+from core.tools.on_demand import normalize_tool_loading
 from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -522,6 +523,11 @@ def _validate_override_value(
                     + ", ".join(outside),
                 )
         return policy.to_dict()
+    if field == "tool_loading":
+        try:
+            return normalize_tool_loading(value)
+        except ValueError as exc:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     try:
         return validate_thinking_effort(value, label="params.value", allow_none=False)
     except SettingsValidationError as exc:

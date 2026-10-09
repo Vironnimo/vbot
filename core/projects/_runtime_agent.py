@@ -56,6 +56,8 @@ class RuntimeAgent(Protocol):
     - ``current_session_id`` — the agent's active session (empty for config; the
       anchor owns project-session selection).
     - ``created_at`` / ``updated_at`` — persisted timestamps (empty for config).
+    - ``tool_loading`` — the On-demand Tools setting (``core.tools.on_demand``);
+      ``None`` leaves them off (for a config agent, the Project override).
     """
 
     @property
@@ -95,6 +97,8 @@ class RuntimeAgent(Protocol):
     def updated_at(self) -> str: ...
     @property
     def compaction_policy(self) -> dict[str, Any] | None: ...
+    @property
+    def tool_loading(self) -> dict[str, Any] | None: ...
 
 
 AGENT_OVERRIDE_FIELDS = ("model", "thinking_effort", "temperature", "top_p")
@@ -206,6 +210,8 @@ class ConfigAgent:
     created_at: str = _CONFIG_AGENT_TIMESTAMP
     updated_at: str = _CONFIG_AGENT_TIMESTAMP
     compaction_policy: dict[str, Any] | None = None
+    # On-demand Tools from the Project's override; ``None`` leaves them off.
+    tool_loading: dict[str, Any] | None = None
     preload_skills: tuple[str, ...] = ()
     model_inherit: bool = False
 

@@ -293,6 +293,12 @@ def test_project_set_without_changes_lists_every_option(rpc: FakeRpc, run_cli: R
             {"mode": "selected", "allowed": ["read"]},
             id="json-object",
         ),
+        pytest.param(
+            "tool_loading",
+            '{"on_demand":true}',
+            {"on_demand": True},
+            id="tool-loading",
+        ),
     ],
 )
 def test_project_override_set_coerces_the_value(
