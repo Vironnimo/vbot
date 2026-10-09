@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, override
 
 import pytest
 
+from core.attachments import AttachmentStore
 from core.chat._queued_input import STEERING_SYSTEM_REMINDER
+from core.chat.block_resolver import ContentBlockResolver
+from core.chat.content_blocks import MediaBlock
 from core.chat.messages import ChatMessage, InputOrigin
 from core.chat.wire_shaping import system_reminder_request_message
 from core.providers.errors import NetworkError
@@ -153,6 +158,48 @@ async def test_steer_keeps_same_run_and_follows_complete_tool_batch(
         for e in await runtime.timelines.events(run)
         if e.type == "user_message_persisted"
     ] == [None, items[0].item_id, items[1].item_id]
+
+
+@pytest.mark.asyncio
+async def test_voice_input_persists_with_its_transcription(tmp_path: Path) -> None:
+    # Speech-to-text runs before a voice message persists, whether it starts the
+    # Run or steers it, so history, accessors and every request carry what was said.
+    class Transcriber:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def transcribe(self, audio: bytes, *, filename: str, media_type: str) -> object:
+            self.calls.append(filename)
+            return SimpleNamespace(text=f"words of {filename}")
+
+    store = AttachmentStore(tmp_path)
+    voices = [store.store(name, b"OggS\x00\x02voice-payload") for name in ("a.ogg", "b.ogg")]
+    blocks = [MediaBlock("media", r.id, r.filename, r.media_type) for r in voices]
+    adapter = PausedAdapter(
+        [{"content": "Before", "tool_calls": None}, {"content": "After", "tool_calls": None}]
+    )
+    agent = StubAgent(id="coder", model="openai/gpt-5.2")
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="one")
+    transcriber = Transcriber()
+    loop = build_chat_loop(
+        runtime, attachment_resolver=ContentBlockResolver(store, transcriber=transcriber)
+    )
+    run = await loop.start_run("coder", [blocks[0]], session_id="one")
+    await asyncio.wait_for(adapter.entered.wait(), 5)
+    item = await loop.queue_run("coder", [blocks[1]], session_id="one")
+    runtime.chat_run_manager.steer_queued("coder", "one", item.item_id, project_id=None)
+    adapter.release.set()
+    await asyncio.wait_for(run.wait(), 10)
+
+    session = runtime.chat_sessions.get(session_address("coder", "one"))
+    users = [message for message in session.load() if message.role == "user"]
+    assert [message.content for message in users] == [
+        [replace(block, transcription=f"words of {block.filename}")] for block in blocks
+    ]
+    # Each voice message is transcribed once; requests reuse the persisted text.
+    assert transcriber.calls == ["a.ogg", "b.ogg"]
+    assert "words of b.ogg" in str(adapter.requests[1]["messages"])
 
 
 @pytest.mark.asyncio

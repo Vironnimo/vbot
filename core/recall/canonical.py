@@ -307,6 +307,8 @@ def content_to_text(content: Any) -> str:
 def content_block_to_text(block: Any) -> str:
     if isinstance(block, TextBlock):
         return block.text
+    if isinstance(block, MediaBlock) and block.transcription is not None:
+        return f"{block.filename} {block.media_type}\n{block.transcription}"
     if isinstance(block, (FileBlock, MediaBlock)):
         return f"{block.filename} {block.media_type}"
     if isinstance(block, FileMentionBlock):

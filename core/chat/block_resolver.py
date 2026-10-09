@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 
 from core.attachments import AttachmentStore
 from core.attachments.images import ImageConversionError, ImageConverter
+from core.chat.content_blocks import ContentBlock, MediaBlock
 from core.chat.errors import ChatError
 from core.chat.file_mentions import file_mention_request_text
 from core.model_tasks import SpeechError
@@ -46,7 +47,7 @@ _UNSUPPORTED_MEDIA_REASON = (
 
 
 class SpeechTranscriber(Protocol):
-    """Speech-to-text hook used to degrade audio attachments to text."""
+    """Speech-to-text hook that transcribes incoming audio attachments."""
 
     async def transcribe(self, audio: bytes, *, filename: str, media_type: str) -> Any:
         """Return an object with a ``text`` attribute for the given audio bytes."""
@@ -126,7 +127,6 @@ class ContentBlockResolver:
         self,
         messages: list[JsonObject],
         *,
-        current_user_message_id: str,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
         max_image_bytes: int | None = None,
@@ -137,9 +137,10 @@ class ContentBlockResolver:
         is what the chosen *adapter*'s wire can carry. An attachment goes native
         on their intersection and otherwise degrades by per-modality policy. Every
         turn resolves the same way, so a turn renders byte-identically in every
-        later request and the prompt cache survives new Runs; only the current
-        turn runs speech-to-text. The resolver holds no provider format knowledge -
-        it only intersects the two sets it is handed.
+        later request and the prompt cache survives new Runs; audio uses the
+        transcription its block carries (:meth:`transcribe_audio`). The resolver
+        holds no provider format knowledge - it only intersects the two sets it
+        is handed.
         """
         resolved_messages: list[JsonObject] = []
         for message in messages:
@@ -155,7 +156,6 @@ class ContentBlockResolver:
                         input_modalities=input_modalities,
                         wire_media_types=wire_media_types,
                         max_image_bytes=max_image_bytes,
-                        transcribe=message.get("id") == current_user_message_id,
                     ),
                 }
             )
@@ -168,7 +168,6 @@ class ContentBlockResolver:
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
         max_image_bytes: int | None,
-        transcribe: bool,
     ) -> list[JsonObject]:
         parts = await _ATTACHMENT_WORKERS.run(self._expand_text_attachments, content)
         resolved_content: list[JsonObject] = []
@@ -182,7 +181,6 @@ class ContentBlockResolver:
                     input_modalities=input_modalities,
                     wire_media_types=wire_media_types,
                     max_image_bytes=max_image_bytes,
-                    transcribe=transcribe,
                 )
             )
         return resolved_content
@@ -218,7 +216,6 @@ class ContentBlockResolver:
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
         max_image_bytes: int | None = None,
-        transcribe: bool = True,
     ) -> list[JsonObject]:
         if not isinstance(block, dict):
             raise ChatError("content blocks must be objects")
@@ -232,7 +229,6 @@ class ContentBlockResolver:
                 input_modalities=input_modalities,
                 wire_media_types=wire_media_types,
                 max_image_bytes=max_image_bytes,
-                transcribe=transcribe,
             )
         if block_type == "file":
             return await _ATTACHMENT_WORKERS.run(
@@ -254,7 +250,6 @@ class ContentBlockResolver:
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
         max_image_bytes: int | None = None,
-        transcribe: bool = True,
     ) -> list[JsonObject]:
         attachment_id = self._require_string(block, "attachment_id")
         filename = self._require_string(block, "filename")
@@ -275,9 +270,9 @@ class ContentBlockResolver:
                 attachment_id,
                 filename,
                 media_type,
+                self._optional_string(block, "transcription"),
                 input_modalities=input_modalities,
                 wire_media_types=wire_media_types,
-                transcribe=transcribe,
             )
         if media_type.startswith("video/"):
             return await _ATTACHMENT_WORKERS.run(
@@ -432,10 +427,10 @@ class ContentBlockResolver:
         attachment_id: str,
         filename: str,
         media_type: str,
+        transcription: str | None,
         *,
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
-        transcribe: bool = True,
     ) -> list[JsonObject]:
         record = await _ATTACHMENT_WORKERS.run(self._load_record_or_none, attachment_id)
 
@@ -444,9 +439,9 @@ class ContentBlockResolver:
             # available") instead of aborting the run.
             return [await self._path_note("Audio", attachment_id, filename, media_type)]
 
-        if isinstance(record.transcription, str):
+        if transcription is not None:
             return [
-                self._transcription_block(filename, media_type, record.transcription),
+                self._transcription_block(filename, media_type, transcription),
                 self._record_path_note("Audio", record, filename, media_type),
             ]
 
@@ -463,68 +458,73 @@ class ContentBlockResolver:
                 self._record_path_note("Audio", record, filename, media_type),
             ]
 
-        if not transcribe:
-            # Speech-to-text runs once, on the audio's own turn; its result is
-            # cached above. Later turns keep the note that turn degraded to.
-            reason = _AUDIO_NO_STT_REASON if self._transcriber is None else _AUDIO_STT_FAILED_REASON
-            return [self._record_path_note("Audio", record, filename, media_type, reason=reason)]
-        return await self._transcribe_or_path_note(record, filename, media_type)
+        # Speech-to-text ran before the message was persisted; without its
+        # result the Model keeps the path to route the audio elsewhere.
+        reason = _AUDIO_NO_STT_REASON if self._transcriber is None else _AUDIO_STT_FAILED_REASON
+        return [self._record_path_note("Audio", record, filename, media_type, reason=reason)]
 
-    async def _transcribe_or_path_note(
-        self,
-        record: Any,
-        filename: str,
-        media_type: str,
-    ) -> list[JsonObject]:
-        """Transcribe current-turn audio, or degrade to a path note on failure.
+    async def transcribe_audio(self, content: str | list[ContentBlock]) -> str | list[ContentBlock]:
+        """Return *content* with every audio block carrying its speech-to-text.
 
-        No transcriber, a speech-to-text error, or an empty result never aborts
-        the run: the agent keeps the file path to route the audio elsewhere (e.g.
-        to a capable sub-agent). Only a genuine blob I/O fault still raises.
+        Chat calls this before it persists a user message, so the transcription
+        becomes part of Session history: accessors show it, search finds it and
+        every request renders it. A block that already carries a transcription
+        keeps it, and an attachment transcribed before reuses its cached text.
+        No speech-to-text service, an unreadable attachment, a speech-to-text
+        error or an empty result leaves the block without one; the input is
+        never refused.
         """
-        if self._transcriber is None:
-            return [
-                self._record_path_note(
-                    "Audio", record, filename, media_type, reason=_AUDIO_NO_STT_REASON
-                )
-            ]
+        if isinstance(content, str):
+            return content
+        transcribed: list[ContentBlock] = []
+        for block in content:
+            if (
+                isinstance(block, MediaBlock)
+                and block.media_type.startswith("audio/")
+                and block.transcription is None
+            ):
+                text = await self._audio_transcription(block)
+                if text is not None:
+                    block = replace(block, transcription=text)
+            transcribed.append(block)
+        return transcribed
 
-        blob_data = await _ATTACHMENT_WORKERS.run(self._read_attachment_bytes, record.id)
+    async def _audio_transcription(self, block: MediaBlock) -> str | None:
+        record = await _ATTACHMENT_WORKERS.run(self._load_record_or_none, block.attachment_id)
+        if record is None:
+            return None
+        if isinstance(record.transcription, str):
+            return record.transcription
+        if self._transcriber is None:
+            return None
+        try:
+            blob_data = await _ATTACHMENT_WORKERS.run(self._read_attachment_bytes, record.id)
+        except AttachmentResolveError as exc:
+            _LOGGER.warning("Cannot read audio %s for speech-to-text: %s", block.filename, exc)
+            return None
         try:
             result = await self._transcriber.transcribe(
-                blob_data, filename=filename, media_type=media_type
+                blob_data, filename=block.filename, media_type=block.media_type
             )
         except SpeechError as exc:
             _LOGGER.warning(
-                "Speech-to-text failed for audio %s (%s); degrading to path note: %s",
-                filename,
-                media_type,
+                "Speech-to-text failed for audio %s (%s): %s",
+                block.filename,
+                block.media_type,
                 exc,
             )
-            return [
-                self._record_path_note(
-                    "Audio", record, filename, media_type, reason=_AUDIO_STT_FAILED_REASON
-                )
-            ]
+            return None
 
         text = getattr(result, "text", None)
         if not isinstance(text, str) or not text.strip():
             _LOGGER.warning(
-                "Speech-to-text produced no text for audio %s (%s); degrading to path note",
-                filename,
-                media_type,
+                "Speech-to-text produced no text for audio %s (%s)",
+                block.filename,
+                block.media_type,
             )
-            return [
-                self._record_path_note(
-                    "Audio", record, filename, media_type, reason=_AUDIO_STT_FAILED_REASON
-                )
-            ]
-
+            return None
         await _ATTACHMENT_WORKERS.run(self._cache_transcription, record.id, text)
-        return [
-            self._transcription_block(filename, media_type, text),
-            self._record_path_note("Audio", record, filename, media_type),
-        ]
+        return text
 
     def _cache_transcription(self, attachment_id: str, text: str) -> None:
         try:
@@ -712,6 +712,15 @@ class ContentBlockResolver:
     @staticmethod
     def _require_string(data: JsonObject, key: str) -> str:
         value = data.get(key)
+        if not isinstance(value, str):
+            raise ChatError(f"content block field '{key}' must be a string")
+        return value
+
+    @staticmethod
+    def _optional_string(data: JsonObject, key: str) -> str | None:
+        value = data.get(key)
+        if value is None:
+            return None
         if not isinstance(value, str):
             raise ChatError(f"content block field '{key}' must be a string")
         return value

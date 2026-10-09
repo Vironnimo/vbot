@@ -24,7 +24,7 @@ from core.chat.messages import (
     ChatMessage,
     InputOrigin,
 )
-from core.runs import USER_MESSAGE_EVENT, QueuedRunItem, Run
+from core.runs import USER_MESSAGE_EVENT, ChatRunManager, QueuedRunItem, Run
 
 if TYPE_CHECKING:
     from core.chat._request_builder import RequestBuilder
@@ -66,8 +66,25 @@ class QueuedChatInput:
         )
 
 
+async def transcribe_steering_audio(
+    run_manager: ChatRunManager, run: Run, requests: RequestBuilder
+) -> None:
+    """Run speech-to-text of selected voice input before the Session lock is taken.
+
+    The append under the lock then reuses each attachment's cached transcription
+    instead of holding the lock through speech-to-text.
+    """
+    for item in run_manager.pending_steering(run):
+        executor = item.executor
+        if isinstance(executor, QueuedChatInput) and isinstance(executor.request.content, list):
+            await requests.transcribe_user_audio(executor.request.content)
+
+
 async def persist_steering_input(
-    context: _RunExecutionContext, item: QueuedRunItem, dependencies: ChatLoopDependencies
+    context: _RunExecutionContext,
+    item: QueuedRunItem,
+    dependencies: ChatLoopDependencies,
+    requests: RequestBuilder,
 ) -> None:
     """Append one user input before the Queue relinquishes it."""
     executor = item.executor
@@ -76,6 +93,7 @@ async def persist_steering_input(
     request = executor.request
     if request.content is None:
         raise ChatError("steering requires user content")
+    content = await requests.transcribe_user_audio(request.content)
     session = context.session
     await context.session_snapshot.refresh(session)
     takeover = await takes_over_subagent_session(context, request, dependencies.sessions)
@@ -89,7 +107,7 @@ async def persist_steering_input(
         else STEERING_SYSTEM_REMINDER
     )
     message = ChatMessage.user(
-        _assign_session_image_references(request.content, context.session_snapshot.active_messages),
+        _assign_session_image_references(content, context.session_snapshot.active_messages),
         input_origin=request.input_origin,
     )
     # The takeover commits with the message, so a cancellation cannot split them.

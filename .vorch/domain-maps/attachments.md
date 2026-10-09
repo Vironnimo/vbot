@@ -8,7 +8,7 @@ Blob-backed original-file storage, attachment-specific message shaping, and shar
 
 ## Data Model
 
-- `AttachmentRecord`: `id` (opaque blob basename; newly generated `att_` plus 12 lowercase base32 characters), `filename` (display name), `media_type` (server-sniffed), `size_bytes`, `stored_at`, `file_path` (the blob's current location, derived on load and never stored), optional cached `transcription` written on first STT.
+- `AttachmentRecord`: `id` (opaque blob basename; newly generated `att_` plus 12 lowercase base32 characters), `filename` (display name), `media_type` (server-sniffed), `size_bytes`, `stored_at`, `file_path` (the blob's current location, derived on load and never stored), optional cached `transcription`: Chat's speech-to-text of the audio, written the first time a user message carries it and reused when the same attachment arrives again. The user message's audio block carries the transcription the Session shows (`chat/request-building.md` -> Content Blocks).
 - Blob at `<id><canonical-extension>` (extension from sniffed type, never client metadata); sidecar `<id>.json`. No index, no DB, no cleanup pass.
 - The sidecar is a durable JSON document under the Generation 1 contract (`settings.md` -> JSON Document Contract; registry kind `attachment_metadata`): `format_version` 1 plus `id`, `filename`, `media_type`, `size_bytes`, `stored_at` and an optional `transcription` (`null` also reads as none). `validate_attachment_metadata_file` backs `doctor config`. Sidecars are not data-snapshot members: a snapshot holds no blobs.
 

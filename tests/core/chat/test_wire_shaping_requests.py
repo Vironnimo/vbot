@@ -825,21 +825,19 @@ def test_rebuilt_request_gives_each_tool_result_only_its_own_media(tmp_path: Pat
 
 
 def test_request_resolves_user_blocks_only_when_the_history_carries_them(tmp_path: Path) -> None:
-    # The latest user turn marks the current turn even when it is plain text; an earlier
-    # attachment still renders like its own turn did. Plain-text history skips resolution.
+    # An earlier attachment still resolves when the latest turn is plain text;
+    # plain-text history skips resolution.
     class RecordingResolver(ContentBlockResolver):
         def __init__(self, store: AttachmentStore) -> None:
             super().__init__(store)
-            self.current_turns: list[str] = []
+            self.calls = 0
 
         @override
         async def resolve_messages(
-            self, messages: list[dict[str, Any]], *, current_user_message_id: str, **kwargs: Any
+            self, messages: list[dict[str, Any]], **kwargs: Any
         ) -> list[dict[str, Any]]:
-            self.current_turns.append(current_user_message_id)
-            return await super().resolve_messages(
-                messages, current_user_message_id=current_user_message_id, **kwargs
-            )
+            self.calls += 1
+            return await super().resolve_messages(messages, **kwargs)
 
     image = io.BytesIO()
     Image.new("RGB", (12, 8), "blue").save(image, format="PNG")
@@ -862,7 +860,7 @@ def test_request_resolves_user_blocks_only_when_the_history_carries_them(tmp_pat
     plain_request = asyncio.run(build_request_messages(loop, agent, plain))
     attached_request = asyncio.run(build_request_messages(loop, agent, attached))
 
-    assert resolver.current_turns == [latest.id]
+    assert resolver.calls == 1
     assert [entry["content"] for entry in plain_request if entry["role"] == "user"] == [
         "first",
         "second",

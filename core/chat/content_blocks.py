@@ -31,6 +31,9 @@ class MediaBlock:
     # Assigned by Chat when an image enters a Session. This is a durable
     # conversation reference, not a filename or a storage address.
     image_reference: int | None = None
+    # Speech-to-text of an audio block, written by Chat before the message is
+    # persisted, so history, search and accessors carry what was said.
+    transcription: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +88,8 @@ def content_block_to_dict(block: ContentBlock) -> dict[str, Any]:
         }
         if block.image_reference is not None:
             payload["image_reference"] = block.image_reference
+        if block.transcription is not None:
+            payload["transcription"] = block.transcription
         return payload
 
     if isinstance(block, FileBlock):
@@ -121,6 +126,7 @@ def content_block_from_dict(data: dict[str, Any]) -> ContentBlock:
             filename=_require_string(data, "filename"),
             media_type=_require_string(data, "media_type"),
             image_reference=_optional_positive_integer(data, "image_reference"),
+            transcription=_optional_non_empty_string(data, "transcription"),
         )
 
     if block_type == "file":
@@ -178,4 +184,13 @@ def _optional_positive_integer(data: dict[str, Any], key: str) -> int | None:
         return None
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ContentBlockError(f"content block field '{key}' must be a positive integer")
+    return value
+
+
+def _optional_non_empty_string(data: dict[str, Any], key: str) -> str | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ContentBlockError(f"content block field '{key}' must be a non-empty string")
     return value

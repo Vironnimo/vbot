@@ -69,6 +69,8 @@ export {
   isTextContentBlock,
   isMediaContentBlock,
   isImageMediaContentBlock,
+  isAudioMediaContentBlock,
+  audioTranscription,
   isFileContentBlock,
   isFileMentionContentBlock,
   fileMentionStatusLabel,

@@ -61,6 +61,7 @@ export default Object.freeze({
   'chat.attachment.preview': 'Preview attachment',
   'chat.attachment.fileLabel': 'Attached file',
   'chat.attachment.imageReference': 'Image {number}',
+  'chat.attachment.transcription': 'Transcription',
   'chat.image.alt': 'Image',
   'chat.image.unavailable': 'Image not available',
   'chat.image.zoomIn': 'Click to view full size',

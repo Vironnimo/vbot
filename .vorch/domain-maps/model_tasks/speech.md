@@ -10,7 +10,7 @@ This domain owns speech wire payloads and runtime artifacts; it does not own tas
 
 ## Interfaces
 
-- `SpeechService.transcribe(audio, filename, media_type) -> SpeechTranscriptionResult` - validates non-empty bytes and the configured input-size limit, resolves the `speech_to_text` binding, and prepares audio for that target (Transcription input below). Besides the server transcribe endpoint, the chat layer's `ContentBlockResolver` uses this as its transcriber to degrade audio attachments to text (see `.vorch/domain-maps/attachments.md`).
+- `SpeechService.transcribe(audio, filename, media_type) -> SpeechTranscriptionResult` - validates non-empty bytes and the configured input-size limit, resolves the `speech_to_text` binding, and prepares audio for that target (Transcription input below). Besides the server transcribe endpoint, the chat layer's `ContentBlockResolver` uses this as its transcriber for incoming audio attachments before the user message persists (see `chat/request-building.md` -> Content Blocks).
 - `SpeechService.synthesize(text) -> SpeechSynthesisResult` - trims and validates text, resolves the `text_to_speech` binding, then returns raw synthesized audio.
 - `SpeechService.synthesize_artifact(text) -> SpeechArtifact` - calls `synthesize()` and persists one runtime artifact under the Runtime-injected canonical path `<data_dir>/artifacts/speech/`.
 - Both synthesis methods accept an optional async `on_audio(SpeechAudioChunk)` callback. Chunks contain mono PCM16 little-endian `audio` bytes and `sample_rate_hz`; they arrive before the complete result and do not replace the final result/artifact. Playback consumers own presentation and cancellation.

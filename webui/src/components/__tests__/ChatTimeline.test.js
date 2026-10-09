@@ -203,6 +203,19 @@ describe('ChatTimeline messages', () => {
         { text: 'report.pdf', fileLink: '/api/attachments/file-attachment-id' },
       ],
       [
+        'a voice message as a player with what it said',
+        [
+          {
+            type: 'media',
+            attachment_id: 'voice-attachment-id',
+            filename: 'voice.ogg',
+            media_type: 'audio/ogg',
+            transcription: 'hallo welt',
+          },
+        ],
+        { text: 'hallo welt', voice: '/api/attachments/voice-attachment-id' },
+      ],
+      [
         'a text block inline',
         [{ type: 'text', text: 'embedded text file content' }],
         { text: 'embedded text file content' },
@@ -231,6 +244,9 @@ describe('ChatTimeline messages', () => {
       expect(
         message.querySelector('.attachment-thumb')?.getAttribute('src'),
       ).toBe(expected.image);
+      expect(
+        message.querySelector('.inline-voice-file a')?.getAttribute('href'),
+      ).toBe(expected.voice);
       expect(message.querySelector('.msg-body-blocks') === null).toBe(
         Boolean(expected.plain),
       );

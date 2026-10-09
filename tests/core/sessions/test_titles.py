@@ -11,7 +11,13 @@ from typing import Any, cast, override
 import pytest
 
 from core.chat import ChatMessage
-from core.chat.content_blocks import ContentBlock, FileBlock, FileMentionBlock, TextBlock
+from core.chat.content_blocks import (
+    ContentBlock,
+    FileBlock,
+    FileMentionBlock,
+    MediaBlock,
+    TextBlock,
+)
 from core.models.pricing import TokenPricing, TokenRates
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
@@ -246,6 +252,13 @@ async def test_configured_title_model_replaces_local_title_with_bounded_request(
             filename="report.pdf",
             media_type="application/pdf",
         ),
+        MediaBlock(
+            type="media",
+            attachment_id="attachment-two",
+            filename="voice.ogg",
+            media_type="audio/ogg",
+            transcription="also check the budget",
+        ),
         FileMentionBlock(
             type="file_mention",
             path="docs/private.txt",
@@ -264,9 +277,11 @@ async def test_configured_title_model_replaces_local_title_with_bounded_request(
     assert len(request["messages"]) == 2
     assert request["messages"][0] == {"role": "system", "content": TITLE_SYSTEM_PROMPT}
     assert request["messages"][1]["role"] == "user"
-    # A bounded projection of the text; attachments are named, never included.
+    # A bounded projection of the text and what a voice message said; attachments
+    # are named, never included.
     title_input = request["messages"][1]["content"]
     assert TITLE_OMISSION_MARKER in title_input
+    assert "also check the budget" in title_input
     assert "report.pdf (application/pdf)" in title_input
     assert "private.txt (mentioned file, 999 bytes)" in title_input
     assert secret not in title_input
