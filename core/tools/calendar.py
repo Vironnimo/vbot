@@ -389,12 +389,14 @@ class _CalendarTool:
         item_id = arguments["id"]
         if parse_occurrence_id(item_id) is not None:
             occurrence = await self._calendar.delete_occurrence(item_id, actor="tool")
+            series = self._calendar.get_event(occurrence.event_id)
             return tool_success(
                 {
                     "id": occurrence.id,
                     "title": occurrence.title,
                     "start": _time_text(occurrence.start),
                     "status": "deleted; the rest of the series stays",
+                    "next": self._next_text(series),
                 }
             )
         event = self._calendar.get_event(item_id)
@@ -484,12 +486,15 @@ class _CalendarTool:
     def _event_result(self, event: CalendarEvent) -> JsonObject:
         data = self._event_fields(event)
         if event.recurring:
-            upcoming = islice(
-                self._calendar.iter_occurrences(event, datetime.now(UTC)), _NEXT_OCCURRENCES
-            )
-            starts = [_time_text(item.start) for item in upcoming]
-            data["next"] = ", ".join(starts) or "none ahead"
+            data["next"] = self._next_text(event)
         return data
+
+    def _next_text(self, event: CalendarEvent) -> str:
+        """The next starts of a repeating event, or that none is ahead."""
+        upcoming = islice(
+            self._calendar.iter_occurrences(event, datetime.now(UTC)), _NEXT_OCCURRENCES
+        )
+        return ", ".join(_time_text(item.start) for item in upcoming) or "none ahead"
 
     def _event_fields(self, event: CalendarEvent) -> JsonObject:
         """One event in the Agent-facing shape: local times, the last day of an all-day event."""

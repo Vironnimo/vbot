@@ -357,8 +357,9 @@ class TestUpdate:
 
     @pytest.mark.parametrize("action", ["update", "delete"])
     def test_an_occurrence_id_changes_or_deletes_only_that_occurrence(
-        self, tool: CalendarTool, action: str
+        self, tool: CalendarTool, monkeypatch: pytest.MonkeyPatch, action: str
     ) -> None:
+        _now(monkeypatch, datetime(2030, 1, 8, 12, tzinfo=UTC))
         standup = _standup(tool)
         changes = {"title": "Long standup", "end": "2030-01-09T10:00"} if action == "update" else {}
 
@@ -379,7 +380,9 @@ class TestUpdate:
         else:
             assert text == (
                 f"id: {standup}_20300109T0900\ntitle: Standup\nstart: 2030-01-09T09:00\n"
-                "status: deleted; the rest of the series stays"
+                "status: deleted; the rest of the series stays\n"
+                # The series goes on without the deleted occurrence.
+                "next: 2030-01-14T09:00, 2030-01-16T09:00, 2030-01-21T09:00"
             )
             assert f"{standup}_20300109T0900" not in listing
         assert f"  {standup}_20300107T0900 2030-01-07T09:00\n" in listing
