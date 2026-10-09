@@ -387,18 +387,28 @@ class SkillRuntime:
         """
         if self._authoring is None:
             return {}
+        names = tuple(names)
+        if not names:
+            return {}
         environment = self._skill_environment(self._storage.load_environment())
         homes: dict[Path, dict[str, str]] = {}
         protection: dict[str, str] = {}
         own_root = self.agent_skills_dir(agent_id)
+        own_packages = {
+            skill.name: skill.path.parent
+            for skill in SkillRegistry.load(own_root, environment=environment).list_all()
+        }
+        shared_packages = self._resolve_shared_skill_packages(
+            agent_id, set(names).difference(own_packages)
+        )
         for name in names:
-            home: Path | None = own_root
-            package = find_skill_package_dir(own_root, name, environment)
+            home = own_root
+            package = own_packages.get(name)
             if package is None:
-                home = self._resolve_shared_skills_dir(agent_id, name)
-                package = None if home is None else find_skill_package_dir(home, name, environment)
-            if home is None or package is None:
-                continue
+                package = shared_packages.get(name)
+                if package is None:
+                    continue
+                home = package.parent
             if home not in homes:
                 homes[home] = dict(self._authoring.background_protection(home))
             reason = homes[home].get(package.name)
@@ -852,12 +862,13 @@ class SkillRuntime:
         environment = self._skill_environment(self._storage.load_environment())
         stale: list[dict[str, Any]] = []
         for owner_id, skills in sorted(policy.shared.items()):
-            owner_exists = self._agents.exists(owner_id)
+            names = (
+                scan_skill_names(self.agent_skills_dir(owner_id), environment)
+                if skills and self._agents.exists(owner_id)
+                else frozenset()
+            )
             for name in sorted(skills):
-                if not owner_exists or (
-                    find_skill_package_dir(self.agent_skills_dir(owner_id), name, environment)
-                    is None
-                ):
+                if name not in names:
                     stale.append({"agent_id": owner_id, "name": name})
         return stale
 
@@ -1032,22 +1043,45 @@ class SkillRuntime:
         ``skill_manage`` mutation lands in exactly the package activation serves.
         ``None`` when no other agent shares that name with the receiver.
         """
+        package = self._resolve_shared_skill_packages(receiver_agent_id, [name]).get(name)
+        return package.parent if package is not None else None
+
+    def _resolve_shared_skill_packages(
+        self, receiver_agent_id: str, names: Iterable[str]
+    ) -> dict[str, Path]:
+        """Resolve named shared packages with at most one scan of each owner.
+
+        This lookup is local to one operation, so authoring and explicit refreshes
+        keep their existing freshness and cache-invalidation boundaries.
+        """
+        unresolved = set(names)
+        if not unresolved:
+            return {}
         shared = self._policy.load().shared
         if not shared:
-            return None
+            return {}
         environment = self._skill_environment(self._storage.load_environment())
+        packages: dict[str, Path] = {}
         for owner_id, skills in sorted(shared.items()):
             if owner_id == receiver_agent_id:
                 continue
-            receivers = skills.get(name)
-            if receivers is None or receiver_agent_id not in receivers:
+            candidates = [
+                name
+                for name in sorted(unresolved)
+                if receiver_agent_id in skills.get(name, frozenset())
+            ]
+            if not candidates or not self._agents.exists(owner_id):
                 continue
-            if not self._agents.exists(owner_id):
-                continue
-            package_dir = find_skill_package_dir(self.agent_skills_dir(owner_id), name, environment)
-            if package_dir is not None:
-                return package_dir.parent
-        return None
+            registry = SkillRegistry.load(self.agent_skills_dir(owner_id), environment=environment)
+            for name in candidates:
+                try:
+                    packages[name] = registry.get(name).path.parent
+                except KeyError:
+                    continue
+                unresolved.remove(name)
+            if not unresolved:
+                break
+        return packages
 
     def _resolve_external_skill_scope(
         self, agent_id: str, name: str, project_id: str | None
@@ -1139,12 +1173,16 @@ class SkillRuntime:
                 continue
             self._stale_shared.ended(("owner", owner_id))
             owner_root = self.agent_skills_dir(owner_id)
+            owner_registry: SkillRegistry | None = None
             for name, receivers in sorted(skills.items()):
                 if receiver_agent_id not in receivers:
                     continue
-                package_dir = find_skill_package_dir(owner_root, name, environment)
+                if owner_registry is None:
+                    owner_registry = SkillRegistry.load(owner_root, environment=environment)
                 entry = ("skill", owner_id, name)
-                if package_dir is None:
+                try:
+                    package_dir = owner_registry.get(name).path.parent
+                except KeyError:
                     if self._stale_shared.started(entry) and self._logger is not None:
                         self._logger.warning(
                             "Ignored shared skill without a private package (owner=%s skill=%s)",
