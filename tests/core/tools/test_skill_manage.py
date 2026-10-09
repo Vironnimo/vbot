@@ -1145,7 +1145,7 @@ def test_attended_agents_change_global_skills_but_never_delete_them(tmp_path: Pa
         run_kind=RunKind.SKILL_REFLECTION,
     )
 
-    assert patched["data"] == {"content": "Patched SKILL.md of Skill 'guide' at line 6."}
+    assert patched["data"]["content"].startswith("Patched SKILL.md of Skill 'guide':\n")
     assert "# Fixed" in document.read_text(encoding="utf-8")
     # The change reaches every Agent: all scopes are invalidated and the global
     # Skills reload once.
@@ -1326,7 +1326,7 @@ def test_receiver_changes_land_in_the_owner_package_and_invalidate_everyone(
     )
 
     # The results read exactly like changes of the caller's own Skill.
-    assert patched["data"] == {"content": "Patched SKILL.md of Skill 'deploy' at line 6."}
+    assert patched["data"]["content"].startswith("Patched SKILL.md of Skill 'deploy':\n")
     assert all(result["ok"] for result in (written, removed, edited))
     assert "# Body" in document.read_text(encoding="utf-8")
     assert not (document.parent / "references" / "notes.md").exists()
@@ -1514,7 +1514,10 @@ def test_patch_decodes_one_extra_level_of_json_escaping_with_a_note(tmp_path: Pa
     )
 
     assert result["data"] == {
-        "content": "Patched SKILL.md of Skill 'demo' at line 12.\n"
+        "content": "Patched SKILL.md of Skill 'demo':\n"
+        "11| 1. Run `pytest`.\n"
+        '12| 2. Tag the release: "v2".\n'
+        "13| \n"
         "Note: old_string and new_string arrived with an extra level of JSON escaping "
         '(such as \\n or \\"); they were applied unescaped.'
     }
@@ -1533,7 +1536,7 @@ def test_patch_keeps_literal_escapes_that_match_the_file(tmp_path: Path) -> None
         }
     )
 
-    assert result["data"] == {"content": "Patched SKILL.md of Skill 'demo' at line 9."}
+    assert result["ok"] is True
     assert _body(skill_file) == 'Run `printf "b\\n"` first.\n'
 
 
@@ -1651,7 +1654,14 @@ def test_ambiguous_patch_changes_nothing_until_replace_all(tmp_path: Path) -> No
         retryable=False,
     )
     assert unchanged == before
-    assert replaced["data"] == {"content": "Replaced 2 occurrences in SKILL.md of Skill 'demo'."}
+    # The result shows the changed lines as they are now, numbered like skill output.
+    assert replaced["data"] == {
+        "content": "Replaced 2 occurrences in SKILL.md of Skill 'demo':\n"
+        "15| \n"
+        "16| - Never deploy on weekends.\n"
+        "17| - Check the weekend calendar.\n"
+        "18| "
+    }
     assert "Friday" not in _body(skill_file)
 
 
@@ -1694,8 +1704,7 @@ def test_edit_with_old_string_and_a_fragment_patches_only_that_text(tmp_path: Pa
         }
     )
 
-    assert result["data"] == {
-        "content": "Patched SKILL.md of Skill 'demo' at line 16.\n"
-        "Note: edit with old_string changed only that text, as patch does."
-    }
+    assert result["data"]["content"].endswith(
+        "\nNote: edit with old_string changed only that text, as patch does."
+    )
     assert _body(skill_file) == _PATCH_BODY.replace("on Fridays", "on holidays")

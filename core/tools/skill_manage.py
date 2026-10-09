@@ -35,6 +35,7 @@ from core.skills.skills import (
     find_skill_package_dir,
     scan_skill_names,
 )
+from core.tools._patch_report import after_preview
 from core.tools._skill_conventions import skill_manage_hints
 from core.tools.availability import SKILL_MANAGE_TOOL_NAME
 from core.tools.call_syntax import normalize_call_arguments, spelling
@@ -1012,9 +1013,17 @@ def _patch(
             f"{where} already reads as new_string at line {replacement.first_changed_line}; "
             "nothing changed."
         )
+    # The changed lines as they are now, numbered like skill output, so the next
+    # patch copies from them instead of reading the file again.
+    change = result.changes[0]
+    preview = after_preview(change.before or "", change.after or "")
     if replacement.replacements > 1:
-        return result, f"Replaced {replacement.replacements} occurrences in {where}."
-    return result, f"Patched {where} at line {replacement.first_changed_line}."
+        lead = f"Replaced {replacement.replacements} occurrences in {where}"
+    else:
+        lead = f"Patched {where}"
+    if not preview:
+        return result, f"{lead} at line {replacement.first_changed_line}."
+    return result, "\n".join((f"{lead}:", *preview))
 
 
 def _replace(current: str, call: _Call, file_path: str) -> tuple[FuzzyReplacement, list[str]]:
