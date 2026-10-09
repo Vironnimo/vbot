@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from core.calendar import CalendarService
 from core.tools.calendar import CALENDAR_TOOL_NAME, CALENDAR_TOOL_PARAMETERS
 from tests.core.tools.scheduling_tool_support import CalendarTool, calendar_tool, clock_at
 
@@ -473,6 +474,57 @@ def test_delete_reports_the_cron_jobs_it_removed(tool: CalendarTool) -> None:
         f"id: {standup}\ntitle: Standup\nstatus: deleted with all its occurrences\n"
         f'deleted_cron_jobs: {job} "Agenda"'
     )
+
+
+def _fail_writes(monkeypatch: pytest.MonkeyPatch, module: str) -> None:
+    def refuse(path: Path, *_args: Any, **_kwargs: Any) -> None:
+        raise PermissionError(13, "Zugriff verweigert", str(path))
+
+    monkeypatch.setattr(f"{module}.write_json_document", refuse)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        {"action": "create", "title": "Dentist", "start": "2030-01-10T15:00"},
+        {"action": "update", "id": "{standup}", "title": "Moved"},
+        {"action": "update", "id": "{standup}_20300109T0900", "title": "Moved"},
+        {"action": "delete", "id": "{standup}"},
+        {"action": "delete", "id": "{standup}_20300109T0900"},
+    ],
+)
+def test_a_calendar_that_cannot_be_saved_changes_nothing(
+    tool: CalendarTool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, call: dict[str, str]
+) -> None:
+    standup = _standup(tool)
+    before = [event.to_dict() for event in tool.events()]
+    _fail_writes(monkeypatch, "core.calendar.service")
+
+    envelope, text = tool.call(
+        {key: value.replace("{standup}", standup) for key, value in call.items()}
+    )
+
+    assert envelope["error"]["code"] == "calendar_storage_error"
+    assert str(tmp_path) not in text and "Zugriff" not in text
+    assert [event.to_dict() for event in tool.events()] == before
+    monkeypatch.undo()
+    reloaded = CalendarService(tmp_path, tz="Europe/Berlin").list_events()
+    assert [event.to_dict() for event in reloaded] == before
+
+
+def test_a_deleted_event_whose_cron_jobs_cannot_be_deleted_says_so(
+    tool: CalendarTool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    standup = _standup(tool)
+    job = _bind_job(tool, standup)
+    _fail_writes(monkeypatch, "core.automation.cron")
+
+    envelope, text = tool.call({"action": "delete", "id": standup})
+
+    assert envelope["error"]["code"] == "cron_storage_error"
+    assert standup in text and str(tmp_path) not in text
+    assert tool.events() == []
+    assert [item.id for item in tool.cron.list_jobs()] == [job]
 
 
 @pytest.mark.parametrize("action", ["update", "delete"])

@@ -8,6 +8,7 @@ from itertools import islice
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
+from core.automation.cron import CronServiceError
 from core.calendar import (
     MAX_WINDOW_DAYS,
     CalendarEventNotFoundError,
@@ -30,6 +31,7 @@ from core.tools._calendar_arguments import (
     STAND_INS,
     UNADVERTISED_PARAMETERS,
     WHEN_FIELD,
+    WINDOW_ACTIONS,
     CalendarCallRefusedError,
     length_text,
     normalize_calendar_arguments,
@@ -232,15 +234,26 @@ class _CalendarTool:
         except CalendarValidationError as error:
             return tool_failure("invalid_arguments", _validation_message(arguments, error))
         except CalendarStorageError as error:
+            # The service rolls a failed save back, and the file is replaced atomically.
             _LOGGER.warning("Calendar storage error for action=%s: %s", action, error)
-            return tool_failure(
-                "calendar_storage_error", f"{error}. Do not repeat the same call unchanged."
-            )
+            if action in WINDOW_ACTIONS:
+                text = (
+                    "vBot cannot read its calendar file on the server. Retrying will not help; "
+                    "tell the user that vBot cannot read its calendar data."
+                )
+            else:
+                text = (
+                    "Nothing was changed: vBot cannot read or write its calendar file on the "
+                    "server. Retrying will not help; tell the user that vBot cannot save its "
+                    "calendar data."
+                )
+            return tool_failure("calendar_storage_error", text)
         except CalendarServiceError as error:
             _LOGGER.warning("Calendar service error for action=%s: %s", action, error)
-            return tool_failure(
-                "calendar_service_error", f"{error}. Do not repeat the same call unchanged."
-            )
+            text = f"The calendar could not complete the call: {str(error).rstrip('. ')}."
+            if action not in WINDOW_ACTIONS:
+                text += ' {"action":"list"} shows whether it changed anything.'
+            return tool_failure("calendar_service_error", text)
 
     # -- reading ------------------------------------------------------------------------
 
@@ -400,7 +413,18 @@ class _CalendarTool:
                 }
             )
         event = self._calendar.get_event(item_id)
-        jobs = await self._calendar.delete_event(item_id, actor="tool")
+        try:
+            jobs = await self._calendar.delete_event(item_id, actor="tool")
+        except CronServiceError as error:
+            # The event stays deleted; its jobs wait without it and no longer run.
+            _LOGGER.warning("Cron jobs of deleted event %s were not deleted: %s", item_id, error)
+            return tool_failure(
+                "cron_storage_error",
+                f'Event {event.id} "{event.title}" was deleted, but the cron jobs bound to it '
+                "were not: vBot cannot read or write its cron job file on the server. Those jobs "
+                "no longer run. Retrying will not help; tell the user that vBot cannot save its "
+                "cron job data.",
+            )
         data: JsonObject = {
             "id": event.id,
             "title": event.title,
