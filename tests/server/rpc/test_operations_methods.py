@@ -29,9 +29,11 @@ from core.prompts import (
 )
 from core.sessions import SessionNotFoundError
 from core.tools import ToolAccess, ToolRegistry
+from core.tools.load_tools import register_load_tools_tool
+from core.tools.tools import ToolPromptBlockRegistry
 from core.utils.log_viewer import LogViewer
 from core.utils.paths import model_path
-from core.utils.tokens import estimate_tokens
+from core.utils.tokens import estimate_json_tokens, estimate_tokens
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.methods import dispatch_rpc
 from server.rpc.operations_methods import (
@@ -63,6 +65,7 @@ class StubAgent:
     tool_access: ToolAccess = ToolAccess(mode="all")
     allowed_skills: tuple[str, ...] = ()
     custom_system_prompt_enabled: bool = False
+    tool_loading: dict[str, Any] | None = None
 
 
 class StubAgentStore:
@@ -901,3 +904,33 @@ async def test_preview_inspects_only_effective_provider_definitions(
         entry["definition"] for entry in inspected["tools"]
     ] == manager.provider_tool_definitions(cast(Any, agent))
     assert all(entry["tokens"] > 0 for entry in inspected["tools"])
+
+
+@pytest.mark.asyncio
+async def test_preview_counts_only_the_tool_list_and_marks_on_demand_tools(tmp_path: Path) -> None:
+    agent = StubAgent(
+        id="coder", name="Coder", tool_loading={"on_demand": True, "always_loaded": ["kept"]}
+    )
+    registry = ToolRegistry()
+    prompt_blocks = ToolPromptBlockRegistry()
+    register_load_tools_tool(registry, prompt_blocks)
+    for name in ("kept", "lazy"):
+        registry.register(name, f"{name.title()} Tool.", {"type": "object"}, lambda *_: {})
+    manager = _manager(
+        tmp_path,
+        agents=[agent],
+        tools=registry,
+        block_definitions=prompt_blocks.block_definitions(),
+    )
+    state = _preview_state(manager, agent)
+
+    result = await _preview_prompt(state, {"agent_id": "coder", "include_tools": True})
+
+    entries = [(entry["definition"]["name"], entry.get("on_demand")) for entry in result["tools"]]
+    assert entries == [("kept", None), ("lazy", True), ("load_tools", None)]
+    listed = [entry["definition"] for entry in result["tools"] if "on_demand" not in entry]
+    assert result["tool_count"] == 2
+    assert result["tool_tokens"] == estimate_json_tokens(listed)[0]
+    # The prompt text lists the On-demand Tool instead.
+    assert "## Tools Loaded on Demand" in result["text"]
+    assert "- lazy: Lazy Tool." in result["text"]
