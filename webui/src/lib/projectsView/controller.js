@@ -156,6 +156,7 @@ export function createProjectsController({
     state.editForm = createProjectEditForm(project);
     state.autoLoadDraft = '';
     state.editError = '';
+    state.editSaving = false;
     state.activeTeam = [];
     state.activeReport = null;
     state.activeSources = [];
@@ -560,18 +561,19 @@ export function createProjectsController({
       return true;
     }
     clearAutoSave({ flushPending: false });
+    const selection = selectionVersion;
     state.editSaving = true;
     state.editError = '';
     state.statusMessage = '';
     const savedEditFormSnapshot = JSON.stringify(state.editForm);
     try {
       const result = await operations.setProject(project.project_id, changes);
-      if (!active) {
-        return true;
+      if (!active || selection !== selectionVersion) {
+        return false;
       }
       await loadProjects({ reload: true });
-      if (!active) {
-        return true;
+      if (!active || selection !== selectionVersion) {
+        return false;
       }
       const savedProject = normalizeProject(result?.project);
       if (pendingProjectList) {
@@ -592,12 +594,12 @@ export function createProjectsController({
       applyScan(result?.scan);
       return true;
     } catch (error) {
-      if (active) {
+      if (active && selection === selectionVersion) {
         state.editError = `${t('projects.manage.saveError')} ${errorText(error)}`;
       }
       return false;
     } finally {
-      if (active) {
+      if (active && selection === selectionVersion) {
         state.editSaving = false;
         flushPendingProjects();
       }

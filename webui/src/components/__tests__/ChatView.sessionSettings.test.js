@@ -272,6 +272,90 @@ describe('ChatView Session settings', () => {
   });
 
   describe('existing Session', () => {
+    it.each(
+      ['same', 'other'].flatMap((session) =>
+        ['success', 'error'].map((outcome) => ({ session, outcome })),
+      ),
+    )(
+      'loads the $session Session around an override write ending in $outcome',
+      async ({ session, outcome }) => {
+        const writing = Promise.withResolvers();
+        const reading = Promise.withResolvers();
+        const sameSession = session === 'same';
+        const readingId = sameSession ? 'session-1' : 'session-2';
+        const original = {
+          session: {
+            id: 'session-1',
+            working_project_id: 'vbot',
+            agent_overrides: { model: SONNET },
+          },
+        };
+        const loaded = {
+          session: {
+            id: readingId,
+            working_project_id: sameSession ? 'vbot' : 'docs',
+            agent_overrides: sameSession
+              ? { model: outcome === 'success' ? MINI : SONNET }
+              : { model: R1, thinking_effort: 'max' },
+          },
+        };
+        let readReady = false;
+        getSessionMock.mockImplementation((_agentId, sessionId) =>
+          sessionId !== readingId
+            ? Promise.resolve(original)
+            : readReady
+              ? Promise.resolve(loaded)
+              : reading.promise,
+        );
+        const base = settingsRpcMock();
+        rpcMock.mockImplementation((method, params) =>
+          method === 'session.set_agent_overrides'
+            ? writing.promise
+            : base(method, params),
+        );
+        const props = reactiveProps({ projects: PROJECTS });
+        await chat.mountChat(props);
+        await waitForCondition(() => pickerText('Model') === SONNET_NAME);
+        await choose('Model', MINI);
+        expect(rpcCalls('session.set_agent_overrides')).toHaveLength(1);
+
+        if (sameSession) {
+          // The initial row predates this write and must be discarded. A
+          // failed write still needs a fresh read to recover the Project.
+          reading.resolve(original);
+          await settle();
+          expect(readOnlyProject()).toBeNull();
+        } else {
+          props.pendingSessionNavigation = {
+            agentId: 'alpha',
+            sessionId: 'session-2',
+            requestId: 1,
+          };
+          await waitForCondition(() =>
+            getSessionMock.mock.calls.some(([, id]) => id === readingId),
+          );
+        }
+        readReady = true;
+        if (outcome === 'success')
+          writing.resolve({ agent_overrides: { model: MINI } });
+        else writing.reject(new Error('override-failed-sentinel'));
+        await settle();
+        if (!sameSession) reading.resolve(loaded);
+        const expectedModel = sameSession
+          ? outcome === 'success'
+            ? MINI
+            : SONNET_NAME
+          : R1;
+        await waitForCondition(
+          () => pickerText('Model') === expectedModel && readOnlyProject(),
+        );
+        expect(readOnlyProject().textContent.trim()).toBe(
+          sameSession ? 'vBot' : 'Docs',
+        );
+        if (!sameSession) expect(pickerText('Thinking effort')).toBe('max');
+      },
+    );
+
     it('writes Model and effort changes at once and offers the levels of the effective Model', async () => {
       getSessionMock.mockResolvedValue({
         session: {

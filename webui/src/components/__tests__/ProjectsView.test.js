@@ -36,6 +36,8 @@ import {
 
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
+const { createAutosaveCoordinator } = await import('../../lib/autosave.js');
+
 function autoLoadNames() {
   return [...document.querySelectorAll('.projects-file-name')].map(
     (node) => node.textContent,
@@ -577,6 +579,98 @@ describe('ProjectsView Project settings', () => {
       display_name: 'Renamed',
     });
   });
+
+  it.each(
+    [false, true].flatMap((returnToOriginal) =>
+      ['success', 'error'].map((outcome) => ({ returnToOriginal, outcome })),
+    ),
+  )(
+    'keeps the current editor after leaving a pending save ($outcome, return: $returnToOriginal)',
+    async ({ outcome, returnToOriginal }) => {
+      const older = Promise.withResolvers();
+      const newer = Promise.withResolvers();
+      const records = [
+        project({ project_id: 'demo', display_name: 'Demo' }),
+        project({ project_id: 'other', display_name: 'Other' }),
+      ];
+      const oldScan = cleanScan({
+        team: [member({ agent_id: 'builder', display_name: 'Old team' })],
+      });
+      const currentScan = cleanScan({
+        team: [member({ agent_id: 'builder', display_name: 'Current team' })],
+      });
+      listProjectsMock.mockImplementation(async () => ({ projects: records }));
+      showProjectMock.mockResolvedValueOnce({ scan: oldScan });
+      showProjectMock.mockResolvedValue({ scan: currentScan });
+      setProjectMock
+        .mockReturnValueOnce(older.promise)
+        .mockReturnValueOnce(newer.promise);
+      const coordinator = createAutosaveCoordinator();
+      const navigation = createStandaloneNavigation(['demo']);
+      view.mount({ navigation }, coordinator);
+      await waitForCondition(() =>
+        document.querySelector('[data-testid="project-team-member-builder"]'),
+      );
+      setInputValue('project-edit-name', 'Older draft');
+      const abandonedTransition = coordinator.flushPending();
+      await waitForCondition(() => setProjectMock.mock.calls.length === 1);
+
+      // App's Leave anyway releases the pending flush and navigates at once.
+      coordinator.releaseRunningSaves();
+      navigation.navigate(['other']);
+      flushSync();
+      await waitForCondition(() =>
+        document.querySelector('[data-testid="project-panel-other"]'),
+      );
+      if (returnToOriginal) {
+        navigation.navigate(['demo']);
+        flushSync();
+      }
+      const currentId = returnToOriginal ? 'demo' : 'other';
+      await waitForCondition(() =>
+        document
+          .querySelector(`#project-detail-panel-team`)
+          ?.textContent.includes('Current team'),
+      );
+      setInputValue('project-edit-name', 'Current draft');
+      buttonByTestId(`project-save-${currentId}`).click();
+      flushSync();
+      expect(setProjectMock).toHaveBeenCalledTimes(1);
+
+      if (outcome === 'success') {
+        records[0] = { ...records[0], display_name: 'Older draft' };
+        older.resolve({ project: records[0], scan: oldScan });
+      } else older.reject(new Error('old-save-failure-sentinel'));
+      await abandonedTransition;
+      await waitForCondition(() => setProjectMock.mock.calls.length === 2);
+      expect(navigation.place).toEqual([currentId]);
+      expect(inputById('project-edit-name').value).toBe('Current draft');
+      expect(
+        document.querySelector('#project-detail-panel-team').textContent,
+      ).toContain('Current team');
+      expect(
+        document.querySelector('#project-detail-panel-team').textContent,
+      ).not.toContain('Old team');
+      expect(document.body.textContent).not.toContain(
+        'old-save-failure-sentinel',
+      );
+      expect(document.querySelector('.save-status__state').textContent).toBe(
+        t('common.saving'),
+      );
+      expect(setProjectMock).toHaveBeenLastCalledWith(currentId, {
+        display_name: 'Current draft',
+      });
+
+      const saved = {
+        ...records.find((record) => record.project_id === currentId),
+        display_name: 'Current draft',
+      };
+      records[returnToOriginal ? 0 : 1] = saved;
+      newer.resolve({ project: saved, scan: currentScan });
+      await waitForCondition(() => !coordinator.hasPending());
+      expect(inputById('project-edit-name').value).toBe('Current draft');
+    },
+  );
 
   it('seeds the Agent defaults from the project and saves changed values', async () => {
     serveProject({ default_temperature: 0.4, default_thinking_effort: 'high' });

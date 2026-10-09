@@ -40,7 +40,7 @@ The view forwards user intent to the controller; the controller alone sequences 
 ## Refresh and error behavior
 
 - The view's place is `[projectId]` (`webui/app-shell.md` -> Navigation): choosing or adding a Project is a history step; the empty place shows the shared managed Project, and a removed or unknown Project corrects the entry. List refresh prefers the Project the place names, then the selected one, then the first. Detail and scan responses are discarded if they belong to a no-longer-selected Project.
-- Mutations reconcile the authoritative Project list/detail or returned scan before clearing controller-owned busy state. Override writes and resets bind their response, error and cleanup to the originating selection visit, including when the user leaves and returns to the same Project. Errors stay attached to the operation that failed and do not silently discard the current management draft.
+- Mutations reconcile the authoritative Project list/detail or returned scan before clearing controller-owned busy state. Project saves, override writes and resets bind their response, error and cleanup to the originating selection visit, including when the user leaves and returns to the same Project. Leaving a running save through Leave anyway releases its visible saving state; its later completion cannot replace the new visit's form or scan. Errors stay attached to the operation that failed and do not silently discard the current management draft.
 - `resource_changed` can request a Projects refresh through the app shell. The Projects controller decides when refreshed state can safely replace an active form or modal.
 
 ## Source and tests
