@@ -7,8 +7,10 @@
      stay barely above prose size (1.07em from h3 down) and bind to the text
      they introduce; bold text keeps a lighter weight (500) than headings
      (600), so a bold lead-in never reads as one. Spacing has three steps
-     (close 1.4 lines, a 0.75em block gap, the largest gap above a heading);
-     prose is dimmed one step so headings and bold stand out.
+     (close 1.4 lines, a 0.75em block gap that grows to 1em after a list, so
+     its lead-in binds to it and the following text sets off, and the largest
+     gap above a heading); prose is dimmed one step so headings and bold
+     stand out.
    - Document (`.md-document`, for Skill instructions, the System Prompt and
      Wiki pages): ordinary Markdown documents. Headings get distinct but
      moderate sizes (h1 20px, h2 18px, h3 16px at 15px prose), with more room
@@ -28,7 +30,7 @@
   --md-paragraph-margin: 0 0 0.75em;
   --md-heading-margin: 1.4em 0 0.15em;
   --md-heading-size: 1.07em;
-  --md-list-margin: 0 0 0.75em 1.4em;
+  --md-list-margin: 0 0 1em 1.4em;
   --md-nested-list-margin: 0.2em 0 0 1.4em;
   --md-block-margin: 0.75em 0;
 }
