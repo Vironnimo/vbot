@@ -579,16 +579,17 @@ async def test_a_call_cancelled_once_its_work_began_still_returns_its_result(
 ) -> None:
     harness.loop.hold("review")
     working = await harness.spawn("review")
-    activities = harness.coordinator._activities  # noqa: SLF001
-    ensure_activity = activities.ensure
+    record_event = harness._record_event  # noqa: SLF001
     entered, release = asyncio.Event(), asyncio.Event()
 
-    async def held_activity(address):
+    async def held_event(event_type, payload):
+        await record_event(event_type, payload)
         entered.set()
         await release.wait()
-        return await ensure_activity(address)
 
-    monkeypatch.setattr(activities, "ensure", held_activity)
+    # Only the Tool call emits this event; the original Run's forwarding task
+    # also opens activity files and could signal an activity-file gate too early.
+    monkeypatch.setattr(harness, "_record_event", held_event)
     arguments: dict[str, Any] = (
         {"description": "Do fix", "content": "fix"}
         if action == "run"
@@ -596,15 +597,15 @@ async def test_a_call_cancelled_once_its_work_began_still_returns_its_result(
     )
     call = asyncio.create_task(harness.call(arguments))
     await entered.wait()
-    # The calling Run's cancel lands after the Sub-Agent's turn began.
+    # The calling Run's cancel lands after the work was admitted, before the
+    # Tool returns its result, regardless of when background forwarding runs.
     call.cancel()
-    await asyncio.sleep(0)
     release.set()
     result = await call
 
     # The Parent gets the result, so it never starts the same work again.
     assert result["ok"], result
-    assert harness.loop.turns[-1].content == "fix"
+    assert [turn.content for turn in harness.loop.turns] == ["review", "fix"]
     harness.subagent_session(result["data"]["id"])
 
 
@@ -722,6 +723,8 @@ async def test_takeover_ends_forwarding_and_parent_messages(harness: SubAgentHar
         ),
     )
     harness.coordinator.subagent_taken_over(child)
+    # The takeover notice is independent of the Run's answer forwarding.
+    await harness.triggers.wait_for_notice(f"subagent-takeover:{data['id']}")
     await harness.finished("review")
 
     [notice] = harness.triggers.to(harness.parent)

@@ -258,6 +258,9 @@ async def test_survivors_keep_a_finished_command_live_until_they_are_killed(
     terminal_id, _adapter, tree = await harness.start(timeout=600)
     survivor = RunningProcess(42, "server.exe")
     tree.shell_exits(0, survivors=(survivor,))
+    # EOF comes through a separate reader executor: observe it before fake
+    # time can overtake that worker and consume the whole quiet-time budget.
+    await eventually(lambda: harness.manager.command_report(terminal_id).exit_code == 0)
 
     # Survivors that stay quiet end the wait, not the session.
     waiting: asyncio.Task[object] = asyncio.create_task(
@@ -560,6 +563,7 @@ async def test_kill_stops_a_command_and_says_what_it_stopped(tools: Tools, befor
     await eventually(lambda: shows(tools, terminal_id, "watching"))
     if before == "survivors":
         tree.shell_exits(0, survivors=(RunningProcess(42, "server.exe"),))
+        await eventually(lambda: tools.manager.command_report(terminal_id).exit_code == 0)
         await tools.run_clock(
             lambda: tools.manager.command_report(terminal_id).exited, until=tools.clock.now + 10
         )
