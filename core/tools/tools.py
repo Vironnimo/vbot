@@ -29,6 +29,7 @@ from core.tools._tool_context import (
     ToolEmitHook,
     ToolExecutionConfig,
     ToolHandler,
+    ToolLoadHook,
     ToolNoteHook,
     ToolResultPayloadHook,
     ToolResultPersistedCallback,
@@ -639,14 +640,22 @@ class ToolRegistry:
     def _unknown_tool_message(
         self, context: ToolContext, allowed_tools: Sequence[str] | None
     ) -> str:
-        """Name the Tools this caller can use instead of an unknown one."""
+        """Name the Tools this caller can use instead of an unknown one.
+
+        These are the Tools the Model was shown and the On-demand Tools it can
+        load; an internal Tool counts only when the Model request listed it.
+        """
         available = [
             model_tool_name(tool.name)
-            for tool in self.list_tools(allowed_tools, ready_only=True)
+            for tool in self.list_tools(allowed_tools, include_internal=True, ready_only=True)
             if not tool.deferred
             and (not tool.session_scoped or tool.name in context.session_tool_grants)
             and (not tool.requires_opt_in or tool.name in (allowed_tools or ()))
-            and context.offers(tool.name)
+            and (
+                context.offers(tool.name)
+                or (tool.name in context.loadable_tools and context.can_call(tool.name))
+            )
+            and (not tool.internal or tool.name in (context.offered_tools or ()))
         ]
         if not available:
             return f"Unknown Tool: {context.tool_name}. No Tools are available in this Run."
@@ -954,7 +963,14 @@ class ToolExecutor:
                 tool_settings=config.tool_settings,
                 session_tool_grants=config.session_tool_grants,
                 input_contract=config.input_contracts.get(tool_call.name),
-                offered_tools=frozenset(config.input_contracts) or None,
+                # On-demand Tools have contracts before the Model was shown them.
+                offered_tools=(
+                    frozenset(config.input_contracts).difference(config.loadable_tools)
+                    if config.input_contracts
+                    else None
+                ),
+                loadable_tools=config.loadable_tools,
+                tool_load_hook=config.tool_load_registrar,
                 change_tracker=config.change_tracker,
             )
             return await self._dispatch_with_envelope(context, tool_call, config.allowed_tools)
@@ -1125,6 +1141,7 @@ __all__ = [
     "ToolExecutionConfig",
     "ToolExecutor",
     "ToolHandler",
+    "ToolLoadHook",
     "ToolNoteHook",
     "ToolNotAllowedError",
     "ToolNotFoundError",

@@ -101,3 +101,4 @@ Read these only when your task matches - not by default.
 
 - Launching or killing OS child processes (windowless flags, Job/guardian containment, tree kill in `core/utils/processes.py`) -> `tools/os-processes.md`
 - Classifying texts through the configured Decision Model (`classify`) -> `tools/classify.md`
+- On-demand Tools: the `load_tools` Tool, its results and argument reading, and how its caller supplies loadable Tools -> `tools/load_tools.md`

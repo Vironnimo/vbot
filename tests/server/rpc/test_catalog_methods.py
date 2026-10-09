@@ -15,6 +15,7 @@ from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.runs import ChatRunManager
 from core.sessions import SessionAddress, SessionNotFoundError
 from core.tools import ToolRegistry, tool_success
+from core.tools.load_tools import register_load_tools_tool
 from server.rpc.catalog_methods import _list_commands, _list_files, _list_tools
 from server.rpc.errors import RpcError
 from tests.server.rpc.chat_methods_test_support import _InlineSessionPool
@@ -588,14 +589,8 @@ async def test_tool_list_returns_public_tools_sorted_with_their_full_projection(
             {"type": "object", "properties": {}, "additionalProperties": False},
             lambda _context, _arguments: tool_success({}),
         )
-    # Internal Tools such as the On-demand Tool loader are not user-selectable.
-    registry.register(
-        "load_tools",
-        "Load Tools",
-        {"type": "object", "properties": {}, "additionalProperties": False},
-        lambda _context, _arguments: tool_success({}),
-        internal=True,
-    )
+    # The internal load_tools Tool is not user-selectable.
+    register_load_tools_tool(registry)
 
     result = await rpc_result(state, "tool.list")
 
