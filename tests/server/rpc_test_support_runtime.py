@@ -494,7 +494,7 @@ class StubRuntime:
         )
         self.channel_service: Any = StubChannelService()
         self.subagents: Any = SimpleNamespace(references_identity_agent=lambda _agent_id: False)
-        self.speech: Any = SimpleNamespace(preload_configured=_unsubscribe)
+        self.speech: Any = SimpleNamespace(preload_configured=lambda task_types=(): None)
         self.statistics_index: Any = StubStatisticsIndex()
         self.usage_recorder: Any = None
         self.trigger_service: Any = None
