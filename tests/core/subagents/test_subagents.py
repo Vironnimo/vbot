@@ -16,6 +16,7 @@ import pytest
 
 import core.subagents.subagents as subagents_module
 from core.chat import ChatMessage
+from core.chat.messages import ToolCall
 from core.projects import AgentResolutionError, ResolutionProjectNotFoundError
 from core.runs import Run, RunAdmission, RunAdmissionBlockedError, RunKind, RunStatus
 from core.sessions import (
@@ -274,12 +275,19 @@ async def test_every_answer_reaches_the_parent_with_what_is_still_running(
 
 
 @pytest.mark.parametrize(
-    ("interrupted", "outcome"),
-    [(False, "Its turn completed."), (True, "Its turn was cancelled.")],
-    ids=["after-the-answer", "during-the-answer"],
+    ("progression", "outcome"),
+    [
+        ("answer", "Its turn completed."),
+        ("partial-answer", "Its turn was cancelled."),
+        ("compaction", "Its turn completed."),
+        ("steering", "Its turn was cancelled."),
+        ("steering-tool", "Its turn was cancelled."),
+        ("steering-reasoning", "Its turn was cancelled."),
+        ("steering-answer", "Its turn completed."),
+    ],
 )
-async def test_a_turn_stopped_after_its_final_answer_reaches_the_parent_as_completed(
-    harness: SubAgentHarness, interrupted: bool, outcome: str
+async def test_a_stopped_turn_forwards_its_latest_progression_outcome(
+    harness: SubAgentHarness, progression: str, outcome: str
 ) -> None:
     data = await harness.spawn("review")
     await harness.settle()
@@ -289,9 +297,42 @@ async def test_a_turn_stopped_after_its_final_answer_reaches_the_parent_as_compl
     async def execute(run: Run) -> ChatMessage:
         session = (await harness.sessions.get_async(child)).for_run(run.id)
         answer = ChatMessage.assistant(
-            model="fixture", content="All fixed.", interrupted=interrupted
+            model="fixture", content="All fixed.", interrupted=progression == "partial-answer"
         )
-        await session.append_many_async([answer])
+        messages = [answer]
+        if progression == "compaction":
+            messages.extend(
+                [
+                    ChatMessage.compaction_checkpoint(
+                        summary="The task was completed.",
+                        projection=[answer],
+                        compacted_token_count=1,
+                    ),
+                    ChatMessage.note("Context compacted."),
+                ]
+            )
+        if progression.startswith("steering"):
+            messages.append(ChatMessage.user("Also finish the follow-up task."))
+        if progression == "steering-tool":
+            messages.append(
+                ChatMessage.assistant(
+                    model="fixture",
+                    content=None,
+                    tool_calls=[ToolCall(id="follow-up-call", name="probe", arguments={})],
+                )
+            )
+        if progression == "steering-reasoning":
+            messages.append(
+                ChatMessage.assistant(
+                    model="fixture",
+                    content=None,
+                    reasoning="Checking the follow-up.",
+                    interrupted=True,
+                )
+            )
+        if progression == "steering-answer":
+            messages.append(ChatMessage.assistant(model="fixture", content="Follow-up fixed."))
+        await session.append_many_async(messages)
         answered.set()
         # Compaction after the answer, for example, until Stop arrives.
         await asyncio.Event().wait()
@@ -306,7 +347,7 @@ async def test_a_turn_stopped_after_its_final_answer_reaches_the_parent_as_compl
 
     body = harness.triggers.to(harness.parent)[-1].body
     assert outcome in body
-    assert "All fixed." in body
+    assert ("Follow-up fixed." if progression == "steering-answer" else "All fixed.") in body
 
 
 async def test_answer_names_working_subagents_of_the_subagent(harness: SubAgentHarness) -> None:
