@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 from collections.abc import Callable, Iterator
 from typing import Any
@@ -295,3 +296,47 @@ def test_cancellation_interrupts_a_retry_backoff(
     with pytest.raises(SpeechRequestCancelled):
         make_client(server).transcribe(b"audio")
     assert len(server.requests) == 1
+
+
+@pytest.mark.parametrize("stop", ["cancel", "close"])
+def test_cancellation_closes_an_in_flight_request_without_waiting_for_a_reply(
+    cancel: threading.Event, stop: str
+) -> None:
+    started, request_closed = threading.Event(), threading.Event()
+    failures: list[Exception] = []
+
+    async def respond(_request: httpx.Request) -> httpx.Response:
+        started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            request_closed.set()
+        raise AssertionError("cancelled request resumed")
+
+    with SpeechServerClient(
+        SERVER, cancel=cancel, transport=httpx.MockTransport(respond)
+    ) as client:
+
+        def transcribe() -> None:
+            try:
+                client.transcribe(b"audio")
+            except Exception as exc:
+                failures.append(exc)
+
+        worker = threading.Thread(target=transcribe)
+        worker.start()
+        try:
+            assert started.wait(1)
+            if stop == "cancel":
+                cancel.set()
+            else:
+                client.close()
+            assert request_closed.wait(1)
+            worker.join(1)
+            assert not worker.is_alive()
+            assert len(failures) == 1
+            assert isinstance(failures[0], SpeechRequestCancelled)
+        finally:
+            cancel.set()
+            client.close()
+            worker.join(1)

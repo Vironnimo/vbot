@@ -6,7 +6,7 @@ import io
 import threading
 import wave
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
 import numpy as np
@@ -353,9 +353,15 @@ class FakeClient:
         self.transcribe_error: BaseException | None = None
         self.resolve_error: BaseException | None = None
         self.gate: threading.Event | None = None
+        self.transcribe_gates: dict[bytes, threading.Event] = {}
+        self.transcripts: dict[bytes, str | BaseException] = {}
+        self.send_gates: dict[str, threading.Event] = {}
+        self.send_errors: dict[str, BaseException] = {}
         self.lock = threading.Lock()
         self.transcribing = 0
         self.uploads: list[bytes] = []
+        self.resolved: list[str] = []
+        self.sending: list[str] = []
         self.sent: list[tuple[str, str | None, str]] = []
 
     def transcribe(self, audio: bytes) -> str:
@@ -365,19 +371,32 @@ class FakeClient:
         try:
             if self.gate is not None:
                 assert self.gate.wait(5)
+            if audio in self.transcribe_gates:
+                assert self.transcribe_gates[audio].wait(5)
             if self.transcribe_error is not None:
                 raise self.transcribe_error
-            return self.transcript
+            result = self.transcripts.get(audio, self.transcript)
+            if isinstance(result, BaseException):
+                raise result
+            return result
         finally:
             with self.lock:
                 self.transcribing -= 1
 
     def resolve_session(self, agent_id: str, session_behavior: str) -> str:
+        with self.lock:
+            self.resolved.append(agent_id)
         if self.resolve_error is not None:
             raise self.resolve_error
         return f"s-{agent_id}-{session_behavior}"
 
     def send_command(self, agent_id: str, session_id: str | None, text: str) -> str:
+        with self.lock:
+            self.sending.append(text)
+        if text in self.send_gates:
+            assert self.send_gates[text].wait(5)
+        if text in self.send_errors:
+            raise self.send_errors[text]
         with self.lock:
             self.sent.append((agent_id, session_id, text))
         return session_id or f"s-{agent_id}-created"
@@ -424,6 +443,8 @@ def pipeline_harness() -> Iterator[Callable[..., PipelineHarness]]:
     for state in created:
         if state.client.gate is not None:
             state.client.gate.set()
+        for gate in [*state.client.transcribe_gates.values(), *state.client.send_gates.values()]:
+            gate.set()
         assert state.pipeline.close(5), "command workers did not stop"
 
 
@@ -535,14 +556,22 @@ def test_stopping_mid_transcription_discards_the_command(
     assert not rig.pipeline.submit(_command("c2"))
 
 
+@pytest.mark.parametrize("warm", [False, True])
 def test_commands_run_on_at_most_three_workers(
     pipeline_harness: Callable[..., PipelineHarness],
+    warm: bool,
 ) -> None:
     rig = pipeline_harness()
+    if warm:
+        assert rig.pipeline.submit(_command("warm-up"))
+        wait_until(lambda: bool(rig.outcomes) and rig.pipeline._idle_workers == 1)
+        rig.outcomes.clear()
     rig.client.gate = threading.Event()
 
-    for index in range(5):
-        rig.pipeline.submit(_command(f"c{index}"))
+    # Deliver one burst before idle workers can wake and consume it.
+    with rig.pipeline._condition:
+        for index in range(5):
+            rig.pipeline.submit(_command(f"c{index}"))
     wait_until(lambda: rig.client.transcribing == MAX_COMMAND_WORKERS)
     workers = sorted(
         thread.name
@@ -556,21 +585,121 @@ def test_commands_run_on_at_most_three_workers(
     assert sorted(outcome.command_id for outcome in rig.outcomes) == [f"c{i}" for i in range(5)]
 
 
-def test_close_waits_until_its_deadline_and_discards_queued_commands(
+def test_commands_send_in_submission_order_per_agent_without_waiting_workers(
     pipeline_harness: Callable[..., PipelineHarness],
 ) -> None:
     rig = pipeline_harness()
-    rig.client.gate = threading.Event()
-    rig.pipeline.submit(_command("busy"))
+    transcribe_first = threading.Event()
+    send_first = threading.Event()
+    rig.client.transcribe_gates[b"first"] = transcribe_first
+    rig.client.send_gates["first"] = send_first
+    command_ids = ["first", "second", "third", "fourth", "other", "other-again"]
+    rig.client.transcripts = {command_id.encode(): command_id for command_id in command_ids}
+
+    assert rig.pipeline.submit(replace(_command("first"), wav=b"first"))
+    wait_until(lambda: rig.client.transcribing == 1)
+    for command_id in command_ids[1:-1]:
+        assert rig.pipeline.submit(
+            replace(
+                _command(command_id),
+                wav=command_id.encode(),
+                agent_id="other" if command_id == "other" else "main",
+            )
+        )
+    wait_until(lambda: any(outcome.command_id == "other" for outcome in rig.outcomes))
+
+    # Later ready transcripts must not consume workers waiting for the first one.
+    assert rig.client.resolved == ["other"]
+    transcribe_first.set()
+    wait_until(lambda: "first" in rig.client.sending)
+    assert rig.pipeline.submit(
+        replace(_command("other-again"), wav=b"other-again", agent_id="other")
+    )
+    wait_until(lambda: any(outcome.command_id == "other-again" for outcome in rig.outcomes))
+
+    # Session resolution is ordered too, including while the prior send is in flight.
+    assert rig.client.resolved == ["other", "main", "other"]
+    send_first.set()
+    wait_until(lambda: len(rig.outcomes) == len(command_ids))
+    assert [text for agent_id, _, text in rig.client.sent if agent_id == "main"] == command_ids[:4]
+    assert [outcome.command_id for outcome in rig.outcomes if outcome.agent_id == "main"] == (
+        command_ids[:4]
+    )
+
+
+@pytest.mark.parametrize(
+    ("transcript", "send_error", "kind"),
+    [
+        (SpeechServerError("server_unreachable", "down"), None, "transcription_failed"),
+        (ValueError("bug"), None, "command_failed"),
+        (" ", None, "no_speech"),
+        ("abbrechen", None, "cancelled"),
+        (SpeechRequestCancelled(), None, None),
+        ("failed", SpeechServerError("send_failed", "down"), "command_failed"),
+    ],
+    ids=["transcription-failed", "bug", "empty", "cancel-phrase", "cancelled", "send-failed"],
+)
+@pytest.mark.parametrize("position", ["first", "middle"])
+def test_a_command_without_a_delivery_releases_later_commands(
+    pipeline_harness: Callable[..., PipelineHarness],
+    transcript: str | BaseException,
+    send_error: BaseException | None,
+    kind: str | None,
+    position: str,
+) -> None:
+    rig = pipeline_harness()
+    release_first = threading.Event()
+    rig.client.transcribe_gates[b"first"] = release_first
+    failed_id = "first" if position == "first" else "middle"
+    rig.client.transcripts = {b"first": "first", failed_id.encode(): transcript}
+    if send_error is not None:
+        rig.client.send_errors["failed"] = send_error
+
+    assert rig.pipeline.submit(replace(_command("first"), wav=b"first"))
+    wait_until(lambda: rig.client.transcribing == 1)
+    if position == "middle":
+        assert rig.pipeline.submit(replace(_command("middle"), wav=b"middle"))
+    assert rig.pipeline.submit(_command("last"))
+    assert rig.pipeline.submit(replace(_command("other"), agent_id="other"))
+    wait_until(lambda: any(outcome.command_id == "other" for outcome in rig.outcomes))
+
+    release_first.set()
+    wait_until(lambda: any(outcome.command_id == "last" for outcome in rig.outcomes))
+    assert [text for agent_id, _, text in rig.client.sent if agent_id == "main"] == (
+        (["first"] if position == "middle" else []) + ["turn on the lights"]
+    )
+    assert [outcome.kind for outcome in rig.outcomes if outcome.command_id == failed_id] == (
+        [] if kind is None else [kind]
+    )
+
+
+@pytest.mark.parametrize("later_transcripts_ready", [False, True])
+def test_close_waits_until_its_deadline_and_discards_queued_commands(
+    pipeline_harness: Callable[..., PipelineHarness],
+    later_transcripts_ready: bool,
+) -> None:
+    rig = pipeline_harness()
+    release_busy = threading.Event()
+    if later_transcripts_ready:
+        rig.client.transcribe_gates[b"busy"] = release_busy
+    else:
+        rig.client.gate = release_busy
+    rig.pipeline.submit(replace(_command("busy"), wav=b"busy"))
     wait_until(lambda: rig.client.transcribing == 1)
     for index in range(MAX_COMMAND_WORKERS + 1):
         rig.pipeline.submit(_command(f"queued-{index}"))
+    if later_transcripts_ready:
+        wait_until(lambda: len(rig.client.uploads) == MAX_COMMAND_WORKERS + 2)
+        wait_until(lambda: rig.client.transcribing == 1)
 
     assert rig.pipeline.close(0.05) is False
-    rig.client.gate.set()
+    release_busy.set()
 
     assert rig.pipeline.close(5) is True
-    assert {command_id for command_id, _ in rig.stages} <= {"busy", "queued-0", "queued-1"}
+    if not later_transcripts_ready:
+        assert {command_id for command_id, _ in rig.stages} <= {"busy", "queued-0", "queued-1"}
+    assert rig.client.sent == []
+    assert rig.outcomes == []
     assert not rig.pipeline.submit(_command("late"))
 
 

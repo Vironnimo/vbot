@@ -66,6 +66,10 @@
         return t('settings.dictation.result.nothingHeard');
       case 'microphone_unavailable':
         return t('settings.dictation.result.microphoneUnavailable');
+      case 'recording_interrupted':
+        return t('settings.dictation.result.recordingInterrupted');
+      case 'microphone_read_failed':
+        return t('settings.dictation.result.microphoneReadFailed');
       case 'server_unreachable':
         return t('settings.dictation.result.serverUnreachable');
       case 'speech_to_text_unconfigured':

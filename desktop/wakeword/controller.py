@@ -998,14 +998,16 @@ class VoiceController:
                     session_behavior=recording.session_behavior,
                     wav=result.wav,
                 )
+            # Submit before another detection can start its recording: the
+            # pipeline's per-Agent order must match the recordings' order.
+            if (
+                command is not None
+                and session is not None
+                and session.pipeline is not None
+                and not session.pipeline.submit(command)
+            ):
+                self._commands.pop(command.command_id, None)
             self._commit_locked()
-        if command is None or session is None or session.pipeline is None:
-            return
-        if not session.pipeline.submit(command):
-            with self._lock:
-                dropped = self._commands.pop(command.command_id, None)
-                if generation == self._generation and dropped is not None:
-                    self._commit_locked()
 
     def _on_command_stage(self, generation: int, command_id: str, stage: str) -> None:
         with self._lock:

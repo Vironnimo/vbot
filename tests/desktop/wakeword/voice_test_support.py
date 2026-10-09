@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from collections import deque
@@ -117,14 +118,14 @@ class FakeVoiceServer:
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self)
 
-    def __call__(self, request: httpx.Request) -> httpx.Response:
+    async def __call__(self, request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/speech/transcribe":
             with self.lock:
                 self.uploads.append(request.content)
                 self.methods.append("transcribe")
             self.transcribing.set()
-            if self.transcribe_gate is not None and not self.transcribe_gate.wait(timeout=10):
-                raise httpx.ReadTimeout("gate never opened")
+            while self.transcribe_gate is not None and not self.transcribe_gate.is_set():
+                await asyncio.sleep(0.005)
             return httpx.Response(200, json={"text": self.transcript})
         body = json.loads(request.content)
         method, params = body["method"], body["params"]
