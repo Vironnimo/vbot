@@ -302,10 +302,6 @@ export function createSessionSettings(context) {
         },
       };
       dropPending(key);
-      if (!projectKnown && current?.key === key) {
-        // The row read this write overlapped was dropped; read it again.
-        rowRevision += 1;
-      }
     } catch (error) {
       if (latestWrite[key] !== writeId) {
         return;
@@ -317,6 +313,11 @@ export function createSessionSettings(context) {
       );
     } finally {
       overrideWrites[key] = (overrideWrites[key] ?? 0) + 1;
+      if (rows[key]?.projectKnown !== true && current?.key === key) {
+        // An initial row read may have been dropped during this write.
+        // Recover it after success or failure, using the completed revision.
+        rowRevision += 1;
+      }
     }
   }
 
